@@ -1,5 +1,6 @@
 #![deny(warnings, clippy::all)]
 
+pub mod ai;
 pub mod diplomacy;
 pub mod economy;
 pub mod events;

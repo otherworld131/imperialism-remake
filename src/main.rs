@@ -3,9 +3,11 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+use domain::economy::buildings::{Building, BuildingType};
 use domain::game_state::{GameState, new_game};
 use domain::hex::HexCoord;
 use domain::map::HexMap;
+use domain::military::units::ArmyUnitType;
 use domain::nation::Nation;
 use domain::turn::{calculate_score, process_turn};
 use domain::types::*;
@@ -147,10 +149,10 @@ fn main() {
                         vote.majority_threshold, vote.total_governors
                     );
                     println!();
-                    if let Some(winner_id) = vote.winner {
-                        if winner_id == game.human_player_nation {
-                            println!("  *** YOU HAVE WON THE GAME! ***");
-                        }
+                    if let Some(winner_id) = vote.winner
+                        && winner_id == game.human_player_nation
+                    {
+                        println!("  *** YOU HAVE WON THE GAME! ***");
                     }
                 }
 
@@ -241,11 +243,272 @@ fn main() {
                 let tech_query = input.trim()[9..].trim();
                 research_tech(&mut game, tech_query);
             }
+            _ if cmd.starts_with("build unit ") => {
+                let unit_query = input.trim()[11..].trim();
+                build_unit(&mut game, unit_query);
+            }
+            _ if cmd.starts_with("build ") => {
+                let building_query = input.trim()[6..].trim();
+                build_building(&mut game, building_query);
+            }
+            _ if cmd.starts_with("expand ") => {
+                let building_query = input.trim()[7..].trim();
+                expand_building(&mut game, building_query);
+            }
+            "recruit" => {
+                recruit_worker(&mut game);
+            }
+            "train" => {
+                train_worker(&mut game);
+            }
             _ => {
                 println!("  Unknown command. Type 'help' for available commands.");
             }
         }
     }
+}
+
+/// Parse a building name string into a BuildingType.
+/// Only mills and factories can be built by the player.
+fn parse_buildable(name: &str) -> Option<BuildingType> {
+    match name.to_lowercase().as_str() {
+        "lumbermill" | "lumber mill" | "lumber_mill" => Some(BuildingType::LumberMill),
+        "steelmill" | "steel mill" | "steel_mill" => Some(BuildingType::SteelMill),
+        "textilemill" | "textile mill" | "textile_mill" => Some(BuildingType::TextileMill),
+        "furniturefactory" | "furniture factory" | "furniture_factory" => {
+            Some(BuildingType::FurnitureFactory)
+        }
+        "hardwarefactory" | "hardware factory" | "hardware_factory" => {
+            Some(BuildingType::HardwareFactory)
+        }
+        "clothingfactory" | "clothing factory" | "clothing_factory" => {
+            Some(BuildingType::ClothingFactory)
+        }
+        _ => None,
+    }
+}
+
+fn build_building(game: &mut GameState, query: &str) {
+    let bt = match parse_buildable(query) {
+        Some(bt) => bt,
+        None => {
+            println!("  Unknown building: '{}'", query);
+            println!(
+                "  Available: lumbermill, steelmill, textilemill, furniturefactory, hardwarefactory, clothingfactory"
+            );
+            return;
+        }
+    };
+
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+
+    // Check if the player already has this building
+    if player.has_building(bt) {
+        println!(
+            "  You already have a {:?}. Use 'expand {:?}' to increase its capacity.",
+            bt, bt
+        );
+        return;
+    }
+
+    // Cost: 1 lumber + 1 steel per capacity unit; initial capacity is 2
+    let initial_capacity: u32 = 2;
+    let (lumber_needed, steel_needed) = Building::expansion_cost(initial_capacity);
+
+    let lumber_have = player.material_amount(MaterialType::Lumber);
+    let steel_have = player.material_amount(MaterialType::Steel);
+
+    if lumber_have < lumber_needed || steel_have < steel_needed {
+        println!(
+            "  Insufficient materials to build {:?} (need {} lumber, {} steel; have {} lumber, {} steel).",
+            bt, lumber_needed, steel_needed, lumber_have, steel_have
+        );
+        return;
+    }
+
+    let player = game.get_nation_mut(player_id).unwrap();
+    player.consume_material(MaterialType::Lumber, lumber_needed);
+    player.consume_material(MaterialType::Steel, steel_needed);
+    player.buildings.push(Building::new(bt, initial_capacity));
+
+    println!(
+        "  Built {:?} with capacity {} (consumed {} lumber, {} steel).",
+        bt, initial_capacity, lumber_needed, steel_needed
+    );
+}
+
+fn expand_building(game: &mut GameState, query: &str) {
+    let bt = match parse_buildable(query) {
+        Some(bt) => bt,
+        None => {
+            println!("  Unknown building: '{}'", query);
+            println!(
+                "  Available: lumbermill, steelmill, textilemill, furniturefactory, hardwarefactory, clothingfactory"
+            );
+            return;
+        }
+    };
+
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+
+    if !player.has_building(bt) {
+        println!(
+            "  You don't have a {:?} yet. Use 'build {:?}' first.",
+            bt, bt
+        );
+        return;
+    }
+
+    // Cost: 1 lumber + 1 steel per new capacity unit; expand by 1
+    let expand_amount: u32 = 1;
+    let (lumber_needed, steel_needed) = Building::expansion_cost(expand_amount);
+
+    let lumber_have = player.material_amount(MaterialType::Lumber);
+    let steel_have = player.material_amount(MaterialType::Steel);
+
+    if lumber_have < lumber_needed || steel_have < steel_needed {
+        println!(
+            "  Insufficient materials to expand {:?} (need {} lumber, {} steel; have {} lumber, {} steel).",
+            bt, lumber_needed, steel_needed, lumber_have, steel_have
+        );
+        return;
+    }
+
+    let player = game.get_nation_mut(player_id).unwrap();
+    player.consume_material(MaterialType::Lumber, lumber_needed);
+    player.consume_material(MaterialType::Steel, steel_needed);
+
+    let building = player.get_building_mut(bt).unwrap();
+    building.start_expansion(expand_amount);
+
+    println!(
+        "  Expanding {:?} by {} capacity (consumed {} lumber, {} steel). Will be ready in 2 turns.",
+        bt, expand_amount, lumber_needed, steel_needed
+    );
+}
+
+fn recruit_worker(game: &mut GameState) {
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+
+    let canned_food = player.material_amount(MaterialType::CannedFood);
+    let clothing = player.goods_amount(GoodsType::Clothing);
+    let furniture = player.goods_amount(GoodsType::Furniture);
+
+    let mut missing = Vec::new();
+    if canned_food < 1 {
+        missing.push(format!("1 canned food (have {})", canned_food));
+    }
+    if clothing < 1 {
+        missing.push(format!("1 clothing (have {})", clothing));
+    }
+    if furniture < 1 {
+        missing.push(format!("1 furniture (have {})", furniture));
+    }
+
+    if !missing.is_empty() {
+        println!("  Cannot recruit: missing {}", missing.join(", "));
+        return;
+    }
+
+    let player = game.get_nation_mut(player_id).unwrap();
+    player.consume_material(MaterialType::CannedFood, 1);
+    player.consume_goods(GoodsType::Clothing, 1);
+    player.consume_goods(GoodsType::Furniture, 1);
+    player.labor.recruit_immigrant();
+
+    println!(
+        "  Recruited 1 untrained worker (now: {} untrained, {} trained, {} expert).",
+        player.labor.untrained, player.labor.trained, player.labor.expert
+    );
+}
+
+fn train_worker(game: &mut GameState) {
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+
+    if player.labor.untrained == 0 {
+        println!("  No untrained workers available to train.");
+        return;
+    }
+
+    // Simplified: consume 1 paper if available, but allow training regardless
+    let has_paper = player.material_amount(MaterialType::Paper) >= 1;
+
+    let player = game.get_nation_mut(player_id).unwrap();
+    if has_paper {
+        player.consume_material(MaterialType::Paper, 1);
+    }
+    player.labor.train_worker();
+
+    let paper_note = if has_paper {
+        " (consumed 1 paper)"
+    } else {
+        " (no paper available, training proceeds anyway)"
+    };
+    println!(
+        "  Trained 1 worker{} (now: {} untrained, {} trained, {} expert).",
+        paper_note, player.labor.untrained, player.labor.trained, player.labor.expert
+    );
+}
+
+/// Parse a unit type name string.
+fn parse_unit_type(name: &str) -> Option<ArmyUnitType> {
+    match name.to_lowercase().as_str() {
+        "regulars" => Some(ArmyUnitType::Regulars),
+        "grenadiers" => Some(ArmyUnitType::Grenadiers),
+        "cuirassiers" => Some(ArmyUnitType::Cuirassiers),
+        "light artillery" | "lightartillery" | "light_artillery" => {
+            Some(ArmyUnitType::LightArtillery)
+        }
+        _ => None,
+    }
+}
+
+/// Simplified money cost for supported unit types.
+fn unit_build_cost(unit_type: ArmyUnitType) -> Money {
+    match unit_type {
+        ArmyUnitType::Regulars => Money::dollars(500),
+        ArmyUnitType::Grenadiers => Money::dollars(1000),
+        ArmyUnitType::Cuirassiers => Money::dollars(500),
+        ArmyUnitType::LightArtillery => Money::dollars(2000),
+        _ => Money::dollars(0),
+    }
+}
+
+fn build_unit(game: &mut GameState, query: &str) {
+    let unit_type = match parse_unit_type(query) {
+        Some(ut) => ut,
+        None => {
+            println!("  Unknown unit type: '{}'", query);
+            println!(
+                "  Available: regulars ($500), grenadiers ($1000), cuirassiers ($500), light artillery ($2000)"
+            );
+            return;
+        }
+    };
+
+    let cost = unit_build_cost(unit_type);
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+
+    if player.treasury.checked_sub(cost).is_none() {
+        println!(
+            "  Cannot afford {:?} (cost: {}, treasury: {}).",
+            unit_type, cost, player.treasury
+        );
+        return;
+    }
+
+    let player = game.get_nation_mut(player_id).unwrap();
+    player.treasury -= cost;
+
+    println!(
+        "  Unit built! {:?} (cost: {}, treasury now: {}).",
+        unit_type, cost, player.treasury
+    );
 }
 
 fn read_line() -> String {
@@ -528,6 +791,16 @@ fn print_help() {
     println!("    buildings         — Show your buildings and workers");
     println!("    tech              — Show technology tree status");
     println!("    research <name>   — Research a technology by name");
+    println!("    build <building>  — Build a new mill or factory");
+    println!("                        (lumbermill, steelmill, textilemill,");
+    println!("                         furniturefactory, hardwarefactory, clothingfactory)");
+    println!("    expand <building> — Expand an existing building's capacity");
+    println!("    recruit           — Recruit an untrained worker (costs 1 canned food,");
+    println!("                        1 clothing, 1 furniture)");
+    println!("    train             — Train an untrained worker to trained");
+    println!("    build unit <type> — Build a military unit");
+    println!("                        (regulars $500, grenadiers $1000,");
+    println!("                         cuirassiers $500, light artillery $2000)");
     println!("    map               — Show the world map");
     println!("    provinces         — Show your provinces");
     println!("    nations           — Show all nations");

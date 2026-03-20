@@ -1,3 +1,4 @@
+use crate::ai::run_ai_turns;
 use crate::economy::buildings::BuildingType;
 use crate::economy::production::{
     ProductionChain, calculate_factory_production, calculate_mill_production,
@@ -41,6 +42,9 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         techs_available: Vec::new(),
         council_vote: None,
     };
+
+    // 0. AI decisions for computer-controlled Great Powers
+    run_ai_turns(game);
 
     // 1. Resource production: gather yields from all owned tiles
     collect_resources(game, &mut report);

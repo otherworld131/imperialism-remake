@@ -119,6 +119,50 @@ impl Nation {
         self.warehouse.get(&resource).copied().unwrap_or(0)
     }
 
+    /// Consume a material from the warehouse.
+    /// Returns `false` if the nation does not have enough (no materials removed).
+    pub fn consume_material(&mut self, material: MaterialType, amount: u32) -> bool {
+        let current = self.materials.entry(material).or_insert(0);
+        if *current >= amount {
+            *current -= amount;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Consume a finished good from the warehouse.
+    /// Returns `false` if the nation does not have enough (no goods removed).
+    pub fn consume_goods(&mut self, goods: GoodsType, amount: u32) -> bool {
+        let current = self.goods.entry(goods).or_insert(0);
+        if *current >= amount {
+            *current -= amount;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The current amount of a material in the warehouse.
+    pub fn material_amount(&self, material: MaterialType) -> u32 {
+        self.materials.get(&material).copied().unwrap_or(0)
+    }
+
+    /// The current amount of a finished good in the warehouse.
+    pub fn goods_amount(&self, goods: GoodsType) -> u32 {
+        self.goods.get(&goods).copied().unwrap_or(0)
+    }
+
+    /// Add materials to the warehouse.
+    pub fn add_material(&mut self, material: MaterialType, amount: u32) {
+        *self.materials.entry(material).or_insert(0) += amount;
+    }
+
+    /// Add finished goods to the warehouse.
+    pub fn add_goods(&mut self, goods: GoodsType, amount: u32) {
+        *self.goods.entry(goods).or_insert(0) += amount;
+    }
+
     /// Whether this nation is a Great Power.
     pub fn is_great_power(&self) -> bool {
         self.nation_type == NationType::GreatPower
@@ -369,5 +413,83 @@ mod tests {
         assert!(n.has_researched(TechId(3)));
         assert!(!n.has_researched(TechId(4)));
         assert_eq!(n.researched_techs.len(), 3);
+    }
+
+    // ── Material management ──────────────────────────────────
+
+    #[test]
+    fn add_material_stores_amount() {
+        let mut n = sample_great_power();
+        n.add_material(MaterialType::Lumber, 5);
+        assert_eq!(n.material_amount(MaterialType::Lumber), 5);
+    }
+
+    #[test]
+    fn add_material_accumulates() {
+        let mut n = sample_great_power();
+        n.add_material(MaterialType::Steel, 3);
+        n.add_material(MaterialType::Steel, 7);
+        assert_eq!(n.material_amount(MaterialType::Steel), 10);
+    }
+
+    #[test]
+    fn material_amount_defaults_to_zero() {
+        let n = sample_great_power();
+        assert_eq!(n.material_amount(MaterialType::Fabric), 0);
+    }
+
+    #[test]
+    fn consume_material_sufficient() {
+        let mut n = sample_great_power();
+        n.add_material(MaterialType::Lumber, 10);
+        assert!(n.consume_material(MaterialType::Lumber, 4));
+        assert_eq!(n.material_amount(MaterialType::Lumber), 6);
+    }
+
+    #[test]
+    fn consume_material_insufficient() {
+        let mut n = sample_great_power();
+        n.add_material(MaterialType::Steel, 3);
+        assert!(!n.consume_material(MaterialType::Steel, 5));
+        assert_eq!(n.material_amount(MaterialType::Steel), 3);
+    }
+
+    // ── Goods management ─────────────────────────────────────
+
+    #[test]
+    fn add_goods_stores_amount() {
+        let mut n = sample_great_power();
+        n.add_goods(GoodsType::Furniture, 2);
+        assert_eq!(n.goods_amount(GoodsType::Furniture), 2);
+    }
+
+    #[test]
+    fn add_goods_accumulates() {
+        let mut n = sample_great_power();
+        n.add_goods(GoodsType::Clothing, 3);
+        n.add_goods(GoodsType::Clothing, 4);
+        assert_eq!(n.goods_amount(GoodsType::Clothing), 7);
+    }
+
+    #[test]
+    fn goods_amount_defaults_to_zero() {
+        let n = sample_great_power();
+        assert_eq!(n.goods_amount(GoodsType::Hardware), 0);
+    }
+
+    #[test]
+    fn consume_goods_sufficient() {
+        let mut n = sample_great_power();
+        n.add_goods(GoodsType::Furniture, 5);
+        assert!(n.consume_goods(GoodsType::Furniture, 3));
+        assert_eq!(n.goods_amount(GoodsType::Furniture), 2);
+    }
+
+    #[test]
+    fn consume_goods_insufficient() {
+        let mut n = sample_great_power();
+        n.add_goods(GoodsType::Clothing, 2);
+        assert!(!n.consume_goods(GoodsType::Clothing, 5));
+        assert_eq!(n.goods_amount(GoodsType::Clothing), 2);
     }
 }
