@@ -1,5 +1,6 @@
 use crate::diplomacy::DiplomacyState;
 use crate::economy::buildings::{Building, BuildingType};
+use crate::economy::civilians::{Civilian, CivilianType, next_civilian_id};
 use crate::events::DomainEvent;
 use crate::map::{HexMap, Province};
 use crate::nation::{Nation, NationColor};
@@ -213,6 +214,12 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
                 nation.labor.untrained = 2;
             }
         }
+
+        // Starting civilians: 1 Farmer + 1 Forester for each Great Power
+        let farmer = Civilian::new(next_civilian_id(), CivilianType::Farmer, setup.nation_id);
+        let forester = Civilian::new(next_civilian_id(), CivilianType::Forester, setup.nation_id);
+        nation.civilians.push(farmer);
+        nation.civilians.push(forester);
 
         nations.push(nation);
     }
@@ -456,5 +463,61 @@ mod tests {
         let mut gs = sample_game_state();
         gs.turn = TurnNumber::from_year_quarter(1914, 4);
         assert!(!gs.is_game_over());
+    }
+
+    // ── Starting civilians ───────────────────────────────────
+
+    #[test]
+    fn new_game_great_powers_have_starting_civilians() {
+        let gs = new_game("test", Difficulty::Normal, 0);
+        for nation in gs.great_powers() {
+            assert_eq!(
+                nation.civilians.len(),
+                2,
+                "Great Power {} should start with 2 civilians",
+                nation.name
+            );
+            // First should be a Farmer
+            assert_eq!(
+                nation.civilians[0].civilian_type,
+                CivilianType::Farmer,
+                "{} should have a Farmer as first civilian",
+                nation.name
+            );
+            // Second should be a Forester
+            assert_eq!(
+                nation.civilians[1].civilian_type,
+                CivilianType::Forester,
+                "{} should have a Forester as second civilian",
+                nation.name
+            );
+        }
+    }
+
+    #[test]
+    fn new_game_minor_nations_have_no_civilians() {
+        let gs = new_game("test", Difficulty::Normal, 0);
+        for nation in gs.minor_nations() {
+            assert!(
+                nation.civilians.is_empty(),
+                "Minor Nation {} should have no civilians",
+                nation.name
+            );
+        }
+    }
+
+    #[test]
+    fn new_game_civilians_have_unique_ids() {
+        let gs = new_game("test", Difficulty::Normal, 0);
+        let all_ids: Vec<crate::map::UnitId> = gs
+            .great_powers()
+            .iter()
+            .flat_map(|n| n.civilians.iter().map(|c| c.id))
+            .collect();
+        for i in 0..all_ids.len() {
+            for j in (i + 1)..all_ids.len() {
+                assert_ne!(all_ids[i], all_ids[j], "All civilian IDs must be unique");
+            }
+        }
     }
 }

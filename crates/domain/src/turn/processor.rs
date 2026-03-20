@@ -1,5 +1,6 @@
 use crate::ai::run_ai_turns;
 use crate::economy::buildings::BuildingType;
+use crate::economy::civilians::CivilianType;
 use crate::economy::production::{
     ProductionChain, calculate_factory_production, calculate_mill_production,
 };
@@ -32,6 +33,8 @@ pub struct TurnReport {
     pub scores: Vec<(NationId, String, u32)>,
     /// Summary of notable actions taken by AI nations this turn.
     pub ai_actions: Vec<String>,
+    /// Descriptions of completed civilian work this turn.
+    pub civilian_completions: Vec<(NationId, String)>,
 }
 
 /// Process one turn of the game.
@@ -55,11 +58,15 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         battles: Vec::new(),
         scores: Vec::new(),
         ai_actions: Vec::new(),
+        civilian_completions: Vec::new(),
     };
 
     // 0. AI decisions for computer-controlled Great Powers
     let ai_actions = run_ai_turns(game);
     report.ai_actions = ai_actions;
+
+    // 0b. Resolve civilian actions (tick working civilians, apply improvements)
+    resolve_civilian_actions(game, &mut report);
 
     // 1. Resource production: gather yields from all owned tiles
     collect_resources(game, &mut report);
@@ -142,6 +149,79 @@ fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
 
     // Record in report
     report.resource_production.extend(production_data);
+}
+
+/// Resolve civilian work actions for all nations.
+///
+/// For each nation, ticks all working civilians. When work completes:
+/// - Farmer/Rancher/Forester/Miner/Driller: improve the tile (increment improvement_level)
+/// - Prospector: reveal the tile's hidden resource deposit (simplified: always reveals coal/iron/oil)
+fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
+    // Phase 1: collect completed work info using immutable borrows on nations,
+    // then apply tile mutations separately.
+    struct CompletedWork {
+        nation_id: NationId,
+        civilian_type: CivilianType,
+        position: crate::hex::HexCoord,
+        description: String,
+    }
+
+    let mut completed: Vec<CompletedWork> = Vec::new();
+
+    for nation in &mut game.nations {
+        for civilian in &mut nation.civilians {
+            if !civilian.working {
+                continue;
+            }
+            let just_finished = civilian.tick();
+            if just_finished && let Some(pos) = civilian.position {
+                let desc = format!(
+                    "{} completed work at ({}, {})",
+                    civilian.civilian_type, pos.q, pos.r
+                );
+                completed.push(CompletedWork {
+                    nation_id: nation.id,
+                    civilian_type: civilian.civilian_type,
+                    position: pos,
+                    description: desc,
+                });
+            }
+        }
+    }
+
+    // Phase 2: apply tile improvements
+    for work in &completed {
+        if let Some(tile) = game.hex_map.get_tile_mut(work.position) {
+            match work.civilian_type {
+                CivilianType::Farmer
+                | CivilianType::Rancher
+                | CivilianType::Forester
+                | CivilianType::Miner
+                | CivilianType::Driller => {
+                    tile.improve();
+                }
+                CivilianType::Prospector => {
+                    // Reveal a resource deposit based on terrain
+                    if tile.terrain().requires_prospecting() && tile.resource_deposit().is_none() {
+                        let deposit = match tile.terrain() {
+                            TerrainType::BarrenHills | TerrainType::Mountain => ResourceType::Coal,
+                            TerrainType::Swamp | TerrainType::Desert | TerrainType::Tundra => {
+                                ResourceType::Oil
+                            }
+                            _ => ResourceType::Coal,
+                        };
+                        tile.reveal_deposit(deposit);
+                    }
+                }
+                CivilianType::Engineer => {
+                    // Engineers build infrastructure, not tile improvements — handled separately
+                }
+            }
+        }
+        report
+            .civilian_completions
+            .push((work.nation_id, work.description.clone()));
+    }
 }
 
 /// Convert monetary resources (Gold, Gems) into treasury money.

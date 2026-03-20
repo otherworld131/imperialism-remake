@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use ::infrastructure::persistence;
 use domain::economy::buildings::{Building, BuildingType};
+use domain::economy::civilians::{next_civilian_id, parse_civilian_type};
 use domain::game_state::{GameState, new_game};
 use domain::hex::HexCoord;
 use domain::map::infrastructure;
@@ -237,6 +238,20 @@ fn main() {
                         }
                     }
                 }
+                // Show civilian completions
+                let player_civs: Vec<_> = report
+                    .civilian_completions
+                    .iter()
+                    .filter(|(nid, _)| *nid == player_id)
+                    .collect();
+                if !player_civs.is_empty() {
+                    println!();
+                    println!("  Civilian work completed:");
+                    for (_, desc) in &player_civs {
+                        println!("    {}", desc);
+                    }
+                }
+
                 // Show score summary
                 if let Some((rank, total)) = score_summary(&report.scores, game.human_player_nation)
                 {
@@ -446,6 +461,18 @@ fn main() {
             _ if cmd.starts_with("peace ") => {
                 let nation_query = input.trim()[6..].trim();
                 cmd_peace(&mut game, nation_query);
+            }
+            "civilians" => {
+                println!();
+                print_civilians(&game);
+            }
+            _ if cmd.starts_with("hire ") => {
+                let type_query = input.trim()[5..].trim();
+                cmd_hire_civilian(&mut game, type_query);
+            }
+            _ if cmd.starts_with("deploy ") => {
+                let args = input.trim()[7..].trim();
+                cmd_deploy_civilian(&mut game, args);
             }
             _ => {
                 println!("  Unknown command. Type 'help' for available commands.");
@@ -1299,6 +1326,176 @@ fn print_trade(game: &GameState) {
     println!("  (Trade is auto-resolved at the start of each turn)");
 }
 
+fn print_civilians(game: &GameState) {
+    let player = game.get_nation(game.human_player_nation).unwrap();
+    if player.civilians.is_empty() {
+        println!("  No civilian units. Use 'hire <type>' to hire one.");
+        println!("  Types: prospector, miner, engineer, farmer, rancher, forester, driller");
+        return;
+    }
+    println!("  CIVILIAN UNITS:");
+    for (i, c) in player.civilians.iter().enumerate() {
+        let pos_str = match c.position {
+            Some(coord) => format!("({}, {})", coord.q, coord.r),
+            None => "Undeployed".to_string(),
+        };
+        let status_str = if c.working {
+            format!("Working ({} turns left)", c.turns_remaining)
+        } else {
+            "Idle".to_string()
+        };
+        println!(
+            "    [{}] {} — {} — {}",
+            i, c.civilian_type, pos_str, status_str
+        );
+    }
+}
+
+fn cmd_hire_civilian(game: &mut GameState, type_name: &str) {
+    let civ_type = match parse_civilian_type(type_name) {
+        Some(ct) => ct,
+        None => {
+            println!("  Unknown civilian type: '{}'", type_name);
+            println!("  Available: prospector ($100), miner ($1500), engineer ($500),");
+            println!(
+                "             farmer ($100), rancher ($100), forester ($100), driller ($2000)"
+            );
+            return;
+        }
+    };
+
+    let cost = civ_type.creation_cost();
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+
+    if player.treasury.checked_sub(cost).is_none() {
+        println!(
+            "  Cannot afford {} (cost: {}, treasury: {}).",
+            civ_type, cost, player.treasury
+        );
+        return;
+    }
+
+    let id = next_civilian_id();
+    let civilian = domain::economy::civilians::Civilian::new(id, civ_type, player_id);
+
+    let player = game.get_nation_mut(player_id).unwrap();
+    player.treasury -= cost;
+    player.civilians.push(civilian);
+
+    println!(
+        "  Hired {} (cost: {}, treasury now: {}). Use 'deploy <index> <province>' to deploy.",
+        civ_type, cost, player.treasury
+    );
+}
+
+fn cmd_deploy_civilian(game: &mut GameState, args: &str) {
+    // Parse: "<index> <province_name>"
+    let parts: Vec<&str> = args.splitn(2, ' ').collect();
+    if parts.len() < 2 {
+        println!("  Usage: deploy <civilian_index> <province_name>");
+        println!("  Example: deploy 0 France City");
+        return;
+    }
+    let index: usize = match parts[0].parse() {
+        Ok(i) => i,
+        Err(_) => {
+            println!(
+                "  Invalid index: '{}'. Use 'civilians' to see indices.",
+                parts[0]
+            );
+            return;
+        }
+    };
+    let province_name = parts[1].trim();
+
+    let player_id = game.human_player_nation;
+
+    // Phase 1: gather info with immutable borrows, extract owned data
+    let (civ_type, coord, prov_name) = {
+        let player = game.get_nation(player_id).unwrap();
+
+        if index >= player.civilians.len() {
+            println!(
+                "  Invalid index {}. You have {} civilians.",
+                index,
+                player.civilians.len()
+            );
+            return;
+        }
+
+        let civ_type = player.civilians[index].civilian_type;
+
+        // Find the province by name (case-insensitive partial match)
+        let lower_name = province_name.to_lowercase();
+        let matching_provinces: Vec<_> = game
+            .provinces
+            .iter()
+            .filter(|p| p.owner == player_id && p.name.to_lowercase().contains(&lower_name))
+            .collect();
+
+        let province = match matching_provinces.len() {
+            0 => {
+                println!("  No owned province matches '{}'.", province_name);
+                return;
+            }
+            1 => matching_provinces[0],
+            _ => {
+                println!(
+                    "  Multiple provinces match '{}'. Be more specific.",
+                    province_name
+                );
+                return;
+            }
+        };
+
+        let prov_name = province.name.clone();
+
+        // Find the first improvable tile in the province for this civilian type
+        let mut target_coord = None;
+        for tile_coord in &province.tiles {
+            if let Some(tile) = game.hex_map.get_tile(*tile_coord)
+                && civ_type.can_improve(tile.terrain())
+                && tile.improvement_level() < tile.terrain().max_improvement_level()
+                && tile.assigned_civilian.is_none()
+            {
+                target_coord = Some(*tile_coord);
+                break;
+            }
+        }
+
+        let coord = match target_coord {
+            Some(c) => c,
+            None => {
+                println!(
+                    "  No improvable tile for {} in province '{}'.",
+                    civ_type, prov_name
+                );
+                return;
+            }
+        };
+
+        (civ_type, coord, prov_name)
+    };
+
+    // Phase 2: apply mutations
+    let player = game.get_nation_mut(player_id).unwrap();
+    let civilian = &mut player.civilians[index];
+    civilian.deploy(coord);
+    civilian.start_work(1); // 1 turn for improvements
+    let civ_id = civilian.id;
+
+    // Assign civilian to tile
+    if let Some(tile) = game.hex_map.get_tile_mut(coord) {
+        tile.assigned_civilian = Some(civ_id);
+    }
+
+    println!(
+        "  Deployed {} to ({}, {}) in province '{}'. Work will complete next turn.",
+        civ_type, coord.q, coord.r, prov_name
+    );
+}
+
 fn print_help() {
     println!("  COMMANDS:");
     println!("    [Enter] / turn    — End turn (gather resources, advance time)");
@@ -1327,6 +1524,11 @@ fn print_help() {
     println!("    build unit <type> — Build a military unit");
     println!("                        (regulars $500, grenadiers $1000,");
     println!("                         cuirassiers $500, light artillery $2000)");
+    println!("    civilians         — List your civilian units (type, position, status)");
+    println!("    hire <type>       — Hire a civilian specialist");
+    println!("                        (prospector $100, miner $1500, engineer $500,");
+    println!("                         farmer $100, rancher $100, forester $100, driller $2000)");
+    println!("    deploy <i> <prov> — Deploy civilian #i to a province to start working");
     println!("    military / army   — Show your army units and their stats");
     println!("    attack <nation>   — Order an attack on a nation you are at war with");
     println!("    diplomacy         — Show diplomatic relations with all nations");
