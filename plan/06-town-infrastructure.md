@@ -21,7 +21,7 @@ and factory capacity.
 ### Province Connection
 - [ ] Province is "connected" if a rail depot on/adjacent to its capital links to national capital
 - [ ] Alternative: port connection to capital (via sea route)
-- [ ] Connection validation algorithm — pathfinding through rail network or port chain
+- [x] Connection validation algorithm — pathfinding through rail network or port chain
 - [ ] Disconnection on province loss — recalculate connectivity
 - [ ] Unit tests for connection detection
 
@@ -40,29 +40,29 @@ and factory capacity.
 - [ ] Unit tests for town production calculations at each capacity level
 
 ### Infrastructure — Railroads
-- [ ] Railroads connect tiles, enabling resource transport to capital
-- [ ] Built by Engineer units, one tile per turn
-- [ ] Cost varies by terrain:
-  - [ ] Plains/Farm/Forest: $100
-  - [ ] Desert/Tundra: $100-150
-  - [ ] Swamp: $300 (requires Iron Railroad Bridge tech)
-  - [ ] Hills: $200 (requires Compound Steam Engine tech)
-  - [ ] Mountains: requires Dynamite tech
+- [x] Railroads connect tiles, enabling resource transport to capital
+- [x] Built by Engineer units, one tile per turn
+- [x] Cost varies by terrain:
+  - [x] Plains/Farm/Forest: $100
+  - [x] Desert/Tundra: $100-150
+  - [x] Swamp: $300 (requires Iron Railroad Bridge tech)
+  - [x] Hills: $200 (requires Compound Steam Engine tech)
+  - [x] Mountains: requires Dynamite tech
 - [ ] Railroads also used for military transport (1 army unit per 5 freight cars)
 - [ ] Unit tests for railroad construction rules
 
 ### Infrastructure — Depots
-- [ ] Depots are collection points for resources from surrounding tiles
-- [ ] Built by Engineer, costs $2,000, takes 3 turns
+- [x] Depots are collection points for resources from surrounding tiles
+- [x] Built by Engineer, costs $2,000, takes 3 turns
 - [ ] Must be connected to capital via railroad or port to be useful
-- [ ] Placing depot on/adjacent to a province capital triggers industrialization
+- [x] Placing depot on/adjacent to a province capital triggers industrialization
 - [ ] Unit tests for depot placement and connectivity
 
 ### Infrastructure — Ports
-- [ ] Ports provide sea access for trade and military operations
-- [ ] Built by Engineer on coastal tiles, costs $3,000, takes 3 turns
-- [ ] Ports cannot be built on hill terrain
-- [ ] Ports connect provinces to the capital via sea routes
+- [x] Ports provide sea access for trade and military operations
+- [x] Built by Engineer on coastal tiles, costs $3,000, takes 3 turns
+- [x] Ports cannot be built on hill terrain
+- [x] Ports connect provinces to the capital via sea routes
 - [ ] Required for overseas trade with minor nations
 - [ ] Unit tests for port placement validation
 
