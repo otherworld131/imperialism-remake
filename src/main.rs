@@ -290,6 +290,17 @@ fn main() {
                 println!();
                 print_fleet(&game);
             }
+            "navy" => {
+                println!();
+                print_navy(&game);
+            }
+            _ if cmd.starts_with("build warship ") => {
+                let ship_query = input.trim()[14..].trim();
+                cmd_build_warship(&mut game, ship_query);
+            }
+            "produce arms" => {
+                cmd_produce_arms(&mut game);
+            }
             _ if cmd.starts_with("sell ") => {
                 let args = input.trim()[5..].trim();
                 cmd_sell(&mut game, args);
@@ -628,6 +639,125 @@ fn cmd_build_ship(game: &mut GameState, query: &str) {
         stats.cargo,
         player.merchant_fleet.len(),
         player.total_cargo_capacity()
+    );
+}
+
+/// Build a warship (frigate or ship-of-the-line).
+fn cmd_build_warship(game: &mut GameState, query: &str) {
+    let ship_type = match query.to_lowercase().as_str() {
+        "frigate" => ShipType::Frigate,
+        "ship-of-the-line" | "ship of the line" | "shipoftheline" => ShipType::ShipOfTheLine,
+        _ => {
+            println!("  Unknown warship type: '{}'", query);
+            println!(
+                "  Available: frigate (2 fabric + 5 lumber + 2 arms), ship-of-the-line (3 fabric + 8 lumber + 5 arms)"
+            );
+            return;
+        }
+    };
+
+    let stats = ship_type.stats();
+    let fabric_needed = stats.fabric_cost;
+    let lumber_needed = stats.lumber_cost;
+    let arms_needed = stats.arms_cost;
+
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+
+    let fabric_have = player.material_amount(MaterialType::Fabric);
+    let lumber_have = player.material_amount(MaterialType::Lumber);
+    let arms_have = player.material_amount(MaterialType::Arms);
+
+    if fabric_have < fabric_needed || lumber_have < lumber_needed || arms_have < arms_needed {
+        println!(
+            "  Insufficient materials to build {:?} (need {} fabric + {} lumber + {} arms; have {} fabric + {} lumber + {} arms).",
+            ship_type,
+            fabric_needed,
+            lumber_needed,
+            arms_needed,
+            fabric_have,
+            lumber_have,
+            arms_have
+        );
+        return;
+    }
+
+    let uid = UnitId(NEXT_UNIT_ID.fetch_add(1, Ordering::Relaxed));
+    let ship = Ship::new(uid, ship_type, player_id);
+
+    let player = game.get_nation_mut(player_id).unwrap();
+    player.consume_material(MaterialType::Fabric, fabric_needed);
+    player.consume_material(MaterialType::Lumber, lumber_needed);
+    player.consume_material(MaterialType::Arms, arms_needed);
+    player.warships.push(ship);
+
+    println!(
+        "  Warship built! {:?} added to navy (FP: {}, Armor: {}, Hull: {}). Navy size: {}, total naval firepower: {}",
+        ship_type,
+        stats.firepower,
+        stats.armor,
+        stats.hull,
+        player.warships.len(),
+        player.total_naval_firepower()
+    );
+}
+
+/// Print the warship fleet.
+fn print_navy(game: &GameState) {
+    let player = game.get_nation(game.human_player_nation).unwrap();
+
+    if player.warships.is_empty() {
+        println!(
+            "  No warships. Use 'build warship frigate' or 'build warship ship-of-the-line' to build one."
+        );
+        return;
+    }
+
+    println!("  NAVY:");
+
+    // Count ships by type
+    let mut counts: std::collections::BTreeMap<String, (usize, u32, u32, u32)> =
+        std::collections::BTreeMap::new();
+    for ship in &player.warships {
+        let name = format!("{:?}", ship.ship_type);
+        let stats = ship.ship_type.stats();
+        let entry = counts
+            .entry(name)
+            .or_insert((0, stats.firepower, stats.armor, stats.hull));
+        entry.0 += 1;
+    }
+
+    for (name, (count, fp, armor, hull)) in &counts {
+        println!(
+            "    {}x {} (FP: {}, Armor: {}, Hull: {})",
+            count, name, fp, armor, hull
+        );
+    }
+    println!(
+        "    Total naval firepower: {}",
+        player.total_naval_firepower()
+    );
+}
+
+/// Produce arms: convert 1 steel into 1 arms.
+fn cmd_produce_arms(game: &mut GameState) {
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+
+    let steel_have = player.material_amount(MaterialType::Steel);
+    if steel_have < 1 {
+        println!("  Cannot produce arms: need 1 steel (have {}).", steel_have);
+        return;
+    }
+
+    let player = game.get_nation_mut(player_id).unwrap();
+    player.consume_material(MaterialType::Steel, 1);
+    player.add_material(MaterialType::Arms, 1);
+
+    println!(
+        "  Produced 1 arms from 1 steel. Arms: {}, Steel: {}",
+        player.material_amount(MaterialType::Arms),
+        player.material_amount(MaterialType::Steel)
     );
 }
 
@@ -1546,6 +1676,9 @@ fn print_help() {
     println!("    build unit <type> — Build a military unit");
     println!("    move <i> <prov>   — Move army unit #i to a province you own");
     println!("    attack <nation>   — Order an attack on a nation you are at war with");
+    println!("    navy              — Show your warship fleet");
+    println!("    build warship <t> — Build a warship (frigate, ship-of-the-line)");
+    println!("    produce arms      — Convert 1 steel into 1 arms");
     println!();
     println!("  {}", color_bold("DIPLOMACY:"));
     println!("    diplomacy         — Show diplomatic relations with all nations");

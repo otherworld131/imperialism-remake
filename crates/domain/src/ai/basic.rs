@@ -99,6 +99,7 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<String> {
         ai_build_transport(game, *nation_id);
         ai_build_consulates(game, *nation_id);
         ai_build_merchant_ships(game, *nation_id);
+        ai_build_warships(game, *nation_id);
         ai_military_strategy(game, *nation_id, &mut actions);
     }
 
@@ -1082,6 +1083,63 @@ fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
 ///
 /// - **Economic** personality: build up to 3 ships total
 /// - Others: build if cargo capacity is 0
+///
+/// AI builds warships if it has fewer than the threshold and has the required materials.
+///
+/// - If AI has < 2 warships and has fabric + lumber + arms materials, build a Frigate.
+/// - Aggressive AI builds up to 4 warships.
+/// - If AI has steel but no arms, it produces arms from steel first.
+fn ai_build_warships(game: &mut GameState, nation_id: NationId) {
+    let personality = get_personality(game, nation_id);
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let max_warships: usize = match personality {
+        AiPersonality::Aggressive => 4,
+        _ => 2,
+    };
+
+    if nation.warship_count() >= max_warships {
+        return;
+    }
+
+    let fabric_have = nation.material_amount(MaterialType::Fabric);
+    let lumber_have = nation.material_amount(MaterialType::Lumber);
+    let arms_have = nation.material_amount(MaterialType::Arms);
+    let steel_have = nation.material_amount(MaterialType::Steel);
+
+    // If we have the fabric and lumber but need arms, produce arms from steel
+    if fabric_have >= 2 && lumber_have >= 5 && arms_have < 2 && steel_have > 0 {
+        let arms_needed = 2 - arms_have;
+        let arms_to_produce = arms_needed.min(steel_have);
+        let nation = game.get_nation_mut(nation_id).unwrap();
+        nation.consume_material(MaterialType::Steel, arms_to_produce);
+        nation.add_material(MaterialType::Arms, arms_to_produce);
+    }
+
+    // Re-check after possible arms production
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+    let fabric_have = nation.material_amount(MaterialType::Fabric);
+    let lumber_have = nation.material_amount(MaterialType::Lumber);
+    let arms_have = nation.material_amount(MaterialType::Arms);
+
+    // Try to build a Frigate: 2 fabric + 5 lumber + 2 arms
+    if fabric_have >= 2 && lumber_have >= 5 && arms_have >= 2 {
+        let uid = next_unit_id();
+        let ship = Ship::new(uid, ShipType::Frigate, nation_id);
+        let nation = game.get_nation_mut(nation_id).unwrap();
+        nation.consume_material(MaterialType::Fabric, 2);
+        nation.consume_material(MaterialType::Lumber, 5);
+        nation.consume_material(MaterialType::Arms, 2);
+        nation.warships.push(ship);
+    }
+}
+
 fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId) {
     let personality = get_personality(game, nation_id);
     let nation = match game.get_nation(nation_id) {
@@ -2428,6 +2486,144 @@ mod tests {
             game.get_nation(NationId(2)).unwrap().merchant_ship_count(),
             1,
             "Balanced AI should only build 1 ship (has cargo capacity)"
+        );
+    }
+
+    // ── Warship building ──────────────────────────────────────
+
+    #[test]
+    fn ai_builds_warship_with_arms() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.add_material(MaterialType::Fabric, 4);
+        ai.add_material(MaterialType::Lumber, 10);
+        ai.add_material(MaterialType::Arms, 4);
+
+        ai_build_warships(&mut game, NationId(2));
+        assert_eq!(
+            game.get_nation(NationId(2)).unwrap().warship_count(),
+            1,
+            "AI should build a warship when it has sufficient materials"
+        );
+    }
+
+    #[test]
+    fn ai_produces_arms_from_steel_for_warships() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.add_material(MaterialType::Fabric, 4);
+        ai.add_material(MaterialType::Lumber, 10);
+        ai.add_material(MaterialType::Steel, 5);
+        // No arms at all
+
+        ai_build_warships(&mut game, NationId(2));
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            ai.warship_count(),
+            1,
+            "AI should produce arms from steel and build a warship"
+        );
+        // Steel should be consumed: 2 for arms production
+        assert_eq!(ai.material_amount(MaterialType::Steel), 3);
+    }
+
+    #[test]
+    fn ai_does_not_build_warship_without_materials() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        // No materials at all
+
+        ai_build_warships(&mut game, NationId(2));
+        assert_eq!(
+            game.get_nation(NationId(2)).unwrap().warship_count(),
+            0,
+            "AI should not build warships without materials"
+        );
+    }
+
+    #[test]
+    fn aggressive_ai_builds_up_to_four_warships() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Aggressive);
+        ai.add_material(MaterialType::Fabric, 20);
+        ai.add_material(MaterialType::Lumber, 40);
+        ai.add_material(MaterialType::Arms, 20);
+
+        for _ in 0..4 {
+            ai_build_warships(&mut game, NationId(2));
+        }
+        assert_eq!(
+            game.get_nation(NationId(2)).unwrap().warship_count(),
+            4,
+            "Aggressive AI should build up to 4 warships"
+        );
+
+        // Should not build a 5th
+        ai_build_warships(&mut game, NationId(2));
+        assert_eq!(
+            game.get_nation(NationId(2)).unwrap().warship_count(),
+            4,
+            "Aggressive AI should cap at 4 warships"
+        );
+    }
+
+    #[test]
+    fn balanced_ai_caps_at_two_warships() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.add_material(MaterialType::Fabric, 20);
+        ai.add_material(MaterialType::Lumber, 40);
+        ai.add_material(MaterialType::Arms, 20);
+
+        for _ in 0..3 {
+            ai_build_warships(&mut game, NationId(2));
+        }
+        assert_eq!(
+            game.get_nation(NationId(2)).unwrap().warship_count(),
+            2,
+            "Balanced AI should cap at 2 warships"
+        );
+    }
+
+    #[test]
+    fn ai_produces_partial_arms_from_steel() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.add_material(MaterialType::Fabric, 4);
+        ai.add_material(MaterialType::Lumber, 10);
+        ai.add_material(MaterialType::Arms, 1); // have 1, need 2
+        ai.add_material(MaterialType::Steel, 1); // can produce 1 more
+
+        ai_build_warships(&mut game, NationId(2));
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            ai.warship_count(),
+            1,
+            "AI should produce 1 arms from steel to supplement existing 1 arms"
+        );
+        assert_eq!(ai.material_amount(MaterialType::Steel), 0);
+    }
+
+    #[test]
+    fn ai_does_not_produce_arms_when_no_steel() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.add_material(MaterialType::Fabric, 4);
+        ai.add_material(MaterialType::Lumber, 10);
+        // No arms and no steel
+
+        ai_build_warships(&mut game, NationId(2));
+        assert_eq!(
+            game.get_nation(NationId(2)).unwrap().warship_count(),
+            0,
+            "AI should not build warship without arms or steel"
         );
     }
 }

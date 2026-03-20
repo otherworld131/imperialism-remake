@@ -9,6 +9,7 @@ use crate::events::*;
 use crate::game_state::GameState;
 use crate::map::SettlementLevel;
 use crate::military::combat::{BattleResult, CombatForce, create_garrison, resolve_battle};
+use crate::military::naval::{NavalBattleResult, calculate_blockade_effect, resolve_naval_battle};
 use crate::turn::scoring::{CouncilVoteResult, calculate_score, run_council_vote};
 use crate::types::*;
 
@@ -30,6 +31,8 @@ pub struct TurnReport {
     pub council_vote: Option<CouncilVoteResult>,
     pub trade_transactions: Vec<TradeTransaction>,
     pub battles: Vec<BattleResult>,
+    /// Naval battles resolved this turn.
+    pub naval_battles: Vec<NavalBattleResult>,
     /// Scores for all Great Powers: (nation_id, nation_name, total_score).
     pub scores: Vec<(NationId, String, u32)>,
     /// Summary of notable actions taken by AI nations this turn.
@@ -120,6 +123,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         council_vote: None,
         trade_transactions: Vec::new(),
         battles: Vec::new(),
+        naval_battles: Vec::new(),
         scores: Vec::new(),
         ai_actions: Vec::new(),
         civilian_completions: Vec::new(),
@@ -168,6 +172,12 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
 
     // 7. Resolve combat (pending attacks)
     resolve_combat(game, &mut report);
+
+    // 7b. Resolve naval combat (warship engagements between nations at war)
+    resolve_naval_combat(game, &mut report);
+
+    // 7c. Apply blockade effects (reduce trade cargo for blockaded nations)
+    apply_blockade_effects(game, &mut report);
 
     // 8. Report available techs
     report_available_techs(game, &mut report);
@@ -1173,6 +1183,148 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
         }
 
         report.battles.push(result);
+    }
+}
+
+/// Resolve naval combat between nations at war that both have warships.
+///
+/// For each pair of nations at war where both sides have warships, resolve
+/// a naval battle. The winner keeps surviving ships, the loser loses destroyed ships.
+fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
+    // Collect all pairs of nations at war where both have warships
+    let gp_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+
+    let mut battles_to_resolve: Vec<(NationId, NationId)> = Vec::new();
+
+    for i in 0..gp_ids.len() {
+        for j in (i + 1)..gp_ids.len() {
+            let a = gp_ids[i];
+            let b = gp_ids[j];
+
+            // Check if at war
+            let at_war = game.diplomacy.get_relation(a, b).is_some_and(|r| r.at_war);
+
+            if !at_war {
+                continue;
+            }
+
+            // Check if both have warships
+            let a_has_warships = game.get_nation(a).is_some_and(|n| !n.warships.is_empty());
+            let b_has_warships = game.get_nation(b).is_some_and(|n| !n.warships.is_empty());
+
+            if a_has_warships && b_has_warships {
+                battles_to_resolve.push((a, b));
+            }
+        }
+    }
+
+    for (attacker_id, defender_id) in battles_to_resolve {
+        let atk_ships = match game.get_nation(attacker_id) {
+            Some(n) => n.warships.clone(),
+            None => continue,
+        };
+        let def_ships = match game.get_nation(defender_id) {
+            Some(n) => n.warships.clone(),
+            None => continue,
+        };
+
+        let result = resolve_naval_battle(&atk_ships, &def_ships, attacker_id, defender_id);
+
+        let atk_name = game
+            .get_nation(attacker_id)
+            .map(|n| n.name.clone())
+            .unwrap_or_else(|| "Unknown".to_string());
+        let def_name = game
+            .get_nation(defender_id)
+            .map(|n| n.name.clone())
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        // Update surviving fleets
+        if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
+            attacker_nation.warships = result.attacker_survivors.clone();
+        }
+        if let Some(defender_nation) = game.get_nation_mut(defender_id) {
+            defender_nation.warships = result.defender_survivors.clone();
+        }
+
+        // Add headline
+        if result.attacker_won {
+            report.newspaper_headlines.push(format!(
+                "NAVAL VICTORY: {} defeats {} fleet! ({} ships sunk)",
+                atk_name,
+                def_name,
+                result.defender_ships_lost.len()
+            ));
+        } else {
+            report.newspaper_headlines.push(format!(
+                "NAVAL VICTORY: {} defeats {} fleet! ({} ships sunk)",
+                def_name,
+                atk_name,
+                result.attacker_ships_lost.len()
+            ));
+        }
+
+        report.naval_battles.push(result);
+    }
+}
+
+/// Apply blockade effects: reduce effective trade cargo capacity for nations
+/// whose enemies have warships.
+///
+/// This is a simplified model: for each nation at war with an enemy that has
+/// warships, the nation's effective cargo for trade is reduced. We apply this
+/// by recording it for reference (the actual trade resolution already happened,
+/// but the blockade effect adds a newspaper headline).
+fn apply_blockade_effects(game: &GameState, report: &mut TurnReport) {
+    let gp_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+
+    for &nation_id in &gp_ids {
+        let nation = match game.get_nation(nation_id) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        let cargo = nation.total_cargo_capacity();
+        if cargo == 0 {
+            continue;
+        }
+
+        // Sum up enemy warship counts
+        let mut enemy_warship_count: u32 = 0;
+        for &other_id in &gp_ids {
+            if other_id == nation_id {
+                continue;
+            }
+            let at_war = game
+                .diplomacy
+                .get_relation(nation_id, other_id)
+                .is_some_and(|r| r.at_war);
+            if at_war && let Some(other) = game.get_nation(other_id) {
+                enemy_warship_count += other.warship_count() as u32;
+            }
+        }
+
+        if enemy_warship_count > 0 {
+            let effective_cargo = calculate_blockade_effect(cargo, enemy_warship_count);
+            let blocked = cargo - effective_cargo;
+            if blocked > 0 {
+                let nation_name = &nation.name;
+                report.newspaper_headlines.push(format!(
+                    "BLOCKADE: {} merchant fleet loses {} cargo capacity to enemy warships",
+                    nation_name, blocked
+                ));
+            }
+        }
     }
 }
 

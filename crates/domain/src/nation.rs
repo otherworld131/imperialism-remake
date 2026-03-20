@@ -73,6 +73,9 @@ pub struct Nation {
     /// Merchant fleet — ships used for trade.
     #[serde(default)]
     pub merchant_fleet: Vec<Ship>,
+    /// Warship fleet — military naval vessels.
+    #[serde(default)]
+    pub warships: Vec<Ship>,
     /// AI personality for this nation (None for human player).
     #[serde(default)]
     pub ai_personality: Option<AiPersonality>,
@@ -105,6 +108,7 @@ impl Nation {
             civilians: Vec::new(),
             transport: TransportSystem::new(),
             merchant_fleet: Vec::new(),
+            warships: Vec::new(),
             ai_personality: None,
         }
     }
@@ -236,6 +240,19 @@ impl Nation {
     /// Number of merchant ships in the fleet.
     pub fn merchant_ship_count(&self) -> usize {
         self.merchant_fleet.len()
+    }
+
+    /// Sum of firepower for all warships in the fleet.
+    pub fn total_naval_firepower(&self) -> u32 {
+        self.warships
+            .iter()
+            .map(|s| s.ship_type.stats().firepower)
+            .sum()
+    }
+
+    /// Number of warships in the fleet.
+    pub fn warship_count(&self) -> usize {
+        self.warships.len()
     }
 
     /// Add a technology to this nation's researched list.

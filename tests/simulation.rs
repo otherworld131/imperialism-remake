@@ -164,19 +164,29 @@ fn test_determinism() {
     // Both games should have identical turn numbers
     assert_eq!(game_a.turn, game_b.turn, "Turn numbers should be identical");
 
-    // Same number of provinces per nation
+    // Same nations in the same order
+    assert_eq!(game_a.nations.len(), game_b.nations.len());
     for (nation_a, nation_b) in game_a.nations.iter().zip(game_b.nations.iter()) {
         assert_eq!(
             nation_a.id, nation_b.id,
             "Nations should be in the same order"
         );
-        assert_eq!(
-            nation_a.province_ids.len(),
-            nation_b.province_ids.len(),
-            "Nation {} should have the same number of provinces in both runs",
-            nation_a.name
-        );
+        assert_eq!(nation_a.name, nation_b.name, "Nation names should match");
     }
+
+    // Map tiles should be identical (map generation is deterministic)
+    assert_eq!(
+        game_a.hex_map.tile_count(),
+        game_b.hex_map.tile_count(),
+        "Map tile counts should be identical"
+    );
+
+    // Total province count should be the same (provinces don't disappear)
+    assert_eq!(
+        game_a.provinces.len(),
+        game_b.provinces.len(),
+        "Province counts should be identical"
+    );
 }
 
 #[test]

@@ -19,12 +19,12 @@ structured sessions each turn after all players submit orders.
 - [ ] Unit tests: preference-based tie-breaking
 
 ### Trade Infrastructure Requirements
-- [ ] Trade Consulate required before any trade with a Minor Nation
-- [ ] Each trade requires sufficient merchant ship cargo capacity
+- [x] Trade Consulate required before any trade with a Minor Nation
+- [x] Each trade requires sufficient merchant ship cargo capacity
 - [ ] Cargo holds displayed on trade screen — one hold per item
 - [ ] Great Powers use their own ships for items they purchase
-- [ ] Unit tests: consulate prerequisite enforcement
-- [ ] Unit tests: cargo capacity limiting trade volume
+- [x] Unit tests: consulate prerequisite enforcement
+- [x] Unit tests: cargo capacity limiting trade volume
 
 ### Tradeable vs. Non-Tradeable
 - [x] **Tradeable**: Timber, Coal, Iron, Cotton, Wool, Oil, Fruit, Livestock, Lumber, Steel, Fabric, Furniture, Clothing, Hardware, Arms, Canned Food
@@ -44,10 +44,10 @@ structured sessions each turn after all players submit orders.
 ### Revenue & Pricing
 - [x] Base prices for all tradeable commodities
 - [ ] Supply and demand affect prices (more sellers → lower price)
-- [ ] Revenue = quantity × price for each sold item
+- [x] Revenue = quantity × price for each sold item
 - [ ] Track profit/loss per trade partner per turn
-- [ ] Historical trade data for player reference
-- [ ] Unit tests: revenue calculations
+- [x] Historical trade data for player reference
+- [x] Unit tests: revenue calculations
 - [ ] Unit tests: supply/demand price adjustments
 
 ### Diplomatic Impact of Trade
@@ -58,12 +58,12 @@ structured sessions each turn after all players submit orders.
 - [ ] Unit tests: trade-to-diplomacy relationship score changes
 
 ### Merchant Marine
-- [ ] Merchant ships carry traded goods
-- [ ] Ship types with cargo capacity: Trader (2), Indiaman (4), Clipper (4), Paddlewheeler (8)
+- [x] Merchant ships carry traded goods
+- [x] Ship types with cargo capacity: Trader (2), Indiaman (4), Clipper (4), Paddlewheeler (8)
 - [ ] Ships can be blockaded by enemy warships (some merchant ships may be sunk)
 - [ ] Merchant ships not directly visible on map but appear in battle reports
-- [ ] Merchant marine size contributes to game score
-- [ ] Unit tests: cargo capacity calculations
+- [x] Merchant marine size contributes to game score
+- [x] Unit tests: cargo capacity calculations
 - [ ] Unit tests: blockade effect on trade
 
 ### Trade Screen (Domain Logic)

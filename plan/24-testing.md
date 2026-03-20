@@ -51,13 +51,13 @@ comprehensive.
 - [ ] Execution time: < 10 minutes (can run in CI on schedule, not every commit)
 
 #### Layer 5 — Architecture Tests (Fitness Functions)
-- [ ] Domain crate has zero external dependencies
-- [ ] Application crate references only Domain
-- [ ] No circular dependencies between crates
-- [ ] No infrastructure types referenced from Domain
-- [ ] All ports (traits) defined in Domain or Application
-- [ ] All adapters defined in Infrastructure or Presentation
-- [ ] Execution time: < 5 seconds
+- [x] Domain crate has zero external dependencies
+- [x] Application crate references only Domain
+- [x] No circular dependencies between crates
+- [x] No infrastructure types referenced from Domain
+- [x] All ports (traits) defined in Domain or Application
+- [x] All adapters defined in Infrastructure or Presentation
+- [x] Execution time: < 5 seconds
 
 ### Test Infrastructure
 - [ ] Test framework: built-in `#[test]` + `rstest` or `test-case`
