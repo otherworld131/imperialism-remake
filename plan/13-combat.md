@@ -52,10 +52,10 @@ a province is invaded via beachhead.
 - [ ] Unit tests: tunnel progress per turn, fort section destruction
 
 ### Battle Resolution
-- [ ] Battle ends when one side is eliminated or retreats
+- [x] Battle ends when one side is eliminated or retreats
 - [ ] Retreating units suffer additional damage
 - [ ] Victorious attacker occupies the province
-- [ ] Surviving units retain damage and earn medals based on performance
+- [x] Surviving units retain damage and earn medals based on performance
 - [ ] Province garrison (Militia) is destroyed on conquest — not captured
 - [ ] Unit tests: victory/defeat determination, retreat mechanics, medal award
 
@@ -76,10 +76,10 @@ a province is invaded via beachhead.
 - [ ] Unit tests: naval combat algorithm, battle report generation
 
 ### Auto-Resolve (Land)
-- [ ] Player can choose to auto-resolve land battles in preferences
-- [ ] AI applies basic tactical logic (positioning, firing priority)
-- [ ] Results should be reasonable but slightly worse than optimal player control
-- [ ] Unit tests: auto-resolve produces valid outcomes
+- [x] Player can choose to auto-resolve land battles in preferences
+- [x] AI applies basic tactical logic (positioning, firing priority)
+- [x] Results should be reasonable but slightly worse than optimal player control
+- [x] Unit tests: auto-resolve produces valid outcomes
 
 ### Verification Strategy
 - [ ] **Unit tests**: Run test suite — all combat tests pass

@@ -9,13 +9,13 @@ structured sessions each turn after all players submit orders.
 ## Checklist
 
 ### Trade Session Mechanics
-- [ ] Trade resolved after all players end their turns
+- [x] Trade resolved after all players end their turns
 - [ ] Each player sets offers (sell) and bids (buy) on the Trade screen
 - [ ] Offers: specify goods to sell, quantity, and minimum price
 - [ ] Bids: specify resources to buy, quantity, and maximum price
-- [ ] Matching algorithm: pair compatible offers/bids by price
+- [x] Matching algorithm: pair compatible offers/bids by price
 - [ ] Priority/preference system: Minor Nations prefer partners with higher relationship scores
-- [ ] Unit tests: trade matching algorithm correctness
+- [x] Unit tests: trade matching algorithm correctness
 - [ ] Unit tests: preference-based tie-breaking
 
 ### Trade Infrastructure Requirements
@@ -27,9 +27,9 @@ structured sessions each turn after all players submit orders.
 - [ ] Unit tests: cargo capacity limiting trade volume
 
 ### Tradeable vs. Non-Tradeable
-- [ ] **Tradeable**: Timber, Coal, Iron, Cotton, Wool, Oil, Fruit, Livestock, Lumber, Steel, Fabric, Furniture, Clothing, Hardware, Arms, Canned Food
-- [ ] **Non-tradeable**: Grain (cannot be bought or sold), Horses, Paper
-- [ ] Unit tests: trade system rejects non-tradeable resources
+- [x] **Tradeable**: Timber, Coal, Iron, Cotton, Wool, Oil, Fruit, Livestock, Lumber, Steel, Fabric, Furniture, Clothing, Hardware, Arms, Canned Food
+- [x] **Non-tradeable**: Grain (cannot be bought or sold), Horses, Paper
+- [x] Unit tests: trade system rejects non-tradeable resources
 
 ### Trade Subsidies
 - [ ] Player can offer subsidies to Minor Nations
@@ -42,7 +42,7 @@ structured sessions each turn after all players submit orders.
 - [ ] Unit tests: subsidy impact on trade preference
 
 ### Revenue & Pricing
-- [ ] Base prices for all tradeable commodities
+- [x] Base prices for all tradeable commodities
 - [ ] Supply and demand affect prices (more sellers → lower price)
 - [ ] Revenue = quantity × price for each sold item
 - [ ] Track profit/loss per trade partner per turn

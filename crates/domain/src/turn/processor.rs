@@ -6,6 +6,7 @@ use crate::economy::production::{
 use crate::economy::trade::{self, TradeTransaction};
 use crate::events::*;
 use crate::game_state::GameState;
+use crate::military::combat::{BattleResult, CombatForce, create_garrison, resolve_battle};
 use crate::turn::scoring::{CouncilVoteResult, run_council_vote};
 use crate::types::*;
 
@@ -25,6 +26,7 @@ pub struct TurnReport {
     pub techs_available: Vec<(NationId, Vec<String>)>,
     pub council_vote: Option<CouncilVoteResult>,
     pub trade_transactions: Vec<TradeTransaction>,
+    pub battles: Vec<BattleResult>,
 }
 
 /// Process one turn of the game.
@@ -44,6 +46,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         techs_available: Vec::new(),
         council_vote: None,
         trade_transactions: Vec::new(),
+        battles: Vec::new(),
     };
 
     // 0. AI decisions for computer-controlled Great Powers
@@ -70,16 +73,19 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 6. Maintenance costs (placeholder)
     apply_maintenance(game, &mut report);
 
-    // 7. Report available techs
+    // 7. Resolve combat (pending attacks)
+    resolve_combat(game, &mut report);
+
+    // 8. Report available techs
     report_available_techs(game, &mut report);
 
-    // 8. Council of Governors vote (at decade boundaries)
+    // 9. Council of Governors vote (at decade boundaries)
     check_council_vote(game, &mut report);
 
-    // 9. Generate newspaper
+    // 10. Generate newspaper
     generate_newspaper(game, &mut report);
 
-    // 10. Advance turn
+    // 11. Advance turn
     report
         .events
         .push(DomainEvent::TurnEnded(TurnEnded { turn }));
@@ -430,11 +436,128 @@ fn resolve_trade_session(game: &mut GameState, report: &mut TurnReport) {
     report.trade_transactions = transactions;
 }
 
-/// Apply maintenance costs. Placeholder: no army units tracked in GameState yet,
-/// so this is a no-op for now.
-fn apply_maintenance(_game: &mut GameState, _report: &mut TurnReport) {
-    // For now just a placeholder — deduct $25 per army unit per turn from each nation.
-    // We don't have army units in GameState yet, so just log it.
+/// Apply maintenance costs for army units.
+fn apply_maintenance(game: &mut GameState, _report: &mut TurnReport) {
+    for nation in &mut game.nations {
+        let total_cost: Money = nation
+            .army
+            .iter()
+            .map(|u| u.maintenance_cost())
+            .fold(Money::ZERO, |acc, c| acc + c);
+        if total_cost != Money::ZERO {
+            nation.treasury -= total_cost;
+        }
+    }
+}
+
+/// Resolve combat for all pending attacks.
+///
+/// For each pending attack:
+/// 1. Create attacker CombatForce from the attacking nation's army units
+/// 2. Create defender CombatForce from garrison (based on province owner type)
+/// 3. Call resolve_battle()
+/// 4. If attacker wins: change province owner, record ProvinceConquered event, add headline
+/// 5. Clear pending_attacks after processing
+fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
+    let attacks: Vec<(NationId, ProvinceId)> = game.pending_attacks.drain(..).collect();
+
+    for (attacker_id, province_id) in attacks {
+        // Look up province owner
+        let defender_id = match game.get_province(province_id) {
+            Some(p) => p.owner,
+            None => continue,
+        };
+
+        // Get defender nation type for garrison creation
+        let defender_type = match game.get_nation(defender_id) {
+            Some(n) => n.nation_type,
+            None => continue,
+        };
+
+        // Create attacker force from nation's army
+        let attacker_units: Vec<_> = match game.get_nation(attacker_id) {
+            Some(n) => n.army.clone(),
+            None => continue,
+        };
+
+        if attacker_units.is_empty() {
+            continue;
+        }
+
+        let attacker_force = CombatForce {
+            nation: attacker_id,
+            units: attacker_units,
+        };
+
+        // Create defender force from garrison
+        let mut garrison = create_garrison(defender_type);
+        for unit in &mut garrison {
+            unit.owner = defender_id;
+            unit.position = province_id;
+        }
+        let defender_force = CombatForce {
+            nation: defender_id,
+            units: garrison,
+        };
+
+        let result = resolve_battle(&attacker_force, &defender_force, province_id);
+
+        // Update attacker's surviving army
+        if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
+            attacker_nation.army = result.attacker_survivors.clone();
+        }
+
+        if result.attacker_won {
+            // Change province owner
+            if let Some(province) = game.get_province_mut(province_id) {
+                province.owner = attacker_id;
+            }
+
+            // Update nation province lists
+            if let Some(defender_nation) = game.get_nation_mut(defender_id) {
+                defender_nation
+                    .province_ids
+                    .retain(|pid| *pid != province_id);
+            }
+            if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
+                attacker_nation.add_province(province_id);
+            }
+
+            // Record event
+            report
+                .events
+                .push(DomainEvent::ProvinceConquered(ProvinceConquered {
+                    province: province_id,
+                    new_owner: attacker_id,
+                }));
+
+            let atk_name = game
+                .get_nation(attacker_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+            let prov_name = game
+                .get_province(province_id)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+            report
+                .newspaper_headlines
+                .push(format!("BREAKING: {} conquers {}!", atk_name, prov_name));
+        } else {
+            let def_name = game
+                .get_nation(defender_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+            let prov_name = game
+                .get_province(province_id)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+            report
+                .newspaper_headlines
+                .push(format!("{} repels attack on {}!", def_name, prov_name));
+        }
+
+        report.battles.push(result);
+    }
 }
 
 /// Report which technologies are available for research by the human player.
@@ -562,6 +685,7 @@ mod tests {
             events: Vec::new(),
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
         }
     }
 
@@ -606,6 +730,7 @@ mod tests {
             events: Vec::new(),
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
         }
     }
 
@@ -812,6 +937,7 @@ mod tests {
             events: Vec::new(),
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
         };
 
         let report = process_turn(&mut game);
@@ -900,6 +1026,7 @@ mod tests {
             events: Vec::new(),
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
         }
     }
 

@@ -53,7 +53,7 @@ The Council of Governors voting system is the primary victory path.
   - [ ] Ctrl+click on Minor Nation auto-calculates necessary subsidy to become preferred partner
   - [ ] Subsidy calculation algorithm
 - [ ] **Treaty Proposals** — propose any applicable treaty type
-- [ ] **War Declaration** — initiate hostilities
+- [x] **War Declaration** — initiate hostilities
 - [ ] Unit tests: grant and subsidy effects on relationship scores
 
 ### Diplomatic Standing

@@ -1,6 +1,7 @@
 use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::labor::LaborPool;
 use crate::events::TechId;
+use crate::military::units::ArmyUnit;
 use crate::types::*;
 use std::collections::HashMap;
 
@@ -56,6 +57,9 @@ pub struct Nation {
     pub labor: LaborPool,
     /// Technologies that have been researched by this nation.
     pub researched_techs: Vec<TechId>,
+    /// Army units owned by this nation.
+    #[serde(default)]
+    pub army: Vec<ArmyUnit>,
 }
 
 impl Nation {
@@ -81,6 +85,7 @@ impl Nation {
             buildings: Vec::new(),
             labor: LaborPool::new(),
             researched_techs: Vec::new(),
+            army: Vec::new(),
         }
     }
 
@@ -185,6 +190,19 @@ impl Nation {
     /// Whether this nation has researched a given technology.
     pub fn has_researched(&self, tech: TechId) -> bool {
         self.researched_techs.contains(&tech)
+    }
+
+    /// Returns all army units stationed in a given province.
+    pub fn units_in_province(&self, province: ProvinceId) -> Vec<&ArmyUnit> {
+        self.army
+            .iter()
+            .filter(|u| u.position == province)
+            .collect()
+    }
+
+    /// Sum of effective_firepower() for all army units.
+    pub fn total_military_firepower(&self) -> f64 {
+        self.army.iter().map(|u| u.effective_firepower()).sum()
     }
 
     /// Add a technology to this nation's researched list.

@@ -6,12 +6,17 @@ use std::path::PathBuf;
 use domain::economy::buildings::{Building, BuildingType};
 use domain::game_state::{GameState, new_game};
 use domain::hex::HexCoord;
-use domain::map::HexMap;
-use domain::military::units::ArmyUnitType;
+use domain::map::{HexMap, UnitId};
+use domain::military::units::{ArmyUnit, ArmyUnitType};
 use domain::nation::Nation;
 use domain::turn::{calculate_score, process_turn};
 use domain::types::*;
 use infrastructure::persistence;
+
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Global counter for generating unique UnitIds when building units via CLI.
+static NEXT_UNIT_ID: AtomicU32 = AtomicU32::new(2_000_000);
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -144,6 +149,50 @@ fn main() {
                 for (nid, income) in &report.gold_income {
                     if *nid == player_id {
                         println!("  Gold/Gems income: {}", income);
+                    }
+                }
+
+                // Show battle results
+                if !report.battles.is_empty() {
+                    println!();
+                    println!("  BATTLE REPORTS:");
+                    for battle in &report.battles {
+                        let atk_name = game
+                            .get_nation(battle.attacker)
+                            .map(|n| n.name.as_str())
+                            .unwrap_or("Unknown");
+                        let def_name = game
+                            .get_nation(battle.defender)
+                            .map(|n| n.name.as_str())
+                            .unwrap_or("Unknown");
+                        let prov_name = game
+                            .get_province(battle.province)
+                            .map(|p| p.name.as_str())
+                            .unwrap_or("Unknown");
+                        let result_str = if battle.attacker_won {
+                            "VICTORY"
+                        } else {
+                            "DEFEAT"
+                        };
+                        println!(
+                            "    {} vs {} at {} -- {}",
+                            atk_name, def_name, prov_name, result_str
+                        );
+                        if !battle.attacker_casualties.is_empty() {
+                            println!(
+                                "      Attacker losses: {} units",
+                                battle.attacker_casualties.len()
+                            );
+                        }
+                        if !battle.defender_casualties.is_empty() {
+                            println!(
+                                "      Defender losses: {} units",
+                                battle.defender_casualties.len()
+                            );
+                        }
+                        if battle.attacker_won && battle.attacker == player_id {
+                            println!("      Province {} conquered!", prov_name);
+                        }
                     }
                 }
                 println!();
@@ -297,6 +346,14 @@ fn main() {
             _ if cmd.starts_with("embassy ") => {
                 let nation_query = input.trim()[8..].trim();
                 cmd_embassy(&mut game, nation_query);
+            }
+            _ if cmd.starts_with("attack ") => {
+                let nation_query = input.trim()[7..].trim();
+                cmd_attack(&mut game, nation_query);
+            }
+            "military" | "army" => {
+                println!();
+                print_military(&game);
             }
             _ if cmd.starts_with("war ") => {
                 let nation_query = input.trim()[4..].trim();
@@ -547,12 +604,20 @@ fn build_unit(game: &mut GameState, query: &str) {
         return;
     }
 
+    let capital_province = player.capital_province_id;
+    let uid = UnitId(NEXT_UNIT_ID.fetch_add(1, Ordering::Relaxed));
+    let unit = ArmyUnit::new(uid, unit_type, player_id, capital_province);
+
     let player = game.get_nation_mut(player_id).unwrap();
     player.treasury -= cost;
+    player.army.push(unit);
 
     println!(
-        "  Unit built! {:?} (cost: {}, treasury now: {}).",
-        unit_type, cost, player.treasury
+        "  Unit built! {:?} stationed at capital (cost: {}, treasury now: {}). Army size: {}",
+        unit_type,
+        cost,
+        player.treasury,
+        player.army.len()
     );
 }
 
@@ -883,6 +948,8 @@ fn print_help() {
     println!("    build unit <type> — Build a military unit");
     println!("                        (regulars $500, grenadiers $1000,");
     println!("                         cuirassiers $500, light artillery $2000)");
+    println!("    military / army   — Show your army units and their stats");
+    println!("    attack <nation>   — Order an attack on a nation you are at war with");
     println!("    diplomacy         — Show diplomatic relations with all nations");
     println!("    consulate <name>  — Build a trade consulate with a Minor Nation ($500)");
     println!("    embassy <name>    — Build an embassy with a Minor Nation ($5,000)");
@@ -1228,6 +1295,115 @@ fn cmd_peace(game: &mut GameState, query: &str) {
     game.diplomacy.make_peace(player_id, target_id);
     println!("  Peace has been established with {}.", target_name);
     println!("  The cannons fall silent.");
+}
+
+fn cmd_attack(game: &mut GameState, query: &str) {
+    let player_id = game.human_player_nation;
+
+    let target = match game.find_nation_by_name(query) {
+        Some(n) => n,
+        None => {
+            println!("  No unique nation matches '{}'. Be more specific.", query);
+            return;
+        }
+    };
+
+    if target.id == player_id {
+        println!("  You cannot attack yourself.");
+        return;
+    }
+
+    let target_id = target.id;
+    let target_name = target.name.clone();
+
+    // Check at war
+    let at_war = game
+        .diplomacy
+        .get_relation(player_id, target_id)
+        .is_some_and(|rel| rel.at_war);
+    if !at_war {
+        println!(
+            "  You are not at war with {}. Declare war first with 'war {}'.",
+            target_name, target_name
+        );
+        return;
+    }
+
+    // Check player has army units
+    let player = game.get_nation(player_id).unwrap();
+    if player.army.is_empty() {
+        println!("  You have no army units! Build units first with 'build unit <type>'.");
+        return;
+    }
+
+    // Find first province owned by target
+    let target_province = game.provinces.iter().find(|p| p.owner == target_id);
+
+    let province_id = match target_province {
+        Some(p) => p.id,
+        None => {
+            println!("  {} has no provinces to attack.", target_name);
+            return;
+        }
+    };
+
+    let province_name = game
+        .get_province(province_id)
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    game.pending_attacks.push((player_id, province_id));
+    println!(
+        "  Attack ordered! Your army will assault {} (province of {}) at end of turn.",
+        province_name, target_name
+    );
+    println!(
+        "  {} pending attack(s) queued. End turn to resolve.",
+        game.pending_attacks.len()
+    );
+}
+
+fn print_military(game: &GameState) {
+    let player = game.get_nation(game.human_player_nation).unwrap();
+
+    println!("  ARMY ({} units):", player.army.len());
+    if player.army.is_empty() {
+        println!("    (no units -- use 'build unit <type>' to recruit)");
+    } else {
+        for unit in &player.army {
+            let province_name = game
+                .get_province(unit.position)
+                .map(|p| p.name.as_str())
+                .unwrap_or("Unknown");
+            println!(
+                "    {:?} (HP: {}, Medals: {}, FP: {:.1}) at {}",
+                unit.unit_type,
+                unit.health,
+                unit.medals,
+                unit.effective_firepower(),
+                province_name
+            );
+        }
+        println!();
+        println!(
+            "  Total firepower: {:.1}",
+            player.total_military_firepower()
+        );
+    }
+
+    if !game.pending_attacks.is_empty() {
+        println!();
+        println!("  PENDING ATTACKS:");
+        for (attacker_id, province_id) in &game.pending_attacks {
+            if *attacker_id == game.human_player_nation {
+                let province_name = game
+                    .get_province(*province_id)
+                    .map(|p| p.name.as_str())
+                    .unwrap_or("Unknown");
+                println!("    -> {}", province_name);
+            }
+        }
+    }
 }
 
 fn render_map(hex_map: &HexMap, nations: &[Nation]) {

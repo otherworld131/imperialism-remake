@@ -1,7 +1,7 @@
 use crate::map::UnitId;
 use crate::types::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum UnitCategory {
     Infantry,
     Cavalry,
@@ -10,7 +10,7 @@ pub enum UnitCategory {
     Garrison, // Militia/Minutemen - immovable
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ArmyUnitType {
     // Garrison
     Militia,
@@ -53,7 +53,7 @@ pub struct UnitStats {
     pub prerequisite_tech: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ArmyUnit {
     pub id: UnitId,
     pub unit_type: ArmyUnitType,

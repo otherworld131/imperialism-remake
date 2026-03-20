@@ -31,6 +31,9 @@ pub struct GameState {
     pub tech_tree: TechTree,
     /// Diplomatic relations and standing between nations.
     pub diplomacy: DiplomacyState,
+    /// Pending attacks to resolve this turn: (attacker NationId, target ProvinceId).
+    #[serde(default)]
+    pub pending_attacks: Vec<(NationId, ProvinceId)>,
 }
 
 impl GameState {
@@ -252,6 +255,7 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         events: Vec::new(),
         tech_tree: TechTree::new(),
         diplomacy,
+        pending_attacks: Vec::new(),
     }
 }
 
@@ -309,6 +313,7 @@ mod tests {
             events: Vec::new(),
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
         }
     }
 

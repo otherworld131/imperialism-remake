@@ -187,6 +187,7 @@ mod tests {
             events: Vec::new(),
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
         }
     }
 
