@@ -4,6 +4,7 @@ use crate::economy::production::{
 };
 use crate::events::*;
 use crate::game_state::GameState;
+use crate::turn::scoring::{CouncilVoteResult, run_council_vote};
 use crate::types::*;
 
 /// Result of processing one turn.
@@ -20,6 +21,7 @@ pub struct TurnReport {
     pub food_consumed: Vec<(NationId, u32)>,
     pub newspaper_headlines: Vec<String>,
     pub techs_available: Vec<(NationId, Vec<String>)>,
+    pub council_vote: Option<CouncilVoteResult>,
 }
 
 /// Process one turn of the game.
@@ -37,6 +39,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         food_consumed: Vec::new(),
         newspaper_headlines: Vec::new(),
         techs_available: Vec::new(),
+        council_vote: None,
     };
 
     // 1. Resource production: gather yields from all owned tiles
@@ -60,10 +63,13 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 7. Report available techs
     report_available_techs(game, &mut report);
 
-    // 8. Generate newspaper
+    // 8. Council of Governors vote (at decade boundaries)
+    check_council_vote(game, &mut report);
+
+    // 9. Generate newspaper
     generate_newspaper(game, &mut report);
 
-    // 9. Advance turn
+    // 10. Advance turn
     report
         .events
         .push(DomainEvent::TurnEnded(TurnEnded { turn }));
@@ -393,6 +399,38 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
             .newspaper_headlines
             .push("Council of Governors to convene!".to_string());
     }
+}
+
+fn check_council_vote(game: &GameState, report: &mut TurnReport) {
+    if !game.turn.is_decade_election() {
+        return;
+    }
+
+    let is_final = game.turn.is_game_end();
+    let result = run_council_vote(&game.nations, &game.provinces, is_final);
+
+    if let Some(winner_id) = result.winner {
+        if let Some(winner) = game.get_nation(winner_id) {
+            report.newspaper_headlines.push(format!(
+                "BREAKING: {} wins the Council of Governors with {} of {} votes!",
+                winner.name,
+                result
+                    .votes
+                    .iter()
+                    .find(|(id, _)| *id == winner_id)
+                    .map(|(_, v)| *v)
+                    .unwrap_or(0),
+                result.total_governors
+            ));
+        }
+    } else {
+        report.newspaper_headlines.push(format!(
+            "Council of Governors: No nation achieves the required {} vote majority.",
+            result.majority_threshold
+        ));
+    }
+
+    report.council_vote = Some(result);
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@ use domain::game_state::{GameState, new_game};
 use domain::hex::HexCoord;
 use domain::map::HexMap;
 use domain::nation::Nation;
-use domain::turn::process_turn;
+use domain::turn::{calculate_score, process_turn};
 use domain::types::*;
 use infrastructure::persistence;
 
@@ -125,6 +125,35 @@ fn main() {
                 }
                 println!();
 
+                // Show council vote results
+                if let Some(ref vote) = report.council_vote {
+                    println!("  ╔════════════════════════════════════════╗");
+                    println!("  ║  COUNCIL OF GOVERNORS VOTE            ║");
+                    println!("  ╚════════════════════════════════════════╝");
+                    for (nid, votes) in &vote.votes {
+                        let name = game
+                            .get_nation(*nid)
+                            .map(|n| n.name.as_str())
+                            .unwrap_or("Unknown");
+                        let marker = if Some(*nid) == vote.winner {
+                            " ◄ WINNER"
+                        } else {
+                            ""
+                        };
+                        println!("    {:<12} {:>3} governors{}", name, votes, marker);
+                    }
+                    println!(
+                        "    Majority needed: {}/{}",
+                        vote.majority_threshold, vote.total_governors
+                    );
+                    println!();
+                    if let Some(winner_id) = vote.winner {
+                        if winner_id == game.human_player_nation {
+                            println!("  *** YOU HAVE WON THE GAME! ***");
+                        }
+                    }
+                }
+
                 if game.is_game_over() {
                     println!("  ══════════════════════════════════════");
                     println!("  The year is 1915. The game has ended!");
@@ -161,6 +190,10 @@ fn main() {
             "tech" => {
                 println!();
                 print_tech(&game);
+            }
+            "score" => {
+                println!();
+                print_scores(&game);
             }
             "h" | "help" | "?" => {
                 println!();
@@ -498,6 +531,7 @@ fn print_help() {
     println!("    map               — Show the world map");
     println!("    provinces         — Show your provinces");
     println!("    nations           — Show all nations");
+    println!("    score             — Show scores for all Great Powers");
     println!("    save              — Save the current game");
     println!("    load <filename>   — Load a saved game");
     println!("    turn10            — Advance 10 turns at once");
@@ -540,6 +574,42 @@ fn print_legend() {
     println!("  Legend: F=Farm f=Forest H=Hills M=Mountain ~=Sea .=Plains");
     println!("         P=Plantation R=Range h=HorseRanch O=Orchard");
     println!("         S=Swamp D=Desert T=Tundra s=Scrub  ★=Capital");
+}
+
+fn print_scores(game: &GameState) {
+    println!("  NATION SCORES:");
+    println!(
+        "    {:<12} {:>6} {:>6} {:>6} {:>6} {:>6} {:>8}",
+        "Nation", "Mil", "Labor", "Trans", "Diplo", "Prov", "TOTAL"
+    );
+    println!("    {}", "-".repeat(58));
+    let mut scores: Vec<_> = game
+        .great_powers()
+        .iter()
+        .map(|n| {
+            let s = calculate_score(n);
+            (n.id, n.name.clone(), s)
+        })
+        .collect();
+    scores.sort_by(|a, b| b.2.total.cmp(&a.2.total));
+    for (id, name, s) in &scores {
+        let marker = if *id == game.human_player_nation {
+            " ◄"
+        } else {
+            ""
+        };
+        println!(
+            "    {:<12} {:>6} {:>6} {:>6} {:>6} {:>6} {:>8}{}",
+            name,
+            s.military_score,
+            s.labor_score,
+            s.transport_score,
+            s.diplomatic_score,
+            s.province_score,
+            s.total,
+            marker
+        );
+    }
 }
 
 fn terrain_char(terrain: TerrainType) -> char {
