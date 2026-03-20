@@ -20,6 +20,28 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// Global counter for generating unique UnitIds when building units via CLI.
 static NEXT_UNIT_ID: AtomicU32 = AtomicU32::new(2_000_000);
 
+// ── Colored output helpers ────────────────────────────────────────
+
+#[allow(dead_code)]
+fn color_green(s: &str) -> String {
+    format!("\x1b[92m{}\x1b[0m", s)
+}
+
+#[allow(dead_code)]
+fn color_red(s: &str) -> String {
+    format!("\x1b[91m{}\x1b[0m", s)
+}
+
+#[allow(dead_code)]
+fn color_yellow(s: &str) -> String {
+    format!("\x1b[93m{}\x1b[0m", s)
+}
+
+#[allow(dead_code)]
+fn color_bold(s: &str) -> String {
+    format!("\x1b[1m{}\x1b[0m", s)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let map_key = args.get(1).map(|s| s.as_str()).unwrap_or("imperialism");
@@ -62,330 +84,7 @@ fn main() {
             }
             "t" | "turn" | "end turn" | "" => {
                 let report = process_turn(&mut game);
-                println!();
-                println!("  ╔════════════════════════════════════════╗");
-                println!("  ║  THE IMPERIAL TIMES                   ║");
-                println!(
-                    "  ║  {} Q{}, Turn {}{}║",
-                    report.year,
-                    report.quarter,
-                    report.turn.0,
-                    " ".repeat(
-                        25 - format!(
-                            "{} Q{}, Turn {}",
-                            report.year, report.quarter, report.turn.0
-                        )
-                        .len()
-                    )
-                );
-                println!("  ╚════════════════════════════════════════╝");
-                for headline in &report.newspaper_headlines {
-                    println!("    {}", headline);
-                }
-                println!();
-
-                // Show resource production summary for player
-                let player_id = game.human_player_nation;
-                let player_production: Vec<_> = report
-                    .resource_production
-                    .iter()
-                    .filter(|(nid, _, _)| *nid == player_id)
-                    .collect();
-                if !player_production.is_empty() {
-                    println!("  Resources gathered this turn:");
-                    let mut by_type: std::collections::HashMap<ResourceType, u32> =
-                        std::collections::HashMap::new();
-                    for (_, res, amt) in &player_production {
-                        *by_type.entry(*res).or_insert(0) += amt;
-                    }
-                    let mut sorted: Vec<_> = by_type.into_iter().collect();
-                    sorted.sort_by_key(|(r, _)| format!("{:?}", r));
-                    for (res, amt) in &sorted {
-                        println!("    {:?}: {}", res, amt);
-                    }
-                }
-
-                // Show production output
-                let player_prod: Vec<_> = report
-                    .production_output
-                    .iter()
-                    .filter(|(nid, _, _)| *nid == player_id)
-                    .collect();
-                if !player_prod.is_empty() {
-                    println!();
-                    println!("  Production this turn:");
-                    for (_, item, qty) in &player_prod {
-                        println!("    {}: {}", item, qty);
-                    }
-                }
-
-                // Show food balance
-                if let Some(player) = game.get_nation(player_id) {
-                    let grain = player.resource_amount(ResourceType::Grain);
-                    let fruit = player.resource_amount(ResourceType::Fruit);
-                    let livestock = player.resource_amount(ResourceType::Livestock);
-                    let total_food = grain + fruit + livestock;
-                    let food_needed = player.labor.total_workers();
-
-                    let consumed: u32 = report
-                        .food_consumed
-                        .iter()
-                        .filter(|(nid, _)| *nid == player_id)
-                        .map(|(_, q)| *q)
-                        .sum();
-
-                    if consumed > 0 || food_needed > 0 {
-                        if total_food >= food_needed {
-                            println!(
-                                "  Food: {} grain, {} fruit, {} livestock (needs {}, surplus {})",
-                                grain,
-                                fruit,
-                                livestock,
-                                food_needed,
-                                total_food - food_needed
-                            );
-                        } else {
-                            println!(
-                                "  Food: {} grain, {} fruit, {} livestock (needs {}, DEFICIT {})",
-                                grain,
-                                fruit,
-                                livestock,
-                                food_needed,
-                                food_needed - total_food
-                            );
-                        }
-                    }
-                }
-
-                // Show starvation warning
-                for (nid, workers_lost) in &report.starvation {
-                    if *nid == player_id {
-                        println!(
-                            "  WARNING: {} workers starved due to food shortage!",
-                            workers_lost
-                        );
-                    }
-                }
-
-                // Show trade transactions
-                let player_trades: Vec<_> = report
-                    .trade_transactions
-                    .iter()
-                    .filter(|txn| txn.buyer == player_id)
-                    .collect();
-                if !player_trades.is_empty() {
-                    println!();
-                    println!("  Trade this turn:");
-                    for txn in &player_trades {
-                        let seller_name = game
-                            .get_nation(txn.seller)
-                            .map(|n| n.name.as_str())
-                            .unwrap_or("Unknown");
-                        println!(
-                            "    Bought {} {:?} from {} for {}",
-                            txn.quantity, txn.resource, seller_name, txn.total_cost
-                        );
-                    }
-                }
-
-                // Show gold income
-                for (nid, income) in &report.gold_income {
-                    if *nid == player_id {
-                        println!("  Gold/Gems income: {}", income);
-                    }
-                }
-
-                // Show battle results
-                if !report.battles.is_empty() {
-                    println!();
-                    for battle in &report.battles {
-                        let atk_name = game
-                            .get_nation(battle.attacker)
-                            .map(|n| n.name.as_str())
-                            .unwrap_or("Unknown");
-                        let def_name = game
-                            .get_nation(battle.defender)
-                            .map(|n| n.name.as_str())
-                            .unwrap_or("Unknown");
-                        let prov_name = game
-                            .get_province(battle.province)
-                            .map(|p| p.name.as_str())
-                            .unwrap_or("Unknown");
-                        let result_str = if battle.attacker_won {
-                            "VICTORY!"
-                        } else {
-                            "DEFEAT"
-                        };
-
-                        // Terrain description
-                        let terrain_str = match battle.terrain {
-                            Some(t) => {
-                                let bonus = domain::military::terrain_defense_bonus(t);
-                                if bonus > 0.0 {
-                                    format!("{:?} (+{:.0}% defense)", t, bonus * 100.0)
-                                } else {
-                                    format!("{:?} (no bonus)", t)
-                                }
-                            }
-                            None => "Unknown".to_string(),
-                        };
-
-                        // Fort description
-                        let fort_str = if battle.fort_level > 0 {
-                            let bonus = domain::military::fort_defense_bonus(battle.fort_level);
-                            format!(
-                                "Level {} (+{:.0}% defense)",
-                                battle.fort_level,
-                                bonus * 100.0
-                            )
-                        } else {
-                            "None".to_string()
-                        };
-
-                        // Attacker casualty details
-                        let atk_casualty_str = if battle.attacker_casualties.is_empty() {
-                            "None".to_string()
-                        } else {
-                            format_casualties(&battle.attacker_casualties)
-                        };
-
-                        // Defender casualty details
-                        let def_casualty_str = if battle.defender_casualties.is_empty() {
-                            "None".to_string()
-                        } else {
-                            format_casualties(&battle.defender_casualties)
-                        };
-
-                        // Defender force description
-                        let def_fp_str = if battle.fort_level > 0
-                            || battle
-                                .terrain
-                                .map(|t| domain::military::terrain_defense_bonus(t) > 0.0)
-                                .unwrap_or(false)
-                        {
-                            format!(
-                                "{:.1} (incl. terrain/fort bonus)",
-                                battle.defender_initial_fp
-                            )
-                        } else {
-                            format!("{:.1}", battle.defender_initial_fp)
-                        };
-
-                        println!("  {}", "=".repeat(42));
-                        println!("  BATTLE OF {}", prov_name);
-                        println!("  {}", "=".repeat(42));
-                        println!(
-                            "  Attacker: {} ({} units, FP: {:.1})",
-                            atk_name, battle.attacker_initial_count, battle.attacker_initial_fp
-                        );
-                        println!(
-                            "  Defender: {} ({} units, FP: {})",
-                            def_name, battle.defender_initial_count, def_fp_str
-                        );
-                        println!("  Terrain: {}", terrain_str);
-                        println!("  Fort: {}", fort_str);
-                        println!();
-                        println!("  Result: {}", result_str);
-                        println!("  Attacker casualties: {}", atk_casualty_str);
-                        println!("  Defender casualties: {}", def_casualty_str);
-                        if battle.attacker_won {
-                            println!("  Province conquered!");
-                        }
-                        println!("  {}", "=".repeat(42));
-                    }
-                }
-                // Show civilian completions
-                let player_civs: Vec<_> = report
-                    .civilian_completions
-                    .iter()
-                    .filter(|(nid, _)| *nid == player_id)
-                    .collect();
-                if !player_civs.is_empty() {
-                    println!();
-                    println!("  Civilian work completed:");
-                    for (_, desc) in &player_civs {
-                        println!("    {}", desc);
-                    }
-                }
-
-                // Show score summary
-                if let Some((rank, total)) = score_summary(&report.scores, game.human_player_nation)
-                {
-                    let gp_count = report.scores.len();
-                    println!(
-                        "  Score: {} (#{} of {} Great Powers)",
-                        format_number(total),
-                        rank,
-                        gp_count
-                    );
-                }
-
-                // Show transport overflow
-                let player_overflow: Vec<_> = report
-                    .transport_overflow
-                    .iter()
-                    .filter(|(nid, _, _)| *nid == player_id)
-                    .collect();
-                if !player_overflow.is_empty() {
-                    println!();
-                    println!("  Transport overflow (resources left in field):");
-                    for (_, res, qty) in &player_overflow {
-                        println!("    {:?}: {}", res, qty);
-                    }
-                }
-
-                // Show immigration
-                for (nid, count) in &report.immigration {
-                    if *nid == player_id {
-                        println!(
-                            "  Immigration: {} new worker{} recruited!",
-                            count,
-                            if *count == 1 { "" } else { "s" }
-                        );
-                    }
-                }
-
-                // Show settlement upgrades
-                for (prov_id, level) in &report.settlement_upgrades {
-                    if let Some(prov) = game.get_province(*prov_id) {
-                        println!("  Settlement upgrade: {} is now a {}!", prov.name, level);
-                    }
-                }
-
-                // Compact turn summary line
-                println!();
-                println!("  {}", report.format_summary_line(&game));
-                println!();
-
-                // Show council vote results
-                if let Some(ref vote) = report.council_vote {
-                    println!("  ╔════════════════════════════════════════╗");
-                    println!("  ║  COUNCIL OF GOVERNORS VOTE            ║");
-                    println!("  ╚════════════════════════════════════════╝");
-                    for (nid, votes) in &vote.votes {
-                        let name = game
-                            .get_nation(*nid)
-                            .map(|n| n.name.as_str())
-                            .unwrap_or("Unknown");
-                        let marker = if Some(*nid) == vote.winner {
-                            " ◄ WINNER"
-                        } else {
-                            ""
-                        };
-                        println!("    {:<12} {:>3} governors{}", name, votes, marker);
-                    }
-                    println!(
-                        "    Majority needed: {}/{}",
-                        vote.majority_threshold, vote.total_governors
-                    );
-                    println!();
-                    if let Some(winner_id) = vote.winner
-                        && winner_id == game.human_player_nation
-                    {
-                        println!("  *** YOU HAVE WON THE GAME! ***");
-                    }
-                }
-
+                print_turn_report(&game, &report);
                 if game.is_game_over() {
                     println!("  ══════════════════════════════════════");
                     println!("  The year is 1915. The game has ended!");
@@ -441,27 +140,33 @@ fn main() {
                 println!();
                 print_help();
             }
+            "overview" => {
+                println!();
+                print_overview(&game);
+            }
+            "history" => {
+                println!();
+                print_history(&game);
+            }
             "turn10" => {
-                for _ in 0..10 {
-                    process_turn(&mut game);
-                }
-                println!(
-                    "  Advanced 10 turns. Now: {} ({})",
-                    game.turn,
-                    game.turn.year()
-                );
-                print_status(&game);
+                cmd_auto(&mut game, 10);
             }
             "turn100" => {
-                for _ in 0..100 {
-                    process_turn(&mut game);
+                cmd_auto(&mut game, 100);
+            }
+            _ if cmd.starts_with("auto ") => {
+                let count_str = input.trim()[5..].trim();
+                match count_str.parse::<u32>() {
+                    Ok(n) if n > 0 => {
+                        cmd_auto(&mut game, n);
+                    }
+                    _ => {
+                        println!("  Usage: auto <turns> (e.g. auto 50)");
+                    }
                 }
-                println!(
-                    "  Advanced 100 turns. Now: {} ({})",
-                    game.turn,
-                    game.turn.year()
-                );
-                print_status(&game);
+            }
+            "auto" => {
+                println!("  Usage: auto <turns> (e.g. auto 50)");
             }
             "save" => {
                 save_current_game(&game);
@@ -859,6 +564,7 @@ fn build_unit(game: &mut GameState, query: &str) {
 }
 
 /// Return the player's rank (1-based) and total score from the turn report scores.
+#[allow(dead_code)]
 fn score_summary(scores: &[(NationId, String, u32)], player_id: NationId) -> Option<(usize, u32)> {
     // Scores are already sorted descending by total.
     for (i, (nid, _, total)) in scores.iter().enumerate() {
@@ -1370,8 +1076,14 @@ fn research_tech(game: &mut GameState, query: &str) {
             player.treasury -= tech_cost;
             player.research_tech(tech_id);
 
-            println!("  Researched: {}!", tech_name);
+            let player_name = player.name.clone();
+            println!("  {}", color_green(&format!("Researched: {}!", tech_name)));
             println!("  Cost: {} (treasury now: {})", tech_cost, player.treasury);
+
+            // Record history event
+            let turn = game.turn;
+            game.history
+                .push((turn, format!("{} researched {}", player_name, tech_name)));
         }
         _ => {
             println!(
@@ -1593,56 +1305,60 @@ fn cmd_deploy_civilian(game: &mut GameState, args: &str) {
 }
 
 fn print_help() {
-    println!("  COMMANDS:");
-    println!("    [Enter] / turn    — End turn (gather resources, advance time)");
-    println!("    status            — Show current game status");
+    println!("  {}", color_bold("ECONOMY:"));
     println!("    warehouse         — Show your resource warehouse");
     println!("    buildings         — Show your buildings and workers");
     println!("    population / pop  — Show population, food balance, recruitment capacity");
-    println!("    tech              — Show technology tree status");
-    println!("    research <name>   — Research a technology by name");
-    println!("    build <building>  — Build a new mill or factory");
-    println!("                        (lumbermill, steelmill, textilemill,");
-    println!("                         furniturefactory, hardwarefactory, clothingfactory)");
-    println!("    expand <building> — Expand an existing building's capacity");
-    println!("    recruit           — Recruit an untrained worker (costs 1 canned food,");
-    println!("                        1 clothing, 1 furniture)");
-    println!("    train             — Train an untrained worker to trained");
-    println!("    build railroad    — Build a railroad on the first un-railroaded tile");
-    println!("                        in your capital province");
-    println!("    build depot       — Build a depot on your capital tile ($2,000)");
-    println!(
-        "    build port        — Build a port on a coastal tile in your capital province ($3,000)"
-    );
-    println!("    infra             — Show infrastructure status (railroads, depots, ports)");
-    println!("    build car         — Build a freight car (costs 2 labor, 1 lumber, 1 steel)");
     println!("    transport         — Show your transport system (freight cars, capacity)");
-    println!("    build unit <type> — Build a military unit");
-    println!("                        (regulars $500, grenadiers $1000,");
-    println!("                         cuirassiers $500, light artillery $2000)");
-    println!("    civilians         — List your civilian units (type, position, status)");
-    println!("    hire <type>       — Hire a civilian specialist");
-    println!("                        (prospector $100, miner $1500, engineer $500,");
-    println!("                         farmer $100, rancher $100, forester $100, driller $2000)");
-    println!("    deploy <i> <prov> — Deploy civilian #i to a province to start working");
+    println!("    trade             — Show Minor Nation trade offerings");
+    println!("    build <building>  — Build a new mill or factory");
+    println!("    expand <building> — Expand an existing building's capacity");
+    println!("    recruit           — Recruit an untrained worker");
+    println!("    train             — Train an untrained worker to trained");
+    println!("    build car         — Build a freight car");
+    println!();
+    println!("  {}", color_bold("MILITARY:"));
     println!("    military / army   — Show your army units and their stats");
+    println!("    build unit <type> — Build a military unit");
     println!("    move <i> <prov>   — Move army unit #i to a province you own");
     println!("    attack <nation>   — Order an attack on a nation you are at war with");
+    println!();
+    println!("  {}", color_bold("DIPLOMACY:"));
     println!("    diplomacy         — Show diplomatic relations with all nations");
     println!("    consulate <name>  — Build a trade consulate with a Minor Nation ($500)");
     println!("    embassy <name>    — Build an embassy with a Minor Nation ($5,000)");
-    println!("    info <name>       — Show detailed info about any nation");
     println!("    war <name>        — Declare war on a nation");
     println!("    peace <name>      — Propose peace with a nation you are at war with");
+    println!();
+    println!("  {}", color_bold("CIVILIANS:"));
+    println!("    civilians         — List your civilian units (type, position, status)");
+    println!("    hire <type>       — Hire a civilian specialist");
+    println!("    deploy <i> <prov> — Deploy civilian #i to a province to start working");
+    println!();
+    println!("  {}", color_bold("TECHNOLOGY:"));
+    println!("    tech              — Show technology tree status");
+    println!("    research <name>   — Research a technology by name");
+    println!();
+    println!("  {}", color_bold("MAP:"));
     println!("    map               — Show the world map");
     println!("    provinces         — Show your provinces");
+    println!("    infra             — Show infrastructure (railroads, depots, ports)");
+    println!("    info <name>       — Show detailed info about any nation");
     println!("    nations           — Show all nations");
-    println!("    trade             — Show Minor Nation trade offerings");
     println!("    score             — Show scores for all Great Powers");
+    println!();
+    println!("  {}", color_bold("INFRASTRUCTURE:"));
+    println!("    build railroad    — Build a railroad in your capital province");
+    println!("    build depot       — Build a depot on your capital tile ($2,000)");
+    println!("    build port        — Build a port on a coastal tile ($3,000)");
+    println!();
+    println!("  {}", color_bold("GAME:"));
+    println!("    [Enter] / turn    — End turn (gather resources, advance time)");
+    println!("    auto <turns>      — Fast-forward N turns with minimal output");
+    println!("    overview          — Comprehensive empire overview");
+    println!("    history           — Show timeline of major events");
     println!("    save              — Save the current game");
     println!("    load <filename>   — Load a saved game");
-    println!("    turn10            — Advance 10 turns at once");
-    println!("    turn100           — Advance 100 turns at once");
     println!("    help              — Show this help");
     println!("    quit              — Exit the game");
 }
@@ -1854,9 +1570,17 @@ fn cmd_consulate(game: &mut GameState, query: &str) {
             let player = game.get_nation_mut(player_id).unwrap();
             player.treasury -= cost;
             println!(
-                "  Trade consulate established with {}! (cost: {}, treasury now: {})",
-                target_name, cost, player.treasury
+                "  {}",
+                color_green(&format!(
+                    "Trade consulate established with {}! (cost: {}, treasury now: {})",
+                    target_name, cost, player.treasury
+                ))
             );
+
+            // Record history event
+            let turn = game.turn;
+            game.history
+                .push((turn, format!("Trade consulate built with {}", target_name)));
         }
         Err(e) => {
             println!("  Cannot build consulate: {}", e);
@@ -1901,9 +1625,17 @@ fn cmd_embassy(game: &mut GameState, query: &str) {
             let player = game.get_nation_mut(player_id).unwrap();
             player.treasury -= cost;
             println!(
-                "  Embassy established with {}! (cost: {}, treasury now: {})",
-                target_name, cost, player.treasury
+                "  {}",
+                color_green(&format!(
+                    "Embassy established with {}! (cost: {}, treasury now: {})",
+                    target_name, cost, player.treasury
+                ))
             );
+
+            // Record history event
+            let turn = game.turn;
+            game.history
+                .push((turn, format!("Embassy built with {}", target_name)));
         }
         Err(e) => {
             println!("  Cannot build embassy: {}", e);
@@ -1939,13 +1671,30 @@ fn cmd_war(game: &mut GameState, query: &str) {
     }
 
     game.diplomacy.declare_war(player_id, target_id);
+    let player_name = game
+        .get_nation(player_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_else(|| "Unknown".to_string());
     println!();
     println!("  ╔════════════════════════════════════════╗");
     println!("  ║  DECLARATION OF WAR                    ║");
     println!("  ╚════════════════════════════════════════╝");
-    println!("  Your Excellency has declared WAR upon {}!", target_name);
+    println!(
+        "  {}",
+        color_red(&format!(
+            "Your Excellency has declared WAR upon {}!",
+            target_name
+        ))
+    );
     println!("  May Providence favor our cause.");
     println!();
+
+    // Record history event
+    let turn = game.turn;
+    game.history.push((
+        turn,
+        format!("{} declared war on {}", player_name, target_name),
+    ));
 }
 
 fn cmd_peace(game: &mut GameState, query: &str) {
@@ -1972,8 +1721,22 @@ fn cmd_peace(game: &mut GameState, query: &str) {
     }
 
     game.diplomacy.make_peace(player_id, target_id);
-    println!("  Peace has been established with {}.", target_name);
+    let player_name = game
+        .get_nation(player_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_else(|| "Unknown".to_string());
+    println!(
+        "  {}",
+        color_green(&format!("Peace has been established with {}.", target_name))
+    );
     println!("  The cannons fall silent.");
+
+    // Record history event
+    let turn = game.turn;
+    game.history.push((
+        turn,
+        format!("{} signed peace with {}", player_name, target_name),
+    ));
 }
 
 fn cmd_attack(game: &mut GameState, query: &str) {
@@ -2367,6 +2130,592 @@ fn print_infrastructure(game: &GameState) {
     }
 }
 
+// ── Turn report display ───────────────────────────────────────────
+
+fn print_turn_report(game: &GameState, report: &TurnReport) {
+    let player_id = game.human_player_nation;
+
+    // ── Newspaper ──────────────────────────────────────────────
+    println!();
+    println!("  {}", color_bold("THE IMPERIAL TIMES"));
+    let date_str = format!(
+        "{} Q{}, Turn {}",
+        report.year, report.quarter, report.turn.0
+    );
+    let pad = 42usize.saturating_sub(date_str.len() + 6);
+    println!("  \u{2554}{}\u{2557}", "\u{2550}".repeat(42));
+    println!("  \u{2551}  {}{}  \u{2551}", date_str, " ".repeat(pad));
+    println!("  \u{255a}{}\u{255d}", "\u{2550}".repeat(42));
+    for headline in &report.newspaper_headlines {
+        println!("    {}", headline);
+    }
+    println!();
+
+    // ── Compact turn summary ───────────────────────────────────
+    let header = format!(
+        "Turn {} ({} Q{}) ",
+        report.turn.0, report.year, report.quarter
+    );
+    let line_len = 42usize.saturating_sub(header.len());
+    let summary_bar = format!(
+        "\u{2500}\u{2500} {}{}",
+        color_bold(&header),
+        "\u{2500}".repeat(line_len)
+    );
+    println!("  {}", summary_bar);
+
+    // Economy line: resources gathered
+    let mut by_type: std::collections::HashMap<ResourceType, u32> =
+        std::collections::HashMap::new();
+    for (nid, res, amt) in &report.resource_production {
+        if *nid == player_id {
+            *by_type.entry(*res).or_insert(0) += amt;
+        }
+    }
+    if !by_type.is_empty() {
+        let mut sorted: Vec<_> = by_type.into_iter().collect();
+        sorted.sort_by_key(|(r, _)| format!("{:?}", r));
+        let resource_parts: Vec<String> = sorted
+            .iter()
+            .map(|(r, a)| format!("+{} {:?}", a, r))
+            .collect();
+        let resource_str = resource_parts.join(", ");
+
+        // Food status
+        let food_str = if let Some(player) = game.get_nation(player_id) {
+            let grain = player.resource_amount(ResourceType::Grain);
+            let fruit = player.resource_amount(ResourceType::Fruit);
+            let livestock = player.resource_amount(ResourceType::Livestock);
+            let total_food = grain + fruit + livestock;
+            let food_needed = player.labor.total_workers();
+            if total_food >= food_needed {
+                color_green(&format!("OK (surplus {})", total_food - food_needed))
+            } else {
+                color_red(&format!("DEFICIT ({})", food_needed - total_food))
+            }
+        } else {
+            String::new()
+        };
+
+        println!(
+            "  Economy:  {} | Food: {}",
+            color_green(&resource_str),
+            food_str
+        );
+    }
+
+    // Trade line
+    let player_trades: Vec<_> = report
+        .trade_transactions
+        .iter()
+        .filter(|txn| txn.buyer == player_id)
+        .collect();
+    if !player_trades.is_empty() {
+        let total_resources: u32 = player_trades.iter().map(|t| t.quantity).sum();
+        let total_cost: i64 = player_trades
+            .iter()
+            .map(|t| t.total_cost.as_dollars())
+            .sum();
+        println!(
+            "  Trade:    Bought {} resources for ${}",
+            total_resources,
+            format_number(total_cost as u32)
+        );
+    }
+
+    // Industry line
+    let player_prod: Vec<_> = report
+        .production_output
+        .iter()
+        .filter(|(nid, _, _)| *nid == player_id)
+        .collect();
+    if !player_prod.is_empty() {
+        let parts: Vec<String> = player_prod
+            .iter()
+            .map(|(_, item, qty)| format!("{} {}", qty, item))
+            .collect();
+        println!("  Industry: Produced {}", parts.join(", "));
+    }
+
+    // Military line
+    let player_battles: Vec<_> = report
+        .battles
+        .iter()
+        .filter(|b| b.attacker == player_id || b.defender == player_id)
+        .collect();
+    if player_battles.is_empty() {
+        println!("  Military: No battles");
+    } else {
+        for battle in &player_battles {
+            let prov_name = game
+                .get_province(battle.province)
+                .map(|p| p.name.as_str())
+                .unwrap_or("Unknown");
+            if battle.attacker_won && battle.attacker == player_id {
+                println!(
+                    "  Military: {}",
+                    color_green(&format!("VICTORY at {}", prov_name))
+                );
+            } else if !battle.attacker_won && battle.defender == player_id {
+                println!(
+                    "  Military: {}",
+                    color_green(&format!("Defended {}", prov_name))
+                );
+            } else {
+                println!(
+                    "  Military: {}",
+                    color_red(&format!("DEFEAT at {}", prov_name))
+                );
+            }
+        }
+    }
+
+    // Score line
+    if let Some((rank, total)) = score_summary(&report.scores, player_id) {
+        println!("  Score:    {} (#{})", format_number(total), rank);
+    }
+
+    println!("  {}", "\u{2500}".repeat(44));
+
+    // ── Detailed events (starvation, gold, battles, etc.) ──────
+    // Starvation
+    for (nid, workers_lost) in &report.starvation {
+        if *nid == player_id {
+            println!(
+                "  {}",
+                color_red(&format!(
+                    "WARNING: {} workers starved due to food shortage!",
+                    workers_lost
+                ))
+            );
+        }
+    }
+
+    // Gold income
+    for (nid, income) in &report.gold_income {
+        if *nid == player_id {
+            println!(
+                "  {}",
+                color_green(&format!("Gold/Gems income: {}", income))
+            );
+        }
+    }
+
+    // Battle details (full report)
+    if !report.battles.is_empty() {
+        println!();
+        for battle in &report.battles {
+            let atk_name = game
+                .get_nation(battle.attacker)
+                .map(|n| n.name.as_str())
+                .unwrap_or("Unknown");
+            let def_name = game
+                .get_nation(battle.defender)
+                .map(|n| n.name.as_str())
+                .unwrap_or("Unknown");
+            let prov_name = game
+                .get_province(battle.province)
+                .map(|p| p.name.as_str())
+                .unwrap_or("Unknown");
+            let result_str = if battle.attacker_won {
+                color_green("VICTORY!")
+            } else {
+                color_red("DEFEAT")
+            };
+
+            let terrain_str = match battle.terrain {
+                Some(t) => {
+                    let bonus = domain::military::terrain_defense_bonus(t);
+                    if bonus > 0.0 {
+                        format!("{:?} (+{:.0}% defense)", t, bonus * 100.0)
+                    } else {
+                        format!("{:?} (no bonus)", t)
+                    }
+                }
+                None => "Unknown".to_string(),
+            };
+
+            let fort_str = if battle.fort_level > 0 {
+                let bonus = domain::military::fort_defense_bonus(battle.fort_level);
+                format!(
+                    "Level {} (+{:.0}% defense)",
+                    battle.fort_level,
+                    bonus * 100.0
+                )
+            } else {
+                "None".to_string()
+            };
+
+            let atk_casualty_str = if battle.attacker_casualties.is_empty() {
+                "None".to_string()
+            } else {
+                format_casualties(&battle.attacker_casualties)
+            };
+            let def_casualty_str = if battle.defender_casualties.is_empty() {
+                "None".to_string()
+            } else {
+                format_casualties(&battle.defender_casualties)
+            };
+
+            let def_fp_str = if battle.fort_level > 0
+                || battle
+                    .terrain
+                    .map(|t| domain::military::terrain_defense_bonus(t) > 0.0)
+                    .unwrap_or(false)
+            {
+                format!(
+                    "{:.1} (incl. terrain/fort bonus)",
+                    battle.defender_initial_fp
+                )
+            } else {
+                format!("{:.1}", battle.defender_initial_fp)
+            };
+
+            println!("  {}", "=".repeat(42));
+            println!("  {}", color_bold(&format!("BATTLE OF {}", prov_name)));
+            println!("  {}", "=".repeat(42));
+            println!(
+                "  Attacker: {} ({} units, FP: {:.1})",
+                atk_name, battle.attacker_initial_count, battle.attacker_initial_fp
+            );
+            println!(
+                "  Defender: {} ({} units, FP: {})",
+                def_name, battle.defender_initial_count, def_fp_str
+            );
+            println!("  Terrain: {}", terrain_str);
+            println!("  Fort: {}", fort_str);
+            println!();
+            println!("  Result: {}", result_str);
+            println!("  Attacker casualties: {}", atk_casualty_str);
+            println!("  Defender casualties: {}", def_casualty_str);
+            if battle.attacker_won {
+                println!("  {}", color_green("Province conquered!"));
+            }
+            println!("  {}", "=".repeat(42));
+        }
+    }
+
+    // Civilian completions
+    let player_civs: Vec<_> = report
+        .civilian_completions
+        .iter()
+        .filter(|(nid, _)| *nid == player_id)
+        .collect();
+    if !player_civs.is_empty() {
+        println!();
+        println!("  Civilian work completed:");
+        for (_, desc) in &player_civs {
+            println!("    {}", color_green(desc));
+        }
+    }
+
+    // Transport overflow
+    let player_overflow: Vec<_> = report
+        .transport_overflow
+        .iter()
+        .filter(|(nid, _, _)| *nid == player_id)
+        .collect();
+    if !player_overflow.is_empty() {
+        println!();
+        println!(
+            "  {}",
+            color_yellow("Transport overflow (resources left in field):")
+        );
+        for (_, res, qty) in &player_overflow {
+            println!("    {:?}: {}", res, qty);
+        }
+    }
+
+    // Immigration
+    for (nid, count) in &report.immigration {
+        if *nid == player_id {
+            println!(
+                "  {}",
+                color_green(&format!(
+                    "Immigration: {} new worker{} recruited!",
+                    count,
+                    if *count == 1 { "" } else { "s" }
+                ))
+            );
+        }
+    }
+
+    // Settlement upgrades
+    for (prov_id, level) in &report.settlement_upgrades {
+        if let Some(prov) = game.get_province(*prov_id) {
+            println!(
+                "  {}",
+                color_green(&format!(
+                    "Settlement upgrade: {} is now a {}!",
+                    prov.name, level
+                ))
+            );
+        }
+    }
+
+    println!();
+
+    // Council vote results
+    if let Some(ref vote) = report.council_vote {
+        println!("  \u{2554}{}\u{2557}", "\u{2550}".repeat(42));
+        println!("  \u{2551}  COUNCIL OF GOVERNORS VOTE            \u{2551}");
+        println!("  \u{255a}{}\u{255d}", "\u{2550}".repeat(42));
+        for (nid, votes) in &vote.votes {
+            let name = game
+                .get_nation(*nid)
+                .map(|n| n.name.as_str())
+                .unwrap_or("Unknown");
+            let marker = if Some(*nid) == vote.winner {
+                " \u{25c4} WINNER"
+            } else {
+                ""
+            };
+            println!("    {:<12} {:>3} governors{}", name, votes, marker);
+        }
+        println!(
+            "    Majority needed: {}/{}",
+            vote.majority_threshold, vote.total_governors
+        );
+        println!();
+        if let Some(winner_id) = vote.winner
+            && winner_id == game.human_player_nation
+        {
+            println!("  {}", color_green("*** YOU HAVE WON THE GAME! ***"));
+        }
+    }
+}
+
+// ── Overview command ──────────────────────────────────────────────
+
+fn print_overview(game: &GameState) {
+    let player_id = game.human_player_nation;
+    let player = match game.get_nation(player_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let year = game.turn.year();
+    let quarter = game.turn.quarter();
+
+    // Count province types
+    let total_provinces = player.province_count();
+    let homeland_provinces = game
+        .provinces
+        .iter()
+        .filter(|p| p.owner == player_id)
+        .count();
+
+    // Population breakdown
+    let untrained = player.labor.untrained;
+    let trained = player.labor.trained;
+    let expert = player.labor.expert;
+    let total_workers = player.labor.total_workers();
+
+    // Army
+    let army_count = player.army.len();
+    let army_fp = player.total_military_firepower();
+
+    // Civilians
+    let civilian_count = player.civilians.len();
+    let mut civ_types: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
+    for c in &player.civilians {
+        *civ_types.entry(format!("{}", c.civilian_type)).or_insert(0) += 1;
+    }
+
+    // Freight
+    let freight_cars = player.transport.freight_cars;
+    let freight_capacity = player.transport.total_capacity();
+
+    // Buildings
+    let standard_count = player
+        .buildings
+        .iter()
+        .filter(|b| {
+            !matches!(
+                b.building_type,
+                BuildingType::LumberMill
+                    | BuildingType::SteelMill
+                    | BuildingType::TextileMill
+                    | BuildingType::FurnitureFactory
+                    | BuildingType::HardwareFactory
+                    | BuildingType::ClothingFactory
+            )
+        })
+        .count();
+    let mill_count = player
+        .buildings
+        .iter()
+        .filter(|b| {
+            matches!(
+                b.building_type,
+                BuildingType::LumberMill | BuildingType::SteelMill | BuildingType::TextileMill
+            )
+        })
+        .count();
+    let factory_count = player
+        .buildings
+        .iter()
+        .filter(|b| {
+            matches!(
+                b.building_type,
+                BuildingType::FurnitureFactory
+                    | BuildingType::HardwareFactory
+                    | BuildingType::ClothingFactory
+            )
+        })
+        .count();
+
+    // Tech
+    let researched_count = player.researched_techs.len();
+    let total_techs = game.tech_tree.total_tech_count();
+
+    // Score
+    let score = calculate_score(player);
+    let mut all_scores: Vec<_> = game
+        .great_powers()
+        .iter()
+        .map(|n| (n.id, calculate_score(n).total))
+        .collect();
+    all_scores.sort_by(|a, b| b.1.cmp(&a.1));
+    let rank = all_scores
+        .iter()
+        .position(|(nid, _)| *nid == player_id)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let gp_count = all_scores.len();
+
+    let title = format!(
+        "EMPIRE OF {} \u{2014} Year {} Q{}",
+        player.name.to_uppercase(),
+        year,
+        quarter
+    );
+
+    println!("  {}", "\u{2550}".repeat(44));
+    println!("  {}", color_bold(&title));
+    println!("  {}", "\u{2550}".repeat(44));
+    println!(
+        "  Treasury:     ${}",
+        format_number(player.treasury.as_dollars() as u32)
+    );
+    println!("  Provinces:    {}", homeland_provinces);
+    println!(
+        "  Population:   {} workers ({} untrained, {} trained, {} expert)",
+        total_workers, untrained, trained, expert
+    );
+    println!("  Army:         {} units (FP: {:.1})", army_count, army_fp);
+    if civilian_count > 0 {
+        let civ_detail: Vec<String> = civ_types
+            .iter()
+            .map(|(t, c)| format!("{} {}", c, t))
+            .collect();
+        println!(
+            "  Civilians:    {} ({})",
+            civilian_count,
+            civ_detail.join(", ")
+        );
+    } else {
+        println!("  Civilians:    0");
+    }
+    println!(
+        "  Freight:      {} cars (capacity: {})",
+        freight_cars, freight_capacity
+    );
+    println!(
+        "  Buildings:    {} standard + {} mills + {} factories",
+        standard_count, mill_count, factory_count
+    );
+    println!(
+        "  Technologies: {} of {} researched",
+        researched_count, total_techs
+    );
+    println!(
+        "  Score:        {} (#{} of {})",
+        format_number(score.total),
+        rank,
+        gp_count
+    );
+    println!("  {}", "\u{2550}".repeat(44));
+
+    // Suppress unused variable warnings
+    let _ = total_provinces;
+}
+
+// ── History command ───────────────────────────────────────────────
+
+fn print_history(game: &GameState) {
+    if game.history.is_empty() {
+        println!("  No major events recorded yet.");
+        return;
+    }
+
+    println!("  {}", color_bold("HISTORY (last 20 events):"));
+    println!();
+
+    let start = if game.history.len() > 20 {
+        game.history.len() - 20
+    } else {
+        0
+    };
+
+    for (turn, event) in &game.history[start..] {
+        println!(
+            "  {} Q{} (Turn {}): {}",
+            turn.year(),
+            turn.quarter(),
+            turn.0,
+            event
+        );
+    }
+}
+
+// ── Auto command ──────────────────────────────────────────────────
+
+fn cmd_auto(game: &mut GameState, turns: u32) {
+    println!("  Auto-playing {} turns...", turns);
+
+    for i in 1..=turns {
+        if game.is_game_over() {
+            println!("  Game ended at turn {}.", game.turn.0);
+            break;
+        }
+        process_turn(game);
+
+        if i % 10 == 0 || i == turns {
+            println!(
+                "  ...turn {} ({} Q{})",
+                i,
+                game.turn.year(),
+                game.turn.quarter()
+            );
+        }
+    }
+
+    let player = game.get_nation(game.human_player_nation).unwrap();
+    let score = calculate_score(player);
+    let mut all_scores: Vec<_> = game
+        .great_powers()
+        .iter()
+        .map(|n| (n.id, calculate_score(n).total))
+        .collect();
+    all_scores.sort_by(|a, b| b.1.cmp(&a.1));
+    let rank = all_scores
+        .iter()
+        .position(|(nid, _)| *nid == game.human_player_nation)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+
+    println!();
+    println!(
+        "  Done. Now at {} Q{}, Treasury: ${}, Score: {} (#{})",
+        game.turn.year(),
+        game.turn.quarter(),
+        format_number(player.treasury.as_dollars() as u32),
+        format_number(score.total),
+        rank
+    );
+}
+
 fn render_map(hex_map: &HexMap, nations: &[Nation]) {
     let reset = "\x1b[0m";
     let sea_color = "\x1b[34m";
@@ -2417,6 +2766,7 @@ fn render_map(hex_map: &HexMap, nations: &[Nation]) {
 
 /// Format a list of casualty unit types into a readable string.
 /// Groups identical types: e.g., "2 Militia, 1 Regulars destroyed"
+#[allow(dead_code)]
 fn format_casualties(casualties: &[ArmyUnitType]) -> String {
     let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for ut in casualties {

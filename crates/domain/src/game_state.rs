@@ -35,6 +35,9 @@ pub struct GameState {
     /// Pending attacks to resolve this turn: (attacker NationId, target ProvinceId).
     #[serde(default)]
     pub pending_attacks: Vec<(NationId, ProvinceId)>,
+    /// History of major game events: (turn_number, description).
+    #[serde(default)]
+    pub history: Vec<(TurnNumber, String)>,
 }
 
 impl GameState {
@@ -263,6 +266,7 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         tech_tree: TechTree::new(),
         diplomacy,
         pending_attacks: Vec::new(),
+        history: Vec::new(),
     }
 }
 
@@ -321,6 +325,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            history: Vec::new(),
         }
     }
 

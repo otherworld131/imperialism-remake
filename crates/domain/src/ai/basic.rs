@@ -79,10 +79,14 @@ fn ai_research_tech(
     if let Some(remaining) = nation.treasury.checked_sub(tech_cost) {
         nation.treasury = remaining;
         nation.research_tech(tech_id);
+        let nation_name = nation.name.clone();
         actions.push(format!(
             "Scientists in {} have discovered {}!",
-            nation.name, tech_name
+            nation_name, tech_name
         ));
+        let turn = game.turn;
+        game.history
+            .push((turn, format!("{} researched {}", nation_name, tech_name)));
     }
 }
 
@@ -520,6 +524,11 @@ fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId], actions: &m
             "{} has declared war on {}!",
             attacker_name, target_name
         ));
+        let turn = game.turn;
+        game.history.push((
+            turn,
+            format!("{} declared war on {}", attacker_name, target_name),
+        ));
     }
 }
 
@@ -620,6 +629,11 @@ fn ai_military_strategy(game: &mut GameState, nation_id: NationId, actions: &mut
             actions.push(format!(
                 "{} has declared war on {}!",
                 nation_name, target_name
+            ));
+            let turn = game.turn;
+            game.history.push((
+                turn,
+                format!("{} declared war on {}", nation_name, target_name),
             ));
         }
     }
@@ -856,6 +870,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            history: Vec::new(),
         }
     }
 
@@ -935,6 +950,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            history: Vec::new(),
         }
     }
 

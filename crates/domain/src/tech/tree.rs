@@ -375,6 +375,11 @@ impl TechTree {
         &self.technologies
     }
 
+    /// Returns the total number of technologies in the tree.
+    pub fn total_tech_count(&self) -> usize {
+        self.technologies.len()
+    }
+
     /// Validates the tech tree structure:
     /// - All prerequisite IDs refer to technologies that exist in the tree
     /// - There are no cycles in the prerequisite graph

@@ -1132,6 +1132,15 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 atk_name, prov_name, def_name_conquest
             ));
 
+            // Record history event
+            game.history.push((
+                game.turn,
+                format!(
+                    "{} conquered {} from {}",
+                    atk_name, prov_name, def_name_conquest
+                ),
+            ));
+
             // Check if the defender has been eliminated (lost all provinces)
             let defender_eliminated = game
                 .get_nation(defender_id)
@@ -1342,6 +1351,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            history: Vec::new(),
         }
     }
 
@@ -1387,6 +1397,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            history: Vec::new(),
         }
     }
 
@@ -1595,6 +1606,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            history: Vec::new(),
         };
 
         let report = process_turn(&mut game);
@@ -1684,6 +1696,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            history: Vec::new(),
         }
     }
 
@@ -2288,6 +2301,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            history: Vec::new(),
         };
 
         let report = process_turn(&mut game);
@@ -2539,6 +2553,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            history: Vec::new(),
         };
 
         // Process 7 turns: 1 turn to start countdown (set to 6), then 6 turns to count down
@@ -2601,6 +2616,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            history: Vec::new(),
         };
 
         for _ in 0..10 {
