@@ -49,7 +49,7 @@ simultaneously.
 - [ ] Steps executed in deterministic order:
   1. [x] **Civilian actions resolve** — specialists improve tiles, engineers build infrastructure
   2. [x] **Production resolves** — mills/factories process resources using assigned inputs
-  3. [ ] **Transport resolves** — freight cars deliver resources to capital
+  3. [x] **Transport resolves** — freight cars deliver resources to capital
   4. [x] **Immigration resolves** — new workers arrive if canned food + clothing + furniture available
   5. [ ] **Technology resolves** — newly purchased techs take effect; new techs become available
   6. [ ] **Trade resolves** — offers/bids matched, transactions executed, revenue generated
@@ -57,7 +57,7 @@ simultaneously.
   8. [ ] **Military movement resolves** — units move to ordered destinations
   9. [ ] **Combat resolves** — battles fought in provinces with opposing forces
   10. [ ] **Naval combat resolves** — naval battles in contested sea zones
-  11. [ ] **Conquest resolves** — provinces change ownership, rewards granted
+  11. [x] **Conquest resolves** — provinces change ownership, rewards granted
   12. [ ] **Maintenance resolves** — military maintenance costs deducted
   13. [x] **Scoring resolves** — game score recalculated
   14. [ ] **Victory check** — Council of Governors vote if decade boundary

@@ -23,7 +23,7 @@ bottleneck — resources not transported are wasted.
 - [ ] Resources from connected tiles are collected automatically
 - [ ] Only resources from tiles connected via railroad/depot/port reach the capital
 - [ ] Unconnected tiles' resources are wasted
-- [x] Excess resources beyond transport capacity are left behind
+- [x] Excess resources beyond transport capacity are left behind (overflow: resources lost when capacity insufficient)
 - [x] Unit tests: allocation algorithm distributes capacity correctly
 - [ ] Unit tests: disconnected tiles produce no deliveries
 

@@ -9,8 +9,8 @@ a province is invaded via beachhead.
 ## Checklist
 
 ### Battle Initiation
-- [ ] Attacker orders army units to move into an enemy-occupied province
-- [ ] Defender's garrison (Militia/Minutemen) + stationed army defend
+- [x] Attacker orders army units to move into an enemy-occupied province
+- [x] Defender's garrison (Militia/Minutemen) + stationed army defend
 - [ ] Counter-attacks: if defender sends reinforcements during the same turn, they arrive for a secondary engagement
 - [ ] Counter-attack reinforcements "have already moved" — no opportunity fire during first move
 - [ ] Battle can be player-controlled or auto-resolved (player choice in preferences)
@@ -38,8 +38,8 @@ a province is invaded via beachhead.
 
 ### Combat Modifiers
 - [ ] **Medals**: 4 medals ≈ 2× firepower; medal holders take less damage and recover faster
-- [ ] **Terrain**: defensive bonuses for hills, forests, fortifications
-- [ ] **Fort defense**: units inside forts receive significant defense bonuses
+- [x] **Terrain**: defensive bonuses for hills, forests, fortifications
+- [x] **Fort defense**: units inside forts receive significant defense bonuses
 - [ ] **Fort destruction**: Sappers tunnel to fort walls; heavy artillery bombards from range
 - [ ] Unit tests: all modifier calculations
 

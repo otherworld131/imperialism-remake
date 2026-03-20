@@ -11,12 +11,12 @@ and factory capacity.
 
 ### Settlement Progression
 - [x] **Hamlet** — initial state; produces raw resources only
-- [ ] **Village** — intermediate; begins producing when connected and factory built
+- [x] **Village** — intermediate; begins producing when connected and factory built
 - [ ] **Town** — fully industrialized; maximum production capacity
-- [ ] 6-turn delay from connection before first materials appear
+- [x] 6-turn delay from connection before first materials appear
 - [ ] Captured Great Power capitals industrialize immediately (no delay)
 - [ ] Minor Nation capitals never industrialize
-- [ ] Unit tests for settlement progression timing
+- [x] Unit tests for settlement progression timing
 
 ### Province Connection
 - [ ] Province is "connected" if a rail depot on/adjacent to its capital links to national capital
