@@ -1,13 +1,13 @@
 use crate::map::UnitId;
 use crate::types::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ShipCategory {
     Merchant,
     Warship,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ShipType {
     // Merchant
     Trader,
@@ -44,7 +44,7 @@ pub struct ShipStats {
     pub prerequisite_tech: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Ship {
     pub id: UnitId,
     pub ship_type: ShipType,

@@ -1,8 +1,10 @@
+use crate::ai::basic::AiPersonality;
 use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::civilians::Civilian;
 use crate::economy::labor::LaborPool;
 use crate::economy::transport::TransportSystem;
 use crate::events::TechId;
+use crate::military::ships::Ship;
 use crate::military::units::ArmyUnit;
 use crate::types::*;
 use std::collections::HashMap;
@@ -68,6 +70,12 @@ pub struct Nation {
     /// Transport system (freight cars, allocations).
     #[serde(default)]
     pub transport: TransportSystem,
+    /// Merchant fleet — ships used for trade.
+    #[serde(default)]
+    pub merchant_fleet: Vec<Ship>,
+    /// AI personality for this nation (None for human player).
+    #[serde(default)]
+    pub ai_personality: Option<AiPersonality>,
 }
 
 impl Nation {
@@ -96,6 +104,8 @@ impl Nation {
             army: Vec::new(),
             civilians: Vec::new(),
             transport: TransportSystem::new(),
+            merchant_fleet: Vec::new(),
+            ai_personality: None,
         }
     }
 
@@ -213,6 +223,19 @@ impl Nation {
     /// Sum of effective_firepower() for all army units.
     pub fn total_military_firepower(&self) -> f64 {
         self.army.iter().map(|u| u.effective_firepower()).sum()
+    }
+
+    /// Total cargo capacity of all merchant ships in the fleet.
+    pub fn total_cargo_capacity(&self) -> u32 {
+        self.merchant_fleet
+            .iter()
+            .map(|s| s.total_cargo_capacity())
+            .sum()
+    }
+
+    /// Number of merchant ships in the fleet.
+    pub fn merchant_ship_count(&self) -> usize {
+        self.merchant_fleet.len()
     }
 
     /// Add a technology to this nation's researched list.

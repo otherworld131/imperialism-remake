@@ -46,7 +46,7 @@ pub fn calculate_score(nation: &Nation) -> NationScore {
         .sum::<u32>();
     let labor_score = nation.labor.total_workers() * 10;
     let transport_score = nation.transport.freight_cars * 5;
-    let merchant_marine_score = 0; // placeholder — ships not tracked per nation yet
+    let merchant_marine_score = nation.total_cargo_capacity() * 20;
     let diplomatic_score = 50; // placeholder
     let province_score = nation.province_count() as u32 * 100;
 

@@ -10,6 +10,7 @@ use domain::game_state::{GameState, new_game};
 use domain::hex::HexCoord;
 use domain::map::infrastructure;
 use domain::map::{HexMap, UnitId};
+use domain::military::ships::{Ship, ShipType};
 use domain::military::units::{ArmyUnit, ArmyUnitType};
 use domain::nation::Nation;
 use domain::turn::{TurnReport, calculate_score, process_turn};
@@ -274,6 +275,24 @@ fn main() {
             _ if cmd.starts_with("move ") => {
                 let args = input.trim()[5..].trim();
                 cmd_move_unit(&mut game, args);
+            }
+            "build ship trader" => {
+                cmd_build_ship(&mut game, "trader");
+            }
+            "build ship indiaman" => {
+                cmd_build_ship(&mut game, "indiaman");
+            }
+            _ if cmd.starts_with("build ship ") => {
+                let ship_query = input.trim()[11..].trim();
+                cmd_build_ship(&mut game, ship_query);
+            }
+            "fleet" => {
+                println!();
+                print_fleet(&game);
+            }
+            _ if cmd.starts_with("sell ") => {
+                let args = input.trim()[5..].trim();
+                cmd_sell(&mut game, args);
             }
             _ => {
                 println!("  Unknown command. Type 'help' for available commands.");
@@ -563,6 +582,170 @@ fn build_unit(game: &mut GameState, query: &str) {
     );
 }
 
+/// Build a merchant ship (trader or indiaman).
+fn cmd_build_ship(game: &mut GameState, query: &str) {
+    let ship_type = match query.to_lowercase().as_str() {
+        "trader" => ShipType::Trader,
+        "indiaman" => ShipType::Indiaman,
+        _ => {
+            println!("  Unknown ship type: '{}'", query);
+            println!(
+                "  Available: trader (2 fabric + 4 lumber, cargo: 2), indiaman (3 fabric + 7 lumber, cargo: 4)"
+            );
+            return;
+        }
+    };
+
+    let stats = ship_type.stats();
+    let fabric_needed = stats.fabric_cost;
+    let lumber_needed = stats.lumber_cost;
+
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+
+    let fabric_have = player.material_amount(MaterialType::Fabric);
+    let lumber_have = player.material_amount(MaterialType::Lumber);
+
+    if fabric_have < fabric_needed || lumber_have < lumber_needed {
+        println!(
+            "  Insufficient materials to build {:?} (need {} fabric + {} lumber; have {} fabric + {} lumber).",
+            ship_type, fabric_needed, lumber_needed, fabric_have, lumber_have
+        );
+        return;
+    }
+
+    let uid = UnitId(NEXT_UNIT_ID.fetch_add(1, Ordering::Relaxed));
+    let ship = Ship::new(uid, ship_type, player_id);
+
+    let player = game.get_nation_mut(player_id).unwrap();
+    player.consume_material(MaterialType::Fabric, fabric_needed);
+    player.consume_material(MaterialType::Lumber, lumber_needed);
+    player.merchant_fleet.push(ship);
+
+    println!(
+        "  Ship built! {:?} added to merchant fleet (cargo: {}). Fleet size: {}, total cargo: {}",
+        ship_type,
+        stats.cargo,
+        player.merchant_fleet.len(),
+        player.total_cargo_capacity()
+    );
+}
+
+/// Print the merchant fleet.
+fn print_fleet(game: &GameState) {
+    let player = game.get_nation(game.human_player_nation).unwrap();
+
+    if player.merchant_fleet.is_empty() {
+        println!(
+            "  No merchant ships. Use 'build ship trader' or 'build ship indiaman' to build one."
+        );
+        return;
+    }
+
+    println!("  MERCHANT FLEET:");
+
+    // Count ships by type
+    let mut counts: std::collections::BTreeMap<String, (usize, u32)> =
+        std::collections::BTreeMap::new();
+    for ship in &player.merchant_fleet {
+        let name = format!("{:?}", ship.ship_type);
+        let cargo = ship.total_cargo_capacity();
+        let entry = counts.entry(name).or_insert((0, cargo));
+        entry.0 += 1;
+    }
+
+    for (name, (count, cargo)) in &counts {
+        println!("    {}x {} (cargo: {} each)", count, name, cargo);
+    }
+    println!(
+        "    Total cargo capacity: {} holds",
+        player.total_cargo_capacity()
+    );
+}
+
+/// Sell resources at base price, adding revenue to treasury.
+fn cmd_sell(game: &mut GameState, args: &str) {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    if parts.len() != 2 {
+        println!("  Usage: sell <resource> <quantity>");
+        println!("  Example: sell timber 5");
+        return;
+    }
+
+    let resource = match parse_resource_type(parts[0]) {
+        Some(r) => r,
+        None => {
+            println!("  Unknown resource: '{}'", parts[0]);
+            println!(
+                "  Tradeable: timber, coal, iron, cotton, wool, fruit, livestock, oil, gold, gems"
+            );
+            return;
+        }
+    };
+
+    let quantity: u32 = match parts[1].parse() {
+        Ok(q) if q > 0 => q,
+        _ => {
+            println!("  Quantity must be a positive number.");
+            return;
+        }
+    };
+
+    if !resource.is_tradeable() {
+        println!("  {:?} is not tradeable.", resource);
+        return;
+    }
+
+    let price = domain::economy::trade::base_price(resource);
+    if price == Money::ZERO {
+        println!("  {:?} has no trade value.", resource);
+        return;
+    }
+
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+
+    if player.resource_amount(resource) < quantity {
+        println!(
+            "  Insufficient {:?} (have {}, want to sell {}).",
+            resource,
+            player.resource_amount(resource),
+            quantity
+        );
+        return;
+    }
+
+    let revenue = price * quantity as i64;
+
+    let player = game.get_nation_mut(player_id).unwrap();
+    player.remove_resource(resource, quantity);
+    player.treasury += revenue;
+
+    println!(
+        "  Sold {} {:?} at {} each for {} total. Treasury: {}",
+        quantity, resource, price, revenue, player.treasury
+    );
+}
+
+/// Parse a resource type from a string.
+fn parse_resource_type(s: &str) -> Option<ResourceType> {
+    match s.to_lowercase().as_str() {
+        "timber" => Some(ResourceType::Timber),
+        "coal" => Some(ResourceType::Coal),
+        "iron" => Some(ResourceType::Iron),
+        "cotton" => Some(ResourceType::Cotton),
+        "wool" => Some(ResourceType::Wool),
+        "fruit" => Some(ResourceType::Fruit),
+        "livestock" => Some(ResourceType::Livestock),
+        "oil" => Some(ResourceType::Oil),
+        "gold" => Some(ResourceType::Gold),
+        "gems" => Some(ResourceType::Gems),
+        "grain" => Some(ResourceType::Grain),
+        "horses" => Some(ResourceType::Horses),
+        _ => None,
+    }
+}
+
 /// Return the player's rank (1-based) and total score from the turn report scores.
 #[allow(dead_code)]
 fn score_summary(scores: &[(NationId, String, u32)], player_id: NationId) -> Option<(usize, u32)> {
@@ -701,6 +884,13 @@ fn print_nation_info(game: &GameState, query: &str) {
     // Treasury (Great Powers only)
     if target.is_great_power() {
         println!("  Treasury: {}", target.treasury);
+    }
+
+    // AI personality (for AI-controlled Great Powers)
+    if target_id != player_id
+        && let Some(personality) = target.ai_personality
+    {
+        println!("  AI Personality: {}", personality);
     }
 
     // Army size and total firepower
@@ -1100,6 +1290,17 @@ fn research_tech(game: &mut GameState, query: &str) {
 fn print_trade(game: &GameState) {
     use domain::economy::trade;
 
+    let player = game.get_nation(game.human_player_nation).unwrap();
+    let cargo_capacity = player.total_cargo_capacity();
+
+    println!("  TRADE STATUS:");
+    println!(
+        "    Merchant fleet: {} ships, {} cargo holds",
+        player.merchant_ship_count(),
+        cargo_capacity
+    );
+    println!();
+
     let offers = trade::generate_minor_nation_offers(&game.nations, &game.provinces, &game.hex_map);
 
     if offers.is_empty() {
@@ -1108,19 +1309,32 @@ fn print_trade(game: &GameState) {
     }
 
     // Group offers by seller
-    let mut by_seller: std::collections::BTreeMap<String, Vec<&trade::TradeOffer>> =
+    let mut by_seller: std::collections::BTreeMap<String, (NationId, Vec<&trade::TradeOffer>)> =
         std::collections::BTreeMap::new();
     for offer in &offers {
         let seller_name = game
             .get_nation(offer.seller)
             .map(|n| n.name.clone())
             .unwrap_or_else(|| format!("Nation {}", offer.seller.0));
-        by_seller.entry(seller_name).or_default().push(offer);
+        let entry = by_seller
+            .entry(seller_name)
+            .or_insert((offer.seller, Vec::new()));
+        entry.1.push(offer);
     }
 
     println!("  MINOR NATION TRADE OFFERINGS:");
-    for (name, nation_offers) in &by_seller {
-        println!("    {}:", name);
+    for (name, (seller_id, nation_offers)) in &by_seller {
+        // Check consulate status
+        let has_consulate = game
+            .diplomacy
+            .get_relation(game.human_player_nation, *seller_id)
+            .is_some_and(|r| r.has_consulate);
+        let status = if has_consulate {
+            color_green("[Consulate]")
+        } else {
+            color_red("[No Consulate]")
+        };
+        println!("    {} {}:", name, status);
         let mut sorted_offers: Vec<_> = nation_offers.iter().collect();
         sorted_offers.sort_by_key(|o| format!("{:?}", o.resource));
         for offer in sorted_offers {
@@ -1131,7 +1345,14 @@ fn print_trade(game: &GameState) {
         }
     }
     println!();
-    println!("  (Trade is auto-resolved at the start of each turn)");
+    if cargo_capacity == 0 {
+        println!(
+            "  {} No cargo capacity! Build merchant ships to enable trade.",
+            color_red("WARNING:")
+        );
+    } else {
+        println!("  (Trade is auto-resolved each turn — requires consulate + cargo capacity)");
+    }
 }
 
 fn print_civilians(game: &GameState) {
@@ -1316,6 +1537,9 @@ fn print_help() {
     println!("    recruit           — Recruit an untrained worker");
     println!("    train             — Train an untrained worker to trained");
     println!("    build car         — Build a freight car");
+    println!("    build ship <type> — Build a merchant ship (trader, indiaman)");
+    println!("    fleet             — Show your merchant fleet");
+    println!("    sell <res> <qty>  — Sell resources at base price");
     println!();
     println!("  {}", color_bold("MILITARY:"));
     println!("    military / army   — Show your army units and their stats");
@@ -2205,22 +2429,39 @@ fn print_turn_report(game: &GameState, report: &TurnReport) {
     }
 
     // Trade line
-    let player_trades: Vec<_> = report
+    let player_trades_bought: Vec<_> = report
         .trade_transactions
         .iter()
         .filter(|txn| txn.buyer == player_id)
         .collect();
-    if !player_trades.is_empty() {
-        let total_resources: u32 = player_trades.iter().map(|t| t.quantity).sum();
-        let total_cost: i64 = player_trades
+    let player_trades_sold: Vec<_> = report
+        .trade_transactions
+        .iter()
+        .filter(|txn| txn.seller == player_id)
+        .collect();
+    if !player_trades_bought.is_empty() || !player_trades_sold.is_empty() {
+        let total_bought: u32 = player_trades_bought.iter().map(|t| t.quantity).sum();
+        let total_cost: i64 = player_trades_bought
             .iter()
             .map(|t| t.total_cost.as_dollars())
             .sum();
-        println!(
-            "  Trade:    Bought {} resources for ${}",
-            total_resources,
-            format_number(total_cost as u32)
-        );
+        let total_earned: i64 = player_trades_sold
+            .iter()
+            .map(|t| t.total_cost.as_dollars())
+            .sum();
+
+        let mut parts = Vec::new();
+        if total_bought > 0 {
+            parts.push(format!(
+                "Bought {} resources for ${}",
+                total_bought,
+                format_number(total_cost as u32)
+            ));
+        }
+        if total_earned > 0 {
+            parts.push(format!("Earned ${}", format_number(total_earned as u32)));
+        }
+        println!("  Trade:    {}", parts.join(" | "));
     }
 
     // Industry line

@@ -1,8 +1,10 @@
+use crate::ai::basic::personality_for_nation_index;
 use crate::diplomacy::DiplomacyState;
 use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::civilians::{Civilian, CivilianType, next_civilian_id};
 use crate::events::DomainEvent;
-use crate::map::{HexMap, Province};
+use crate::map::{HexMap, Province, UnitId};
+use crate::military::ships::{Ship, ShipType};
 use crate::nation::{Nation, NationColor};
 use crate::tech::TechTree;
 use crate::types::*;
@@ -223,6 +225,19 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         let forester = Civilian::new(next_civilian_id(), CivilianType::Forester, setup.nation_id);
         nation.civilians.push(farmer);
         nation.civilians.push(forester);
+
+        // Starting merchant fleet: 1 Trader for each Great Power
+        let trader = Ship::new(
+            UnitId(1_500_000 + i as u32),
+            ShipType::Trader,
+            setup.nation_id,
+        );
+        nation.merchant_fleet.push(trader);
+
+        // Assign AI personality for non-human Great Powers
+        if i != human_nation_index.min(generated.great_power_nations.len() - 1) {
+            nation.ai_personality = Some(personality_for_nation_index(i));
+        }
 
         nations.push(nation);
     }

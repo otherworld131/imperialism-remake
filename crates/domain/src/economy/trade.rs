@@ -1,3 +1,4 @@
+use crate::diplomacy::DiplomacyState;
 use crate::map::{HexMap, Province};
 use crate::nation::Nation;
 use crate::types::*;
@@ -155,6 +156,94 @@ pub fn generate_minor_nation_offers(
     }
 
     offers
+}
+
+/// Generate trade bids for a nation, respecting consulate requirements and cargo capacity.
+///
+/// Rules:
+/// - Only buy from Minor Nations where the nation has a trade consulate (check diplomacy).
+/// - Total quantity of all bids cannot exceed cargo capacity (merchant ships).
+/// - Prioritize buying resources the nation needs most (buy what they have least of).
+/// - Set max_price at 120% of base_price (willing to pay a bit more).
+pub fn generate_smart_bids(
+    nation: &Nation,
+    available_offers: &[TradeOffer],
+    diplomacy: &DiplomacyState,
+    max_cargo: u32,
+) -> Vec<TradeBid> {
+    if max_cargo == 0 {
+        return Vec::new();
+    }
+
+    // Filter offers to only those from nations where we have a consulate
+    let eligible_offers: Vec<&TradeOffer> = available_offers
+        .iter()
+        .filter(|offer| {
+            // Check that a consulate exists between this nation and the seller
+            if let Some(rel) = diplomacy.get_relation(nation.id, offer.seller) {
+                rel.has_consulate
+            } else {
+                false
+            }
+        })
+        .collect();
+
+    if eligible_offers.is_empty() {
+        return Vec::new();
+    }
+
+    // Collect unique tradeable resources from eligible offers
+    let mut available_resources: Vec<ResourceType> = eligible_offers
+        .iter()
+        .map(|o| o.resource)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    // Sort by how little we have of each resource (ascending) — prioritize what we need most
+    available_resources.sort_by_key(|r| (nation.resource_amount(*r), format!("{:?}", r)));
+
+    let mut bids = Vec::new();
+    let mut remaining_cargo = max_cargo;
+
+    for resource in &available_resources {
+        if remaining_cargo == 0 {
+            break;
+        }
+
+        // Find total quantity available for this resource from eligible offers
+        let total_available: u32 = eligible_offers
+            .iter()
+            .filter(|o| o.resource == *resource)
+            .map(|o| o.quantity)
+            .sum();
+
+        if total_available == 0 {
+            continue;
+        }
+
+        let bp = base_price(*resource);
+        if bp == Money::ZERO {
+            continue;
+        }
+
+        // Bid for min(available, remaining_cargo)
+        let bid_qty = total_available.min(remaining_cargo);
+
+        // Max price at 120% of base price
+        let max_price = Money::dollars(bp.as_dollars() * 120 / 100);
+
+        bids.push(TradeBid {
+            buyer: nation.id,
+            resource: *resource,
+            quantity: bid_qty,
+            max_price_per_unit: max_price,
+        });
+
+        remaining_cargo -= bid_qty;
+    }
+
+    bids
 }
 
 #[cfg(test)]

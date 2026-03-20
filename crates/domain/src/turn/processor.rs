@@ -42,6 +42,8 @@ pub struct TurnReport {
     pub immigration: Vec<(NationId, u32)>,
     /// Settlement upgrades that happened this turn: (province_id, new_level_name).
     pub settlement_upgrades: Vec<(ProvinceId, String)>,
+    /// Trade balance: (nation_id, total_spent, total_earned).
+    pub trade_balance: Vec<(NationId, Money, Money)>,
 }
 
 impl TurnReport {
@@ -124,6 +126,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         transport_overflow: Vec::new(),
         immigration: Vec::new(),
         settlement_upgrades: Vec::new(),
+        trade_balance: Vec::new(),
     };
 
     // 0. AI decisions for computer-controlled Great Powers
@@ -933,8 +936,9 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
     }
 }
 
-/// Resolve a trade session: generate offers from Minor Nations, auto-generate bids
-/// for the human player, resolve trades, and apply the resulting transactions.
+/// Resolve a trade session: generate offers from Minor Nations, use smart bids
+/// (respecting consulate requirements and cargo capacity), resolve trades, and apply
+/// the resulting transactions.
 fn resolve_trade_session(game: &mut GameState, report: &mut TurnReport) {
     // 1. Generate offers from Minor Nations
     let offers = trade::generate_minor_nation_offers(&game.nations, &game.provinces, &game.hex_map);
@@ -943,43 +947,30 @@ fn resolve_trade_session(game: &mut GameState, report: &mut TurnReport) {
         return;
     }
 
-    // 2. Auto-generate bids for the human player: buy 1 of each available resource at base price
-    let human_id = game.human_player_nation;
-    let human_treasury = match game.get_nation(human_id) {
-        Some(n) => n.treasury,
-        None => return,
-    };
+    // 2. Generate smart bids for all Great Powers
+    let mut all_bids = Vec::new();
 
-    let mut budget = human_treasury;
-    let mut bids = Vec::new();
-
-    // Collect unique tradeable resources from offers
-    let mut available_resources: Vec<ResourceType> = offers
+    let gp_ids: Vec<NationId> = game
+        .nations
         .iter()
-        .map(|o| o.resource)
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
+        .filter(|n| n.is_great_power())
+        .map(|n| n.id)
         .collect();
-    available_resources.sort_by_key(|r| format!("{:?}", r));
 
-    for resource in available_resources {
-        let price = trade::base_price(resource);
-        if price == Money::ZERO {
-            continue;
-        }
-        if budget.checked_sub(price).is_some() {
-            bids.push(trade::TradeBid {
-                buyer: human_id,
-                resource,
-                quantity: 1,
-                max_price_per_unit: price,
-            });
-            budget -= price;
+    for gp_id in &gp_ids {
+        if let Some(nation) = game.get_nation(*gp_id) {
+            let cargo_capacity = nation.total_cargo_capacity();
+            let bids = trade::generate_smart_bids(nation, &offers, &game.diplomacy, cargo_capacity);
+            all_bids.extend(bids);
         }
     }
 
+    if all_bids.is_empty() {
+        return;
+    }
+
     // 3. Resolve trades
-    let transactions = trade::resolve_trades(&offers, &bids);
+    let transactions = trade::resolve_trades(&offers, &all_bids);
 
     // 4. Apply transactions
     for txn in &transactions {
@@ -994,7 +985,24 @@ fn resolve_trade_session(game: &mut GameState, report: &mut TurnReport) {
         }
     }
 
-    // 5. Record in report
+    // 5. Record trade balance per nation
+    let mut spent: std::collections::HashMap<NationId, Money> = std::collections::HashMap::new();
+    let mut earned: std::collections::HashMap<NationId, Money> = std::collections::HashMap::new();
+    for txn in &transactions {
+        *spent.entry(txn.buyer).or_insert(Money::ZERO) += txn.total_cost;
+        *earned.entry(txn.seller).or_insert(Money::ZERO) += txn.total_cost;
+    }
+    let all_ids: std::collections::HashSet<NationId> =
+        spent.keys().chain(earned.keys()).copied().collect();
+    for nid in all_ids {
+        report.trade_balance.push((
+            nid,
+            *spent.get(&nid).unwrap_or(&Money::ZERO),
+            *earned.get(&nid).unwrap_or(&Money::ZERO),
+        ));
+    }
+
+    // 6. Record in report
     report.trade_transactions = transactions;
 }
 

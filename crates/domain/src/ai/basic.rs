@@ -4,9 +4,57 @@ use crate::economy::trade;
 use crate::events::TechId;
 use crate::game_state::GameState;
 use crate::map::UnitId;
+use crate::military::ships::{Ship, ShipType};
 use crate::military::units::{ArmyUnit, ArmyUnitType};
+use crate::tech::tree::TechEffect;
 use crate::types::*;
 use std::sync::atomic::{AtomicU32, Ordering};
+
+/// AI personality types that affect decision-making priorities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum AiPersonality {
+    /// Prioritizes military, declares wars early.
+    Aggressive,
+    /// Prioritizes trade and alliances, avoids war.
+    Diplomatic,
+    /// Prioritizes production and tech investment.
+    Economic,
+    /// Default: adapts to circumstances.
+    Balanced,
+}
+
+impl std::fmt::Display for AiPersonality {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AiPersonality::Aggressive => write!(f, "Aggressive"),
+            AiPersonality::Diplomatic => write!(f, "Diplomatic"),
+            AiPersonality::Economic => write!(f, "Economic"),
+            AiPersonality::Balanced => write!(f, "Balanced"),
+        }
+    }
+}
+
+/// Returns the default AI personality for a Great Power based on nation index.
+///
+/// - Index 0 (Deneb): Balanced (usually human-controlled)
+/// - Index 1 (Devron): Aggressive
+/// - Index 2 (Haxaco): Economic
+/// - Index 3 (Kem): Aggressive
+/// - Index 4 (Ordune): Diplomatic
+/// - Index 5 (Patagon): Economic
+/// - Index 6 (Zimm): Balanced
+pub fn personality_for_nation_index(index: usize) -> AiPersonality {
+    match index {
+        0 => AiPersonality::Balanced,
+        1 => AiPersonality::Aggressive,
+        2 => AiPersonality::Economic,
+        3 => AiPersonality::Aggressive,
+        4 => AiPersonality::Diplomatic,
+        5 => AiPersonality::Economic,
+        6 => AiPersonality::Balanced,
+        _ => AiPersonality::Balanced,
+    }
+}
 
 /// Global counter for generating unique UnitIds for AI-built army units.
 static AI_UNIT_ID_COUNTER: AtomicU32 = AtomicU32::new(2_000_000);
@@ -14,6 +62,13 @@ static AI_UNIT_ID_COUNTER: AtomicU32 = AtomicU32::new(2_000_000);
 /// Generate a unique UnitId for an AI-built unit.
 fn next_unit_id() -> UnitId {
     UnitId(AI_UNIT_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Get the AI personality for a nation, defaulting to Balanced.
+fn get_personality(game: &GameState, nation_id: NationId) -> AiPersonality {
+    game.get_nation(nation_id)
+        .and_then(|n| n.ai_personality)
+        .unwrap_or(AiPersonality::Balanced)
 }
 
 /// Run AI decisions for all non-human Great Powers.
@@ -42,6 +97,8 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<String> {
         ai_build_military(game, *nation_id, &mut actions);
         ai_trade(game, *nation_id);
         ai_build_transport(game, *nation_id);
+        ai_build_consulates(game, *nation_id);
+        ai_build_merchant_ships(game, *nation_id);
         ai_military_strategy(game, *nation_id, &mut actions);
     }
 
@@ -50,23 +107,92 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<String> {
     actions
 }
 
-/// Pick the cheapest available tech and research it if the nation can afford it.
+/// Returns true if a technology has military effects (upgrades units, unlocks military units/ships).
+fn is_military_tech(effects: &[TechEffect]) -> bool {
+    effects.iter().any(|e| {
+        matches!(
+            e,
+            TechEffect::UpgradeUnit { .. } | TechEffect::UnlockUnit(_) | TechEffect::UnlockShip(_)
+        )
+    })
+}
+
+/// Returns true if a technology has economic effects (buildings, terrain, infrastructure, civilians).
+fn is_economic_tech(effects: &[TechEffect]) -> bool {
+    effects.iter().any(|e| {
+        matches!(
+            e,
+            TechEffect::UnlockBuilding(_)
+                | TechEffect::EnableTerrainImprovement { .. }
+                | TechEffect::EnableInfrastructure(_)
+                | TechEffect::EnableCivilian(_)
+        )
+    })
+}
+
+/// Pick a tech based on personality and research it if the nation can afford it.
+///
+/// - **Economic**: prefer the most expensive available tech (invest in the future)
+/// - **Aggressive**: prefer military techs (unit upgrades, unit unlocks, ship unlocks)
+/// - **Diplomatic**: prefer economic/trade techs (buildings, terrain, infrastructure)
+/// - **Balanced**: pick the cheapest available tech (current behavior)
 fn ai_research_tech(
     game: &mut GameState,
     nation_id: NationId,
     current_year: u32,
     actions: &mut Vec<String>,
 ) {
+    let personality = get_personality(game, nation_id);
+
     // Gather the nation's researched techs
     let researched: Vec<TechId> = match game.get_nation(nation_id) {
         Some(n) => n.researched_techs.clone(),
         None => return,
     };
 
-    // Find available techs and pick the cheapest
+    // Find available techs
     let available = game.tech_tree.available_techs(&researched, current_year);
-    let cheapest = available.iter().min_by_key(|t| t.cost.cents());
-    let (tech_id, tech_cost, tech_name) = match cheapest {
+    if available.is_empty() {
+        return;
+    }
+
+    // Select tech based on personality
+    let chosen = match personality {
+        AiPersonality::Economic => {
+            // Prefer the most expensive tech (long-term investment)
+            available.iter().max_by_key(|t| t.cost.cents())
+        }
+        AiPersonality::Aggressive => {
+            // Prefer military techs, fallback to cheapest
+            let military: Vec<_> = available
+                .iter()
+                .filter(|t| is_military_tech(&t.effects))
+                .collect();
+            if military.is_empty() {
+                available.iter().min_by_key(|t| t.cost.cents())
+            } else {
+                military.into_iter().min_by_key(|t| t.cost.cents())
+            }
+        }
+        AiPersonality::Diplomatic => {
+            // Prefer economic/trade techs, fallback to cheapest
+            let econ: Vec<_> = available
+                .iter()
+                .filter(|t| is_economic_tech(&t.effects))
+                .collect();
+            if econ.is_empty() {
+                available.iter().min_by_key(|t| t.cost.cents())
+            } else {
+                econ.into_iter().min_by_key(|t| t.cost.cents())
+            }
+        }
+        AiPersonality::Balanced => {
+            // Pick the cheapest available tech
+            available.iter().min_by_key(|t| t.cost.cents())
+        }
+    };
+
+    let (tech_id, tech_cost, tech_name) = match chosen {
         Some(tech) => (tech.id, tech.cost, tech.name.clone()),
         None => return,
     };
@@ -378,11 +504,14 @@ fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
 }
 
 /// Build military units when the nation has sufficient treasury.
+/// Personality affects thresholds and unit preferences:
 ///
-/// - If nation has < 3 army units AND treasury > $2,000, build a Regulars unit ($500)
-/// - If nation has < 5 army units AND treasury > $5,000, build a Grenadiers unit ($1,000)
-/// - If nation has >= 5 army units AND treasury > $10,000, build Light Artillery ($2,000)
+/// - **Aggressive**: lower thresholds, prefer artillery
+/// - **Diplomatic**: higher thresholds, fewer units
+/// - **Economic**: moderate thresholds
+/// - **Balanced**: default behavior
 fn ai_build_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
+    let personality = get_personality(game, nation_id);
     let nation = match game.get_nation_mut(nation_id) {
         Some(n) => n,
         None => return,
@@ -393,7 +522,39 @@ fn ai_build_military(game: &mut GameState, nation_id: NationId, actions: &mut Ve
     let capital = nation.capital_province_id;
     let nation_name = nation.name.clone();
 
-    if army_count < 3 && treasury > Money::dollars(2000) {
+    // Thresholds vary by personality
+    let (tier1_max, tier1_treasury, tier2_max, tier2_treasury, tier3_treasury) = match personality {
+        AiPersonality::Aggressive => (
+            4,
+            Money::dollars(1500),
+            7,
+            Money::dollars(3000),
+            Money::dollars(6000),
+        ),
+        AiPersonality::Diplomatic => (
+            2,
+            Money::dollars(3000),
+            4,
+            Money::dollars(8000),
+            Money::dollars(15000),
+        ),
+        AiPersonality::Economic => (
+            3,
+            Money::dollars(2500),
+            5,
+            Money::dollars(6000),
+            Money::dollars(12000),
+        ),
+        AiPersonality::Balanced => (
+            3,
+            Money::dollars(2000),
+            5,
+            Money::dollars(5000),
+            Money::dollars(10000),
+        ),
+    };
+
+    if army_count < tier1_max && treasury > tier1_treasury {
         let cost = Money::dollars(500);
         nation.treasury -= cost;
         let unit = ArmyUnit::new(next_unit_id(), ArmyUnitType::Regulars, nation_id, capital);
@@ -402,16 +563,42 @@ fn ai_build_military(game: &mut GameState, nation_id: NationId, actions: &mut Ve
             "{} has been expanding its military forces",
             nation_name
         ));
-    } else if army_count < 5 && treasury > Money::dollars(5000) {
+    } else if army_count < tier2_max && treasury > tier2_treasury {
         let cost = Money::dollars(1000);
         nation.treasury -= cost;
-        let unit = ArmyUnit::new(next_unit_id(), ArmyUnitType::Grenadiers, nation_id, capital);
-        nation.army.push(unit);
-        actions.push(format!(
-            "{} has been expanding its military forces",
-            nation_name
-        ));
-    } else if army_count >= 5 && treasury > Money::dollars(10000) {
+        // Aggressive personality prefers artillery over grenadiers when possible
+        let unit_type = if personality == AiPersonality::Aggressive && army_count >= 3 {
+            ArmyUnitType::LightArtillery
+        } else {
+            ArmyUnitType::Grenadiers
+        };
+        let build_cost = if unit_type == ArmyUnitType::LightArtillery {
+            Money::dollars(2000)
+        } else {
+            Money::dollars(1000)
+        };
+        // Re-check if we can afford the artillery cost
+        if unit_type == ArmyUnitType::LightArtillery {
+            // Need to undo the grenadier cost and pay artillery cost
+            nation.treasury += cost; // undo
+            if nation.treasury > tier2_treasury {
+                nation.treasury -= build_cost;
+                let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
+                nation.army.push(unit);
+                actions.push(format!(
+                    "{} has been expanding its military forces",
+                    nation_name
+                ));
+            }
+        } else {
+            let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
+            nation.army.push(unit);
+            actions.push(format!(
+                "{} has been expanding its military forces",
+                nation_name
+            ));
+        }
+    } else if army_count >= tier2_max && treasury > tier3_treasury {
         let cost = Money::dollars(2000);
         nation.treasury -= cost;
         let unit = ArmyUnit::new(
@@ -428,16 +615,15 @@ fn ai_build_military(game: &mut GameState, nation_id: NationId, actions: &mut Ve
     }
 }
 
-/// Every ~20 turns, each AI Great Power considers declaring war on a Minor Nation.
+/// Periodically, each AI Great Power considers declaring war on a Minor Nation.
+/// Frequency and army threshold depend on personality:
 ///
-/// Smarter targeting:
-/// - Prefer Minor Nations with more tiles (more valuable provinces)
-/// - Only attack if army size >= 4 units (enough to beat a garrison)
-/// - Don't declare war on nations that another AI is already at war with (avoid dogpiling)
+/// - **Aggressive**: every 15 turns, needs >= 3 units
+/// - **Diplomatic**: every 40 turns, needs >= 8 units
+/// - **Economic**: every 30 turns, needs >= 5 units
+/// - **Balanced**: every 20 turns, needs >= 4 units
 fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId], actions: &mut Vec<String>) {
-    if !game.turn.0.is_multiple_of(20) {
-        return;
-    }
+    let turn_number = game.turn.0;
 
     // Collect minor nation IDs, their capitals, names, and tile counts
     let minor_nations: Vec<(NationId, ProvinceId, String, usize)> = game
@@ -478,9 +664,24 @@ fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId], actions: &m
         .collect();
 
     for &ai_id in ai_nation_ids {
-        // Only attack if AI has >= 4 army units
+        let personality = get_personality(game, ai_id);
+
+        // War frequency and army threshold depend on personality
+        let (war_interval, army_threshold) = match personality {
+            AiPersonality::Aggressive => (15u32, 3),
+            AiPersonality::Diplomatic => (40, 8),
+            AiPersonality::Economic => (30, 5),
+            AiPersonality::Balanced => (20, 4),
+        };
+
+        // Check if this is a war-consideration turn for this AI
+        if !turn_number.is_multiple_of(war_interval) {
+            continue;
+        }
+
+        // Only attack if AI has enough army units
         let army_size = game.get_nation(ai_id).map(|n| n.army.len()).unwrap_or(0);
-        if army_size < 4 {
+        if army_size < army_threshold {
             continue;
         }
 
@@ -687,12 +888,21 @@ fn ai_upgrade_units(game: &mut GameState, nation_id: NationId) {
 ///
 /// - If AI has no mills and has lumber+steel materials: build a LumberMill
 /// - If AI has mills producing materials, build corresponding factories
-/// - Expand mills when capacity is maxed (if resources > capacity * 2)
+/// - Expand mills when capacity is maxed (if resources > capacity * threshold)
+/// - **Economic** personality: expand more aggressively (threshold multiplier 1 instead of 2)
 fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
+    let personality = get_personality(game, nation_id);
+
     // Build infrastructure handles mills and factories
     ai_build_infrastructure(game, nation_id);
 
-    // Expand mills when input resources exceed capacity * 2
+    // Economic personality expands more aggressively
+    let expansion_threshold_multiplier: u32 = match personality {
+        AiPersonality::Economic => 1,
+        _ => 2,
+    };
+
+    // Expand mills when input resources exceed capacity * threshold
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,
         None => return,
@@ -714,7 +924,9 @@ fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
                 }
                 _ => return None,
             };
-            if input_resources > b.effective_capacity() * 2 && b.pending_capacity == 0 {
+            if input_resources > b.effective_capacity() * expansion_threshold_multiplier
+                && b.pending_capacity == 0
+            {
                 Some(b.building_type)
             } else {
                 None
@@ -798,6 +1010,111 @@ fn ai_build_transport(game: &mut GameState, nation_id: NationId) {
         nation.consume_material(MaterialType::Lumber, 2);
         nation.consume_material(MaterialType::Steel, 2);
         nation.transport.build_freight_cars(2);
+    }
+}
+
+/// AI builds trade consulates with Minor Nations.
+///
+/// - Requires treasury > $2,000 and $500 per consulate
+/// - **Diplomatic** personality: build up to 4 consulates per turn
+/// - Others: build up to 2 consulates per turn
+fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
+    let personality = get_personality(game, nation_id);
+    let cost = Money::dollars(500);
+    let treasury_threshold = Money::dollars(2000);
+
+    let max_per_turn = match personality {
+        AiPersonality::Diplomatic => 4,
+        _ => 2,
+    };
+
+    // Check treasury threshold
+    let treasury = match game.get_nation(nation_id) {
+        Some(n) => n.treasury,
+        None => return,
+    };
+    if treasury < treasury_threshold {
+        return;
+    }
+
+    // Gather minor nation IDs
+    let minor_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| !n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+
+    let mut built = 0;
+    for mn_id in minor_ids {
+        if built >= max_per_turn {
+            break;
+        }
+
+        let treasury = match game.get_nation(nation_id) {
+            Some(n) => n.treasury,
+            None => return,
+        };
+        if treasury.checked_sub(cost).is_none() {
+            break;
+        }
+
+        // Check if consulate already exists
+        let already_has = game
+            .diplomacy
+            .get_relation(nation_id, mn_id)
+            .is_some_and(|r| r.has_consulate);
+        if already_has {
+            continue;
+        }
+
+        // Build consulate
+        if game.diplomacy.build_consulate(nation_id, mn_id).is_ok() {
+            if let Some(nation) = game.get_nation_mut(nation_id) {
+                nation.treasury -= cost;
+            }
+            built += 1;
+        }
+    }
+}
+
+/// AI builds merchant ships when it has the materials and too few ships.
+///
+/// - **Economic** personality: build up to 3 ships total
+/// - Others: build if cargo capacity is 0
+fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId) {
+    let personality = get_personality(game, nation_id);
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    // Ship cap depends on personality
+    let max_ships: usize = match personality {
+        AiPersonality::Economic => 3,
+        _ => 1,
+    };
+
+    // For non-Economic, only build if cargo capacity is 0
+    if personality != AiPersonality::Economic && nation.total_cargo_capacity() > 0 {
+        return;
+    }
+
+    if nation.merchant_ship_count() >= max_ships {
+        return;
+    }
+
+    let fabric_have = nation.material_amount(MaterialType::Fabric);
+    let lumber_have = nation.material_amount(MaterialType::Lumber);
+
+    // Try to build Trader (2 fabric + 4 lumber)
+    if fabric_have >= 2 && lumber_have >= 4 {
+        let uid = next_unit_id();
+        let ship = Ship::new(uid, ShipType::Trader, nation_id);
+        let nation = game.get_nation_mut(nation_id).unwrap();
+        nation.consume_material(MaterialType::Fabric, 2);
+        nation.consume_material(MaterialType::Lumber, 4);
+        nation.merchant_fleet.push(ship);
     }
 }
 
@@ -1667,6 +1984,450 @@ mod tests {
         assert_eq!(
             ai.civilians[0].position, None,
             "Civilian should not be deployed"
+        );
+    }
+
+    // ── Personality assignment ────────────────────────────────
+
+    #[test]
+    fn personality_assignment_is_deterministic() {
+        assert_eq!(personality_for_nation_index(0), AiPersonality::Balanced);
+        assert_eq!(personality_for_nation_index(1), AiPersonality::Aggressive);
+        assert_eq!(personality_for_nation_index(2), AiPersonality::Economic);
+        assert_eq!(personality_for_nation_index(3), AiPersonality::Aggressive);
+        assert_eq!(personality_for_nation_index(4), AiPersonality::Diplomatic);
+        assert_eq!(personality_for_nation_index(5), AiPersonality::Economic);
+        assert_eq!(personality_for_nation_index(6), AiPersonality::Balanced);
+        // Out-of-range defaults to Balanced
+        assert_eq!(personality_for_nation_index(99), AiPersonality::Balanced);
+    }
+
+    #[test]
+    fn personality_display_format() {
+        assert_eq!(format!("{}", AiPersonality::Aggressive), "Aggressive");
+        assert_eq!(format!("{}", AiPersonality::Diplomatic), "Diplomatic");
+        assert_eq!(format!("{}", AiPersonality::Economic), "Economic");
+        assert_eq!(format!("{}", AiPersonality::Balanced), "Balanced");
+    }
+
+    #[test]
+    fn new_game_assigns_ai_personalities() {
+        let gs = crate::game_state::new_game("test", Difficulty::Normal, 0);
+        // Human player (index 0, Deneb) should have no personality
+        let human = gs.get_nation(gs.human_player_nation).unwrap();
+        assert_eq!(
+            human.ai_personality, None,
+            "Human player should not have an AI personality"
+        );
+
+        // Other Great Powers should have personalities
+        for nation in gs.great_powers() {
+            if nation.id == gs.human_player_nation {
+                continue;
+            }
+            assert!(
+                nation.ai_personality.is_some(),
+                "AI Great Power {} should have a personality",
+                nation.name
+            );
+        }
+    }
+
+    // ── Personality affects tech choice ──────────────────────
+
+    #[test]
+    fn economic_ai_prefers_expensive_tech() {
+        let mut game = test_game_with_ai();
+        // Set Economic personality
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Economic);
+        ai.treasury = Money::dollars(50000);
+
+        // At year 1821, multiple techs with different costs are available
+        game.turn = TurnNumber::from_year_quarter(1821, 1);
+
+        // Pre-research the free techs so only paid techs remain
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.research_tech(TechId(1));
+        ai.research_tech(TechId(2));
+
+        let mut actions = Vec::new();
+        ai_research_tech(&mut game, NationId(2), 1821, &mut actions);
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        // Economic should pick the most expensive available tech
+        // At 1821: Iron Railroad Bridge ($1,500), Feed Grasses ($1,500),
+        // Square-Set Timbering ($1,500), Streamlined Hulls ($1,500)
+        // All cost $1,500 so any of them is valid (they're equally expensive)
+        assert!(
+            ai.researched_techs.len() > 2,
+            "Economic AI should have researched a tech"
+        );
+    }
+
+    #[test]
+    fn aggressive_ai_prefers_military_tech() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Aggressive);
+        ai.treasury = Money::dollars(100000);
+
+        // Set year to 1841 when Breech-Loading Rifles (military) is available
+        game.turn = TurnNumber::from_year_quarter(1841, 1);
+
+        // Pre-research Bessemer Converter (prerequisite for Breech-Loading Rifles)
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.research_tech(TechId(1));
+        ai.research_tech(TechId(2));
+        ai.research_tech(TechId(11)); // Bessemer Converter
+
+        let mut actions = Vec::new();
+        ai_research_tech(&mut game, NationId(2), 1841, &mut actions);
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        // Should have picked Breech-Loading Rifles (TechId 13, military)
+        // or Rifled Artillery (TechId 14, also military)
+        let has_military = ai.has_researched(TechId(13)) || ai.has_researched(TechId(14));
+        assert!(
+            has_military,
+            "Aggressive AI should prefer military techs (Breech-Loading Rifles or Rifled Artillery)"
+        );
+    }
+
+    #[test]
+    fn balanced_ai_picks_cheapest_tech() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.treasury = Money::dollars(50000);
+
+        // At 1815, two free techs (ID 1 and 2) are available
+        let mut actions = Vec::new();
+        ai_research_tech(&mut game, NationId(2), 1815, &mut actions);
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        // Should pick one of the free techs
+        assert!(
+            ai.has_researched(TechId(1)) || ai.has_researched(TechId(2)),
+            "Balanced AI should pick the cheapest (free) tech"
+        );
+    }
+
+    // ── Personality affects war declaration ──────────────────
+
+    #[test]
+    fn aggressive_ai_declares_war_on_turn_15() {
+        let mut game = test_game_with_ai_and_minor();
+        // Set Aggressive personality
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Aggressive);
+        // Give AI 3 army units (Aggressive threshold is 3)
+        for i in 0..3 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(5000 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+
+        // Turn 15: Aggressive declares (every 15 turns), Balanced would not (every 20)
+        game.turn = TurnNumber::new(15);
+
+        let mut actions = Vec::new();
+        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
+
+        let rel = game.diplomacy.get_relation(NationId(2), NationId(3));
+        assert!(
+            rel.is_some() && rel.unwrap().at_war,
+            "Aggressive AI should declare war on turn 15"
+        );
+    }
+
+    #[test]
+    fn diplomatic_ai_does_not_declare_war_on_turn_20() {
+        let mut game = test_game_with_ai_and_minor();
+        // Set Diplomatic personality
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Diplomatic);
+        // Give AI 5 army units (enough for Balanced, not enough for Diplomatic which needs 8)
+        for i in 0..5 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(5000 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+
+        game.turn = TurnNumber::new(20);
+
+        let mut actions = Vec::new();
+        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
+
+        // Turn 20 is not a multiple of 40, so Diplomatic AI should not declare war
+        let at_war = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .map(|r| r.at_war)
+            .unwrap_or(false);
+        assert!(
+            !at_war,
+            "Diplomatic AI should not declare war on turn 20 (interval is 40)"
+        );
+    }
+
+    // ── Consulate building ──────────────────────────────────
+
+    #[test]
+    fn diplomatic_ai_builds_more_consulates() {
+        let mut game = test_game_with_ai_and_minor();
+        // Add more minor nations for the test
+        let province4 = Province::new(
+            ProvinceId(4),
+            "Minor Capital 2".to_string(),
+            NationId(4),
+            HexCoord::new(7, 7),
+            vec![HexCoord::new(7, 7)],
+            3,
+        );
+        let province5 = Province::new(
+            ProvinceId(5),
+            "Minor Capital 3".to_string(),
+            NationId(5),
+            HexCoord::new(8, 8),
+            vec![HexCoord::new(8, 8)],
+            3,
+        );
+        let province6 = Province::new(
+            ProvinceId(6),
+            "Minor Capital 4".to_string(),
+            NationId(6),
+            HexCoord::new(9, 9),
+            vec![HexCoord::new(9, 9)],
+            3,
+        );
+        let province7 = Province::new(
+            ProvinceId(7),
+            "Minor Capital 5".to_string(),
+            NationId(7),
+            HexCoord::new(4, 4),
+            vec![HexCoord::new(4, 4)],
+            3,
+        );
+        game.provinces.push(province4);
+        game.provinces.push(province5);
+        game.provinces.push(province6);
+        game.provinces.push(province7);
+        game.nations.push(Nation::new(
+            NationId(4),
+            "Minor2".to_string(),
+            NationColor::Brown,
+            NationType::MinorNation,
+            ProvinceId(4),
+        ));
+        game.nations.push(Nation::new(
+            NationId(5),
+            "Minor3".to_string(),
+            NationColor::Pink,
+            NationType::MinorNation,
+            ProvinceId(5),
+        ));
+        game.nations.push(Nation::new(
+            NationId(6),
+            "Minor4".to_string(),
+            NationColor::Teal,
+            NationType::MinorNation,
+            ProvinceId(6),
+        ));
+        game.nations.push(Nation::new(
+            NationId(7),
+            "Minor5".to_string(),
+            NationColor::Olive,
+            NationType::MinorNation,
+            ProvinceId(7),
+        ));
+
+        // Set Diplomatic personality
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Diplomatic);
+        ai.treasury = Money::dollars(10000);
+
+        ai_build_consulates(&mut game, NationId(2));
+
+        // Count consulates built
+        let consulate_count = [
+            NationId(3),
+            NationId(4),
+            NationId(5),
+            NationId(6),
+            NationId(7),
+        ]
+        .iter()
+        .filter(|&&mn_id| {
+            game.diplomacy
+                .get_relation(NationId(2), mn_id)
+                .is_some_and(|r| r.has_consulate)
+        })
+        .count();
+
+        assert_eq!(
+            consulate_count, 4,
+            "Diplomatic AI should build up to 4 consulates"
+        );
+    }
+
+    #[test]
+    fn balanced_ai_builds_fewer_consulates() {
+        let mut game = test_game_with_ai_and_minor();
+        // Add more minor nations
+        game.provinces.push(Province::new(
+            ProvinceId(4),
+            "Minor2 Capital".to_string(),
+            NationId(4),
+            HexCoord::new(7, 7),
+            vec![HexCoord::new(7, 7)],
+            3,
+        ));
+        game.provinces.push(Province::new(
+            ProvinceId(5),
+            "Minor3 Capital".to_string(),
+            NationId(5),
+            HexCoord::new(8, 8),
+            vec![HexCoord::new(8, 8)],
+            3,
+        ));
+        game.provinces.push(Province::new(
+            ProvinceId(6),
+            "Minor4 Capital".to_string(),
+            NationId(6),
+            HexCoord::new(9, 9),
+            vec![HexCoord::new(9, 9)],
+            3,
+        ));
+        game.nations.push(Nation::new(
+            NationId(4),
+            "Minor2".to_string(),
+            NationColor::Brown,
+            NationType::MinorNation,
+            ProvinceId(4),
+        ));
+        game.nations.push(Nation::new(
+            NationId(5),
+            "Minor3".to_string(),
+            NationColor::Pink,
+            NationType::MinorNation,
+            ProvinceId(5),
+        ));
+        game.nations.push(Nation::new(
+            NationId(6),
+            "Minor4".to_string(),
+            NationColor::Teal,
+            NationType::MinorNation,
+            ProvinceId(6),
+        ));
+
+        // Set Balanced personality
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.treasury = Money::dollars(10000);
+
+        ai_build_consulates(&mut game, NationId(2));
+
+        // Count consulates built
+        let consulate_count = [NationId(3), NationId(4), NationId(5), NationId(6)]
+            .iter()
+            .filter(|&&mn_id| {
+                game.diplomacy
+                    .get_relation(NationId(2), mn_id)
+                    .is_some_and(|r| r.has_consulate)
+            })
+            .count();
+
+        assert_eq!(
+            consulate_count, 2,
+            "Balanced AI should build up to 2 consulates"
+        );
+    }
+
+    #[test]
+    fn ai_does_not_build_consulates_when_poor() {
+        let mut game = test_game_with_ai_and_minor();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.treasury = Money::dollars(1000); // Below $2,000 threshold
+
+        ai_build_consulates(&mut game, NationId(2));
+
+        let has_consulate = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .is_some_and(|r| r.has_consulate);
+        assert!(
+            !has_consulate,
+            "AI should not build consulates when treasury < $2,000"
+        );
+    }
+
+    // ── Merchant ship building ──────────────────────────────
+
+    #[test]
+    fn economic_ai_builds_merchant_ships() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Economic);
+        ai.add_material(MaterialType::Fabric, 10);
+        ai.add_material(MaterialType::Lumber, 20);
+
+        // Build ships up to 3 for Economic personality
+        ai_build_merchant_ships(&mut game, NationId(2));
+        assert_eq!(
+            game.get_nation(NationId(2)).unwrap().merchant_ship_count(),
+            1,
+            "Should build 1 ship per call"
+        );
+
+        ai_build_merchant_ships(&mut game, NationId(2));
+        assert_eq!(
+            game.get_nation(NationId(2)).unwrap().merchant_ship_count(),
+            2,
+        );
+
+        ai_build_merchant_ships(&mut game, NationId(2));
+        assert_eq!(
+            game.get_nation(NationId(2)).unwrap().merchant_ship_count(),
+            3,
+        );
+
+        // Should not build more than 3
+        ai_build_merchant_ships(&mut game, NationId(2));
+        assert_eq!(
+            game.get_nation(NationId(2)).unwrap().merchant_ship_count(),
+            3,
+            "Economic AI should cap at 3 ships"
+        );
+    }
+
+    #[test]
+    fn balanced_ai_only_builds_one_merchant_ship() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.add_material(MaterialType::Fabric, 10);
+        ai.add_material(MaterialType::Lumber, 20);
+
+        ai_build_merchant_ships(&mut game, NationId(2));
+        assert_eq!(
+            game.get_nation(NationId(2)).unwrap().merchant_ship_count(),
+            1,
+        );
+
+        // Should not build more (has cargo capacity > 0)
+        ai_build_merchant_ships(&mut game, NationId(2));
+        assert_eq!(
+            game.get_nation(NationId(2)).unwrap().merchant_ship_count(),
+            1,
+            "Balanced AI should only build 1 ship (has cargo capacity)"
         );
     }
 }
