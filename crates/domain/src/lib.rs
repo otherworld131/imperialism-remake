@@ -1,5 +1,6 @@
 #![deny(warnings, clippy::all)]
 
+pub mod diplomacy;
 pub mod economy;
 pub mod events;
 pub mod game_state;
@@ -8,4 +9,5 @@ pub mod map;
 pub mod military;
 pub mod nation;
 pub mod tech;
+pub mod turn;
 pub mod types;
