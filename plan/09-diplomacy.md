@@ -9,19 +9,19 @@ The Council of Governors voting system is the primary victory path.
 ## Checklist
 
 ### Diplomatic Relationship Model
-- [ ] `DiplomaticRelation` entity — pair of NationIds + relationship score + treaty history
-- [ ] Relationship score: numeric value tracking friendliness (-100 to +100 or similar)
+- [x] `DiplomaticRelation` entity — pair of NationIds + relationship score + treaty history
+- [x] Relationship score: numeric value tracking friendliness (-100 to +100 or similar)
 - [ ] Score modifiers: trade frequency, grants, subsidies, broken promises, wars
 - [ ] Track number of distinct commodity types traded per turn (not quantity — types matter)
-- [ ] Great Powers start with mutual embassies (includes trade consulate functionality)
-- [ ] Unit tests: relationship score calculations from various actions
+- [x] Great Powers start with mutual embassies (includes trade consulate functionality)
+- [x] Unit tests: relationship score calculations from various actions
 
 ### Diplomatic Infrastructure
-- [ ] **Trade Consulate** — costs $500; must be established before trading with a Minor Nation
-- [ ] **Embassy** — costs $5,000; must be established before signing treaties with a Minor Nation
-- [ ] Great Power ↔ Great Power: embassies exist from game start
-- [ ] Great Power → Minor Nation: must build consulate, then embassy
-- [ ] Unit tests: infrastructure prerequisite validation
+- [x] **Trade Consulate** — costs $500; must be established before trading with a Minor Nation
+- [x] **Embassy** — costs $5,000; must be established before signing treaties with a Minor Nation
+- [x] Great Power ↔ Great Power: embassies exist from game start
+- [x] Great Power → Minor Nation: must build consulate, then embassy
+- [x] Unit tests: infrastructure prerequisite validation
 
 ### Treaty Types (5 types)
 - [ ] **Non-Aggression Pact** (Great Power ↔ Minor Nation only)
@@ -38,12 +38,12 @@ The Council of Governors voting system is the primary victory path.
   - [ ] Triggered when a Minor Nation's relationship with a Great Power is sufficiently high
   - [ ] Minor Nation voluntarily incorporates into the empire
   - [ ] Unit tests: voluntary incorporation threshold
-- [ ] **Peace Treaty**
-  - [ ] Ends active war between two nations
+- [x] **Peace Treaty**
+  - [x] Ends active war between two nations
   - [ ] Separate peace (without allies) damages diplomatic standing
   - [ ] Unit tests: war termination, standing impacts
-- [ ] **War Declaration**
-  - [ ] "The only treaty which may not be refused"
+- [x] **War Declaration**
+  - [x] "The only treaty which may not be refused"
   - [ ] Triggers alliance obligations for all allies of both sides
   - [ ] Unit tests: war declaration cascade through alliances
 
@@ -57,11 +57,11 @@ The Council of Governors voting system is the primary victory path.
 - [ ] Unit tests: grant and subsidy effects on relationship scores
 
 ### Diplomatic Standing
-- [ ] Global standing value per Great Power (affects all diplomatic interactions)
-- [ ] Reduced by: breaking alliances, refusing pact obligations, separate peace treaties
+- [x] Global standing value per Great Power (affects all diplomatic interactions)
+- [x] Reduced by: breaking alliances, refusing pact obligations, separate peace treaties
 - [ ] Impacts: treaty acceptance probability, Minor Nation governor voting, trade willingness
 - [ ] AI nations factor standing into their decisions
-- [ ] Unit tests: standing reduction from various violations
+- [x] Unit tests: standing reduction from various violations
 - [ ] Unit tests: standing impact on treaty acceptance probability
 
 ### Council of Governors Voting

@@ -79,24 +79,24 @@ and factory capacity.
 - [ ] Unit tests for fort construction and defensive bonus calculations
 
 ### Capital City Buildings (8 standard)
-- [ ] **Armory** — build army units from workers + arms + money
-- [ ] **Capitol** — recruit immigrants (requires canned food + clothing + furniture)
-- [ ] **Food Processing** — convert raw food → canned food
-- [ ] **Railyard** — build freight cars (2 labor + 1 lumber + 1 steel each); manage transport
-- [ ] **Shipyard** — build merchant ships and warships (resource costs, no money cost)
-- [ ] **Trade School** — train workers: untrained → trained → expert (uses paper)
-- [ ] **University** — convert expert workers into specialist civilians (uses paper + money)
-- [ ] **Warehouse** — display inventory and incoming shipments
+- [x] **Armory** — build army units from workers + arms + money
+- [x] **Capitol** — recruit immigrants (requires canned food + clothing + furniture)
+- [x] **Food Processing** — convert raw food → canned food
+- [x] **Railyard** — build freight cars (2 labor + 1 lumber + 1 steel each); manage transport
+- [x] **Shipyard** — build merchant ships and warships (resource costs, no money cost)
+- [x] **Trade School** — train workers: untrained → trained → expert (uses paper)
+- [x] **University** — convert expert workers into specialist civilians (uses paper + money)
+- [x] **Warehouse** — display inventory and incoming shipments
 
 ### Optional / Unlockable Buildings
-- [ ] **Mills** (Lumber Mill, Steel Mill, Textile Mill) — process raw → materials
-- [ ] **Factories** (Furniture, Hardware, Clothing) — process materials → goods
-- [ ] **Oil Refinery** — process oil (unlocked by Oil Drilling tech)
-- [ ] **Power Plant** — uses oil for bonuses (unlocked by Oil Drilling tech)
-- [ ] All expandable: 1 lumber + 1 steel per capacity unit
+- [x] **Mills** (Lumber Mill, Steel Mill, Textile Mill) — process raw → materials
+- [x] **Factories** (Furniture, Hardware, Clothing) — process materials → goods
+- [x] **Oil Refinery** — process oil (unlocked by Oil Drilling tech)
+- [x] **Power Plant** — uses oil for bonuses (unlocked by Oil Drilling tech)
+- [x] All expandable: 1 lumber + 1 steel per capacity unit
 - [ ] Easy difficulty: start with 3 mills (cap 2) + 3 factories (cap 1)
 - [ ] Harder difficulties: must be built from scratch
-- [ ] Unit tests for building construction and expansion
+- [x] Unit tests for building construction and expansion
 
 ### Verification Strategy
 - [ ] **Unit tests**: `cargo test` — all town, infrastructure, and building tests pass

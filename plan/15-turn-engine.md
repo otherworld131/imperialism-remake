@@ -61,14 +61,14 @@ simultaneously.
   12. [ ] **Maintenance resolves** — military maintenance costs deducted
   13. [ ] **Scoring resolves** — game score recalculated
   14. [ ] **Victory check** — Council of Governors vote if decade boundary
-  15. [ ] **Newspaper generated** — events of the turn compiled
-  16. [ ] **New turn begins** — turn counter advances
+  15. [x] **Newspaper generated** — events of the turn compiled
+  16. [x] **New turn begins** — turn counter advances
 - [ ] Unit tests: each resolution step in isolation
 - [ ] Integration test: full turn resolution with all systems active
 
 ### Newspaper
-- [ ] Generated after turn resolution, displayed before next turn begins
-- [ ] "Imperial Times" — dated to the quarter
+- [x] Generated after turn resolution, displayed before next turn begins
+- [x] "Imperial Times" — dated to the quarter
 - [ ] Reports: new technology discoveries, military actions, diplomatic events
 - [ ] Some items have no gameplay impact (flavor text, historical references)
 - [ ] Some items report events before advisor notifications
