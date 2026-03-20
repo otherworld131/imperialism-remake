@@ -1,9 +1,10 @@
 use crate::events::TreatyType;
 use crate::types::*;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Tracks the diplomatic relationship between two nations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiplomaticRelation {
     pub nation_a: NationId,
     pub nation_b: NationId,
@@ -57,11 +58,39 @@ impl DiplomaticRelation {
 }
 
 /// Manages all diplomatic relationships in the game.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiplomacyState {
+    #[serde(
+        serialize_with = "serialize_relations",
+        deserialize_with = "deserialize_relations"
+    )]
     relations: HashMap<(NationId, NationId), DiplomaticRelation>,
     /// Per-nation diplomatic standing (global reputation).
     pub standing: HashMap<NationId, i32>,
+}
+
+/// Serialize HashMap<(NationId, NationId), DiplomaticRelation> as a Vec of pairs
+/// because tuple keys cannot be used directly as JSON object keys.
+fn serialize_relations<S>(
+    relations: &HashMap<(NationId, NationId), DiplomaticRelation>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let entries: Vec<(&(NationId, NationId), &DiplomaticRelation)> = relations.iter().collect();
+    entries.serialize(serializer)
+}
+
+/// Deserialize Vec of ((NationId, NationId), DiplomaticRelation) pairs back into HashMap.
+fn deserialize_relations<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<(NationId, NationId), DiplomaticRelation>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let entries: Vec<((NationId, NationId), DiplomaticRelation)> = Vec::deserialize(deserializer)?;
+    Ok(entries.into_iter().collect())
 }
 
 /// Normalize a pair of NationIds to a canonical order so (a,b) and (b,a) map to the same key.
@@ -163,6 +192,17 @@ impl DiplomacyState {
     pub fn reduce_standing(&mut self, nation: NationId, amount: i32) {
         let standing = self.standing.entry(nation).or_insert(100);
         *standing -= amount;
+    }
+
+    /// Get all relations involving a specific nation.
+    pub fn relations_for(
+        &self,
+        nation: NationId,
+    ) -> Vec<(&(NationId, NationId), &DiplomaticRelation)> {
+        self.relations
+            .iter()
+            .filter(|((a, b), _)| *a == nation || *b == nation)
+            .collect()
     }
 }
 

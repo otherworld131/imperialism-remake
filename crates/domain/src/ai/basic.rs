@@ -130,6 +130,7 @@ fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diplomacy::DiplomacyState;
     use crate::hex::HexCoord;
     use crate::map::{HexMap, Province};
     use crate::nation::{Nation, NationColor};
@@ -185,6 +186,7 @@ mod tests {
             human_player_nation: NationId(1),
             events: Vec::new(),
             tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
         }
     }
 

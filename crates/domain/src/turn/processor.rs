@@ -511,6 +511,7 @@ fn check_council_vote(game: &GameState, report: &mut TurnReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diplomacy::DiplomacyState;
     use crate::hex::HexCoord;
     use crate::map::tile::Tile;
     use crate::map::{HexMap, Province};
@@ -560,6 +561,7 @@ mod tests {
             human_player_nation: NationId(1),
             events: Vec::new(),
             tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
         }
     }
 
@@ -603,6 +605,7 @@ mod tests {
             human_player_nation: NationId(1),
             events: Vec::new(),
             tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
         }
     }
 
@@ -808,6 +811,7 @@ mod tests {
             human_player_nation: NationId(1),
             events: Vec::new(),
             tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
         };
 
         let report = process_turn(&mut game);
@@ -895,6 +899,7 @@ mod tests {
             human_player_nation: NationId(1),
             events: Vec::new(),
             tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
         }
     }
 

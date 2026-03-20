@@ -1,3 +1,4 @@
+use crate::diplomacy::DiplomacyState;
 use crate::economy::buildings::{Building, BuildingType};
 use crate::events::DomainEvent;
 use crate::map::{HexMap, Province};
@@ -28,6 +29,8 @@ pub struct GameState {
     /// The technology tree for this game (reconstructed on load).
     #[serde(skip, default = "TechTree::default")]
     pub tech_tree: TechTree,
+    /// Diplomatic relations and standing between nations.
+    pub diplomacy: DiplomacyState,
 }
 
 impl GameState {
@@ -77,6 +80,22 @@ impl GameState {
     /// Whether the game is over (turn >= 1915 Q1).
     pub fn is_game_over(&self) -> bool {
         self.turn.is_game_end() || self.turn > TurnNumber::from_year_quarter(1915, 1)
+    }
+
+    /// Find a nation by partial, case-insensitive name match.
+    /// Returns `None` if no nation matches or if multiple nations match.
+    pub fn find_nation_by_name(&self, partial: &str) -> Option<&Nation> {
+        let lower = partial.to_lowercase();
+        let matches: Vec<&Nation> = self
+            .nations
+            .iter()
+            .filter(|n| n.name.to_lowercase().contains(&lower))
+            .collect();
+        if matches.len() == 1 {
+            Some(matches[0])
+        } else {
+            None
+        }
     }
 }
 
@@ -214,6 +233,14 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         [human_nation_index.min(generated.great_power_nations.len() - 1)]
     .nation_id;
 
+    let mut diplomacy = DiplomacyState::new();
+    let gp_ids: Vec<NationId> = nations
+        .iter()
+        .filter(|n| n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+    diplomacy.initialize_great_powers(&gp_ids);
+
     GameState {
         turn: TurnNumber::new(1),
         difficulty,
@@ -224,6 +251,7 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         human_player_nation: human_nation_id,
         events: Vec::new(),
         tech_tree: TechTree::new(),
+        diplomacy,
     }
 }
 
@@ -280,6 +308,7 @@ mod tests {
             human_player_nation: NationId(1),
             events: Vec::new(),
             tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
         }
     }
 

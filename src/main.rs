@@ -286,6 +286,26 @@ fn main() {
             "train" => {
                 train_worker(&mut game);
             }
+            "diplomacy" | "diplo" | "d" => {
+                println!();
+                print_diplomacy(&game);
+            }
+            _ if cmd.starts_with("consulate ") => {
+                let nation_query = input.trim()[10..].trim();
+                cmd_consulate(&mut game, nation_query);
+            }
+            _ if cmd.starts_with("embassy ") => {
+                let nation_query = input.trim()[8..].trim();
+                cmd_embassy(&mut game, nation_query);
+            }
+            _ if cmd.starts_with("war ") => {
+                let nation_query = input.trim()[4..].trim();
+                cmd_war(&mut game, nation_query);
+            }
+            _ if cmd.starts_with("peace ") => {
+                let nation_query = input.trim()[6..].trim();
+                cmd_peace(&mut game, nation_query);
+            }
             _ => {
                 println!("  Unknown command. Type 'help' for available commands.");
             }
@@ -863,6 +883,11 @@ fn print_help() {
     println!("    build unit <type> — Build a military unit");
     println!("                        (regulars $500, grenadiers $1000,");
     println!("                         cuirassiers $500, light artillery $2000)");
+    println!("    diplomacy         — Show diplomatic relations with all nations");
+    println!("    consulate <name>  — Build a trade consulate with a Minor Nation ($500)");
+    println!("    embassy <name>    — Build an embassy with a Minor Nation ($5,000)");
+    println!("    war <name>        — Declare war on a nation");
+    println!("    peace <name>      — Propose peace with a nation you are at war with");
     println!("    map               — Show the world map");
     println!("    provinces         — Show your provinces");
     println!("    nations           — Show all nations");
@@ -994,6 +1019,215 @@ fn nation_color_code(nation: &Nation) -> &str {
         NationColor::Khaki => "\x1b[93m",
         NationColor::Indigo => "\x1b[34m",
     }
+}
+
+fn print_diplomacy(game: &GameState) {
+    let player_id = game.human_player_nation;
+    let standing = game.diplomacy.get_standing(player_id);
+
+    println!("  DIPLOMATIC STATUS (Standing: {})", standing);
+    println!();
+
+    // Show Great Power relations
+    println!("  GREAT POWERS:");
+    for gp in game.great_powers() {
+        if gp.id == player_id {
+            continue;
+        }
+        let status = match game.diplomacy.get_relation(player_id, gp.id) {
+            Some(rel) => {
+                if rel.at_war {
+                    "AT WAR".to_string()
+                } else if rel.has_treaty(domain::events::TreatyType::Alliance) {
+                    format!("Allied (score: {})", rel.score)
+                } else {
+                    format!("Neutral (score: {})", rel.score)
+                }
+            }
+            None => "No contact".to_string(),
+        };
+        println!("    {:<12} {}", gp.name, status);
+    }
+    println!();
+
+    // Show Minor Nation relations
+    println!("  MINOR NATIONS:");
+    for mn in game.minor_nations() {
+        let status = match game.diplomacy.get_relation(player_id, mn.id) {
+            Some(rel) => {
+                if rel.at_war {
+                    "AT WAR".to_string()
+                } else if rel.has_embassy {
+                    format!("Embassy (score: {})", rel.score)
+                } else if rel.has_consulate {
+                    format!("Consulate (score: {})", rel.score)
+                } else {
+                    format!("No relations (score: {})", rel.score)
+                }
+            }
+            None => "No relations".to_string(),
+        };
+        println!("    {:<12} {}", mn.name, status);
+    }
+}
+
+fn cmd_consulate(game: &mut GameState, query: &str) {
+    let player_id = game.human_player_nation;
+
+    let target = match game.find_nation_by_name(query) {
+        Some(n) => n,
+        None => {
+            println!("  No unique nation matches '{}'. Be more specific.", query);
+            return;
+        }
+    };
+
+    if target.is_great_power() {
+        println!(
+            "  {} is a Great Power. Consulates are for Minor Nations only.",
+            target.name
+        );
+        return;
+    }
+
+    let target_id = target.id;
+    let target_name = target.name.clone();
+
+    let player = game.get_nation(player_id).unwrap();
+    let cost = Money::dollars(500);
+    if player.treasury.checked_sub(cost).is_none() {
+        println!(
+            "  Cannot afford consulate (cost: {}, treasury: {}).",
+            cost, player.treasury
+        );
+        return;
+    }
+
+    match game.diplomacy.build_consulate(player_id, target_id) {
+        Ok(_) => {
+            let player = game.get_nation_mut(player_id).unwrap();
+            player.treasury -= cost;
+            println!(
+                "  Trade consulate established with {}! (cost: {}, treasury now: {})",
+                target_name, cost, player.treasury
+            );
+        }
+        Err(e) => {
+            println!("  Cannot build consulate: {}", e);
+        }
+    }
+}
+
+fn cmd_embassy(game: &mut GameState, query: &str) {
+    let player_id = game.human_player_nation;
+
+    let target = match game.find_nation_by_name(query) {
+        Some(n) => n,
+        None => {
+            println!("  No unique nation matches '{}'. Be more specific.", query);
+            return;
+        }
+    };
+
+    if target.is_great_power() {
+        println!(
+            "  {} is a Great Power. Use diplomacy with Great Powers through treaties.",
+            target.name
+        );
+        return;
+    }
+
+    let target_id = target.id;
+    let target_name = target.name.clone();
+
+    let player = game.get_nation(player_id).unwrap();
+    let cost = Money::dollars(5000);
+    if player.treasury.checked_sub(cost).is_none() {
+        println!(
+            "  Cannot afford embassy (cost: {}, treasury: {}).",
+            cost, player.treasury
+        );
+        return;
+    }
+
+    match game.diplomacy.build_embassy(player_id, target_id) {
+        Ok(_) => {
+            let player = game.get_nation_mut(player_id).unwrap();
+            player.treasury -= cost;
+            println!(
+                "  Embassy established with {}! (cost: {}, treasury now: {})",
+                target_name, cost, player.treasury
+            );
+        }
+        Err(e) => {
+            println!("  Cannot build embassy: {}", e);
+        }
+    }
+}
+
+fn cmd_war(game: &mut GameState, query: &str) {
+    let player_id = game.human_player_nation;
+
+    let target = match game.find_nation_by_name(query) {
+        Some(n) => n,
+        None => {
+            println!("  No unique nation matches '{}'. Be more specific.", query);
+            return;
+        }
+    };
+
+    if target.id == player_id {
+        println!("  You cannot declare war on yourself.");
+        return;
+    }
+
+    let target_id = target.id;
+    let target_name = target.name.clone();
+
+    // Check if already at war
+    if let Some(rel) = game.diplomacy.get_relation(player_id, target_id)
+        && rel.at_war
+    {
+        println!("  You are already at war with {}.", target_name);
+        return;
+    }
+
+    game.diplomacy.declare_war(player_id, target_id);
+    println!();
+    println!("  ╔════════════════════════════════════════╗");
+    println!("  ║  DECLARATION OF WAR                    ║");
+    println!("  ╚════════════════════════════════════════╝");
+    println!("  Your Excellency has declared WAR upon {}!", target_name);
+    println!("  May Providence favor our cause.");
+    println!();
+}
+
+fn cmd_peace(game: &mut GameState, query: &str) {
+    let player_id = game.human_player_nation;
+
+    let target = match game.find_nation_by_name(query) {
+        Some(n) => n,
+        None => {
+            println!("  No unique nation matches '{}'. Be more specific.", query);
+            return;
+        }
+    };
+
+    let target_id = target.id;
+    let target_name = target.name.clone();
+
+    // Check if actually at war
+    match game.diplomacy.get_relation(player_id, target_id) {
+        Some(rel) if rel.at_war => {}
+        _ => {
+            println!("  You are not at war with {}.", target_name);
+            return;
+        }
+    }
+
+    game.diplomacy.make_peace(player_id, target_id);
+    println!("  Peace has been established with {}.", target_name);
+    println!("  The cannons fall silent.");
 }
 
 fn render_map(hex_map: &HexMap, nations: &[Nation]) {
