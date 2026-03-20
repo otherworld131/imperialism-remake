@@ -1,0 +1,8 @@
+[package]
+name = "presentation"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+application = { path = "../application" }
+domain = { path = "../domain" }

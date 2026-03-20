@@ -1,0 +1,110 @@
+# 06 — Town Development & Infrastructure
+
+## Overview
+
+Non-capital provinces evolve from hamlets → villages → towns through industrialization.
+Industrialization requires connecting a province to the capital via rail depot or port.
+Towns produce materials and goods autonomously (no labor needed) based on local resources
+and factory capacity.
+
+## Checklist
+
+### Settlement Progression
+- [ ] **Hamlet** — initial state; produces raw resources only
+- [ ] **Village** — intermediate; begins producing when connected and factory built
+- [ ] **Town** — fully industrialized; maximum production capacity
+- [ ] 6-turn delay from connection before first materials appear
+- [ ] Captured Great Power capitals industrialize immediately (no delay)
+- [ ] Minor Nation capitals never industrialize
+- [ ] Unit tests for settlement progression timing
+
+### Province Connection
+- [ ] Province is "connected" if a rail depot on/adjacent to its capital links to national capital
+- [ ] Alternative: port connection to capital (via sea route)
+- [ ] Connection validation algorithm — pathfinding through rail network or port chain
+- [ ] Disconnection on province loss — recalculate connectivity
+- [ ] Unit tests for connection detection
+
+### Town Production
+- [ ] Town production requires no labor input
+- [ ] Base ratio: 2 raw resources → 1 material
+- [ ] Finished goods: 1/2 of available materials → goods
+- [ ] Production limited by local factory capacity
+- [ ] Factory capacity progression: 4, 8, 12, 16, ...
+- [ ] Factory upgrade cost: materials + 2-turn delay for new capacity
+- [ ] Three production chains available per town based on local resources:
+  - [ ] Timber → Lumber → Furniture
+  - [ ] Cotton/Wool → Fabric → Clothing
+  - [ ] Coal + Iron → Steel → Hardware
+- [ ] Towns with multiple resource types (especially coal + iron) are especially valuable
+- [ ] Unit tests for town production calculations at each capacity level
+
+### Infrastructure — Railroads
+- [ ] Railroads connect tiles, enabling resource transport to capital
+- [ ] Built by Engineer units, one tile per turn
+- [ ] Cost varies by terrain:
+  - [ ] Plains/Farm/Forest: $100
+  - [ ] Desert/Tundra: $100-150
+  - [ ] Swamp: $300 (requires Iron Railroad Bridge tech)
+  - [ ] Hills: $200 (requires Compound Steam Engine tech)
+  - [ ] Mountains: requires Dynamite tech
+- [ ] Railroads also used for military transport (1 army unit per 5 freight cars)
+- [ ] Unit tests for railroad construction rules
+
+### Infrastructure — Depots
+- [ ] Depots are collection points for resources from surrounding tiles
+- [ ] Built by Engineer, costs $2,000, takes 3 turns
+- [ ] Must be connected to capital via railroad or port to be useful
+- [ ] Placing depot on/adjacent to a province capital triggers industrialization
+- [ ] Unit tests for depot placement and connectivity
+
+### Infrastructure — Ports
+- [ ] Ports provide sea access for trade and military operations
+- [ ] Built by Engineer on coastal tiles, costs $3,000, takes 3 turns
+- [ ] Ports cannot be built on hill terrain
+- [ ] Ports connect provinces to the capital via sea routes
+- [ ] Required for overseas trade with minor nations
+- [ ] Unit tests for port placement validation
+
+### Infrastructure — Forts
+- [ ] Forts provide defensive bonuses in combat
+- [ ] Three levels:
+  - [ ] Level 1: $5,000 (available from start)
+  - [ ] Level 2: $7,500 (requires Bessemer Converter tech)
+  - [ ] Level 3: $10,000 (requires Large Artillery tech)
+- [ ] Built by Engineer, takes 3 turns per level
+- [ ] Forts affect tactical battle maps — walls, defensive positions
+- [ ] Sappers can tunnel to destroy fort sections
+- [ ] Heavy artillery can also destroy fort sections
+- [ ] Unit tests for fort construction and defensive bonus calculations
+
+### Capital City Buildings (8 standard)
+- [ ] **Armory** — build army units from workers + arms + money
+- [ ] **Capitol** — recruit immigrants (requires canned food + clothing + furniture)
+- [ ] **Food Processing** — convert raw food → canned food
+- [ ] **Railyard** — build freight cars (2 labor + 1 lumber + 1 steel each); manage transport
+- [ ] **Shipyard** — build merchant ships and warships (resource costs, no money cost)
+- [ ] **Trade School** — train workers: untrained → trained → expert (uses paper)
+- [ ] **University** — convert expert workers into specialist civilians (uses paper + money)
+- [ ] **Warehouse** — display inventory and incoming shipments
+
+### Optional / Unlockable Buildings
+- [ ] **Mills** (Lumber Mill, Steel Mill, Textile Mill) — process raw → materials
+- [ ] **Factories** (Furniture, Hardware, Clothing) — process materials → goods
+- [ ] **Oil Refinery** — process oil (unlocked by Oil Drilling tech)
+- [ ] **Power Plant** — uses oil for bonuses (unlocked by Oil Drilling tech)
+- [ ] All expandable: 1 lumber + 1 steel per capacity unit
+- [ ] Easy difficulty: start with 3 mills (cap 2) + 3 factories (cap 1)
+- [ ] Harder difficulties: must be built from scratch
+- [ ] Unit tests for building construction and expansion
+
+### Verification Strategy
+- [ ] **Unit tests**: `cargo test` — all town, infrastructure, and building tests pass
+- [ ] **Industrialization test**: Connect depot to province → verify 6-turn delay → materials appear on turn 7
+- [ ] **Town production test**: Town with factory capacity 8 + 4 timber available → verify 2 lumber + 1 furniture produced
+- [ ] **Railroad cost test**: Build railroad on each terrain type → verify correct cost and tech prerequisite enforced
+- [ ] **Fort siege test**: Build level 3 fort → verify combat defense bonus applied; sapper destroys section → bonus reduced
+- [ ] **Building expansion test**: Expand mill from cap 2 → 4 → verify cost = 2 lumber + 2 steel, 2-turn delay
+- [ ] **Connectivity test**: Province connected via port → rail severed → verify province still connected via sea route
+- [ ] **Captured capital test**: Capture Great Power capital → verify immediate industrialization (no 6-turn delay)
+- [ ] **Minor capital test**: Capture Minor Nation capital → verify it does NOT industrialize

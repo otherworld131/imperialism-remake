@@ -1,0 +1,10 @@
+[package]
+name = "domain"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# Domain crate: ONLY std. No external crates.
+# mlua will be added when Lua scripting is implemented.
+
+[dev-dependencies]

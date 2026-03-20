@@ -1,0 +1,91 @@
+# 13 — Combat System
+
+## Overview
+
+Land battles can be player-controlled (tactical) or AI-automated. Naval battles are always
+AI-resolved. Combat occurs when armies in adjacent provinces are ordered to attack, or when
+a province is invaded via beachhead.
+
+## Checklist
+
+### Battle Initiation
+- [ ] Attacker orders army units to move into an enemy-occupied province
+- [ ] Defender's garrison (Militia/Minutemen) + stationed army defend
+- [ ] Counter-attacks: if defender sends reinforcements during the same turn, they arrive for a secondary engagement
+- [ ] Counter-attack reinforcements "have already moved" — no opportunity fire during first move
+- [ ] Battle can be player-controlled or auto-resolved (player choice in preferences)
+- [ ] Unit tests: battle initiation conditions, counter-attack eligibility
+
+### Tactical Battle Map
+- [ ] Hex-based battlefield (separate from strategic map)
+- [ ] Terrain from the province affects battlefield layout
+- [ ] Forts appear on the tactical map as defensive structures
+- [ ] Attacker and defender deploy units on opposite sides
+- [ ] Auto-deployment available (but suboptimal for counter-attacks)
+- [ ] Counter-attack deployment tip: place faster units in front (auto-deploy doesn't do this)
+- [ ] Unit tests: battlefield generation from province terrain
+
+### Turn-Based Tactical Combat
+- [ ] Units take turns based on initiative (influenced by General medals + force composition)
+- [ ] Each unit per turn: move (up to movement points) → fire (if in range)
+- [ ] **Opportunity fire**: defending units fire when enemy enters their range during enemy movement
+- [ ] Firepower calculation: base FP × medal modifier × terrain modifier
+- [ ] Range: maximum distance (in hex tiles) a unit can fire
+- [ ] Movement: hex tiles a unit can traverse per combat turn
+- [ ] Damage applied to target health in 5% increments
+- [ ] Unit destroyed at 0% health
+- [ ] Unit tests: initiative ordering, opportunity fire triggers, damage calculation
+
+### Combat Modifiers
+- [ ] **Medals**: 4 medals ≈ 2× firepower; medal holders take less damage and recover faster
+- [ ] **Terrain**: defensive bonuses for hills, forests, fortifications
+- [ ] **Fort defense**: units inside forts receive significant defense bonuses
+- [ ] **Fort destruction**: Sappers tunnel to fort walls; heavy artillery bombards from range
+- [ ] Unit tests: all modifier calculations
+
+### Sapper Mechanics (Tactical)
+- [ ] Sappers use half movement to dig one tunnel space
+- [ ] Stationary sapper: 2 tunnel spaces per turn
+- [ ] Tunnel reaches fort wall → explosive placement → section destroyed
+- [ ] "S" key: skip all non-sapper units until next sapper's turn
+- [ ] Skip interrupted if any unit takes damage
+- [ ] Unit tests: tunnel progress per turn, fort section destruction
+
+### Battle Resolution
+- [ ] Battle ends when one side is eliminated or retreats
+- [ ] Retreating units suffer additional damage
+- [ ] Victorious attacker occupies the province
+- [ ] Surviving units retain damage and earn medals based on performance
+- [ ] Province garrison (Militia) is destroyed on conquest — not captured
+- [ ] Unit tests: victory/defeat determination, retreat mechanics, medal award
+
+### Province Conquest
+- [ ] Conquering a Minor Nation capital: new army unit starts with 1 medal + Armory statue
+- [ ] Conquering a Great Power capital: Capitol expansion (recruitment ratio 4:1 → 3:1)
+- [ ] Minor Nation provinces become colonies of the conquering power
+- [ ] Great Power provinces change ownership
+- [ ] Garrison in conquered provinces: none until player stations units
+- [ ] Unit tests: conquest effects and rewards
+
+### Naval Combat (AI-Only)
+- [ ] Naval battles always resolved automatically
+- [ ] Combat factors: firepower, range, armor, hull points, speed
+- [ ] Damage reduces hull points; ship sinks at 0
+- [ ] Battle report provided to player with outcome summary
+- [ ] Merchant ships in a blockaded zone may be sunk (some survive based on armor/speed)
+- [ ] Unit tests: naval combat algorithm, battle report generation
+
+### Auto-Resolve (Land)
+- [ ] Player can choose to auto-resolve land battles in preferences
+- [ ] AI applies basic tactical logic (positioning, firing priority)
+- [ ] Results should be reasonable but slightly worse than optimal player control
+- [ ] Unit tests: auto-resolve produces valid outcomes
+
+### Verification Strategy
+- [ ] **Unit tests**: Run test suite — all combat tests pass
+- [ ] **Deterministic combat test**: Fixed seed → same battle always produces same result
+- [ ] **Integration test**: 3 Regulars attack province with 4 Militia → verify battle resolves, correct winner determined
+- [ ] **Integration test**: Sapper siege scenario → verify tunnel progress over multiple turns → fort destroyed
+- [ ] **Balance test**: Run 1000 battles with various force compositions → verify win rates are reasonable
+- [ ] **Naval test**: Fleet of 3 Frigates vs 1 Ship-of-the-Line → verify plausible outcomes over 100 runs
+- [ ] **Counter-attack test**: Defender sends reinforcements → verify they arrive with no opportunity fire on first move
