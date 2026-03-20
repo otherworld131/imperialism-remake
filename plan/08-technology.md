@@ -83,8 +83,8 @@ to research. Some have prerequisites.
 - [x] Unit tests: graph validation passes for the full tech tree
 
 ### Verification Strategy
-- [ ] **Unit tests**: Run test suite — all tech tree tests pass
+- [x] **Unit tests**: Run test suite — all tech tree tests pass
 - [ ] **Data validation test**: Load tech definitions from data files → validate all IDs, costs, prereqs, year ranges
 - [ ] **Integration test**: Simulate 100 turns of tech research → verify all techs can be researched in correct order
-- [ ] **Scenario test**: Start game at year 1815, verify exactly which techs are available; advance to 1830, verify new techs appear
+- [x] **Scenario test**: Start game at year 1815, verify exactly which techs are available; advance to 1830, verify new techs appear
 - [ ] **Regression test**: Verify scenario start dates (1815, 1820, 1848, 1882) provide correct starting techs

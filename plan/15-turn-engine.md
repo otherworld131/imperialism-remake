@@ -13,7 +13,7 @@ simultaneously.
 - [ ] Each turn, all players interact with 5 screens in order
 - [ ] After all players submit, orders are resolved
 - [ ] Resolution order: production → transport → trade → diplomacy → military → combat → scoring
-- [ ] Unit tests: turn-to-year conversion, resolution ordering
+- [x] Unit tests: turn-to-year conversion, resolution ordering
 ### Five Sequential Screens (Player Phase)
 1. **Map Screen**
    - [ ] Deploy civilian specialists to terrain tiles (prospectors, miners, farmers, foresters, engineers, ranchers, drillers)
@@ -45,7 +45,7 @@ simultaneously.
 - [ ] Unit tests: screen data correctly calculated for each phase
 
 ### Turn Resolution Pipeline
-- [ ] `TurnProcessor` trait orchestrates the entire resolution
+- [x] `TurnProcessor` trait orchestrates the entire resolution
 - [ ] Steps executed in deterministic order:
   1. [ ] **Civilian actions resolve** — specialists improve tiles, engineers build infrastructure
   2. [ ] **Production resolves** — mills/factories process resources using assigned inputs
@@ -96,7 +96,7 @@ simultaneously.
 - [ ] Unit tests: AI orders pass validation
 
 ### Verification Strategy
-- [ ] **Unit tests**: Run test suite — all turn engine tests pass
+- [x] **Unit tests**: Run test suite — all turn engine tests pass
 - [ ] **Integration test**: Full turn resolution with 7 nations (1 human + 6 AI) → no errors, valid state transition
 - [ ] **Determinism test**: Run same turn with same inputs 100 times → identical results every time
 - [ ] **Performance test**: Measure turn resolution time with full 7-player game → must complete within 5 seconds

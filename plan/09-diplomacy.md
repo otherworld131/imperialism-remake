@@ -75,7 +75,7 @@ The Council of Governors voting system is the primary victory path.
 - [ ] Unit tests: governor preference calculations (trade-based, military-based)
 
 ### Verification Strategy
-- [ ] **Unit tests**: Run test suite — all diplomacy tests pass
+- [x] **Unit tests**: Run test suite — all diplomacy tests pass
 - [ ] **Integration test**: Simulate a full diplomatic lifecycle — build consulate → embassy → pact → voluntary incorporation
 - [ ] **Integration test**: War declaration → alliance cascade → peace treaty → standing penalty
 - [ ] **Scenario test**: Set up a game state where a Great Power should win the Council vote → verify victory

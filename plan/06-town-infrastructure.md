@@ -99,12 +99,12 @@ and factory capacity.
 - [x] Unit tests for building construction and expansion
 
 ### Verification Strategy
-- [ ] **Unit tests**: `cargo test` — all town, infrastructure, and building tests pass
+- [x] **Unit tests**: `cargo test` — all town, infrastructure, and building tests pass
 - [ ] **Industrialization test**: Connect depot to province → verify 6-turn delay → materials appear on turn 7
 - [ ] **Town production test**: Town with factory capacity 8 + 4 timber available → verify 2 lumber + 1 furniture produced
 - [ ] **Railroad cost test**: Build railroad on each terrain type → verify correct cost and tech prerequisite enforced
 - [ ] **Fort siege test**: Build level 3 fort → verify combat defense bonus applied; sapper destroys section → bonus reduced
-- [ ] **Building expansion test**: Expand mill from cap 2 → 4 → verify cost = 2 lumber + 2 steel, 2-turn delay
+- [x] **Building expansion test**: Expand mill from cap 2 → 4 → verify cost = 2 lumber + 2 steel, 2-turn delay
 - [ ] **Connectivity test**: Province connected via port → rail severed → verify province still connected via sea route
 - [ ] **Captured capital test**: Capture Great Power capital → verify immediate industrialization (no 6-turn delay)
 - [ ] **Minor capital test**: Capture Minor Nation capital → verify it does NOT industrialize

@@ -99,11 +99,11 @@ goods in factories. Three parallel production chains exist.
 - [ ] Unit tests for treasury calculations
 
 ### Verification Strategy
-- [ ] **Unit tests**: `cargo test` — all resource, production, food, labor, warehouse, treasury tests pass
-- [ ] **Production chain test**: Feed known inputs into each chain → verify exact outputs (e.g., 4 timber + 4 labor → 2 lumber; 4 lumber + 4 labor → 2 furniture)
+- [x] **Unit tests**: `cargo test` — all resource, production, food, labor, warehouse, treasury tests pass
+- [x] **Production chain test**: Feed known inputs into each chain → verify exact outputs (e.g., 4 timber + 4 labor → 2 lumber; 4 lumber + 4 labor → 2 furniture)
 - [ ] **Food balance test**: Create nation with 10 population, 8 grain, 2 fruit → verify food sufficient; reduce to 5 grain → verify shortage
 - [ ] **Immigration test**: Stock warehouse with canned food + clothing + furniture → recruit worker → verify goods consumed, worker appears next turn
-- [ ] **Worker pipeline test**: Recruit untrained → train → expert → specialist → verify each step costs correct resources
-- [ ] **Mill capacity test**: Mill at capacity 4, feed 8 timber → verify 4 lumber produced; feed 10 timber → verify still only 4 (capped)
-- [ ] **Factory expansion test**: Expand factory → verify 2-turn delay before new capacity active
+- [x] **Worker pipeline test**: Recruit untrained → train → expert → specialist → verify each step costs correct resources
+- [x] **Mill capacity test**: Mill at capacity 4, feed 8 timber → verify 4 lumber produced; feed 10 timber → verify still only 4 (capped)
+- [x] **Factory expansion test**: Expand factory → verify 2-turn delay before new capacity active
 - [ ] **Treasury test**: Start with $10,000, spend $3,000 on tech, $500 on consulate, earn $2,000 from trade → verify balance = $8,500
