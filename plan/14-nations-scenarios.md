@@ -8,28 +8,28 @@ historical scenarios with real European powers. Nations are data-driven and modd
 ## Checklist
 
 ### Nation Data Model
-- [ ] `Nation` entity — ID, name, color, type (GreatPower/MinorNation), provinces list, capital province
+- [x] `Nation` entity — ID, name, color, type (GreatPower/MinorNation), provinces list, capital province
 - [ ] Nation data loaded from definition files (JSON/YAML)
 - [ ] Fixed vs. Random naming option (computer nations get standard or procedural names)
-- [ ] Capital province auto-named: nation name + "City"
-- [ ] Each Great Power starts with 8 provinces
-- [ ] Each Minor Nation starts with 4 provinces
-- [ ] Unit tests: nation creation, naming rules
+- [x] Capital province auto-named: nation name + "City"
+- [x] Each Great Power starts with 8 provinces
+- [x] Each Minor Nation starts with 4 provinces
+- [x] Unit tests: nation creation, naming rules
 
 ### Standard Great Powers (Random Game)
-- [ ] **Deneb** (Yellow) — provinces: Banlingen, Feolin, Gairloch, Girvan, Lochinvar, Lochmaddy, Mallaig, Nairn
-- [ ] **Devron** (Orange) — provinces: Anza, Lopez, Moraga, Pacheco, Rivera, Taraval, Ulloa, Wawona
-- [ ] **Haxaco** (Light Blue) — provinces: Hackensack, Hopatcong, Peapack, Piscataway, Secaucus, Teaneck, Watchung, Weehawken
-- [ ] **Kem** (Red) — provinces: Hukchi, Kara, Koryak, Latev, Narvik, Tiksi, Totyev, Tromso
-- [ ] **Ordune** (Green) — provinces: Banburn, Brigadune, Dunbar, Dundee, Dunham, Dunlap, Dunmore, Oban
-- [ ] **Patagon** (Purple) — provinces: Callisto, Faliro, Kailithea, Kifisia, Patisia, Pereus, Perissos, Petralona
-- [ ] **Zimm** (Blue) — provinces: Bergen, Essex, Monmouth, Morris, Nassau, Passaic, Sussex, Warren
-- [ ] Unit tests: all 7 nations have correct province counts and colors
+- [x] **Deneb** (Yellow) — provinces: Banlingen, Feolin, Gairloch, Girvan, Lochinvar, Lochmaddy, Mallaig, Nairn
+- [x] **Devron** (Orange) — provinces: Anza, Lopez, Moraga, Pacheco, Rivera, Taraval, Ulloa, Wawona
+- [x] **Haxaco** (Light Blue) — provinces: Hackensack, Hopatcong, Peapack, Piscataway, Secaucus, Teaneck, Watchung, Weehawken
+- [x] **Kem** (Red) — provinces: Hukchi, Kara, Koryak, Latev, Narvik, Tiksi, Totyev, Tromso
+- [x] **Ordune** (Green) — provinces: Banburn, Brigadune, Dunbar, Dundee, Dunham, Dunlap, Dunmore, Oban
+- [x] **Patagon** (Purple) — provinces: Callisto, Faliro, Kailithea, Kifisia, Patisia, Pereus, Perissos, Petralona
+- [x] **Zimm** (Blue) — provinces: Bergen, Essex, Monmouth, Morris, Nassau, Passaic, Sussex, Warren
+- [x] Unit tests: all 7 nations have correct province counts and colors
 
 ### Standard Minor Nations (16)
-- [ ] Bruhr, Dedge, Hurshen, Idolon, Issa, Kathay, Kessel, Loke, Manx, Pont, Pram, Sindel, Twelt, Wodan, Zazi, Zinlu
-- [ ] Each with 4 assigned provinces
-- [ ] Unit tests: 16 nations, 4 provinces each
+- [x] Bruhr, Dedge, Hurshen, Idolon, Issa, Kathay, Kessel, Loke, Manx, Pont, Pram, Sindel, Twelt, Wodan, Zazi, Zinlu
+- [x] Each with 4 assigned provinces
+- [x] Unit tests: 16 nations, 4 provinces each
 
 ### Historical Scenarios
 - [ ] **1815 scenario** — post-Napoleonic Europe
@@ -68,11 +68,11 @@ historical scenarios with real European powers. Nations are data-driven and modd
 - [ ] These are hints for the player — not enforced rules
 
 ### Difficulty Levels (5)
-- [ ] **Introductory** — easiest, program picks capital, extra starting resources
-- [ ] **Easy** — simplified, program picks capital
-- [ ] **Normal** — human and AI on almost equal footing
-- [ ] **Hard** — AI advantages
-- [ ] **Nigh-On Impossible (NOI)** — for expert players
+- [x] **Introductory** — easiest, program picks capital, extra starting resources
+- [x] **Easy** — simplified, program picks capital
+- [x] **Normal** — human and AI on almost equal footing
+- [x] **Hard** — AI advantages
+- [x] **Nigh-On Impossible (NOI)** — for expert players
 - [ ] Difficulty affects: starting cash, warehouse contents, mineral density, capital selection, AI bonuses
 - [ ] Tutorial mode available separately
 - [ ] Unit tests: each difficulty level applies correct modifiers

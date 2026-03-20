@@ -64,13 +64,13 @@ imperialism-remake/
 - [ ] Create `LICENSE` file
 
 ### Project Structure
-- [ ] Create `Cargo.toml` workspace with all member crates
-- [ ] Create `rust-toolchain.toml` — pin edition 2024, stable channel
-- [ ] Create `crates/domain` — library crate; deps: `mlua` (Lua 5.4, sandboxed)
-- [ ] Create `crates/application` — library crate; deps: `domain` only
-- [ ] Create `crates/infrastructure` — library crate; deps: `application`, `serde`, `bincode`, `tokio`
-- [ ] Create `crates/presentation` — library crate; deps: `application`, `bevy` (or chosen framework)
-- [ ] Create `src/main.rs` — binary entry point, composition root, depends on all crates
+- [x] Create `Cargo.toml` workspace with all member crates
+- [x] Create `rust-toolchain.toml` — pin edition 2024, stable channel
+- [x] Create `crates/domain` — library crate; deps: `mlua` (Lua 5.4, sandboxed)
+- [x] Create `crates/application` — library crate; deps: `domain` only
+- [x] Create `crates/infrastructure` — library crate; deps: `application`, `serde`, `bincode`, `tokio`
+- [x] Create `crates/presentation` — library crate; deps: `application`, `bevy` (or chosen framework)
+- [x] Create `src/main.rs` — binary entry point, composition root, depends on all crates
 - [ ] Create `tests/architecture/` — fitness function tests parsing `Cargo.toml` dependency graphs
 - [ ] Create `tests/integration/` — cross-crate integration tests
 - [ ] Create `tests/simulation/` — multi-turn automated game tests

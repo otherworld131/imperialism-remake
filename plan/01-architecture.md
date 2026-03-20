@@ -47,9 +47,9 @@ with `--no-default-features` and no rendering framework, the boundary is intact.
 ## Checklist
 
 ### Language & Runtime — Rust
-- [ ] Lock Rust edition and MSRV in `rust-toolchain.toml` (edition 2024, stable channel)
-- [ ] Configure `Cargo.toml` workspace with all crates
-- [ ] Enforce `#![deny(warnings, clippy::all)]` in all crates
+- [x] Lock Rust edition and MSRV in `rust-toolchain.toml` (edition 2024, stable channel)
+- [x] Configure `Cargo.toml` workspace with all crates
+- [x] Enforce `#![deny(warnings, clippy::all)]` in all crates
 
 ### Scripting Layer — Lua
 - [ ] Integrate `mlua` crate (Lua 5.4) in the domain crate
@@ -95,14 +95,14 @@ with `--no-default-features` and no rendering framework, the boundary is intact.
 - [ ] Verify frontend is fully swappable: domain crate compiles + tests pass without any framework dependency
 
 ### Dependency Rule Enforcement
-- [ ] Domain crate `Cargo.toml`: only `mlua` (+ `serde` with `derive` feature for data structs)
-- [ ] Application crate: depends only on domain
-- [ ] Infrastructure: depends on application + external crates (serde, bincode, tokio, etc.)
-- [ ] Presentation: depends on application + framework crate (bevy, godot, etc.)
-- [ ] Host binary (`main.rs`): depends on all — this is the composition root
+- [x] Domain crate `Cargo.toml`: only `mlua` (+ `serde` with `derive` feature for data structs)
+- [x] Application crate: depends only on domain
+- [x] Infrastructure: depends on application + external crates (serde, bincode, tokio, etc.)
+- [x] Presentation: depends on application + framework crate (bevy, godot, etc.)
+- [x] Host binary (`main.rs`): depends on all — this is the composition root
 - [ ] Enforce via crate boundaries + `cargo test --test architecture` that parses `Cargo.toml` dependency graphs
 - [ ] Write architectural fitness function tests that fail on illegal dependencies
-- [ ] `domain` crate compiles with `cargo build -p domain` in isolation
+- [x] `domain` crate compiles with `cargo build -p domain` in isolation
 
 ### Cross-Platform Abstractions (Traits)
 - [ ] `PlatformServices` trait — file paths, clipboard, notifications
@@ -116,8 +116,8 @@ with `--no-default-features` and no rendering framework, the boundary is intact.
 - [ ] WASM adapter stubs (future)
 
 ### Event Bus / Mediator
-- [ ] In-process event bus for domain events (`TurnEnded`, `WarDeclared`, `TechResearched`, …)
-- [ ] Events are immutable Rust structs
+- [x] In-process event bus for domain events (`TurnEnded`, `WarDeclared`, `TechResearched`, …)
+- [x] Events are immutable Rust structs
 - [ ] Handlers registered at composition root, executed synchronously within the game loop
 - [ ] Lua scripts can register event listeners (e.g., mod hook: `on("TurnEnded", function(turn) ... end)`)
 - [ ] Unit test: publish event → Rust handler fires → side-effect observable

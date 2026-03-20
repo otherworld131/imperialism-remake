@@ -9,12 +9,11 @@ simultaneously.
 ## Checklist
 
 ### Turn Structure
-- [ ] `TurnNumber` → year + quarter mapping (Turn 1 = 1815 Q1, Turn 400 = 1914 Q4, Turn 401 = 1915 Q1)
+- [x] `TurnNumber` → year + quarter mapping (Turn 1 = 1815 Q1, Turn 400 = 1914 Q4, Turn 401 = 1915 Q1)
 - [ ] Each turn, all players interact with 5 screens in order
 - [ ] After all players submit, orders are resolved
 - [ ] Resolution order: production → transport → trade → diplomacy → military → combat → scoring
 - [ ] Unit tests: turn-to-year conversion, resolution ordering
-
 ### Five Sequential Screens (Player Phase)
 1. **Map Screen**
    - [ ] Deploy civilian specialists to terrain tiles (prospectors, miners, farmers, foresters, engineers, ranchers, drillers)
@@ -76,7 +75,7 @@ simultaneously.
 - [ ] Unit tests: newspaper event collection and formatting
 
 ### Game State Management
-- [ ] `GameState` aggregate root holds entire game state
+- [x] `GameState` aggregate root holds entire game state
 - [ ] State transitions are deterministic given the same inputs (critical for multiplayer sync)
 - [ ] State snapshots for undo/redo consideration
 - [ ] State serialization for save/load (see plan 21)
