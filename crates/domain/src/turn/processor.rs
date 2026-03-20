@@ -541,13 +541,28 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 .get_nation(attacker_id)
                 .map(|n| n.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
+            let def_name_conquest = game
+                .get_nation(defender_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
             let prov_name = game
                 .get_province(province_id)
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
-            report
-                .newspaper_headlines
-                .push(format!("BREAKING: {} conquers {}!", atk_name, prov_name));
+            report.newspaper_headlines.push(format!(
+                "BREAKING: {} conquers {} from {}!",
+                atk_name, prov_name, def_name_conquest
+            ));
+
+            // Check if the defender has been eliminated (lost all provinces)
+            let defender_eliminated = game
+                .get_nation(defender_id)
+                .is_some_and(|n| n.is_great_power() && n.province_ids.is_empty());
+            if defender_eliminated {
+                report
+                    .newspaper_headlines
+                    .push(format!("{} has been eliminated!", def_name_conquest));
+            }
         } else {
             let def_name = game
                 .get_nation(defender_id)

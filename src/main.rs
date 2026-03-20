@@ -9,7 +9,7 @@ use domain::hex::HexCoord;
 use domain::map::{HexMap, UnitId};
 use domain::military::units::{ArmyUnit, ArmyUnitType};
 use domain::nation::Nation;
-use domain::turn::{calculate_score, process_turn};
+use domain::turn::{TurnReport, calculate_score, process_turn};
 use domain::types::*;
 use infrastructure::persistence;
 
@@ -241,6 +241,8 @@ fn main() {
                     println!("  ══════════════════════════════════════");
                     println!("  The year is 1915. The game has ended!");
                     println!("  ══════════════════════════════════════");
+                    println!();
+                    print_game_end_summary(&game, &report);
                     break;
                 }
             }
@@ -372,6 +374,11 @@ fn main() {
             "military" | "army" => {
                 println!();
                 print_military(&game);
+            }
+            _ if cmd.starts_with("info ") => {
+                let nation_query = input.trim()[5..].trim();
+                println!();
+                print_nation_info(&game, nation_query);
             }
             _ if cmd.starts_with("war ") => {
                 let nation_query = input.trim()[4..].trim();
@@ -663,6 +670,173 @@ fn format_number(n: u32) -> String {
     result.chars().rev().collect()
 }
 
+fn print_game_end_summary(game: &GameState, report: &TurnReport) {
+    println!("  ╔════════════════════════════════════════╗");
+    println!("  ║        FINAL GAME SUMMARY              ║");
+    println!("  ╚════════════════════════════════════════╝");
+    println!();
+
+    // Final scores for all Great Powers
+    println!("    {:<12} {:>8} {:>8}", "Nation", "Score", "Provinces");
+    println!("    {}", "-".repeat(32));
+
+    let mut scores: Vec<_> = game
+        .great_powers()
+        .iter()
+        .map(|n| {
+            let s = calculate_score(n);
+            (n.id, n.name.clone(), s.total, n.province_count())
+        })
+        .collect();
+    scores.sort_by(|a, b| b.2.cmp(&a.2));
+
+    for (id, name, total, prov_count) in &scores {
+        let marker = if *id == game.human_player_nation {
+            " ◄ YOU"
+        } else {
+            ""
+        };
+        println!(
+            "    {:<12} {:>8} {:>8}{}",
+            name,
+            format_number(*total),
+            prov_count,
+            marker
+        );
+    }
+    println!();
+
+    // Determine winner
+    let winner_id = if let Some(ref vote) = report.council_vote {
+        vote.winner
+    } else {
+        // No council vote in final report — winner is highest scorer
+        scores.first().map(|(id, _, _, _)| *id)
+    };
+
+    if let Some(wid) = winner_id {
+        let winner_name = game
+            .get_nation(wid)
+            .map(|n| n.name.as_str())
+            .unwrap_or("Unknown");
+        if wid == game.human_player_nation {
+            println!(
+                "  *** CONGRATULATIONS! {} (YOU) wins the game! ***",
+                winner_name
+            );
+        } else {
+            println!("  {} wins the game.", winner_name);
+        }
+    }
+
+    println!();
+    println!("  Play again? (start a new game with 'cargo run')");
+}
+
+fn print_nation_info(game: &GameState, query: &str) {
+    let target = match game.find_nation_by_name(query) {
+        Some(n) => n,
+        None => {
+            println!("  No unique nation matches '{}'. Be more specific.", query);
+            return;
+        }
+    };
+
+    let target_id = target.id;
+    let player_id = game.human_player_nation;
+
+    println!("  ══════════════════════════════════════");
+    println!(
+        "  {} ({})",
+        target.name,
+        if target.is_great_power() {
+            "Great Power"
+        } else {
+            "Minor Nation"
+        }
+    );
+    println!("  ══════════════════════════════════════");
+    println!();
+
+    // Province count and names
+    let owned_provinces: Vec<_> = game
+        .provinces
+        .iter()
+        .filter(|p| p.owner == target_id)
+        .collect();
+    println!("  Provinces: {}", owned_provinces.len());
+    for p in &owned_provinces {
+        let settlement = match p.settlement_level {
+            domain::map::SettlementLevel::Hamlet => "Hamlet",
+            domain::map::SettlementLevel::Village => "Village",
+            domain::map::SettlementLevel::Town => "Town",
+        };
+        println!(
+            "    - {} ({}, {} tiles)",
+            p.name,
+            settlement,
+            p.tile_count()
+        );
+    }
+    println!();
+
+    // Treasury (Great Powers only)
+    if target.is_great_power() {
+        println!("  Treasury: {}", target.treasury);
+    }
+
+    // Army size and total firepower
+    println!("  Army: {} units", target.army.len());
+    if !target.army.is_empty() {
+        println!(
+            "  Total firepower: {:.1}",
+            target.total_military_firepower()
+        );
+    }
+    println!();
+
+    // Diplomatic relations with player
+    if target_id != player_id {
+        let status = match game.diplomacy.get_relation(player_id, target_id) {
+            Some(rel) => {
+                if rel.at_war {
+                    "AT WAR".to_string()
+                } else if target.is_great_power() {
+                    if rel.has_treaty(domain::events::TreatyType::Alliance) {
+                        format!("Allied (score: {})", rel.score)
+                    } else {
+                        format!("Neutral (score: {})", rel.score)
+                    }
+                } else if rel.has_embassy {
+                    format!("Embassy (score: {})", rel.score)
+                } else if rel.has_consulate {
+                    format!("Consulate (score: {})", rel.score)
+                } else {
+                    format!("No relations (score: {})", rel.score)
+                }
+            }
+            None => "No contact".to_string(),
+        };
+        println!("  Relations with you: {}", status);
+    } else {
+        println!("  (This is your nation)");
+    }
+
+    // Score (Great Powers only)
+    if target.is_great_power() {
+        let score = calculate_score(target);
+        println!(
+            "  Score: {} (Mil:{} Lab:{} Trans:{} Dip:{} Prov:{})",
+            format_number(score.total),
+            score.military_score,
+            score.labor_score,
+            score.transport_score,
+            score.diplomatic_score,
+            score.province_score,
+        );
+    }
+}
+
 fn read_line() -> String {
     let mut input = String::new();
     io::stdout().flush().unwrap();
@@ -774,10 +948,16 @@ fn print_provinces(game: &domain::game_state::GameState) {
                 .collect::<Vec<_>>()
                 .join(" ");
 
+            let settlement = match province.settlement_level {
+                domain::map::SettlementLevel::Hamlet => "Hamlet",
+                domain::map::SettlementLevel::Village => "Village",
+                domain::map::SettlementLevel::Town => "Town",
+            };
             println!(
-                "    {} ({} tiles) [{}]",
+                "    {} ({} tiles, {}) [{}]",
                 province.name,
                 province.tile_count(),
+                settlement,
                 terrain_summary
             );
         }
@@ -997,6 +1177,7 @@ fn print_help() {
     println!("    diplomacy         — Show diplomatic relations with all nations");
     println!("    consulate <name>  — Build a trade consulate with a Minor Nation ($500)");
     println!("    embassy <name>    — Build an embassy with a Minor Nation ($5,000)");
+    println!("    info <name>       — Show detailed info about any nation");
     println!("    war <name>        — Declare war on a nation");
     println!("    peace <name>      — Propose peace with a nation you are at war with");
     println!("    map               — Show the world map");
