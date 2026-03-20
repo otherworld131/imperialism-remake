@@ -71,10 +71,7 @@ pub fn calculate_mill_production(
             ProductionResult {
                 materials_produced: vec![(MaterialType::Steel, units)],
                 goods_produced: vec![],
-                resources_consumed: vec![
-                    (ResourceType::Coal, units),
-                    (ResourceType::Iron, units),
-                ],
+                resources_consumed: vec![(ResourceType::Coal, units), (ResourceType::Iron, units)],
                 materials_consumed: vec![],
                 labor_used: units * 2,
             }
@@ -204,12 +201,7 @@ mod tests {
 
     #[test]
     fn timber_mill_no_resources() {
-        let result = calculate_mill_production(
-            ProductionChain::Timber,
-            &[],
-            5,
-            20,
-        );
+        let result = calculate_mill_production(ProductionChain::Timber, &[], 5, 20);
         assert_eq!(result.materials_produced, vec![(MaterialType::Lumber, 0)]);
         assert_eq!(result.labor_used, 0);
     }
@@ -228,12 +220,8 @@ mod tests {
 
     #[test]
     fn timber_mill_zero_labor() {
-        let result = calculate_mill_production(
-            ProductionChain::Timber,
-            &[(ResourceType::Timber, 10)],
-            5,
-            0,
-        );
+        let result =
+            calculate_mill_production(ProductionChain::Timber, &[(ResourceType::Timber, 10)], 5, 0);
         assert_eq!(result.materials_produced, vec![(MaterialType::Lumber, 0)]);
         assert_eq!(result.labor_used, 0);
     }
@@ -319,23 +307,15 @@ mod tests {
 
     #[test]
     fn metal_mill_no_coal() {
-        let result = calculate_mill_production(
-            ProductionChain::Metal,
-            &[(ResourceType::Iron, 10)],
-            5,
-            20,
-        );
+        let result =
+            calculate_mill_production(ProductionChain::Metal, &[(ResourceType::Iron, 10)], 5, 20);
         assert_eq!(result.materials_produced, vec![(MaterialType::Steel, 0)]);
     }
 
     #[test]
     fn metal_mill_no_iron() {
-        let result = calculate_mill_production(
-            ProductionChain::Metal,
-            &[(ResourceType::Coal, 10)],
-            5,
-            20,
-        );
+        let result =
+            calculate_mill_production(ProductionChain::Metal, &[(ResourceType::Coal, 10)], 5, 20);
         assert_eq!(result.materials_produced, vec![(MaterialType::Steel, 0)]);
     }
 
@@ -383,12 +363,8 @@ mod tests {
 
     #[test]
     fn textile_mill_wool_only() {
-        let result = calculate_mill_production(
-            ProductionChain::Textile,
-            &[(ResourceType::Wool, 4)],
-            5,
-            20,
-        );
+        let result =
+            calculate_mill_production(ProductionChain::Textile, &[(ResourceType::Wool, 4)], 5, 20);
         assert_eq!(result.materials_produced, vec![(MaterialType::Fabric, 2)]);
         assert_eq!(result.resources_consumed, vec![(ResourceType::Wool, 4)]);
     }
@@ -425,12 +401,7 @@ mod tests {
 
     #[test]
     fn textile_mill_no_fiber() {
-        let result = calculate_mill_production(
-            ProductionChain::Textile,
-            &[],
-            5,
-            20,
-        );
+        let result = calculate_mill_production(ProductionChain::Textile, &[], 5, 20);
         assert_eq!(result.materials_produced, vec![(MaterialType::Fabric, 0)]);
         assert_eq!(result.labor_used, 0);
     }
@@ -504,19 +475,14 @@ mod tests {
                 ProductionChain::Textile => vec![(ResourceType::Cotton, 20)],
             };
 
-            let mill_result =
-                calculate_mill_production(chain, &resources, 5, 20);
+            let mill_result = calculate_mill_production(chain, &resources, 5, 20);
             assert!(
                 mill_result.materials_produced.iter().any(|(_, q)| *q > 0),
                 "Mill should produce materials for {chain:?}"
             );
 
-            let factory_result = calculate_factory_production(
-                chain,
-                &mill_result.materials_produced,
-                5,
-                20,
-            );
+            let factory_result =
+                calculate_factory_production(chain, &mill_result.materials_produced, 5, 20);
             // Factory needs 2 materials per good, so with 5 materials max → 2 goods
             // Factory should produce some result (possibly 0 if not enough
             // materials, but the vector itself should not be empty).

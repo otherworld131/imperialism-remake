@@ -7,9 +7,9 @@ use std::collections::HashMap;
 pub struct DiplomaticRelation {
     pub nation_a: NationId,
     pub nation_b: NationId,
-    pub score: i32, // -100 to +100
+    pub score: i32,          // -100 to +100
     pub has_consulate: bool, // trade consulate established (GP->MN only)
-    pub has_embassy: bool, // embassy established (GP->MN, costs $5000)
+    pub has_embassy: bool,   // embassy established (GP->MN, costs $5000)
     pub active_treaties: Vec<TreatyType>,
     pub at_war: bool,
 }
@@ -66,11 +66,7 @@ pub struct DiplomacyState {
 
 /// Normalize a pair of NationIds to a canonical order so (a,b) and (b,a) map to the same key.
 fn ordered_key(a: NationId, b: NationId) -> (NationId, NationId) {
-    if a.0 <= b.0 {
-        (a, b)
-    } else {
-        (b, a)
-    }
+    if a.0 <= b.0 { (a, b) } else { (b, a) }
 }
 
 impl DiplomacyState {

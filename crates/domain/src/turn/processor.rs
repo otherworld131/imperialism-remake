@@ -122,10 +122,9 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
         .push(format!("The Imperial Times - {year} Q{quarter}"));
 
     if let Some(human_nation) = game.get_nation(game.human_player_nation) {
-        report.newspaper_headlines.push(format!(
-            "The {} empire grows stronger",
-            human_nation.name
-        ));
+        report
+            .newspaper_headlines
+            .push(format!("The {} empire grows stronger", human_nation.name));
     }
 
     if game.turn.is_decade_election() {

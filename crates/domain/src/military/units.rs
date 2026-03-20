@@ -59,8 +59,8 @@ pub struct ArmyUnit {
     pub unit_type: ArmyUnitType,
     pub owner: NationId,
     pub position: ProvinceId,
-    pub health: u8,              // 0-100 in 5% increments
-    pub medals: u8,              // 0-4+
+    pub health: u8, // 0-100 in 5% increments
+    pub medals: u8, // 0-4+
     pub movement_remaining: u32,
 }
 
@@ -392,7 +392,11 @@ impl ArmyUnit {
         let multiplier = 1 + self.medals / 2;
         let effective = (amount as u16) * (multiplier as u16);
         let new_health = (self.health as u16) + effective;
-        self.health = if new_health > 100 { 100 } else { new_health as u8 };
+        self.health = if new_health > 100 {
+            100
+        } else {
+            new_health as u8
+        };
     }
 
     /// Award a medal to this unit, incrementing the medal count.
@@ -443,7 +447,10 @@ mod tests {
         assert!(!stats.requires_horse);
         assert_eq!(stats.category, UnitCategory::Infantry);
         assert_eq!(stats.maintenance_per_turn, Money::dollars(75));
-        assert_eq!(stats.prerequisite_tech, Some("Professional Army".to_string()));
+        assert_eq!(
+            stats.prerequisite_tech,
+            Some("Professional Army".to_string())
+        );
     }
 
     #[test]
@@ -520,12 +527,7 @@ mod tests {
 
     #[test]
     fn medal_firepower_guards_with_3_medals() {
-        let mut unit = ArmyUnit::new(
-            UnitId(2),
-            ArmyUnitType::Guards,
-            NationId(1),
-            ProvinceId(1),
-        );
+        let mut unit = ArmyUnit::new(UnitId(2), ArmyUnitType::Guards, NationId(1), ProvinceId(1));
         for _ in 0..3 {
             unit.award_medal();
         }
@@ -770,12 +772,7 @@ mod tests {
 
     #[test]
     fn guards_maintenance_3_arms() {
-        let unit = ArmyUnit::new(
-            UnitId(3),
-            ArmyUnitType::Guards,
-            NationId(1),
-            ProvinceId(1),
-        );
+        let unit = ArmyUnit::new(UnitId(3), ArmyUnitType::Guards, NationId(1), ProvinceId(1));
         // 3 arms * $25 = $75
         assert_eq!(unit.maintenance_cost(), Money::dollars(75));
     }
@@ -806,12 +803,7 @@ mod tests {
 
     #[test]
     fn militia_maintenance_1_arm() {
-        let unit = ArmyUnit::new(
-            UnitId(6),
-            ArmyUnitType::Militia,
-            NationId(1),
-            ProvinceId(1),
-        );
+        let unit = ArmyUnit::new(UnitId(6), ArmyUnitType::Militia, NationId(1), ProvinceId(1));
         // 1 arm * $25 = $25
         assert_eq!(unit.maintenance_cost(), Money::dollars(25));
     }
@@ -833,12 +825,7 @@ mod tests {
 
     #[test]
     fn new_unit_movement_matches_stats() {
-        let unit = ArmyUnit::new(
-            UnitId(1),
-            ArmyUnitType::Scouts,
-            NationId(1),
-            ProvinceId(1),
-        );
+        let unit = ArmyUnit::new(UnitId(1), ArmyUnitType::Scouts, NationId(1), ProvinceId(1));
         assert_eq!(unit.movement_remaining, 7);
     }
 
@@ -875,7 +862,10 @@ mod tests {
         assert_eq!(ArmyUnitType::Militia.category(), UnitCategory::Garrison);
         assert_eq!(ArmyUnitType::Regulars.category(), UnitCategory::Infantry);
         assert_eq!(ArmyUnitType::Cuirassiers.category(), UnitCategory::Cavalry);
-        assert_eq!(ArmyUnitType::LightArtillery.category(), UnitCategory::Artillery);
+        assert_eq!(
+            ArmyUnitType::LightArtillery.category(),
+            UnitCategory::Artillery
+        );
         assert_eq!(ArmyUnitType::Sapper.category(), UnitCategory::Special);
     }
 }

@@ -39,9 +39,7 @@ impl TechTree {
                 earliest_year: 1815,
                 latest_year: 1815,
                 prerequisites: vec![],
-                effects: vec![
-                    TechEffect::EnableInfrastructure("Railroad".to_string()),
-                ],
+                effects: vec![TechEffect::EnableInfrastructure("Railroad".to_string())],
             },
             Technology {
                 id: TechId(2),
@@ -50,12 +48,10 @@ impl TechTree {
                 earliest_year: 1815,
                 latest_year: 1815,
                 prerequisites: vec![],
-                effects: vec![
-                    TechEffect::EnableTerrainImprovement {
-                        terrain: "Farm".to_string(),
-                        max_level: 1,
-                    },
-                ],
+                effects: vec![TechEffect::EnableTerrainImprovement {
+                    terrain: "Farm".to_string(),
+                    max_level: 1,
+                }],
             },
             Technology {
                 id: TechId(3),
@@ -64,12 +60,10 @@ impl TechTree {
                 earliest_year: 1816,
                 latest_year: 1820,
                 prerequisites: vec![],
-                effects: vec![
-                    TechEffect::EnableTerrainImprovement {
-                        terrain: "Plantation".to_string(),
-                        max_level: 1,
-                    },
-                ],
+                effects: vec![TechEffect::EnableTerrainImprovement {
+                    terrain: "Plantation".to_string(),
+                    max_level: 1,
+                }],
             },
             Technology {
                 id: TechId(4),
@@ -78,9 +72,9 @@ impl TechTree {
                 earliest_year: 1821,
                 latest_year: 1824,
                 prerequisites: vec![],
-                effects: vec![
-                    TechEffect::EnableInfrastructure("Railroad Bridge".to_string()),
-                ],
+                effects: vec![TechEffect::EnableInfrastructure(
+                    "Railroad Bridge".to_string(),
+                )],
             },
             Technology {
                 id: TechId(5),
@@ -89,12 +83,10 @@ impl TechTree {
                 earliest_year: 1821,
                 latest_year: 1824,
                 prerequisites: vec![],
-                effects: vec![
-                    TechEffect::EnableTerrainImprovement {
-                        terrain: "OpenRange".to_string(),
-                        max_level: 1,
-                    },
-                ],
+                effects: vec![TechEffect::EnableTerrainImprovement {
+                    terrain: "OpenRange".to_string(),
+                    max_level: 1,
+                }],
             },
             Technology {
                 id: TechId(6),
@@ -103,12 +95,10 @@ impl TechTree {
                 earliest_year: 1821,
                 latest_year: 1825,
                 prerequisites: vec![],
-                effects: vec![
-                    TechEffect::EnableTerrainImprovement {
-                        terrain: "Mountain".to_string(),
-                        max_level: 2,
-                    },
-                ],
+                effects: vec![TechEffect::EnableTerrainImprovement {
+                    terrain: "Mountain".to_string(),
+                    max_level: 2,
+                }],
             },
             Technology {
                 id: TechId(7),
@@ -117,9 +107,7 @@ impl TechTree {
                 earliest_year: 1821,
                 latest_year: 1825,
                 prerequisites: vec![],
-                effects: vec![
-                    TechEffect::UnlockShip("Clipper".to_string()),
-                ],
+                effects: vec![TechEffect::UnlockShip("Clipper".to_string())],
             },
             Technology {
                 id: TechId(8),
@@ -128,9 +116,7 @@ impl TechTree {
                 earliest_year: 1826,
                 latest_year: 1829,
                 prerequisites: vec![TechId(3), TechId(5)],
-                effects: vec![
-                    TechEffect::UnlockBuilding("Textile Mill".to_string()),
-                ],
+                effects: vec![TechEffect::UnlockBuilding("Textile Mill".to_string())],
             },
             Technology {
                 id: TechId(9),
@@ -139,9 +125,7 @@ impl TechTree {
                 earliest_year: 1826,
                 latest_year: 1830,
                 prerequisites: vec![],
-                effects: vec![
-                    TechEffect::UnlockShip("Paddle Steamer".to_string()),
-                ],
+                effects: vec![TechEffect::UnlockShip("Paddle Steamer".to_string())],
             },
             Technology {
                 id: TechId(10),
@@ -150,12 +134,10 @@ impl TechTree {
                 earliest_year: 1831,
                 latest_year: 1835,
                 prerequisites: vec![TechId(2)],
-                effects: vec![
-                    TechEffect::EnableTerrainImprovement {
-                        terrain: "Farm".to_string(),
-                        max_level: 2,
-                    },
-                ],
+                effects: vec![TechEffect::EnableTerrainImprovement {
+                    terrain: "Farm".to_string(),
+                    max_level: 2,
+                }],
             },
             Technology {
                 id: TechId(11),
@@ -164,9 +146,7 @@ impl TechTree {
                 earliest_year: 1836,
                 latest_year: 1839,
                 prerequisites: vec![],
-                effects: vec![
-                    TechEffect::UnlockBuilding("Steel Mill".to_string()),
-                ],
+                effects: vec![TechEffect::UnlockBuilding("Steel Mill".to_string())],
             },
             Technology {
                 id: TechId(12),
@@ -175,9 +155,9 @@ impl TechTree {
                 earliest_year: 1836,
                 latest_year: 1838,
                 prerequisites: vec![TechId(4)],
-                effects: vec![
-                    TechEffect::EnableInfrastructure("Advanced Railroad".to_string()),
-                ],
+                effects: vec![TechEffect::EnableInfrastructure(
+                    "Advanced Railroad".to_string(),
+                )],
             },
             Technology {
                 id: TechId(13),
@@ -186,12 +166,10 @@ impl TechTree {
                 earliest_year: 1841,
                 latest_year: 1845,
                 prerequisites: vec![TechId(11)],
-                effects: vec![
-                    TechEffect::UpgradeUnit {
-                        from: "Militia".to_string(),
-                        to: "Infantry".to_string(),
-                    },
-                ],
+                effects: vec![TechEffect::UpgradeUnit {
+                    from: "Militia".to_string(),
+                    to: "Infantry".to_string(),
+                }],
             },
             Technology {
                 id: TechId(14),
@@ -200,12 +178,10 @@ impl TechTree {
                 earliest_year: 1841,
                 latest_year: 1844,
                 prerequisites: vec![],
-                effects: vec![
-                    TechEffect::UpgradeUnit {
-                        from: "Artillery".to_string(),
-                        to: "Rifled Artillery".to_string(),
-                    },
-                ],
+                effects: vec![TechEffect::UpgradeUnit {
+                    from: "Artillery".to_string(),
+                    to: "Rifled Artillery".to_string(),
+                }],
             },
             Technology {
                 id: TechId(15),
@@ -214,9 +190,7 @@ impl TechTree {
                 earliest_year: 1846,
                 latest_year: 1850,
                 prerequisites: vec![],
-                effects: vec![
-                    TechEffect::UnlockShip("Ironclad".to_string()),
-                ],
+                effects: vec![TechEffect::UnlockShip("Ironclad".to_string())],
             },
             Technology {
                 id: TechId(16),
@@ -225,9 +199,9 @@ impl TechTree {
                 earliest_year: 1846,
                 latest_year: 1851,
                 prerequisites: vec![TechId(8)],
-                effects: vec![
-                    TechEffect::UnlockBuilding("Advanced Textile Mill".to_string()),
-                ],
+                effects: vec![TechEffect::UnlockBuilding(
+                    "Advanced Textile Mill".to_string(),
+                )],
             },
             Technology {
                 id: TechId(17),
@@ -236,12 +210,10 @@ impl TechTree {
                 earliest_year: 1851,
                 latest_year: 1855,
                 prerequisites: vec![TechId(10)],
-                effects: vec![
-                    TechEffect::EnableTerrainImprovement {
-                        terrain: "Farm".to_string(),
-                        max_level: 3,
-                    },
-                ],
+                effects: vec![TechEffect::EnableTerrainImprovement {
+                    terrain: "Farm".to_string(),
+                    max_level: 3,
+                }],
             },
             Technology {
                 id: TechId(18),
@@ -250,12 +222,10 @@ impl TechTree {
                 earliest_year: 1856,
                 latest_year: 1860,
                 prerequisites: vec![TechId(10)],
-                effects: vec![
-                    TechEffect::EnableTerrainImprovement {
-                        terrain: "Orchard".to_string(),
-                        max_level: 3,
-                    },
-                ],
+                effects: vec![TechEffect::EnableTerrainImprovement {
+                    terrain: "Orchard".to_string(),
+                    max_level: 3,
+                }],
             },
             Technology {
                 id: TechId(19),
@@ -264,12 +234,10 @@ impl TechTree {
                 earliest_year: 1856,
                 latest_year: 1858,
                 prerequisites: vec![],
-                effects: vec![
-                    TechEffect::EnableTerrainImprovement {
-                        terrain: "Desert".to_string(),
-                        max_level: 1,
-                    },
-                ],
+                effects: vec![TechEffect::EnableTerrainImprovement {
+                    terrain: "Desert".to_string(),
+                    max_level: 1,
+                }],
             },
             Technology {
                 id: TechId(20),
@@ -278,12 +246,10 @@ impl TechTree {
                 earliest_year: 1862,
                 latest_year: 1862,
                 prerequisites: vec![TechId(5)],
-                effects: vec![
-                    TechEffect::EnableTerrainImprovement {
-                        terrain: "OpenRange".to_string(),
-                        max_level: 2,
-                    },
-                ],
+                effects: vec![TechEffect::EnableTerrainImprovement {
+                    terrain: "OpenRange".to_string(),
+                    max_level: 2,
+                }],
             },
             Technology {
                 id: TechId(21),
@@ -292,9 +258,7 @@ impl TechTree {
                 earliest_year: 1866,
                 latest_year: 1868,
                 prerequisites: vec![TechId(15)],
-                effects: vec![
-                    TechEffect::UnlockShip("Battleship".to_string()),
-                ],
+                effects: vec![TechEffect::UnlockShip("Battleship".to_string())],
             },
             Technology {
                 id: TechId(22),
@@ -303,9 +267,7 @@ impl TechTree {
                 earliest_year: 1872,
                 latest_year: 1886,
                 prerequisites: vec![TechId(14)],
-                effects: vec![
-                    TechEffect::UnlockUnit("Siege Artillery".to_string()),
-                ],
+                effects: vec![TechEffect::UnlockUnit("Siege Artillery".to_string())],
             },
             Technology {
                 id: TechId(23),
@@ -314,12 +276,10 @@ impl TechTree {
                 earliest_year: 1874,
                 latest_year: 1887,
                 prerequisites: vec![TechId(12), TechId(6)],
-                effects: vec![
-                    TechEffect::EnableTerrainImprovement {
-                        terrain: "Mountain".to_string(),
-                        max_level: 3,
-                    },
-                ],
+                effects: vec![TechEffect::EnableTerrainImprovement {
+                    terrain: "Mountain".to_string(),
+                    max_level: 3,
+                }],
             },
             Technology {
                 id: TechId(24),
@@ -328,9 +288,7 @@ impl TechTree {
                 earliest_year: 1873,
                 latest_year: 1889,
                 prerequisites: vec![TechId(21)],
-                effects: vec![
-                    TechEffect::UnlockShip("Cruiser".to_string()),
-                ],
+                effects: vec![TechEffect::UnlockShip("Cruiser".to_string())],
             },
             Technology {
                 id: TechId(25),
@@ -339,9 +297,7 @@ impl TechTree {
                 earliest_year: 1879,
                 latest_year: 1893,
                 prerequisites: vec![TechId(13)],
-                effects: vec![
-                    TechEffect::UnlockUnit("Machine Gun Corps".to_string()),
-                ],
+                effects: vec![TechEffect::UnlockUnit("Machine Gun Corps".to_string())],
             },
             Technology {
                 id: TechId(26),
@@ -350,9 +306,7 @@ impl TechTree {
                 earliest_year: 1875,
                 latest_year: 1894,
                 prerequisites: vec![TechId(19), TechId(20)],
-                effects: vec![
-                    TechEffect::UnlockBuilding("Chemical Plant".to_string()),
-                ],
+                effects: vec![TechEffect::UnlockBuilding("Chemical Plant".to_string())],
             },
             Technology {
                 id: TechId(27),
@@ -361,9 +315,7 @@ impl TechTree {
                 earliest_year: 1881,
                 latest_year: 1897,
                 prerequisites: vec![TechId(24)],
-                effects: vec![
-                    TechEffect::UnlockShip("Dreadnought".to_string()),
-                ],
+                effects: vec![TechEffect::UnlockShip("Dreadnought".to_string())],
             },
             Technology {
                 id: TechId(28),
@@ -372,9 +324,7 @@ impl TechTree {
                 earliest_year: 1884,
                 latest_year: 1898,
                 prerequisites: vec![TechId(26)],
-                effects: vec![
-                    TechEffect::UnlockUnit("Motorized Infantry".to_string()),
-                ],
+                effects: vec![TechEffect::UnlockUnit("Motorized Infantry".to_string())],
             },
         ];
 
@@ -444,8 +394,10 @@ impl TechTree {
         }
 
         // Check for cycles using topological sort (Kahn's algorithm)
-        let mut in_degree: std::collections::HashMap<TechId, usize> = std::collections::HashMap::new();
-        let mut dependents: std::collections::HashMap<TechId, Vec<TechId>> = std::collections::HashMap::new();
+        let mut in_degree: std::collections::HashMap<TechId, usize> =
+            std::collections::HashMap::new();
+        let mut dependents: std::collections::HashMap<TechId, Vec<TechId>> =
+            std::collections::HashMap::new();
 
         for tech in &self.technologies {
             in_degree.entry(tech.id).or_insert(0);
@@ -504,7 +456,11 @@ mod tests {
     #[test]
     fn validation_passes() {
         let tree = TechTree::new();
-        assert!(tree.validate().is_ok(), "Tech tree validation failed: {:?}", tree.validate());
+        assert!(
+            tree.validate().is_ok(),
+            "Tech tree validation failed: {:?}",
+            tree.validate()
+        );
     }
 
     #[test]
@@ -512,9 +468,16 @@ mod tests {
         let tree = TechTree::new();
         let available = tree.available_techs(&[], 1815);
         let names: Vec<&str> = available.iter().map(|t| t.name.as_str()).collect();
-        assert!(names.contains(&"High Pressure Steam Engine"), "Expected Steam Engine at 1815");
+        assert!(
+            names.contains(&"High Pressure Steam Engine"),
+            "Expected Steam Engine at 1815"
+        );
         assert!(names.contains(&"Seed Drill"), "Expected Seed Drill at 1815");
-        assert_eq!(available.len(), 2, "Only 2 techs should be available at 1815 with no prereqs");
+        assert_eq!(
+            available.len(),
+            2,
+            "Only 2 techs should be available at 1815 with no prereqs"
+        );
     }
 
     #[test]
@@ -581,7 +544,10 @@ mod tests {
         assert_eq!(tech.latest_year, 1839);
 
         let not_found = tree.get_by_name("Nonexistent Tech");
-        assert!(not_found.is_none(), "Should return None for nonexistent tech");
+        assert!(
+            not_found.is_none(),
+            "Should return None for nonexistent tech"
+        );
     }
 
     #[test]
@@ -609,8 +575,14 @@ mod tests {
         let tree = TechTree::new();
         let available = tree.available_techs(&[TechId(1), TechId(2)], 1815);
         let ids: Vec<TechId> = available.iter().map(|t| t.id).collect();
-        assert!(!ids.contains(&TechId(1)), "Already researched tech should not appear");
-        assert!(!ids.contains(&TechId(2)), "Already researched tech should not appear");
+        assert!(
+            !ids.contains(&TechId(1)),
+            "Already researched tech should not appear"
+        );
+        assert!(
+            !ids.contains(&TechId(2)),
+            "Already researched tech should not appear"
+        );
     }
 
     #[test]
