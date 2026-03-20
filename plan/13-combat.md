@@ -68,11 +68,11 @@ a province is invaded via beachhead.
 - [ ] Unit tests: conquest effects and rewards
 
 ### Naval Combat (AI-Only)
-- [ ] Naval battles always resolved automatically
-- [ ] Combat factors: firepower, range, armor, hull points, speed
-- [ ] Damage reduces hull points; ship sinks at 0
-- [ ] Battle report provided to player with outcome summary
-- [ ] Merchant ships in a blockaded zone may be sunk (some survive based on armor/speed)
+- [x] Naval battles always resolved automatically
+- [x] Combat factors: firepower, range, armor, hull points, speed
+- [x] Damage reduces hull points; ship sinks at 0
+- [x] Battle report provided to player with outcome summary
+- [x] Merchant ships in a blockaded zone may be sunk (some survive based on armor/speed)
 - [ ] Unit tests: naval combat algorithm, battle report generation
 
 ### Auto-Resolve (Land)

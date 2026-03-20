@@ -198,6 +198,9 @@ fn main() {
             "build port" => {
                 cmd_build_port(&mut game);
             }
+            "build fort" => {
+                cmd_build_fort(&mut game);
+            }
             "infrastructure" | "infra" => {
                 println!();
                 print_infrastructure(&game);
@@ -2425,6 +2428,55 @@ fn cmd_build_port(game: &mut GameState) {
         }
         Err(e) => {
             println!("  Cannot build port: {}", e);
+        }
+    }
+}
+
+fn cmd_build_fort(game: &mut GameState) {
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+    let capital_province_id = player.capital_province_id;
+
+    let province = game.get_province(capital_province_id).unwrap();
+    let capital_tile_coord = province.capital_tile;
+
+    // Check current fort level
+    let current_level = game
+        .hex_map
+        .get_tile(capital_tile_coord)
+        .map(|t| t.infrastructure.fort_level)
+        .unwrap_or(0);
+    let next_level = current_level + 1;
+
+    if next_level > 3 {
+        println!("  Fort already at maximum level (3).");
+        return;
+    }
+
+    let cost = domain::map::fort_cost(next_level).unwrap();
+    let treasury = game.get_nation(player_id).unwrap().treasury;
+    if treasury.checked_sub(cost).is_none() {
+        println!(
+            "  Cannot afford fort level {} (cost: {}, treasury: {}).",
+            next_level, cost, treasury
+        );
+        return;
+    }
+
+    match domain::map::build_fort(&mut game.hex_map, capital_tile_coord) {
+        Ok((level, cost)) => {
+            let player = game.get_nation_mut(player_id).unwrap();
+            player.treasury -= cost;
+            println!(
+                "  {}",
+                color_green(&format!(
+                    "Fort upgraded to level {}! Cost: {}, treasury now: {}.",
+                    level, cost, player.treasury
+                ))
+            );
+        }
+        Err(e) => {
+            println!("  Cannot build fort: {}", e);
         }
     }
 }

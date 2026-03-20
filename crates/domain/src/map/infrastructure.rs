@@ -75,6 +75,35 @@ pub fn build_port(hex_map: &mut HexMap, coord: HexCoord) -> Result<Money, String
     Ok(Money::dollars(3000))
 }
 
+/// Cost to build or upgrade a fort.
+pub fn fort_cost(level: u8) -> Result<Money, String> {
+    match level {
+        1 => Ok(Money::dollars(5000)),
+        2 => Ok(Money::dollars(7500)),
+        3 => Ok(Money::dollars(10000)),
+        _ => Err("Fort level must be 1-3".to_string()),
+    }
+}
+
+/// Build or upgrade a fort on a tile. Returns (new_level, cost).
+pub fn build_fort(hex_map: &mut HexMap, coord: HexCoord) -> Result<(u8, Money), String> {
+    let tile = hex_map.get_tile(coord).ok_or("Tile not found")?;
+    if !tile.terrain().is_land() {
+        return Err("Cannot build fort on sea".to_string());
+    }
+    let current_level = tile.infrastructure.fort_level;
+    if current_level >= 3 {
+        return Err("Fort already at maximum level (3)".to_string());
+    }
+    let new_level = current_level + 1;
+    let cost = fort_cost(new_level)?;
+
+    let tile = hex_map.get_tile_mut(coord).ok_or("Tile not found")?;
+    tile.infrastructure.has_fort = true;
+    tile.infrastructure.fort_level = new_level;
+    Ok((new_level, cost))
+}
+
 /// Check if a province is connected to the national capital via railroad
 /// network or port chain.
 ///
@@ -537,6 +566,69 @@ mod tests {
             &provinces
         ));
     }
+
+    // ── fort ─────────────────────────────────────────────────
+
+    #[test]
+    fn fort_cost_levels() {
+        assert_eq!(fort_cost(1), Ok(Money::dollars(5000)));
+        assert_eq!(fort_cost(2), Ok(Money::dollars(7500)));
+        assert_eq!(fort_cost(3), Ok(Money::dollars(10000)));
+        assert!(fort_cost(4).is_err());
+    }
+
+    #[test]
+    fn build_fort_level_1() {
+        let mut map = HexMap::new(10, 10);
+        let coord = HexCoord::new(0, 0);
+        map.set_tile(coord, Tile::new(TerrainType::Farm));
+
+        let result = build_fort(&mut map, coord);
+        assert!(result.is_ok());
+        let (level, cost) = result.unwrap();
+        assert_eq!(level, 1);
+        assert_eq!(cost, Money::dollars(5000));
+        assert!(map.get_tile(coord).unwrap().infrastructure.has_fort);
+        assert_eq!(map.get_tile(coord).unwrap().infrastructure.fort_level, 1);
+    }
+
+    #[test]
+    fn build_fort_upgrades_to_level_2() {
+        let mut map = HexMap::new(10, 10);
+        let coord = HexCoord::new(0, 0);
+        map.set_tile(coord, Tile::new(TerrainType::Farm));
+
+        build_fort(&mut map, coord).unwrap();
+        let (level, cost) = build_fort(&mut map, coord).unwrap();
+        assert_eq!(level, 2);
+        assert_eq!(cost, Money::dollars(7500));
+    }
+
+    #[test]
+    fn build_fort_max_level_3() {
+        let mut map = HexMap::new(10, 10);
+        let coord = HexCoord::new(0, 0);
+        map.set_tile(coord, Tile::new(TerrainType::Farm));
+
+        build_fort(&mut map, coord).unwrap(); // L1
+        build_fort(&mut map, coord).unwrap(); // L2
+        build_fort(&mut map, coord).unwrap(); // L3
+        let result = build_fort(&mut map, coord);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Fort already at maximum level (3)");
+    }
+
+    #[test]
+    fn build_fort_on_sea_fails() {
+        let mut map = HexMap::new(10, 10);
+        let coord = HexCoord::new(0, 0);
+        map.set_tile(coord, Tile::new(TerrainType::Sea));
+
+        let result = build_fort(&mut map, coord);
+        assert!(result.is_err());
+    }
+
+    // ── connectivity edge cases ─────────────────────────────
 
     #[test]
     fn not_connected_target_has_depot_but_no_railroad_path() {

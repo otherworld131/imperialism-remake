@@ -46,7 +46,7 @@ goods in factories. Three parallel production chains exist.
 
 ### Special Products
 - [ ] **Paper** — produced in Trade School (trains workers); used for specialist training
-- [ ] **Arms** — produced in Armory; used for military unit construction
+- [x] **Arms** — produced in Armory; used for military unit construction
 - [ ] **Canned Food** — produced in Food Processing from grain/fruit/livestock; feeds population
 
 ### Mill & Factory Mechanics
@@ -90,7 +90,7 @@ goods in factories. Three parallel production chains exist.
 ### Revenue & Treasury
 - [x] Gold and Gems automatically convert to money
 - [ ] Selling goods on trade market generates revenue
-- [ ] Military maintenance: $25/turn per arm in active army units
+- [x] Military maintenance: $25/turn per arm in active army units
 - [ ] Building construction and expansion costs
 - [ ] Civilian unit creation costs
 - [ ] Technology research costs

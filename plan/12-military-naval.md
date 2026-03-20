@@ -58,10 +58,10 @@ beachhead). Naval battles are always resolved by AI.
 - [ ] Unit tests: each operation type's rules and constraints
 
 ### Naval Combat Resolution
-- [ ] All naval battles resolved by AI (never player-controlled)
+- [x] All naval battles resolved by AI (never player-controlled)
 - [x] Combat factors: firepower, range, armor, hull, speed
 - [x] Damage applied to hull; ship destroyed when hull reaches 0
-- [ ] Battle results reported to player
+- [x] Battle results reported to player
 - [ ] Unit tests: naval combat resolution algorithm
 
 ### Obsolescence
