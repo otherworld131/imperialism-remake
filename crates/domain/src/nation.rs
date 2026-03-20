@@ -1,5 +1,6 @@
 use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::labor::LaborPool;
+use crate::economy::transport::TransportSystem;
 use crate::events::TechId;
 use crate::military::units::ArmyUnit;
 use crate::types::*;
@@ -60,6 +61,9 @@ pub struct Nation {
     /// Army units owned by this nation.
     #[serde(default)]
     pub army: Vec<ArmyUnit>,
+    /// Transport system (freight cars, allocations).
+    #[serde(default)]
+    pub transport: TransportSystem,
 }
 
 impl Nation {
@@ -86,6 +90,7 @@ impl Nation {
             labor: LaborPool::new(),
             researched_techs: Vec::new(),
             army: Vec::new(),
+            transport: TransportSystem::new(),
         }
     }
 

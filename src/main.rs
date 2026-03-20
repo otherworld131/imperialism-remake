@@ -195,6 +195,17 @@ fn main() {
                         }
                     }
                 }
+                // Show score summary
+                if let Some((rank, total)) = score_summary(&report.scores, game.human_player_nation)
+                {
+                    let gp_count = report.scores.len();
+                    println!(
+                        "  Score: {} (#{} of {} Great Powers)",
+                        format_number(total),
+                        rank,
+                        gp_count
+                    );
+                }
                 println!();
 
                 // Show council vote results
@@ -350,6 +361,13 @@ fn main() {
             _ if cmd.starts_with("attack ") => {
                 let nation_query = input.trim()[7..].trim();
                 cmd_attack(&mut game, nation_query);
+            }
+            "transport" | "freight" => {
+                println!();
+                print_transport(&game);
+            }
+            "build car" => {
+                build_freight_car(&mut game);
             }
             "military" | "army" => {
                 println!();
@@ -619,6 +637,30 @@ fn build_unit(game: &mut GameState, query: &str) {
         player.treasury,
         player.army.len()
     );
+}
+
+/// Return the player's rank (1-based) and total score from the turn report scores.
+fn score_summary(scores: &[(NationId, String, u32)], player_id: NationId) -> Option<(usize, u32)> {
+    // Scores are already sorted descending by total.
+    for (i, (nid, _, total)) in scores.iter().enumerate() {
+        if *nid == player_id {
+            return Some((i + 1, *total));
+        }
+    }
+    None
+}
+
+/// Format a number with comma separators (e.g. 1290 -> "1,290").
+fn format_number(n: u32) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    for (i, ch) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(ch);
+    }
+    result.chars().rev().collect()
 }
 
 fn read_line() -> String {
@@ -945,6 +987,8 @@ fn print_help() {
     println!("    recruit           — Recruit an untrained worker (costs 1 canned food,");
     println!("                        1 clothing, 1 furniture)");
     println!("    train             — Train an untrained worker to trained");
+    println!("    build car         — Build a freight car (costs 2 labor, 1 lumber, 1 steel)");
+    println!("    transport         — Show your transport system (freight cars, capacity)");
     println!("    build unit <type> — Build a military unit");
     println!("                        (regulars $500, grenadiers $1000,");
     println!("                         cuirassiers $500, light artillery $2000)");
@@ -1360,6 +1404,74 @@ fn cmd_attack(game: &mut GameState, query: &str) {
     println!(
         "  {} pending attack(s) queued. End turn to resolve.",
         game.pending_attacks.len()
+    );
+}
+
+fn print_transport(game: &GameState) {
+    let player = game.get_nation(game.human_player_nation).unwrap();
+    let ts = &player.transport;
+    println!("  TRANSPORT SYSTEM:");
+    println!("    Freight cars: {}", ts.freight_cars);
+    println!("    Total capacity: {} units", ts.total_capacity());
+    println!(
+        "    Military transport capacity: {} army units",
+        ts.military_transport_capacity()
+    );
+    println!();
+    let (labor, lumber, steel) =
+        domain::economy::transport::TransportSystem::build_freight_car_cost();
+    println!(
+        "  Use 'build car' to build a freight car (cost: {} labor, {} lumber, {} steel).",
+        labor, lumber, steel
+    );
+}
+
+fn build_freight_car(game: &mut GameState) {
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+
+    let (labor_needed, lumber_needed, steel_needed) =
+        domain::economy::transport::TransportSystem::build_freight_car_cost();
+
+    let total_labor = player.labor.total_workers();
+    let lumber_have = player.material_amount(MaterialType::Lumber);
+    let steel_have = player.material_amount(MaterialType::Steel);
+
+    if total_labor < labor_needed {
+        println!(
+            "  Cannot build freight car: need {} labor (have {} workers).",
+            labor_needed, total_labor
+        );
+        return;
+    }
+    if lumber_have < lumber_needed {
+        println!(
+            "  Cannot build freight car: need {} lumber (have {}).",
+            lumber_needed, lumber_have
+        );
+        return;
+    }
+    if steel_have < steel_needed {
+        println!(
+            "  Cannot build freight car: need {} steel (have {}).",
+            steel_needed, steel_have
+        );
+        return;
+    }
+
+    let player = game.get_nation_mut(player_id).unwrap();
+    player.consume_material(MaterialType::Lumber, lumber_needed);
+    player.consume_material(MaterialType::Steel, steel_needed);
+    // Labor is consumed as a workforce requirement, not permanently removed.
+    // (Workers are available each turn; this just requires having enough.)
+    player.transport.build_freight_cars(1);
+
+    println!(
+        "  Freight car built! (consumed {} lumber, {} steel). Total cars: {}, capacity: {}.",
+        lumber_needed,
+        steel_needed,
+        player.transport.freight_cars,
+        player.transport.total_capacity()
     );
 }
 

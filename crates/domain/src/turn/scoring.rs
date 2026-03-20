@@ -39,10 +39,14 @@ pub struct CouncilVoteResult {
 /// - **Diplomatic**: placeholder — currently 50
 /// - **Province**: number of provinces * 100
 pub fn calculate_score(nation: &Nation) -> NationScore {
-    let military_score = 0; // TODO: sum firepower of all army units (placeholder)
+    let military_score = nation
+        .army
+        .iter()
+        .map(|u| u.effective_firepower() as u32)
+        .sum::<u32>();
     let labor_score = nation.labor.total_workers() * 10;
-    let transport_score = 0; // TODO: freight cars + railroad miles
-    let merchant_marine_score = 0; // TODO: cargo capacity
+    let transport_score = nation.transport.freight_cars * 5;
+    let merchant_marine_score = 0; // placeholder — ships not tracked per nation yet
     let diplomatic_score = 50; // placeholder
     let province_score = nation.province_count() as u32 * 100;
 

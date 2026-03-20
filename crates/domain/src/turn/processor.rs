@@ -7,7 +7,7 @@ use crate::economy::trade::{self, TradeTransaction};
 use crate::events::*;
 use crate::game_state::GameState;
 use crate::military::combat::{BattleResult, CombatForce, create_garrison, resolve_battle};
-use crate::turn::scoring::{CouncilVoteResult, run_council_vote};
+use crate::turn::scoring::{CouncilVoteResult, calculate_score, run_council_vote};
 use crate::types::*;
 
 /// Result of processing one turn.
@@ -27,6 +27,8 @@ pub struct TurnReport {
     pub council_vote: Option<CouncilVoteResult>,
     pub trade_transactions: Vec<TradeTransaction>,
     pub battles: Vec<BattleResult>,
+    /// Scores for all Great Powers: (nation_id, nation_name, total_score).
+    pub scores: Vec<(NationId, String, u32)>,
 }
 
 /// Process one turn of the game.
@@ -47,6 +49,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         council_vote: None,
         trade_transactions: Vec::new(),
         battles: Vec::new(),
+        scores: Vec::new(),
     };
 
     // 0. AI decisions for computer-controlled Great Powers
@@ -82,10 +85,13 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 9. Council of Governors vote (at decade boundaries)
     check_council_vote(game, &mut report);
 
-    // 10. Generate newspaper
+    // 10. Calculate and store scores for all Great Powers
+    calculate_scores(game, &mut report);
+
+    // 11. Generate newspaper
     generate_newspaper(game, &mut report);
 
-    // 11. Advance turn
+    // 12. Advance turn
     report
         .events
         .push(DomainEvent::TurnEnded(TurnEnded { turn }));
@@ -597,6 +603,21 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
             .newspaper_headlines
             .push("Council of Governors to convene!".to_string());
     }
+}
+
+/// Calculate scores for all Great Powers and store them in the report.
+fn calculate_scores(game: &GameState, report: &mut TurnReport) {
+    let mut scores: Vec<(NationId, String, u32)> = game
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power())
+        .map(|n| {
+            let s = calculate_score(n);
+            (n.id, n.name.clone(), s.total)
+        })
+        .collect();
+    scores.sort_by(|a, b| b.2.cmp(&a.2));
+    report.scores = scores;
 }
 
 fn check_council_vote(game: &GameState, report: &mut TurnReport) {
