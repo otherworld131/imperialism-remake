@@ -2,6 +2,7 @@ use crate::economy::buildings::{Building, BuildingType};
 use crate::events::DomainEvent;
 use crate::map::{HexMap, Province};
 use crate::nation::{Nation, NationColor};
+use crate::tech::TechTree;
 use crate::types::*;
 
 /// Top-level aggregate root representing the complete state of a game.
@@ -22,6 +23,8 @@ pub struct GameState {
     pub human_player_nation: NationId,
     /// Event log for the current turn.
     pub events: Vec<DomainEvent>,
+    /// The technology tree for this game.
+    pub tech_tree: TechTree,
 }
 
 impl GameState {
@@ -217,6 +220,7 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         nations,
         human_player_nation: human_nation_id,
         events: Vec::new(),
+        tech_tree: TechTree::new(),
     }
 }
 
@@ -272,6 +276,7 @@ mod tests {
             nations: vec![nation1, nation2],
             human_player_nation: NationId(1),
             events: Vec::new(),
+            tech_tree: TechTree::new(),
         }
     }
 

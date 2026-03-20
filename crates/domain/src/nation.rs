@@ -1,5 +1,6 @@
 use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::labor::LaborPool;
+use crate::events::TechId;
 use crate::types::*;
 use std::collections::HashMap;
 
@@ -52,6 +53,8 @@ pub struct Nation {
     pub buildings: Vec<Building>,
     /// Labor pool (workers available for production).
     pub labor: LaborPool,
+    /// Technologies that have been researched by this nation.
+    pub researched_techs: Vec<TechId>,
 }
 
 impl Nation {
@@ -76,6 +79,7 @@ impl Nation {
             goods: HashMap::new(),
             buildings: Vec::new(),
             labor: LaborPool::new(),
+            researched_techs: Vec::new(),
         }
     }
 
@@ -131,6 +135,18 @@ impl Nation {
         self.buildings
             .iter()
             .any(|b| b.building_type == building_type)
+    }
+
+    /// Whether this nation has researched a given technology.
+    pub fn has_researched(&self, tech: TechId) -> bool {
+        self.researched_techs.contains(&tech)
+    }
+
+    /// Add a technology to this nation's researched list.
+    pub fn research_tech(&mut self, tech: TechId) {
+        if !self.researched_techs.contains(&tech) {
+            self.researched_techs.push(tech);
+        }
     }
 }
 
@@ -309,5 +325,48 @@ mod tests {
         // Others unchanged
         assert_eq!(n.resource_amount(ResourceType::Timber), 10);
         assert_eq!(n.resource_amount(ResourceType::Iron), 15);
+    }
+
+    // ── Tech research ─────────────────────────────────────────
+
+    #[test]
+    fn new_nation_has_no_researched_techs() {
+        let n = sample_great_power();
+        assert!(n.researched_techs.is_empty());
+    }
+
+    #[test]
+    fn has_researched_returns_false_when_empty() {
+        let n = sample_great_power();
+        assert!(!n.has_researched(TechId(1)));
+    }
+
+    #[test]
+    fn research_tech_adds_to_list() {
+        let mut n = sample_great_power();
+        n.research_tech(TechId(5));
+        assert!(n.has_researched(TechId(5)));
+        assert_eq!(n.researched_techs.len(), 1);
+    }
+
+    #[test]
+    fn research_tech_does_not_duplicate() {
+        let mut n = sample_great_power();
+        n.research_tech(TechId(3));
+        n.research_tech(TechId(3));
+        assert_eq!(n.researched_techs.len(), 1);
+    }
+
+    #[test]
+    fn research_multiple_techs() {
+        let mut n = sample_great_power();
+        n.research_tech(TechId(1));
+        n.research_tech(TechId(2));
+        n.research_tech(TechId(3));
+        assert!(n.has_researched(TechId(1)));
+        assert!(n.has_researched(TechId(2)));
+        assert!(n.has_researched(TechId(3)));
+        assert!(!n.has_researched(TechId(4)));
+        assert_eq!(n.researched_techs.len(), 3);
     }
 }

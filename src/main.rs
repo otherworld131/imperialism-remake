@@ -2,7 +2,7 @@
 
 use std::io::{self, Write};
 
-use domain::game_state::new_game;
+use domain::game_state::{GameState, new_game};
 use domain::hex::HexCoord;
 use domain::map::HexMap;
 use domain::nation::Nation;
@@ -156,6 +156,10 @@ fn main() {
                 println!();
                 print_buildings(&game);
             }
+            "tech" => {
+                println!();
+                print_tech(&game);
+            }
             "h" | "help" | "?" => {
                 println!();
                 print_help();
@@ -181,6 +185,10 @@ fn main() {
                     game.turn.year()
                 );
                 print_status(&game);
+            }
+            _ if cmd.starts_with("research ") => {
+                let tech_query = input.trim()[9..].trim();
+                research_tech(&mut game, tech_query);
             }
             _ => {
                 println!("  Unknown command. Type 'help' for available commands.");
@@ -369,19 +377,113 @@ fn print_buildings(game: &domain::game_state::GameState) {
     );
 }
 
+fn print_tech(game: &GameState) {
+    let player = game.get_nation(game.human_player_nation).unwrap();
+    let year = game.turn.year();
+
+    // Show already researched technologies
+    println!("  RESEARCHED TECHNOLOGIES:");
+    if player.researched_techs.is_empty() {
+        println!("    (none)");
+    } else {
+        for tech_id in &player.researched_techs {
+            if let Some(tech) = game.tech_tree.get(*tech_id) {
+                println!("    [x] {}", tech.name);
+            }
+        }
+    }
+    println!();
+
+    // Show available technologies
+    let available = game
+        .tech_tree
+        .available_techs(&player.researched_techs, year);
+    println!("  AVAILABLE FOR RESEARCH (year {}):", year);
+    if available.is_empty() {
+        println!("    (none available this year)");
+    } else {
+        for tech in &available {
+            println!("    [ ] {} (cost: {})", tech.name, tech.cost);
+        }
+    }
+    println!();
+    println!("  Use 'research <name>' to research a technology.");
+}
+
+fn research_tech(game: &mut GameState, query: &str) {
+    let player_id = game.human_player_nation;
+    let year = game.turn.year();
+
+    let query_lower = query.to_lowercase();
+
+    // Get available techs and find a case-insensitive partial match
+    let player = game.get_nation(player_id).unwrap();
+    let available = game
+        .tech_tree
+        .available_techs(&player.researched_techs, year);
+
+    let matched: Vec<_> = available
+        .iter()
+        .filter(|t| t.name.to_lowercase().contains(&query_lower))
+        .collect();
+
+    match matched.len() {
+        0 => {
+            println!("  No available technology matches '{}'.", query);
+            println!("  Use 'tech' to see what is available.");
+        }
+        1 => {
+            let tech = matched[0];
+            let player = game.get_nation(player_id).unwrap();
+
+            // Check if player can afford it
+            if player.treasury.checked_sub(tech.cost).is_none() {
+                println!(
+                    "  Cannot afford {} (cost: {}, treasury: {}).",
+                    tech.name, tech.cost, player.treasury
+                );
+                return;
+            }
+
+            let tech_id = tech.id;
+            let tech_name = tech.name.clone();
+            let tech_cost = tech.cost;
+
+            // Deduct cost and add tech
+            let player = game.get_nation_mut(player_id).unwrap();
+            player.treasury -= tech_cost;
+            player.research_tech(tech_id);
+
+            println!("  Researched: {}!", tech_name);
+            println!("  Cost: {} (treasury now: {})", tech_cost, player.treasury);
+        }
+        _ => {
+            println!(
+                "  Multiple technologies match '{}'. Be more specific:",
+                query
+            );
+            for tech in &matched {
+                println!("    - {} (cost: {})", tech.name, tech.cost);
+            }
+        }
+    }
+}
+
 fn print_help() {
     println!("  COMMANDS:");
-    println!("    [Enter] / turn  — End turn (gather resources, advance time)");
-    println!("    status          — Show current game status");
-    println!("    warehouse       — Show your resource warehouse");
-    println!("    buildings       — Show your buildings and workers");
-    println!("    map             — Show the world map");
-    println!("    provinces       — Show your provinces");
-    println!("    nations         — Show all nations");
-    println!("    turn10          — Advance 10 turns at once");
-    println!("    turn100         — Advance 100 turns at once");
-    println!("    help            — Show this help");
-    println!("    quit            — Exit the game");
+    println!("    [Enter] / turn    — End turn (gather resources, advance time)");
+    println!("    status            — Show current game status");
+    println!("    warehouse         — Show your resource warehouse");
+    println!("    buildings         — Show your buildings and workers");
+    println!("    tech              — Show technology tree status");
+    println!("    research <name>   — Research a technology by name");
+    println!("    map               — Show the world map");
+    println!("    provinces         — Show your provinces");
+    println!("    nations           — Show all nations");
+    println!("    turn10            — Advance 10 turns at once");
+    println!("    turn100           — Advance 100 turns at once");
+    println!("    help              — Show this help");
+    println!("    quit              — Exit the game");
 }
 
 fn print_legend() {

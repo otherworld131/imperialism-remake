@@ -19,6 +19,7 @@ pub struct TurnReport {
     pub production_output: Vec<(NationId, String, u32)>,
     pub food_consumed: Vec<(NationId, u32)>,
     pub newspaper_headlines: Vec<String>,
+    pub techs_available: Vec<(NationId, Vec<String>)>,
 }
 
 /// Process one turn of the game.
@@ -35,6 +36,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         production_output: Vec::new(),
         food_consumed: Vec::new(),
         newspaper_headlines: Vec::new(),
+        techs_available: Vec::new(),
     };
 
     // 1. Resource production: gather yields from all owned tiles
@@ -52,10 +54,16 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 5. Food consumption
     food_consumption(game, &mut report);
 
-    // 6. Generate newspaper
+    // 6. Maintenance costs (placeholder)
+    apply_maintenance(game, &mut report);
+
+    // 7. Report available techs
+    report_available_techs(game, &mut report);
+
+    // 8. Generate newspaper
     generate_newspaper(game, &mut report);
 
-    // 7. Advance turn
+    // 9. Advance turn
     report
         .events
         .push(DomainEvent::TurnEnded(TurnEnded { turn }));
@@ -341,6 +349,30 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
     }
 }
 
+/// Apply maintenance costs. Placeholder: no army units tracked in GameState yet,
+/// so this is a no-op for now.
+fn apply_maintenance(_game: &mut GameState, _report: &mut TurnReport) {
+    // For now just a placeholder — deduct $25 per army unit per turn from each nation.
+    // We don't have army units in GameState yet, so just log it.
+}
+
+/// Report which technologies are available for research by the human player.
+fn report_available_techs(game: &GameState, report: &mut TurnReport) {
+    let nation = match game.get_nation(game.human_player_nation) {
+        Some(n) => n,
+        None => return,
+    };
+    let available = game
+        .tech_tree
+        .available_techs(&nation.researched_techs, game.turn.year());
+    let tech_names: Vec<String> = available.iter().map(|t| t.name.clone()).collect();
+    if !tech_names.is_empty() {
+        report
+            .techs_available
+            .push((game.human_player_nation, tech_names));
+    }
+}
+
 /// Generate newspaper headlines for the turn report.
 fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
     let year = game.turn.year();
@@ -370,6 +402,7 @@ mod tests {
     use crate::map::tile::Tile;
     use crate::map::{HexMap, Province};
     use crate::nation::{Nation, NationColor};
+    use crate::tech::TechTree;
 
     /// Build a minimal GameState for testing the turn processor.
     fn test_game_state() -> GameState {
@@ -413,6 +446,7 @@ mod tests {
             nations: vec![nation1],
             human_player_nation: NationId(1),
             events: Vec::new(),
+            tech_tree: TechTree::new(),
         }
     }
 
@@ -455,6 +489,7 @@ mod tests {
             nations: vec![nation1],
             human_player_nation: NationId(1),
             events: Vec::new(),
+            tech_tree: TechTree::new(),
         }
     }
 
@@ -659,6 +694,7 @@ mod tests {
             nations: vec![nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
+            tech_tree: TechTree::new(),
         };
 
         let report = process_turn(&mut game);
@@ -745,6 +781,7 @@ mod tests {
             nations: vec![nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
+            tech_tree: TechTree::new(),
         }
     }
 
@@ -1153,6 +1190,36 @@ mod tests {
                 .copied()
                 .unwrap_or(0),
             3
+        );
+    }
+
+    // ── Tech reporting ────────────────────────────────────────
+
+    #[test]
+    fn turn_report_includes_available_techs() {
+        let mut game = test_game_state();
+        // At turn 1, year 1815: should have 2 techs available
+        let report = process_turn(&mut game);
+        assert!(!report.techs_available.is_empty());
+        let (nation_id, techs) = &report.techs_available[0];
+        assert_eq!(*nation_id, NationId(1));
+        assert!(techs.contains(&"High Pressure Steam Engine".to_string()));
+        assert!(techs.contains(&"Seed Drill".to_string()));
+    }
+
+    #[test]
+    fn turn_report_excludes_researched_techs() {
+        let mut game = test_game_state();
+        // Research both 1815 techs
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.research_tech(crate::events::TechId(1));
+        nation.research_tech(crate::events::TechId(2));
+
+        let report = process_turn(&mut game);
+        // No techs should be available at 1815 after researching both
+        assert!(
+            report.techs_available.is_empty(),
+            "No techs should be available after researching all 1815 techs"
         );
     }
 }
