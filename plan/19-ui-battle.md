@@ -1,5 +1,9 @@
 # 19 — UI — Tactical Battle Screen
 
+> **STATUS: DEFERRED** — All battles are auto-resolved with the combat engine
+> (terrain/fort bonuses, firepower, casualties, medals). Tactical hex-based battle
+> mode deferred to post-MVP. The auto-resolve system produces detailed battle reports.
+
 ## Overview
 
 When land combat occurs, the player can choose to fight tactically on a hex-based

@@ -1,5 +1,9 @@
 # 23 — Modding & Data-Driven Design
 
+> **STATUS: DEFERRED** — Not critical for initial release. Core game data is already
+> partially data-driven (tech tree, unit stats in code). Full modding support (RON files,
+> Lua scripts, mod loading) deferred to post-MVP.
+
 ## Overview
 
 The original supported custom scenarios and map editors. The remake should be deeply
