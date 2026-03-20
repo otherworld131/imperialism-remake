@@ -30,7 +30,7 @@ or by having the most governors when the game reaches 1915. Score tracks overall
 - [x] **Merchant marine** — total cargo capacity of merchant ships
 - [x] **Diplomatic standing** — accumulated standing value
 - [x] **Provinces controlled** — number of provinces in empire
-- [ ] Score recalculated each turn
+- [x] Score recalculated each turn
 - [ ] High score table for completed games
 - [x] Unit tests: score calculation from game state
 - [x] Unit tests: score components independently testable
@@ -39,7 +39,7 @@ or by having the most governors when the game reaches 1915. Score tracks overall
 - [x] **Council Victory (Vote)** — achieve two-thirds majority at a decade election
 - [x] **Council Victory (Default)** — most governors at game end (1915)
 - [ ] **Conquest Victory** — implied by controlling enough provinces to dominate the vote
-- [ ] **Elimination** — when a Great Power loses all provinces (effectively eliminated, but game continues for others)
+- [x] **Elimination** — when a Great Power loses all provinces (effectively eliminated, but game continues for others)
 - [ ] Unit tests: each victory type detection
 
 ### Game End Conditions

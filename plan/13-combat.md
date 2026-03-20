@@ -54,17 +54,17 @@ a province is invaded via beachhead.
 ### Battle Resolution
 - [x] Battle ends when one side is eliminated or retreats
 - [ ] Retreating units suffer additional damage
-- [ ] Victorious attacker occupies the province
+- [x] Victorious attacker occupies the province
 - [x] Surviving units retain damage and earn medals based on performance
-- [ ] Province garrison (Militia) is destroyed on conquest — not captured
+- [x] Province garrison (Militia) is destroyed on conquest — not captured
 - [ ] Unit tests: victory/defeat determination, retreat mechanics, medal award
 
 ### Province Conquest
 - [ ] Conquering a Minor Nation capital: new army unit starts with 1 medal + Armory statue
 - [ ] Conquering a Great Power capital: Capitol expansion (recruitment ratio 4:1 → 3:1)
-- [ ] Minor Nation provinces become colonies of the conquering power
-- [ ] Great Power provinces change ownership
-- [ ] Garrison in conquered provinces: none until player stations units
+- [x] Minor Nation provinces become colonies of the conquering power
+- [x] Great Power provinces change ownership
+- [x] Garrison in conquered provinces: none until player stations units
 - [ ] Unit tests: conquest effects and rewards
 
 ### Naval Combat (AI-Only)

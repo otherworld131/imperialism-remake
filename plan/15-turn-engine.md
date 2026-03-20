@@ -59,7 +59,7 @@ simultaneously.
   10. [ ] **Naval combat resolves** — naval battles in contested sea zones
   11. [ ] **Conquest resolves** — provinces change ownership, rewards granted
   12. [ ] **Maintenance resolves** — military maintenance costs deducted
-  13. [ ] **Scoring resolves** — game score recalculated
+  13. [x] **Scoring resolves** — game score recalculated
   14. [ ] **Victory check** — Council of Governors vote if decade boundary
   15. [x] **Newspaper generated** — events of the turn compiled
   16. [x] **New turn begins** — turn counter advances

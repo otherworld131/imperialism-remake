@@ -3,15 +3,16 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+use ::infrastructure::persistence;
 use domain::economy::buildings::{Building, BuildingType};
 use domain::game_state::{GameState, new_game};
 use domain::hex::HexCoord;
+use domain::map::infrastructure;
 use domain::map::{HexMap, UnitId};
 use domain::military::units::{ArmyUnit, ArmyUnitType};
 use domain::nation::Nation;
 use domain::turn::{TurnReport, calculate_score, process_turn};
 use domain::types::*;
-use infrastructure::persistence;
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -329,6 +330,19 @@ fn main() {
             _ if cmd.starts_with("research ") => {
                 let tech_query = input.trim()[9..].trim();
                 research_tech(&mut game, tech_query);
+            }
+            "build railroad" => {
+                cmd_build_railroad(&mut game);
+            }
+            "build depot" => {
+                cmd_build_depot(&mut game);
+            }
+            "build port" => {
+                cmd_build_port(&mut game);
+            }
+            "infrastructure" | "infra" => {
+                println!();
+                print_infrastructure(&game);
             }
             _ if cmd.starts_with("build unit ") => {
                 let unit_query = input.trim()[11..].trim();
@@ -1167,6 +1181,13 @@ fn print_help() {
     println!("    recruit           — Recruit an untrained worker (costs 1 canned food,");
     println!("                        1 clothing, 1 furniture)");
     println!("    train             — Train an untrained worker to trained");
+    println!("    build railroad    — Build a railroad on the first un-railroaded tile");
+    println!("                        in your capital province");
+    println!("    build depot       — Build a depot on your capital tile ($2,000)");
+    println!(
+        "    build port        — Build a port on a coastal tile in your capital province ($3,000)"
+    );
+    println!("    infra             — Show infrastructure status (railroads, depots, ports)");
     println!("    build car         — Build a freight car (costs 2 labor, 1 lumber, 1 steel)");
     println!("    transport         — Show your transport system (freight cars, capacity)");
     println!("    build unit <type> — Build a military unit");
@@ -1696,6 +1717,219 @@ fn print_military(game: &GameState) {
                 println!("    -> {}", province_name);
             }
         }
+    }
+}
+
+fn cmd_build_railroad(game: &mut GameState) {
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+    let capital_province_id = player.capital_province_id;
+
+    // Find the capital province to get its tiles
+    let province = game.get_province(capital_province_id).unwrap();
+    let tiles: Vec<HexCoord> = province.tiles.clone();
+
+    // Find the first tile in the capital province that does not have a railroad
+    let mut target_coord = None;
+    for coord in &tiles {
+        if let Some(tile) = game.hex_map.get_tile(*coord)
+            && tile.terrain().is_land()
+            && !tile.infrastructure.has_railroad
+        {
+            target_coord = Some(*coord);
+            break;
+        }
+    }
+
+    let coord = match target_coord {
+        Some(c) => c,
+        None => {
+            println!("  All land tiles in your capital province already have railroads.");
+            return;
+        }
+    };
+
+    let terrain = game.hex_map.get_tile(coord).unwrap().terrain();
+    let cost = match infrastructure::railroad_cost(terrain) {
+        Some(c) => c,
+        None => {
+            println!("  Cannot build railroad on {:?}.", terrain);
+            return;
+        }
+    };
+
+    let treasury = game.get_nation(player_id).unwrap().treasury;
+    if treasury.checked_sub(cost).is_none() {
+        println!(
+            "  Cannot afford railroad on {:?} at ({},{}) (cost: {}, treasury: {}).",
+            terrain, coord.q, coord.r, cost, treasury
+        );
+        return;
+    }
+
+    match infrastructure::build_railroad(&mut game.hex_map, coord) {
+        Ok(cost) => {
+            let player = game.get_nation_mut(player_id).unwrap();
+            player.treasury -= cost;
+            println!(
+                "  Railroad built on {:?} at ({},{})! Cost: {}, treasury now: {}.",
+                terrain, coord.q, coord.r, cost, player.treasury
+            );
+        }
+        Err(e) => {
+            println!("  Cannot build railroad: {}", e);
+        }
+    }
+}
+
+fn cmd_build_depot(game: &mut GameState) {
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+    let capital_province_id = player.capital_province_id;
+    let treasury = player.treasury;
+
+    let province = game.get_province(capital_province_id).unwrap();
+    let capital_tile_coord = province.capital_tile;
+
+    let depot_cost = Money::dollars(2000);
+    if treasury.checked_sub(depot_cost).is_none() {
+        println!(
+            "  Cannot afford depot (cost: {}, treasury: {}).",
+            depot_cost, treasury
+        );
+        return;
+    }
+
+    match infrastructure::build_depot(&mut game.hex_map, capital_tile_coord) {
+        Ok(cost) => {
+            let player = game.get_nation_mut(player_id).unwrap();
+            player.treasury -= cost;
+            println!(
+                "  Depot built at capital ({},{})! Cost: {}, treasury now: {}.",
+                capital_tile_coord.q, capital_tile_coord.r, cost, player.treasury
+            );
+        }
+        Err(e) => {
+            println!("  Cannot build depot: {}", e);
+        }
+    }
+}
+
+fn cmd_build_port(game: &mut GameState) {
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+    let capital_province_id = player.capital_province_id;
+
+    let province = game.get_province(capital_province_id).unwrap();
+    let tiles: Vec<HexCoord> = province.tiles.clone();
+
+    // Find the first coastal tile in the capital province without a port
+    let mut target_coord = None;
+    for coord in &tiles {
+        if let Some(tile) = game.hex_map.get_tile(*coord)
+            && tile.terrain().is_land()
+            && !tile.infrastructure.has_port
+        {
+            let is_coastal = coord.neighbors().iter().any(|n| {
+                game.hex_map
+                    .get_tile(*n)
+                    .is_some_and(|t| !t.terrain().is_land())
+            });
+            if is_coastal {
+                target_coord = Some(*coord);
+                break;
+            }
+        }
+    }
+
+    let coord = match target_coord {
+        Some(c) => c,
+        None => {
+            println!("  No coastal tile without a port found in your capital province.");
+            return;
+        }
+    };
+
+    let port_cost = Money::dollars(3000);
+    let treasury = game.get_nation(player_id).unwrap().treasury;
+    if treasury.checked_sub(port_cost).is_none() {
+        println!(
+            "  Cannot afford port (cost: {}, treasury: {}).",
+            port_cost, treasury
+        );
+        return;
+    }
+
+    match infrastructure::build_port(&mut game.hex_map, coord) {
+        Ok(cost) => {
+            let player = game.get_nation_mut(player_id).unwrap();
+            player.treasury -= cost;
+            println!(
+                "  Port built at ({},{})! Cost: {}, treasury now: {}.",
+                coord.q, coord.r, cost, player.treasury
+            );
+        }
+        Err(e) => {
+            println!("  Cannot build port: {}", e);
+        }
+    }
+}
+
+fn print_infrastructure(game: &GameState) {
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+
+    println!("  INFRASTRUCTURE STATUS:");
+    println!();
+
+    for province_id in &player.province_ids {
+        let province = match game.get_province(*province_id) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        let mut railroads = 0u32;
+        let mut depots = 0u32;
+        let mut ports = 0u32;
+        let mut total_land = 0u32;
+
+        for coord in &province.tiles {
+            if let Some(tile) = game.hex_map.get_tile(*coord)
+                && tile.terrain().is_land()
+            {
+                total_land += 1;
+                if tile.infrastructure.has_railroad {
+                    railroads += 1;
+                }
+                if tile.infrastructure.has_depot {
+                    depots += 1;
+                }
+                if tile.infrastructure.has_port {
+                    ports += 1;
+                }
+            }
+        }
+
+        let connected = infrastructure::is_province_connected(
+            &game.hex_map,
+            game.get_province(player.capital_province_id)
+                .unwrap()
+                .capital_tile,
+            *province_id,
+            &game.provinces,
+        );
+        let conn_str = if *province_id == player.capital_province_id {
+            "(capital)"
+        } else if connected {
+            "CONNECTED"
+        } else {
+            "not connected"
+        };
+
+        println!(
+            "    {}: {} railroads/{} land, {} depot(s), {} port(s) [{}]",
+            province.name, railroads, total_land, depots, ports, conn_str
+        );
     }
 }
 
