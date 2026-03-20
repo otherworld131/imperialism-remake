@@ -94,6 +94,27 @@ fn main() {
                     }
                 }
 
+                // Show production output
+                let player_prod: Vec<_> = report
+                    .production_output
+                    .iter()
+                    .filter(|(nid, _, _)| *nid == player_id)
+                    .collect();
+                if !player_prod.is_empty() {
+                    println!();
+                    println!("  Production this turn:");
+                    for (_, item, qty) in &player_prod {
+                        println!("    {}: {}", item, qty);
+                    }
+                }
+
+                // Show food consumed
+                for (nid, amt) in &report.food_consumed {
+                    if *nid == player_id {
+                        println!("  Food consumed: {} grain", amt);
+                    }
+                }
+
                 // Show gold income
                 for (nid, income) in &report.gold_income {
                     if *nid == player_id {
@@ -130,6 +151,10 @@ fn main() {
             "n" | "nations" => {
                 println!();
                 print_nations(&game);
+            }
+            "b" | "buildings" => {
+                println!();
+                print_buildings(&game);
             }
             "h" | "help" | "?" => {
                 println!();
@@ -314,11 +339,42 @@ fn print_nations(game: &domain::game_state::GameState) {
     }
 }
 
+fn print_buildings(game: &domain::game_state::GameState) {
+    let player = game.get_nation(game.human_player_nation).unwrap();
+    println!("  BUILDINGS:");
+    if player.buildings.is_empty() {
+        println!("    (none)");
+    } else {
+        for b in &player.buildings {
+            let pending = if b.pending_capacity > 0 {
+                format!(
+                    " (+{} in {} turn{})",
+                    b.pending_capacity,
+                    b.turns_until_upgrade,
+                    if b.turns_until_upgrade != 1 { "s" } else { "" }
+                )
+            } else {
+                String::new()
+            };
+            println!(
+                "    {:?}: capacity {}{}",
+                b.building_type, b.capacity, pending
+            );
+        }
+    }
+    println!();
+    println!(
+        "  Workers: {} untrained, {} trained, {} expert",
+        player.labor.untrained, player.labor.trained, player.labor.expert
+    );
+}
+
 fn print_help() {
     println!("  COMMANDS:");
     println!("    [Enter] / turn  — End turn (gather resources, advance time)");
     println!("    status          — Show current game status");
     println!("    warehouse       — Show your resource warehouse");
+    println!("    buildings       — Show your buildings and workers");
     println!("    map             — Show the world map");
     println!("    provinces       — Show your provinces");
     println!("    nations         — Show all nations");

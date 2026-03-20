@@ -1,3 +1,5 @@
+use crate::economy::buildings::{Building, BuildingType};
+use crate::economy::labor::LaborPool;
 use crate::types::*;
 use std::collections::HashMap;
 
@@ -46,6 +48,10 @@ pub struct Nation {
     pub materials: HashMap<MaterialType, u32>,
     /// Finished goods warehouse.
     pub goods: HashMap<GoodsType, u32>,
+    /// Buildings owned by this nation.
+    pub buildings: Vec<Building>,
+    /// Labor pool (workers available for production).
+    pub labor: LaborPool,
 }
 
 impl Nation {
@@ -68,6 +74,8 @@ impl Nation {
             warehouse: HashMap::new(),
             materials: HashMap::new(),
             goods: HashMap::new(),
+            buildings: Vec::new(),
+            labor: LaborPool::new(),
         }
     }
 
@@ -109,6 +117,20 @@ impl Nation {
     /// Whether this nation is a Great Power.
     pub fn is_great_power(&self) -> bool {
         self.nation_type == NationType::GreatPower
+    }
+
+    /// Get a mutable reference to a building by its type.
+    pub fn get_building_mut(&mut self, building_type: BuildingType) -> Option<&mut Building> {
+        self.buildings
+            .iter_mut()
+            .find(|b| b.building_type == building_type)
+    }
+
+    /// Check whether this nation has a building of the given type.
+    pub fn has_building(&self, building_type: BuildingType) -> bool {
+        self.buildings
+            .iter()
+            .any(|b| b.building_type == building_type)
     }
 }
 

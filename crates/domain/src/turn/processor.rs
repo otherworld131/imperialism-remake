@@ -1,3 +1,7 @@
+use crate::economy::buildings::BuildingType;
+use crate::economy::production::{
+    ProductionChain, calculate_factory_production, calculate_mill_production,
+};
 use crate::events::*;
 use crate::game_state::GameState;
 use crate::types::*;
@@ -12,6 +16,8 @@ pub struct TurnReport {
     pub resource_production: Vec<(NationId, ResourceType, u32)>,
     pub gold_income: Vec<(NationId, Money)>,
     pub maintenance_costs: Vec<(NationId, Money)>,
+    pub production_output: Vec<(NationId, String, u32)>,
+    pub food_consumed: Vec<(NationId, u32)>,
     pub newspaper_headlines: Vec<String>,
 }
 
@@ -26,6 +32,8 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         resource_production: Vec::new(),
         gold_income: Vec::new(),
         maintenance_costs: Vec::new(),
+        production_output: Vec::new(),
+        food_consumed: Vec::new(),
         newspaper_headlines: Vec::new(),
     };
 
@@ -35,10 +43,19 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 2. Gold/Gems -> money conversion
     convert_monetary_resources(game, &mut report);
 
-    // 3. Generate newspaper
+    // 3. Run production chains (mills then factories)
+    run_production(game, &mut report);
+
+    // 4. Tick buildings (process expansion timers)
+    tick_buildings(game);
+
+    // 5. Food consumption
+    food_consumption(game, &mut report);
+
+    // 6. Generate newspaper
     generate_newspaper(game, &mut report);
 
-    // 4. Advance turn
+    // 7. Advance turn
     report
         .events
         .push(DomainEvent::TurnEnded(TurnEnded { turn }));
@@ -108,6 +125,218 @@ fn convert_monetary_resources(game: &mut GameState, report: &mut TurnReport) {
         if income != Money::ZERO {
             nation.treasury += income;
             report.gold_income.push((nation.id, income));
+        }
+    }
+}
+
+/// Run production chains: mills convert resources to materials, factories convert materials to goods.
+///
+/// Labor is simplified for now: assumes sufficient labor (constraints added later).
+fn run_production(game: &mut GameState, report: &mut TurnReport) {
+    let nation_ids: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
+
+    for nation_id in nation_ids {
+        let nation = match game.nations.iter().find(|n| n.id == nation_id) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        // Gather current resource inventory as slices
+        let resources: Vec<(ResourceType, u32)> =
+            nation.warehouse.iter().map(|(r, q)| (*r, *q)).collect();
+        let available_labor = u32::MAX; // simplified: assume sufficient labor
+
+        // ── Mills: resources → materials ──
+
+        // Timber chain: LumberMill
+        let lumber_mill_cap = nation
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::LumberMill)
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
+
+        let timber_result = if lumber_mill_cap > 0 {
+            Some(calculate_mill_production(
+                ProductionChain::Timber,
+                &resources,
+                lumber_mill_cap,
+                available_labor,
+            ))
+        } else {
+            None
+        };
+
+        // Metal chain: SteelMill
+        let steel_mill_cap = nation
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::SteelMill)
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
+
+        let metal_result = if steel_mill_cap > 0 {
+            Some(calculate_mill_production(
+                ProductionChain::Metal,
+                &resources,
+                steel_mill_cap,
+                available_labor,
+            ))
+        } else {
+            None
+        };
+
+        // Textile chain: TextileMill
+        let textile_mill_cap = nation
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::TextileMill)
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
+
+        let textile_result = if textile_mill_cap > 0 {
+            Some(calculate_mill_production(
+                ProductionChain::Textile,
+                &resources,
+                textile_mill_cap,
+                available_labor,
+            ))
+        } else {
+            None
+        };
+
+        // Apply mill results: consume resources, produce materials
+        let nation = game.nations.iter_mut().find(|n| n.id == nation_id).unwrap();
+
+        // Collect newly produced materials to feed into factories
+        let mut new_materials: Vec<(MaterialType, u32)> = Vec::new();
+
+        for result in [&timber_result, &metal_result, &textile_result]
+            .into_iter()
+            .flatten()
+        {
+            // Consume resources
+            for (resource, amount) in &result.resources_consumed {
+                if *amount > 0 {
+                    nation.remove_resource(*resource, *amount);
+                }
+            }
+            // Produce materials
+            for (material, amount) in &result.materials_produced {
+                if *amount > 0 {
+                    *nation.materials.entry(*material).or_insert(0) += *amount;
+                    new_materials.push((*material, *amount));
+                    report
+                        .production_output
+                        .push((nation_id, format!("{:?}", material), *amount));
+                }
+            }
+        }
+
+        // ── Factories: materials → goods ──
+
+        // Build the current materials inventory for factory input
+        let materials_inventory: Vec<(MaterialType, u32)> =
+            nation.materials.iter().map(|(m, q)| (*m, *q)).collect();
+
+        // Furniture: LumberMill output → FurnitureFactory
+        let furniture_cap = nation
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::FurnitureFactory)
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
+
+        let furniture_result = if furniture_cap > 0 {
+            Some(calculate_factory_production(
+                ProductionChain::Timber,
+                &materials_inventory,
+                furniture_cap,
+                available_labor,
+            ))
+        } else {
+            None
+        };
+
+        // Hardware: SteelMill output → HardwareFactory
+        let hardware_cap = nation
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::HardwareFactory)
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
+
+        let hardware_result = if hardware_cap > 0 {
+            Some(calculate_factory_production(
+                ProductionChain::Metal,
+                &materials_inventory,
+                hardware_cap,
+                available_labor,
+            ))
+        } else {
+            None
+        };
+
+        // Clothing: TextileMill output → ClothingFactory
+        let clothing_cap = nation
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::ClothingFactory)
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
+
+        let clothing_result = if clothing_cap > 0 {
+            Some(calculate_factory_production(
+                ProductionChain::Textile,
+                &materials_inventory,
+                clothing_cap,
+                available_labor,
+            ))
+        } else {
+            None
+        };
+
+        // Apply factory results: consume materials, produce goods
+        for result in [&furniture_result, &hardware_result, &clothing_result]
+            .into_iter()
+            .flatten()
+        {
+            // Consume materials
+            for (material, amount) in &result.materials_consumed {
+                if *amount > 0 {
+                    let entry = nation.materials.entry(*material).or_insert(0);
+                    *entry = entry.saturating_sub(*amount);
+                }
+            }
+            // Produce goods
+            for (good, amount) in &result.goods_produced {
+                if *amount > 0 {
+                    *nation.goods.entry(*good).or_insert(0) += *amount;
+                    report
+                        .production_output
+                        .push((nation_id, format!("{:?}", good), *amount));
+                }
+            }
+        }
+    }
+}
+
+/// Tick all buildings for all nations, advancing expansion timers.
+fn tick_buildings(game: &mut GameState) {
+    for nation in &mut game.nations {
+        for building in &mut nation.buildings {
+            building.tick();
+        }
+    }
+}
+
+/// Consume food for each nation. Placeholder: consume 1 grain per turn if available.
+fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
+    for nation in &mut game.nations {
+        let grain = nation.resource_amount(ResourceType::Grain);
+        if grain > 0 {
+            nation.remove_resource(ResourceType::Grain, 1);
+            report.food_consumed.push((nation.id, 1));
         }
     }
 }
@@ -268,8 +497,9 @@ mod tests {
         assert_eq!(timber_produced, 1); // ScrubForest = 1 Timber
 
         // Verify the nation's warehouse was updated
+        // Note: food_consumption eats 1 grain per turn, so net grain is 0
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.resource_amount(ResourceType::Grain), 1);
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 0);
         assert_eq!(nation.resource_amount(ResourceType::Timber), 1);
     }
 
@@ -372,8 +602,10 @@ mod tests {
         assert_eq!(game.turn, TurnNumber::new(6));
 
         // After 5 turns, the nation should have accumulated resources
+        // Grain: 1 gathered - 1 consumed each turn = 0 net per turn
+        // Timber: 1 gathered per turn, not consumed = 5
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.resource_amount(ResourceType::Grain), 5);
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 0);
         assert_eq!(nation.resource_amount(ResourceType::Timber), 5);
     }
 
@@ -455,5 +687,472 @@ mod tests {
         assert_eq!(nation.treasury, initial + Money::dollars(2000));
         assert_eq!(nation.resource_amount(ResourceType::Gold), 0);
         assert_eq!(nation.resource_amount(ResourceType::Gems), 0);
+    }
+
+    // ── Production pipeline ───────────────────────────────────
+
+    /// Helper: build a game state with a nation that has buildings and resources.
+    fn test_game_state_with_production() -> GameState {
+        use crate::economy::buildings::{Building, BuildingType};
+
+        let coord = HexCoord::new(0, 0);
+        let hex_map = HexMap::new(10, 10);
+
+        let province = Province::new(
+            ProvinceId(1),
+            "Industrial".to_string(),
+            NationId(1),
+            coord,
+            vec![coord],
+            4,
+        );
+
+        let mut nation = Nation::new(
+            NationId(1),
+            "FactoryNation".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation.treasury = Money::dollars(5000);
+
+        // Add mills and factories
+        nation
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 2));
+        nation
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 2));
+        nation
+            .buildings
+            .push(Building::new(BuildingType::TextileMill, 2));
+        nation
+            .buildings
+            .push(Building::new(BuildingType::FurnitureFactory, 1));
+        nation
+            .buildings
+            .push(Building::new(BuildingType::HardwareFactory, 1));
+        nation
+            .buildings
+            .push(Building::new(BuildingType::ClothingFactory, 1));
+
+        GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province],
+            nations: vec![nation],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn lumber_mill_produces_lumber_from_timber() {
+        let mut game = test_game_state_with_production();
+        // Add timber to warehouse (need 2 per lumber unit)
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .add_resource(ResourceType::Timber, 6);
+
+        let report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        // Mill capacity 2, 6 timber / 2 per unit = 3, limited by capacity = 2 lumber produced
+        // Then FurnitureFactory cap 1 consumes 2 lumber → 1 furniture
+        // Net lumber: 2 - 2 = 0
+        assert_eq!(
+            nation
+                .materials
+                .get(&MaterialType::Lumber)
+                .copied()
+                .unwrap_or(0),
+            0
+        );
+        // 6 - 4 consumed = 2 timber remaining
+        assert_eq!(nation.resource_amount(ResourceType::Timber), 2);
+        // Furniture produced by factory
+        assert_eq!(
+            nation
+                .goods
+                .get(&GoodsType::Furniture)
+                .copied()
+                .unwrap_or(0),
+            1
+        );
+
+        // Report should show lumber was produced by the mill
+        let lumber_output: u32 = report
+            .production_output
+            .iter()
+            .filter(|(_, name, _)| name == "Lumber")
+            .map(|(_, _, q)| *q)
+            .sum();
+        assert_eq!(lumber_output, 2);
+    }
+
+    #[test]
+    fn steel_mill_produces_steel_from_coal_and_iron() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.add_resource(ResourceType::Coal, 5);
+        nation.add_resource(ResourceType::Iron, 3);
+
+        let report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        // Mill capacity 2, min(5, 3) = 3 limited by capacity = 2 steel produced
+        // Then HardwareFactory cap 1 consumes 2 steel → 1 hardware
+        // Net steel: 2 - 2 = 0
+        assert_eq!(
+            nation
+                .materials
+                .get(&MaterialType::Steel)
+                .copied()
+                .unwrap_or(0),
+            0
+        );
+        // 5-2=3 coal, 3-2=1 iron remaining
+        assert_eq!(nation.resource_amount(ResourceType::Coal), 3);
+        assert_eq!(nation.resource_amount(ResourceType::Iron), 1);
+        // Hardware produced
+        assert_eq!(
+            nation.goods.get(&GoodsType::Hardware).copied().unwrap_or(0),
+            1
+        );
+
+        let steel_output: u32 = report
+            .production_output
+            .iter()
+            .filter(|(_, name, _)| name == "Steel")
+            .map(|(_, _, q)| *q)
+            .sum();
+        assert_eq!(steel_output, 2);
+    }
+
+    #[test]
+    fn textile_mill_produces_fabric_from_cotton() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.add_resource(ResourceType::Cotton, 4);
+
+        let report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        // Mill capacity 2, 4 cotton / 2 per unit = 2 fabric produced
+        // Then ClothingFactory cap 1 consumes 2 fabric → 1 clothing
+        // Net fabric: 2 - 2 = 0
+        assert_eq!(
+            nation
+                .materials
+                .get(&MaterialType::Fabric)
+                .copied()
+                .unwrap_or(0),
+            0
+        );
+        assert_eq!(nation.resource_amount(ResourceType::Cotton), 0);
+        // Clothing produced
+        assert_eq!(
+            nation.goods.get(&GoodsType::Clothing).copied().unwrap_or(0),
+            1
+        );
+
+        let fabric_output: u32 = report
+            .production_output
+            .iter()
+            .filter(|(_, name, _)| name == "Fabric")
+            .map(|(_, _, q)| *q)
+            .sum();
+        assert_eq!(fabric_output, 2);
+    }
+
+    #[test]
+    fn furniture_factory_produces_from_lumber() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        // Pre-stock lumber (bypassing mill)
+        *nation.materials.entry(MaterialType::Lumber).or_insert(0) = 4;
+
+        let report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        // Factory capacity 1, 4 lumber / 2 per unit = 2, limited by capacity = 1
+        assert_eq!(
+            nation
+                .goods
+                .get(&GoodsType::Furniture)
+                .copied()
+                .unwrap_or(0),
+            1
+        );
+        // 4 - 2 consumed = 2 lumber remaining
+        assert_eq!(
+            nation
+                .materials
+                .get(&MaterialType::Lumber)
+                .copied()
+                .unwrap_or(0),
+            2
+        );
+
+        let furniture_output: u32 = report
+            .production_output
+            .iter()
+            .filter(|(_, name, _)| name == "Furniture")
+            .map(|(_, _, q)| *q)
+            .sum();
+        assert_eq!(furniture_output, 1);
+    }
+
+    #[test]
+    fn hardware_factory_produces_from_steel() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        *nation.materials.entry(MaterialType::Steel).or_insert(0) = 4;
+
+        let report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        // Factory capacity 1, 4 steel / 2 = 2, limited by capacity = 1
+        assert_eq!(
+            nation.goods.get(&GoodsType::Hardware).copied().unwrap_or(0),
+            1
+        );
+        assert_eq!(
+            nation
+                .materials
+                .get(&MaterialType::Steel)
+                .copied()
+                .unwrap_or(0),
+            2
+        );
+
+        let hardware_output: u32 = report
+            .production_output
+            .iter()
+            .filter(|(_, name, _)| name == "Hardware")
+            .map(|(_, _, q)| *q)
+            .sum();
+        assert_eq!(hardware_output, 1);
+    }
+
+    #[test]
+    fn clothing_factory_produces_from_fabric() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        *nation.materials.entry(MaterialType::Fabric).or_insert(0) = 6;
+
+        let report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        // Factory capacity 1, 6 fabric / 2 = 3, limited by capacity = 1
+        assert_eq!(
+            nation.goods.get(&GoodsType::Clothing).copied().unwrap_or(0),
+            1
+        );
+        assert_eq!(
+            nation
+                .materials
+                .get(&MaterialType::Fabric)
+                .copied()
+                .unwrap_or(0),
+            4
+        );
+
+        let clothing_output: u32 = report
+            .production_output
+            .iter()
+            .filter(|(_, name, _)| name == "Clothing")
+            .map(|(_, _, q)| *q)
+            .sum();
+        assert_eq!(clothing_output, 1);
+    }
+
+    #[test]
+    fn full_timber_chain_mill_then_factory() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        // Add 8 timber: mill produces 2 lumber (cap 2), then factory makes 1 furniture (cap 1)
+        nation.add_resource(ResourceType::Timber, 8);
+
+        let report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        // Mill: 8 timber, cap 2 → 2 lumber produced, 4 timber consumed, 4 remain
+        // Factory: 2 lumber available, cap 1 → 1 furniture, 2 lumber consumed, 0 lumber remain
+        assert_eq!(nation.resource_amount(ResourceType::Timber), 4);
+        assert_eq!(
+            nation
+                .materials
+                .get(&MaterialType::Lumber)
+                .copied()
+                .unwrap_or(0),
+            0
+        );
+        assert_eq!(
+            nation
+                .goods
+                .get(&GoodsType::Furniture)
+                .copied()
+                .unwrap_or(0),
+            1
+        );
+
+        // Report should have both lumber and furniture entries
+        let has_lumber = report
+            .production_output
+            .iter()
+            .any(|(_, name, q)| name == "Lumber" && *q > 0);
+        let has_furniture = report
+            .production_output
+            .iter()
+            .any(|(_, name, q)| name == "Furniture" && *q > 0);
+        assert!(has_lumber);
+        assert!(has_furniture);
+    }
+
+    #[test]
+    fn no_production_without_buildings() {
+        let mut game = test_game_state(); // no buildings
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .add_resource(ResourceType::Timber, 10);
+
+        let report = process_turn(&mut game);
+
+        // No production output since there are no mills/factories
+        let production_for_nation: Vec<_> = report
+            .production_output
+            .iter()
+            .filter(|(nid, _, _)| *nid == NationId(1))
+            .collect();
+        assert!(production_for_nation.is_empty());
+        // Timber should still be there
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(nation.resource_amount(ResourceType::Timber), 11); // 10 + 1 from forest tile
+    }
+
+    #[test]
+    fn no_production_without_resources() {
+        let mut game = test_game_state_with_production();
+        // No resources added; nation has buildings but nothing to process
+
+        let report = process_turn(&mut game);
+
+        let production_for_nation: Vec<_> = report
+            .production_output
+            .iter()
+            .filter(|(nid, _, _)| *nid == NationId(1))
+            .collect();
+        assert!(production_for_nation.is_empty());
+    }
+
+    // ── Food consumption ──────────────────────────────────────
+
+    #[test]
+    fn food_consumption_eats_one_grain() {
+        let mut game = test_game_state();
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .add_resource(ResourceType::Grain, 5);
+
+        let report = process_turn(&mut game);
+
+        // Started with 5, gained 1 from farm = 6, consumed 1 = 5
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 5);
+
+        let consumed: u32 = report
+            .food_consumed
+            .iter()
+            .filter(|(nid, _)| *nid == NationId(1))
+            .map(|(_, q)| *q)
+            .sum();
+        assert_eq!(consumed, 1);
+    }
+
+    #[test]
+    fn food_consumption_with_no_grain() {
+        let mut game = test_game_state_with_production();
+        // No grain in warehouse, no farm tiles
+
+        let report = process_turn(&mut game);
+
+        let consumed: u32 = report
+            .food_consumed
+            .iter()
+            .filter(|(nid, _)| *nid == NationId(1))
+            .map(|(_, q)| *q)
+            .sum();
+        assert_eq!(consumed, 0);
+    }
+
+    // ── Building tick ─────────────────────────────────────────
+
+    #[test]
+    fn tick_buildings_advances_expansion() {
+        use crate::economy::buildings::BuildingType;
+
+        let mut game = test_game_state_with_production();
+        // Start expanding the lumber mill
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation
+            .get_building_mut(BuildingType::LumberMill)
+            .unwrap()
+            .start_expansion(3);
+
+        // After 1 turn, expansion countdown should go from 2 to 1
+        process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        let mill = nation
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::LumberMill)
+            .unwrap();
+        assert_eq!(mill.turns_until_upgrade, 1);
+        assert_eq!(mill.capacity, 2); // not yet applied
+
+        // After 2nd turn, expansion should complete
+        process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        let mill = nation
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::LumberMill)
+            .unwrap();
+        assert_eq!(mill.turns_until_upgrade, 0);
+        assert_eq!(mill.capacity, 5); // 2 + 3
+    }
+
+    // ── Production accumulates over multiple turns ────────────
+
+    #[test]
+    fn production_accumulates_over_turns() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.add_resource(ResourceType::Timber, 20);
+
+        // Run 3 turns
+        for _ in 0..3 {
+            process_turn(&mut game);
+        }
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        // Each turn: mill cap 2 → 2 lumber, factory cap 1 → 1 furniture (consumes 2 lumber)
+        // Net lumber per turn: 2 - 2 = 0 remaining (factory consumes what mill produces)
+        // Net furniture per turn: 1
+        // Timber consumed: 4 per turn = 12 total, 20 - 12 = 8 remaining
+        assert_eq!(nation.resource_amount(ResourceType::Timber), 8);
+        assert_eq!(
+            nation
+                .goods
+                .get(&GoodsType::Furniture)
+                .copied()
+                .unwrap_or(0),
+            3
+        );
     }
 }

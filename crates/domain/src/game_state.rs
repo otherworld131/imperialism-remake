@@ -1,3 +1,4 @@
+use crate::economy::buildings::{Building, BuildingType};
 use crate::events::DomainEvent;
 use crate::map::{HexMap, Province};
 use crate::nation::{Nation, NationColor};
@@ -132,6 +133,59 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         for pid in &setup.province_ids {
             nation.add_province(*pid);
         }
+
+        // Starting buildings — all Great Powers get fixed buildings
+        let fixed_buildings = [
+            BuildingType::Armory,
+            BuildingType::Capitol,
+            BuildingType::FoodProcessing,
+            BuildingType::Railyard,
+            BuildingType::Shipyard,
+            BuildingType::TradeSchool,
+            BuildingType::University,
+            BuildingType::Warehouse,
+        ];
+        for bt in &fixed_buildings {
+            nation.buildings.push(Building::new(*bt, 1));
+        }
+
+        // On Easy/Introductory, add starting mills and factories
+        if matches!(difficulty, Difficulty::Easy | Difficulty::Introductory) {
+            nation
+                .buildings
+                .push(Building::new(BuildingType::LumberMill, 2));
+            nation
+                .buildings
+                .push(Building::new(BuildingType::SteelMill, 2));
+            nation
+                .buildings
+                .push(Building::new(BuildingType::TextileMill, 2));
+            nation
+                .buildings
+                .push(Building::new(BuildingType::FurnitureFactory, 1));
+            nation
+                .buildings
+                .push(Building::new(BuildingType::HardwareFactory, 1));
+            nation
+                .buildings
+                .push(Building::new(BuildingType::ClothingFactory, 1));
+        }
+
+        // Starting workers based on difficulty
+        match difficulty {
+            Difficulty::Introductory | Difficulty::Easy => {
+                nation.labor.untrained = 5;
+                nation.labor.trained = 3;
+            }
+            Difficulty::Normal => {
+                nation.labor.untrained = 3;
+                nation.labor.trained = 1;
+            }
+            Difficulty::Hard | Difficulty::NighOnImpossible => {
+                nation.labor.untrained = 2;
+            }
+        }
+
         nations.push(nation);
     }
 
