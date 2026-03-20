@@ -61,13 +61,13 @@ goods in factories. Three parallel production chains exist.
 - [x] Unit tests for production calculations
 
 ### Food System
-- [ ] Population requires food each turn: grain preferred by ≥ 50% of population
-- [ ] Food types: Grain, Fruit, Livestock (meat)
-- [ ] Food Processing building converts raw food → Canned Food (half nutrition value)
-- [ ] Canned Food can be sold and is needed for immigration
-- [ ] Immigration requires: Canned Food + Clothing + Furniture
-- [ ] Starvation mechanics if food supply is insufficient
-- [ ] Unit tests for food consumption and immigration requirements
+- [x] Population requires food each turn: grain preferred by ≥ 50% of population
+- [x] Food types: Grain, Fruit, Livestock (meat)
+- [x] Food Processing building converts raw food → Canned Food (half nutrition value)
+- [x] Canned Food can be sold and is needed for immigration
+- [x] Immigration requires: Canned Food + Clothing + Furniture
+- [x] Starvation mechanics if food supply is insufficient
+- [x] Unit tests for food consumption and immigration requirements
 
 ### Labor System
 - [x] **Untrained Worker** — base labor unit, recruited via Capitol building
@@ -76,7 +76,7 @@ goods in factories. Three parallel production chains exist.
 - [ ] Workers assigned to: mills, factories, civilian units, military units
 - [x] Each production facility needs 2 labor units per unit of output
 - [x] Worker pool management — track available vs. assigned workers
-- [ ] Worker recruitment limited by province count (1 worker per N provinces)
+- [x] Worker recruitment limited by province count (1 worker per N provinces)
 - [ ] Reward: Capitol expansion at 10 and 30 expert workers
 - [x] Unit tests for labor allocation and training
 

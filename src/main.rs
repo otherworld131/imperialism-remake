@@ -198,7 +198,6 @@ fn main() {
                 // Show battle results
                 if !report.battles.is_empty() {
                     println!();
-                    println!("  BATTLE REPORTS:");
                     for battle in &report.battles {
                         let atk_name = game
                             .get_nation(battle.attacker)
@@ -213,29 +212,86 @@ fn main() {
                             .map(|p| p.name.as_str())
                             .unwrap_or("Unknown");
                         let result_str = if battle.attacker_won {
-                            "VICTORY"
+                            "VICTORY!"
                         } else {
                             "DEFEAT"
                         };
+
+                        // Terrain description
+                        let terrain_str = match battle.terrain {
+                            Some(t) => {
+                                let bonus = domain::military::terrain_defense_bonus(t);
+                                if bonus > 0.0 {
+                                    format!("{:?} (+{:.0}% defense)", t, bonus * 100.0)
+                                } else {
+                                    format!("{:?} (no bonus)", t)
+                                }
+                            }
+                            None => "Unknown".to_string(),
+                        };
+
+                        // Fort description
+                        let fort_str = if battle.fort_level > 0 {
+                            let bonus = domain::military::fort_defense_bonus(battle.fort_level);
+                            format!(
+                                "Level {} (+{:.0}% defense)",
+                                battle.fort_level,
+                                bonus * 100.0
+                            )
+                        } else {
+                            "None".to_string()
+                        };
+
+                        // Attacker casualty details
+                        let atk_casualty_str = if battle.attacker_casualties.is_empty() {
+                            "None".to_string()
+                        } else {
+                            format_casualties(&battle.attacker_casualties)
+                        };
+
+                        // Defender casualty details
+                        let def_casualty_str = if battle.defender_casualties.is_empty() {
+                            "None".to_string()
+                        } else {
+                            format_casualties(&battle.defender_casualties)
+                        };
+
+                        // Defender force description
+                        let def_fp_str = if battle.fort_level > 0
+                            || battle
+                                .terrain
+                                .map(|t| domain::military::terrain_defense_bonus(t) > 0.0)
+                                .unwrap_or(false)
+                        {
+                            format!(
+                                "{:.1} (incl. terrain/fort bonus)",
+                                battle.defender_initial_fp
+                            )
+                        } else {
+                            format!("{:.1}", battle.defender_initial_fp)
+                        };
+
+                        println!("  {}", "=".repeat(42));
+                        println!("  BATTLE OF {}", prov_name);
+                        println!("  {}", "=".repeat(42));
                         println!(
-                            "    {} vs {} at {} -- {}",
-                            atk_name, def_name, prov_name, result_str
+                            "  Attacker: {} ({} units, FP: {:.1})",
+                            atk_name, battle.attacker_initial_count, battle.attacker_initial_fp
                         );
-                        if !battle.attacker_casualties.is_empty() {
-                            println!(
-                                "      Attacker losses: {} units",
-                                battle.attacker_casualties.len()
-                            );
+                        println!(
+                            "  Defender: {} ({} units, FP: {})",
+                            def_name, battle.defender_initial_count, def_fp_str
+                        );
+                        println!("  Terrain: {}", terrain_str);
+                        println!("  Fort: {}", fort_str);
+                        println!();
+                        println!("  Result: {}", result_str);
+                        println!("  Attacker casualties: {}", atk_casualty_str);
+                        println!("  Defender casualties: {}", def_casualty_str);
+                        if battle.attacker_won {
+                            println!("  Province conquered!");
                         }
-                        if !battle.defender_casualties.is_empty() {
-                            println!(
-                                "      Defender losses: {} units",
-                                battle.defender_casualties.len()
-                            );
-                        }
-                        if battle.attacker_won && battle.attacker == player_id {
-                            println!("      Province {} conquered!", prov_name);
-                        }
+                        println!("  {}", "=".repeat(42));
                     }
                 }
                 // Show civilian completions
@@ -263,6 +319,42 @@ fn main() {
                         gp_count
                     );
                 }
+
+                // Show transport overflow
+                let player_overflow: Vec<_> = report
+                    .transport_overflow
+                    .iter()
+                    .filter(|(nid, _, _)| *nid == player_id)
+                    .collect();
+                if !player_overflow.is_empty() {
+                    println!();
+                    println!("  Transport overflow (resources left in field):");
+                    for (_, res, qty) in &player_overflow {
+                        println!("    {:?}: {}", res, qty);
+                    }
+                }
+
+                // Show immigration
+                for (nid, count) in &report.immigration {
+                    if *nid == player_id {
+                        println!(
+                            "  Immigration: {} new worker{} recruited!",
+                            count,
+                            if *count == 1 { "" } else { "s" }
+                        );
+                    }
+                }
+
+                // Show settlement upgrades
+                for (prov_id, level) in &report.settlement_upgrades {
+                    if let Some(prov) = game.get_province(*prov_id) {
+                        println!("  Settlement upgrade: {} is now a {}!", prov.name, level);
+                    }
+                }
+
+                // Compact turn summary line
+                println!();
+                println!("  {}", report.format_summary_line(&game));
                 println!();
 
                 // Show council vote results
@@ -473,6 +565,10 @@ fn main() {
             _ if cmd.starts_with("deploy ") => {
                 let args = input.trim()[7..].trim();
                 cmd_deploy_civilian(&mut game, args);
+            }
+            _ if cmd.starts_with("move ") => {
+                let args = input.trim()[5..].trim();
+                cmd_move_unit(&mut game, args);
             }
             _ => {
                 println!("  Unknown command. Type 'help' for available commands.");
@@ -1530,6 +1626,7 @@ fn print_help() {
     println!("                         farmer $100, rancher $100, forester $100, driller $2000)");
     println!("    deploy <i> <prov> — Deploy civilian #i to a province to start working");
     println!("    military / army   — Show your army units and their stats");
+    println!("    move <i> <prov>   — Move army unit #i to a province you own");
     println!("    attack <nation>   — Order an attack on a nation you are at war with");
     println!("    diplomacy         — Show diplomatic relations with all nations");
     println!("    consulate <name>  — Build a trade consulate with a Minor Nation ($500)");
@@ -2020,13 +2117,14 @@ fn print_military(game: &GameState) {
     if player.army.is_empty() {
         println!("    (no units -- use 'build unit <type>' to recruit)");
     } else {
-        for unit in &player.army {
+        for (i, unit) in player.army.iter().enumerate() {
             let province_name = game
                 .get_province(unit.position)
                 .map(|p| p.name.as_str())
                 .unwrap_or("Unknown");
             println!(
-                "    {:?} (HP: {}, Medals: {}, FP: {:.1}) at {}",
+                "    [{}] {:?} (HP: {}, Medals: {}, FP: {:.1}) at {}",
+                i,
                 unit.unit_type,
                 unit.health,
                 unit.medals,
@@ -2315,4 +2413,109 @@ fn render_map(hex_map: &HexMap, nations: &[Nation]) {
         }
         println!();
     }
+}
+
+/// Format a list of casualty unit types into a readable string.
+/// Groups identical types: e.g., "2 Militia, 1 Regulars destroyed"
+fn format_casualties(casualties: &[ArmyUnitType]) -> String {
+    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for ut in casualties {
+        *counts.entry(format!("{:?}", ut)).or_insert(0) += 1;
+    }
+    let parts: Vec<String> = counts
+        .iter()
+        .map(|(name, count)| format!("{} {}", count, name))
+        .collect();
+    format!("{} destroyed", parts.join(", "))
+}
+
+/// Move a unit from its current province to another owned province.
+///
+/// Usage: move <unit_index> <province_name>
+/// - Unit must belong to the player
+/// - Target province must be owned by the player
+/// - Militia units cannot move
+fn cmd_move_unit(game: &mut GameState, args: &str) {
+    let parts: Vec<&str> = args.splitn(2, ' ').collect();
+    if parts.len() < 2 {
+        println!("  Usage: move <unit_index> <province_name>");
+        println!("  Example: move 0 France City");
+        println!("  Use 'army' to see unit indices.");
+        return;
+    }
+
+    let index: usize = match parts[0].parse() {
+        Ok(i) => i,
+        Err(_) => {
+            println!(
+                "  Invalid unit index: '{}'. Use 'army' to see indices.",
+                parts[0]
+            );
+            return;
+        }
+    };
+    let province_name = parts[1].trim();
+
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+
+    if index >= player.army.len() {
+        println!(
+            "  Invalid index {}. You have {} army units.",
+            index,
+            player.army.len()
+        );
+        return;
+    }
+
+    let unit_type = player.army[index].unit_type;
+
+    // Militia units cannot move
+    if !unit_type.can_move() {
+        println!("  {:?} units cannot move (garrison only).", unit_type);
+        return;
+    }
+
+    // Find target province by name
+    let lower_name = province_name.to_lowercase();
+    let matching_provinces: Vec<_> = game
+        .provinces
+        .iter()
+        .filter(|p| p.owner == player_id && p.name.to_lowercase().contains(&lower_name))
+        .collect();
+
+    let target_province_id = match matching_provinces.len() {
+        0 => {
+            println!(
+                "  No owned province matches '{}'. You can only move units between your provinces.",
+                province_name
+            );
+            return;
+        }
+        1 => matching_provinces[0].id,
+        _ => {
+            println!(
+                "  Multiple provinces match '{}'. Be more specific.",
+                province_name
+            );
+            return;
+        }
+    };
+
+    let target_name = matching_provinces
+        .first()
+        .map(|p| p.name.clone())
+        .unwrap_or_default();
+
+    // Check the unit is not already in the target province
+    if player.army[index].position == target_province_id {
+        println!("  Unit is already in {}.", target_name);
+        return;
+    }
+
+    // Move the unit
+    let player = game.get_nation_mut(player_id).unwrap();
+    player.army[index].position = target_province_id;
+
+    println!("  Moved {:?} to {}.", unit_type, target_name);
 }

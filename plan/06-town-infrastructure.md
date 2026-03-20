@@ -10,7 +10,7 @@ and factory capacity.
 ## Checklist
 
 ### Settlement Progression
-- [ ] **Hamlet** — initial state; produces raw resources only
+- [x] **Hamlet** — initial state; produces raw resources only
 - [ ] **Village** — intermediate; begins producing when connected and factory built
 - [ ] **Town** — fully industrialized; maximum production capacity
 - [ ] 6-turn delay from connection before first materials appear

@@ -750,7 +750,7 @@ mod tests {
         let mut rng = Rng::from_seed(42);
         for _ in 0..1000 {
             let val = rng.range(5, 10);
-            assert!(val >= 5 && val <= 10, "range produced {val}");
+            assert!((5..=10).contains(&val), "range produced {val}");
         }
     }
 

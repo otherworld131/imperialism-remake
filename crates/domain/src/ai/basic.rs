@@ -36,12 +36,13 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<String> {
 
     for nation_id in &ai_nation_ids {
         ai_research_tech(game, *nation_id, current_year, &mut actions);
-        ai_build_infrastructure(game, *nation_id);
+        ai_manage_economy(game, *nation_id);
         ai_recruit_workers(game, *nation_id);
         ai_manage_civilians(game, *nation_id);
         ai_build_military(game, *nation_id, &mut actions);
         ai_trade(game, *nation_id);
         ai_build_transport(game, *nation_id);
+        ai_military_strategy(game, *nation_id, &mut actions);
     }
 
     ai_declare_wars(game, &ai_nation_ids, &mut actions);
@@ -425,49 +426,302 @@ fn ai_build_military(game: &mut GameState, nation_id: NationId, actions: &mut Ve
 
 /// Every ~20 turns, each AI Great Power considers declaring war on a Minor Nation.
 ///
-/// Uses turn number + nation id as a pseudo-random seed to pick a target.
-/// Only declares war if not already at war with that minor.
+/// Smarter targeting:
+/// - Prefer Minor Nations with more tiles (more valuable provinces)
+/// - Only attack if army size >= 4 units (enough to beat a garrison)
+/// - Don't declare war on nations that another AI is already at war with (avoid dogpiling)
 fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId], actions: &mut Vec<String>) {
     if !game.turn.0.is_multiple_of(20) {
         return;
     }
 
-    // Collect minor nation IDs and their capitals
-    let minor_nations: Vec<(NationId, ProvinceId, String)> = game
+    // Collect minor nation IDs, their capitals, names, and tile counts
+    let minor_nations: Vec<(NationId, ProvinceId, String, usize)> = game
         .nations
         .iter()
         .filter(|n| !n.is_great_power())
-        .map(|n| (n.id, n.capital_province_id, n.name.clone()))
+        .map(|n| {
+            // Count total tiles across all provinces owned by this minor
+            let total_tiles: usize = game
+                .provinces
+                .iter()
+                .filter(|p| p.owner == n.id)
+                .map(|p| p.tiles.len())
+                .sum();
+            (n.id, n.capital_province_id, n.name.clone(), total_tiles)
+        })
         .collect();
 
     if minor_nations.is_empty() {
         return;
     }
 
+    // Track which minors are being targeted this round to avoid dogpiling
+    let mut targeted_this_round: Vec<NationId> = Vec::new();
+
+    // Also check which minors are already at war with any AI
+    let already_targeted: Vec<NationId> = minor_nations
+        .iter()
+        .filter(|(mn_id, _, _, _)| {
+            ai_nation_ids.iter().any(|&ai_id| {
+                game.diplomacy
+                    .get_relation(ai_id, *mn_id)
+                    .map(|r| r.at_war)
+                    .unwrap_or(false)
+            })
+        })
+        .map(|(mn_id, _, _, _)| *mn_id)
+        .collect();
+
     for &ai_id in ai_nation_ids {
-        // Pseudo-random index based on turn + nation id
+        // Only attack if AI has >= 4 army units
+        let army_size = game.get_nation(ai_id).map(|n| n.army.len()).unwrap_or(0);
+        if army_size < 4 {
+            continue;
+        }
+
+        // Find best target: not already at war, not dogpiled, most tiles (most valuable)
+        let mut candidates: Vec<_> = minor_nations
+            .iter()
+            .filter(|(mn_id, _, _, _)| {
+                // Not already at war with this AI
+                let at_war = game
+                    .diplomacy
+                    .get_relation(ai_id, *mn_id)
+                    .map(|r| r.at_war)
+                    .unwrap_or(false);
+                // Not already targeted by another AI (anti-dogpile)
+                let dogpiled =
+                    already_targeted.contains(mn_id) || targeted_this_round.contains(mn_id);
+                !at_war && !dogpiled
+            })
+            .collect();
+
+        // Sort by tile count descending (most valuable first)
+        candidates.sort_by(|a, b| b.3.cmp(&a.3));
+
+        // Use pseudo-random seed to add some variety: pick from top 3 candidates
+        if candidates.is_empty() {
+            continue;
+        }
         let seed = (game.turn.0 as usize).wrapping_add(ai_id.0 as usize);
-        let target_index = seed % minor_nations.len();
-        let (target_id, target_capital, ref target_name) = minor_nations[target_index];
+        let pick_range = candidates.len().min(3);
+        let target_index = seed % pick_range;
+        let (target_id, target_capital, ref target_name, _) = *candidates[target_index];
 
-        // Check if already at war with this minor
-        let already_at_war = game
-            .diplomacy
-            .get_relation(ai_id, target_id)
-            .map(|r| r.at_war)
-            .unwrap_or(false);
+        let attacker_name = game
+            .get_nation(ai_id)
+            .map(|n| n.name.clone())
+            .unwrap_or_else(|| "Unknown".to_string());
+        game.diplomacy.declare_war(ai_id, target_id);
+        game.pending_attacks.push((ai_id, target_capital));
+        targeted_this_round.push(target_id);
+        actions.push(format!(
+            "{} has declared war on {}!",
+            attacker_name, target_name
+        ));
+    }
+}
 
-        if !already_at_war {
-            let attacker_name = game
-                .get_nation(ai_id)
+/// Strategic military decisions for an AI nation.
+///
+/// - If at war and has >= 4 army units, queue an attack on the enemy's weakest province
+/// - If not at war and has >= 6 army units and turn > 40, consider declaring war on a weak Minor Nation
+/// - Upgrade units when tech allows (call unit_type.upgrade_to(), check if prereq tech is researched)
+fn ai_military_strategy(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
+    // Phase 1: Upgrade units if possible
+    ai_upgrade_units(game, nation_id);
+
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let army_size = nation.army.len();
+    let nation_name = nation.name.clone();
+
+    // Find nations we are at war with
+    let enemies: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.id != nation_id)
+        .filter(|n| {
+            game.diplomacy
+                .get_relation(nation_id, n.id)
+                .map(|r| r.at_war)
+                .unwrap_or(false)
+        })
+        .map(|n| n.id)
+        .collect();
+
+    // If at war and has >= 4 army units, attack enemy's weakest province
+    if !enemies.is_empty() && army_size >= 4 {
+        // Find the weakest enemy province (fewest tiles)
+        let mut best_target: Option<(ProvinceId, usize)> = None;
+        for &enemy_id in &enemies {
+            for prov in &game.provinces {
+                if prov.owner == enemy_id {
+                    let tile_count = prov.tiles.len();
+                    if best_target.is_none() || tile_count < best_target.unwrap().1 {
+                        best_target = Some((prov.id, tile_count));
+                    }
+                }
+            }
+        }
+
+        if let Some((target_prov, _)) = best_target {
+            // Only queue if not already pending
+            let already_pending = game
+                .pending_attacks
+                .iter()
+                .any(|(a, p)| *a == nation_id && *p == target_prov);
+            if !already_pending {
+                game.pending_attacks.push((nation_id, target_prov));
+            }
+        }
+    }
+
+    // If not at war and has >= 6 army units and turn > 40, consider proactive war
+    if enemies.is_empty() && army_size >= 6 && game.turn.0 > 40 {
+        // Find weakest Minor Nation (fewest total tiles, not at war with anyone)
+        let minor_nations: Vec<(NationId, ProvinceId, usize)> = game
+            .nations
+            .iter()
+            .filter(|n| !n.is_great_power())
+            .map(|n| {
+                let total_tiles: usize = game
+                    .provinces
+                    .iter()
+                    .filter(|p| p.owner == n.id)
+                    .map(|p| p.tiles.len())
+                    .sum();
+                (n.id, n.capital_province_id, total_tiles)
+            })
+            .filter(|(mn_id, _, _)| {
+                !game
+                    .diplomacy
+                    .get_relation(nation_id, *mn_id)
+                    .map(|r| r.at_war)
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        // Sort by tile count ascending to find weakest
+        let mut sorted = minor_nations;
+        sorted.sort_by_key(|&(_, _, tiles)| tiles);
+
+        if let Some(&(target_id, target_capital, _)) = sorted.first() {
+            let target_name = game
+                .get_nation(target_id)
                 .map(|n| n.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
-            game.diplomacy.declare_war(ai_id, target_id);
-            game.pending_attacks.push((ai_id, target_capital));
+            game.diplomacy.declare_war(nation_id, target_id);
+            game.pending_attacks.push((nation_id, target_capital));
             actions.push(format!(
                 "{} has declared war on {}!",
-                attacker_name, target_name
+                nation_name, target_name
             ));
+        }
+    }
+}
+
+/// Upgrade units when tech prerequisites have been researched.
+fn ai_upgrade_units(game: &mut GameState, nation_id: NationId) {
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let researched = nation.researched_techs.clone();
+
+    // Collect upgrade info: (index, new_type)
+    let upgrades: Vec<(usize, ArmyUnitType)> = nation
+        .army
+        .iter()
+        .enumerate()
+        .filter_map(|(i, unit)| {
+            unit.unit_type.upgrade_to().and_then(|new_type| {
+                let prereq = new_type.stats().prerequisite_tech;
+                match prereq {
+                    // If the upgrade requires a tech, check it's researched
+                    Some(ref tech_name) => {
+                        let has_tech = game
+                            .tech_tree
+                            .all_techs()
+                            .iter()
+                            .any(|t| t.name == *tech_name && researched.contains(&t.id));
+                        if has_tech { Some((i, new_type)) } else { None }
+                    }
+                    // No tech prereq: always upgrade
+                    None => Some((i, new_type)),
+                }
+            })
+        })
+        .collect();
+
+    // Apply upgrades
+    if let Some(nation) = game.get_nation_mut(nation_id) {
+        for (idx, new_type) in upgrades {
+            if idx < nation.army.len() {
+                nation.army[idx].unit_type = new_type;
+            }
+        }
+    }
+}
+
+/// Consolidate AI economic decisions.
+///
+/// - If AI has no mills and has lumber+steel materials: build a LumberMill
+/// - If AI has mills producing materials, build corresponding factories
+/// - Expand mills when capacity is maxed (if resources > capacity * 2)
+fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
+    // Build infrastructure handles mills and factories
+    ai_build_infrastructure(game, nation_id);
+
+    // Expand mills when input resources exceed capacity * 2
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let expansions_needed: Vec<BuildingType> = nation
+        .buildings
+        .iter()
+        .filter_map(|b| {
+            let input_resources = match b.building_type {
+                BuildingType::LumberMill => nation.resource_amount(ResourceType::Timber),
+                BuildingType::SteelMill => {
+                    nation.resource_amount(ResourceType::Coal)
+                        + nation.resource_amount(ResourceType::Iron)
+                }
+                BuildingType::TextileMill => {
+                    nation.resource_amount(ResourceType::Cotton)
+                        + nation.resource_amount(ResourceType::Wool)
+                }
+                _ => return None,
+            };
+            if input_resources > b.effective_capacity() * 2 && b.pending_capacity == 0 {
+                Some(b.building_type)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for bt in expansions_needed {
+        let nation = match game.get_nation(nation_id) {
+            Some(n) => n,
+            None => return,
+        };
+        let has_lumber = nation.material_amount(MaterialType::Lumber) >= 1;
+        let has_steel = nation.material_amount(MaterialType::Steel) >= 1;
+        if has_lumber && has_steel {
+            let nation = game.get_nation_mut(nation_id).unwrap();
+            nation.consume_material(MaterialType::Lumber, 1);
+            nation.consume_material(MaterialType::Steel, 1);
+            if let Some(building) = nation.get_building_mut(bt) {
+                building.start_expansion(1);
+            }
         }
     }
 }
@@ -1004,6 +1258,16 @@ mod tests {
         let mut game = test_game_with_ai_and_minor();
         // Set to turn 20 (divisible by 20)
         game.turn = TurnNumber::new(20);
+        // Give AI enough army units to meet the >= 4 threshold for war declaration
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        for i in 0..4 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(5000 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
 
         run_ai_turns(&mut game);
 

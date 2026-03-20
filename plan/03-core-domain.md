@@ -41,7 +41,7 @@ services. It has **zero** external dependencies — no framework, no I/O, no UI.
 - [x] `Nation` entity — name, color, type (GreatPower / MinorNation), provinces, treasury
 - [x] `Province` entity — name, owner, tiles collection, capital tile, garrison
 - [x] `Tile` entity — HexCoord, terrain, resource, improvement level, infrastructure
-- [ ] `Unit` entity — type, owner, position, health, medals, movement points
+- [x] `Unit` entity — type, owner, position, health, medals, movement points
 - [ ] `Building` entity — type, capacity, upgrades
 - [ ] `TechResearch` entity — tech ID, researched flag, turn researched
 

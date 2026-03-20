@@ -47,10 +47,10 @@ simultaneously.
 ### Turn Resolution Pipeline
 - [x] `TurnProcessor` trait orchestrates the entire resolution
 - [ ] Steps executed in deterministic order:
-  1. [ ] **Civilian actions resolve** — specialists improve tiles, engineers build infrastructure
+  1. [x] **Civilian actions resolve** — specialists improve tiles, engineers build infrastructure
   2. [x] **Production resolves** — mills/factories process resources using assigned inputs
   3. [ ] **Transport resolves** — freight cars deliver resources to capital
-  4. [ ] **Immigration resolves** — new workers arrive if canned food + clothing + furniture available
+  4. [x] **Immigration resolves** — new workers arrive if canned food + clothing + furniture available
   5. [ ] **Technology resolves** — newly purchased techs take effect; new techs become available
   6. [ ] **Trade resolves** — offers/bids matched, transactions executed, revenue generated
   7. [ ] **Diplomacy resolves** — treaties accepted/rejected, relationship scores updated

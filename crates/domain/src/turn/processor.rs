@@ -7,6 +7,7 @@ use crate::economy::production::{
 use crate::economy::trade::{self, TradeTransaction};
 use crate::events::*;
 use crate::game_state::GameState;
+use crate::map::SettlementLevel;
 use crate::military::combat::{BattleResult, CombatForce, create_garrison, resolve_battle};
 use crate::turn::scoring::{CouncilVoteResult, calculate_score, run_council_vote};
 use crate::types::*;
@@ -35,6 +36,67 @@ pub struct TurnReport {
     pub ai_actions: Vec<String>,
     /// Descriptions of completed civilian work this turn.
     pub civilian_completions: Vec<(NationId, String)>,
+    /// Resources lost to insufficient transport capacity: (nation, resource, amount lost).
+    pub transport_overflow: Vec<(NationId, ResourceType, u32)>,
+    /// Workers recruited via immigration this turn: (nation, count).
+    pub immigration: Vec<(NationId, u32)>,
+    /// Settlement upgrades that happened this turn: (province_id, new_level_name).
+    pub settlement_upgrades: Vec<(ProvinceId, String)>,
+}
+
+impl TurnReport {
+    /// Format a compact summary line suitable for CLI display.
+    ///
+    /// Example: `Turn 21 (1820 Q1) | Treasury: $8,500 | Workers: 5 | Army: 3 | Provinces: 9 | Score: 1,230 (#2)`
+    pub fn format_summary_line(&self, game: &GameState) -> String {
+        let player = match game.get_nation(game.human_player_nation) {
+            Some(n) => n,
+            None => return format!("Turn {} ({})", self.turn.0, self.turn),
+        };
+
+        let treasury = player.treasury.as_dollars();
+        let workers = player.labor.total_workers();
+        let army = player.army.len();
+        let provinces = player.province_count();
+
+        // Find score and rank from the scores list
+        let (score, rank) = self
+            .scores
+            .iter()
+            .enumerate()
+            .find(|(_, (nid, _, _))| *nid == game.human_player_nation)
+            .map(|(i, (_, _, s))| (*s, i + 1))
+            .unwrap_or((0, 0));
+
+        format!(
+            "Turn {} ({}) | Treasury: ${} | Workers: {} | Army: {} | Provinces: {} | Score: {} (#{})",
+            self.turn.0,
+            self.turn,
+            format_number_with_commas(treasury),
+            workers,
+            army,
+            provinces,
+            format_number_with_commas(score as i64),
+            rank
+        )
+    }
+}
+
+/// Format a number with comma separators (e.g. 8500 -> "8,500").
+fn format_number_with_commas(n: i64) -> String {
+    let negative = n < 0;
+    let s = n.unsigned_abs().to_string();
+    let mut result = String::new();
+    for (i, ch) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(ch);
+    }
+    if negative {
+        result.push('-');
+    }
+    result.chars().rev().collect()
 }
 
 /// Process one turn of the game.
@@ -59,6 +121,9 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         scores: Vec::new(),
         ai_actions: Vec::new(),
         civilian_completions: Vec::new(),
+        transport_overflow: Vec::new(),
+        immigration: Vec::new(),
+        settlement_upgrades: Vec::new(),
     };
 
     // 0. AI decisions for computer-controlled Great Powers
@@ -70,6 +135,9 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
 
     // 1. Resource production: gather yields from all owned tiles
     collect_resources(game, &mut report);
+
+    // 1b. Transport resolution: cap resources delivered by freight car capacity
+    resolve_transport(game, &mut report);
 
     // 2. Gold/Gems -> money conversion
     convert_monetary_resources(game, &mut report);
@@ -89,6 +157,9 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 5. Food consumption
     food_consumption(game, &mut report);
 
+    // 5b. Immigration: auto-recruit workers if nation has surplus food and materials
+    resolve_immigration(game, &mut report);
+
     // 6. Maintenance costs (placeholder)
     apply_maintenance(game, &mut report);
 
@@ -103,6 +174,9 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
 
     // 10. Calculate and store scores for all Great Powers
     calculate_scores(game, &mut report);
+
+    // 10b. Update settlement progression for connected provinces
+    update_settlements(game, &mut report);
 
     // 11. Generate newspaper
     generate_newspaper(game, &mut report);
@@ -149,6 +223,273 @@ fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
 
     // Record in report
     report.resource_production.extend(production_data);
+}
+
+/// Resolve transport: cap resources delivered *this turn* based on freight car capacity.
+///
+/// Works on the resources collected this turn (from `report.resource_production`), not on the
+/// total warehouse. Resources already in the warehouse from prior turns are unaffected.
+///
+/// For each nation:
+/// - If freight cars == 0: only resources from the capital province tiles are delivered.
+///   Resources from non-capital provinces are "left in the field" and subtracted.
+/// - If freight cars > 0: total resources delivered this turn are capped at freight car capacity.
+///   Excess resources are removed from warehouse.
+/// - Resources lost are tracked in `report.transport_overflow`.
+fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
+    // Gather per-nation resource production from this turn
+    let nation_ids: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
+
+    for nation_id in nation_ids {
+        let nation = match game.nations.iter().find(|n| n.id == nation_id) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        let capacity = nation.transport.total_capacity();
+
+        // Aggregate this turn's resource production for this nation
+        let mut produced_this_turn: Vec<(ResourceType, u32)> = Vec::new();
+        for (nid, resource, amount) in &report.resource_production {
+            if *nid == nation_id && *amount > 0 {
+                if let Some(entry) = produced_this_turn.iter_mut().find(|(r, _)| *r == *resource) {
+                    entry.1 += amount;
+                } else {
+                    produced_this_turn.push((*resource, *amount));
+                }
+            }
+        }
+
+        let total_produced: u32 = produced_this_turn.iter().map(|(_, q)| q).sum();
+        if total_produced == 0 {
+            continue;
+        }
+
+        if capacity == 0 {
+            // Zero freight cars: only capital province resources are delivered.
+            // Calculate how many resources came from capital province tiles.
+            let capital_province_id = nation.capital_province_id;
+            let capital_tile_count = game
+                .provinces
+                .iter()
+                .find(|p| p.id == capital_province_id)
+                .map(|p| p.tiles.len() as u32)
+                .unwrap_or(0);
+
+            // Keep resources up to capital_tile_count (those are adjacent to capital).
+            let keep = capital_tile_count.min(total_produced);
+            if total_produced > keep {
+                let overflow = total_produced - keep;
+                let nation = game.nations.iter_mut().find(|n| n.id == nation_id).unwrap();
+                let mut remaining_to_remove = overflow;
+
+                for (resource, produced) in &produced_this_turn {
+                    if remaining_to_remove == 0 {
+                        break;
+                    }
+                    let current_in_warehouse = nation.resource_amount(*resource);
+                    let removable = (*produced)
+                        .min(current_in_warehouse)
+                        .min(remaining_to_remove);
+                    if removable > 0 {
+                        nation.remove_resource(*resource, removable);
+                        report
+                            .transport_overflow
+                            .push((nation_id, *resource, removable));
+                        remaining_to_remove -= removable;
+                    }
+                }
+            }
+        } else if total_produced > capacity {
+            // Has freight cars but this turn's production exceeds capacity.
+            let overflow = total_produced - capacity;
+
+            let nation = game.nations.iter_mut().find(|n| n.id == nation_id).unwrap();
+            let mut remaining_to_remove = overflow;
+
+            for (resource, produced) in &produced_this_turn {
+                if remaining_to_remove == 0 {
+                    break;
+                }
+                let current_in_warehouse = nation.resource_amount(*resource);
+                let removable = (*produced)
+                    .min(current_in_warehouse)
+                    .min(remaining_to_remove);
+                if removable > 0 {
+                    nation.remove_resource(*resource, removable);
+                    report
+                        .transport_overflow
+                        .push((nation_id, *resource, removable));
+                    remaining_to_remove -= removable;
+                }
+            }
+        }
+    }
+}
+
+/// Resolve immigration for all nations.
+///
+/// For each nation, if they have the required materials (1 CannedFood + 1 Clothing + 1 Furniture)
+/// in their goods/materials warehouses, auto-recruit 1 untrained worker.
+/// Limit: max 1 immigrant per 4 provinces (or per 3 if Capitol building is expanded beyond level 1).
+/// Only recruits if the nation has a food surplus (total food > total workers).
+fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
+    let nation_ids: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
+
+    for nation_id in nation_ids {
+        let nation = match game.nations.iter().find(|n| n.id == nation_id) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        // Only Great Powers get immigration
+        if !nation.is_great_power() {
+            continue;
+        }
+
+        // Check food surplus: total raw food > total workers
+        let grain = nation.resource_amount(ResourceType::Grain);
+        let fruit = nation.resource_amount(ResourceType::Fruit);
+        let livestock = nation.resource_amount(ResourceType::Livestock);
+        let total_food = grain + fruit + livestock;
+        let total_workers = nation.labor.total_workers();
+
+        if total_food <= total_workers {
+            continue; // no food surplus
+        }
+
+        // Immigration limit: 1 per 4 provinces, or 1 per 3 if Capitol expanded
+        let capitol_expanded = nation
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::Capitol)
+            .map(|b| b.effective_capacity() > 1)
+            .unwrap_or(false);
+
+        let provinces_per_immigrant = if capitol_expanded { 3 } else { 4 };
+        let province_count = nation.province_count() as u32;
+        let max_immigrants = if province_count == 0 {
+            0
+        } else {
+            province_count / provinces_per_immigrant
+        };
+
+        if max_immigrants == 0 {
+            continue;
+        }
+
+        // Check if nation has required materials: 1 CannedFood + 1 Clothing + 1 Furniture
+        let has_canned_food = nation.material_amount(MaterialType::CannedFood) >= 1;
+        let has_clothing = nation.goods_amount(GoodsType::Clothing) >= 1;
+        let has_furniture = nation.goods_amount(GoodsType::Furniture) >= 1;
+
+        if !has_canned_food || !has_clothing || !has_furniture {
+            continue;
+        }
+
+        // Recruit immigrants (up to max_immigrants, consuming 1 set of materials per immigrant)
+        let mut recruited = 0;
+        let nation = game.nations.iter_mut().find(|n| n.id == nation_id).unwrap();
+
+        for _ in 0..max_immigrants {
+            // Check materials for each immigrant
+            let can_food = nation.material_amount(MaterialType::CannedFood) >= 1;
+            let can_clothing = nation.goods_amount(GoodsType::Clothing) >= 1;
+            let can_furniture = nation.goods_amount(GoodsType::Furniture) >= 1;
+
+            if !can_food || !can_clothing || !can_furniture {
+                break;
+            }
+
+            nation.consume_material(MaterialType::CannedFood, 1);
+            nation.consume_goods(GoodsType::Clothing, 1);
+            nation.consume_goods(GoodsType::Furniture, 1);
+            nation.labor.recruit_immigrant();
+            recruited += 1;
+        }
+
+        if recruited > 0 {
+            report.immigration.push((nation_id, recruited));
+        }
+    }
+}
+
+/// Update settlement progression for connected provinces.
+///
+/// For each province connected to its nation's capital via depot/port:
+/// - If the province just became connected, start the industrialization countdown (6 turns).
+/// - Tick down the industrialization counter each turn.
+/// - When the countdown reaches 0 and the settlement is a Hamlet, upgrade to Village.
+fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
+    // Collect province IDs and their owner for processing
+    let province_data: Vec<(ProvinceId, NationId)> =
+        game.provinces.iter().map(|p| (p.id, p.owner)).collect();
+
+    for (province_id, owner_id) in &province_data {
+        let province = match game.provinces.iter().find(|p| p.id == *province_id) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        // Skip if this is the nation's capital province (already developed)
+        let is_capital = game
+            .nations
+            .iter()
+            .find(|n| n.id == *owner_id)
+            .map(|n| n.capital_province_id == *province_id)
+            .unwrap_or(false);
+
+        if is_capital {
+            continue;
+        }
+
+        if province.connected_to_capital {
+            match province.industrialization_turns_remaining {
+                None => {
+                    // Just connected or already industrialized; if still Hamlet, start countdown
+                    if province.settlement_level == SettlementLevel::Hamlet {
+                        let prov = game
+                            .provinces
+                            .iter_mut()
+                            .find(|p| p.id == *province_id)
+                            .unwrap();
+                        prov.industrialization_turns_remaining = Some(6);
+                    }
+                }
+                Some(remaining) => {
+                    if remaining <= 1 {
+                        // Countdown complete: upgrade settlement
+                        let prov = game
+                            .provinces
+                            .iter_mut()
+                            .find(|p| p.id == *province_id)
+                            .unwrap();
+
+                        if prov.settlement_level == SettlementLevel::Hamlet {
+                            prov.settlement_level = SettlementLevel::Village;
+                            prov.industrialization_turns_remaining = None;
+
+                            let headline = format!("{} has grown into a Village!", prov.name);
+                            report.newspaper_headlines.push(headline.clone());
+                            report
+                                .settlement_upgrades
+                                .push((*province_id, "Village".to_string()));
+                        } else {
+                            prov.industrialization_turns_remaining = None;
+                        }
+                    } else {
+                        // Tick down
+                        let prov = game
+                            .provinces
+                            .iter_mut()
+                            .find(|p| p.id == *province_id)
+                            .unwrap();
+                        prov.industrialization_turns_remaining = Some(remaining - 1);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Resolve civilian work actions for all nations.
@@ -721,7 +1062,29 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
             units: garrison,
         };
 
-        let result = resolve_battle(&attacker_force, &defender_force, province_id);
+        // Get terrain and fort level from the province's capital tile
+        let (battle_terrain, battle_fort_level) = game
+            .get_province(province_id)
+            .and_then(|prov| {
+                game.hex_map.get_tile(prov.capital_tile).map(|tile| {
+                    let terrain = tile.terrain();
+                    let fort_level = if tile.infrastructure.has_fort {
+                        tile.infrastructure.fort_level
+                    } else {
+                        0
+                    };
+                    (Some(terrain), fort_level)
+                })
+            })
+            .unwrap_or((None, 0));
+
+        let result = resolve_battle(
+            &attacker_force,
+            &defender_force,
+            province_id,
+            battle_terrain,
+            battle_fort_level,
+        );
 
         // Update attacker's surviving army
         if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
@@ -1856,5 +2219,444 @@ mod tests {
             report.techs_available.is_empty(),
             "No techs should be available after researching all 1815 techs"
         );
+    }
+
+    // ── Transport resolution ──────────────────────────────────
+
+    #[test]
+    fn transport_no_overflow_when_capacity_exceeds_production() {
+        let mut game = test_game_state();
+        // Give nation freight cars: capacity 10, production is 2 (1 Grain + 1 Timber)
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .transport
+            .build_freight_cars(10);
+
+        let report = process_turn(&mut game);
+
+        assert!(
+            report.transport_overflow.is_empty(),
+            "No overflow when capacity >= production"
+        );
+        // Resources should be fully delivered
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 1);
+        assert_eq!(nation.resource_amount(ResourceType::Timber), 1);
+    }
+
+    #[test]
+    fn transport_overflow_when_capacity_insufficient() {
+        // Build a game state with many tiles producing resources
+        let mut hex_map = HexMap::new(10, 10);
+        let mut tiles = Vec::new();
+        for i in 0..6 {
+            let coord = HexCoord::new(i, 0);
+            let tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+            hex_map.set_tile(coord, tile);
+            tiles.push(coord);
+        }
+
+        let province = Province::new(
+            ProvinceId(1),
+            "BigProvince".to_string(),
+            NationId(1),
+            HexCoord::new(0, 0),
+            tiles,
+            4,
+        );
+
+        let mut nation = Nation::new(
+            NationId(1),
+            "TransportTest".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation.treasury = Money::dollars(5000);
+        // Give only 3 freight cars, but 6 farms produce 6 Grain
+        nation.transport.build_freight_cars(3);
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province],
+            nations: vec![nation],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+        };
+
+        let report = process_turn(&mut game);
+
+        // 6 grain produced, capacity 3 -> 3 overflow
+        let total_overflow: u32 = report
+            .transport_overflow
+            .iter()
+            .filter(|(nid, _, _)| *nid == NationId(1))
+            .map(|(_, _, q)| *q)
+            .sum();
+        assert_eq!(total_overflow, 3);
+
+        // Should have 3 grain remaining
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 3);
+    }
+
+    #[test]
+    fn transport_zero_cars_keeps_capital_province_resources() {
+        let mut game = test_game_state();
+        // Default: 0 freight cars, 2 tiles in capital province (Farm + ScrubForest)
+        // Produces 2 resources total, capital tile count = 2, so all should be kept
+
+        let report = process_turn(&mut game);
+
+        assert!(
+            report.transport_overflow.is_empty(),
+            "With 0 freight cars but only capital province tiles, no overflow"
+        );
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 1);
+        assert_eq!(nation.resource_amount(ResourceType::Timber), 1);
+    }
+
+    // ── Immigration ──────────────────────────────────────────
+
+    #[test]
+    fn immigration_requires_materials_and_food_surplus() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+
+        // Give sufficient materials for immigration
+        nation.add_material(MaterialType::CannedFood, 2);
+        nation.add_goods(GoodsType::Clothing, 2);
+        nation.add_goods(GoodsType::Furniture, 2);
+
+        // Give food surplus
+        nation.add_resource(ResourceType::Grain, 20);
+
+        // Start with 0 workers so food surplus is guaranteed
+        nation.labor.untrained = 0;
+
+        // Give enough provinces: need at least 4 provinces for 1 immigrant
+        for i in 2..=5 {
+            nation.add_province(ProvinceId(i));
+        }
+
+        let report = process_turn(&mut game);
+
+        let immigration: u32 = report
+            .immigration
+            .iter()
+            .filter(|(nid, _)| *nid == NationId(1))
+            .map(|(_, q)| *q)
+            .sum();
+        assert_eq!(
+            immigration, 1,
+            "Should recruit 1 immigrant with 4+ provinces"
+        );
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(nation.labor.untrained, 1, "Should have 1 untrained worker");
+    }
+
+    #[test]
+    fn immigration_does_not_happen_without_food_surplus() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+
+        // Materials present
+        nation.add_material(MaterialType::CannedFood, 2);
+        nation.add_goods(GoodsType::Clothing, 2);
+        nation.add_goods(GoodsType::Furniture, 2);
+
+        // Workers need food: 5 workers, only 4 food -> no surplus
+        nation.labor.untrained = 5;
+        nation.add_resource(ResourceType::Grain, 4);
+
+        for i in 2..=5 {
+            nation.add_province(ProvinceId(i));
+        }
+
+        let report = process_turn(&mut game);
+
+        let immigration: u32 = report
+            .immigration
+            .iter()
+            .filter(|(nid, _)| *nid == NationId(1))
+            .map(|(_, q)| *q)
+            .sum();
+        assert_eq!(immigration, 0, "No immigration without food surplus");
+    }
+
+    #[test]
+    fn immigration_does_not_happen_without_materials() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+
+        // Plenty of food, no materials
+        nation.add_resource(ResourceType::Grain, 20);
+
+        for i in 2..=5 {
+            nation.add_province(ProvinceId(i));
+        }
+
+        let report = process_turn(&mut game);
+
+        let immigration: u32 = report
+            .immigration
+            .iter()
+            .filter(|(nid, _)| *nid == NationId(1))
+            .map(|(_, q)| *q)
+            .sum();
+        assert_eq!(immigration, 0, "No immigration without materials");
+    }
+
+    #[test]
+    fn immigration_limited_by_province_count() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+
+        // Plenty of everything
+        nation.add_material(MaterialType::CannedFood, 10);
+        nation.add_goods(GoodsType::Clothing, 10);
+        nation.add_goods(GoodsType::Furniture, 10);
+        nation.add_resource(ResourceType::Grain, 50);
+        nation.labor.untrained = 0;
+
+        // With only 1 province, max immigrants = 1/4 = 0
+        // (already has 1 province from construction)
+
+        let report = process_turn(&mut game);
+
+        let immigration: u32 = report
+            .immigration
+            .iter()
+            .filter(|(nid, _)| *nid == NationId(1))
+            .map(|(_, q)| *q)
+            .sum();
+        assert_eq!(immigration, 0, "No immigration with fewer than 4 provinces");
+    }
+
+    // ── Building tick / expansion ──────────────────────────────
+
+    #[test]
+    fn building_expansion_completes_after_two_turns_in_pipeline() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+
+        // Start expanding the SteelMill from capacity 2 by adding 3
+        nation
+            .get_building_mut(BuildingType::SteelMill)
+            .unwrap()
+            .start_expansion(3);
+
+        // Verify initial state
+        let mill = nation
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::SteelMill)
+            .unwrap();
+        assert_eq!(mill.capacity, 2);
+        assert_eq!(mill.turns_until_upgrade, 2);
+
+        // Turn 1
+        process_turn(&mut game);
+        let nation = game.get_nation(NationId(1)).unwrap();
+        let mill = nation
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::SteelMill)
+            .unwrap();
+        assert_eq!(mill.capacity, 2);
+        assert_eq!(mill.turns_until_upgrade, 1);
+
+        // Turn 2 - expansion completes
+        process_turn(&mut game);
+        let nation = game.get_nation(NationId(1)).unwrap();
+        let mill = nation
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::SteelMill)
+            .unwrap();
+        assert_eq!(mill.capacity, 5); // 2 + 3
+        assert_eq!(mill.turns_until_upgrade, 0);
+        assert_eq!(mill.pending_capacity, 0);
+    }
+
+    // ── Settlement progression ──────────────────────────────────
+
+    #[test]
+    fn settlement_upgrades_after_six_turns_connected() {
+        let coord1 = HexCoord::new(0, 0);
+        let coord2 = HexCoord::new(3, 3);
+
+        let hex_map = HexMap::new(10, 10);
+
+        let province_capital = Province::new(
+            ProvinceId(1),
+            "Capital".to_string(),
+            NationId(1),
+            coord1,
+            vec![coord1],
+            4,
+        );
+
+        let mut province_remote = Province::new(
+            ProvinceId(2),
+            "Remote Land".to_string(),
+            NationId(1),
+            coord2,
+            vec![coord2],
+            4,
+        );
+        // Mark as connected to capital
+        province_remote.connected_to_capital = true;
+        // Settlement starts as Hamlet
+
+        let mut nation = Nation::new(
+            NationId(1),
+            "SettlementNation".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation.treasury = Money::dollars(5000);
+        nation.add_province(ProvinceId(2));
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province_capital, province_remote],
+            nations: vec![nation],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+        };
+
+        // Process 7 turns: 1 turn to start countdown (set to 6), then 6 turns to count down
+        for _ in 0..7 {
+            process_turn(&mut game);
+        }
+
+        let province = game.get_province(ProvinceId(2)).unwrap();
+        assert_eq!(
+            province.settlement_level,
+            crate::map::SettlementLevel::Village,
+            "Province should have upgraded to Village after 6 turns connected"
+        );
+    }
+
+    #[test]
+    fn settlement_does_not_upgrade_if_not_connected() {
+        let coord = HexCoord::new(0, 0);
+        let coord2 = HexCoord::new(3, 3);
+        let hex_map = HexMap::new(10, 10);
+
+        let province_capital = Province::new(
+            ProvinceId(1),
+            "Capital".to_string(),
+            NationId(1),
+            coord,
+            vec![coord],
+            4,
+        );
+
+        let province_disconnected = Province::new(
+            ProvinceId(2),
+            "Disconnected".to_string(),
+            NationId(1),
+            coord2,
+            vec![coord2],
+            4,
+        );
+        // connected_to_capital defaults to false
+
+        let mut nation = Nation::new(
+            NationId(1),
+            "TestNation".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation.treasury = Money::dollars(5000);
+        nation.add_province(ProvinceId(2));
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province_capital, province_disconnected],
+            nations: vec![nation],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+        };
+
+        for _ in 0..10 {
+            process_turn(&mut game);
+        }
+
+        let province = game.get_province(ProvinceId(2)).unwrap();
+        assert_eq!(
+            province.settlement_level,
+            crate::map::SettlementLevel::Hamlet,
+            "Disconnected province should not be upgraded"
+        );
+    }
+
+    // ── Summary line formatting ──────────────────────────────
+
+    #[test]
+    fn format_summary_line_contains_key_info() {
+        let mut game = test_game_state();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.treasury = Money::dollars(8500);
+        nation.labor.untrained = 5;
+        // Add enough food so workers don't starve
+        nation.add_resource(ResourceType::Grain, 10);
+
+        let report = process_turn(&mut game);
+        let summary = report.format_summary_line(&game);
+
+        assert!(
+            summary.contains("Turn 1"),
+            "Summary should contain turn number"
+        );
+        assert!(
+            summary.contains("Treasury: $8,500"),
+            "Summary should contain formatted treasury: {}",
+            summary
+        );
+        assert!(
+            summary.contains("Workers: 5"),
+            "Summary should contain worker count: {}",
+            summary
+        );
+        assert!(
+            summary.contains("Score:"),
+            "Summary should contain score: {}",
+            summary
+        );
+    }
+
+    #[test]
+    fn format_number_with_commas_works() {
+        assert_eq!(super::format_number_with_commas(0), "0");
+        assert_eq!(super::format_number_with_commas(999), "999");
+        assert_eq!(super::format_number_with_commas(1000), "1,000");
+        assert_eq!(super::format_number_with_commas(1234567), "1,234,567");
+        assert_eq!(super::format_number_with_commas(-500), "-500");
+        assert_eq!(super::format_number_with_commas(-1234), "-1,234");
     }
 }
