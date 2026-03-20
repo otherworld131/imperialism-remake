@@ -81,11 +81,11 @@ goods in factories. Three parallel production chains exist.
 - [x] Unit tests for labor allocation and training
 
 ### Warehouse / Inventory
-- [ ] `Warehouse` entity — stores all resources, materials, and goods for a nation
+- [x] `Warehouse` entity — stores all resources, materials, and goods for a nation
 - [ ] Tracks incoming shipments (from transport) vs. available stock
 - [ ] Display of current inventory and expected next-turn deliveries
 - [ ] Resources not transported to capital are lost (no local storage)
-- [ ] Unit tests for warehouse accounting
+- [x] Unit tests for warehouse accounting
 
 ### Revenue & Treasury
 - [x] Gold and Gems automatically convert to money

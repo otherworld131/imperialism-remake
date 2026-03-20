@@ -8,20 +8,20 @@ The save format should be stable, versioned, and forward-compatible.
 ## Checklist
 
 ### Save System Architecture
-- [ ] `SaveRepository` trait — domain defines what needs saving; infrastructure handles how
-- [ ] `GameStateSnapshot` — serializable representation of entire game state
+- [x] `SaveRepository` trait — domain defines what needs saving; infrastructure handles how
+- [x] `GameStateSnapshot` — serializable representation of entire game state
 - [ ] Snapshot includes: map, all nations, all units, all buildings, all diplomatic relations, tech state, turn number, treasury, warehouse, transport orders, pending orders
-- [ ] Snapshot is a pure data object — no behavior, no references to runtime services
-- [ ] Unit tests: snapshot creation from live game state
+- [x] Snapshot is a pure data object — no behavior, no references to runtime services
+- [x] Unit tests: snapshot creation from live game state
 
 ### Serialization Format
-- [ ] JSON primary format (human-readable, debuggable, moddable)
+- [x] JSON primary format (human-readable, debuggable, moddable)
 - [ ] Binary format option for faster load times (`bincode`, `postcard`, or `rmp-serde`)
 - [ ] Schema versioning: each save file includes a format version number
 - [ ] Forward compatibility: newer game versions can load older saves
 - [ ] Migration system: version N save → version N+1 transformation
 - [ ] Compression: saves compressed with gzip/zstd for disk efficiency
-- [ ] Unit tests: serialize → deserialize roundtrip produces identical state
+- [x] Unit tests: serialize → deserialize roundtrip produces identical state
 - [ ] Unit tests: schema migration from older versions
 
 ### Save Slots
@@ -46,7 +46,7 @@ The save format should be stable, versioned, and forward-compatible.
 - [ ] Unit tests: every state component serializes and deserializes correctly
 
 ### Load System
-- [ ] Load from save file → reconstruct full `GameState`
+- [x] Load from save file → reconstruct full `GameState`
 - [ ] Validate loaded state: all invariants hold (no corrupt data)
 - [ ] Graceful error handling: corrupted save → informative error message, not crash
 - [ ] Loading screen with progress indication for large saves
@@ -60,8 +60,8 @@ The save format should be stable, versioned, and forward-compatible.
 - [ ] Export/import saves for sharing
 
 ### Verification Strategy
-- [ ] **Unit tests**: Run test suite — all persistence tests pass
-- [ ] **Roundtrip test**: Create game state → save → load → compare → identical
+- [x] **Unit tests**: Run test suite — all persistence tests pass
+- [x] **Roundtrip test**: Create game state → save → load → compare → identical
 - [ ] **Corruption test**: Tamper with save file bytes → load → verify graceful error, no crash
 - [ ] **Migration test**: Create save with version N schema → migrate to N+1 → load successfully
 - [ ] **Autosave test**: Play 5 turns → verify 5 autosave files created

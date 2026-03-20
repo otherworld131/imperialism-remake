@@ -119,6 +119,27 @@ fn main() {
                     }
                 }
 
+                // Show trade transactions
+                let player_trades: Vec<_> = report
+                    .trade_transactions
+                    .iter()
+                    .filter(|txn| txn.buyer == player_id)
+                    .collect();
+                if !player_trades.is_empty() {
+                    println!();
+                    println!("  Trade this turn:");
+                    for txn in &player_trades {
+                        let seller_name = game
+                            .get_nation(txn.seller)
+                            .map(|n| n.name.as_str())
+                            .unwrap_or("Unknown");
+                        println!(
+                            "    Bought {} {:?} from {} for {}",
+                            txn.quantity, txn.resource, seller_name, txn.total_cost
+                        );
+                    }
+                }
+
                 // Show gold income
                 for (nid, income) in &report.gold_income {
                     if *nid == player_id {
@@ -196,6 +217,10 @@ fn main() {
             "score" => {
                 println!();
                 print_scores(&game);
+            }
+            "trade" => {
+                println!();
+                print_trade(&game);
             }
             "h" | "help" | "?" => {
                 println!();
@@ -783,6 +808,43 @@ fn research_tech(game: &mut GameState, query: &str) {
     }
 }
 
+fn print_trade(game: &GameState) {
+    use domain::economy::trade;
+
+    let offers = trade::generate_minor_nation_offers(&game.nations, &game.provinces, &game.hex_map);
+
+    if offers.is_empty() {
+        println!("  No trade offerings available from Minor Nations.");
+        return;
+    }
+
+    // Group offers by seller
+    let mut by_seller: std::collections::BTreeMap<String, Vec<&trade::TradeOffer>> =
+        std::collections::BTreeMap::new();
+    for offer in &offers {
+        let seller_name = game
+            .get_nation(offer.seller)
+            .map(|n| n.name.clone())
+            .unwrap_or_else(|| format!("Nation {}", offer.seller.0));
+        by_seller.entry(seller_name).or_default().push(offer);
+    }
+
+    println!("  MINOR NATION TRADE OFFERINGS:");
+    for (name, nation_offers) in &by_seller {
+        println!("    {}:", name);
+        let mut sorted_offers: Vec<_> = nation_offers.iter().collect();
+        sorted_offers.sort_by_key(|o| format!("{:?}", o.resource));
+        for offer in sorted_offers {
+            println!(
+                "      {:?}: {} available at {} each",
+                offer.resource, offer.quantity, offer.price_per_unit
+            );
+        }
+    }
+    println!();
+    println!("  (Trade is auto-resolved at the start of each turn)");
+}
+
 fn print_help() {
     println!("  COMMANDS:");
     println!("    [Enter] / turn    — End turn (gather resources, advance time)");
@@ -804,6 +866,7 @@ fn print_help() {
     println!("    map               — Show the world map");
     println!("    provinces         — Show your provinces");
     println!("    nations           — Show all nations");
+    println!("    trade             — Show Minor Nation trade offerings");
     println!("    score             — Show scores for all Great Powers");
     println!("    save              — Save the current game");
     println!("    load <filename>   — Load a saved game");

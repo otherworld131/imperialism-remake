@@ -3,6 +3,7 @@ use crate::economy::buildings::BuildingType;
 use crate::economy::production::{
     ProductionChain, calculate_factory_production, calculate_mill_production,
 };
+use crate::economy::trade::{self, TradeTransaction};
 use crate::events::*;
 use crate::game_state::GameState;
 use crate::turn::scoring::{CouncilVoteResult, run_council_vote};
@@ -23,6 +24,7 @@ pub struct TurnReport {
     pub newspaper_headlines: Vec<String>,
     pub techs_available: Vec<(NationId, Vec<String>)>,
     pub council_vote: Option<CouncilVoteResult>,
+    pub trade_transactions: Vec<TradeTransaction>,
 }
 
 /// Process one turn of the game.
@@ -41,6 +43,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         newspaper_headlines: Vec::new(),
         techs_available: Vec::new(),
         council_vote: None,
+        trade_transactions: Vec::new(),
     };
 
     // 0. AI decisions for computer-controlled Great Powers
@@ -54,6 +57,9 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
 
     // 3. Run production chains (mills then factories)
     run_production(game, &mut report);
+
+    // 3b. Trade session: Minor Nations sell resources to Great Powers
+    resolve_trade_session(game, &mut report);
 
     // 4. Tick buildings (process expansion timers)
     tick_buildings(game);
@@ -357,6 +363,71 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
             report.food_consumed.push((nation.id, 1));
         }
     }
+}
+
+/// Resolve a trade session: generate offers from Minor Nations, auto-generate bids
+/// for the human player, resolve trades, and apply the resulting transactions.
+fn resolve_trade_session(game: &mut GameState, report: &mut TurnReport) {
+    // 1. Generate offers from Minor Nations
+    let offers = trade::generate_minor_nation_offers(&game.nations, &game.provinces, &game.hex_map);
+
+    if offers.is_empty() {
+        return;
+    }
+
+    // 2. Auto-generate bids for the human player: buy 1 of each available resource at base price
+    let human_id = game.human_player_nation;
+    let human_treasury = match game.get_nation(human_id) {
+        Some(n) => n.treasury,
+        None => return,
+    };
+
+    let mut budget = human_treasury;
+    let mut bids = Vec::new();
+
+    // Collect unique tradeable resources from offers
+    let mut available_resources: Vec<ResourceType> = offers
+        .iter()
+        .map(|o| o.resource)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    available_resources.sort_by_key(|r| format!("{:?}", r));
+
+    for resource in available_resources {
+        let price = trade::base_price(resource);
+        if price == Money::ZERO {
+            continue;
+        }
+        if budget.checked_sub(price).is_some() {
+            bids.push(trade::TradeBid {
+                buyer: human_id,
+                resource,
+                quantity: 1,
+                max_price_per_unit: price,
+            });
+            budget -= price;
+        }
+    }
+
+    // 3. Resolve trades
+    let transactions = trade::resolve_trades(&offers, &bids);
+
+    // 4. Apply transactions
+    for txn in &transactions {
+        // Buyer pays money and receives resources
+        if let Some(buyer) = game.get_nation_mut(txn.buyer) {
+            buyer.treasury -= txn.total_cost;
+            buyer.add_resource(txn.resource, txn.quantity);
+        }
+        // Seller gets money
+        if let Some(seller) = game.get_nation_mut(txn.seller) {
+            seller.treasury += txn.total_cost;
+        }
+    }
+
+    // 5. Record in report
+    report.trade_transactions = transactions;
 }
 
 /// Apply maintenance costs. Placeholder: no army units tracked in GameState yet,

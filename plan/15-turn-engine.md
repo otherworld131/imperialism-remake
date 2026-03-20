@@ -89,11 +89,11 @@ simultaneously.
 - [ ] Unit tests: order validation rules
 
 ### AI Turn Orders
-- [ ] AI generates orders for all 5 screens (map, transport, industry, trade, diplomacy)
-- [ ] AI orders generated via `AiDecisionMaker` trait (see plan 16)
-- [ ] AI orders pass through same validation as human orders
+- [x] AI generates orders for all 5 screens (map, transport, industry, trade, diplomacy)
+- [x] AI orders generated via `AiDecisionMaker` trait (see plan 16)
+- [x] AI orders pass through same validation as human orders
 - [ ] AI processing time should be fast (< 2 seconds for all AI players)
-- [ ] Unit tests: AI orders pass validation
+- [x] Unit tests: AI orders pass validation
 
 ### Verification Strategy
 - [x] **Unit tests**: Run test suite — all turn engine tests pass

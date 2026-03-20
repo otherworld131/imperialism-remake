@@ -59,7 +59,7 @@ significantly boost effectiveness (4 medals ≈ 2× firepower).
 - [ ] Unit tests: sapper tunnel progress, general initiative bonus
 
 ### Unit Recruitment
-- [ ] Built in the Armory — requires worker (mostly trained) + arms + money
+- [x] Built in the Armory — requires worker (mostly trained) + arms + money
 - [x] Cavalry units additionally require horses
 - [ ] Units appear the turn after ordering
 - [x] Maintenance: $25/turn per arm in the unit
