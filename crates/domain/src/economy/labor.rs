@@ -1,11 +1,11 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum WorkerType {
     Untrained,
     Trained,
     Expert,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LaborPool {
     pub untrained: u32,
     pub trained: u32,

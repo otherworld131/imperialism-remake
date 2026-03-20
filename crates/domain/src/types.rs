@@ -1,7 +1,7 @@
 /// Macro for generating strongly-typed ID wrappers.
 macro_rules! define_id {
     ($name:ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
         pub struct $name(pub u32);
 
         impl std::fmt::Display for $name {
@@ -19,7 +19,9 @@ define_id!(ProvinceId);
 // ── Turn number ─────────────────────────────────────────────────
 
 /// A turn number. Turn 1 = 1815 Q1, Turn 4 = 1815 Q4, Turn 5 = 1816 Q1, etc.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct TurnNumber(pub u32);
 
 const BASE_YEAR: u32 = 1815;
@@ -74,7 +76,9 @@ impl std::fmt::Display for TurnNumber {
 
 /// Money value in game currency. Stored as integer cents to avoid floating-point issues.
 /// Display shows dollars (e.g., $1,500).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Money(i64);
 
 impl Money {
@@ -151,7 +155,7 @@ impl std::fmt::Display for Money {
 
 // ── Resource / Material / Goods enums ───────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ResourceType {
     Timber,
     Coal,
@@ -179,7 +183,7 @@ impl ResourceType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum MaterialType {
     Lumber,
     Steel,
@@ -189,7 +193,7 @@ pub enum MaterialType {
     CannedFood,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum GoodsType {
     Furniture,
     Clothing,
@@ -198,7 +202,7 @@ pub enum GoodsType {
 
 // ── Terrain ─────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TerrainType {
     DryPlains,
     OpenRange,
@@ -272,7 +276,7 @@ impl TerrainType {
 
 // ── ResourceAmount ──────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ResourceAmount {
     pub resource: ResourceType,
     pub quantity: u32,
@@ -286,7 +290,7 @@ impl ResourceAmount {
 
 // ── Nation type ──────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum NationType {
     GreatPower,
     MinorNation,
@@ -294,7 +298,7 @@ pub enum NationType {
 
 // ── Difficulty ──────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Difficulty {
     Introductory,
     Easy,

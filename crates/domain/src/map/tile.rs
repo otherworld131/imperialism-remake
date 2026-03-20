@@ -3,7 +3,7 @@ use crate::types::*;
 // ── UnitId ─────────────────────────────────────────────────────
 
 /// Unique identifier for a unit (civilian or military).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct UnitId(pub u32);
 
 impl std::fmt::Display for UnitId {
@@ -15,7 +15,7 @@ impl std::fmt::Display for UnitId {
 // ── Infrastructure ─────────────────────────────────────────────
 
 /// Infrastructure built on a tile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Infrastructure {
     pub has_railroad: bool,
     pub has_depot: bool,
@@ -48,7 +48,7 @@ impl Default for Infrastructure {
 /// The terrain is immutable after creation. Resource deposits may be hidden
 /// until revealed by prospecting. Improvement levels range from 0 (unimproved)
 /// through 3 (fully developed).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Tile {
     /// The terrain type (immutable after creation).
     terrain: TerrainType,

@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum BuildingType {
     Armory,
     Capitol,
@@ -21,7 +21,7 @@ pub enum BuildingType {
     PowerPlant,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Building {
     pub building_type: BuildingType,
     pub capacity: u32,

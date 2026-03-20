@@ -9,10 +9,36 @@ use super::tile::Tile;
 ///
 /// Not every coordinate within the bounding rectangle necessarily has a tile —
 /// the map can have irregular coastlines, islands, etc.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct HexMap {
+    #[serde(
+        serialize_with = "serialize_hex_tiles",
+        deserialize_with = "deserialize_hex_tiles"
+    )]
     tiles: HashMap<HexCoord, Tile>,
     width: i32,
     height: i32,
+}
+
+/// Serialize HashMap<HexCoord, Tile> as a Vec of (HexCoord, Tile) pairs
+/// because HexCoord cannot be used directly as a JSON object key.
+fn serialize_hex_tiles<S>(tiles: &HashMap<HexCoord, Tile>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::Serialize;
+    let entries: Vec<(&HexCoord, &Tile)> = tiles.iter().collect();
+    entries.serialize(serializer)
+}
+
+/// Deserialize Vec of (HexCoord, Tile) pairs back into HashMap<HexCoord, Tile>.
+fn deserialize_hex_tiles<'de, D>(deserializer: D) -> Result<HashMap<HexCoord, Tile>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let entries: Vec<(HexCoord, Tile)> = Vec::deserialize(deserializer)?;
+    Ok(entries.into_iter().collect())
 }
 
 impl HexMap {

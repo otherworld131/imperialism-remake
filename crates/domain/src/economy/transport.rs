@@ -1,7 +1,7 @@
 use crate::types::*;
 
 /// The transport system for a nation — freight cars carrying resources.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TransportSystem {
     /// Total freight cars owned
     pub freight_cars: u32,

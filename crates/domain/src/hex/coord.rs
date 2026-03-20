@@ -2,7 +2,7 @@
 ///
 /// Uses cube constraint: q + r + s = 0 (s is derived, not stored).
 /// See: https://www.redblobgames.com/grids/hexagons/
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct HexCoord {
     pub q: i32,
     pub r: i32,

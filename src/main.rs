@@ -1,6 +1,7 @@
 #![deny(warnings, clippy::all)]
 
 use std::io::{self, Write};
+use std::path::PathBuf;
 
 use domain::game_state::{GameState, new_game};
 use domain::hex::HexCoord;
@@ -8,6 +9,7 @@ use domain::map::HexMap;
 use domain::nation::Nation;
 use domain::turn::process_turn;
 use domain::types::*;
+use infrastructure::persistence;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -185,6 +187,22 @@ fn main() {
                     game.turn.year()
                 );
                 print_status(&game);
+            }
+            "save" => {
+                save_current_game(&game);
+            }
+            _ if cmd.starts_with("load ") => {
+                let filename = input.trim()[5..].trim();
+                match load_saved_game(filename) {
+                    Ok(loaded) => {
+                        game = loaded;
+                        println!("  Game loaded successfully.");
+                        print_status(&game);
+                    }
+                    Err(e) => {
+                        println!("  Failed to load: {}", e);
+                    }
+                }
             }
             _ if cmd.starts_with("research ") => {
                 let tech_query = input.trim()[9..].trim();
@@ -480,10 +498,42 @@ fn print_help() {
     println!("    map               — Show the world map");
     println!("    provinces         — Show your provinces");
     println!("    nations           — Show all nations");
+    println!("    save              — Save the current game");
+    println!("    load <filename>   — Load a saved game");
     println!("    turn10            — Advance 10 turns at once");
     println!("    turn100           — Advance 100 turns at once");
     println!("    help              — Show this help");
     println!("    quit              — Exit the game");
+}
+
+fn saves_dir() -> PathBuf {
+    PathBuf::from("saves")
+}
+
+fn save_current_game(game: &GameState) {
+    let dir = saves_dir();
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        println!("  Failed to create saves directory: {}", e);
+        return;
+    }
+
+    let filename = format!("save_{}_Q{}.json", game.turn.year(), game.turn.quarter());
+    let path = dir.join(&filename);
+
+    match persistence::save_game(game, &path) {
+        Ok(()) => {
+            println!("  Game saved to: {}", path.display());
+        }
+        Err(e) => {
+            println!("  Failed to save: {}", e);
+        }
+    }
+}
+
+fn load_saved_game(filename: &str) -> Result<GameState, String> {
+    let dir = saves_dir();
+    let path = dir.join(filename);
+    persistence::load_game(&path)
 }
 
 fn print_legend() {

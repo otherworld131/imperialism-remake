@@ -6,6 +6,7 @@ use crate::tech::TechTree;
 use crate::types::*;
 
 /// Top-level aggregate root representing the complete state of a game.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct GameState {
     /// Current turn number.
     pub turn: TurnNumber,
@@ -21,9 +22,11 @@ pub struct GameState {
     pub nations: Vec<Nation>,
     /// The NationId of the human player's nation.
     pub human_player_nation: NationId,
-    /// Event log for the current turn.
+    /// Event log for the current turn (transient, not saved).
+    #[serde(skip)]
     pub events: Vec<DomainEvent>,
-    /// The technology tree for this game.
+    /// The technology tree for this game (reconstructed on load).
+    #[serde(skip, default = "TechTree::default")]
     pub tech_tree: TechTree,
 }
 

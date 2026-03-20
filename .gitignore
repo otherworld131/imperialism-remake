@@ -1,4 +1,5 @@
 /target
+/saves
 **/*.rs.bk
 *.swp
 *.swo

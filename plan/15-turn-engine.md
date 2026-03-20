@@ -48,7 +48,7 @@ simultaneously.
 - [x] `TurnProcessor` trait orchestrates the entire resolution
 - [ ] Steps executed in deterministic order:
   1. [ ] **Civilian actions resolve** — specialists improve tiles, engineers build infrastructure
-  2. [ ] **Production resolves** — mills/factories process resources using assigned inputs
+  2. [x] **Production resolves** — mills/factories process resources using assigned inputs
   3. [ ] **Transport resolves** — freight cars deliver resources to capital
   4. [ ] **Immigration resolves** — new workers arrive if canned food + clothing + furniture available
   5. [ ] **Technology resolves** — newly purchased techs take effect; new techs become available

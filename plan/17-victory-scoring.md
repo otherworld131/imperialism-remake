@@ -8,36 +8,36 @@ or by having the most governors when the game reaches 1915. Score tracks overall
 ## Checklist
 
 ### Council of Governors
-- [ ] Each province has one governor
-- [ ] Total governors = total provinces in the game (7×8 + 16×4 = 120 in standard game)
-- [ ] Conquered provinces' governors belong to the conqueror
+- [x] Each province has one governor
+- [x] Total governors = total provinces in the game (7×8 + 16×4 = 120 in standard game)
+- [x] Conquered provinces' governors belong to the conqueror
 - [ ] Minor Nation governors' voting preference:
   - [ ] Favor powers offering beneficial trade (trade volume, subsidy level)
   - [ ] Favor powers with high diplomatic relationship scores
-- [ ] Great Power governors' voting preference:
-  - [ ] Favor the militarily strongest nations
+- [x] Great Power governors' voting preference:
+  - [x] Favor the militarily strongest nations
 - [ ] Election held every decade (every 40 turns): 1825, 1835, 1845, ..., 1915
-- [ ] Two-thirds majority (≥ 80 out of 120) = immediate victory
-- [ ] If no majority by 1915: most governors wins
-- [ ] Unit tests: governor vote counting and majority calculation
+- [x] Two-thirds majority (≥ 80 out of 120) = immediate victory
+- [x] If no majority by 1915: most governors wins
+- [x] Unit tests: governor vote counting and majority calculation
 - [ ] Unit tests: governor preference calculations (trade-based, military-based)
-- [ ] Unit tests: decade boundary detection
+- [x] Unit tests: decade boundary detection
 
 ### Score Components
-- [ ] **Military size** — total firepower of all army units
-- [ ] **Labor force** — total workers (untrained, trained, expert, specialist)
-- [ ] **Transport networks** — total freight car capacity + railroad miles
-- [ ] **Merchant marine** — total cargo capacity of merchant ships
-- [ ] **Diplomatic standing** — accumulated standing value
-- [ ] **Provinces controlled** — number of provinces in empire
+- [x] **Military size** — total firepower of all army units
+- [x] **Labor force** — total workers (untrained, trained, expert, specialist)
+- [x] **Transport networks** — total freight car capacity + railroad miles
+- [x] **Merchant marine** — total cargo capacity of merchant ships
+- [x] **Diplomatic standing** — accumulated standing value
+- [x] **Provinces controlled** — number of provinces in empire
 - [ ] Score recalculated each turn
 - [ ] High score table for completed games
-- [ ] Unit tests: score calculation from game state
-- [ ] Unit tests: score components independently testable
+- [x] Unit tests: score calculation from game state
+- [x] Unit tests: score components independently testable
 
 ### Victory Types
-- [ ] **Council Victory (Vote)** — achieve two-thirds majority at a decade election
-- [ ] **Council Victory (Default)** — most governors at game end (1915)
+- [x] **Council Victory (Vote)** — achieve two-thirds majority at a decade election
+- [x] **Council Victory (Default)** — most governors at game end (1915)
 - [ ] **Conquest Victory** — implied by controlling enough provinces to dominate the vote
 - [ ] **Elimination** — when a Great Power loses all provinces (effectively eliminated, but game continues for others)
 - [ ] Unit tests: each victory type detection

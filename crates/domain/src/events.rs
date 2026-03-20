@@ -3,12 +3,12 @@ use crate::types::*;
 // ── TechId ─────────────────────────────────────────────────────
 
 /// Identifies a technology in the tech tree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TechId(pub u32);
 
 // ── Treaty & Victory enums ─────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TreatyType {
     NonAggressionPact,
     Alliance,
@@ -17,7 +17,7 @@ pub enum TreatyType {
     WarDeclaration,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum VictoryType {
     CouncilVote,
     CouncilDefault,

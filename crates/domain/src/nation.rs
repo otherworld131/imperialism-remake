@@ -5,7 +5,7 @@ use crate::types::*;
 use std::collections::HashMap;
 
 /// Colors used to distinguish nations on the map and in the UI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum NationColor {
     // Great Power colors
     Yellow,
@@ -35,6 +35,7 @@ pub enum NationColor {
 
 /// A nation in the game — either a Great Power (player-controlled or AI)
 /// or a Minor Nation (AI-only, can be annexed or allied).
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Nation {
     pub id: NationId,
     pub name: String,

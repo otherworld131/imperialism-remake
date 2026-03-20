@@ -2,7 +2,7 @@ use crate::hex::HexCoord;
 use crate::types::*;
 
 /// The level of industrialization of a province's settlement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum SettlementLevel {
     /// Smallest settlement — starting state for newly connected provinces.
     Hamlet,
@@ -13,7 +13,7 @@ pub enum SettlementLevel {
 }
 
 /// A province: a contiguous group of hex tiles owned by a nation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Province {
     /// Unique identifier.
     pub id: ProvinceId,

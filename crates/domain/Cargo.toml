@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-# Domain crate: ONLY std. No external crates.
+serde = { version = "1", features = ["derive"] }
 # mlua will be added when Lua scripting is implemented.
 
 [dev-dependencies]
