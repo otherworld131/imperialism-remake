@@ -1,0 +1,364 @@
+use crate::events::DomainEvent;
+use crate::map::{HexMap, Province};
+use crate::nation::{Nation, NationColor};
+use crate::types::*;
+
+/// Top-level aggregate root representing the complete state of a game.
+pub struct GameState {
+    /// Current turn number.
+    pub turn: TurnNumber,
+    /// Difficulty setting for this game.
+    pub difficulty: Difficulty,
+    /// Key identifying which map is loaded.
+    pub map_key: String,
+    /// The hex map containing all tiles.
+    pub hex_map: HexMap,
+    /// All provinces in the game.
+    pub provinces: Vec<Province>,
+    /// All nations in the game (Great Powers + Minor Nations).
+    pub nations: Vec<Nation>,
+    /// The NationId of the human player's nation.
+    pub human_player_nation: NationId,
+    /// Event log for the current turn.
+    pub events: Vec<DomainEvent>,
+}
+
+impl GameState {
+    /// Look up a nation by its ID.
+    pub fn get_nation(&self, id: NationId) -> Option<&Nation> {
+        self.nations.iter().find(|n| n.id == id)
+    }
+
+    /// Look up a nation by its ID (mutable).
+    pub fn get_nation_mut(&mut self, id: NationId) -> Option<&mut Nation> {
+        self.nations.iter_mut().find(|n| n.id == id)
+    }
+
+    /// Look up a province by its ID.
+    pub fn get_province(&self, id: ProvinceId) -> Option<&Province> {
+        self.provinces.iter().find(|p| p.id == id)
+    }
+
+    /// Look up a province by its ID (mutable).
+    pub fn get_province_mut(&mut self, id: ProvinceId) -> Option<&mut Province> {
+        self.provinces.iter_mut().find(|p| p.id == id)
+    }
+
+    /// Returns all Great Power nations.
+    pub fn great_powers(&self) -> Vec<&Nation> {
+        self.nations.iter().filter(|n| n.is_great_power()).collect()
+    }
+
+    /// Returns all Minor Nations.
+    pub fn minor_nations(&self) -> Vec<&Nation> {
+        self.nations
+            .iter()
+            .filter(|n| !n.is_great_power())
+            .collect()
+    }
+
+    /// Advance to the next turn.
+    pub fn advance_turn(&mut self) {
+        self.turn = self.turn.next();
+    }
+
+    /// Record a domain event.
+    pub fn push_event(&mut self, event: DomainEvent) {
+        self.events.push(event);
+    }
+
+    /// Whether the game is over (turn >= 1915 Q1).
+    pub fn is_game_over(&self) -> bool {
+        self.turn.is_game_end() || self.turn > TurnNumber::from_year_quarter(1915, 1)
+    }
+}
+
+// ── Great Power colors (matched to original game) ───────────────
+
+const GP_COLORS: [NationColor; 7] = [
+    NationColor::Yellow,    // Deneb
+    NationColor::Orange,    // Devron
+    NationColor::LightBlue, // Haxaco
+    NationColor::Red,       // Kem
+    NationColor::Green,     // Ordune
+    NationColor::Purple,    // Patagon
+    NationColor::Blue,      // Zimm
+];
+
+const MN_COLORS: [NationColor; 16] = [
+    NationColor::Gray,
+    NationColor::Brown,
+    NationColor::Pink,
+    NationColor::Teal,
+    NationColor::Olive,
+    NationColor::Maroon,
+    NationColor::Navy,
+    NationColor::Cyan,
+    NationColor::Lime,
+    NationColor::Coral,
+    NationColor::Lavender,
+    NationColor::Tan,
+    NationColor::Salmon,
+    NationColor::Khaki,
+    NationColor::Indigo,
+    NationColor::Gray, // reuse for 16th
+];
+
+/// Create a new game from a map key and difficulty.
+/// This is the main entry point for starting a game.
+pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize) -> GameState {
+    let generated = crate::map::generate_map(map_key);
+
+    let mut nations = Vec::new();
+
+    // Create Great Power nations
+    for (i, setup) in generated.great_power_nations.iter().enumerate() {
+        let starting_cash = match difficulty {
+            Difficulty::Introductory => Money::dollars(15000),
+            Difficulty::Easy => Money::dollars(12000),
+            Difficulty::Normal => Money::dollars(10000),
+            Difficulty::Hard => Money::dollars(8000),
+            Difficulty::NighOnImpossible => Money::dollars(5000),
+        };
+
+        let mut nation = Nation::new(
+            setup.nation_id,
+            setup.name.clone(),
+            GP_COLORS[i],
+            NationType::GreatPower,
+            setup.capital_province,
+        );
+        nation.treasury = starting_cash;
+        for pid in &setup.province_ids {
+            nation.add_province(*pid);
+        }
+        nations.push(nation);
+    }
+
+    // Create Minor Nations
+    for (i, setup) in generated.minor_nations.iter().enumerate() {
+        let mut nation = Nation::new(
+            setup.nation_id,
+            setup.name.clone(),
+            MN_COLORS[i],
+            NationType::MinorNation,
+            setup.capital_province,
+        );
+        for pid in &setup.province_ids {
+            nation.add_province(*pid);
+        }
+        nations.push(nation);
+    }
+
+    let human_nation_id = generated.great_power_nations
+        [human_nation_index.min(generated.great_power_nations.len() - 1)]
+    .nation_id;
+
+    GameState {
+        turn: TurnNumber::new(1),
+        difficulty,
+        map_key: map_key.to_string(),
+        hex_map: generated.hex_map,
+        provinces: generated.provinces,
+        nations,
+        human_player_nation: human_nation_id,
+        events: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::TurnStarted;
+    use crate::hex::HexCoord;
+    use crate::nation::NationColor;
+
+    /// Helper: build a minimal GameState for testing.
+    fn sample_game_state() -> GameState {
+        let capital_tile = HexCoord::new(0, 0);
+
+        let province1 = Province::new(
+            ProvinceId(1),
+            "France City".to_string(),
+            NationId(1),
+            capital_tile,
+            vec![capital_tile],
+            4,
+        );
+        let province2 = Province::new(
+            ProvinceId(2),
+            "Bavaria".to_string(),
+            NationId(2),
+            HexCoord::new(3, 3),
+            vec![HexCoord::new(3, 3)],
+            3,
+        );
+
+        let nation1 = Nation::new(
+            NationId(1),
+            "France".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        let nation2 = Nation::new(
+            NationId(2),
+            "Bavaria".to_string(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(2),
+        );
+
+        GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "europe".to_string(),
+            hex_map: HexMap::new(10, 10),
+            provinces: vec![province1, province2],
+            nations: vec![nation1, nation2],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn new_game_creates_valid_state() {
+        let gs = new_game("test", Difficulty::Normal, 0);
+        assert_eq!(gs.great_powers().len(), 7);
+        assert_eq!(gs.minor_nations().len(), 16);
+        assert_eq!(gs.provinces.len(), 120);
+        assert_eq!(gs.turn, TurnNumber::new(1));
+        assert!(!gs.is_game_over());
+    }
+
+    #[test]
+    fn new_game_starting_treasury_varies_by_difficulty() {
+        let easy = new_game("test", Difficulty::Easy, 0);
+        let hard = new_game("test", Difficulty::Hard, 0);
+        let easy_cash = easy.get_nation(easy.human_player_nation).unwrap().treasury;
+        let hard_cash = hard.get_nation(hard.human_player_nation).unwrap().treasury;
+        assert!(easy_cash > hard_cash);
+    }
+
+    // ── Nation lookup ─────────────────────────────────────────
+
+    #[test]
+    fn get_nation_found() {
+        let gs = sample_game_state();
+        let nation = gs.get_nation(NationId(1));
+        assert!(nation.is_some());
+        assert_eq!(nation.unwrap().name, "France");
+    }
+
+    #[test]
+    fn get_nation_not_found() {
+        let gs = sample_game_state();
+        assert!(gs.get_nation(NationId(99)).is_none());
+    }
+
+    #[test]
+    fn get_nation_mut_modifies() {
+        let mut gs = sample_game_state();
+        let nation = gs.get_nation_mut(NationId(1)).unwrap();
+        nation.treasury = Money::dollars(1000);
+        assert_eq!(
+            gs.get_nation(NationId(1)).unwrap().treasury,
+            Money::dollars(1000)
+        );
+    }
+
+    // ── Province lookup ───────────────────────────────────────
+
+    #[test]
+    fn get_province_found() {
+        let gs = sample_game_state();
+        let province = gs.get_province(ProvinceId(2));
+        assert!(province.is_some());
+        assert_eq!(province.unwrap().name, "Bavaria");
+    }
+
+    #[test]
+    fn get_province_not_found() {
+        let gs = sample_game_state();
+        assert!(gs.get_province(ProvinceId(99)).is_none());
+    }
+
+    #[test]
+    fn get_province_mut_modifies() {
+        let mut gs = sample_game_state();
+        let province = gs.get_province_mut(ProvinceId(1)).unwrap();
+        province.connected_to_capital = true;
+        assert!(gs.get_province(ProvinceId(1)).unwrap().connected_to_capital);
+    }
+
+    // ── Great powers / minor nations ──────────────────────────
+
+    #[test]
+    fn great_powers_returns_only_great_powers() {
+        let gs = sample_game_state();
+        let gps = gs.great_powers();
+        assert_eq!(gps.len(), 1);
+        assert_eq!(gps[0].name, "France");
+    }
+
+    #[test]
+    fn minor_nations_returns_only_minors() {
+        let gs = sample_game_state();
+        let minors = gs.minor_nations();
+        assert_eq!(minors.len(), 1);
+        assert_eq!(minors[0].name, "Bavaria");
+    }
+
+    // ── Turn management ───────────────────────────────────────
+
+    #[test]
+    fn advance_turn_increments() {
+        let mut gs = sample_game_state();
+        assert_eq!(gs.turn, TurnNumber::new(1));
+        gs.advance_turn();
+        assert_eq!(gs.turn, TurnNumber::new(2));
+        gs.advance_turn();
+        assert_eq!(gs.turn, TurnNumber::new(3));
+    }
+
+    // ── Events ────────────────────────────────────────────────
+
+    #[test]
+    fn push_event_stores_event() {
+        let mut gs = sample_game_state();
+        assert!(gs.events.is_empty());
+        gs.push_event(DomainEvent::TurnStarted(TurnStarted {
+            turn: TurnNumber::new(1),
+        }));
+        assert_eq!(gs.events.len(), 1);
+    }
+
+    // ── Game over ─────────────────────────────────────────────
+
+    #[test]
+    fn game_not_over_at_start() {
+        let gs = sample_game_state();
+        assert!(!gs.is_game_over());
+    }
+
+    #[test]
+    fn game_over_at_1915_q1() {
+        let mut gs = sample_game_state();
+        gs.turn = TurnNumber::from_year_quarter(1915, 1);
+        assert!(gs.is_game_over());
+    }
+
+    #[test]
+    fn game_over_past_1915_q1() {
+        let mut gs = sample_game_state();
+        gs.turn = TurnNumber::from_year_quarter(1915, 2);
+        assert!(gs.is_game_over());
+    }
+
+    #[test]
+    fn game_not_over_at_1914_q4() {
+        let mut gs = sample_game_state();
+        gs.turn = TurnNumber::from_year_quarter(1914, 4);
+        assert!(!gs.is_game_over());
+    }
+}

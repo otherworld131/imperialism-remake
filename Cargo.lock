@@ -14,6 +14,13 @@ name = "domain"
 version = "0.1.0"
 
 [[package]]
+name = "imperialism-remake"
+version = "0.1.0"
+dependencies = [
+ "domain",
+]
+
+[[package]]
 name = "infrastructure"
 version = "0.1.0"
 dependencies = [

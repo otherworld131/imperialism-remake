@@ -11,3 +11,15 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+
+[package]
+name = "imperialism-remake"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "imperialism"
+path = "src/main.rs"
+
+[dependencies]
+domain = { path = "crates/domain" }

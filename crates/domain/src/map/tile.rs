@@ -230,9 +230,7 @@ impl Tile {
             }
 
             // Mining terrains: require prospecting
-            TerrainType::BarrenHills | TerrainType::Mountain => {
-                self.calculate_mining_yield()
-            }
+            TerrainType::BarrenHills | TerrainType::Mountain => self.calculate_mining_yield(),
 
             // Oil terrains: require prospecting + improvement
             TerrainType::Swamp | TerrainType::Desert | TerrainType::Tundra => {
@@ -556,39 +554,72 @@ mod tests {
     #[test]
     fn orchard_yield_scales_with_level() {
         let mut tile = Tile::new(TerrainType::Orchard);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Fruit, 1));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Fruit, 1)
+        );
         tile.set_improvement_level(1);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Fruit, 2));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Fruit, 2)
+        );
         tile.set_improvement_level(2);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Fruit, 3));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Fruit, 3)
+        );
         tile.set_improvement_level(3);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Fruit, 4));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Fruit, 4)
+        );
     }
 
     #[test]
     fn plantation_yield_scales_with_level() {
         let mut tile = Tile::new(TerrainType::Plantation);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Cotton, 1));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Cotton, 1)
+        );
         tile.set_improvement_level(3);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Cotton, 4));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Cotton, 4)
+        );
     }
 
     #[test]
     fn fertile_hills_yield_scales_with_level() {
         let mut tile = Tile::new(TerrainType::FertileHills);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Wool, 1));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Wool, 1)
+        );
         tile.set_improvement_level(2);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Wool, 3));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Wool, 3)
+        );
     }
 
     #[test]
     fn hardwood_forest_yield_scales_with_level() {
         let mut tile = Tile::new(TerrainType::HardwoodForest);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Timber, 1));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Timber, 1)
+        );
         tile.set_improvement_level(1);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Timber, 2));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Timber, 2)
+        );
         tile.set_improvement_level(3);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Timber, 4));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Timber, 4)
+        );
     }
 
     // ── Yield: Mining (Coal & Iron — double rate) ──────────────
@@ -599,19 +630,31 @@ mod tests {
         tile.reveal_deposit(ResourceType::Coal);
 
         // Level 0: base 1
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Coal, 1));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Coal, 1)
+        );
 
         // Level 1: 1 + 2*1 = 3
         tile.improve();
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Coal, 3));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Coal, 3)
+        );
 
         // Level 2: 1 + 2*2 = 5
         tile.improve();
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Coal, 5));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Coal, 5)
+        );
 
         // Level 3: 1 + 2*3 = 7
         tile.improve();
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Coal, 7));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Coal, 7)
+        );
     }
 
     #[test]
@@ -619,16 +662,28 @@ mod tests {
         let mut tile = Tile::new(TerrainType::BarrenHills);
         tile.reveal_deposit(ResourceType::Iron);
 
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Iron, 1));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Iron, 1)
+        );
 
         tile.set_improvement_level(1);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Iron, 3));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Iron, 3)
+        );
 
         tile.set_improvement_level(2);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Iron, 5));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Iron, 5)
+        );
 
         tile.set_improvement_level(3);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Iron, 7));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Iron, 7)
+        );
     }
 
     // ── Yield: Mining (Gold & Gems — special) ──────────────────
@@ -643,11 +698,17 @@ mod tests {
 
         // Level 1: 1 gold
         tile.improve();
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Gold, 1));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Gold, 1)
+        );
 
         // Level 2: 2 gold
         tile.improve();
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Gold, 2));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Gold, 2)
+        );
     }
 
     #[test]
@@ -658,10 +719,16 @@ mod tests {
         assert_eq!(tile.calculate_yield(), None);
 
         tile.set_improvement_level(1);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Gems, 1));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Gems, 1)
+        );
 
         tile.set_improvement_level(2);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Gems, 2));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Gems, 2)
+        );
     }
 
     #[test]
@@ -670,7 +737,10 @@ mod tests {
         tile.reveal_deposit(ResourceType::Gold);
         tile.set_improvement_level(3);
         // Level 3: 3 gold (follows the pattern)
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Gold, 3));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Gold, 3)
+        );
     }
 
     // ── Yield: No deposit on prospecting terrain ───────────────
@@ -699,15 +769,24 @@ mod tests {
 
         // Level 1: 1 oil
         tile.improve();
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Oil, 1));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Oil, 1)
+        );
 
         // Level 2: 2 oil
         tile.improve();
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Oil, 2));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Oil, 2)
+        );
 
         // Level 3: 3 oil
         tile.improve();
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Oil, 3));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Oil, 3)
+        );
     }
 
     #[test]
@@ -718,7 +797,10 @@ mod tests {
         assert_eq!(tile.calculate_yield(), None);
 
         tile.set_improvement_level(2);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Oil, 2));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Oil, 2)
+        );
     }
 
     #[test]
@@ -729,7 +811,10 @@ mod tests {
         assert_eq!(tile.calculate_yield(), None);
 
         tile.set_improvement_level(1);
-        assert_eq!(tile.calculate_yield().unwrap(), ResourceAmount::new(ResourceType::Oil, 1));
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Oil, 1)
+        );
     }
 
     #[test]
@@ -841,8 +926,7 @@ mod tests {
                 let y = tile.calculate_yield().unwrap();
                 assert_eq!(y.resource, deposit);
                 assert_eq!(
-                    y.quantity,
-                    level as u32,
+                    y.quantity, level as u32,
                     "Mountain with {deposit:?} at level {level}: expected {level}, got {}",
                     y.quantity
                 );
