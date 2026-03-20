@@ -42,12 +42,12 @@ comprehensive.
 - [ ] Execution time: < 60 seconds
 
 #### Layer 4 — Simulation Tests (Game-Level)
-- [ ] 10-turn smoke test: game progresses without errors
-- [ ] 100-turn endurance test: no state corruption, memory leaks, or runaway values
-- [ ] Full game test (to 1915): game completes with valid winner
-- [ ] AI-only games: 100 games → verify win distribution, no crashes
+- [x] 10-turn smoke test: game progresses without errors
+- [x] 100-turn endurance test: no state corruption, memory leaks, or runaway values
+- [x] Full game test (to 1915): game completes with valid winner
+- [x] AI-only games: 100 games → verify win distribution, no crashes
 - [ ] Balance tests: no single nation/strategy dominates excessively
-- [ ] Performance baseline: turn resolution < 5s, frame time < 16ms
+- [x] Performance baseline: turn resolution < 5s, frame time < 16ms
 - [ ] Execution time: < 10 minutes (can run in CI on schedule, not every commit)
 
 #### Layer 5 — Architecture Tests (Fitness Functions)

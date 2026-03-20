@@ -16,7 +16,10 @@ fn next_unit_id() -> UnitId {
 }
 
 /// Run AI decisions for all non-human Great Powers.
-pub fn run_ai_turns(game: &mut GameState) {
+///
+/// Returns a list of notable actions taken by AI nations, suitable for
+/// inclusion in the newspaper / turn report.
+pub fn run_ai_turns(game: &mut GameState) -> Vec<String> {
     let human_id = game.human_player_nation;
     let current_year = game.turn.year();
 
@@ -28,20 +31,29 @@ pub fn run_ai_turns(game: &mut GameState) {
         .map(|n| n.id)
         .collect();
 
+    let mut actions: Vec<String> = Vec::new();
+
     for nation_id in &ai_nation_ids {
-        ai_research_tech(game, *nation_id, current_year);
+        ai_research_tech(game, *nation_id, current_year, &mut actions);
         ai_build_infrastructure(game, *nation_id);
         ai_recruit_workers(game, *nation_id);
-        ai_build_military(game, *nation_id);
+        ai_build_military(game, *nation_id, &mut actions);
         ai_trade(game, *nation_id);
         ai_build_transport(game, *nation_id);
     }
 
-    ai_declare_wars(game, &ai_nation_ids);
+    ai_declare_wars(game, &ai_nation_ids, &mut actions);
+
+    actions
 }
 
 /// Pick the cheapest available tech and research it if the nation can afford it.
-fn ai_research_tech(game: &mut GameState, nation_id: NationId, current_year: u32) {
+fn ai_research_tech(
+    game: &mut GameState,
+    nation_id: NationId,
+    current_year: u32,
+    actions: &mut Vec<String>,
+) {
     // Gather the nation's researched techs
     let researched: Vec<TechId> = match game.get_nation(nation_id) {
         Some(n) => n.researched_techs.clone(),
@@ -51,8 +63,8 @@ fn ai_research_tech(game: &mut GameState, nation_id: NationId, current_year: u32
     // Find available techs and pick the cheapest
     let available = game.tech_tree.available_techs(&researched, current_year);
     let cheapest = available.iter().min_by_key(|t| t.cost.cents());
-    let (tech_id, tech_cost) = match cheapest {
-        Some(tech) => (tech.id, tech.cost),
+    let (tech_id, tech_cost, tech_name) = match cheapest {
+        Some(tech) => (tech.id, tech.cost, tech.name.clone()),
         None => return,
     };
 
@@ -64,6 +76,10 @@ fn ai_research_tech(game: &mut GameState, nation_id: NationId, current_year: u32
     if let Some(remaining) = nation.treasury.checked_sub(tech_cost) {
         nation.treasury = remaining;
         nation.research_tech(tech_id);
+        actions.push(format!(
+            "Scientists in {} have discovered {}!",
+            nation.name, tech_name
+        ));
     }
 }
 
@@ -131,17 +147,101 @@ fn ai_build_infrastructure(game: &mut GameState, nation_id: NationId) {
     }
 }
 
-/// Recruit a worker if the nation has fewer than 5 total and has food in the warehouse.
+/// Recruit a worker if the nation has fewer than 5 total and has surplus food.
+///
+/// AI only recruits if total food (grain + fruit + livestock) exceeds total workers
+/// (i.e., there is a surplus to feed the new worker next turn).
+/// AI also processes food first if it has a FoodProcessing building and raw food.
 fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
+    // First, process food if possible
+    ai_process_food(game, nation_id);
+
     let nation = match game.get_nation_mut(nation_id) {
         Some(n) => n,
         None => return,
     };
 
-    if nation.labor.total_workers() < 5 && nation.resource_amount(ResourceType::Grain) > 0 {
-        nation.remove_resource(ResourceType::Grain, 1);
+    let total_workers = nation.labor.total_workers();
+    let grain = nation.resource_amount(ResourceType::Grain);
+    let fruit = nation.resource_amount(ResourceType::Fruit);
+    let livestock = nation.resource_amount(ResourceType::Livestock);
+    let total_food = grain + fruit + livestock;
+
+    // Only recruit if workforce is small AND there is surplus food
+    if total_workers < 5 && total_food > total_workers {
+        // Consume 1 grain (or fruit/livestock) to recruit
+        if nation.resource_amount(ResourceType::Grain) > 0 {
+            nation.remove_resource(ResourceType::Grain, 1);
+        } else if nation.resource_amount(ResourceType::Fruit) > 0 {
+            nation.remove_resource(ResourceType::Fruit, 1);
+        } else if nation.resource_amount(ResourceType::Livestock) > 0 {
+            nation.remove_resource(ResourceType::Livestock, 1);
+        }
         nation.labor.recruit_immigrant();
     }
+}
+
+/// AI processes food: if the nation has a FoodProcessing building and raw food,
+/// convert raw food to canned food (2 raw -> 1 canned).
+fn ai_process_food(game: &mut GameState, nation_id: NationId) {
+    let nation = match game.get_nation_mut(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let food_processing_cap = nation
+        .buildings
+        .iter()
+        .find(|b| b.building_type == BuildingType::FoodProcessing)
+        .map(|b| b.effective_capacity())
+        .unwrap_or(0);
+
+    if food_processing_cap == 0 {
+        return;
+    }
+
+    let grain = nation.resource_amount(ResourceType::Grain);
+    let fruit = nation.resource_amount(ResourceType::Fruit);
+    let livestock = nation.resource_amount(ResourceType::Livestock);
+    let total_raw = grain + fruit + livestock;
+
+    // Only process if we have excess food beyond worker needs
+    let workers = nation.labor.total_workers();
+    if total_raw <= workers {
+        return; // Don't process food we need to eat
+    }
+
+    let available_for_processing = total_raw - workers;
+    if available_for_processing < 2 {
+        return;
+    }
+
+    let raw_limited = available_for_processing / 2;
+    let units = food_processing_cap.min(raw_limited);
+
+    if units == 0 {
+        return;
+    }
+
+    // Consume grain first, then fruit, then livestock
+    let mut remaining = units * 2;
+    let grain_used = grain.min(remaining);
+    remaining -= grain_used;
+    let fruit_used = fruit.min(remaining);
+    remaining -= fruit_used;
+    let livestock_used = livestock.min(remaining);
+    let _ = remaining - livestock_used;
+
+    if grain_used > 0 {
+        nation.remove_resource(ResourceType::Grain, grain_used);
+    }
+    if fruit_used > 0 {
+        nation.remove_resource(ResourceType::Fruit, fruit_used);
+    }
+    if livestock_used > 0 {
+        nation.remove_resource(ResourceType::Livestock, livestock_used);
+    }
+    nation.add_material(MaterialType::CannedFood, units);
 }
 
 /// Build military units when the nation has sufficient treasury.
@@ -149,7 +249,7 @@ fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
 /// - If nation has < 3 army units AND treasury > $2,000, build a Regulars unit ($500)
 /// - If nation has < 5 army units AND treasury > $5,000, build a Grenadiers unit ($1,000)
 /// - If nation has >= 5 army units AND treasury > $10,000, build Light Artillery ($2,000)
-fn ai_build_military(game: &mut GameState, nation_id: NationId) {
+fn ai_build_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
     let nation = match game.get_nation_mut(nation_id) {
         Some(n) => n,
         None => return,
@@ -158,17 +258,26 @@ fn ai_build_military(game: &mut GameState, nation_id: NationId) {
     let army_count = nation.army.len();
     let treasury = nation.treasury;
     let capital = nation.capital_province_id;
+    let nation_name = nation.name.clone();
 
     if army_count < 3 && treasury > Money::dollars(2000) {
         let cost = Money::dollars(500);
         nation.treasury -= cost;
         let unit = ArmyUnit::new(next_unit_id(), ArmyUnitType::Regulars, nation_id, capital);
         nation.army.push(unit);
+        actions.push(format!(
+            "{} has been expanding its military forces",
+            nation_name
+        ));
     } else if army_count < 5 && treasury > Money::dollars(5000) {
         let cost = Money::dollars(1000);
         nation.treasury -= cost;
         let unit = ArmyUnit::new(next_unit_id(), ArmyUnitType::Grenadiers, nation_id, capital);
         nation.army.push(unit);
+        actions.push(format!(
+            "{} has been expanding its military forces",
+            nation_name
+        ));
     } else if army_count >= 5 && treasury > Money::dollars(10000) {
         let cost = Money::dollars(2000);
         nation.treasury -= cost;
@@ -179,6 +288,10 @@ fn ai_build_military(game: &mut GameState, nation_id: NationId) {
             capital,
         );
         nation.army.push(unit);
+        actions.push(format!(
+            "{} has been expanding its military forces",
+            nation_name
+        ));
     }
 }
 
@@ -186,17 +299,17 @@ fn ai_build_military(game: &mut GameState, nation_id: NationId) {
 ///
 /// Uses turn number + nation id as a pseudo-random seed to pick a target.
 /// Only declares war if not already at war with that minor.
-fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId]) {
+fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId], actions: &mut Vec<String>) {
     if !game.turn.0.is_multiple_of(20) {
         return;
     }
 
     // Collect minor nation IDs and their capitals
-    let minor_nations: Vec<(NationId, ProvinceId)> = game
+    let minor_nations: Vec<(NationId, ProvinceId, String)> = game
         .nations
         .iter()
         .filter(|n| !n.is_great_power())
-        .map(|n| (n.id, n.capital_province_id))
+        .map(|n| (n.id, n.capital_province_id, n.name.clone()))
         .collect();
 
     if minor_nations.is_empty() {
@@ -207,7 +320,7 @@ fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId]) {
         // Pseudo-random index based on turn + nation id
         let seed = (game.turn.0 as usize).wrapping_add(ai_id.0 as usize);
         let target_index = seed % minor_nations.len();
-        let (target_id, target_capital) = minor_nations[target_index];
+        let (target_id, target_capital, ref target_name) = minor_nations[target_index];
 
         // Check if already at war with this minor
         let already_at_war = game
@@ -217,8 +330,16 @@ fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId]) {
             .unwrap_or(false);
 
         if !already_at_war {
+            let attacker_name = game
+                .get_nation(ai_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
             game.diplomacy.declare_war(ai_id, target_id);
             game.pending_attacks.push((ai_id, target_capital));
+            actions.push(format!(
+                "{} has declared war on {}!",
+                attacker_name, target_name
+            ));
         }
     }
 }
@@ -718,8 +839,9 @@ mod tests {
         ai.treasury = Money::dollars(50000);
 
         // Run multiple turns to build several units
+        let mut actions = Vec::new();
         for _ in 0..5 {
-            ai_build_military(&mut game, NationId(2));
+            ai_build_military(&mut game, NationId(2), &mut actions);
         }
 
         let ai = game.get_nation(NationId(2)).unwrap();

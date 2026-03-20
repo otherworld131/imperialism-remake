@@ -22,6 +22,7 @@ pub struct TurnReport {
     pub maintenance_costs: Vec<(NationId, Money)>,
     pub production_output: Vec<(NationId, String, u32)>,
     pub food_consumed: Vec<(NationId, u32)>,
+    pub starvation: Vec<(NationId, u32)>,
     pub newspaper_headlines: Vec<String>,
     pub techs_available: Vec<(NationId, Vec<String>)>,
     pub council_vote: Option<CouncilVoteResult>,
@@ -29,6 +30,8 @@ pub struct TurnReport {
     pub battles: Vec<BattleResult>,
     /// Scores for all Great Powers: (nation_id, nation_name, total_score).
     pub scores: Vec<(NationId, String, u32)>,
+    /// Summary of notable actions taken by AI nations this turn.
+    pub ai_actions: Vec<String>,
 }
 
 /// Process one turn of the game.
@@ -44,16 +47,19 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         maintenance_costs: Vec::new(),
         production_output: Vec::new(),
         food_consumed: Vec::new(),
+        starvation: Vec::new(),
         newspaper_headlines: Vec::new(),
         techs_available: Vec::new(),
         council_vote: None,
         trade_transactions: Vec::new(),
         battles: Vec::new(),
         scores: Vec::new(),
+        ai_actions: Vec::new(),
     };
 
     // 0. AI decisions for computer-controlled Great Powers
-    run_ai_turns(game);
+    let ai_actions = run_ai_turns(game);
+    report.ai_actions = ai_actions;
 
     // 1. Resource production: gather yields from all owned tiles
     collect_resources(game, &mut report);
@@ -69,6 +75,9 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
 
     // 4. Tick buildings (process expansion timers)
     tick_buildings(game);
+
+    // 4b. Food processing: convert raw food to canned food
+    process_food(game, &mut report);
 
     // 5. Food consumption
     food_consumption(game, &mut report);
@@ -366,13 +375,139 @@ fn tick_buildings(game: &mut GameState) {
     }
 }
 
-/// Consume food for each nation. Placeholder: consume 1 grain per turn if available.
+/// Process food: convert raw food into canned food using FoodProcessing buildings.
+///
+/// If a nation has a FoodProcessing building and raw food (grain/fruit/livestock),
+/// convert up to (building capacity) units: 2 raw food -> 1 canned food.
+/// Prioritize grain for canning.
+fn process_food(game: &mut GameState, report: &mut TurnReport) {
+    let nation_ids: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
+
+    for nation_id in nation_ids {
+        let nation = match game.nations.iter().find(|n| n.id == nation_id) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        let food_processing_cap = nation
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::FoodProcessing)
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
+
+        if food_processing_cap == 0 {
+            continue;
+        }
+
+        let grain = nation.resource_amount(ResourceType::Grain);
+        let fruit = nation.resource_amount(ResourceType::Fruit);
+        let livestock = nation.resource_amount(ResourceType::Livestock);
+        let total_raw_food = grain + fruit + livestock;
+
+        if total_raw_food < 2 {
+            continue;
+        }
+
+        // Maximum units we can produce: limited by capacity and raw food
+        let raw_food_limited = total_raw_food / 2;
+        let units_to_produce = food_processing_cap.min(raw_food_limited);
+
+        if units_to_produce == 0 {
+            continue;
+        }
+
+        // Consume raw food: prioritize grain, then fruit, then livestock
+        let mut remaining_to_consume = units_to_produce * 2;
+
+        let grain_used = grain.min(remaining_to_consume);
+        remaining_to_consume -= grain_used;
+
+        let fruit_used = fruit.min(remaining_to_consume);
+        remaining_to_consume -= fruit_used;
+
+        let livestock_used = livestock.min(remaining_to_consume);
+        // remaining_to_consume should be 0 now
+
+        let nation = game.nations.iter_mut().find(|n| n.id == nation_id).unwrap();
+        if grain_used > 0 {
+            nation.remove_resource(ResourceType::Grain, grain_used);
+        }
+        if fruit_used > 0 {
+            nation.remove_resource(ResourceType::Fruit, fruit_used);
+        }
+        if livestock_used > 0 {
+            nation.remove_resource(ResourceType::Livestock, livestock_used);
+        }
+
+        nation.add_material(MaterialType::CannedFood, units_to_produce);
+        let _ = remaining_to_consume;
+
+        report
+            .production_output
+            .push((nation_id, "CannedFood".to_string(), units_to_produce));
+    }
+}
+
+/// Consume food for each nation based on population.
+///
+/// Each worker (untrained + trained + expert) needs 1 food per turn.
+/// Food priority: Grain first (preferred by 50%+), then Fruit, then Livestock.
+/// If not enough food: 1 worker dies per missing food unit, up to 2 max per turn.
 fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
     for nation in &mut game.nations {
+        let population = nation.labor.total_workers();
+        if population == 0 {
+            continue;
+        }
+
         let grain = nation.resource_amount(ResourceType::Grain);
-        if grain > 0 {
-            nation.remove_resource(ResourceType::Grain, 1);
-            report.food_consumed.push((nation.id, 1));
+        let fruit = nation.resource_amount(ResourceType::Fruit);
+        let livestock = nation.resource_amount(ResourceType::Livestock);
+        let total_food = grain + fruit + livestock;
+
+        let food_needed = population;
+        let food_to_consume = food_needed.min(total_food);
+
+        // Consume food in priority order: Grain first, then Fruit, then Livestock
+        // Grain is preferred by 50%+ of population
+        let mut remaining = food_to_consume;
+
+        let grain_consumed = grain.min(remaining);
+        if grain_consumed > 0 {
+            nation.remove_resource(ResourceType::Grain, grain_consumed);
+        }
+        remaining -= grain_consumed;
+
+        let fruit_consumed = fruit.min(remaining);
+        if fruit_consumed > 0 {
+            nation.remove_resource(ResourceType::Fruit, fruit_consumed);
+        }
+        remaining -= fruit_consumed;
+
+        let livestock_consumed = livestock.min(remaining);
+        if livestock_consumed > 0 {
+            nation.remove_resource(ResourceType::Livestock, livestock_consumed);
+        }
+
+        if food_to_consume > 0 {
+            report.food_consumed.push((nation.id, food_to_consume));
+        }
+
+        // Starvation: workers die if not enough food
+        if total_food < food_needed {
+            let deficit = food_needed - total_food;
+            let workers_lost = deficit.min(2); // cap at 2 per turn
+
+            let mut actual_lost = 0;
+            for _ in 0..workers_lost {
+                if nation.labor.remove_worker() {
+                    actual_lost += 1;
+                }
+            }
+            if actual_lost > 0 {
+                report.starvation.push((nation.id, actual_lost));
+            }
         }
     }
 }
@@ -599,6 +734,10 @@ fn report_available_techs(game: &GameState, report: &mut TurnReport) {
 }
 
 /// Generate newspaper headlines for the turn report.
+///
+/// Gathers notable events from the turn: AI actions (tech research, military
+/// buildup, war declarations), trade activity, and adds period-appropriate
+/// flavor headlines that rotate based on the turn number.
 fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
     let year = game.turn.year();
     let quarter = game.turn.quarter();
@@ -606,6 +745,27 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
     report
         .newspaper_headlines
         .push(format!("The Imperial Times - {year} Q{quarter}"));
+
+    // AI actions (tech research, military buildup, war declarations)
+    for action in &report.ai_actions {
+        report.newspaper_headlines.push(action.clone());
+    }
+
+    // Trade activity headline for the human player
+    if !report.trade_transactions.is_empty()
+        && let Some(human_nation) = game.get_nation(game.human_player_nation)
+    {
+        let human_traded = report
+            .trade_transactions
+            .iter()
+            .any(|txn| txn.buyer == game.human_player_nation);
+        if human_traded {
+            report.newspaper_headlines.push(format!(
+                "Trade flourishes between {} and its partners",
+                human_nation.name
+            ));
+        }
+    }
 
     if let Some(human_nation) = game.get_nation(game.human_player_nation) {
         report
@@ -618,6 +778,22 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
             .newspaper_headlines
             .push("Council of Governors to convene!".to_string());
     }
+
+    // Period-appropriate flavor headlines that rotate based on turn number
+    let flavor_headlines = [
+        "Railroad expansion continues across the continent",
+        "Industrial production reaches new heights",
+        "Diplomatic tensions simmer between the Great Powers",
+        "Colonial ambitions drive the Great Powers forward",
+        "New trade routes open promising opportunities",
+        "The age of progress marches ever onward",
+        "Rumors of unrest in the frontier provinces",
+        "Great exhibitions showcase industrial might",
+    ];
+    let flavor_index = (game.turn.0 as usize) % flavor_headlines.len();
+    report
+        .newspaper_headlines
+        .push(flavor_headlines[flavor_index].to_string());
 }
 
 /// Calculate scores for all Great Powers and store them in the report.
@@ -671,6 +847,7 @@ fn check_council_vote(game: &GameState, report: &mut TurnReport) {
 mod tests {
     use super::*;
     use crate::diplomacy::DiplomacyState;
+    use crate::economy::buildings::Building;
     use crate::hex::HexCoord;
     use crate::map::tile::Tile;
     use crate::map::{HexMap, Province};
@@ -809,9 +986,9 @@ mod tests {
         assert_eq!(timber_produced, 1); // ScrubForest = 1 Timber
 
         // Verify the nation's warehouse was updated
-        // Note: food_consumption eats 1 grain per turn, so net grain is 0
+        // With 0 workers, no food is consumed
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.resource_amount(ResourceType::Grain), 0);
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 1);
         assert_eq!(nation.resource_amount(ResourceType::Timber), 1);
     }
 
@@ -914,10 +1091,11 @@ mod tests {
         assert_eq!(game.turn, TurnNumber::new(6));
 
         // After 5 turns, the nation should have accumulated resources
-        // Grain: 1 gathered - 1 consumed each turn = 0 net per turn
+        // With 0 workers, no food is consumed
+        // Grain: 1 gathered per turn, not consumed = 5
         // Timber: 1 gathered per turn, not consumed = 5
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.resource_amount(ResourceType::Grain), 0);
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 5);
         assert_eq!(nation.resource_amount(ResourceType::Timber), 5);
     }
 
@@ -1369,17 +1547,17 @@ mod tests {
     // ── Food consumption ──────────────────────────────────────
 
     #[test]
-    fn food_consumption_eats_one_grain() {
+    fn food_consumption_eats_per_worker() {
         let mut game = test_game_state();
-        game.get_nation_mut(NationId(1))
-            .unwrap()
-            .add_resource(ResourceType::Grain, 5);
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.add_resource(ResourceType::Grain, 10);
+        nation.labor.untrained = 3; // 3 workers need 3 food
 
         let report = process_turn(&mut game);
 
-        // Started with 5, gained 1 from farm = 6, consumed 1 = 5
+        // Started with 10, gained 1 from farm = 11, consumed 3 (1 per worker) = 8
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.resource_amount(ResourceType::Grain), 5);
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 8);
 
         let consumed: u32 = report
             .food_consumed
@@ -1387,13 +1565,39 @@ mod tests {
             .filter(|(nid, _)| *nid == NationId(1))
             .map(|(_, q)| *q)
             .sum();
-        assert_eq!(consumed, 1);
+        assert_eq!(consumed, 3);
     }
 
     #[test]
-    fn food_consumption_with_no_grain() {
+    fn food_consumption_uses_fruit_and_livestock() {
         let mut game = test_game_state_with_production();
-        // No grain in warehouse, no farm tiles
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.labor.untrained = 5; // 5 workers need 5 food
+        nation.add_resource(ResourceType::Grain, 2);
+        nation.add_resource(ResourceType::Fruit, 2);
+        nation.add_resource(ResourceType::Livestock, 3);
+
+        let report = process_turn(&mut game);
+
+        // Consume grain first (2), then fruit (2), then livestock (1) = 5 total
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 0);
+        assert_eq!(nation.resource_amount(ResourceType::Fruit), 0);
+        assert_eq!(nation.resource_amount(ResourceType::Livestock), 2);
+
+        let consumed: u32 = report
+            .food_consumed
+            .iter()
+            .filter(|(nid, _)| *nid == NationId(1))
+            .map(|(_, q)| *q)
+            .sum();
+        assert_eq!(consumed, 5);
+    }
+
+    #[test]
+    fn food_consumption_with_no_workers() {
+        let mut game = test_game_state_with_production();
+        // No workers, no food consumed
 
         let report = process_turn(&mut game);
 
@@ -1404,6 +1608,76 @@ mod tests {
             .map(|(_, q)| *q)
             .sum();
         assert_eq!(consumed, 0);
+    }
+
+    #[test]
+    fn food_consumption_starvation_kills_workers() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.labor.untrained = 5; // 5 workers need 5 food
+        nation.add_resource(ResourceType::Grain, 2); // only 2 food available
+
+        let report = process_turn(&mut game);
+
+        // Deficit = 5 - 2 = 3, capped at 2 deaths per turn
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(nation.labor.total_workers(), 3); // 5 - 2 = 3
+
+        let starved: u32 = report
+            .starvation
+            .iter()
+            .filter(|(nid, _)| *nid == NationId(1))
+            .map(|(_, q)| *q)
+            .sum();
+        assert_eq!(starved, 2);
+    }
+
+    #[test]
+    fn food_consumption_starvation_capped_at_two() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.labor.untrained = 10; // 10 workers need 10 food
+        // No food at all -> deficit 10, but cap at 2
+
+        let report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(nation.labor.total_workers(), 8); // 10 - 2 = 8
+
+        let starved: u32 = report
+            .starvation
+            .iter()
+            .filter(|(nid, _)| *nid == NationId(1))
+            .map(|(_, q)| *q)
+            .sum();
+        assert_eq!(starved, 2);
+    }
+
+    #[test]
+    fn food_processing_converts_raw_food_to_canned() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        // Add a FoodProcessing building with capacity 3
+        nation
+            .buildings
+            .push(Building::new(BuildingType::FoodProcessing, 3));
+        nation.add_resource(ResourceType::Grain, 8);
+
+        let report = process_turn(&mut game);
+
+        // FoodProcessing: cap 3, 8 grain / 2 = 4 limited by cap = 3 canned food
+        // Consumes 6 grain, leaves 2
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 2);
+        assert_eq!(nation.material_amount(MaterialType::CannedFood), 3);
+
+        let canned_output: u32 = report
+            .production_output
+            .iter()
+            .filter(|(_, name, _)| name == "CannedFood")
+            .map(|(_, _, q)| *q)
+            .sum();
+        assert_eq!(canned_output, 3);
     }
 
     // ── Building tick ─────────────────────────────────────────

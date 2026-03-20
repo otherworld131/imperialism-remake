@@ -118,10 +118,51 @@ fn main() {
                     }
                 }
 
-                // Show food consumed
-                for (nid, amt) in &report.food_consumed {
+                // Show food balance
+                if let Some(player) = game.get_nation(player_id) {
+                    let grain = player.resource_amount(ResourceType::Grain);
+                    let fruit = player.resource_amount(ResourceType::Fruit);
+                    let livestock = player.resource_amount(ResourceType::Livestock);
+                    let total_food = grain + fruit + livestock;
+                    let food_needed = player.labor.total_workers();
+
+                    let consumed: u32 = report
+                        .food_consumed
+                        .iter()
+                        .filter(|(nid, _)| *nid == player_id)
+                        .map(|(_, q)| *q)
+                        .sum();
+
+                    if consumed > 0 || food_needed > 0 {
+                        if total_food >= food_needed {
+                            println!(
+                                "  Food: {} grain, {} fruit, {} livestock (needs {}, surplus {})",
+                                grain,
+                                fruit,
+                                livestock,
+                                food_needed,
+                                total_food - food_needed
+                            );
+                        } else {
+                            println!(
+                                "  Food: {} grain, {} fruit, {} livestock (needs {}, DEFICIT {})",
+                                grain,
+                                fruit,
+                                livestock,
+                                food_needed,
+                                food_needed - total_food
+                            );
+                        }
+                    }
+                }
+
+                // Show starvation warning
+                for (nid, workers_lost) in &report.starvation {
                     if *nid == player_id {
-                        println!("  Food consumed: {} grain", amt);
+                        println!(
+                            "  WARNING: {} workers starved due to food shortage!",
+                            workers_lost
+                        );
                     }
                 }
 
@@ -272,6 +313,10 @@ fn main() {
             "b" | "buildings" => {
                 println!();
                 print_buildings(&game);
+            }
+            "pop" | "population" => {
+                println!();
+                print_population(&game);
             }
             "tech" => {
                 println!();
@@ -530,9 +575,38 @@ fn expand_building(game: &mut GameState, query: &str) {
     );
 }
 
+/// Calculate max recruitable workers based on province count.
+/// Base: 1 worker per 4 provinces. With expanded Capitol: 1 per 3 provinces.
+fn max_recruitment_capacity(player: &Nation) -> u32 {
+    let province_count = player.province_count() as u32;
+    let has_expanded_capitol = player
+        .buildings
+        .iter()
+        .any(|b| b.building_type == BuildingType::Capitol && b.capacity > 1);
+    let per_province = if has_expanded_capitol { 3 } else { 4 };
+    if per_province == 0 {
+        return 0;
+    }
+    province_count / per_province
+}
+
 fn recruit_worker(game: &mut GameState) {
     let player_id = game.human_player_nation;
     let player = game.get_nation(player_id).unwrap();
+
+    // Check province-based recruitment limit
+    let max_recruits = max_recruitment_capacity(player);
+    let current_workers = player.labor.total_workers();
+    if current_workers >= max_recruits {
+        println!(
+            "  Cannot recruit: at capacity ({}/{} workers for {} provinces).",
+            current_workers,
+            max_recruits,
+            player.province_count()
+        );
+        println!("  Conquer more provinces or expand your Capitol to increase capacity.");
+        return;
+    }
 
     let canned_food = player.material_amount(MaterialType::CannedFood);
     let clothing = player.goods_amount(GoodsType::Clothing);
@@ -560,9 +634,10 @@ fn recruit_worker(game: &mut GameState) {
     player.consume_goods(GoodsType::Furniture, 1);
     player.labor.recruit_immigrant();
 
+    let max_recruits = max_recruitment_capacity(player);
     println!(
-        "  Recruited 1 untrained worker (now: {} untrained, {} trained, {} expert).",
-        player.labor.untrained, player.labor.trained, player.labor.expert
+        "  Recruited 1 untrained worker (now: {} untrained, {} trained, {} expert, capacity {}).",
+        player.labor.untrained, player.labor.trained, player.labor.expert, max_recruits
     );
 }
 
@@ -1037,6 +1112,64 @@ fn print_buildings(game: &domain::game_state::GameState) {
     );
 }
 
+fn print_population(game: &GameState) {
+    let player = game.get_nation(game.human_player_nation).unwrap();
+
+    let untrained = player.labor.untrained;
+    let trained = player.labor.trained;
+    let expert = player.labor.expert;
+    let total = player.labor.total_workers();
+
+    println!("  POPULATION:");
+    println!("    Untrained workers: {}", untrained);
+    println!("    Trained workers:   {}", trained);
+    println!("    Expert workers:    {}", expert);
+    println!("    Total:             {}", total);
+    println!();
+
+    // Food requirement
+    let food_needed = total;
+    let grain = player.resource_amount(ResourceType::Grain);
+    let fruit = player.resource_amount(ResourceType::Fruit);
+    let livestock = player.resource_amount(ResourceType::Livestock);
+    let total_food = grain + fruit + livestock;
+
+    println!("  FOOD:");
+    println!(
+        "    Available: {} grain, {} fruit, {} livestock ({} total)",
+        grain, fruit, livestock, total_food
+    );
+    println!("    Requirement: {} per turn (1 per worker)", food_needed);
+    if total_food >= food_needed {
+        println!("    Status: SURPLUS (+{})", total_food - food_needed);
+    } else {
+        println!(
+            "    Status: DEFICIT (-{}) -- workers will starve!",
+            food_needed - total_food
+        );
+    }
+    println!();
+
+    // Recruitment capacity
+    let max_recruits = max_recruitment_capacity(player);
+    println!("  RECRUITMENT:");
+    println!(
+        "    Max workers: {} (based on {} provinces)",
+        max_recruits,
+        player.province_count()
+    );
+    println!("    Current workers: {} / {}", total, max_recruits);
+    let has_expanded_capitol = player
+        .buildings
+        .iter()
+        .any(|b| b.building_type == BuildingType::Capitol && b.capacity > 1);
+    if has_expanded_capitol {
+        println!("    Capitol expanded: 1 worker per 3 provinces");
+    } else {
+        println!("    Capitol base: 1 worker per 4 provinces (expand Capitol for 1 per 3)");
+    }
+}
+
 fn print_tech(game: &GameState) {
     let player = game.get_nation(game.human_player_nation).unwrap();
     let year = game.turn.year();
@@ -1172,6 +1305,7 @@ fn print_help() {
     println!("    status            — Show current game status");
     println!("    warehouse         — Show your resource warehouse");
     println!("    buildings         — Show your buildings and workers");
+    println!("    population / pop  — Show population, food balance, recruitment capacity");
     println!("    tech              — Show technology tree status");
     println!("    research <name>   — Research a technology by name");
     println!("    build <building>  — Build a new mill or factory");

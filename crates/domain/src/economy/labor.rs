@@ -62,6 +62,24 @@ impl LaborPool {
         self.untrained += 1;
     }
 
+    /// Remove one worker due to starvation or other attrition.
+    /// Removes untrained first, then trained, then expert.
+    /// Returns `true` if a worker was removed, `false` if pool is empty.
+    pub fn remove_worker(&mut self) -> bool {
+        if self.untrained > 0 {
+            self.untrained -= 1;
+            true
+        } else if self.trained > 0 {
+            self.trained -= 1;
+            true
+        } else if self.expert > 0 {
+            self.expert -= 1;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Workers available for production. For now, equals total workers.
     pub fn available_for_production(&self) -> u32 {
         self.total_workers()
