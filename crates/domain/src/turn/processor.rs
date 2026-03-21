@@ -1318,6 +1318,31 @@ fn resolve_trade_session(game: &mut GameState, report: &mut TurnReport) {
         }
     }
 
+    // 5b. Record trade history for each nation involved
+    let current_turn = game.turn;
+    for txn in &transactions {
+        // Record for buyer (partner is seller)
+        if let Some(buyer) = game.get_nation_mut(txn.buyer) {
+            buyer.trade_history.push(trade::TradeHistoryEntry {
+                turn: current_turn,
+                partner: txn.seller,
+                resource: txn.resource,
+                quantity: txn.quantity,
+                total_cost: txn.total_cost,
+            });
+        }
+        // Record for seller (partner is buyer)
+        if let Some(seller) = game.get_nation_mut(txn.seller) {
+            seller.trade_history.push(trade::TradeHistoryEntry {
+                turn: current_turn,
+                partner: txn.buyer,
+                resource: txn.resource,
+                quantity: txn.quantity,
+                total_cost: txn.total_cost,
+            });
+        }
+    }
+
     // 6. Diplomatic impact: +1 score per distinct commodity type traded per partner pair
     let mut trade_pairs: std::collections::HashMap<
         (NationId, NationId),
@@ -5285,6 +5310,113 @@ mod tests {
             assert!(
                 !report.trade_diplomacy.is_empty(),
                 "Trade diplomacy improvements should be recorded"
+            );
+        }
+    }
+
+    // ── Trade history recording ──────────────────────────────────
+
+    #[test]
+    fn trade_records_history_entries() {
+        use crate::hex::HexCoord;
+        use crate::map::tile::Tile;
+        use crate::military::ships::{Ship, ShipType};
+
+        let coord_forest = HexCoord::new(0, 0);
+        let coord_plantation = HexCoord::new(1, 0);
+
+        let mut hex_map = HexMap::new(10, 10);
+        hex_map.set_tile(
+            coord_forest,
+            Tile::with_province(TerrainType::ScrubForest, ProvinceId(20)),
+        );
+        hex_map.set_tile(
+            coord_plantation,
+            Tile::with_province(TerrainType::Plantation, ProvinceId(20)),
+        );
+
+        let mn_province = Province::new(
+            ProvinceId(20),
+            "Minor Province".to_string(),
+            NationId(10),
+            coord_forest,
+            vec![coord_forest, coord_plantation],
+            3,
+        );
+
+        let gp_province = Province::new(
+            ProvinceId(1),
+            "GP Province".to_string(),
+            NationId(1),
+            HexCoord::new(5, 5),
+            vec![HexCoord::new(5, 5)],
+            4,
+        );
+
+        let mut gp = Nation::new(
+            NationId(1),
+            "TestGP".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        gp.treasury = Money::dollars(50000);
+        gp.merchant_fleet.push(Ship::new(
+            crate::map::UnitId(999),
+            ShipType::Trader,
+            NationId(1),
+        ));
+
+        let mn = Nation::new(
+            NationId(10),
+            "TestMN".to_string(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(20),
+        );
+
+        let mut diplomacy = DiplomacyState::new();
+        diplomacy
+            .build_consulate(NationId(1), NationId(10))
+            .unwrap();
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![gp_province, mn_province],
+            nations: vec![gp, mn],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy,
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+        };
+
+        let report = process_turn(&mut game);
+
+        // If trade happened, history should be recorded
+        if !report.trade_transactions.is_empty() {
+            let gp_nation = game.get_nation(NationId(1)).unwrap();
+            assert!(
+                !gp_nation.trade_history.is_empty(),
+                "Great Power should have trade history entries after trade"
+            );
+            // Check the first entry has correct fields
+            let first = &gp_nation.trade_history[0];
+            assert_eq!(first.turn, TurnNumber::new(1));
+            assert_eq!(first.partner, NationId(10));
+            assert!(first.quantity > 0);
+            assert!(first.total_cost > Money::ZERO);
+
+            let mn_nation = game.get_nation(NationId(10)).unwrap();
+            assert!(
+                !mn_nation.trade_history.is_empty(),
+                "Minor Nation should also have trade history entries"
             );
         }
     }

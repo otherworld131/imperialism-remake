@@ -64,6 +64,10 @@ pub struct BattleResult {
     pub defender_initial_count: usize,
     /// Whether the attacker retreated (lost >60% of initial firepower).
     pub retreated: bool,
+    /// Whether siege artillery reduced the fort's defense bonus.
+    pub siege_reduced_fort: bool,
+    /// Medal awards for surviving units on the winning side: (unit_type, new_medal_count).
+    pub medal_awards: Vec<(ArmyUnitType, u8)>,
 }
 
 /// Calculate total firepower for a list of units.
@@ -77,6 +81,23 @@ fn militia_count(units: &[ArmyUnit]) -> usize {
         .iter()
         .filter(|u| u.unit_type == ArmyUnitType::Militia)
         .count()
+}
+
+/// Check if a force contains any siege artillery units.
+fn has_siege_artillery(units: &[ArmyUnit]) -> bool {
+    units.iter().any(|u| {
+        u.unit_type == ArmyUnitType::SiegeArtillery || u.unit_type == ArmyUnitType::RailroadGun
+    })
+}
+
+/// Calculate the effective fort defense bonus, reduced by 50% if attacker has siege artillery.
+pub fn effective_fort_bonus(fort_level: u8, attacker_has_siege: bool) -> f64 {
+    let base = fort_defense_bonus(fort_level);
+    if attacker_has_siege && base > 0.0 {
+        base * 0.5
+    } else {
+        base
+    }
 }
 
 /// Resolve a battle between an attacker and a defender in a province.
@@ -110,7 +131,9 @@ pub fn resolve_battle(
     let defender_initial_count = def_units.len();
     let attacker_initial_fp = total_firepower(&atk_units);
     let terrain_bonus_init = terrain.map(terrain_defense_bonus).unwrap_or(0.0);
-    let fort_bonus_init = fort_defense_bonus(fort_level);
+    let attacker_has_siege = has_siege_artillery(&atk_units);
+    let siege_reduced_fort = attacker_has_siege && fort_level > 0;
+    let fort_bonus_init = effective_fort_bonus(fort_level, attacker_has_siege);
     let defender_initial_fp =
         total_firepower(&def_units) * 1.2 * (1.0 + terrain_bonus_init) * (1.0 + fort_bonus_init)
             + militia_count(&def_units) as f64 * 8.0;
@@ -136,6 +159,8 @@ pub fn resolve_battle(
             attacker_initial_count,
             defender_initial_count,
             retreated: false,
+            siege_reduced_fort: false,
+            medal_awards: Vec::new(),
         };
     }
 
@@ -157,11 +182,17 @@ pub fn resolve_battle(
             attacker_initial_count,
             defender_initial_count,
             retreated: false,
+            siege_reduced_fort: false,
+            medal_awards: Vec::new(),
         };
     }
 
     // Handle edge case: defender empty
     if def_units.is_empty() {
+        let medal_awards: Vec<(ArmyUnitType, u8)> = atk_units
+            .iter()
+            .map(|u| (u.unit_type, u.medals + 1))
+            .collect();
         for unit in &mut atk_units {
             unit.award_medal();
         }
@@ -181,6 +212,8 @@ pub fn resolve_battle(
             attacker_initial_count,
             defender_initial_count,
             retreated: false,
+            siege_reduced_fort,
+            medal_awards,
         };
     }
 
@@ -198,7 +231,7 @@ pub fn resolve_battle(
         // Calculate firepower for this round
         let atk_fp = total_firepower(&atk_units);
         let terrain_bonus = terrain.map(terrain_defense_bonus).unwrap_or(0.0);
-        let fort_bonus = fort_defense_bonus(fort_level);
+        let fort_bonus = effective_fort_bonus(fort_level, attacker_has_siege);
         let def_fp = total_firepower(&def_units) * 1.2 * (1.0 + terrain_bonus) * (1.0 + fort_bonus)
             + militia_count(&def_units) as f64 * 8.0;
 
@@ -326,11 +359,13 @@ pub fn resolve_battle(
     // Winners with 0 medals get 1 medal.
     // Winners with existing medals: gain one if they dealt damage.
     // Losers keep their medals (don't lose them).
+    let mut medal_awards: Vec<(ArmyUnitType, u8)> = Vec::new();
     if attacker_won {
         for (idx, unit) in atk_units.iter_mut().enumerate() {
             let dealt = atk_damage_dealt.get(idx).copied().unwrap_or(0.0);
             if unit.medals == 0 || dealt > 0.0 {
                 unit.award_medal();
+                medal_awards.push((unit.unit_type, unit.medals));
             }
         }
     } else {
@@ -338,6 +373,7 @@ pub fn resolve_battle(
             let dealt = def_damage_dealt.get(idx).copied().unwrap_or(0.0);
             if unit.medals == 0 || dealt > 0.0 {
                 unit.award_medal();
+                medal_awards.push((unit.unit_type, unit.medals));
             }
         }
     }
@@ -358,6 +394,8 @@ pub fn resolve_battle(
         attacker_initial_count,
         defender_initial_count,
         retreated,
+        siege_reduced_fort,
+        medal_awards,
     }
 }
 
@@ -972,5 +1010,181 @@ mod tests {
         );
         // Attacker should lose (either eliminated or retreated)
         assert!(!result.attacker_won);
+    }
+
+    // ── Siege artillery reduces fort defense ─────────────────────
+
+    #[test]
+    fn effective_fort_bonus_without_siege() {
+        // Without siege, fort bonus is unchanged
+        assert!((effective_fort_bonus(1, false) - 0.20).abs() < f64::EPSILON);
+        assert!((effective_fort_bonus(2, false) - 0.40).abs() < f64::EPSILON);
+        assert!((effective_fort_bonus(3, false) - 0.60).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn effective_fort_bonus_with_siege_reduces_by_half() {
+        // With siege, fort bonus is halved
+        assert!((effective_fort_bonus(1, true) - 0.10).abs() < f64::EPSILON);
+        assert!((effective_fort_bonus(2, true) - 0.20).abs() < f64::EPSILON);
+        assert!((effective_fort_bonus(3, true) - 0.30).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn effective_fort_bonus_no_fort_unaffected_by_siege() {
+        assert!((effective_fort_bonus(0, false) - 0.0).abs() < f64::EPSILON);
+        assert!((effective_fort_bonus(0, true) - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn siege_artillery_reduces_fort_bonus_in_battle() {
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+
+        // Attacker WITH siege artillery
+        let attacker_with_siege = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Guards, atk_nation),
+                make_unit(2, ArmyUnitType::Guards, atk_nation),
+                make_unit(3, ArmyUnitType::Guards, atk_nation),
+                make_unit(4, ArmyUnitType::SiegeArtillery, atk_nation),
+            ],
+        );
+
+        // Attacker WITHOUT siege artillery
+        let attacker_without_siege = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Guards, atk_nation),
+                make_unit(2, ArmyUnitType::Guards, atk_nation),
+                make_unit(3, ArmyUnitType::Guards, atk_nation),
+                make_unit(4, ArmyUnitType::Guards, atk_nation),
+            ],
+        );
+
+        let defender = make_force(
+            def_nation,
+            vec![
+                make_unit(10, ArmyUnitType::Regulars, def_nation),
+                make_unit(11, ArmyUnitType::Regulars, def_nation),
+                make_unit(12, ArmyUnitType::Regulars, def_nation),
+            ],
+        );
+
+        // With fort level 3 and siege artillery
+        let result_with_siege =
+            resolve_battle(&attacker_with_siege, &defender, ProvinceId(1), None, 3);
+
+        // Without siege (same strength force) against fort level 3
+        let result_without_siege =
+            resolve_battle(&attacker_without_siege, &defender, ProvinceId(1), None, 3);
+
+        // The siege result should have the flag set
+        assert!(result_with_siege.siege_reduced_fort);
+        assert!(!result_without_siege.siege_reduced_fort);
+
+        // With siege, attacker should do better (fewer attacker casualties or more defender casualties)
+        assert!(
+            result_with_siege.attacker_casualties.len()
+                <= result_without_siege.attacker_casualties.len()
+                || result_with_siege.defender_casualties.len()
+                    >= result_without_siege.defender_casualties.len(),
+            "Siege artillery should reduce fort effectiveness"
+        );
+    }
+
+    #[test]
+    fn railroad_gun_also_counts_as_siege() {
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+
+        let attacker = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Guards, atk_nation),
+                make_unit(2, ArmyUnitType::RailroadGun, atk_nation),
+            ],
+        );
+        let defender = make_force(
+            def_nation,
+            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+        );
+
+        let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 2);
+        assert!(result.siege_reduced_fort);
+    }
+
+    #[test]
+    fn no_siege_units_means_no_fort_reduction() {
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+
+        let attacker = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Guards, atk_nation),
+                make_unit(2, ArmyUnitType::Regulars, atk_nation),
+            ],
+        );
+        let defender = make_force(
+            def_nation,
+            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+        );
+
+        let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 2);
+        assert!(!result.siege_reduced_fort);
+    }
+
+    // ── Medal awards in battle results ───────────────────────────
+
+    #[test]
+    fn battle_result_includes_medal_awards() {
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+
+        let attacker = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Guards, atk_nation),
+                make_unit(2, ArmyUnitType::Guards, atk_nation),
+                make_unit(3, ArmyUnitType::Guards, atk_nation),
+            ],
+        );
+
+        let defender = make_force(
+            def_nation,
+            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+        );
+
+        let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 0);
+        assert!(result.attacker_won);
+        // Medal awards should be populated for the winning side
+        assert!(
+            !result.medal_awards.is_empty(),
+            "Medal awards should be recorded for winning units"
+        );
+        // Each medal award should have a positive medal count
+        for (_, count) in &result.medal_awards {
+            assert!(*count >= 1, "Awarded medal count should be at least 1");
+        }
+    }
+
+    #[test]
+    fn empty_defender_medal_awards_recorded() {
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+
+        let attacker = make_force(
+            atk_nation,
+            vec![make_unit(1, ArmyUnitType::Regulars, atk_nation)],
+        );
+        let defender = make_force(def_nation, vec![]);
+
+        let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 0);
+        assert!(result.attacker_won);
+        assert_eq!(result.medal_awards.len(), 1);
+        assert_eq!(result.medal_awards[0].0, ArmyUnitType::Regulars);
+        assert_eq!(result.medal_awards[0].1, 1);
     }
 }

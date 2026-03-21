@@ -82,6 +82,9 @@ pub struct Nation {
     /// Trade subsidies: per-Minor-Nation subsidy amounts (GP pays this per turn).
     #[serde(default)]
     pub trade_subsidies: HashMap<NationId, Money>,
+    /// Trade history: records of past trade transactions for player reference.
+    #[serde(default)]
+    pub trade_history: Vec<crate::economy::trade::TradeHistoryEntry>,
 }
 
 impl Nation {
@@ -114,6 +117,7 @@ impl Nation {
             warships: Vec::new(),
             ai_personality: None,
             trade_subsidies: HashMap::new(),
+            trade_history: Vec::new(),
         }
     }
 
@@ -682,5 +686,50 @@ mod tests {
                 .iter()
                 .any(|b| b.building_type == BuildingType::SteelMill && b.pending_capacity == 3)
         );
+    }
+
+    // ── Trade history ────────────────────────────────────────────
+
+    #[test]
+    fn new_nation_has_empty_trade_history() {
+        let n = sample_great_power();
+        assert!(n.trade_history.is_empty());
+    }
+
+    #[test]
+    fn trade_history_can_be_appended() {
+        use crate::economy::trade::TradeHistoryEntry;
+
+        let mut n = sample_great_power();
+        n.trade_history.push(TradeHistoryEntry {
+            turn: TurnNumber::new(3),
+            partner: NationId(10),
+            resource: ResourceType::Timber,
+            quantity: 5,
+            total_cost: Money::dollars(250),
+        });
+        assert_eq!(n.trade_history.len(), 1);
+        assert_eq!(n.trade_history[0].partner, NationId(10));
+        assert_eq!(n.trade_history[0].quantity, 5);
+    }
+
+    #[test]
+    fn trade_history_survives_serialization() {
+        use crate::economy::trade::TradeHistoryEntry;
+
+        let mut n = sample_great_power();
+        n.trade_history.push(TradeHistoryEntry {
+            turn: TurnNumber::new(7),
+            partner: NationId(5),
+            resource: ResourceType::Iron,
+            quantity: 3,
+            total_cost: Money::dollars(225),
+        });
+
+        let json = serde_json::to_string(&n).unwrap();
+        let deserialized: Nation = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.trade_history.len(), 1);
+        assert_eq!(deserialized.trade_history[0].turn, TurnNumber::new(7));
+        assert_eq!(deserialized.trade_history[0].partner, NationId(5));
     }
 }

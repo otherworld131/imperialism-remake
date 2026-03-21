@@ -21,7 +21,7 @@ structured sessions each turn after all players submit orders.
 ### Trade Infrastructure Requirements
 - [x] Trade Consulate required before any trade with a Minor Nation
 - [x] Each trade requires sufficient merchant ship cargo capacity
-- [ ] Cargo holds displayed on trade screen — one hold per item
+- [x] Cargo holds displayed on trade screen — one hold per item
 - [ ] Great Powers use their own ships for items they purchase
 - [x] Unit tests: consulate prerequisite enforcement
 - [x] Unit tests: cargo capacity limiting trade volume
@@ -70,7 +70,7 @@ structured sessions each turn after all players submit orders.
 - [ ] List all Minor Nations with Trade Consulates
 - [ ] Show available goods and current prices for each partner
 - [ ] Allow setting offers and bids with quantity + price
-- [ ] Show current cargo capacity and utilization
+- [x] Show current cargo capacity and utilization
 - [ ] Preview expected revenue from current offers
 - [ ] Show diplomatic relationship status per partner
 - [ ] Unit tests: trade screen data aggregation

@@ -156,6 +156,7 @@ pub fn read_save_metadata(path: &Path) -> Option<SaveFileMetadata> {
     let json = std::fs::read_to_string(path).ok()?;
     if let Ok(save) = serde_json::from_str::<SaveFile>(&json) {
         Some(SaveFileMetadata {
+            version: save.version,
             nation_name: save.nation_name,
             turn_display: save.turn_display,
             difficulty: save.difficulty,
@@ -168,6 +169,7 @@ pub fn read_save_metadata(path: &Path) -> Option<SaveFileMetadata> {
 
 /// Metadata extracted from a save file for display in the save browser.
 pub struct SaveFileMetadata {
+    pub version: u32,
     pub nation_name: String,
     pub turn_display: String,
     pub difficulty: String,
@@ -485,6 +487,7 @@ mod tests {
 
         // Verify metadata via read_save_metadata
         let meta = read_save_metadata(&path).unwrap();
+        assert_eq!(meta.version, CURRENT_SAVE_VERSION);
         assert!(!meta.nation_name.is_empty());
         assert!(meta.turn_display.contains("Q"));
         assert_eq!(meta.difficulty, "Normal");
@@ -561,5 +564,50 @@ mod tests {
     fn list_saves_nonexistent_directory() {
         let saves = list_saves(Path::new("/tmp/nonexistent_dir_999999"));
         assert!(saves.is_empty());
+    }
+
+    // ── Save metadata (saveinfo) tests ──────────────────────────
+
+    #[test]
+    fn read_save_metadata_includes_version() {
+        let game = new_game("test", Difficulty::Hard, 0);
+
+        let dir = std::env::temp_dir().join("imperialism_test_saveinfo");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("saveinfo_test.json");
+
+        save_game(&game, &path).unwrap();
+
+        let meta = read_save_metadata(&path).unwrap();
+        assert_eq!(meta.version, CURRENT_SAVE_VERSION);
+        assert!(!meta.nation_name.is_empty());
+        assert!(meta.turn_display.contains("Q"));
+        assert_eq!(meta.difficulty, "Hard");
+        assert!(meta.timestamp.contains("T"));
+
+        // Cleanup
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn read_save_metadata_returns_none_for_invalid_file() {
+        let dir = std::env::temp_dir().join("imperialism_test_saveinfo_invalid");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("invalid_meta.json");
+        std::fs::write(&path, "not valid json at all").unwrap();
+
+        let meta = read_save_metadata(&path);
+        assert!(meta.is_none());
+
+        // Cleanup
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn read_save_metadata_returns_none_for_nonexistent_file() {
+        let meta = read_save_metadata(Path::new("/tmp/nonexistent_saveinfo_99999.json"));
+        assert!(meta.is_none());
     }
 }

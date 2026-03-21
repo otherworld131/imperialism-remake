@@ -40,7 +40,7 @@ a province is invaded via beachhead.
 - [x] **Medals**: 4 medals ≈ 2× firepower; medal holders take less damage and recover faster
 - [x] **Terrain**: defensive bonuses for hills, forests, fortifications
 - [x] **Fort defense**: units inside forts receive significant defense bonuses
-- [ ] **Fort destruction**: Sappers tunnel to fort walls; heavy artillery bombards from range
+- [x] **Fort destruction**: Sappers tunnel to fort walls; heavy artillery bombards from range (siege artillery reduces fort bonus by 50% in auto-resolve)
 - [x] Unit tests: all modifier calculations
 
 ### Sapper Mechanics (Tactical)

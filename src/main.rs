@@ -267,6 +267,10 @@ fn main() {
                 let filename = input.trim()[7..].trim();
                 delete_saved_game(filename);
             }
+            _ if cmd.starts_with("saveinfo ") => {
+                let filename = input.trim()[9..].trim();
+                cmd_saveinfo(filename);
+            }
             "quicksave" | "qs" => {
                 quicksave_game(&game);
             }
@@ -1802,13 +1806,42 @@ fn print_trade(game: &GameState) {
         println!();
     }
 
-    if cargo_capacity == 0 {
+    // Show cargo utilization: estimate how many holds are used by current trade volume
+    if cargo_capacity > 0 {
+        // Count total quantity being traded (sum of last turn's transactions for this player)
+        let cargo_used: u32 = player
+            .trade_history
+            .iter()
+            .filter(|th| th.turn == game.turn || th.turn.0 + 1 == game.turn.0)
+            .filter(|th| th.partner != player.id) // buyer entries
+            .map(|th| th.quantity)
+            .sum();
+        let cargo_used = cargo_used.min(cargo_capacity);
+        println!("  Cargo: {}/{} holds used", cargo_used, cargo_capacity);
+        println!("  (Trade is auto-resolved each turn — requires consulate + cargo capacity)");
+    } else {
         println!(
             "  {} No cargo capacity! Build merchant ships to enable trade.",
             color_red("WARNING:")
         );
-    } else {
-        println!("  (Trade is auto-resolved each turn — requires consulate + cargo capacity)");
+    }
+
+    // Show recent trade history (last 10 entries)
+    if !player.trade_history.is_empty() {
+        println!();
+        println!("  RECENT TRADE HISTORY:");
+        let history_len = player.trade_history.len();
+        let start = history_len.saturating_sub(10);
+        for entry in &player.trade_history[start..] {
+            let partner_name = game
+                .get_nation(entry.partner)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| format!("Nation {}", entry.partner.0));
+            println!(
+                "    {} — {:?} x{} with {} for {}",
+                entry.turn, entry.resource, entry.quantity, partner_name, entry.total_cost
+            );
+        }
     }
 }
 
@@ -2052,6 +2085,7 @@ fn print_help() {
     println!("    load              — List saved games");
     println!("    load <filename>   — Load a saved game");
     println!("    delete <filename> — Delete a saved game");
+    println!("    saveinfo <file>   — Show save file metadata without loading");
     println!("    quicksave / qs    — Quick save to quicksave.json");
     println!("    quickload / ql    — Quick load from quicksave.json");
     println!("    help              — Show this help");
@@ -2206,6 +2240,33 @@ fn delete_saved_game(filename: &str) {
         }
         Err(e) => {
             println!("  Failed to delete: {}", e);
+        }
+    }
+}
+
+fn cmd_saveinfo(filename: &str) {
+    let dir = saves_dir();
+    let path = dir.join(filename);
+    if !path.exists() {
+        println!("  Save file not found: {}", filename);
+        println!("  Use 'load' to list available saves.");
+        return;
+    }
+    match persistence::read_save_metadata(&path) {
+        Some(meta) => {
+            println!();
+            println!("  SAVE FILE INFO: {}", filename);
+            println!("    Version:    {}", meta.version);
+            println!("    Nation:     {}", meta.nation_name);
+            println!("    Turn:       {}", meta.turn_display);
+            println!("    Difficulty: {}", meta.difficulty);
+            println!("    Timestamp:  {}", meta.timestamp);
+        }
+        None => {
+            println!(
+                "  Could not read metadata from '{}'. File may be corrupt or in an old format.",
+                filename
+            );
         }
     }
 }
@@ -3644,12 +3705,24 @@ fn print_turn_report(game: &GameState, report: &TurnReport) {
             };
 
             let fort_str = if battle.fort_level > 0 {
-                let bonus = domain::military::fort_defense_bonus(battle.fort_level);
-                format!(
-                    "Level {} (+{:.0}% defense)",
-                    battle.fort_level,
-                    bonus * 100.0
-                )
+                if battle.siege_reduced_fort {
+                    let full_bonus = domain::military::fort_defense_bonus(battle.fort_level);
+                    let reduced_bonus =
+                        domain::military::effective_fort_bonus(battle.fort_level, true);
+                    format!(
+                        "Level {} (+{:.0}% -> +{:.0}% defense, reduced by siege artillery)",
+                        battle.fort_level,
+                        full_bonus * 100.0,
+                        reduced_bonus * 100.0,
+                    )
+                } else {
+                    let bonus = domain::military::fort_defense_bonus(battle.fort_level);
+                    format!(
+                        "Level {} (+{:.0}% defense)",
+                        battle.fort_level,
+                        bonus * 100.0
+                    )
+                }
             } else {
                 "None".to_string()
             };
@@ -3704,6 +3777,30 @@ fn print_turn_report(game: &GameState, report: &TurnReport) {
             }
             if battle.attacker_won {
                 println!("  {}", color_green("Province conquered!"));
+            }
+            // Show medal awards
+            if !battle.medal_awards.is_empty() {
+                println!();
+                println!("  Medal awards:");
+                // Group by unit type
+                let mut medal_counts: std::collections::BTreeMap<String, Vec<u8>> =
+                    std::collections::BTreeMap::new();
+                for (ut, count) in &battle.medal_awards {
+                    medal_counts
+                        .entry(format!("{:?}", ut))
+                        .or_default()
+                        .push(*count);
+                }
+                for (unit_name, medals) in &medal_counts {
+                    let medal_strs: Vec<String> = medals
+                        .iter()
+                        .map(|m| {
+                            let stars = "*".repeat(*m as usize);
+                            format!("[{}]", stars)
+                        })
+                        .collect();
+                    println!("    {} {}", unit_name, medal_strs.join(" "));
+                }
             }
             println!("  {}", "=".repeat(42));
         }

@@ -22,13 +22,23 @@ pub struct TradeBid {
 }
 
 /// Result of a single trade transaction.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TradeTransaction {
     pub buyer: NationId,
     pub seller: NationId,
     pub resource: ResourceType,
     pub quantity: u32,
     pub price_per_unit: Money,
+    pub total_cost: Money,
+}
+
+/// A record of a past trade transaction, stored in a nation's trade history.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TradeHistoryEntry {
+    pub turn: TurnNumber,
+    pub partner: NationId,
+    pub resource: ResourceType,
+    pub quantity: u32,
     pub total_cost: Money,
 }
 
@@ -829,5 +839,41 @@ mod tests {
         assert_eq!(txns.len(), 1);
         // Nation 2 wins: effective score 15 > Nation 1 score 10
         assert_eq!(txns[0].buyer, NationId(2));
+    }
+
+    // ── TradeHistoryEntry ──────────────────────────────────────
+
+    #[test]
+    fn trade_history_entry_stores_all_fields() {
+        let entry = TradeHistoryEntry {
+            turn: TurnNumber(5),
+            partner: NationId(10),
+            resource: ResourceType::Timber,
+            quantity: 3,
+            total_cost: Money::dollars(150),
+        };
+        assert_eq!(entry.turn, TurnNumber(5));
+        assert_eq!(entry.partner, NationId(10));
+        assert_eq!(entry.resource, ResourceType::Timber);
+        assert_eq!(entry.quantity, 3);
+        assert_eq!(entry.total_cost, Money::dollars(150));
+    }
+
+    #[test]
+    fn trade_history_entry_serializes_and_deserializes() {
+        let entry = TradeHistoryEntry {
+            turn: TurnNumber(12),
+            partner: NationId(5),
+            resource: ResourceType::Coal,
+            quantity: 7,
+            total_cost: Money::dollars(525),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let deserialized: TradeHistoryEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.turn, entry.turn);
+        assert_eq!(deserialized.partner, entry.partner);
+        assert_eq!(deserialized.resource, entry.resource);
+        assert_eq!(deserialized.quantity, entry.quantity);
+        assert_eq!(deserialized.total_cost, entry.total_cost);
     }
 }
