@@ -43,6 +43,9 @@ pub struct GameState {
     /// History of major game events: (turn_number, description).
     #[serde(default)]
     pub history: Vec<(TurnNumber, String)>,
+    /// High score table: (nation_name, score, date_string).
+    #[serde(default)]
+    pub high_scores: Vec<(String, u32, String)>,
 }
 
 impl GameState {
@@ -286,6 +289,7 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         pending_attacks: Vec::new(),
         pending_moves: Vec::new(),
         history: Vec::new(),
+        high_scores: Vec::new(),
     }
 }
 
@@ -346,6 +350,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         }
     }
 
@@ -855,5 +860,30 @@ mod tests {
         let mut gs = sample_game_state();
         gs.turn = TurnNumber::from_year_quarter(1915, 1);
         assert!(gs.is_game_over(), "Game should be over at exactly 1915 Q1");
+    }
+
+    // ── High scores ──────────────────────────────────────────────
+
+    #[test]
+    fn high_scores_default_empty() {
+        let gs = sample_game_state();
+        assert!(gs.high_scores.is_empty());
+    }
+
+    #[test]
+    fn high_score_recorded_on_game_end() {
+        let mut gs = sample_game_state();
+        gs.turn = TurnNumber::from_year_quarter(1915, 1);
+        assert!(gs.is_game_over());
+
+        // Record a high score
+        let score = crate::turn::calculate_score(gs.get_nation(NationId(1)).unwrap());
+        let date_str = format!("{} Q{}", gs.turn.year(), gs.turn.quarter());
+        gs.high_scores
+            .push(("France".to_string(), score.total, date_str));
+
+        assert_eq!(gs.high_scores.len(), 1);
+        assert_eq!(gs.high_scores[0].0, "France");
+        assert_eq!(gs.high_scores[0].2, "1915 Q1");
     }
 }

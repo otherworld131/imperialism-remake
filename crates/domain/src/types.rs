@@ -61,6 +61,20 @@ impl TurnNumber {
         self.year() == 1915 && self.quarter() == 1
     }
 
+    /// Whether a decade election is approaching within `turns_ahead` turns.
+    ///
+    /// Returns `true` if any turn from now to `self.0 + turns_ahead` (inclusive)
+    /// would be a decade election.
+    pub fn is_near_decade_election(self, turns_ahead: u32) -> bool {
+        for offset in 1..=turns_ahead {
+            let future = TurnNumber(self.0 + offset);
+            if future.is_decade_election() {
+                return true;
+            }
+        }
+        false
+    }
+
     pub const fn next(self) -> Self {
         Self(self.0 + 1)
     }

@@ -2190,7 +2190,7 @@ fn check_council_vote(game: &GameState, report: &mut TurnReport) {
     }
 
     let is_final = game.turn.is_game_end();
-    let result = run_council_vote(&game.nations, &game.provinces, is_final);
+    let result = run_council_vote(&game.nations, &game.provinces, is_final, &game.diplomacy);
 
     if let Some(winner_id) = result.winner {
         if let Some(winner) = game.get_nation(winner_id) {
@@ -2274,6 +2274,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         }
     }
 
@@ -2321,6 +2322,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         }
     }
 
@@ -2531,6 +2533,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         };
 
         let report = process_turn(&mut game);
@@ -2622,6 +2625,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         }
     }
 
@@ -3228,6 +3232,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         };
 
         let report = process_turn(&mut game);
@@ -3481,6 +3486,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         };
 
         // Process 7 turns: 1 turn to start countdown (set to 6), then 6 turns to count down
@@ -3545,6 +3551,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         };
 
         for _ in 0..10 {
@@ -3673,6 +3680,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         }
     }
 
@@ -3771,6 +3779,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         };
 
         let report = process_turn(&mut game);
@@ -3938,6 +3947,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         };
 
         // Process 12 turns to count down the town_countdown
@@ -4005,6 +4015,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         };
 
         // Process only 11 turns — not enough
@@ -4073,6 +4084,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         };
 
         // 7 turns: Hamlet → Village (1 to start countdown + 6 to count down)
@@ -4385,6 +4397,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         }
     }
 
@@ -4730,6 +4743,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         };
 
         // Verify pact exists
@@ -4848,6 +4862,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         };
 
         let mut report = TurnReport {
@@ -5008,6 +5023,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         };
 
         let report = process_turn(&mut game);

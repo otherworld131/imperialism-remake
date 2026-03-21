@@ -1,3 +1,4 @@
+use crate::diplomacy::DiplomacyState;
 use crate::map::Province;
 use crate::nation::Nation;
 use crate::types::*;
@@ -14,6 +15,21 @@ pub struct NationScore {
     pub total: u32,
 }
 
+/// Detail of a single governor's vote.
+#[derive(Debug, Clone)]
+pub struct GovernorVoteDetail {
+    /// The province this governor represents.
+    pub province_name: String,
+    /// Owner of the province.
+    pub province_owner: NationId,
+    /// Whether the owner is a Great Power or Minor Nation.
+    pub owner_type: NationType,
+    /// The GP this governor voted for.
+    pub voted_for: NationId,
+    /// Reason the governor voted this way.
+    pub reason: String,
+}
+
 /// Result of a Council of Governors vote.
 #[derive(Debug, Clone)]
 pub struct CouncilVoteResult {
@@ -27,6 +43,8 @@ pub struct CouncilVoteResult {
     pub winner: Option<NationId>,
     /// `true` if this is the 1915 final vote.
     pub is_final: bool,
+    /// Detailed per-governor vote information.
+    pub governor_details: Vec<GovernorVoteDetail>,
 }
 
 /// Calculate the game score for a nation.
@@ -68,12 +86,44 @@ pub fn calculate_score(nation: &Nation) -> NationScore {
     }
 }
 
+/// Determine which GP a governor votes for.
+///
+/// - **Great Power governors**: always vote for their own GP.
+/// - **Minor Nation governors**: vote for the GP with the highest diplomatic
+///   relationship score. Ties are broken by lowest NationId.
+pub fn governor_vote(
+    province_owner: NationId,
+    owner_type: NationType,
+    diplomacy: &DiplomacyState,
+    great_power_ids: &[NationId],
+) -> NationId {
+    match owner_type {
+        NationType::GreatPower => province_owner,
+        NationType::MinorNation => {
+            // Find GP with best relationship score
+            let mut best_gp = great_power_ids[0];
+            let mut best_score = i32::MIN;
+            for &gp_id in great_power_ids {
+                let score = diplomacy
+                    .get_relation(province_owner, gp_id)
+                    .map(|rel| rel.score)
+                    .unwrap_or(0);
+                if score > best_score || (score == best_score && gp_id.0 < best_gp.0) {
+                    best_score = score;
+                    best_gp = gp_id;
+                }
+            }
+            best_gp
+        }
+    }
+}
+
 /// Run the Council of Governors vote.
 ///
 /// Each province has one governor. Governor voting preference:
 /// - **Great Power provinces**: the governor always supports their own nation.
 /// - **Minor Nation provinces**: the governor supports the Great Power with the
-///   highest total score (simplified heuristic).
+///   highest diplomatic relationship score (trade relationship).
 ///
 /// A nation wins outright if it secures at least 2/3 of total governors.
 /// On the final vote (1915) with no 2/3 majority, the nation with the most
@@ -82,45 +132,70 @@ pub fn run_council_vote(
     nations: &[Nation],
     provinces: &[Province],
     is_final: bool,
+    diplomacy: &DiplomacyState,
 ) -> CouncilVoteResult {
     let total_governors = provinces.len() as u32;
     // 2/3 majority — rounding up so the threshold is strict.
     let majority_threshold = (total_governors * 2).div_ceil(3);
 
-    // Pre-compute scores for all Great Powers so we can determine
-    // which GP the minor-nation governors prefer.
-    let great_powers: Vec<(NationId, u32)> = nations
+    // Collect Great Power IDs.
+    let great_power_ids: Vec<NationId> = nations
         .iter()
         .filter(|n| n.is_great_power())
-        .map(|n| (n.id, calculate_score(n).total))
+        .map(|n| n.id)
         .collect();
 
-    // Find the GP with the highest score (tie-break: lowest NationId).
-    let best_gp = great_powers
-        .iter()
-        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.0.cmp(&a.0.0)));
+    if great_power_ids.is_empty() {
+        return CouncilVoteResult {
+            votes: Vec::new(),
+            total_governors,
+            majority_threshold,
+            winner: None,
+            is_final,
+            governor_details: Vec::new(),
+        };
+    }
 
     // Tally governor votes per Great Power.
     let mut vote_tally: std::collections::HashMap<NationId, u32> = std::collections::HashMap::new();
+    let mut governor_details: Vec<GovernorVoteDetail> = Vec::new();
 
     for province in provinces {
         // Determine which nation the governor of this province supports.
         let owner_nation = nations.iter().find(|n| n.id == province.owner);
 
-        let supported_gp = match owner_nation {
+        let (owner_type, supported_gp, reason) = match owner_nation {
             Some(n) if n.is_great_power() => {
-                // Great Power governor supports own nation.
-                n.id
+                (NationType::GreatPower, n.id, "own nation".to_string())
             }
-            _ => {
-                // Minor Nation governor (or unknown owner) supports the
-                // GP with the highest score.
-                match best_gp {
-                    Some(&(gp_id, _)) => gp_id,
-                    None => continue, // no Great Powers — skip
-                }
+            Some(n) => {
+                // Minor Nation governor — vote based on diplomatic relationship.
+                let voted_for =
+                    governor_vote(n.id, NationType::MinorNation, diplomacy, &great_power_ids);
+                let score = diplomacy
+                    .get_relation(n.id, voted_for)
+                    .map(|r| r.score)
+                    .unwrap_or(0);
+                let reason = format!("trade relationship (score: {})", score);
+                (NationType::MinorNation, voted_for, reason)
+            }
+            None => {
+                // Unknown owner — vote for first GP.
+                (
+                    NationType::MinorNation,
+                    great_power_ids[0],
+                    "unknown owner".to_string(),
+                )
             }
         };
+
+        governor_details.push(GovernorVoteDetail {
+            province_name: province.name.clone(),
+            province_owner: province.owner,
+            owner_type,
+            voted_for: supported_gp,
+            reason,
+        });
 
         *vote_tally.entry(supported_gp).or_insert(0) += 1;
     }
@@ -150,12 +225,14 @@ pub fn run_council_vote(
         majority_threshold,
         winner,
         is_final,
+        governor_details,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diplomacy::DiplomacyState;
     use crate::hex::HexCoord;
     use crate::map::Province;
     use crate::nation::{Nation, NationColor};
@@ -248,14 +325,93 @@ mod tests {
         assert_eq!(score.province_score, 0);
     }
 
+    // ── governor_vote: GP province always votes for own GP ────────
+
+    #[test]
+    fn governor_vote_gp_always_votes_own() {
+        let diplomacy = DiplomacyState::new();
+        let gp_ids = vec![NationId(1), NationId(2)];
+
+        // A GP province owner always votes for itself
+        let vote = governor_vote(NationId(1), NationType::GreatPower, &diplomacy, &gp_ids);
+        assert_eq!(vote, NationId(1));
+
+        let vote2 = governor_vote(NationId(2), NationType::GreatPower, &diplomacy, &gp_ids);
+        assert_eq!(vote2, NationId(2));
+    }
+
+    // ── governor_vote: MN province votes for GP with best relationship ──
+
+    #[test]
+    fn governor_vote_mn_votes_best_relationship() {
+        let mut diplomacy = DiplomacyState::new();
+        let gp_ids = vec![NationId(1), NationId(2), NationId(3)];
+
+        // MN(10) has best relationship with GP(2)
+        diplomacy.ensure_relation(NationId(10), NationId(1)).score = 10;
+        diplomacy.ensure_relation(NationId(10), NationId(2)).score = 50;
+        diplomacy.ensure_relation(NationId(10), NationId(3)).score = 30;
+
+        let vote = governor_vote(NationId(10), NationType::MinorNation, &diplomacy, &gp_ids);
+        assert_eq!(
+            vote,
+            NationId(2),
+            "MN should vote for GP with highest relationship score"
+        );
+    }
+
+    #[test]
+    fn governor_vote_mn_tie_broken_by_lowest_id() {
+        let mut diplomacy = DiplomacyState::new();
+        let gp_ids = vec![NationId(1), NationId(2), NationId(3)];
+
+        // MN(10) has equal relationship with GP(2) and GP(1)
+        diplomacy.ensure_relation(NationId(10), NationId(1)).score = 50;
+        diplomacy.ensure_relation(NationId(10), NationId(2)).score = 50;
+        diplomacy.ensure_relation(NationId(10), NationId(3)).score = 20;
+
+        let vote = governor_vote(NationId(10), NationType::MinorNation, &diplomacy, &gp_ids);
+        assert_eq!(vote, NationId(1), "Tie should be broken by lowest NationId");
+    }
+
+    // ── Council vote uses diplomatic relationships ────────────────
+
+    #[test]
+    fn council_vote_uses_diplomatic_relationships() {
+        // GP1: 30 provinces, GP2: 30 provinces, MN: 60 provinces
+        // Total = 120, threshold = 80
+        // MN(10) has best relationship with GP2 => GP2 gets 30 + 60 = 90 votes
+        let gp1 = make_great_power(1, "Alpha", 30, 0);
+        let gp2 = make_great_power(2, "Beta", 30, 0);
+        let minor = make_minor_nation(10, "MinorNat", 60);
+
+        let nations = vec![gp1, gp2, minor];
+
+        let mut provinces = make_provinces(NationId(1), 1, 30);
+        provinces.extend(make_provinces(NationId(2), 100, 30));
+        provinces.extend(make_provinces(NationId(10), 200, 60));
+
+        let mut diplomacy = DiplomacyState::new();
+        // MN(10) prefers GP(2)
+        diplomacy.ensure_relation(NationId(10), NationId(1)).score = 10;
+        diplomacy.ensure_relation(NationId(10), NationId(2)).score = 60;
+
+        let result = run_council_vote(&nations, &provinces, false, &diplomacy);
+
+        assert_eq!(result.total_governors, 120);
+        assert!(result.winner.is_some());
+        // GP2 should win because MN votes go to GP2 (higher relationship)
+        assert_eq!(result.winner.unwrap(), NationId(2));
+    }
+
     // ── Council vote: clear majority ──────────────────────────────
 
     #[test]
     fn council_vote_clear_majority() {
         // GP1 controls 85 provinces, GP2 controls 15, minor has 20
         // Total = 120 provinces. 2/3 threshold = 80.
-        // GP1 governors = 85, minor nation governors all back GP1 (highest score),
-        // so GP1 gets 85 + 20 = 105.
+        // With no diplomacy, MN governors default to GP with lowest ID (score 0 tie).
+        // GP1 gets 85 + 20 = 105.
         let gp1 = make_great_power(1, "Empire", 85, 10);
         let gp2 = make_great_power(2, "Republic", 15, 2);
         let minor = make_minor_nation(10, "SmallLand", 20);
@@ -266,7 +422,8 @@ mod tests {
         provinces.extend(make_provinces(NationId(2), 100, 15));
         provinces.extend(make_provinces(NationId(10), 200, 20));
 
-        let result = run_council_vote(&nations, &provinces, false);
+        let diplomacy = DiplomacyState::new();
+        let result = run_council_vote(&nations, &provinces, false, &diplomacy);
 
         assert_eq!(result.total_governors, 120);
         assert_eq!(result.majority_threshold, 80);
@@ -279,19 +436,8 @@ mod tests {
 
     #[test]
     fn council_vote_no_majority() {
-        // GP1: 40 provinces, GP2: 40 provinces, minor: 40 provinces
-        // Total = 120. Threshold = 80.
-        // GP1 score = 40*100 + 50 = 4050, GP2 score = 40*100 + 50 = 4050.
-        // Tie in score — minor governors go to lower NationId (GP1).
-        // GP1 gets 40 + 40 = 80. Threshold is 80. That equals the threshold.
-        // Actually let's make it so neither reaches 2/3:
-        // GP1: 30, GP2: 50, minor: 40.
-        // GP2 score = 50*100+50 = 5050 > GP1 score = 30*100+50 = 3050.
-        // Minor governors back GP2. GP2 gets 50+40 = 90. That's a majority.
-        //
-        // To get no majority: 3 GPs splitting votes + minor backing only one.
         // GP1: 35, GP2: 35, GP3: 10, minor: 40. Total=120, threshold=80.
-        // GP2 and GP1 have same score (3550). Minor backs GP1 (lower id).
+        // With no diplomacy, MN governors default to lowest GP ID (GP1).
         // GP1 = 35 + 40 = 75 < 80. No majority.
         let gp1 = make_great_power(1, "Alpha", 35, 0);
         let gp2 = make_great_power(2, "Beta", 35, 0);
@@ -305,7 +451,8 @@ mod tests {
         provinces.extend(make_provinces(NationId(3), 200, 10));
         provinces.extend(make_provinces(NationId(10), 300, 40));
 
-        let result = run_council_vote(&nations, &provinces, false);
+        let diplomacy = DiplomacyState::new();
+        let result = run_council_vote(&nations, &provinces, false, &diplomacy);
 
         assert_eq!(result.total_governors, 120);
         assert_eq!(result.majority_threshold, 80);
@@ -330,10 +477,12 @@ mod tests {
         provinces.extend(make_provinces(NationId(3), 200, 10));
         provinces.extend(make_provinces(NationId(10), 300, 40));
 
-        let result = run_council_vote(&nations, &provinces, true);
+        let diplomacy = DiplomacyState::new();
+        let result = run_council_vote(&nations, &provinces, true, &diplomacy);
 
         assert!(result.is_final);
-        // GP1 gets 35 own + 40 minor = 75. GP2 gets 35. GP3 gets 10.
+        // GP1 gets 35 own + 40 minor = 75 (default tie goes to lowest ID).
+        // GP2 gets 35. GP3 gets 10.
         // 75 < 80 threshold, but is_final, so GP1 wins by most governors.
         assert!(result.winner.is_some());
         assert_eq!(result.winner.unwrap(), NationId(1));
@@ -348,7 +497,8 @@ mod tests {
         let nations = vec![gp];
         let provinces = make_provinces(NationId(1), 1, 120);
 
-        let result = run_council_vote(&nations, &provinces, false);
+        let diplomacy = DiplomacyState::new();
+        let result = run_council_vote(&nations, &provinces, false, &diplomacy);
 
         assert_eq!(result.total_governors, 120);
         assert_eq!(result.majority_threshold, 80);
@@ -362,7 +512,8 @@ mod tests {
         let nations = vec![gp];
         let provinces = make_provinces(NationId(1), 1, 10);
 
-        let result = run_council_vote(&nations, &provinces, false);
+        let diplomacy = DiplomacyState::new();
+        let result = run_council_vote(&nations, &provinces, false, &diplomacy);
 
         assert_eq!(result.total_governors, 10);
         assert_eq!(result.majority_threshold, 7);
@@ -374,7 +525,8 @@ mod tests {
         let nations = vec![gp];
         let provinces: Vec<Province> = Vec::new();
 
-        let result = run_council_vote(&nations, &provinces, false);
+        let diplomacy = DiplomacyState::new();
+        let result = run_council_vote(&nations, &provinces, false, &diplomacy);
 
         assert_eq!(result.total_governors, 0);
         assert!(result.winner.is_none());

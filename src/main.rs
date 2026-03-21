@@ -137,6 +137,18 @@ fn main() {
                 persistence::save_game(&game, &autosave_path).ok();
 
                 if game.is_game_over() {
+                    // Record high score for each Great Power
+                    let date_str = format!("{} Q{}", game.turn.year(), game.turn.quarter());
+                    let gp_scores: Vec<(String, u32)> = game
+                        .great_powers()
+                        .iter()
+                        .map(|gp| (gp.name.clone(), calculate_score(gp).total))
+                        .collect();
+                    for (name, total) in gp_scores {
+                        game.high_scores.push((name, total, date_str.clone()));
+                    }
+                    game.high_scores.sort_by(|a, b| b.1.cmp(&a.1));
+
                     println!("  ══════════════════════════════════════");
                     println!("  The year is 1915. The game has ended!");
                     println!("  ══════════════════════════════════════");
@@ -1106,7 +1118,7 @@ fn print_game_end_summary(game: &GameState, report: &TurnReport) {
 
     for (id, name, total, prov_count) in &scores {
         let marker = if *id == game.human_player_nation {
-            " ◄ YOU"
+            " <-- YOU"
         } else {
             ""
         };
@@ -1117,6 +1129,97 @@ fn print_game_end_summary(game: &GameState, report: &TurnReport) {
             prov_count,
             marker
         );
+    }
+    println!();
+
+    // Show Council of Governors vote details
+    if let Some(ref vote) = report.council_vote {
+        println!("  Council of Governors Vote:");
+        println!("    {}", "-".repeat(40));
+
+        // Show MN governor preferences
+        let mn_details: Vec<_> = vote
+            .governor_details
+            .iter()
+            .filter(|d| d.owner_type == NationType::MinorNation)
+            .collect();
+
+        if !mn_details.is_empty() {
+            println!("    Minor Nation governor preferences:");
+            // Group by province owner for cleaner display
+            let mut shown_owners: std::collections::HashSet<NationId> =
+                std::collections::HashSet::new();
+            for detail in &mn_details {
+                if shown_owners.insert(detail.province_owner) {
+                    let owner_name = game
+                        .get_nation(detail.province_owner)
+                        .map(|n| n.name.as_str())
+                        .unwrap_or("Unknown");
+                    let voted_for_name = game
+                        .get_nation(detail.voted_for)
+                        .map(|n| n.name.as_str())
+                        .unwrap_or("Unknown");
+                    println!(
+                        "      Governor of {} votes for {} ({})",
+                        owner_name, voted_for_name, detail.reason
+                    );
+                }
+            }
+            println!();
+        }
+
+        // Show vote tally
+        println!("    Vote tally:");
+        for (nid, count) in &vote.votes {
+            let name = game
+                .get_nation(*nid)
+                .map(|n| n.name.as_str())
+                .unwrap_or("Unknown");
+            let marker = if vote.winner == Some(*nid) {
+                " <-- WINNER"
+            } else {
+                ""
+            };
+            println!("      {:<12} {:>3} votes{}", name, count, marker);
+        }
+        println!(
+            "    Threshold for majority: {} / {}",
+            vote.majority_threshold, vote.total_governors
+        );
+        println!();
+
+        // Show which GP had most trade influence over MN governors
+        let mut mn_influence: std::collections::HashMap<NationId, u32> =
+            std::collections::HashMap::new();
+        for detail in &mn_details {
+            *mn_influence.entry(detail.voted_for).or_insert(0) += 1;
+        }
+        if !mn_influence.is_empty()
+            && let Some((&most_influential, &mn_votes)) =
+                mn_influence.iter().max_by_key(|&(_, v)| *v)
+        {
+            let name = game
+                .get_nation(most_influential)
+                .map(|n| n.name.as_str())
+                .unwrap_or("Unknown");
+            println!(
+                "    Most trade influence over Minor Nations: {} ({} MN governors)",
+                name, mn_votes
+            );
+        }
+        println!();
+    }
+
+    // Final diplomatic standings
+    println!("  Diplomatic Standings:");
+    for gp in game.great_powers() {
+        let standing = game.diplomacy.get_standing(gp.id);
+        let marker = if gp.id == game.human_player_nation {
+            " <-- YOU"
+        } else {
+            ""
+        };
+        println!("    {:<12} standing: {:>4}{}", gp.name, standing, marker);
     }
     println!();
 
@@ -1140,6 +1243,21 @@ fn print_game_end_summary(game: &GameState, report: &TurnReport) {
             );
         } else {
             println!("  {} wins the game.", winner_name);
+        }
+    }
+
+    // Show high scores
+    if !game.high_scores.is_empty() {
+        println!();
+        println!("  High Scores:");
+        for (i, (name, score, date)) in game.high_scores.iter().enumerate() {
+            println!(
+                "    {}. {} - {} ({})",
+                i + 1,
+                name,
+                format_number(*score),
+                date
+            );
         }
     }
 

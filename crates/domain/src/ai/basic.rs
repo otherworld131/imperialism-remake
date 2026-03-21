@@ -100,6 +100,7 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<String> {
         ai_build_transport_proactive(game, *nation_id);
         ai_build_consulates(game, *nation_id);
         ai_manage_diplomacy(game, *nation_id, &mut actions);
+        ai_pre_election_strategy(game, *nation_id, &mut actions);
         ai_build_merchant_ships(game, *nation_id);
         ai_build_warships(game, *nation_id);
         ai_military_strategy(game, *nation_id, &mut actions);
@@ -1329,6 +1330,158 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
     }
 }
 
+/// AI pre-election strategy: when approaching a decade election (within 4 turns),
+/// send larger cash grants to Minor Nation partners to boost relationship scores,
+/// and build more consulates/embassies to expand influence.
+///
+/// - **Diplomatic** personality: sends double grants and builds embassies aggressively
+/// - **Balanced/Economic**: sends standard grants
+/// - **Aggressive**: does nothing extra
+pub fn ai_pre_election_strategy(
+    game: &mut GameState,
+    nation_id: NationId,
+    actions: &mut Vec<String>,
+) {
+    // Only activate within 4 turns of a decade election
+    if !game.turn.is_near_decade_election(4) {
+        return;
+    }
+
+    let personality = get_personality(game, nation_id);
+
+    // Aggressive nations don't care about elections
+    if personality == AiPersonality::Aggressive {
+        return;
+    }
+
+    let grant_amount = match personality {
+        AiPersonality::Diplomatic => Money::dollars(1000),
+        _ => Money::dollars(500),
+    };
+
+    // Send grants to all MNs with embassies to boost relationship before the vote
+    let minor_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| !n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+
+    for mn_id in &minor_ids {
+        let has_embassy = game
+            .diplomacy
+            .get_relation(nation_id, *mn_id)
+            .is_some_and(|r| r.has_embassy);
+        if !has_embassy {
+            continue;
+        }
+
+        let can_afford = game
+            .get_nation(nation_id)
+            .is_some_and(|n| n.treasury.checked_sub(grant_amount).is_some());
+        if !can_afford {
+            break;
+        }
+
+        game.diplomacy.send_grant(nation_id, *mn_id, grant_amount);
+        if let Some(nation) = game.get_nation_mut(nation_id) {
+            nation.treasury -= grant_amount;
+        }
+    }
+
+    // Diplomatic personality also tries to build embassies with MNs that have consulates
+    if personality == AiPersonality::Diplomatic {
+        let embassy_cost = Money::dollars(5000);
+        for mn_id in &minor_ids {
+            let has_consulate_no_embassy = game
+                .diplomacy
+                .get_relation(nation_id, *mn_id)
+                .is_some_and(|r| r.has_consulate && !r.has_embassy);
+            if !has_consulate_no_embassy {
+                continue;
+            }
+
+            let can_afford = game
+                .get_nation(nation_id)
+                .is_some_and(|n| n.treasury.checked_sub(embassy_cost).is_some());
+            if !can_afford {
+                break;
+            }
+
+            if game.diplomacy.build_embassy(nation_id, *mn_id).is_ok() {
+                if let Some(nation) = game.get_nation_mut(nation_id) {
+                    nation.treasury -= embassy_cost;
+                }
+                let nation_name = game
+                    .get_nation(nation_id)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_default();
+                let mn_name = game
+                    .get_nation(*mn_id)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_default();
+                actions.push(format!(
+                    "{} built an embassy in {} ahead of the election",
+                    nation_name, mn_name
+                ));
+            }
+        }
+    }
+}
+
+/// Minor Nation bonus trade: when a MN has an embassy with a GP and relationship > 50,
+/// it offers 1 extra of each resource type the MN has.
+///
+/// This function should be called during the trade phase to add bonus resources
+/// for preferred trade partners.
+pub fn minor_nation_bonus_trade(game: &mut GameState) {
+    // Collect MN/GP pairs that qualify
+    let mut bonus_pairs: Vec<(NationId, NationId)> = Vec::new();
+
+    let minor_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| !n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+    let gp_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+
+    for &mn_id in &minor_ids {
+        for &gp_id in &gp_ids {
+            let qualifies = game
+                .diplomacy
+                .get_relation(mn_id, gp_id)
+                .is_some_and(|r| r.has_embassy && r.score > 50);
+            if qualifies {
+                bonus_pairs.push((mn_id, gp_id));
+            }
+        }
+    }
+
+    // For each qualifying pair, give 1 bonus of each resource type the GP has
+    // (simulating the MN offering bonus trade goods to preferred partners)
+    for (_, gp_id) in bonus_pairs {
+        let resources = [
+            ResourceType::Timber,
+            ResourceType::Iron,
+            ResourceType::Coal,
+            ResourceType::Grain,
+            ResourceType::Cotton,
+            ResourceType::Wool,
+        ];
+        if let Some(gp) = game.get_nation_mut(gp_id) {
+            for resource in &resources {
+                gp.add_resource(*resource, 1);
+            }
+        }
+    }
+}
+
 /// AI builds merchant ships when it has the materials and too few ships.
 ///
 /// - **Economic** personality: build up to 3 ships total
@@ -1885,6 +2038,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         }
     }
 
@@ -1966,6 +2120,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         }
     }
 
@@ -3660,6 +3815,7 @@ mod tests {
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             history: Vec::new(),
+            high_scores: Vec::new(),
         }
     }
 
@@ -4045,5 +4201,114 @@ mod tests {
             "Net trained stays same (trained+1, promoted-1)"
         );
         assert_eq!(ai.labor.expert, 1, "Promoted 1 to expert");
+    }
+
+    // ── Pre-election strategy ────────────────────────────────────
+
+    #[test]
+    fn ai_pre_election_grants_within_4_turns() {
+        let mut game = test_game_with_ai_and_minor();
+        // Set turn to 3 turns before an election at 1825 Q1 (turn 41).
+        // Turn 38 = 1824 Q2 (within 4 turns of turn 41)
+        game.turn = TurnNumber::from_year_quarter(1824, 2);
+
+        // Give AI a Balanced personality (not Aggressive, so it will send grants)
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.treasury = Money::dollars(10000);
+
+        // Set up embassy between AI(2) and MN(3)
+        game.diplomacy
+            .build_consulate(NationId(2), NationId(3))
+            .unwrap();
+        game.diplomacy
+            .build_embassy(NationId(2), NationId(3))
+            .unwrap();
+
+        let score_before = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .unwrap()
+            .score;
+
+        let mut actions = Vec::new();
+        ai_pre_election_strategy(&mut game, NationId(2), &mut actions);
+
+        let score_after = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .unwrap()
+            .score;
+        assert!(
+            score_after > score_before,
+            "Pre-election grants should improve relationship: before={}, after={}",
+            score_before,
+            score_after
+        );
+
+        // Treasury should have decreased
+        let treasury_after = game.get_nation(NationId(2)).unwrap().treasury;
+        assert!(
+            treasury_after < Money::dollars(10000),
+            "Treasury should decrease from pre-election grants"
+        );
+    }
+
+    #[test]
+    fn ai_pre_election_does_nothing_when_far_from_election() {
+        let mut game = test_game_with_ai_and_minor();
+        // Set turn to 1820 Q1 — far from any election
+        game.turn = TurnNumber::from_year_quarter(1820, 1);
+
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.treasury = Money::dollars(10000);
+
+        // Set up embassy
+        game.diplomacy
+            .build_consulate(NationId(2), NationId(3))
+            .unwrap();
+        game.diplomacy
+            .build_embassy(NationId(2), NationId(3))
+            .unwrap();
+
+        let treasury_before = game.get_nation(NationId(2)).unwrap().treasury;
+        let mut actions = Vec::new();
+        ai_pre_election_strategy(&mut game, NationId(2), &mut actions);
+
+        let treasury_after = game.get_nation(NationId(2)).unwrap().treasury;
+        assert_eq!(
+            treasury_before, treasury_after,
+            "Pre-election strategy should do nothing when far from election"
+        );
+    }
+
+    #[test]
+    fn ai_aggressive_ignores_pre_election() {
+        let mut game = test_game_with_ai_and_minor();
+        // Set turn near election
+        game.turn = TurnNumber::from_year_quarter(1824, 2);
+
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Aggressive);
+        ai.treasury = Money::dollars(10000);
+
+        // Set up embassy
+        game.diplomacy
+            .build_consulate(NationId(2), NationId(3))
+            .unwrap();
+        game.diplomacy
+            .build_embassy(NationId(2), NationId(3))
+            .unwrap();
+
+        let treasury_before = game.get_nation(NationId(2)).unwrap().treasury;
+        let mut actions = Vec::new();
+        ai_pre_election_strategy(&mut game, NationId(2), &mut actions);
+
+        let treasury_after = game.get_nation(NationId(2)).unwrap().treasury;
+        assert_eq!(
+            treasury_before, treasury_after,
+            "Aggressive AI should ignore pre-election strategy"
+        );
     }
 }
