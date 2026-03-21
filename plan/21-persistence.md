@@ -25,15 +25,15 @@ The save format should be stable, versioned, and forward-compatible.
 - [x] Unit tests: schema migration from older versions
 
 ### Save Slots
-- [ ] Multiple save slots (at least 20)
-- [ ] Autosave every N turns (configurable, default: every turn)
-- [ ] Quicksave / quickload hotkeys
-- [ ] Save file naming: descriptive (nation name + turn number + timestamp)
-- [ ] Save file location: platform-appropriate user data directory
+- [x] Multiple save slots (at least 20)
+- [x] Autosave every N turns (configurable, default: every turn)
+- [x] Quicksave / quickload hotkeys
+- [x] Save file naming: descriptive (nation name + turn number + timestamp)
+- [x] Save file location: platform-appropriate user data directory
 - [ ] Unit tests: save slot management
 
 ### Save File Contents
-- [ ] Game metadata: version, timestamp, player name, nation, difficulty, turn number
+- [x] Game metadata: version, timestamp, player name, nation, difficulty, turn number
 - [ ] Map state: all tile data (terrain, resources, improvements, infrastructure)
 - [ ] Nation state: treasury, diplomatic standing, tech research status, building levels
 - [ ] Unit state: all civilian, army, and naval units with positions, health, medals
@@ -47,8 +47,8 @@ The save format should be stable, versioned, and forward-compatible.
 
 ### Load System
 - [x] Load from save file → reconstruct full `GameState`
-- [ ] Validate loaded state: all invariants hold (no corrupt data)
-- [ ] Graceful error handling: corrupted save → informative error message, not crash
+- [x] Validate loaded state: all invariants hold (no corrupt data)
+- [x] Graceful error handling: corrupted save → informative error message, not crash
 - [ ] Loading screen with progress indication for large saves
 - [ ] Unit tests: load validation catches corrupted data
 
