@@ -37,7 +37,7 @@ a province is invaded via beachhead.
 - [ ] Unit tests: initiative ordering, opportunity fire triggers, damage calculation
 
 ### Combat Modifiers
-- [ ] **Medals**: 4 medals ≈ 2× firepower; medal holders take less damage and recover faster
+- [x] **Medals**: 4 medals ≈ 2× firepower; medal holders take less damage and recover faster
 - [x] **Terrain**: defensive bonuses for hills, forests, fortifications
 - [x] **Fort defense**: units inside forts receive significant defense bonuses
 - [ ] **Fort destruction**: Sappers tunnel to fort walls; heavy artillery bombards from range
@@ -53,7 +53,7 @@ a province is invaded via beachhead.
 
 ### Battle Resolution
 - [x] Battle ends when one side is eliminated or retreats
-- [ ] Retreating units suffer additional damage
+- [x] Retreating units suffer additional damage
 - [x] Victorious attacker occupies the province
 - [x] Surviving units retain damage and earn medals based on performance
 - [x] Province garrison (Militia) is destroyed on conquest — not captured
