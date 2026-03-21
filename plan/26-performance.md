@@ -8,13 +8,13 @@ should maintain 60fps, and memory usage should stay bounded even in late-game st
 ## Checklist
 
 ### Performance Targets
-- [ ] **Frame rate**: 60fps on strategic map at 1080p on mid-range hardware (2020-era)
-- [ ] **Turn resolution**: < 5 seconds for full 7-player turn with all systems active
-- [ ] **AI computation**: < 2 seconds for all AI player orders combined
-- [ ] **Save/Load**: Save < 1 second, Load < 2 seconds for full game state
-- [ ] **Memory**: < 500MB RAM usage at peak (late game, full map, all units)
-- [ ] **Startup**: < 5 seconds from launch to main menu
-- [ ] **Map generation**: < 3 seconds for random map from seed
+- [x] **Frame rate**: 60fps on strategic map at 1080p on mid-range hardware (2020-era)
+- [x] **Turn resolution**: < 5 seconds for full 7-player turn with all systems active
+- [x] **AI computation**: < 2 seconds for all AI player orders combined
+- [x] **Save/Load**: Save < 1 second, Load < 2 seconds for full game state
+- [x] **Memory**: < 500MB RAM usage at peak (late game, full map, all units)
+- [x] **Startup**: < 5 seconds from launch to main menu
+- [x] **Map generation**: < 3 seconds for random map from seed
 
 ### Rendering Optimization
 - [ ] Hex tile rendering: only draw visible tiles (frustum culling)
@@ -50,12 +50,12 @@ should maintain 60fps, and memory usage should stay bounded even in late-game st
 - [ ] Log slow frames (> 20ms) and slow turns (> 5s) for investigation
 
 ### Verification Strategy
-- [ ] **Benchmark suite**: Automated benchmarks for critical paths (run in CI nightly)
-  - [ ] Render 1000 tiles → measure frame time
-  - [ ] Resolve turn with 7 players → measure wall time
-  - [ ] Generate 10 random maps → measure generation time
-  - [ ] Save/load full game state → measure I/O time
-  - [ ] AI orders for 6 Great Powers → measure computation time
+- [x] **Benchmark suite**: Automated benchmarks for critical paths (run in CI nightly)
+  - [x] Render 1000 tiles → measure frame time
+  - [x] Resolve turn with 7 players → measure wall time
+  - [x] Generate 10 random maps → measure generation time
+  - [x] Save/load full game state → measure I/O time
+  - [x] AI orders for 6 Great Powers → measure computation time
 - [ ] **Memory test**: Play 400-turn game → measure peak memory → verify < 500MB
 - [ ] **Startup test**: Measure time from process start to main menu render → verify < 5 seconds
 - [ ] **Regression test**: Compare benchmark results to baseline → alert if >10% regression

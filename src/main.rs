@@ -332,6 +332,10 @@ fn main() {
                 let index_str = input.trim()[8..].trim();
                 cmd_upgrade_unit(&mut game, index_str);
             }
+            _ if cmd.starts_with("subsidy ") => {
+                let args = input.trim()[8..].trim();
+                cmd_subsidy(&mut game, args);
+            }
             _ => {
                 println!("  Unknown command. Type 'help' for available commands.");
             }
@@ -1579,6 +1583,28 @@ fn print_trade(game: &GameState) {
         }
     }
     println!();
+
+    // Show active subsidies
+    if !player.trade_subsidies.is_empty() {
+        println!("  ACTIVE TRADE SUBSIDIES:");
+        let mut subsidy_entries: Vec<_> = player.trade_subsidies.iter().collect();
+        subsidy_entries.sort_by_key(|(nid, _)| nid.0);
+        for (target_id, amount) in subsidy_entries {
+            let target_name = game
+                .get_nation(*target_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| format!("Nation {}", target_id.0));
+            println!("    {:<12} {} per turn", target_name, amount);
+        }
+        let total_subsidy: domain::types::Money = player
+            .trade_subsidies
+            .values()
+            .copied()
+            .fold(domain::types::Money::ZERO, |acc, v| acc + v);
+        println!("    Total subsidy cost: {} per turn", total_subsidy);
+        println!();
+    }
+
     if cargo_capacity == 0 {
         println!(
             "  {} No cargo capacity! Build merchant ships to enable trade.",
@@ -1765,7 +1791,8 @@ fn print_help() {
     println!("    buildings         — Show your buildings and workers");
     println!("    population / pop  — Show population, food balance, recruitment capacity");
     println!("    transport         — Show your transport system (freight cars, capacity)");
-    println!("    trade             — Show Minor Nation trade offerings");
+    println!("    trade             — Show Minor Nation trade offerings and subsidies");
+    println!("    subsidy <n> <$>   — Set trade subsidy with Minor Nation (0 to remove)");
     println!("    build <building>  — Build a new mill or factory");
     println!("    expand <building> — Expand an existing building's capacity");
     println!("    recruit           — Recruit an untrained worker");
@@ -1980,6 +2007,7 @@ fn print_diplomacy(game: &GameState) {
     println!();
 
     // Show Minor Nation relations
+    let player = game.get_nation(player_id).unwrap();
     println!("  MINOR NATIONS:");
     for mn in game.minor_nations() {
         let status = match game.diplomacy.get_relation(player_id, mn.id) {
@@ -1998,7 +2026,13 @@ fn print_diplomacy(game: &GameState) {
             }
             None => "No relations".to_string(),
         };
-        println!("    {:<12} {}", mn.name, status);
+        let subsidy_info = player
+            .trade_subsidies
+            .get(&mn.id)
+            .filter(|s| **s != domain::types::Money::ZERO)
+            .map(|s| format!(" [Subsidy: {}/turn]", s))
+            .unwrap_or_default();
+        println!("    {:<12} {}{}", mn.name, status, subsidy_info);
     }
 }
 
@@ -2383,6 +2417,76 @@ fn cmd_grant(game: &mut GameState, args: &str) {
             amount, target_name, score, new_treasury
         ))
     );
+}
+
+fn cmd_subsidy(game: &mut GameState, args: &str) {
+    let player_id = game.human_player_nation;
+
+    // Parse: subsidy <nation> <amount>
+    let parts: Vec<&str> = args.rsplitn(2, ' ').collect();
+    if parts.len() < 2 {
+        println!("  Usage: subsidy <nation> <amount>");
+        println!("  Example: subsidy Bavaria 200");
+        println!("  Set to 0 to remove: subsidy Bavaria 0");
+        return;
+    }
+
+    let amount_str = parts[0];
+    let nation_query = parts[1].trim();
+
+    let amount: i64 = match amount_str.parse() {
+        Ok(v) if v >= 0 => v,
+        _ => {
+            println!(
+                "  Invalid amount '{}'. Must be a non-negative number.",
+                amount_str
+            );
+            return;
+        }
+    };
+
+    let target = match game.find_nation_by_name(nation_query) {
+        Some(n) => n,
+        None => {
+            println!(
+                "  No unique nation matches '{}'. Be more specific.",
+                nation_query
+            );
+            return;
+        }
+    };
+
+    if target.is_great_power() {
+        println!(
+            "  {} is a Great Power. Subsidies are for Minor Nations only.",
+            target.name
+        );
+        return;
+    }
+
+    let target_id = target.id;
+    let target_name = target.name.clone();
+
+    if amount == 0 {
+        // Remove subsidy
+        let player = game.get_nation_mut(player_id).unwrap();
+        player.trade_subsidies.remove(&target_id);
+        println!(
+            "  {}",
+            color_green(&format!("Trade subsidy with {} removed.", target_name))
+        );
+    } else {
+        let subsidy = Money::dollars(amount);
+        let player = game.get_nation_mut(player_id).unwrap();
+        player.trade_subsidies.insert(target_id, subsidy);
+        println!(
+            "  {}",
+            color_green(&format!(
+                "Trade subsidy set: {} per turn to {}.",
+                subsidy, target_name
+            ))
+        );
+    }
 }
 
 fn cmd_attack(game: &mut GameState, query: &str) {
@@ -2956,6 +3060,47 @@ fn print_turn_report(game: &GameState, report: &TurnReport) {
             parts.push(format!("Earned ${}", format_number(total_earned as u32)));
         }
         println!("  Trade:    {}", parts.join(" | "));
+    }
+
+    // Subsidy costs line
+    let player_subsidies: Vec<_> = report
+        .subsidy_costs
+        .iter()
+        .filter(|(gp, _, _)| *gp == player_id)
+        .collect();
+    if !player_subsidies.is_empty() {
+        let total_subsidy: i64 = player_subsidies
+            .iter()
+            .map(|(_, _, c)| c.as_dollars())
+            .sum();
+        println!(
+            "  Subsidies: ${} paid to {} Minor Nations",
+            format_number(total_subsidy as u32),
+            player_subsidies.len()
+        );
+    }
+
+    // Trade diplomacy line
+    let player_diplo: Vec<_> = report
+        .trade_diplomacy
+        .iter()
+        .filter(|(a, _, _)| *a == player_id)
+        .collect();
+    if !player_diplo.is_empty() {
+        let parts: Vec<String> = player_diplo
+            .iter()
+            .map(|(_, target, imp)| {
+                let name = game
+                    .get_nation(*target)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_else(|| format!("Nation {}", target.0));
+                format!("{} +{}", name, imp)
+            })
+            .collect();
+        println!(
+            "  Diplomacy: Trade improved relations: {}",
+            parts.join(", ")
+        );
     }
 
     // Industry line

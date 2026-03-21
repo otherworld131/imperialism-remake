@@ -51,6 +51,25 @@ pub fn base_price(resource: ResourceType) -> Money {
     }
 }
 
+/// Apply subsidy to trade prices. Subsidized nations get better prices.
+pub fn apply_subsidy(base_price: Money, subsidy: Money) -> Money {
+    // Subsidy reduces the effective price the buyer pays
+    let reduced = base_price.as_dollars() - subsidy.as_dollars();
+    Money::dollars(reduced.max(1))
+}
+
+/// Adjusted price based on supply. More sellers = lower price.
+pub fn market_price(resource: ResourceType, total_supply: u32) -> Money {
+    let base = base_price(resource);
+    // Price drops 5% per unit of supply above 10
+    if total_supply > 10 {
+        let discount = ((total_supply - 10) * 5).min(50) as i64; // max 50% discount
+        Money::dollars(base.as_dollars() * (100 - discount) / 100)
+    } else {
+        base
+    }
+}
+
 /// Resolve trade offers and bids, producing transactions.
 /// Simple matching: pair each bid with the cheapest compatible offer.
 pub fn resolve_trades(offers: &[TradeOffer], bids: &[TradeBid]) -> Vec<TradeTransaction> {
@@ -76,6 +95,103 @@ pub fn resolve_trades(offers: &[TradeOffer], bids: &[TradeBid]) -> Vec<TradeTran
             .collect();
 
         // Sort by price ascending (cheapest first)
+        matching_indices.sort_by_key(|&i| offers[i].price_per_unit);
+
+        for &offer_idx in &matching_indices {
+            if bid_remaining == 0 {
+                break;
+            }
+
+            let trade_qty = bid_remaining.min(remaining[offer_idx]);
+            if trade_qty == 0 {
+                continue;
+            }
+
+            let price = offers[offer_idx].price_per_unit;
+            let total = price * trade_qty as i64;
+
+            transactions.push(TradeTransaction {
+                buyer: bid.buyer,
+                seller: offers[offer_idx].seller,
+                resource: bid.resource,
+                quantity: trade_qty,
+                price_per_unit: price,
+                total_cost: total,
+            });
+
+            remaining[offer_idx] -= trade_qty;
+            bid_remaining -= trade_qty;
+        }
+    }
+
+    transactions
+}
+
+/// Resolve trades with a preference system.
+///
+/// When multiple GPs bid for the same MN's resources, the MN prefers the GP with
+/// the highest effective relationship score. Subsidies boost the effective
+/// relationship by +1 per $100 of subsidy.
+///
+/// `relationship_scores` maps `(buyer, seller)` to the base diplomatic score.
+/// `subsidies` maps `(buyer, seller)` to the subsidy amount in Money.
+pub fn resolve_trades_with_preference(
+    offers: &[TradeOffer],
+    bids: &[TradeBid],
+    relationship_scores: &std::collections::HashMap<(NationId, NationId), i32>,
+    subsidies: &std::collections::HashMap<(NationId, NationId), Money>,
+) -> Vec<TradeTransaction> {
+    let mut transactions = Vec::new();
+
+    // Track remaining quantity for each offer
+    let mut remaining: Vec<u32> = offers.iter().map(|o| o.quantity).collect();
+
+    // Sort bids by effective relationship score (descending) so preferred buyers go first
+    let mut sorted_bids: Vec<(usize, i64)> = bids
+        .iter()
+        .enumerate()
+        .map(|(i, bid)| {
+            // Calculate max effective score across all sellers this buyer might trade with
+            let max_score = offers
+                .iter()
+                .filter(|o| o.resource == bid.resource && o.seller != bid.buyer)
+                .map(|o| {
+                    let base_score = relationship_scores
+                        .get(&(bid.buyer, o.seller))
+                        .copied()
+                        .unwrap_or(0) as i64;
+                    let subsidy_bonus = subsidies
+                        .get(&(bid.buyer, o.seller))
+                        .map(|s| s.as_dollars() / 100)
+                        .unwrap_or(0);
+                    base_score + subsidy_bonus
+                })
+                .max()
+                .unwrap_or(0);
+            (i, max_score)
+        })
+        .collect();
+
+    // Sort by effective score descending (preferred buyers first)
+    sorted_bids.sort_by(|a, b| b.1.cmp(&a.1));
+
+    for (bid_idx, _) in &sorted_bids {
+        let bid = &bids[*bid_idx];
+        let mut bid_remaining = bid.quantity;
+
+        // Find matching offers, sorted by price (cheapest first)
+        let mut matching_indices: Vec<usize> = offers
+            .iter()
+            .enumerate()
+            .filter(|(i, o)| {
+                o.resource == bid.resource
+                    && o.price_per_unit <= bid.max_price_per_unit
+                    && remaining[*i] > 0
+                    && o.seller != bid.buyer
+            })
+            .map(|(i, _)| i)
+            .collect();
+
         matching_indices.sort_by_key(|&i| offers[i].price_per_unit);
 
         for &offer_idx in &matching_indices {
@@ -588,5 +704,130 @@ mod tests {
             offers.is_empty(),
             "Grain is not tradeable and should not appear in offers"
         );
+    }
+
+    // ── apply_subsidy ───────────────────────────────────────────
+
+    #[test]
+    fn apply_subsidy_reduces_price() {
+        let price = Money::dollars(100);
+        let subsidy = Money::dollars(30);
+        let result = apply_subsidy(price, subsidy);
+        assert_eq!(result, Money::dollars(70));
+    }
+
+    #[test]
+    fn apply_subsidy_does_not_go_below_one() {
+        let price = Money::dollars(50);
+        let subsidy = Money::dollars(100);
+        let result = apply_subsidy(price, subsidy);
+        assert_eq!(result, Money::dollars(1));
+    }
+
+    #[test]
+    fn apply_subsidy_zero_subsidy_keeps_price() {
+        let price = Money::dollars(75);
+        let subsidy = Money::ZERO;
+        let result = apply_subsidy(price, subsidy);
+        assert_eq!(result, Money::dollars(75));
+    }
+
+    // ── market_price ────────────────────────────────────────────
+
+    #[test]
+    fn market_price_no_discount_at_low_supply() {
+        // Supply <= 10: no discount
+        assert_eq!(market_price(ResourceType::Timber, 5), Money::dollars(50));
+        assert_eq!(market_price(ResourceType::Timber, 10), Money::dollars(50));
+    }
+
+    #[test]
+    fn market_price_drops_with_high_supply() {
+        // Supply 15: (15-10)*5 = 25% discount -> 50 * 75/100 = 37
+        assert_eq!(market_price(ResourceType::Timber, 15), Money::dollars(37));
+    }
+
+    #[test]
+    fn market_price_caps_discount_at_50_percent() {
+        // Supply 30: (30-10)*5 = 100, capped at 50% -> 50 * 50/100 = 25
+        assert_eq!(market_price(ResourceType::Timber, 30), Money::dollars(25));
+        // Even higher supply: still 50%
+        assert_eq!(market_price(ResourceType::Timber, 100), Money::dollars(25));
+    }
+
+    // ── resolve_trades_with_preference ──────────────────────────
+
+    #[test]
+    fn preference_gives_higher_relationship_priority() {
+        let offers = vec![TradeOffer {
+            seller: NationId(10),
+            resource: ResourceType::Timber,
+            quantity: 3,
+            price_per_unit: Money::dollars(50),
+        }];
+        // Two buyers want the same resource, but only 3 available
+        let bids = vec![
+            TradeBid {
+                buyer: NationId(1),
+                resource: ResourceType::Timber,
+                quantity: 3,
+                max_price_per_unit: Money::dollars(60),
+            },
+            TradeBid {
+                buyer: NationId(2),
+                resource: ResourceType::Timber,
+                quantity: 3,
+                max_price_per_unit: Money::dollars(60),
+            },
+        ];
+
+        let mut scores = std::collections::HashMap::new();
+        scores.insert((NationId(1), NationId(10)), 10);
+        scores.insert((NationId(2), NationId(10)), 50); // Nation 2 has higher relationship
+
+        let subsidies = std::collections::HashMap::new();
+
+        let txns = resolve_trades_with_preference(&offers, &bids, &scores, &subsidies);
+        assert_eq!(txns.len(), 1);
+        // Nation 2 should win because higher score
+        assert_eq!(txns[0].buyer, NationId(2));
+        assert_eq!(txns[0].quantity, 3);
+    }
+
+    #[test]
+    fn subsidy_boosts_trade_preference() {
+        let offers = vec![TradeOffer {
+            seller: NationId(10),
+            resource: ResourceType::Coal,
+            quantity: 5,
+            price_per_unit: Money::dollars(75),
+        }];
+        let bids = vec![
+            TradeBid {
+                buyer: NationId(1),
+                resource: ResourceType::Coal,
+                quantity: 5,
+                max_price_per_unit: Money::dollars(100),
+            },
+            TradeBid {
+                buyer: NationId(2),
+                resource: ResourceType::Coal,
+                quantity: 5,
+                max_price_per_unit: Money::dollars(100),
+            },
+        ];
+
+        let mut scores = std::collections::HashMap::new();
+        scores.insert((NationId(1), NationId(10)), 10);
+        scores.insert((NationId(2), NationId(10)), 5); // Nation 2 has lower base score
+
+        let mut subsidies = std::collections::HashMap::new();
+        // But Nation 2 gives $1000 subsidy -> +10 bonus, effective = 5+10 = 15
+        subsidies.insert((NationId(2), NationId(10)), Money::dollars(1000));
+
+        let txns = resolve_trades_with_preference(&offers, &bids, &scores, &subsidies);
+        assert_eq!(txns.len(), 1);
+        // Nation 2 wins: effective score 15 > Nation 1 score 10
+        assert_eq!(txns[0].buyer, NationId(2));
     }
 }

@@ -91,4 +91,4 @@ comprehensive.
 - [ ] **Compile check**: `cargo build` must succeed with zero warnings
 - [ ] **Coverage check**: Generate coverage report → verify thresholds
 - [ ] **Regression check**: No previously passing test starts failing
-- [ ] **Performance baseline**: Measure and record execution times; alert on significant regression
+- [x] **Performance baseline**: Measure and record execution times; alert on significant regression

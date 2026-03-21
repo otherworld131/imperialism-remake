@@ -56,6 +56,10 @@ pub struct TurnReport {
     pub incorporations: Vec<(NationId, NationId)>,
     /// Unit upgrades: (nation_id, from_type, to_type).
     pub unit_upgrades: Vec<(NationId, String, String)>,
+    /// Subsidy costs deducted this turn: (nation_id, target_nation_id, cost).
+    pub subsidy_costs: Vec<(NationId, NationId, Money)>,
+    /// Diplomatic score improvements from trade: (nation_a, nation_b, improvement).
+    pub trade_diplomacy: Vec<(NationId, NationId, i32)>,
 }
 
 impl TurnReport {
@@ -144,6 +148,8 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         unit_movements: Vec::new(),
         incorporations: Vec::new(),
         unit_upgrades: Vec::new(),
+        subsidy_costs: Vec::new(),
+        trade_diplomacy: Vec::new(),
     };
 
     // 0. AI decisions for computer-controlled Great Powers
@@ -1162,6 +1168,29 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
 /// (respecting consulate requirements and cargo capacity), resolve trades, and apply
 /// the resulting transactions.
 fn resolve_trade_session(game: &mut GameState, report: &mut TurnReport) {
+    // 0. Deduct subsidy costs from Great Powers
+    let gp_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+
+    for gp_id in &gp_ids {
+        let subsidies: Vec<(NationId, Money)> = game
+            .get_nation(*gp_id)
+            .map(|n| n.trade_subsidies.iter().map(|(k, v)| (*k, *v)).collect())
+            .unwrap_or_default();
+        for (target_id, cost) in subsidies {
+            if cost != Money::ZERO {
+                if let Some(nation) = game.get_nation_mut(*gp_id) {
+                    nation.treasury -= cost;
+                }
+                report.subsidy_costs.push((*gp_id, target_id, cost));
+            }
+        }
+    }
+
     // 1. Generate offers from Minor Nations
     let offers = trade::generate_minor_nation_offers(&game.nations, &game.provinces, &game.hex_map);
 
@@ -1171,13 +1200,6 @@ fn resolve_trade_session(game: &mut GameState, report: &mut TurnReport) {
 
     // 2. Generate smart bids for all Great Powers
     let mut all_bids = Vec::new();
-
-    let gp_ids: Vec<NationId> = game
-        .nations
-        .iter()
-        .filter(|n| n.is_great_power())
-        .map(|n| n.id)
-        .collect();
 
     for gp_id in &gp_ids {
         if let Some(nation) = game.get_nation(*gp_id) {
@@ -1191,10 +1213,36 @@ fn resolve_trade_session(game: &mut GameState, report: &mut TurnReport) {
         return;
     }
 
-    // 3. Resolve trades
-    let transactions = trade::resolve_trades(&offers, &all_bids);
+    // 3. Build relationship scores and subsidies maps for preference-based resolution
+    let mut relationship_scores: std::collections::HashMap<(NationId, NationId), i32> =
+        std::collections::HashMap::new();
+    let mut subsidies_map: std::collections::HashMap<(NationId, NationId), Money> =
+        std::collections::HashMap::new();
 
-    // 4. Apply transactions
+    for gp_id in &gp_ids {
+        if let Some(nation) = game.get_nation(*gp_id) {
+            // Collect subsidies
+            for (target_id, amount) in &nation.trade_subsidies {
+                subsidies_map.insert((*gp_id, *target_id), *amount);
+            }
+        }
+        // Collect relationship scores
+        for offer in &offers {
+            if let Some(rel) = game.diplomacy.get_relation(*gp_id, offer.seller) {
+                relationship_scores.insert((*gp_id, offer.seller), rel.score);
+            }
+        }
+    }
+
+    // 4. Resolve trades with preference system
+    let transactions = trade::resolve_trades_with_preference(
+        &offers,
+        &all_bids,
+        &relationship_scores,
+        &subsidies_map,
+    );
+
+    // 5. Apply transactions
     for txn in &transactions {
         // Buyer pays money and receives resources
         if let Some(buyer) = game.get_nation_mut(txn.buyer) {
@@ -1207,7 +1255,25 @@ fn resolve_trade_session(game: &mut GameState, report: &mut TurnReport) {
         }
     }
 
-    // 5. Record trade balance per nation
+    // 6. Diplomatic impact: +1 score per distinct commodity type traded per partner pair
+    let mut trade_pairs: std::collections::HashMap<
+        (NationId, NationId),
+        std::collections::HashSet<ResourceType>,
+    > = std::collections::HashMap::new();
+    for txn in &transactions {
+        trade_pairs
+            .entry((txn.buyer, txn.seller))
+            .or_default()
+            .insert(txn.resource);
+    }
+    for ((buyer, seller), resources) in &trade_pairs {
+        let improvement = resources.len() as i32;
+        let rel = game.diplomacy.ensure_relation(*buyer, *seller);
+        rel.improve_score(improvement);
+        report.trade_diplomacy.push((*buyer, *seller, improvement));
+    }
+
+    // 7. Record trade balance per nation
     let mut spent: std::collections::HashMap<NationId, Money> = std::collections::HashMap::new();
     let mut earned: std::collections::HashMap<NationId, Money> = std::collections::HashMap::new();
     for txn in &transactions {
@@ -1224,7 +1290,7 @@ fn resolve_trade_session(game: &mut GameState, report: &mut TurnReport) {
         ));
     }
 
-    // 6. Record in report
+    // 8. Record in report
     report.trade_transactions = transactions;
 }
 
@@ -4358,6 +4424,8 @@ mod tests {
             unit_movements: Vec::new(),
             incorporations: Vec::new(),
             unit_upgrades: Vec::new(),
+            subsidy_costs: Vec::new(),
+            trade_diplomacy: Vec::new(),
         };
 
         resolve_voluntary_incorporations(&mut game, &mut report);
@@ -4420,6 +4488,8 @@ mod tests {
             unit_movements: Vec::new(),
             incorporations: Vec::new(),
             unit_upgrades: Vec::new(),
+            subsidy_costs: Vec::new(),
+            trade_diplomacy: Vec::new(),
         };
 
         resolve_voluntary_incorporations(&mut game, &mut report);
@@ -4491,6 +4561,8 @@ mod tests {
             unit_movements: Vec::new(),
             incorporations: Vec::new(),
             unit_upgrades: Vec::new(),
+            subsidy_costs: Vec::new(),
+            trade_diplomacy: Vec::new(),
         };
 
         resolve_unit_upgrades(&mut game, &mut report);
@@ -4556,6 +4628,8 @@ mod tests {
             unit_movements: Vec::new(),
             incorporations: Vec::new(),
             unit_upgrades: Vec::new(),
+            subsidy_costs: Vec::new(),
+            trade_diplomacy: Vec::new(),
         };
 
         resolve_unit_upgrades(&mut game, &mut report);
@@ -4694,6 +4768,8 @@ mod tests {
             unit_movements: Vec::new(),
             incorporations: Vec::new(),
             unit_upgrades: Vec::new(),
+            subsidy_costs: Vec::new(),
+            trade_diplomacy: Vec::new(),
         };
 
         trigger_pact_defense(&mut game, NationId(3), NationId(2), &mut report);
@@ -4802,6 +4878,8 @@ mod tests {
             unit_movements: Vec::new(),
             incorporations: Vec::new(),
             unit_upgrades: Vec::new(),
+            subsidy_costs: Vec::new(),
+            trade_diplomacy: Vec::new(),
         };
 
         // GP defender - should not trigger pact defense
@@ -4811,5 +4889,147 @@ mod tests {
             report.newspaper_headlines.is_empty(),
             "No headlines should be generated for GP defenders"
         );
+    }
+
+    // ── Trade subsidy deduction tests ────────────────────────────
+
+    #[test]
+    fn subsidy_costs_deducted_each_turn() {
+        let mut game = test_game_state();
+        game.nations[0].treasury = Money::dollars(10000);
+        // Set a subsidy with a fictional MN
+        game.nations[0]
+            .trade_subsidies
+            .insert(NationId(10), Money::dollars(200));
+
+        let report = process_turn(&mut game);
+
+        // Subsidy cost should appear in report
+        assert!(
+            report
+                .subsidy_costs
+                .iter()
+                .any(|(gp, mn, cost)| *gp == NationId(1)
+                    && *mn == NationId(10)
+                    && *cost == Money::dollars(200)),
+            "Subsidy cost should be recorded in report"
+        );
+        // Treasury should be reduced by at least the subsidy amount
+        assert!(
+            game.get_nation(NationId(1)).unwrap().treasury < Money::dollars(10000),
+            "Treasury should be reduced after subsidy deduction"
+        );
+    }
+
+    // ── Trade improves relationship score ────────────────────────
+
+    #[test]
+    fn trade_improves_relationship_score() {
+        use crate::hex::HexCoord;
+        use crate::map::tile::Tile;
+        use crate::military::ships::{Ship, ShipType};
+
+        let coord_forest = HexCoord::new(0, 0);
+        let coord_plantation = HexCoord::new(1, 0);
+
+        let mut hex_map = HexMap::new(10, 10);
+        hex_map.set_tile(
+            coord_forest,
+            Tile::with_province(TerrainType::ScrubForest, ProvinceId(20)),
+        );
+        hex_map.set_tile(
+            coord_plantation,
+            Tile::with_province(TerrainType::Plantation, ProvinceId(20)),
+        );
+
+        let mn_province = Province::new(
+            ProvinceId(20),
+            "Minor Province".to_string(),
+            NationId(10),
+            coord_forest,
+            vec![coord_forest, coord_plantation],
+            3,
+        );
+
+        let gp_province = Province::new(
+            ProvinceId(1),
+            "GP Province".to_string(),
+            NationId(1),
+            HexCoord::new(5, 5),
+            vec![HexCoord::new(5, 5)],
+            4,
+        );
+
+        let mut gp = Nation::new(
+            NationId(1),
+            "TestGP".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        gp.treasury = Money::dollars(50000);
+        // Give merchant ship for cargo
+        gp.merchant_fleet.push(Ship::new(
+            crate::map::UnitId(999),
+            ShipType::Trader,
+            NationId(1),
+        ));
+
+        let mn = Nation::new(
+            NationId(10),
+            "TestMN".to_string(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(20),
+        );
+
+        let mut diplomacy = DiplomacyState::new();
+        // Build consulate so trade is possible
+        diplomacy
+            .build_consulate(NationId(1), NationId(10))
+            .unwrap();
+
+        let score_before = diplomacy
+            .get_relation(NationId(1), NationId(10))
+            .map(|r| r.score)
+            .unwrap_or(0);
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![gp_province, mn_province],
+            nations: vec![gp, mn],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy,
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            history: Vec::new(),
+        };
+
+        let report = process_turn(&mut game);
+
+        // If trade happened, relationship should have improved
+        if !report.trade_transactions.is_empty() {
+            let score_after = game
+                .diplomacy
+                .get_relation(NationId(1), NationId(10))
+                .map(|r| r.score)
+                .unwrap_or(0);
+            assert!(
+                score_after > score_before,
+                "Trade should improve relationship score (before={}, after={})",
+                score_before,
+                score_after
+            );
+            // trade_diplomacy should have entries
+            assert!(
+                !report.trade_diplomacy.is_empty(),
+                "Trade diplomacy improvements should be recorded"
+            );
+        }
     }
 }

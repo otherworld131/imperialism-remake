@@ -79,6 +79,9 @@ pub struct Nation {
     /// AI personality for this nation (None for human player).
     #[serde(default)]
     pub ai_personality: Option<AiPersonality>,
+    /// Trade subsidies: per-Minor-Nation subsidy amounts (GP pays this per turn).
+    #[serde(default)]
+    pub trade_subsidies: HashMap<NationId, Money>,
 }
 
 impl Nation {
@@ -110,6 +113,7 @@ impl Nation {
             merchant_fleet: Vec::new(),
             warships: Vec::new(),
             ai_personality: None,
+            trade_subsidies: HashMap::new(),
         }
     }
 
