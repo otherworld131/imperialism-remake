@@ -18,7 +18,7 @@ comprehensive.
 - [x] Production chain calculations: all combinations of inputs → outputs
 - [x] Combat resolution: deterministic outcomes for fixed inputs
 - [ ] Tech tree: prerequisite validation, availability windows, effects
-- [ ] Diplomacy: relationship score calculations, treaty rules
+- [x] Diplomacy: relationship score calculations, treaty rules
 - [ ] AI decision-making: valid orders for known game states
 - [ ] Victory/scoring: correct calculations from known state
 - [ ] Target: **≥ 90% code coverage** on Domain crate
@@ -26,18 +26,18 @@ comprehensive.
 - [ ] Execution time: < 30 seconds for entire domain test suite
 
 #### Layer 2 — Application Tests (Use Cases)
-- [ ] Command handlers: valid commands produce correct state changes
-- [ ] Query handlers: return correct data for known states
-- [ ] Validation: invalid commands rejected with clear errors
-- [ ] Event handling: domain events trigger correct side effects
+- [x] Command handlers: valid commands produce correct state changes
+- [x] Query handlers: return correct data for known states
+- [x] Validation: invalid commands rejected with clear errors
+- [x] Event handling: domain events trigger correct side effects
 - [ ] Target: **≥ 85% coverage** on Application crate
 - [ ] Execution time: < 15 seconds
 
 #### Layer 3 — Integration Tests
-- [ ] Save/Load roundtrip: save state → load → compare
-- [ ] Full turn resolution: 7 nations, all systems active, no errors
+- [x] Save/Load roundtrip: save state → load → compare
+- [x] Full turn resolution: 7 nations, all systems active, no errors
 - [ ] Multiplayer sync: 2+ clients receive identical results
-- [ ] Data loading: all definition files load and validate correctly
+- [x] Data loading: all definition files load and validate correctly
 - [ ] Mod system: mods apply correctly, conflicts detected
 - [ ] Execution time: < 60 seconds
 
