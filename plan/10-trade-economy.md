@@ -80,4 +80,4 @@ structured sessions each turn after all players submit orders.
 - [x] **Integration test**: Set up 3 nations, create trade offers/bids → resolve session → verify correct transactions, revenue, and relationship changes
 - [x] **Integration test**: Verify blockade reduces trade (some merchant ships sunk)
 - [x] **Edge case tests**: No cargo capacity, all bids above all offers, multiple bidders for same resource
-- [ ] **Scenario test**: 20-turn trade simulation → verify economic growth trajectory matches expected curves
+- [x] **Scenario test**: 20-turn trade simulation → verify economic growth trajectory matches expected curves

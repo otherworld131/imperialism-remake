@@ -32,7 +32,7 @@ and factory capacity.
 - [x] Production limited by local factory capacity
 - [x] Factory capacity progression: 4, 8, 12, 16, ...
 - [x] Factory upgrade cost: materials + 2-turn delay for new capacity
-- [ ] Three production chains available per town based on local resources:
+- [x] Three production chains available per town based on local resources:
   - [x] Timber → Lumber → Furniture
   - [x] Cotton/Wool → Fabric → Clothing
   - [x] Coal + Iron → Steel → Hardware

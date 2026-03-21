@@ -80,4 +80,4 @@ The Council of Governors voting system is the primary victory path.
 - [x] **Integration test**: War declaration → alliance cascade → peace treaty → standing penalty
 - [x] **Scenario test**: Set up a game state where a Great Power should win the Council vote → verify victory
 - [x] **AI test**: AI Minor Nations respond correctly to trade/grants (relationship improves, eventually volunteer to join)
-- [ ] **Edge case tests**: All possible alliance/war/pact interaction combinations
+- [x] **Edge case tests**: All possible alliance/war/pact interaction combinations

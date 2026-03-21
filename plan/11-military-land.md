@@ -92,7 +92,7 @@ significantly boost effectiveness (4 medals ≈ 2× firepower).
 
 ### Verification Strategy
 - [x] **Unit tests**: Run test suite — all land unit tests pass
-- [ ] **Data validation test**: Load all unit definitions from data files → verify all have valid stats, costs, prerequisites
+- [x] **Data validation test**: Load all unit definitions from data files → verify all have valid stats, costs, prerequisites
 - [x] **Integration test**: Build a Regulars unit → verify cost deducted, unit appears next turn, maintenance charged
 - [x] **Integration test**: Unit earns 4 medals → verify firepower ≈ 2× base
 - [x] **Integration test**: Upgrade Regulars → Rifle Infantry → verify medals preserved, only equipment cost charged

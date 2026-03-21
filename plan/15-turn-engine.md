@@ -70,8 +70,8 @@ simultaneously.
 - [x] Generated after turn resolution, displayed before next turn begins
 - [x] "Imperial Times" — dated to the quarter
 - [x] Reports: new technology discoveries, military actions, diplomatic events
-- [ ] Some items have no gameplay impact (flavor text, historical references)
-- [ ] Some items report events before advisor notifications
+- [x] Some items have no gameplay impact (flavor text, historical references)
+- [x] Some items report events before advisor notifications
 - [x] Unit tests: newspaper event collection and formatting
 
 ### Game State Management

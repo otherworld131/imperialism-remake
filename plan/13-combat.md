@@ -85,7 +85,7 @@ a province is invaded via beachhead.
 - [x] **Unit tests**: Run test suite — all combat tests pass
 - [x] **Deterministic combat test**: Fixed seed → same battle always produces same result
 - [x] **Integration test**: 3 Regulars attack province with 4 Militia → verify battle resolves, correct winner determined
-- [x] **Integration test**: Sapper siege scenario → verify tunnel progress over multiple turns → fort destroyed
+- [x] **Fort siege test**: Sapper siege scenario → verify tunnel progress over multiple turns → fort destroyed
 - [x] **Balance test**: Run 1000 battles with various force compositions → verify win rates are reasonable
 - [x] **Naval test**: Fleet of 3 Frigates vs 1 Ship-of-the-Line → verify plausible outcomes over 100 runs
 - [x] **Counter-attack test**: Defender sends reinforcements → verify they arrive with no opportunity fire on first move

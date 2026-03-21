@@ -77,7 +77,7 @@ goods in factories. Three parallel production chains exist.
 - [x] Each production facility needs 2 labor units per unit of output
 - [x] Worker pool management — track available vs. assigned workers
 - [x] Worker recruitment limited by province count (1 worker per N provinces)
-- [ ] Reward: Capitol expansion at 10 and 30 expert workers
+- [x] Reward: Capitol expansion at 10 and 30 expert workers
 - [x] Unit tests for labor allocation and training
 
 ### Warehouse / Inventory

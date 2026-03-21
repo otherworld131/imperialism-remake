@@ -90,5 +90,5 @@ comprehensive.
 - [x] **Run tests after every code change**: `cargo test` must pass before considering a task complete
 - [x] **Compile check**: `cargo build` must succeed with zero warnings
 - [ ] **Coverage check**: Generate coverage report → verify thresholds
-- [ ] **Regression check**: No previously passing test starts failing
+- [x] **Regression check**: No previously passing test starts failing
 - [x] **Performance baseline**: Measure and record execution times; alert on significant regression

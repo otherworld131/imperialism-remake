@@ -75,7 +75,7 @@ beachhead). Naval battles are always resolved by AI.
 ### Rewards
 - [x] **Admiral** — build 5 Ships-of-the-Line → free Admiral + free Ship-of-the-Line
 - [x] **Free Clippers** — establishing first colony → free Clipper ships + statue (even without tech)
-- [ ] Unit tests: naval reward trigger conditions
+- [x] Unit tests: naval reward trigger conditions
 
 ### Verification Strategy
 - [x] **Unit tests**: Run test suite — all naval tests pass
