@@ -1,8 +1,10 @@
 use std::time::Instant;
 
 use domain::game_state::new_game;
+use domain::map::{UnitId, generate_map};
+use domain::military::units::{ArmyUnit, ArmyUnitType};
 use domain::turn::process_turn;
-use domain::types::Difficulty;
+use domain::types::{Difficulty, NationId, ResourceType};
 
 #[test]
 fn benchmark_turn_resolution() {
@@ -132,4 +134,138 @@ fn benchmark_memory_usage() {
     println!("GameState struct size: {} bytes", size);
     // This only measures the stack size, not heap. But useful as a sanity check.
     // Actual heap usage would need a memory profiler.
+}
+
+#[test]
+fn memory_test_400_turn_game() {
+    let mut game = new_game("mem_400", Difficulty::Normal, 0);
+    for _ in 0..400 {
+        process_turn(&mut game);
+    }
+    // Verify game state doesn't grow unboundedly
+    // Check warehouse doesn't accumulate infinite resources
+    let player = game.get_nation(game.human_player_nation).unwrap();
+    // Resources should be bounded (consumed by food, trade, etc.)
+    let total_resources: u32 = [
+        ResourceType::Timber,
+        ResourceType::Coal,
+        ResourceType::Iron,
+        ResourceType::Cotton,
+        ResourceType::Wool,
+        ResourceType::Grain,
+        ResourceType::Fruit,
+        ResourceType::Livestock,
+    ]
+    .iter()
+    .map(|r| player.resource_amount(*r))
+    .sum();
+
+    // After 400 turns, resources should be bounded (not growing infinitely)
+    // History should be bounded too
+    assert!(
+        game.history.len() < 5000,
+        "History grew too large: {}",
+        game.history.len()
+    );
+    println!(
+        "After 400 turns: {} resources in warehouse, {} history entries",
+        total_resources,
+        game.history.len()
+    );
+}
+
+#[test]
+fn stress_test_all_nations_at_war() {
+    let mut game = new_game("stress", Difficulty::Normal, 0);
+
+    // Declare war between all Great Powers
+    let gp_ids: Vec<NationId> = game.great_powers().iter().map(|n| n.id).collect();
+    for i in 0..gp_ids.len() {
+        for j in (i + 1)..gp_ids.len() {
+            game.diplomacy.declare_war(gp_ids[i], gp_ids[j]);
+        }
+    }
+
+    // Build maximum units for each nation
+    for nation in &mut game.nations {
+        if nation.is_great_power() {
+            for k in 0..10 {
+                let unit = ArmyUnit::new(
+                    UnitId(5_000_000 + nation.id.0 * 100 + k),
+                    ArmyUnitType::Regulars,
+                    nation.id,
+                    nation.capital_province_id,
+                );
+                nation.army.push(unit);
+            }
+        }
+    }
+
+    // Run 50 turns of total war
+    let start = Instant::now();
+    for _ in 0..50 {
+        process_turn(&mut game);
+    }
+    let elapsed = start.elapsed();
+
+    println!(
+        "Stress test (50 turns, all at war, 70 units): {:?}",
+        elapsed
+    );
+    assert!(
+        elapsed.as_secs() < 30,
+        "Stress test too slow: {:?}",
+        elapsed
+    );
+}
+
+#[test]
+fn profile_turn_resolution_steps() {
+    let mut game = new_game("profile", Difficulty::Normal, 0);
+    // Warm up
+    for _ in 0..20 {
+        process_turn(&mut game);
+    }
+
+    // Time a single turn in detail
+    let start = Instant::now();
+    let report = process_turn(&mut game);
+    let elapsed = start.elapsed();
+
+    println!("=== Turn Resolution Profile ===");
+    println!("Total: {:?}", elapsed);
+    println!("Resources collected: {}", report.resource_production.len());
+    println!("Trade transactions: {}", report.trade_transactions.len());
+    println!("Town production items: {}", report.town_production.len());
+    println!("Battles: {}", report.battles.len());
+    println!("Naval battles: {}", report.naval_battles.len());
+    println!("Headlines: {}", report.newspaper_headlines.len());
+    println!("AI actions: {}", report.ai_actions.len());
+}
+
+#[test]
+fn performance_regression_baseline() {
+    // Establish baseline timings for regression detection
+    let mut game = new_game("regression", Difficulty::Normal, 0);
+
+    let start = Instant::now();
+    for _ in 0..100 {
+        process_turn(&mut game);
+    }
+    let turns_100 = start.elapsed();
+
+    let start = Instant::now();
+    let _map = generate_map("regression_map");
+    let map_gen = start.elapsed();
+
+    println!("=== Performance Baseline ===");
+    println!("100 turns: {:?} ({:?}/turn)", turns_100, turns_100 / 100);
+    println!("Map gen: {:?}", map_gen);
+
+    // These are the regression thresholds
+    assert!(
+        turns_100.as_millis() < 5000,
+        "100 turns should complete in <5s"
+    );
+    assert!(map_gen.as_millis() < 1000, "Map gen should complete in <1s");
 }

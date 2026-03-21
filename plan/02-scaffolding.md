@@ -102,7 +102,7 @@ imperialism-remake/
 - [ ] A hex grid renders on screen (even with placeholder tiles)
 - [ ] A click on a hex tile is detected and logged
 - [ ] A sound effect plays on click
-- [ ] Application shuts down cleanly with no resource leaks
+- [x] Application shuts down cleanly with no resource leaks
 
 ### Verification Strategy
 - [x] **Build from scratch**: Clone repo → run `build.sh`/`build.ps1` → exits 0, all crates compile

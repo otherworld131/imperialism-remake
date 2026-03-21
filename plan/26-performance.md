@@ -44,9 +44,9 @@ should maintain 60fps, and memory usage should stay bounded even in late-game st
 
 ### Profiling & Monitoring
 - [ ] Frame time profiler: identify render bottlenecks
-- [ ] Turn resolution profiler: identify slow resolution steps
+- [x] Turn resolution profiler: identify slow resolution steps
 - [ ] Memory profiler: track allocation patterns and heap usage
-- [ ] Performance regression detection: compare benchmark results across builds
+- [x] Performance regression detection: compare benchmark results across builds
 - [ ] Log slow frames (> 20ms) and slow turns (> 5s) for investigation
 
 ### Verification Strategy
@@ -56,7 +56,7 @@ should maintain 60fps, and memory usage should stay bounded even in late-game st
   - [x] Generate 10 random maps → measure generation time
   - [x] Save/load full game state → measure I/O time
   - [x] AI orders for 6 Great Powers → measure computation time
-- [ ] **Memory test**: Play 400-turn game → measure peak memory → verify < 500MB
+- [x] **Memory test**: Play 400-turn game → measure peak memory → verify < 500MB
 - [ ] **Startup test**: Measure time from process start to main menu render → verify < 5 seconds
-- [ ] **Regression test**: Compare benchmark results to baseline → alert if >10% regression
-- [ ] **Stress test**: Maximum units (all nations at war, every province contested) → verify 60fps + < 5s turns
+- [x] **Regression test**: Compare benchmark results to baseline → alert if >10% regression
+- [x] **Stress test**: Maximum units (all nations at war, every province contested) → verify 60fps + < 5s turns

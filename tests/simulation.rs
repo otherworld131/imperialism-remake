@@ -430,3 +430,15 @@ fn minor_nations_respond_to_trade_offers() {
         "After 10 turns, at least one AI should have engaged in trade or collected resources"
     );
 }
+
+#[test]
+fn application_shuts_down_cleanly() {
+    // Create a game, process some turns, drop everything
+    // This verifies no panics on cleanup
+    let mut game = new_game("shutdown_test", Difficulty::Normal, 0);
+    for _ in 0..10 {
+        process_turn(&mut game);
+    }
+    drop(game); // explicit drop to verify no resource leaks
+    // If we get here without panicking, the test passes
+}

@@ -73,8 +73,8 @@ comprehensive.
 - [x] Map generation: random seeds always produce valid maps
 - [x] Hex math: coordinate conversions are invertible
 - [x] Serialization: roundtrip always preserves equality
-- [ ] Production: output never exceeds input (conservation laws)
-- [ ] Combat: total damage dealt never exceeds total health available
+- [x] Production: output never exceeds input (conservation laws)
+- [x] Combat: total damage dealt never exceeds total health available
 
 ### CI Verification Steps (How Claude Code Validates Each Step)
 - [x] `cargo build` — project compiles with zero warnings
