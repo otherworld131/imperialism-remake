@@ -1,7 +1,7 @@
 use domain::game_state::GameState;
 use domain::tech::TechTree;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Current save file format version.
 pub const CURRENT_SAVE_VERSION: u32 = 2;
@@ -172,6 +172,35 @@ pub struct SaveFileMetadata {
     pub turn_display: String,
     pub difficulty: String,
     pub timestamp: String,
+}
+
+/// Delete a save file.
+pub fn delete_save(path: &Path) -> Result<(), String> {
+    std::fs::remove_file(path).map_err(|e| format!("Delete error: {}", e))
+}
+
+/// List all save files (`.json`) in a directory, sorted by modification time (newest first).
+pub fn list_saves(dir: &Path) -> Vec<PathBuf> {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+                .map(|e| e.path())
+                .collect()
+        })
+        .unwrap_or_default();
+    entries.sort_by(|a, b| {
+        let time_a = a
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let time_b = b
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        time_b.cmp(&time_a)
+    });
+    entries
 }
 
 /// Serialize and re-deserialize the game state to produce a clean copy
@@ -464,5 +493,73 @@ mod tests {
         // Cleanup
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    // ── delete_save tests ───────────────────────────────────────
+
+    #[test]
+    fn delete_save_removes_file() {
+        let dir = std::env::temp_dir().join("imperialism_test_delete_save");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("to_delete.json");
+
+        let game = new_game("test", Difficulty::Normal, 0);
+        save_game(&game, &path).unwrap();
+        assert!(path.exists());
+
+        let result = delete_save(&path);
+        assert!(result.is_ok());
+        assert!(!path.exists());
+
+        // Cleanup
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn delete_save_nonexistent_returns_error() {
+        let result = delete_save(Path::new("/tmp/nonexistent_save_99999.json"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Delete error"));
+    }
+
+    // ── list_saves tests ────────────────────────────────────────
+
+    #[test]
+    fn list_saves_returns_json_files() {
+        let dir = std::env::temp_dir().join("imperialism_test_list_saves");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Create a few JSON files
+        std::fs::write(dir.join("save1.json"), "{}").unwrap();
+        std::fs::write(dir.join("save2.json"), "{}").unwrap();
+        std::fs::write(dir.join("notes.txt"), "not a save").unwrap();
+
+        let saves = list_saves(&dir);
+        assert_eq!(saves.len(), 2, "Should find exactly 2 .json files");
+        assert!(saves.iter().all(|p| p.extension().unwrap() == "json"));
+
+        // Cleanup
+        let _ = std::fs::remove_file(dir.join("save1.json"));
+        let _ = std::fs::remove_file(dir.join("save2.json"));
+        let _ = std::fs::remove_file(dir.join("notes.txt"));
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn list_saves_empty_directory() {
+        let dir = std::env::temp_dir().join("imperialism_test_list_saves_empty");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let saves = list_saves(&dir);
+        assert!(saves.is_empty());
+
+        // Cleanup
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn list_saves_nonexistent_directory() {
+        let saves = list_saves(Path::new("/tmp/nonexistent_dir_999999"));
+        assert!(saves.is_empty());
     }
 }

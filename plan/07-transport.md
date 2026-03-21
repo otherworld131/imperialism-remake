@@ -21,29 +21,29 @@ bottleneck — resources not transported are wasted.
 - [x] Player assigns transport priority per resource type each turn
 - [ ] "Give Transport Orders" — sliders determine what percentage of capacity goes to each resource
 - [ ] Resources from connected tiles are collected automatically
-- [ ] Only resources from tiles connected via railroad/depot/port reach the capital
-- [ ] Unconnected tiles' resources are wasted
+- [x] Only resources from tiles connected via railroad/depot/port reach the capital
+- [x] Unconnected tiles' resources are wasted
 - [x] Excess resources beyond transport capacity are left behind (overflow: resources lost when capacity insufficient)
 - [x] Unit tests: allocation algorithm distributes capacity correctly
-- [ ] Unit tests: disconnected tiles produce no deliveries
+- [x] Unit tests: disconnected tiles produce no deliveries
 
 ### Military Transport
 - [ ] Army unit transport size = number of arms used to build it
 - [x] Rail transport capacity: 1 army unit per 5 freight cars
 - [ ] Troops can be moved via rail to any connected province in one turn
-- [ ] Amphibious transport: landing force size = total arms of all ships in beachhead fleet
-- [ ] Example: 4 frigates (2 arms each) = landing force of size 8
+- [x] Amphibious transport: landing force size = total arms of all ships in beachhead fleet
+- [x] Example: 4 frigates (2 arms each) = landing force of size 8
 - [ ] Generals count as 1 transport unit
 - [x] Unit tests: military transport capacity calculations
-- [ ] Unit tests: amphibious landing force size calculations
+- [x] Unit tests: amphibious landing force size calculations
 
 ### Transport Screen (Domain Logic)
 - [x] Calculate total freight car capacity
-- [ ] Calculate total resource production from all connected tiles
-- [ ] Show surplus/deficit per resource type
+- [x] Calculate total resource production from all connected tiles
+- [x] Show surplus/deficit per resource type
 - [ ] Allow reallocation without leaving the screen
 - [ ] Preview next turn's deliveries based on current allocation
-- [ ] Unit tests: transport screen data calculations
+- [x] Unit tests: transport screen data calculations
 
 ### Verification Strategy
 - [ ] **Unit tests**: Run `cargo test` — all transport-related tests pass

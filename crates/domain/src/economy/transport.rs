@@ -1,3 +1,4 @@
+use crate::military::ships::Ship;
 use crate::types::*;
 
 /// The transport system for a nation — freight cars carrying resources.
@@ -154,6 +155,18 @@ impl TransportSystem {
 
         result
     }
+}
+
+/// Calculate how many army units can be transported by rail.
+/// 1 unit per 5 freight cars (integer division).
+pub fn rail_transport_capacity(freight_cars: u32) -> u32 {
+    freight_cars / 5
+}
+
+/// Calculate amphibious landing force size.
+/// Force size = total arms_cost used to build all ships in the fleet.
+pub fn amphibious_force_size(ships: &[Ship]) -> u32 {
+    ships.iter().map(|s| s.ship_type.stats().arms_cost).sum()
 }
 
 impl Default for TransportSystem {
@@ -383,5 +396,73 @@ mod tests {
         let ts = TransportSystem::default();
         assert_eq!(ts.freight_cars, 0);
         assert!(ts.allocations.is_empty());
+    }
+
+    // ── Standalone rail_transport_capacity function ──────────────
+
+    #[test]
+    fn rail_transport_capacity_ten_cars() {
+        assert_eq!(rail_transport_capacity(10), 2);
+    }
+
+    #[test]
+    fn rail_transport_capacity_three_cars() {
+        assert_eq!(rail_transport_capacity(3), 0);
+    }
+
+    #[test]
+    fn rail_transport_capacity_five_cars() {
+        assert_eq!(rail_transport_capacity(5), 1);
+    }
+
+    #[test]
+    fn rail_transport_capacity_zero_cars() {
+        assert_eq!(rail_transport_capacity(0), 0);
+    }
+
+    // ── Amphibious force size ──────────────────────────────────
+
+    #[test]
+    fn amphibious_force_size_empty_fleet() {
+        let ships: Vec<Ship> = vec![];
+        assert_eq!(amphibious_force_size(&ships), 0);
+    }
+
+    #[test]
+    fn amphibious_force_size_frigates() {
+        use crate::map::UnitId;
+        use crate::military::ships::ShipType;
+
+        // 4 frigates, each with arms_cost = 2
+        let ships: Vec<Ship> = (0..4)
+            .map(|i| Ship::new(UnitId(i), ShipType::Frigate, NationId(1)))
+            .collect();
+        assert_eq!(amphibious_force_size(&ships), 8);
+    }
+
+    #[test]
+    fn amphibious_force_size_mixed_fleet() {
+        use crate::map::UnitId;
+        use crate::military::ships::ShipType;
+
+        // Mix of warships with different arms_cost values
+        let ships = vec![
+            Ship::new(UnitId(1), ShipType::Frigate, NationId(1)), // arms_cost = 2
+            Ship::new(UnitId(2), ShipType::ShipOfTheLine, NationId(1)), // arms_cost = 5
+            Ship::new(UnitId(3), ShipType::Dreadnought, NationId(1)), // arms_cost = 8
+        ];
+        assert_eq!(amphibious_force_size(&ships), 2 + 5 + 8);
+    }
+
+    #[test]
+    fn amphibious_force_size_merchant_ships_have_zero_arms() {
+        use crate::map::UnitId;
+        use crate::military::ships::ShipType;
+
+        let ships = vec![
+            Ship::new(UnitId(1), ShipType::Trader, NationId(1)), // arms_cost = 0
+            Ship::new(UnitId(2), ShipType::Clipper, NationId(1)), // arms_cost = 0
+        ];
+        assert_eq!(amphibious_force_size(&ships), 0);
     }
 }

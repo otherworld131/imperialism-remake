@@ -56,7 +56,7 @@ The save format should be stable, versioned, and forward-compatible.
 - [x] List all saves with metadata (date, nation, turn, difficulty)
 - [x] Sort by date, nation, or turn
 - [x] Preview: show minimap and key stats for selected save
-- [ ] Delete save option (with confirmation)
+- [x] Delete save option (with confirmation)
 - [ ] Export/import saves for sharing
 
 ### Verification Strategy

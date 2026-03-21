@@ -8,11 +8,13 @@ use crate::economy::trade::{self, TradeTransaction};
 use crate::events::*;
 use crate::game_state::GameState;
 use crate::map::SettlementLevel;
+use crate::map::infrastructure::is_province_connected;
 use crate::military::combat::{BattleResult, CombatForce, create_garrison, resolve_battle};
 use crate::military::naval::{NavalBattleResult, calculate_blockade_effect, resolve_naval_battle};
 use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::turn::scoring::{CouncilVoteResult, calculate_score, run_council_vote};
 use crate::types::*;
+use std::collections::HashSet;
 
 /// Result of processing one turn.
 #[derive(Debug)]
@@ -60,6 +62,8 @@ pub struct TurnReport {
     pub subsidy_costs: Vec<(NationId, NationId, Money)>,
     /// Diplomatic score improvements from trade: (nation_a, nation_b, improvement).
     pub trade_diplomacy: Vec<(NationId, NationId, i32)>,
+    /// Resources lost because the producing province was disconnected from the capital.
+    pub disconnected_resources: Vec<(NationId, ResourceType, u32)>,
 }
 
 impl TurnReport {
@@ -150,6 +154,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         unit_upgrades: Vec::new(),
         subsidy_costs: Vec::new(),
         trade_diplomacy: Vec::new(),
+        disconnected_resources: Vec::new(),
     };
 
     // 0. AI decisions for computer-controlled Great Powers
@@ -243,28 +248,85 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     report
 }
 
+/// Compute the set of province IDs connected to a nation's capital via railroad/port.
+///
+/// The capital province is always considered connected. Other provinces are checked
+/// via [`is_province_connected`].
+pub fn connected_provinces(game: &GameState, nation_id: NationId) -> HashSet<ProvinceId> {
+    let mut connected = HashSet::new();
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return connected,
+    };
+    let capital_pid = nation.capital_province_id;
+    connected.insert(capital_pid);
+
+    let capital_province = match game.get_province(capital_pid) {
+        Some(p) => p,
+        None => return connected,
+    };
+    let capital_tile = capital_province.capital_tile;
+
+    for &pid in &nation.province_ids {
+        if pid == capital_pid {
+            continue;
+        }
+        if is_province_connected(&game.hex_map, capital_tile, pid, &game.provinces) {
+            connected.insert(pid);
+        }
+    }
+
+    connected
+}
+
 /// Collect resource yields from all tiles owned by each nation.
 ///
 /// For each nation, iterates through their provinces, looks up tiles in the hex map,
 /// calculates yields, and adds resources to the nation's warehouse.
+/// Only resources from provinces connected to the capital are delivered;
+/// resources from disconnected provinces are tracked in `report.disconnected_resources`.
 fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
+    // Phase 0: precompute connected provinces for each nation
+    let nation_ids: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
+    let connected_map: Vec<(NationId, HashSet<ProvinceId>)> = nation_ids
+        .iter()
+        .map(|&nid| (nid, connected_provinces(game, nid)))
+        .collect();
+
     // Phase 1: collect production data using immutable borrows
     let mut production_data: Vec<(NationId, ResourceType, u32)> = Vec::new();
+    let mut disconnected_data: Vec<(NationId, ResourceType, u32)> = Vec::new();
+
     for province in &game.provinces {
+        // Check if this province is connected for its owner
+        let is_connected = connected_map
+            .iter()
+            .find(|(nid, _)| *nid == province.owner)
+            .map(|(_, set)| set.contains(&province.id))
+            .unwrap_or(false);
+
         for tile_coord in &province.tiles {
             if let Some(tile) = game.hex_map.get_tile(*tile_coord)
                 && let Some(yield_amount) = tile.calculate_yield()
             {
-                production_data.push((
-                    province.owner,
-                    yield_amount.resource,
-                    yield_amount.quantity,
-                ));
+                if is_connected {
+                    production_data.push((
+                        province.owner,
+                        yield_amount.resource,
+                        yield_amount.quantity,
+                    ));
+                } else {
+                    disconnected_data.push((
+                        province.owner,
+                        yield_amount.resource,
+                        yield_amount.quantity,
+                    ));
+                }
             }
         }
     }
 
-    // Phase 2: apply to nations using mutable borrows
+    // Phase 2: apply connected resources to nations using mutable borrows
     for (nation_id, resource, amount) in &production_data {
         if let Some(nation) = game.nations.iter_mut().find(|n| n.id == *nation_id) {
             nation.add_resource(*resource, *amount);
@@ -273,6 +335,7 @@ fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
 
     // Record in report
     report.resource_production.extend(production_data);
+    report.disconnected_resources.extend(disconnected_data);
 }
 
 /// Resolve transport: cap resources delivered *this turn* based on freight car capacity.
@@ -4610,6 +4673,7 @@ mod tests {
             unit_upgrades: Vec::new(),
             subsidy_costs: Vec::new(),
             trade_diplomacy: Vec::new(),
+            disconnected_resources: Vec::new(),
         };
 
         resolve_voluntary_incorporations(&mut game, &mut report);
@@ -4674,6 +4738,7 @@ mod tests {
             unit_upgrades: Vec::new(),
             subsidy_costs: Vec::new(),
             trade_diplomacy: Vec::new(),
+            disconnected_resources: Vec::new(),
         };
 
         resolve_voluntary_incorporations(&mut game, &mut report);
@@ -4747,6 +4812,7 @@ mod tests {
             unit_upgrades: Vec::new(),
             subsidy_costs: Vec::new(),
             trade_diplomacy: Vec::new(),
+            disconnected_resources: Vec::new(),
         };
 
         resolve_unit_upgrades(&mut game, &mut report);
@@ -4814,6 +4880,7 @@ mod tests {
             unit_upgrades: Vec::new(),
             subsidy_costs: Vec::new(),
             trade_diplomacy: Vec::new(),
+            disconnected_resources: Vec::new(),
         };
 
         resolve_unit_upgrades(&mut game, &mut report);
@@ -4955,6 +5022,7 @@ mod tests {
             unit_upgrades: Vec::new(),
             subsidy_costs: Vec::new(),
             trade_diplomacy: Vec::new(),
+            disconnected_resources: Vec::new(),
         };
 
         trigger_pact_defense(&mut game, NationId(3), NationId(2), &mut report);
@@ -5066,6 +5134,7 @@ mod tests {
             unit_upgrades: Vec::new(),
             subsidy_costs: Vec::new(),
             trade_diplomacy: Vec::new(),
+            disconnected_resources: Vec::new(),
         };
 
         // GP defender - should not trigger pact defense
@@ -5567,5 +5636,259 @@ mod tests {
         let new_owner_type = game.get_nation(NationId(1)).unwrap().nation_type;
         let garrison = create_garrison(new_owner_type);
         assert_eq!(garrison.len(), 4, "GP garrison should have 4 Militia units");
+    }
+
+    // ── Connected-tile resource filtering tests ─────────────────
+
+    #[test]
+    fn connected_province_resources_are_collected() {
+        // Capital province tiles should always produce resources (capital is always connected)
+        let mut game = test_game_state();
+
+        let mut report = TurnReport {
+            turn: game.turn,
+            year: game.turn.year(),
+            quarter: game.turn.quarter(),
+            events: Vec::new(),
+            resource_production: Vec::new(),
+            gold_income: Vec::new(),
+            maintenance_costs: Vec::new(),
+            production_output: Vec::new(),
+            food_consumed: Vec::new(),
+            starvation: Vec::new(),
+            newspaper_headlines: Vec::new(),
+            techs_available: Vec::new(),
+            council_vote: None,
+            trade_transactions: Vec::new(),
+            battles: Vec::new(),
+            naval_battles: Vec::new(),
+            scores: Vec::new(),
+            ai_actions: Vec::new(),
+            civilian_completions: Vec::new(),
+            transport_overflow: Vec::new(),
+            immigration: Vec::new(),
+            settlement_upgrades: Vec::new(),
+            trade_balance: Vec::new(),
+            town_production: Vec::new(),
+            unit_movements: Vec::new(),
+            incorporations: Vec::new(),
+            unit_upgrades: Vec::new(),
+            subsidy_costs: Vec::new(),
+            trade_diplomacy: Vec::new(),
+            disconnected_resources: Vec::new(),
+        };
+
+        collect_resources(&mut game, &mut report);
+
+        // Capital province is always connected, so resources should be produced
+        assert!(
+            !report.resource_production.is_empty(),
+            "Connected capital province tiles should produce resources"
+        );
+        assert!(
+            report.disconnected_resources.is_empty(),
+            "No disconnected resources when all provinces belong to capital"
+        );
+    }
+
+    #[test]
+    fn disconnected_province_resources_not_collected() {
+        // Create a game state with a second province that is NOT connected via railroad/port
+        let coord_farm = HexCoord::new(0, 0);
+        let coord_forest = HexCoord::new(1, 0);
+        let coord_distant = HexCoord::new(8, 8);
+
+        let mut hex_map = HexMap::new(20, 20);
+        let farm_tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        hex_map.set_tile(coord_farm, farm_tile);
+        let forest_tile = Tile::with_province(TerrainType::ScrubForest, ProvinceId(1));
+        hex_map.set_tile(coord_forest, forest_tile);
+
+        // Distant province tile (disconnected - no railroad/depot/port)
+        let distant_tile = Tile::with_province(TerrainType::Farm, ProvinceId(2));
+        hex_map.set_tile(coord_distant, distant_tile);
+
+        let province1 = Province::new(
+            ProvinceId(1),
+            "Capital Province".to_string(),
+            NationId(1),
+            coord_farm,
+            vec![coord_farm, coord_forest],
+            4,
+        );
+        let province2 = Province::new(
+            ProvinceId(2),
+            "Distant Province".to_string(),
+            NationId(1),
+            coord_distant,
+            vec![coord_distant],
+            4,
+        );
+
+        let mut nation1 = Nation::new(
+            NationId(1),
+            "Testlandia".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation1.add_province(ProvinceId(2));
+        nation1.treasury = Money::dollars(1000);
+
+        let game_state = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province1, province2],
+            nations: vec![nation1],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+        };
+
+        let mut game = game_state;
+
+        let mut report = TurnReport {
+            turn: game.turn,
+            year: game.turn.year(),
+            quarter: game.turn.quarter(),
+            events: Vec::new(),
+            resource_production: Vec::new(),
+            gold_income: Vec::new(),
+            maintenance_costs: Vec::new(),
+            production_output: Vec::new(),
+            food_consumed: Vec::new(),
+            starvation: Vec::new(),
+            newspaper_headlines: Vec::new(),
+            techs_available: Vec::new(),
+            council_vote: None,
+            trade_transactions: Vec::new(),
+            battles: Vec::new(),
+            naval_battles: Vec::new(),
+            scores: Vec::new(),
+            ai_actions: Vec::new(),
+            civilian_completions: Vec::new(),
+            transport_overflow: Vec::new(),
+            immigration: Vec::new(),
+            settlement_upgrades: Vec::new(),
+            trade_balance: Vec::new(),
+            town_production: Vec::new(),
+            unit_movements: Vec::new(),
+            incorporations: Vec::new(),
+            unit_upgrades: Vec::new(),
+            subsidy_costs: Vec::new(),
+            trade_diplomacy: Vec::new(),
+            disconnected_resources: Vec::new(),
+        };
+
+        collect_resources(&mut game, &mut report);
+
+        // Capital province tiles produce resources (connected)
+        assert!(
+            !report.resource_production.is_empty(),
+            "Capital province should produce resources"
+        );
+
+        // The distant province's tile should be in disconnected_resources
+        assert!(
+            !report.disconnected_resources.is_empty(),
+            "Disconnected province should have resources tracked as disconnected"
+        );
+
+        // The disconnected resource should be from NationId(1)
+        for (nid, _, _) in &report.disconnected_resources {
+            assert_eq!(*nid, NationId(1));
+        }
+
+        // The disconnected province's resources should NOT be added to warehouse
+        // (only the capital province's resources should be there)
+        let nation = game.get_nation(NationId(1)).unwrap();
+        let total_in_warehouse: u32 = nation.warehouse.values().sum();
+        let total_produced: u32 = report.resource_production.iter().map(|(_, _, q)| q).sum();
+        assert_eq!(
+            total_in_warehouse, total_produced,
+            "Only connected resources should be in warehouse"
+        );
+    }
+
+    #[test]
+    fn connected_provinces_includes_capital() {
+        let game = test_game_state();
+        let connected = connected_provinces(&game, NationId(1));
+        assert!(
+            connected.contains(&ProvinceId(1)),
+            "Capital province should always be connected"
+        );
+    }
+
+    #[test]
+    fn connected_provinces_excludes_disconnected() {
+        let coord_farm = HexCoord::new(0, 0);
+        let coord_distant = HexCoord::new(8, 8);
+
+        let mut hex_map = HexMap::new(20, 20);
+        let farm_tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        hex_map.set_tile(coord_farm, farm_tile);
+        let distant_tile = Tile::with_province(TerrainType::Farm, ProvinceId(2));
+        hex_map.set_tile(coord_distant, distant_tile);
+
+        let province1 = Province::new(
+            ProvinceId(1),
+            "Capital".to_string(),
+            NationId(1),
+            coord_farm,
+            vec![coord_farm],
+            4,
+        );
+        let province2 = Province::new(
+            ProvinceId(2),
+            "Distant".to_string(),
+            NationId(1),
+            coord_distant,
+            vec![coord_distant],
+            4,
+        );
+
+        let mut nation1 = Nation::new(
+            NationId(1),
+            "Testlandia".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation1.add_province(ProvinceId(2));
+
+        let game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province1, province2],
+            nations: vec![nation1],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+        };
+
+        let connected = connected_provinces(&game, NationId(1));
+        assert!(
+            connected.contains(&ProvinceId(1)),
+            "Capital always connected"
+        );
+        assert!(
+            !connected.contains(&ProvinceId(2)),
+            "Province without railroad/port should not be connected"
+        );
     }
 }

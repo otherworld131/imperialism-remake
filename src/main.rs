@@ -263,6 +263,10 @@ fn main() {
                     }
                 }
             }
+            _ if cmd.starts_with("delete ") => {
+                let filename = input.trim()[7..].trim();
+                delete_saved_game(filename);
+            }
             "quicksave" | "qs" => {
                 quicksave_game(&game);
             }
@@ -2047,6 +2051,7 @@ fn print_help() {
     println!("    save              — Save the current game (shows existing saves)");
     println!("    load              — List saved games");
     println!("    load <filename>   — Load a saved game");
+    println!("    delete <filename> — Delete a saved game");
     println!("    quicksave / qs    — Quick save to quicksave.json");
     println!("    quickload / ql    — Quick load from quicksave.json");
     println!("    help              — Show this help");
@@ -2190,6 +2195,19 @@ fn load_saved_game(filename: &str) -> Result<GameState, String> {
     let dir = saves_dir();
     let path = dir.join(filename);
     persistence::load_game(&path)
+}
+
+fn delete_saved_game(filename: &str) {
+    let dir = saves_dir();
+    let path = dir.join(filename);
+    match persistence::delete_save(&path) {
+        Ok(()) => {
+            println!("  Save deleted: {}", filename);
+        }
+        Err(e) => {
+            println!("  Failed to delete: {}", e);
+        }
+    }
 }
 
 fn print_legend() {
@@ -2870,6 +2888,66 @@ fn print_transport(game: &GameState) {
         "    Military transport capacity: {} army units",
         ts.military_transport_capacity()
     );
+    println!();
+
+    // Show connected vs disconnected provinces
+    let connected = domain::turn::connected_provinces(game, game.human_player_nation);
+    let total_provinces = player.province_count();
+    let connected_count = connected.len();
+    let disconnected_count = total_provinces - connected_count;
+    println!(
+        "  Provinces: {} connected, {} disconnected (of {} total)",
+        connected_count, disconnected_count, total_provinces
+    );
+
+    // Calculate total production from connected tiles
+    let mut total_production: std::collections::HashMap<ResourceType, u32> =
+        std::collections::HashMap::new();
+    for province in &game.provinces {
+        if province.owner != game.human_player_nation {
+            continue;
+        }
+        if !connected.contains(&province.id) {
+            continue;
+        }
+        for tile_coord in &province.tiles {
+            if let Some(tile) = game.hex_map.get_tile(*tile_coord)
+                && let Some(yield_amount) = tile.calculate_yield()
+            {
+                *total_production.entry(yield_amount.resource).or_insert(0) +=
+                    yield_amount.quantity;
+            }
+        }
+    }
+
+    let total_produced: u32 = total_production.values().sum();
+    let capacity = ts.total_capacity();
+    println!();
+    println!("  RESOURCE PRODUCTION (connected tiles):");
+    if total_production.is_empty() {
+        println!("    (none)");
+    } else {
+        let mut sorted: Vec<_> = total_production.iter().collect();
+        sorted.sort_by_key(|(r, _)| format!("{:?}", r));
+        for (resource, amount) in &sorted {
+            println!("    {:?}: {}", resource, amount);
+        }
+    }
+    println!();
+    println!(
+        "  Total production: {} | Capacity: {} | {}",
+        total_produced,
+        capacity,
+        if total_produced <= capacity {
+            format!("Surplus capacity: {}", capacity - total_produced)
+        } else {
+            format!(
+                "DEFICIT: {} resources will overflow",
+                total_produced - capacity
+            )
+        }
+    );
+
     println!();
     let (labor, lumber, steel) =
         domain::economy::transport::TransportSystem::build_freight_car_cost();
