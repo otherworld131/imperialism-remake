@@ -6,17 +6,12 @@ edition.workspace = true
 [dependencies]
 application = { path = "../application" }
 domain = { path = "../domain" }
-bevy = { version = "0.18", default-features = false, features = [
-    "bevy_asset",
-    "bevy_color",
-    "bevy_core_pipeline",
-    "bevy_render",
-    "bevy_sprite",
-    "bevy_text",
-    "bevy_ui",
-    "bevy_window",
-    "bevy_winit",
-    "default_font",
-    "x11",
-    "multi_threaded",
-] }
+
+# Bevy game engine. Uses default features which auto-detect the platform:
+# - Windows: DirectX 12 / Vulkan
+# - macOS: Metal
+# - Linux: X11 + Wayland (requires libwayland-dev, libxkbcommon-dev)
+#
+# To build on Linux without wayland-dev, install:
+#   sudo apt install libwayland-dev libxkbcommon-dev libasound2-dev libudev-dev
+bevy = "0.18"

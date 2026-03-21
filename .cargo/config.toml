@@ -1,0 +1,4 @@
+# Speed up Bevy builds with dynamic linking during development
+# Uncomment the line below for faster iterative builds (not for release):
+# [target.'cfg(target_os = "windows")']
+# rustflags = ["-C", "link-arg=/DEBUG:NONE"]

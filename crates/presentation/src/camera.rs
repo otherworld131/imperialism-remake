@@ -1,42 +1,33 @@
 use bevy::prelude::*;
 
+use crate::hex_renderer::{hex_to_pixel, GameStateResource};
+
 /// Marker component for the main game camera.
 #[derive(Component)]
 pub struct GameCamera;
 
-/// Resource tracking the current zoom level for the camera.
-#[derive(Resource)]
-pub struct CameraZoom {
-    pub scale: f32,
-}
-
-impl Default for CameraZoom {
-    fn default() -> Self {
-        Self { scale: 1.0 }
-    }
-}
-
 /// Camera movement speed.
-const CAMERA_SPEED: f32 = 500.0;
-const ZOOM_SPEED: f32 = 0.1;
-const MIN_ZOOM: f32 = 0.2;
-const MAX_ZOOM: f32 = 3.0;
+const CAMERA_SPEED: f32 = 300.0;
 
-/// Spawn the 2D camera.
-pub fn setup_camera(mut commands: Commands) {
+/// Spawn the 2D camera centered on the map.
+pub fn setup_camera(mut commands: Commands, game: Res<GameStateResource>) {
+    let map_w = game.0.hex_map.width();
+    let map_h = game.0.hex_map.height();
+    let center = hex_to_pixel(map_w / 2, map_h / 2);
+
+    println!("Camera spawning at: ({}, {})", center.x, center.y);
+
     commands.spawn((
         Camera2d,
-        Transform::from_xyz(600.0, -400.0, 0.0),
+        Transform::from_xyz(center.x, center.y, 0.0),
         GameCamera,
     ));
-    commands.init_resource::<CameraZoom>();
 }
 
-/// Handle camera pan (WASD/arrows) and zoom (Q/E or scroll).
+/// Handle camera pan (WASD/arrows). No zoom for now to keep things simple.
 pub fn camera_movement(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
-    mut zoom: ResMut<CameraZoom>,
     mut query: Query<&mut Transform, With<GameCamera>>,
 ) {
     let Ok(mut transform) = query.single_mut() else {
@@ -44,9 +35,8 @@ pub fn camera_movement(
     };
 
     let dt = time.delta_secs();
-    let speed = CAMERA_SPEED * zoom.scale;
+    let speed = CAMERA_SPEED;
 
-    // Pan
     if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) {
         transform.translation.y += speed * dt;
     }
@@ -60,13 +50,11 @@ pub fn camera_movement(
         transform.translation.x += speed * dt;
     }
 
-    // Zoom
-    if keys.pressed(KeyCode::KeyQ) || keys.pressed(KeyCode::Minus) {
-        zoom.scale = (zoom.scale + ZOOM_SPEED).min(MAX_ZOOM);
+    // Home key — recenter on map
+    if keys.just_pressed(KeyCode::Home) {
+        // Reset to origin for debugging
+        transform.translation.x = 0.0;
+        transform.translation.y = 0.0;
+        println!("Camera reset to (0, 0)");
     }
-    if keys.pressed(KeyCode::KeyE) || keys.pressed(KeyCode::Equal) {
-        zoom.scale = (zoom.scale - ZOOM_SPEED).max(MIN_ZOOM);
-    }
-
-    transform.scale = Vec3::splat(zoom.scale);
 }
