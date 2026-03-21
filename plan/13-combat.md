@@ -14,7 +14,7 @@ a province is invaded via beachhead.
 - [ ] Counter-attacks: if defender sends reinforcements during the same turn, they arrive for a secondary engagement
 - [ ] Counter-attack reinforcements "have already moved" — no opportunity fire during first move
 - [ ] Battle can be player-controlled or auto-resolved (player choice in preferences)
-- [ ] Unit tests: battle initiation conditions, counter-attack eligibility
+- [x] Unit tests: battle initiation conditions, counter-attack eligibility
 
 ### Tactical Battle Map
 - [ ] Hex-based battlefield (separate from strategic map)
@@ -41,7 +41,7 @@ a province is invaded via beachhead.
 - [x] **Terrain**: defensive bonuses for hills, forests, fortifications
 - [x] **Fort defense**: units inside forts receive significant defense bonuses
 - [ ] **Fort destruction**: Sappers tunnel to fort walls; heavy artillery bombards from range
-- [ ] Unit tests: all modifier calculations
+- [x] Unit tests: all modifier calculations
 
 ### Sapper Mechanics (Tactical)
 - [ ] Sappers use half movement to dig one tunnel space
@@ -73,7 +73,7 @@ a province is invaded via beachhead.
 - [x] Damage reduces hull points; ship sinks at 0
 - [x] Battle report provided to player with outcome summary
 - [x] Merchant ships in a blockaded zone may be sunk (some survive based on armor/speed)
-- [ ] Unit tests: naval combat algorithm, battle report generation
+- [x] Unit tests: naval combat algorithm, battle report generation
 
 ### Auto-Resolve (Land)
 - [x] Player can choose to auto-resolve land battles in preferences

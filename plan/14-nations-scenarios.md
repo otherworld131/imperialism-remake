@@ -39,7 +39,7 @@ historical scenarios with real European powers. Nations are data-driven and modd
 - [x] Historical Great Powers: Britain, Spain, France, Netherlands, Prussia, Germany, Austria-Hungary, Sardinia, Italy, Russia, Ottoman Empire (availability varies by scenario)
 - [x] Scenario files define: start year, available nations, map layout, starting resources, pre-researched techs
 - [ ] Difficulty ratings per nation per scenario (some nations are harder to play)
-- [ ] Unit tests: scenario loading and validation
+- [x] Unit tests: scenario loading and validation
 
 ### Scenario Data Format
 - [ ] Define schema for scenario files (JSON/YAML)
@@ -50,14 +50,14 @@ historical scenarios with real European powers. Nations are data-driven and modd
 - [ ] Unit tests: schema validation, required fields present
 
 ### Starting Conditions (Random Game)
-- [ ] Starting civilians: prospectors, miners, engineers, possibly farmers (varies by difficulty)
+- [x] Starting civilians: prospectors, miners, engineers, possibly farmers (varies by difficulty)
 - [ ] One warship in nearest sea zone
-- [ ] Easy/Introductory: 6 pre-placed processing buildings; program selects capital location
+- [x] Easy/Introductory: 6 pre-placed processing buildings; program selects capital location
 - [ ] Normal+: player selects capital on coast or river; food requirement: ideal 3 grain + 2 fruit + 2 meat, minimum 2+1+1
-- [ ] Starting treasury varies by difficulty
+- [x] Starting treasury varies by difficulty
 - [ ] Starting warehouse contents vary by difficulty
 - [ ] Mineral resource density varies by difficulty (more minerals on easier settings)
-- [ ] Unit tests: starting condition generation per difficulty level
+- [x] Unit tests: starting condition generation per difficulty level
 
 ### Nation Selection Criteria (for UI guidance)
 - [ ] Geographic shape: circular nations enable faster railroad expansion
@@ -78,9 +78,9 @@ historical scenarios with real European powers. Nations are data-driven and modd
 - [x] Unit tests: each difficulty level applies correct modifiers
 
 ### Verification Strategy
-- [ ] **Unit tests**: Run test suite — all nation/scenario tests pass
-- [ ] **Data validation**: Load all nation definitions → verify counts, colors, province assignments
-- [ ] **Scenario test**: Load each historical scenario → verify it produces a valid game state
-- [ ] **Map key test**: Generate 10 random maps from known keys → verify reproducibility (same key = same map)
-- [ ] **Difficulty test**: Generate games at each difficulty → verify starting conditions match spec
-- [ ] **Smoke test**: Start a game with each Great Power → no errors, valid initial state
+- [x] **Unit tests**: Run test suite — all nation/scenario tests pass
+- [x] **Data validation**: Load all nation definitions → verify counts, colors, province assignments
+- [x] **Scenario test**: Load each historical scenario → verify it produces a valid game state
+- [x] **Map key test**: Generate 10 random maps from known keys → verify reproducibility (same key = same map)
+- [x] **Difficulty test**: Generate games at each difficulty → verify starting conditions match spec
+- [x] **Smoke test**: Start a game with each Great Power → no errors, valid initial state

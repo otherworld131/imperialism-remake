@@ -100,17 +100,17 @@ with `--no-default-features` and no rendering framework, the boundary is intact.
 - [x] Infrastructure: depends on application + external crates (serde, bincode, tokio, etc.)
 - [x] Presentation: depends on application + framework crate (bevy, godot, etc.)
 - [x] Host binary (`main.rs`): depends on all — this is the composition root
-- [ ] Enforce via crate boundaries + `cargo test --test architecture` that parses `Cargo.toml` dependency graphs
-- [ ] Write architectural fitness function tests that fail on illegal dependencies
+- [x] Enforce via crate boundaries + `cargo test --test architecture` that parses `Cargo.toml` dependency graphs
+- [x] Write architectural fitness function tests that fail on illegal dependencies
 - [x] `domain` crate compiles with `cargo build -p domain` in isolation
 
 ### Cross-Platform Abstractions (Traits)
-- [ ] `PlatformServices` trait — file paths, clipboard, notifications
-- [ ] `RenderSurface` trait — thin abstraction over the framework's draw calls
-- [ ] `AudioEngine` trait — play BGM, SFX, set volume
-- [ ] `InputProvider` trait — keyboard, mouse, gamepad abstraction
-- [ ] `ScriptLoader` trait — load Lua scripts from file system or embedded resources
-- [ ] Windows adapter implementations
+- [x] `PlatformServices` trait — file paths, clipboard, notifications
+- [x] `RenderSurface` trait — thin abstraction over the framework's draw calls
+- [x] `AudioEngine` trait — play BGM, SFX, set volume
+- [x] `InputProvider` trait — keyboard, mouse, gamepad abstraction
+- [x] `ScriptLoader` trait — load Lua scripts from file system or embedded resources
+- [x] Windows adapter implementations
 - [ ] macOS adapter stubs (future)
 - [ ] Linux adapter stubs (future)
 - [ ] WASM adapter stubs (future)
@@ -118,17 +118,17 @@ with `--no-default-features` and no rendering framework, the boundary is intact.
 ### Event Bus / Mediator
 - [x] In-process event bus for domain events (`TurnEnded`, `WarDeclared`, `TechResearched`, …)
 - [x] Events are immutable Rust structs
-- [ ] Handlers registered at composition root, executed synchronously within the game loop
+- [x] Handlers registered at composition root, executed synchronously within the game loop
 - [ ] Lua scripts can register event listeners (e.g., mod hook: `on("TurnEnded", function(turn) ... end)`)
-- [ ] Unit test: publish event → Rust handler fires → side-effect observable
+- [x] Unit test: publish event → Rust handler fires → side-effect observable
 - [ ] Unit test: publish event → Lua listener fires → side-effect observable
 
 ### Dependency Injection (Manual)
-- [ ] Composition root in `main.rs` — constructs all objects, wires all trait implementations
-- [ ] All ports defined as traits; adapters as concrete `struct`s implementing those traits
+- [x] Composition root in `main.rs` — constructs all objects, wires all trait implementations
+- [x] All ports defined as traits; adapters as concrete `struct`s implementing those traits
 - [ ] Trait objects (`Box<dyn Trait>`) for runtime polymorphism where needed
 - [ ] Generics for compile-time polymorphism in hot paths
-- [ ] No DI framework — Rust's type system + manual wiring is sufficient
+- [x] No DI framework — Rust's type system + manual wiring is sufficient
 
 ### Architectural Decision Records (ADRs)
 - [x] ADR-001: Language & framework selection (Rust + Lua + Bevy/Godot)
@@ -141,13 +141,13 @@ with `--no-default-features` and no rendering framework, the boundary is intact.
 - [x] Template: `docs/adr/NNNN-title.md` with Status / Context / Decision / Consequences
 
 ### Verification Strategy
-- [ ] **Compile check**: `cargo build` succeeds with zero warnings across all crates
-- [ ] **Domain isolation test**: `cargo build -p domain` compiles with no framework dependency
-- [ ] **Dependency rule test**: `cargo test --test architecture` → verify domain has only allowed deps, application refs only domain, etc.
+- [x] **Compile check**: `cargo build` succeeds with zero warnings across all crates
+- [x] **Domain isolation test**: `cargo build -p domain` compiles with no framework dependency
+- [x] **Dependency rule test**: `cargo test --test architecture` → verify domain has only allowed deps, application refs only domain, etc.
 - [ ] **Lua sandbox test**: `cargo test -p domain -- lua_sandbox` → verify blocked APIs raise errors
 - [ ] **Lua integration test**: Load `scripts/tech/test_tech.lua` → call `get_tech_effect("seed_drill")` → verify correct return
 - [ ] **Port/Adapter test**: Instantiate each adapter → verify it implements its port trait correctly
-- [ ] **Frontend swap test**: Build domain + application without presentation crate → compiles and tests pass
+- [x] **Frontend swap test**: Build domain + application without presentation crate → compiles and tests pass
 - [ ] **Prototype validation**: Hex grid renders, click detected, sound plays — captured in a smoke test script
 - [ ] **Cross-platform check**: `cargo build --target wasm32-unknown-unknown -p domain` compiles (WASM viability)
 - [ ] **ADR review**: Every ADR has Status, Context, Decision, Consequences sections
