@@ -263,6 +263,18 @@ fn main() {
                 let nation_query = input.trim()[6..].trim();
                 cmd_peace(&mut game, nation_query);
             }
+            _ if cmd.starts_with("pact ") => {
+                let nation_query = input.trim()[5..].trim();
+                cmd_pact(&mut game, nation_query);
+            }
+            _ if cmd.starts_with("alliance ") => {
+                let nation_query = input.trim()[9..].trim();
+                cmd_alliance(&mut game, nation_query);
+            }
+            _ if cmd.starts_with("grant ") => {
+                let args = input.trim()[6..].trim();
+                cmd_grant(&mut game, args);
+            }
             "civilians" => {
                 println!();
                 print_civilians(&game);
@@ -1687,6 +1699,9 @@ fn print_help() {
     println!("    diplomacy         — Show diplomatic relations with all nations");
     println!("    consulate <name>  — Build a trade consulate with a Minor Nation ($500)");
     println!("    embassy <name>    — Build an embassy with a Minor Nation ($5,000)");
+    println!("    pact <name>       — Propose non-aggression pact with a Minor Nation");
+    println!("    alliance <name>   — Propose alliance with a Great Power");
+    println!("    grant <name> <$>  — Send cash grant to improve relations");
     println!("    war <name>        — Declare war on a nation");
     println!("    peace <name>      — Propose peace with a nation you are at war with");
     println!();
@@ -1879,6 +1894,8 @@ fn print_diplomacy(game: &GameState) {
             Some(rel) => {
                 if rel.at_war {
                     "AT WAR".to_string()
+                } else if rel.has_treaty(domain::events::TreatyType::NonAggressionPact) {
+                    format!("Pact + Embassy (score: {})", rel.score)
                 } else if rel.has_embassy {
                     format!("Embassy (score: {})", rel.score)
                 } else if rel.has_consulate {
@@ -2097,6 +2114,183 @@ fn cmd_peace(game: &mut GameState, query: &str) {
         turn,
         format!("{} signed peace with {}", player_name, target_name),
     ));
+}
+
+fn cmd_pact(game: &mut GameState, query: &str) {
+    let player_id = game.human_player_nation;
+
+    let target = match game.find_nation_by_name(query) {
+        Some(n) => n,
+        None => {
+            println!("  No unique nation matches '{}'. Be more specific.", query);
+            return;
+        }
+    };
+
+    if target.is_great_power() {
+        println!(
+            "  {} is a Great Power. Non-aggression pacts are for Minor Nations only.",
+            target.name
+        );
+        println!(
+            "  Use 'alliance {}' to form an alliance with a Great Power.",
+            target.name
+        );
+        return;
+    }
+
+    let target_id = target.id;
+    let target_name = target.name.clone();
+
+    match game.diplomacy.propose_pact(player_id, target_id) {
+        Ok(()) => {
+            println!(
+                "  {}",
+                color_green(&format!("Non-aggression pact signed with {}!", target_name))
+            );
+            let turn = game.turn;
+            let player_name = game
+                .get_nation(player_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            game.history.push((
+                turn,
+                format!(
+                    "{} signed non-aggression pact with {}",
+                    player_name, target_name
+                ),
+            ));
+        }
+        Err(e) => {
+            println!("  Cannot propose pact: {}", e);
+        }
+    }
+}
+
+fn cmd_alliance(game: &mut GameState, query: &str) {
+    let player_id = game.human_player_nation;
+
+    let target = match game.find_nation_by_name(query) {
+        Some(n) => n,
+        None => {
+            println!("  No unique nation matches '{}'. Be more specific.", query);
+            return;
+        }
+    };
+
+    if !target.is_great_power() {
+        println!(
+            "  {} is a Minor Nation. Alliances are between Great Powers only.",
+            target.name
+        );
+        println!(
+            "  Use 'pact {}' to sign a non-aggression pact.",
+            target.name
+        );
+        return;
+    }
+
+    if target.id == player_id {
+        println!("  You cannot form an alliance with yourself.");
+        return;
+    }
+
+    let target_id = target.id;
+    let target_name = target.name.clone();
+
+    match game.diplomacy.propose_alliance(player_id, target_id) {
+        Ok(()) => {
+            println!(
+                "  {}",
+                color_green(&format!("Alliance formed with {}!", target_name))
+            );
+            let turn = game.turn;
+            let player_name = game
+                .get_nation(player_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            game.history.push((
+                turn,
+                format!("{} formed an alliance with {}", player_name, target_name),
+            ));
+        }
+        Err(e) => {
+            println!("  Cannot form alliance: {}", e);
+        }
+    }
+}
+
+fn cmd_grant(game: &mut GameState, args: &str) {
+    let player_id = game.human_player_nation;
+
+    // Parse: grant <nation> <amount>
+    let parts: Vec<&str> = args.rsplitn(2, ' ').collect();
+    if parts.len() < 2 {
+        println!("  Usage: grant <nation> <amount>");
+        println!("  Example: grant Bavaria 500");
+        return;
+    }
+
+    let amount_str = parts[0];
+    let nation_query = parts[1].trim();
+
+    let amount: i64 = match amount_str.parse() {
+        Ok(v) if v > 0 => v,
+        _ => {
+            println!(
+                "  Invalid amount '{}'. Must be a positive number.",
+                amount_str
+            );
+            return;
+        }
+    };
+
+    let target = match game.find_nation_by_name(nation_query) {
+        Some(n) => n,
+        None => {
+            println!(
+                "  No unique nation matches '{}'. Be more specific.",
+                nation_query
+            );
+            return;
+        }
+    };
+
+    let target_id = target.id;
+    let target_name = target.name.clone();
+
+    if target_id == player_id {
+        println!("  You cannot send a grant to yourself.");
+        return;
+    }
+
+    let grant = Money::dollars(amount);
+    let player = game.get_nation(player_id).unwrap();
+    if player.treasury.checked_sub(grant).is_none() {
+        println!(
+            "  Cannot afford grant of {} (treasury: {}).",
+            grant, player.treasury
+        );
+        return;
+    }
+
+    game.diplomacy.send_grant(player_id, target_id, grant);
+    let player = game.get_nation_mut(player_id).unwrap();
+    player.treasury -= grant;
+    let new_treasury = player.treasury;
+    let score = game
+        .diplomacy
+        .get_relation(player_id, target_id)
+        .map(|r| r.score)
+        .unwrap_or(0);
+
+    println!(
+        "  {}",
+        color_green(&format!(
+            "Sent ${} grant to {}. Relationship score now: {}. Treasury: {}",
+            amount, target_name, score, new_treasury
+        ))
+    );
 }
 
 fn cmd_attack(game: &mut GameState, query: &str) {

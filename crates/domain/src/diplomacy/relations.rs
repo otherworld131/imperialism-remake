@@ -169,9 +169,97 @@ impl DiplomacyState {
         Ok(Money::dollars(5000))
     }
 
+    /// Propose a non-aggression pact between a Great Power and a Minor Nation.
+    /// Requires an embassy to be established.
+    /// `from` must be a Great Power and `to` must be a Minor Nation.
+    /// The caller is responsible for verifying nation types before calling this.
+    pub fn propose_pact(&mut self, from: NationId, to: NationId) -> Result<(), String> {
+        let rel = self.ensure_relation(from, to);
+        if !rel.has_embassy {
+            return Err("Embassy required before proposing a non-aggression pact".to_string());
+        }
+        if rel.at_war {
+            return Err("Cannot propose pact while at war".to_string());
+        }
+        if rel.has_treaty(TreatyType::NonAggressionPact) {
+            return Err("Non-aggression pact already active".to_string());
+        }
+        rel.add_treaty(TreatyType::NonAggressionPact);
+        rel.improve_score(10);
+        Ok(())
+    }
+
+    /// Propose an alliance between two Great Powers.
+    /// Requires embassy (GP pairs have embassies from game start).
+    /// Both nations must be Great Powers — the caller is responsible for verifying this.
+    pub fn propose_alliance(&mut self, from: NationId, to: NationId) -> Result<(), String> {
+        let rel = self.ensure_relation(from, to);
+        if !rel.has_embassy {
+            return Err("Embassy required before proposing an alliance".to_string());
+        }
+        if rel.at_war {
+            return Err("Cannot propose alliance while at war".to_string());
+        }
+        if rel.has_treaty(TreatyType::Alliance) {
+            return Err("Alliance already active".to_string());
+        }
+        rel.add_treaty(TreatyType::Alliance);
+        rel.improve_score(15);
+        Ok(())
+    }
+
+    /// Check whether a specific treaty is active between two nations.
+    pub fn has_treaty(&self, a: NationId, b: NationId, treaty: TreatyType) -> bool {
+        self.get_relation(a, b)
+            .map(|rel| rel.has_treaty(treaty))
+            .unwrap_or(false)
+    }
+
+    /// Break a specific treaty between two nations.
+    /// Removes the treaty and reduces the breaking nation's standing.
+    pub fn break_treaty(&mut self, a: NationId, b: NationId, treaty: TreatyType) {
+        let had_treaty = {
+            let rel = self.ensure_relation(a, b);
+            let had = rel.has_treaty(treaty);
+            if had {
+                rel.remove_treaty(treaty);
+                rel.reduce_score(20);
+            }
+            had
+        };
+        if had_treaty {
+            self.reduce_standing(a, 15);
+        }
+    }
+
+    /// Send a cash grant from one nation to another, improving the relationship score.
+    /// The improvement is amount_in_dollars / 100 (minimum 1 for any non-zero grant).
+    /// The caller is responsible for deducting money from the sending nation's treasury.
+    pub fn send_grant(&mut self, from: NationId, to: NationId, amount: Money) {
+        let improvement = (amount.as_dollars() / 100).max(1) as i32;
+        let rel = self.ensure_relation(from, to);
+        rel.improve_score(improvement);
+    }
+
     /// Declare war between attacker and defender.
-    /// Sets at_war flag and reduces the diplomatic score to minimum.
+    /// Sets at_war flag, reduces the diplomatic score to minimum,
+    /// and breaks all active treaties between the two nations.
     pub fn declare_war(&mut self, attacker: NationId, defender: NationId) {
+        // Break all treaties first
+        let treaties_to_break: Vec<TreatyType> = self
+            .get_relation(attacker, defender)
+            .map(|rel| rel.active_treaties.clone())
+            .unwrap_or_default();
+        for treaty in &treaties_to_break {
+            // Use ensure_relation to remove treaties without the standing penalty
+            // since war declaration itself is the cause
+            let rel = self.ensure_relation(attacker, defender);
+            rel.remove_treaty(*treaty);
+        }
+        if !treaties_to_break.is_empty() {
+            self.reduce_standing(attacker, 10);
+        }
+
         let rel = self.ensure_relation(attacker, defender);
         rel.at_war = true;
         rel.score = -100;
@@ -202,6 +290,23 @@ impl DiplomacyState {
         self.relations
             .iter()
             .filter(|((a, b), _)| *a == nation || *b == nation)
+            .collect()
+    }
+
+    /// Get all nations that have an Alliance treaty with the given nation.
+    pub fn get_allies(&self, nation: NationId) -> Vec<NationId> {
+        self.relations
+            .iter()
+            .filter(|(_, rel)| rel.has_treaty(TreatyType::Alliance))
+            .filter_map(|((a, b), _)| {
+                if *a == nation {
+                    Some(*b)
+                } else if *b == nation {
+                    Some(*a)
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 }
@@ -418,5 +523,176 @@ mod tests {
         // Should find the consulate regardless of argument order.
         let rel = state.get_relation(NationId(3), NationId(5)).unwrap();
         assert!(rel.has_consulate);
+    }
+
+    // ── Treaty proposal tests ────────────────────────────────────
+
+    #[test]
+    fn pact_requires_embassy() {
+        let mut state = DiplomacyState::new();
+        // No embassy established
+        let result = state.propose_pact(NationId(1), NationId(10));
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "Embassy required before proposing a non-aggression pact"
+        );
+    }
+
+    #[test]
+    fn pact_succeeds_with_embassy() {
+        let mut state = DiplomacyState::new();
+        state.build_consulate(NationId(1), NationId(10)).unwrap();
+        state.build_embassy(NationId(1), NationId(10)).unwrap();
+
+        let result = state.propose_pact(NationId(1), NationId(10));
+        assert!(result.is_ok());
+        assert!(state.has_treaty(NationId(1), NationId(10), TreatyType::NonAggressionPact));
+    }
+
+    #[test]
+    fn alliance_requires_embassy() {
+        let mut state = DiplomacyState::new();
+        // No embassy between these two GPs (not initialized)
+        let result = state.propose_alliance(NationId(1), NationId(2));
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "Embassy required before proposing an alliance"
+        );
+    }
+
+    #[test]
+    fn alliance_succeeds_between_gps_with_embassy() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2)];
+        state.initialize_great_powers(&gps);
+
+        let result = state.propose_alliance(NationId(1), NationId(2));
+        assert!(result.is_ok());
+        assert!(state.has_treaty(NationId(1), NationId(2), TreatyType::Alliance));
+    }
+
+    #[test]
+    fn duplicate_pact_rejected() {
+        let mut state = DiplomacyState::new();
+        state.build_consulate(NationId(1), NationId(10)).unwrap();
+        state.build_embassy(NationId(1), NationId(10)).unwrap();
+        state.propose_pact(NationId(1), NationId(10)).unwrap();
+
+        let result = state.propose_pact(NationId(1), NationId(10));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Non-aggression pact already active");
+    }
+
+    #[test]
+    fn duplicate_alliance_rejected() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2)];
+        state.initialize_great_powers(&gps);
+        state.propose_alliance(NationId(1), NationId(2)).unwrap();
+
+        let result = state.propose_alliance(NationId(1), NationId(2));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Alliance already active");
+    }
+
+    // ── War breaks all treaties ──────────────────────────────────
+
+    #[test]
+    fn war_breaks_all_treaties() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2)];
+        state.initialize_great_powers(&gps);
+
+        // Establish alliance
+        state.propose_alliance(NationId(1), NationId(2)).unwrap();
+        assert!(state.has_treaty(NationId(1), NationId(2), TreatyType::Alliance));
+
+        // Declare war
+        state.declare_war(NationId(1), NationId(2));
+
+        // Alliance should be broken
+        assert!(!state.has_treaty(NationId(1), NationId(2), TreatyType::Alliance));
+        let rel = state.get_relation(NationId(1), NationId(2)).unwrap();
+        assert!(rel.at_war);
+        assert!(rel.active_treaties.is_empty());
+    }
+
+    #[test]
+    fn war_breaks_pact() {
+        let mut state = DiplomacyState::new();
+        state.build_consulate(NationId(1), NationId(10)).unwrap();
+        state.build_embassy(NationId(1), NationId(10)).unwrap();
+        state.propose_pact(NationId(1), NationId(10)).unwrap();
+        assert!(state.has_treaty(NationId(1), NationId(10), TreatyType::NonAggressionPact));
+
+        state.declare_war(NationId(1), NationId(10));
+        assert!(!state.has_treaty(NationId(1), NationId(10), TreatyType::NonAggressionPact));
+    }
+
+    // ── Break treaty ─────────────────────────────────────────────
+
+    #[test]
+    fn break_treaty_reduces_standing() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2)];
+        state.initialize_great_powers(&gps);
+        state.propose_alliance(NationId(1), NationId(2)).unwrap();
+
+        let standing_before = state.get_standing(NationId(1));
+        state.break_treaty(NationId(1), NationId(2), TreatyType::Alliance);
+
+        assert!(!state.has_treaty(NationId(1), NationId(2), TreatyType::Alliance));
+        assert!(state.get_standing(NationId(1)) < standing_before);
+    }
+
+    // ── Cash grant ───────────────────────────────────────────────
+
+    #[test]
+    fn cash_grant_improves_relationship() {
+        let mut state = DiplomacyState::new();
+        state.build_consulate(NationId(1), NationId(10)).unwrap();
+
+        let score_before = state.get_relation(NationId(1), NationId(10)).unwrap().score;
+        state.send_grant(NationId(1), NationId(10), Money::dollars(500));
+        let score_after = state.get_relation(NationId(1), NationId(10)).unwrap().score;
+
+        assert!(score_after > score_before);
+        assert_eq!(score_after, score_before + 5); // 500/100 = 5
+    }
+
+    #[test]
+    fn cash_grant_large_amount() {
+        let mut state = DiplomacyState::new();
+        state.build_consulate(NationId(1), NationId(10)).unwrap();
+
+        state.send_grant(NationId(1), NationId(10), Money::dollars(2000));
+        let score = state.get_relation(NationId(1), NationId(10)).unwrap().score;
+        assert_eq!(score, 20); // 2000/100 = 20
+    }
+
+    // ── Get allies ───────────────────────────────────────────────
+
+    #[test]
+    fn get_allies_returns_allied_nations() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2), NationId(3)];
+        state.initialize_great_powers(&gps);
+        state.propose_alliance(NationId(1), NationId(2)).unwrap();
+
+        let allies = state.get_allies(NationId(1));
+        assert_eq!(allies.len(), 1);
+        assert!(allies.contains(&NationId(2)));
+
+        // Nation 3 is not an ally
+        let allies_3 = state.get_allies(NationId(3));
+        assert!(allies_3.is_empty());
+    }
+
+    #[test]
+    fn has_treaty_returns_false_for_non_existent_relation() {
+        let state = DiplomacyState::new();
+        assert!(!state.has_treaty(NationId(1), NationId(2), TreatyType::Alliance));
     }
 }

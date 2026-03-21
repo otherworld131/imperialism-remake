@@ -137,6 +137,9 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     let ai_actions = run_ai_turns(game);
     report.ai_actions = ai_actions;
 
+    // 0a. Alliance obligations: AI allies automatically join wars
+    resolve_alliance_obligations(game, &mut report);
+
     // 0b. Resolve civilian actions (tick working civilians, apply improvements)
     resolve_civilian_actions(game, &mut report);
 
@@ -1350,6 +1353,124 @@ fn report_available_techs(game: &GameState, report: &mut TurnReport) {
 /// Gathers notable events from the turn: AI actions (tech research, military
 /// buildup, war declarations), trade activity, and adds period-appropriate
 /// flavor headlines that rotate based on the turn number.
+/// Check for alliance obligations when nations are at war.
+///
+/// When a nation is at war, check if the defender has allies (Alliance treaty).
+/// AI allies automatically join the war by declaring war on the attacker.
+/// A newspaper headline is generated for each alliance activation.
+fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
+    // Collect all active wars
+    let mut wars: Vec<(NationId, NationId)> = Vec::new();
+    for nation in &game.nations {
+        if !nation.is_great_power() {
+            continue;
+        }
+        let rels = game.diplomacy.relations_for(nation.id);
+        for ((a, b), rel) in &rels {
+            if rel.at_war && *a == nation.id {
+                wars.push((*a, *b));
+            }
+        }
+    }
+
+    // For each war, check if either side has allies that are not yet at war with the other side
+    let mut new_wars: Vec<(NationId, NationId, String, String)> = Vec::new();
+    for (attacker, defender) in &wars {
+        // Check defender's allies
+        let defender_allies = game.diplomacy.get_allies(*defender);
+        for ally in &defender_allies {
+            if *ally == *attacker {
+                continue;
+            }
+            // Check if this ally is already at war with the attacker
+            let already_at_war = game
+                .diplomacy
+                .get_relation(*ally, *attacker)
+                .is_some_and(|r| r.at_war);
+            if already_at_war {
+                continue;
+            }
+            // Check if this ally is an AI nation (human allies make their own decisions)
+            let is_ai = game
+                .get_nation(*ally)
+                .is_some_and(|n| n.ai_personality.is_some());
+            if !is_ai {
+                continue;
+            }
+            let ally_name = game
+                .get_nation(*ally)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            let defender_name = game
+                .get_nation(*defender)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            let attacker_name = game
+                .get_nation(*attacker)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+
+            new_wars.push((*ally, *attacker, ally_name.clone(), attacker_name.clone()));
+            report.newspaper_headlines.push(format!(
+                "{} honors its alliance with {} and declares war on {}!",
+                ally_name, defender_name, attacker_name
+            ));
+        }
+
+        // Check attacker's allies
+        let attacker_allies = game.diplomacy.get_allies(*attacker);
+        for ally in &attacker_allies {
+            if *ally == *defender {
+                continue;
+            }
+            let already_at_war = game
+                .diplomacy
+                .get_relation(*ally, *defender)
+                .is_some_and(|r| r.at_war);
+            if already_at_war {
+                continue;
+            }
+            let is_ai = game
+                .get_nation(*ally)
+                .is_some_and(|n| n.ai_personality.is_some());
+            if !is_ai {
+                continue;
+            }
+            let ally_name = game
+                .get_nation(*ally)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            let attacker_name = game
+                .get_nation(*attacker)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            let defender_name = game
+                .get_nation(*defender)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+
+            new_wars.push((*ally, *defender, ally_name.clone(), defender_name.clone()));
+            report.newspaper_headlines.push(format!(
+                "{} honors its alliance with {} and declares war on {}!",
+                ally_name, attacker_name, defender_name
+            ));
+        }
+    }
+
+    // Actually declare the new wars (done after collecting to avoid borrow issues)
+    for (ally, enemy, ally_name, enemy_name) in &new_wars {
+        game.diplomacy.declare_war(*ally, *enemy);
+        let turn = game.turn;
+        game.history.push((
+            turn,
+            format!(
+                "{} joined war against {} (alliance obligation)",
+                ally_name, enemy_name
+            ),
+        ));
+    }
+}
+
 fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
     let year = game.turn.year();
     let quarter = game.turn.quarter();
