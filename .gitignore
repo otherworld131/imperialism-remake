@@ -9,3 +9,7 @@
 *.iml
 .DS_Store
 Thumbs.db
+web/node_modules/
+web/dist/
+crates/wasm-bridge/pkg/
+crates/wasm-bridge/target/
