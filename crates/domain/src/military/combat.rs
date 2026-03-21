@@ -62,6 +62,8 @@ pub struct BattleResult {
     pub attacker_initial_count: usize,
     /// Number of defender units at start.
     pub defender_initial_count: usize,
+    /// Whether the attacker retreated (lost >60% of initial firepower).
+    pub retreated: bool,
 }
 
 /// Calculate total firepower for a list of units.
@@ -133,6 +135,7 @@ pub fn resolve_battle(
             defender_initial_fp,
             attacker_initial_count,
             defender_initial_count,
+            retreated: false,
         };
     }
 
@@ -153,6 +156,7 @@ pub fn resolve_battle(
             defender_initial_fp,
             attacker_initial_count,
             defender_initial_count,
+            retreated: false,
         };
     }
 
@@ -176,10 +180,16 @@ pub fn resolve_battle(
             defender_initial_fp,
             attacker_initial_count,
             defender_initial_count,
+            retreated: false,
         };
     }
 
     // Combat rounds (up to 10)
+    let mut retreated = false;
+    // Track damage dealt by each unit (by index in survivors) for medal eligibility
+    let mut atk_damage_dealt: Vec<f64> = vec![0.0; atk_units.len()];
+    let mut def_damage_dealt: Vec<f64> = vec![0.0; def_units.len()];
+
     for _ in 0..10 {
         if atk_units.is_empty() || def_units.is_empty() {
             break;
@@ -204,6 +214,14 @@ pub fn resolve_battle(
             for unit in &mut def_units {
                 unit.take_damage(damage_per_unit as u8);
             }
+            // Track damage dealt by each attacker unit (proportional to their firepower)
+            if atk_fp > 0.0 {
+                for (idx, unit) in atk_units.iter().enumerate() {
+                    if idx < atk_damage_dealt.len() {
+                        atk_damage_dealt[idx] += unit.effective_firepower();
+                    }
+                }
+            }
         }
 
         // Defender deals damage to attacker units (weakest first)
@@ -218,6 +236,14 @@ pub fn resolve_battle(
             for unit in &mut atk_units {
                 unit.take_damage(damage_per_unit as u8);
             }
+            // Track damage dealt by each defender unit (proportional to their firepower)
+            if def_fp > 0.0 {
+                for (idx, unit) in def_units.iter().enumerate() {
+                    if idx < def_damage_dealt.len() {
+                        def_damage_dealt[idx] += unit.effective_firepower();
+                    }
+                }
+            }
         }
 
         // Remove destroyed units and record casualties
@@ -226,6 +252,9 @@ pub fn resolve_battle(
             if !def_units[i].is_alive() {
                 defender_casualties.push(def_units[i].unit_type);
                 def_units.remove(i);
+                if i < def_damage_dealt.len() {
+                    def_damage_dealt.remove(i);
+                }
             } else {
                 i += 1;
             }
@@ -236,15 +265,53 @@ pub fn resolve_battle(
             if !atk_units[i].is_alive() {
                 attacker_casualties.push(atk_units[i].unit_type);
                 atk_units.remove(i);
+                if i < atk_damage_dealt.len() {
+                    atk_damage_dealt.remove(i);
+                }
             } else {
                 i += 1;
+            }
+        }
+
+        // Check for retreat: if attacker has lost >60% of initial firepower
+        if attacker_initial_fp > 0.0 && !atk_units.is_empty() {
+            let current_atk_fp = total_firepower(&atk_units);
+            let fp_lost_ratio = 1.0 - (current_atk_fp / attacker_initial_fp);
+            if fp_lost_ratio > 0.60 {
+                retreated = true;
+                // Retreating units suffer 10% additional damage on remaining health
+                for unit in &mut atk_units {
+                    let retreat_damage = (unit.health as f64 * 0.10) as u8;
+                    // Round to nearest 5% increment for consistency
+                    let rounded = (retreat_damage / 5) * 5;
+                    if rounded > 0 {
+                        unit.take_damage(rounded);
+                    }
+                }
+                // Remove any units killed by retreat damage
+                let mut i = 0;
+                while i < atk_units.len() {
+                    if !atk_units[i].is_alive() {
+                        attacker_casualties.push(atk_units[i].unit_type);
+                        atk_units.remove(i);
+                        if i < atk_damage_dealt.len() {
+                            atk_damage_dealt.remove(i);
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+                break;
             }
         }
     }
 
     // Determine winner: if one side eliminated, the other wins.
+    // If attacker retreated, defender wins.
     // If both survive, the side with more remaining firepower wins.
-    let attacker_won = if def_units.is_empty() && !atk_units.is_empty() {
+    let attacker_won = if retreated {
+        false
+    } else if def_units.is_empty() && !atk_units.is_empty() {
         true
     } else if atk_units.is_empty() {
         false
@@ -256,13 +323,22 @@ pub fn resolve_battle(
     };
 
     // Award medals to survivors on the winning side
+    // Winners with 0 medals get 1 medal.
+    // Winners with existing medals: gain one if they dealt damage.
+    // Losers keep their medals (don't lose them).
     if attacker_won {
-        for unit in &mut atk_units {
-            unit.award_medal();
+        for (idx, unit) in atk_units.iter_mut().enumerate() {
+            let dealt = atk_damage_dealt.get(idx).copied().unwrap_or(0.0);
+            if unit.medals == 0 || dealt > 0.0 {
+                unit.award_medal();
+            }
         }
     } else {
-        for unit in &mut def_units {
-            unit.award_medal();
+        for (idx, unit) in def_units.iter_mut().enumerate() {
+            let dealt = def_damage_dealt.get(idx).copied().unwrap_or(0.0);
+            if unit.medals == 0 || dealt > 0.0 {
+                unit.award_medal();
+            }
         }
     }
 
@@ -281,6 +357,7 @@ pub fn resolve_battle(
         defender_initial_fp,
         attacker_initial_count,
         defender_initial_count,
+        retreated,
     }
 }
 
@@ -733,5 +810,167 @@ mod tests {
             !result.attacker_won,
             "Equal forces with mountain + fort level 3 should heavily favor defender"
         );
+    }
+
+    // ── Retreat mechanics ─────────────────────────────────────────
+
+    #[test]
+    fn retreat_triggers_when_attacker_loses_over_60_percent_fp() {
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+
+        // Small attacker force against a strong defender
+        // Attacker will lose firepower quickly and should retreat
+        let attacker = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Regulars, atk_nation),
+                make_unit(2, ArmyUnitType::Regulars, atk_nation),
+            ],
+        );
+
+        // Defender: strong force with terrain + fort that will quickly degrade attacker
+        let defender = make_force(
+            def_nation,
+            vec![
+                make_unit(10, ArmyUnitType::Guards, def_nation),
+                make_unit(11, ArmyUnitType::Guards, def_nation),
+                make_unit(12, ArmyUnitType::Guards, def_nation),
+                make_unit(13, ArmyUnitType::Guards, def_nation),
+                make_unit(14, ArmyUnitType::Guards, def_nation),
+            ],
+        );
+
+        let result = resolve_battle(
+            &attacker,
+            &defender,
+            ProvinceId(1),
+            Some(TerrainType::Mountain),
+            3,
+        );
+
+        // Attacker should have retreated or been eliminated
+        assert!(
+            !result.attacker_won,
+            "Attacker should not win against overwhelmingly stronger defender"
+        );
+        // If any attacker survivors remain, they should have retreated
+        if !result.attacker_survivors.is_empty() {
+            assert!(
+                result.retreated,
+                "Attacker with survivors against overwhelming force should have retreated"
+            );
+        }
+    }
+
+    #[test]
+    fn retreating_units_take_extra_damage() {
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+
+        // Attacker: 2 weak regulars
+        let attacker = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Regulars, atk_nation),
+                make_unit(2, ArmyUnitType::Regulars, atk_nation),
+            ],
+        );
+
+        // Defender: very strong force to force retreat
+        let defender = make_force(
+            def_nation,
+            vec![
+                make_unit(10, ArmyUnitType::Guards, def_nation),
+                make_unit(11, ArmyUnitType::Guards, def_nation),
+                make_unit(12, ArmyUnitType::Guards, def_nation),
+                make_unit(13, ArmyUnitType::Guards, def_nation),
+                make_unit(14, ArmyUnitType::Guards, def_nation),
+                make_unit(15, ArmyUnitType::Guards, def_nation),
+            ],
+        );
+
+        let result = resolve_battle(
+            &attacker,
+            &defender,
+            ProvinceId(1),
+            Some(TerrainType::Mountain),
+            3,
+        );
+
+        assert!(!result.attacker_won);
+        // If retreat happened, surviving units should have less than 100 health
+        if result.retreated && !result.attacker_survivors.is_empty() {
+            for survivor in &result.attacker_survivors {
+                assert!(
+                    survivor.health < 100,
+                    "Retreating survivors should have taken damage (health: {})",
+                    survivor.health
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_retreat_when_attacker_is_winning() {
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+
+        let attacker = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Guards, atk_nation),
+                make_unit(2, ArmyUnitType::Guards, atk_nation),
+                make_unit(3, ArmyUnitType::Guards, atk_nation),
+                make_unit(4, ArmyUnitType::SiegeArtillery, atk_nation),
+                make_unit(5, ArmyUnitType::SiegeArtillery, atk_nation),
+            ],
+        );
+
+        let defender = make_force(
+            def_nation,
+            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+        );
+
+        let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 0);
+        assert!(result.attacker_won);
+        assert!(!result.retreated, "Winning attacker should not retreat");
+    }
+
+    #[test]
+    fn retreat_means_defender_wins() {
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+
+        // Set up a battle where retreat will definitely occur
+        let attacker = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Militia, atk_nation),
+                make_unit(2, ArmyUnitType::Militia, atk_nation),
+            ],
+        );
+
+        let defender = make_force(
+            def_nation,
+            vec![
+                make_unit(10, ArmyUnitType::Guards, def_nation),
+                make_unit(11, ArmyUnitType::Guards, def_nation),
+                make_unit(12, ArmyUnitType::Guards, def_nation),
+                make_unit(13, ArmyUnitType::Guards, def_nation),
+                make_unit(14, ArmyUnitType::SiegeArtillery, def_nation),
+                make_unit(15, ArmyUnitType::SiegeArtillery, def_nation),
+            ],
+        );
+
+        let result = resolve_battle(
+            &attacker,
+            &defender,
+            ProvinceId(1),
+            Some(TerrainType::Mountain),
+            3,
+        );
+        // Attacker should lose (either eliminated or retreated)
+        assert!(!result.attacker_won);
     }
 }

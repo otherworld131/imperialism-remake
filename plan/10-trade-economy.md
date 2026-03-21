@@ -45,17 +45,17 @@ structured sessions each turn after all players submit orders.
 - [x] Base prices for all tradeable commodities
 - [x] Supply and demand affect prices (more sellers → lower price)
 - [x] Revenue = quantity × price for each sold item
-- [ ] Track profit/loss per trade partner per turn
+- [x] Track profit/loss per trade partner per turn
 - [x] Historical trade data for player reference
 - [x] Unit tests: revenue calculations
-- [ ] Unit tests: supply/demand price adjustments
+- [x] Unit tests: supply/demand price adjustments
 
 ### Diplomatic Impact of Trade
-- [ ] Trading improves relationship with trade partner
-- [ ] Relationship improvement based on number of distinct commodity types traded (not quantity)
-- [ ] Consistent trade over multiple turns compounds relationship growth
-- [ ] Cutting off trade harms relationship
-- [ ] Unit tests: trade-to-diplomacy relationship score changes
+- [x] Trading improves relationship with trade partner
+- [x] Relationship improvement based on number of distinct commodity types traded (not quantity)
+- [x] Consistent trade over multiple turns compounds relationship growth
+- [x] Cutting off trade harms relationship
+- [x] Unit tests: trade-to-diplomacy relationship score changes
 
 ### Merchant Marine
 - [x] Merchant ships carry traded goods

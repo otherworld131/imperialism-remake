@@ -45,18 +45,59 @@ fn color_bold(s: &str) -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let map_key = args.get(1).map(|s| s.as_str()).unwrap_or("imperialism");
-    let nation_index: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+
+    // Check for --scenario flag
+    let scenario_flag = args.iter().position(|a| a == "--scenario");
 
     println!("╔══════════════════════════════════════════════╗");
     println!("║         IMPERIALISM REMAKE v0.1.0            ║");
     println!("╚══════════════════════════════════════════════╝");
     println!();
 
-    let mut game = new_game(map_key, Difficulty::Normal, nation_index);
+    let mut game = if let Some(idx) = scenario_flag {
+        let scenario_id = args.get(idx + 1).map(|s| s.as_str()).unwrap_or_else(|| {
+            println!("  Usage: cargo run -- --scenario <id> [nation_index]");
+            println!();
+            println!("  Available scenarios:");
+            for s in domain::scenarios::list_scenarios() {
+                println!("    {} — {} ({})", s.id, s.name, s.year);
+                println!("      {}", s.description);
+                println!("      Powers: {}", s.great_powers.join(", "));
+            }
+            std::process::exit(0);
+        });
+        let nation_index: usize = args.get(idx + 2).and_then(|s| s.parse().ok()).unwrap_or(0);
+        match domain::scenarios::new_scenario_game(scenario_id, Difficulty::Normal, nation_index) {
+            Ok(g) => {
+                println!(
+                    "  Starting scenario: {} ({})",
+                    g.turn.year(),
+                    domain::scenarios::list_scenarios()
+                        .iter()
+                        .find(|s| s.id == scenario_id)
+                        .map(|s| s.name)
+                        .unwrap_or("Unknown")
+                );
+                g
+            }
+            Err(e) => {
+                println!("  Error: {}", e);
+                println!();
+                println!("  Available scenarios:");
+                for s in domain::scenarios::list_scenarios() {
+                    println!("    {} — {} ({})", s.id, s.name, s.year);
+                }
+                std::process::exit(1);
+            }
+        }
+    } else {
+        let map_key = args.get(1).map(|s| s.as_str()).unwrap_or("imperialism");
+        let nation_index: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+        new_game(map_key, Difficulty::Normal, nation_index)
+    };
 
     // Show initial map
-    println!("  Map key: \"{}\"", map_key);
+    println!("  Map key: \"{}\"", game.map_key);
     print_status(&game);
     println!();
     println!(
@@ -116,6 +157,15 @@ fn main() {
             "n" | "nations" => {
                 println!();
                 print_nations(&game);
+            }
+            "scenarios" => {
+                println!();
+                println!("  Available scenarios (use --scenario flag at startup):");
+                for s in domain::scenarios::list_scenarios() {
+                    println!("    {} — {} ({})", s.id, s.name, s.year);
+                    println!("      {}", s.description);
+                    println!("      Powers: {}", s.great_powers.join(", "));
+                }
             }
             "b" | "buildings" => {
                 println!();
@@ -3242,6 +3292,8 @@ fn print_turn_report(game: &GameState, report: &TurnReport) {
                 .unwrap_or("Unknown");
             let result_str = if battle.attacker_won {
                 color_green("VICTORY!")
+            } else if battle.retreated {
+                color_yellow("RETREAT (attacker withdrew)")
             } else {
                 color_red("DEFEAT")
             };
@@ -3311,6 +3363,12 @@ fn print_turn_report(game: &GameState, report: &TurnReport) {
             println!("  Result: {}", result_str);
             println!("  Attacker casualties: {}", atk_casualty_str);
             println!("  Defender casualties: {}", def_casualty_str);
+            if battle.retreated {
+                println!(
+                    "  {}",
+                    color_yellow("Attacker retreated! Surviving units took additional damage.")
+                );
+            }
             if battle.attacker_won {
                 println!("  {}", color_green("Province conquered!"));
             }

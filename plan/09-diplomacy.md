@@ -11,8 +11,8 @@ The Council of Governors voting system is the primary victory path.
 ### Diplomatic Relationship Model
 - [x] `DiplomaticRelation` entity — pair of NationIds + relationship score + treaty history
 - [x] Relationship score: numeric value tracking friendliness (-100 to +100 or similar)
-- [ ] Score modifiers: trade frequency, grants, subsidies, broken promises, wars
-- [ ] Track number of distinct commodity types traded per turn (not quantity — types matter)
+- [x] Score modifiers: trade frequency, grants, subsidies, broken promises, wars
+- [x] Track number of distinct commodity types traded per turn (not quantity — types matter)
 - [x] Great Powers start with mutual embassies (includes trade consulate functionality)
 - [x] Unit tests: relationship score calculations from various actions
 
@@ -49,12 +49,12 @@ The Council of Governors voting system is the primary victory path.
 
 ### Diplomatic Actions
 - [x] **Cash Grants** — direct money transfer to improve relations
-- [ ] **Trade Subsidies** — increase export prices, decrease import costs for a Minor Nation
+- [x] **Trade Subsidies** — increase export prices, decrease import costs for a Minor Nation
   - [ ] Ctrl+click on Minor Nation auto-calculates necessary subsidy to become preferred partner
-  - [ ] Subsidy calculation algorithm
+  - [x] Subsidy calculation algorithm
 - [x] **Treaty Proposals** — propose any applicable treaty type
 - [x] **War Declaration** — initiate hostilities
-- [ ] Unit tests: grant and subsidy effects on relationship scores
+- [x] Unit tests: grant and subsidy effects on relationship scores
 
 ### Diplomatic Standing
 - [x] Global standing value per Great Power (affects all diplomatic interactions)
