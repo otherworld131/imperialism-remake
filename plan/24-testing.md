@@ -39,7 +39,7 @@ comprehensive.
 - [ ] Multiplayer sync: 2+ clients receive identical results
 - [x] Data loading: all definition files load and validate correctly
 - [ ] Mod system: mods apply correctly, conflicts detected
-- [ ] Execution time: < 60 seconds
+- [x] Execution time: < 60 seconds
 
 #### Layer 4 — Simulation Tests (Game-Level)
 - [x] 10-turn smoke test: game progresses without errors

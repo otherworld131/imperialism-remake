@@ -95,6 +95,15 @@ pub struct Nation {
     /// Number of Generals already earned (tracks reward thresholds).
     #[serde(default)]
     pub generals_earned: u32,
+    /// Total Ships-of-the-Line built (tracked for Admiral rewards).
+    #[serde(default)]
+    pub total_ships_of_the_line_built: u32,
+    /// Number of Admirals already earned (tracks reward thresholds).
+    #[serde(default)]
+    pub admirals_earned: u32,
+    /// Whether this nation has established its first colony (MN province conquered/incorporated).
+    #[serde(default)]
+    pub has_colony: bool,
 }
 
 impl Nation {
@@ -131,6 +140,9 @@ impl Nation {
             capitol_bonus_capacity: 0,
             total_arms_built: 0,
             generals_earned: 0,
+            total_ships_of_the_line_built: 0,
+            admirals_earned: 0,
+            has_colony: false,
         }
     }
 

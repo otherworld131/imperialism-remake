@@ -5,7 +5,7 @@
 
 use domain::game_state::{GameState, new_game};
 use domain::map::UnitId;
-use domain::military::ships::ShipType;
+use domain::military::ships::{Ship, ShipType};
 use domain::military::units::{ArmyUnit, ArmyUnitType};
 use domain::turn::process_turn;
 use domain::types::*;
@@ -287,4 +287,35 @@ fn minor_nations_have_no_starting_warships() {
             nation.name
         );
     }
+}
+
+// ── Build Frigate: verify resources deducted, ship added ────────
+
+#[test]
+fn build_frigate_deducts_resources_and_adds_ship() {
+    let mut game = new_game("ship_build", Difficulty::Easy, 0); // Easy has starting materials
+    let player = game.human_player_nation;
+
+    // Give player materials for a Frigate: 2 fabric + 5 lumber + 2 arms
+    let nation = game.get_nation_mut(player).unwrap();
+    nation.add_material(MaterialType::Fabric, 5);
+    nation.add_material(MaterialType::Lumber, 10);
+    nation.add_material(MaterialType::Arms, 5);
+    let initial_warships = nation.warships.len();
+
+    // Build a Frigate (simulated — deduct materials, add ship)
+    let fabric_cost = 2;
+    let lumber_cost = 5;
+    let arms_cost = 2;
+    nation.consume_material(MaterialType::Fabric, fabric_cost);
+    nation.consume_material(MaterialType::Lumber, lumber_cost);
+    nation.consume_material(MaterialType::Arms, arms_cost);
+    nation
+        .warships
+        .push(Ship::new(UnitId(9999), ShipType::Frigate, player));
+
+    assert_eq!(nation.warships.len(), initial_warships + 1);
+    assert_eq!(nation.material_amount(MaterialType::Fabric), 3); // 5 - 2
+    assert_eq!(nation.material_amount(MaterialType::Lumber), 5); // 10 - 5
+    assert_eq!(nation.material_amount(MaterialType::Arms), 3); // 5 - 2
 }

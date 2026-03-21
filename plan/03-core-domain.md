@@ -32,9 +32,9 @@ services. It has **zero** external dependencies — no framework, no I/O, no UI.
 - [x] Unit tests for all value objects (equality, immutability, edge cases)
 
 ### Entity Base
-- [ ] `Entity<TId>` base trait with identity-based equality
-- [ ] `AggregateRoot<TId>` base trait with domain event collection
-- [ ] `DomainEvent` base struct with timestamp and correlation ID
+- [x] `Entity<TId>` base trait with identity-based equality
+- [x] `AggregateRoot<TId>` base trait with domain event collection
+- [x] `DomainEvent` base struct with timestamp and correlation ID
 
 ### Core Entities (Stubs — detailed in later plans)
 - [x] `GameState` aggregate root — the top-level game container
@@ -70,7 +70,7 @@ services. It has **zero** external dependencies — no framework, no I/O, no UI.
 
 ### Verification Strategy
 - [x] **Unit tests**: `cargo test -p domain` — all coordinate, value object, entity, and event tests pass
-- [ ] **Coverage check**: Generate coverage report for Domain crate → verify ≥ 90% line coverage
+- [x] **Coverage check**: Generate coverage report for Domain crate → verify ≥ 90% line coverage
 - [x] **Immutability test**: Attempt to mutate value objects → verify compile-time or runtime errors
 - [x] **Identity test**: Two entities with same ID are equal; two with different IDs are not
 - [x] **Event test**: Publish each domain event type → verify correct handlers fire

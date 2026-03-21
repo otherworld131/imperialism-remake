@@ -50,7 +50,7 @@ The Council of Governors voting system is the primary victory path.
 ### Diplomatic Actions
 - [x] **Cash Grants** — direct money transfer to improve relations
 - [x] **Trade Subsidies** — increase export prices, decrease import costs for a Minor Nation
-  - [ ] Ctrl+click on Minor Nation auto-calculates necessary subsidy to become preferred partner
+  - [x] Ctrl+click on Minor Nation auto-calculates necessary subsidy to become preferred partner
   - [x] Subsidy calculation algorithm
 - [x] **Treaty Proposals** — propose any applicable treaty type
 - [x] **War Declaration** — initiate hostilities
@@ -59,10 +59,10 @@ The Council of Governors voting system is the primary victory path.
 ### Diplomatic Standing
 - [x] Global standing value per Great Power (affects all diplomatic interactions)
 - [x] Reduced by: breaking alliances, refusing pact obligations, separate peace treaties
-- [ ] Impacts: treaty acceptance probability, Minor Nation governor voting, trade willingness
-- [ ] AI nations factor standing into their decisions
+- [x] Impacts: treaty acceptance probability, Minor Nation governor voting, trade willingness
+- [x] AI nations factor standing into their decisions
 - [x] Unit tests: standing reduction from various violations
-- [ ] Unit tests: standing impact on treaty acceptance probability
+- [x] Unit tests: standing impact on treaty acceptance probability
 
 ### Council of Governors Voting
 - [x] Each province has a governor who votes
@@ -76,8 +76,8 @@ The Council of Governors voting system is the primary victory path.
 
 ### Verification Strategy
 - [x] **Unit tests**: Run test suite — all diplomacy tests pass
-- [ ] **Integration test**: Simulate a full diplomatic lifecycle — build consulate → embassy → pact → voluntary incorporation
-- [ ] **Integration test**: War declaration → alliance cascade → peace treaty → standing penalty
-- [ ] **Scenario test**: Set up a game state where a Great Power should win the Council vote → verify victory
-- [ ] **AI test**: AI Minor Nations respond correctly to trade/grants (relationship improves, eventually volunteer to join)
+- [x] **Integration test**: Simulate a full diplomatic lifecycle — build consulate → embassy → pact → voluntary incorporation
+- [x] **Integration test**: War declaration → alliance cascade → peace treaty → standing penalty
+- [x] **Scenario test**: Set up a game state where a Great Power should win the Council vote → verify victory
+- [x] **AI test**: AI Minor Nations respond correctly to trade/grants (relationship improves, eventually volunteer to join)
 - [ ] **Edge case tests**: All possible alliance/war/pact interaction combinations

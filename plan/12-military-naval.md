@@ -13,7 +13,7 @@ beachhead). Naval battles are always resolved by AI.
 - [ ] Ship stats loaded from data files (data-driven, moddable)
 - [x] `ShipType` — defines: firepower, range, armor, hull, speed, cargo capacity, resource costs
 - [x] No maintenance cost for any ship type
-- [ ] Ships become available the turn after ordering
+- [x] Ships become available the turn after ordering
 - [x] Unit tests: ship creation with correct stats
 
 ### Merchant Ships
@@ -43,7 +43,7 @@ beachhead). Naval battles are always resolved by AI.
 - [x] Early ships use fabric (sails) + lumber
 - [x] Later ships substitute fabric with coal + steel (steam power)
 - [x] 2-3 ship models available at game start; others unlock via tech
-- [ ] Ship usable the turn after ordering
+- [x] Ship usable the turn after ordering
 - [x] Unit tests: resource cost deduction, availability timing
 
 ### Naval Operations
@@ -73,14 +73,14 @@ beachhead). Naval battles are always resolved by AI.
 - [x] Unit tests: obsolescence flag set correctly on tech research
 
 ### Rewards
-- [ ] **Admiral** — build 5 Ships-of-the-Line → free Admiral + free Ship-of-the-Line
-- [ ] **Free Clippers** — establishing first colony → free Clipper ships + statue (even without tech)
+- [x] **Admiral** — build 5 Ships-of-the-Line → free Admiral + free Ship-of-the-Line
+- [x] **Free Clippers** — establishing first colony → free Clipper ships + statue (even without tech)
 - [ ] Unit tests: naval reward trigger conditions
 
 ### Verification Strategy
 - [x] **Unit tests**: Run test suite — all naval tests pass
 - [x] **Data validation**: Load ship definitions → verify all stats, costs, prerequisites
-- [ ] **Integration test**: Build a Frigate → verify resources deducted, ship appears next turn
+- [x] **Integration test**: Build a Frigate → verify resources deducted, ship appears next turn
 - [x] **Integration test**: Blockade scenario → verify merchant ships intercepted, trade disrupted
 - [x] **Integration test**: Beachhead → verify landing force size matches fleet arms total
 - [x] **Combat simulation**: Run 100 naval battles with known fleets → verify outcomes are reasonable

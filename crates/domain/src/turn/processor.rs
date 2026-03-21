@@ -1591,6 +1591,41 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                     .push((attacker_id, "Conquest medal awarded!".to_string()));
             }
 
+            // Free Clippers: first colony established (first MN province conquered)
+            if defender_type == NationType::MinorNation {
+                let already_has_colony = game.get_nation(attacker_id).is_some_and(|n| n.has_colony);
+                if !already_has_colony
+                    && let Some(attacker_nation) = game.get_nation_mut(attacker_id)
+                {
+                    use crate::map::UnitId;
+                    use crate::military::ships::{Ship, ShipType};
+                    attacker_nation.has_colony = true;
+                    let base_id = 5_000_000 + attacker_nation.id.0 * 100;
+                    attacker_nation.merchant_fleet.push(Ship::new(
+                        UnitId(base_id + 1),
+                        ShipType::Clipper,
+                        attacker_id,
+                    ));
+                    attacker_nation.merchant_fleet.push(Ship::new(
+                        UnitId(base_id + 2),
+                        ShipType::Clipper,
+                        attacker_id,
+                    ));
+                    let atk_colony_name = attacker_nation.name.clone();
+                    report.rewards_earned.push((
+                        attacker_id,
+                        format!(
+                            "{} receives free Clipper ships for establishing its first colony!",
+                            atk_colony_name
+                        ),
+                    ));
+                    report.newspaper_headlines.push(format!(
+                        "{} receives free Clipper ships for establishing its first colony!",
+                        atk_colony_name
+                    ));
+                }
+            }
+
             // Record event
             report
                 .events
@@ -2307,6 +2342,39 @@ fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnRepor
 
             report.incorporations.push((*minor_id, gp_id));
 
+            // Free Clippers: first colony established (MN voluntarily incorporated)
+            {
+                let already_has_colony = game.get_nation(gp_id).is_some_and(|n| n.has_colony);
+                if !already_has_colony && let Some(gp) = game.get_nation_mut(gp_id) {
+                    use crate::map::UnitId;
+                    use crate::military::ships::{Ship, ShipType};
+                    gp.has_colony = true;
+                    let base_id = 5_000_000 + gp.id.0 * 100;
+                    gp.merchant_fleet.push(Ship::new(
+                        UnitId(base_id + 1),
+                        ShipType::Clipper,
+                        gp_id,
+                    ));
+                    gp.merchant_fleet.push(Ship::new(
+                        UnitId(base_id + 2),
+                        ShipType::Clipper,
+                        gp_id,
+                    ));
+                    let gp_colony_name = gp.name.clone();
+                    report.rewards_earned.push((
+                        gp_id,
+                        format!(
+                            "{} receives free Clipper ships for establishing its first colony!",
+                            gp_colony_name
+                        ),
+                    ));
+                    report.newspaper_headlines.push(format!(
+                        "{} receives free Clipper ships for establishing its first colony!",
+                        gp_colony_name
+                    ));
+                }
+            }
+
             // Record in history
             game.history.push((
                 game.turn,
@@ -2387,9 +2455,11 @@ fn resolve_unit_upgrades(game: &mut GameState, report: &mut TurnReport) {
     }
 }
 
-/// Resolve rewards: Generals earned from arms buildup, capitol expansion from GP capital conquest.
+/// Resolve rewards: Generals earned from arms buildup, Admirals earned from Ship-of-the-Line
+/// buildup, free Clippers for first colony, capitol expansion from GP capital conquest.
 fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
     use crate::map::UnitId;
+    use crate::military::ships::{Ship, ShipType};
 
     let nation_ids: Vec<NationId> = game
         .nations
@@ -2452,6 +2522,62 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                 report
                     .newspaper_headlines
                     .push(format!("{} has earned a General!", nation_name));
+            }
+        }
+    }
+
+    // Admiral reward: track Ships-of-the-Line built per nation.
+    // When count >= 5 (and then every 5 more): earn an Admiral (free bonus Ship-of-the-Line).
+    for nation_id in &nation_ids {
+        let nation = match game.nations.iter().find(|n| n.id == *nation_id) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        // Count Ships-of-the-Line in warship fleet
+        let sol_count: u32 = nation
+            .warships
+            .iter()
+            .filter(|s| s.ship_type == ShipType::ShipOfTheLine)
+            .count() as u32;
+
+        let current_sol = sol_count.max(nation.total_ships_of_the_line_built);
+        let admirals_earned_now = nation.admirals_earned;
+
+        // Admiral thresholds: every 5 Ships-of-the-Line (5, 10, 15, ...)
+        let mut new_admirals = 0u32;
+        let mut threshold = 5u32;
+        let mut idx = 0u32;
+        while threshold <= current_sol {
+            if idx >= admirals_earned_now {
+                new_admirals += 1;
+            }
+            idx += 1;
+            threshold += 5;
+        }
+
+        if new_admirals > 0 || current_sol != nation.total_ships_of_the_line_built {
+            let nation = match game.nations.iter_mut().find(|n| n.id == *nation_id) {
+                Some(n) => n,
+                None => continue,
+            };
+            nation.total_ships_of_the_line_built = current_sol;
+
+            for _ in 0..new_admirals {
+                nation.admirals_earned += 1;
+                // Award a free Ship-of-the-Line as the Admiral bonus warship
+                let ship_id = UnitId(4_000_000 + nation.id.0 * 100 + nation.admirals_earned);
+                let bonus_ship = Ship::new(ship_id, ShipType::ShipOfTheLine, *nation_id);
+                nation.warships.push(bonus_ship);
+
+                let nation_name = nation.name.clone();
+                report.rewards_earned.push((
+                    *nation_id,
+                    format!("{} has earned an Admiral!", nation_name),
+                ));
+                report
+                    .newspaper_headlines
+                    .push(format!("{} has earned an Admiral!", nation_name));
             }
         }
     }
