@@ -332,10 +332,32 @@ fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
         }
     }
 
-    // Phase 2: apply connected resources to nations using mutable borrows
+    // Phase 2: apply connected resources to nations using mutable borrows,
+    // with AI difficulty bonus applied to non-human nations.
+    let human_id = game.human_player_nation;
+    let difficulty = game.difficulty;
     for (nation_id, resource, amount) in &production_data {
         if let Some(nation) = game.nations.iter_mut().find(|n| n.id == *nation_id) {
-            nation.add_resource(*resource, *amount);
+            // Apply AI difficulty bonus multiplier
+            let bonus_multiplier = match difficulty {
+                Difficulty::Hard => {
+                    if *nation_id != human_id {
+                        1.1
+                    } else {
+                        1.0
+                    }
+                }
+                Difficulty::NighOnImpossible => {
+                    if *nation_id != human_id {
+                        1.25
+                    } else {
+                        1.0
+                    }
+                }
+                _ => 1.0,
+            };
+            let adjusted = (*amount as f64 * bonus_multiplier).round() as u32;
+            nation.add_resource(*resource, adjusted);
         }
     }
 

@@ -70,9 +70,22 @@ pub struct BattleResult {
     pub medal_awards: Vec<(ArmyUnitType, u8)>,
 }
 
-/// Calculate total firepower for a list of units.
+/// Calculate the General bonus multiplier for a force.
+///
+/// If the force contains a General, all friendly units get a 5% firepower
+/// boost per General medal. Returns 1.0 if no General is present.
+fn general_bonus(units: &[ArmyUnit]) -> f64 {
+    if let Some(general) = units.iter().find(|u| u.unit_type == ArmyUnitType::General) {
+        1.0 + general.medals as f64 * 0.05
+    } else {
+        1.0
+    }
+}
+
+/// Calculate total firepower for a list of units, including General bonus.
 fn total_firepower(units: &[ArmyUnit]) -> f64 {
-    units.iter().map(|u| u.effective_firepower()).sum()
+    let base: f64 = units.iter().map(|u| u.effective_firepower()).sum();
+    base * general_bonus(units)
 }
 
 /// Count Militia units in a force.

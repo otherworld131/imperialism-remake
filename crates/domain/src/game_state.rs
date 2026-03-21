@@ -249,8 +249,21 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         nation.warships.push(frigate);
 
         // Assign AI personality for non-human Great Powers
-        if i != human_nation_index.min(generated.great_power_nations.len() - 1) {
+        let human_nation_index_clamped =
+            human_nation_index.min(generated.great_power_nations.len() - 1);
+        if i != human_nation_index_clamped {
             nation.ai_personality = Some(personality_for_nation_index(i));
+
+            // AI difficulty bonuses (applied to AI nations only, not human)
+            match difficulty {
+                Difficulty::Hard => {
+                    nation.treasury += Money::dollars(1000); // +$1,000 starting cash
+                }
+                Difficulty::NighOnImpossible => {
+                    nation.treasury += Money::dollars(5000); // +$5,000 starting cash
+                }
+                _ => {} // Normal/Easy/Introductory: no AI bonuses
+            }
         }
 
         nations.push(nation);
@@ -548,13 +561,23 @@ mod tests {
     fn new_game_hard_has_less_starting_cash() {
         let gs = new_game("test", Difficulty::Hard, 0);
         for nation in gs.great_powers() {
-            // $8,000 starting cash
-            assert_eq!(
-                nation.treasury,
-                Money::dollars(8000),
-                "{} should start with $8,000 on Hard",
-                nation.name
-            );
+            if nation.id == gs.human_player_nation {
+                // Human: $8,000 starting cash (no AI bonus)
+                assert_eq!(
+                    nation.treasury,
+                    Money::dollars(8000),
+                    "{} (human) should start with $8,000 on Hard",
+                    nation.name
+                );
+            } else {
+                // AI: $8,000 base + $1,000 AI difficulty bonus = $9,000
+                assert_eq!(
+                    nation.treasury,
+                    Money::dollars(9000),
+                    "{} (AI) should start with $9,000 on Hard ($8,000 + $1,000 bonus)",
+                    nation.name
+                );
+            }
 
             // No mills or factories
             assert!(
@@ -573,13 +596,23 @@ mod tests {
     fn new_game_noi_has_minimal_resources() {
         let gs = new_game("test", Difficulty::NighOnImpossible, 0);
         for nation in gs.great_powers() {
-            // $5,000 starting cash
-            assert_eq!(
-                nation.treasury,
-                Money::dollars(5000),
-                "{} should start with $5,000 on NOI",
-                nation.name
-            );
+            if nation.id == gs.human_player_nation {
+                // Human: $5,000 starting cash (no AI bonus)
+                assert_eq!(
+                    nation.treasury,
+                    Money::dollars(5000),
+                    "{} (human) should start with $5,000 on NOI",
+                    nation.name
+                );
+            } else {
+                // AI: $5,000 base + $5,000 AI difficulty bonus = $10,000
+                assert_eq!(
+                    nation.treasury,
+                    Money::dollars(10000),
+                    "{} (AI) should start with $10,000 on NOI ($5,000 + $5,000 bonus)",
+                    nation.name
+                );
+            }
 
             // Only 2 untrained workers
             assert_eq!(

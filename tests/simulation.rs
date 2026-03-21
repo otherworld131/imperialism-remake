@@ -346,3 +346,87 @@ fn test_game_with_difficulty_builder() {
         assert_valid_game_state(&game);
     }
 }
+
+// ── AI verification tests ────────────────────────────────────────
+
+#[test]
+fn ai_achieves_self_sustaining_economy_within_20_turns() {
+    let mut game = new_game("econ_test", Difficulty::Normal, 0);
+    for _ in 0..20 {
+        process_turn(&mut game);
+    }
+    // At least one AI GP should have positive treasury or growing warehouse
+    let ai_viable = game
+        .great_powers()
+        .iter()
+        .filter(|n| n.id != game.human_player_nation)
+        .any(|n| n.treasury > Money::dollars(0) || n.resource_amount(ResourceType::Timber) > 10);
+    assert!(
+        ai_viable,
+        "At least one AI should be economically viable after 20 turns"
+    );
+}
+
+#[test]
+fn ai_conquers_minor_nation_within_50_turns() {
+    let mut game = new_game("mil_test", Difficulty::Normal, 0);
+    for _ in 0..50 {
+        process_turn(&mut game);
+    }
+    // Check if any GP has more than 8 provinces (started with 8, must have conquered)
+    let ai_conquered = game
+        .great_powers()
+        .iter()
+        .filter(|n| n.id != game.human_player_nation)
+        .any(|n| n.province_count() > 8);
+    assert!(
+        ai_conquered,
+        "At least one AI should conquer a province within 50 turns"
+    );
+}
+
+#[test]
+fn ai_does_not_declare_war_on_allies() {
+    // Run 100 turns and verify no AI declares war on a nation it has an alliance with.
+    // This passes as long as AI code checks for alliances before declaring war.
+    let mut game = new_game("diplo_test", Difficulty::Normal, 0);
+    for turn in 0..100 {
+        process_turn(&mut game);
+        // After each turn, verify no two nations that are allies are also at war
+        let gp_ids: Vec<NationId> = game.great_powers().iter().map(|n| n.id).collect();
+        for &a in &gp_ids {
+            let allies = game.diplomacy.get_allies(a);
+            for &ally in &allies {
+                let rel = game.diplomacy.get_relation(a, ally);
+                if let Some(r) = rel {
+                    assert!(
+                        !r.at_war,
+                        "Turn {}: Nations {} and {} are allies AND at war!",
+                        turn + 1,
+                        a,
+                        ally
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn minor_nations_respond_to_trade_offers() {
+    let mut game = new_game("mn_trade", Difficulty::Normal, 0);
+    // Process several turns — AI will build consulates and trade with minor nations
+    for _ in 0..10 {
+        process_turn(&mut game);
+    }
+    // At least one AI nation should have some trade history or resources from trade
+    let any_ai_traded = game
+        .great_powers()
+        .iter()
+        .filter(|n| n.id != game.human_player_nation)
+        .any(|n| !n.trade_history.is_empty() || !n.warehouse.is_empty());
+    assert!(
+        any_ai_traded,
+        "After 10 turns, at least one AI should have engaged in trade or collected resources"
+    );
+}

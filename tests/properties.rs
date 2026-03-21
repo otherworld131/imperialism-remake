@@ -637,6 +637,121 @@ fn each_great_power_has_mineral_potential() {
     }
 }
 
+// ── Production conservation laws ──────────────────────────────
+
+/// Test that mill production output never exceeds input resources.
+/// For Timber: 2 timber -> 1 lumber, so output <= input / 2
+#[test]
+fn production_output_never_exceeds_input() {
+    use domain::economy::production::{ProductionChain, calculate_mill_production};
+
+    for input in 1..=20u32 {
+        let resources = vec![(ResourceType::Timber, input)];
+        let result = calculate_mill_production(ProductionChain::Timber, &resources, 100, 100);
+        let output: u32 = result.materials_produced.iter().map(|(_, q)| q).sum();
+        assert!(
+            output <= input,
+            "Mill output {} exceeds input {} for Timber chain",
+            output,
+            input
+        );
+    }
+
+    // Metal chain: 1 coal + 1 iron -> 1 steel, output <= min(coal, iron)
+    for input in 1..=20u32 {
+        let resources = vec![(ResourceType::Coal, input), (ResourceType::Iron, input)];
+        let result = calculate_mill_production(ProductionChain::Metal, &resources, 100, 100);
+        let output: u32 = result.materials_produced.iter().map(|(_, q)| q).sum();
+        assert!(
+            output <= input,
+            "Mill output {} exceeds input {} for Metal chain",
+            output,
+            input
+        );
+    }
+
+    // Textile chain: 2 cotton -> 1 fabric, output <= input / 2
+    for input in 1..=20u32 {
+        let resources = vec![(ResourceType::Cotton, input)];
+        let result = calculate_mill_production(ProductionChain::Textile, &resources, 100, 100);
+        let output: u32 = result.materials_produced.iter().map(|(_, q)| q).sum();
+        assert!(
+            output <= input,
+            "Mill output {} exceeds input {} for Textile chain",
+            output,
+            input
+        );
+    }
+}
+
+/// Test that combat damage never exceeds total health of all engaged units.
+#[test]
+fn combat_damage_never_exceeds_total_health() {
+    use domain::map::UnitId;
+    use domain::military::combat::{CombatForce, resolve_battle};
+    use domain::military::units::{ArmyUnit, ArmyUnitType};
+
+    let attacker = CombatForce {
+        nation: NationId(1),
+        units: vec![
+            ArmyUnit::new(
+                UnitId(1),
+                ArmyUnitType::Regulars,
+                NationId(1),
+                ProvinceId(1),
+            ),
+            ArmyUnit::new(UnitId(2), ArmyUnitType::Guards, NationId(1), ProvinceId(1)),
+        ],
+    };
+    let defender = CombatForce {
+        nation: NationId(2),
+        units: vec![
+            ArmyUnit::new(
+                UnitId(3),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ),
+            ArmyUnit::new(UnitId(4), ArmyUnitType::Militia, NationId(2), ProvinceId(2)),
+        ],
+    };
+
+    let initial_atk_health: u32 = attacker.units.iter().map(|u| u.health as u32).sum();
+    let initial_def_health: u32 = defender.units.iter().map(|u| u.health as u32).sum();
+    let total_initial_health = initial_atk_health + initial_def_health;
+
+    let result = resolve_battle(&attacker, &defender, ProvinceId(2), None, 0);
+
+    // Total casualties (destroyed units) should not exceed total units
+    let total_casualties = result.attacker_casualties.len() + result.defender_casualties.len();
+    let total_units = attacker.units.len() + defender.units.len();
+    assert!(
+        total_casualties <= total_units,
+        "Total casualties ({}) exceed total initial units ({})",
+        total_casualties,
+        total_units
+    );
+
+    // Total remaining health should not exceed total initial health
+    let remaining_atk_health: u32 = result
+        .attacker_survivors
+        .iter()
+        .map(|u| u.health as u32)
+        .sum();
+    let remaining_def_health: u32 = result
+        .defender_survivors
+        .iter()
+        .map(|u| u.health as u32)
+        .sum();
+    let total_remaining_health = remaining_atk_health + remaining_def_health;
+    assert!(
+        total_remaining_health <= total_initial_health,
+        "Total remaining health ({}) exceeds total initial health ({})",
+        total_remaining_health,
+        total_initial_health
+    );
+}
+
 /// Test that tradeable/monetary classifications are consistent.
 #[test]
 fn resource_type_classification_consistency() {

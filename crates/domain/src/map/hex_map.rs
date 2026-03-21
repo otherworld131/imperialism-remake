@@ -291,7 +291,7 @@ mod tests {
         // All should be at distance <= 2 and >= 1 from center
         for (coord, _) in &in_range {
             let d = center.distance(*coord);
-            assert!(d >= 1 && d <= 2);
+            assert!((1..=2).contains(&d));
         }
     }
 
