@@ -10,7 +10,7 @@ use crate::game_state::GameState;
 use crate::map::SettlementLevel;
 use crate::military::combat::{BattleResult, CombatForce, create_garrison, resolve_battle};
 use crate::military::naval::{NavalBattleResult, calculate_blockade_effect, resolve_naval_battle};
-use crate::military::units::ArmyUnitType;
+use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::turn::scoring::{CouncilVoteResult, calculate_score, run_council_vote};
 use crate::types::*;
 
@@ -1444,9 +1444,10 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
         }
 
         if result.attacker_won {
-            // Change province owner
+            // Change province owner and reset garrison (conquering nation has no garrison)
             if let Some(province) = game.get_province_mut(province_id) {
                 province.owner = attacker_id;
+                province.garrison_count = 0;
             }
 
             // Update nation province lists
@@ -1514,6 +1515,176 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
             report
                 .newspaper_headlines
                 .push(format!("{} repels attack on {}!", def_name, prov_name));
+        }
+
+        report.battles.push(result);
+    }
+
+    // ── Counter-attacks ──────────────────────────────────────────
+    // After all initial attacks resolve, check if any conquered province has
+    // the original defender's army units in an adjacent province.  If so,
+    // those units counter-attack the newly occupied province (one round only).
+    let conquered_provinces: Vec<(NationId, ProvinceId, NationId)> = report
+        .battles
+        .iter()
+        .filter(|b| b.attacker_won)
+        .map(|b| (b.attacker, b.province, b.defender))
+        .collect();
+
+    let mut counter_attacks: Vec<(NationId, ProvinceId)> = Vec::new();
+
+    for (_new_owner, conquered_prov_id, original_defender) in &conquered_provinces {
+        // Collect tiles that belong to the conquered province
+        let conquered_tiles: Vec<crate::hex::HexCoord> = game
+            .get_province(*conquered_prov_id)
+            .map(|p| p.tiles.clone())
+            .unwrap_or_default();
+
+        // Find all provinces adjacent to the conquered province
+        let mut adjacent_province_ids: Vec<ProvinceId> = Vec::new();
+        for tile_coord in &conquered_tiles {
+            for neighbor in tile_coord.neighbors() {
+                if let Some(tile) = game.hex_map.get_tile(neighbor)
+                    && let Some(adj_pid) = tile.province_id
+                    && adj_pid != *conquered_prov_id
+                    && !adjacent_province_ids.contains(&adj_pid)
+                {
+                    adjacent_province_ids.push(adj_pid);
+                }
+            }
+        }
+
+        // Check if the original defender has army units in any adjacent province
+        // that is still owned by the defender
+        let defender_nation = match game.get_nation(*original_defender) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        let has_adjacent_units = defender_nation.army.iter().any(|u| {
+            adjacent_province_ids.contains(&u.position)
+                && defender_nation.province_ids.contains(&u.position)
+        });
+
+        if has_adjacent_units
+            && !counter_attacks
+                .iter()
+                .any(|(_, p)| *p == *conquered_prov_id)
+        {
+            counter_attacks.push((*original_defender, *conquered_prov_id));
+        }
+    }
+
+    // Resolve counter-attacks (second pass — no further counter-attacks after this)
+    for (counter_attacker_id, target_province_id) in counter_attacks {
+        let new_owner_id = match game.get_province(target_province_id) {
+            Some(p) => p.owner,
+            None => continue,
+        };
+
+        // The counter-attacker uses their army units from adjacent provinces
+        let counter_units: Vec<ArmyUnit> = match game.get_nation(counter_attacker_id) {
+            Some(n) => n.army.clone(),
+            None => continue,
+        };
+
+        if counter_units.is_empty() {
+            continue;
+        }
+
+        let counter_force = CombatForce {
+            nation: counter_attacker_id,
+            units: counter_units,
+        };
+
+        // Defender of counter-attack is the new occupier — use surviving attacker army
+        let occupier_units: Vec<ArmyUnit> = match game.get_nation(new_owner_id) {
+            Some(n) => n.army.clone(),
+            None => continue,
+        };
+
+        let defender_force = CombatForce {
+            nation: new_owner_id,
+            units: occupier_units,
+        };
+
+        let (battle_terrain, battle_fort_level) = game
+            .get_province(target_province_id)
+            .and_then(|prov| {
+                game.hex_map.get_tile(prov.capital_tile).map(|tile| {
+                    let terrain = tile.terrain();
+                    let fort_level = if tile.infrastructure.has_fort {
+                        tile.infrastructure.fort_level
+                    } else {
+                        0
+                    };
+                    (Some(terrain), fort_level)
+                })
+            })
+            .unwrap_or((None, 0));
+
+        let result = resolve_battle(
+            &counter_force,
+            &defender_force,
+            target_province_id,
+            battle_terrain,
+            battle_fort_level,
+        );
+
+        // Update counter-attacker's surviving army
+        if let Some(ca_nation) = game.get_nation_mut(counter_attacker_id) {
+            ca_nation.army = result.attacker_survivors.clone();
+        }
+
+        // Update occupier's surviving army
+        if let Some(occ_nation) = game.get_nation_mut(new_owner_id) {
+            occ_nation.army = result.defender_survivors.clone();
+        }
+
+        if result.attacker_won {
+            // Counter-attack succeeds: province returns to original defender
+            if let Some(province) = game.get_province_mut(target_province_id) {
+                province.owner = counter_attacker_id;
+            }
+            if let Some(occ_nation) = game.get_nation_mut(new_owner_id) {
+                occ_nation
+                    .province_ids
+                    .retain(|pid| *pid != target_province_id);
+            }
+            if let Some(ca_nation) = game.get_nation_mut(counter_attacker_id) {
+                ca_nation.add_province(target_province_id);
+            }
+
+            // Reset garrison to 0 on re-conquered province
+            if let Some(province) = game.get_province_mut(target_province_id) {
+                province.garrison_count = 0;
+            }
+
+            let ca_name = game
+                .get_nation(counter_attacker_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+            let prov_name = game
+                .get_province(target_province_id)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+            report.newspaper_headlines.push(format!(
+                "{} counter-attacks and recaptures {}!",
+                ca_name, prov_name
+            ));
+        } else {
+            let occ_name = game
+                .get_nation(new_owner_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+            let prov_name = game
+                .get_province(target_province_id)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+            report.newspaper_headlines.push(format!(
+                "{} repels counter-attack on {}!",
+                occ_name, prov_name
+            ));
         }
 
         report.battles.push(result);
@@ -5169,5 +5340,232 @@ mod tests {
             immigration >= 1,
             "Immigration confirms CannedFood + Clothing + Furniture were consumed"
         );
+    }
+
+    // ── Counter-attack tests ────────────────────────────────────
+
+    /// Build a game state with three adjacent provinces for counter-attack testing.
+    ///
+    /// Layout on the hex grid:
+    /// - Province 1 (Nation 1, attacker): tile (0,0)
+    /// - Province 2 (Nation 2, defender): tile (1,0)  ← adjacent to Province 1
+    /// - Province 3 (Nation 2, defender): tile (2,0)  ← adjacent to Province 2
+    ///
+    /// Nation 1 has a strong army. Nation 2 has army units in Province 3.
+    fn test_game_for_counter_attack() -> GameState {
+        use crate::map::UnitId;
+
+        let coord1 = HexCoord::new(0, 0);
+        let coord2 = HexCoord::new(1, 0);
+        let coord3 = HexCoord::new(2, 0);
+
+        let mut hex_map = HexMap::new(10, 10);
+        let tile1 = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        let tile2 = Tile::with_province(TerrainType::DryPlains, ProvinceId(2));
+        let tile3 = Tile::with_province(TerrainType::DryPlains, ProvinceId(3));
+        hex_map.set_tile(coord1, tile1);
+        hex_map.set_tile(coord2, tile2);
+        hex_map.set_tile(coord3, tile3);
+
+        let province1 = Province::new(
+            ProvinceId(1),
+            "Attacker Land".to_string(),
+            NationId(1),
+            coord1,
+            vec![coord1],
+            4,
+        );
+        let province2 = Province::new(
+            ProvinceId(2),
+            "Target Province".to_string(),
+            NationId(2),
+            coord2,
+            vec![coord2],
+            3,
+        );
+        let province3 = Province::new(
+            ProvinceId(3),
+            "Defender Rear".to_string(),
+            NationId(2),
+            coord3,
+            vec![coord3],
+            3,
+        );
+
+        let mut nation1 = Nation::new(
+            NationId(1),
+            "Attacker".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation1.treasury = Money::dollars(10000);
+        // Give attacker a strong army
+        for i in 0..6 {
+            nation1.army.push(ArmyUnit::new(
+                UnitId(100 + i),
+                ArmyUnitType::Guards,
+                NationId(1),
+                ProvinceId(1),
+            ));
+        }
+
+        let mut nation2 = Nation::new(
+            NationId(2),
+            "Defender".to_string(),
+            NationColor::Red,
+            NationType::MinorNation,
+            ProvinceId(2),
+        );
+        nation2.add_province(ProvinceId(3));
+
+        GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province1, province2, province3],
+            nations: vec![nation1, nation2],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn counter_attack_triggers_when_defender_has_adjacent_units() {
+        use crate::map::UnitId;
+
+        let mut game = test_game_for_counter_attack();
+
+        // Give defender army units in Province 3 (adjacent to Province 2)
+        let nation2 = game.get_nation_mut(NationId(2)).unwrap();
+        for i in 0..5 {
+            nation2.army.push(ArmyUnit::new(
+                UnitId(200 + i),
+                ArmyUnitType::Guards,
+                NationId(2),
+                ProvinceId(3), // stationed in Province 3
+            ));
+        }
+
+        // Queue attack on Province 2
+        game.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.diplomacy.declare_war(NationId(1), NationId(2));
+
+        let report = process_turn(&mut game);
+
+        // Should have at least 2 battles: initial attack + counter-attack
+        assert!(
+            report.battles.len() >= 2,
+            "Should have counter-attack battle; got {} battles",
+            report.battles.len()
+        );
+
+        // Check that a counter-attack headline was generated
+        let has_counter_attack_headline = report
+            .newspaper_headlines
+            .iter()
+            .any(|h| h.contains("counter-attack") || h.contains("repels counter-attack"));
+        assert!(
+            has_counter_attack_headline,
+            "Should have counter-attack headline; headlines: {:?}",
+            report.newspaper_headlines
+        );
+    }
+
+    #[test]
+    fn no_counter_attack_when_no_adjacent_units() {
+        let mut game = test_game_for_counter_attack();
+
+        // Defender has NO army units (only garrison)
+        // Queue attack on Province 2
+        game.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.diplomacy.declare_war(NationId(1), NationId(2));
+
+        let report = process_turn(&mut game);
+
+        // Should have exactly 1 battle (the initial attack only)
+        assert_eq!(
+            report.battles.len(),
+            1,
+            "Should have only 1 battle (no counter-attack); got {}",
+            report.battles.len()
+        );
+
+        // No counter-attack headline
+        let has_counter_attack_headline = report
+            .newspaper_headlines
+            .iter()
+            .any(|h| h.contains("counter-attack"));
+        assert!(
+            !has_counter_attack_headline,
+            "Should not have counter-attack headline"
+        );
+    }
+
+    #[test]
+    fn garrison_resets_to_zero_on_conquest() {
+        let mut game = test_game_for_counter_attack();
+
+        // Province 2 starts with garrison_count = 3 (Minor Nation)
+        assert_eq!(
+            game.get_province(ProvinceId(2)).unwrap().garrison_count,
+            3,
+            "Province 2 should start with garrison_count = 3"
+        );
+
+        // Queue attack on Province 2 (attacker has strong army, will win)
+        game.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.diplomacy.declare_war(NationId(1), NationId(2));
+
+        let report = process_turn(&mut game);
+
+        // Verify attack succeeded
+        assert!(
+            report.battles[0].attacker_won,
+            "Attacker should win with 6 Guards vs 3 Militia"
+        );
+
+        // After conquest, garrison_count should be 0
+        let province = game.get_province(ProvinceId(2)).unwrap();
+        assert_eq!(
+            province.garrison_count, 0,
+            "Garrison should be 0 after conquest (conquering nation must station own units)"
+        );
+        assert_eq!(
+            province.owner,
+            NationId(1),
+            "Province should now belong to attacker"
+        );
+    }
+
+    #[test]
+    fn garrison_uses_new_owner_type_after_conquest() {
+        use crate::military::combat::create_garrison;
+
+        let mut game = test_game_for_counter_attack();
+
+        // Province 2 is Minor Nation (garrison_count=3).
+        // After being conquered by GP Nation 1, garrison_count = 0.
+        // But if garrison is rebuilt, it should use GP type (4 Militia).
+        game.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.diplomacy.declare_war(NationId(1), NationId(2));
+
+        process_turn(&mut game);
+
+        // Province now owned by Nation 1 (Great Power)
+        let province = game.get_province(ProvinceId(2)).unwrap();
+        assert_eq!(province.owner, NationId(1));
+
+        // Verify that create_garrison with the new owner type gives the GP amount
+        let new_owner_type = game.get_nation(NationId(1)).unwrap().nation_type;
+        let garrison = create_garrison(new_owner_type);
+        assert_eq!(garrison.len(), 4, "GP garrison should have 4 Militia units");
     }
 }

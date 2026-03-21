@@ -65,14 +65,14 @@ The Council of Governors voting system is the primary victory path.
 - [ ] Unit tests: standing impact on treaty acceptance probability
 
 ### Council of Governors Voting
-- [ ] Each province has a governor who votes
-- [ ] Minor Nation governors favor powers offering beneficial trade
-- [ ] Great Power governors favor militarily strong nations
-- [ ] Election held every decade (every 40 turns)
-- [ ] Two-thirds majority = victory
-- [ ] If no majority by 1915 (turn 400), most governors wins
-- [ ] Unit tests: vote counting, majority calculation
-- [ ] Unit tests: governor preference calculations (trade-based, military-based)
+- [x] Each province has a governor who votes
+- [x] Minor Nation governors favor powers offering beneficial trade
+- [x] Great Power governors favor militarily strong nations
+- [x] Election held every decade (every 40 turns)
+- [x] Two-thirds majority = victory
+- [x] If no majority by 1915 (turn 400), most governors wins
+- [x] Unit tests: vote counting, majority calculation
+- [x] Unit tests: governor preference calculations (trade-based, military-based)
 
 ### Verification Strategy
 - [x] **Unit tests**: Run test suite — all diplomacy tests pass

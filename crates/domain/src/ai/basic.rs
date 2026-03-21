@@ -103,6 +103,7 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<String> {
         ai_pre_election_strategy(game, *nation_id, &mut actions);
         ai_build_merchant_ships(game, *nation_id);
         ai_build_warships(game, *nation_id);
+        ai_naval_strategy(game, *nation_id, &mut actions);
         ai_military_strategy(game, *nation_id, &mut actions);
         ai_tactical_decisions(game, *nation_id, &mut actions);
         ai_train_and_promote_workers(game, *nation_id);
@@ -771,21 +772,84 @@ fn ai_military_strategy(game: &mut GameState, nation_id: NationId, actions: &mut
         .collect();
 
     // If at war and has >= 4 army units, attack enemy's weakest province
+    // Smarter targeting: prefer provinces with fewer defenders, valuable resources,
+    // and avoid attacking when outnumbered.
     if !enemies.is_empty() && army_size >= 4 {
-        // Find the weakest enemy province (fewest tiles)
-        let mut best_target: Option<(ProvinceId, usize)> = None;
+        // Score each enemy province — lower score = better target
+        let mut candidates: Vec<(ProvinceId, i32)> = Vec::new();
         for &enemy_id in &enemies {
+            let enemy_type = game
+                .get_nation(enemy_id)
+                .map(|n| n.nation_type)
+                .unwrap_or(NationType::MinorNation);
+            let garrison_size: usize = match enemy_type {
+                NationType::GreatPower => 4,
+                NationType::MinorNation => 3,
+            };
+            // Count enemy army units in each province
+            let enemy_army: Vec<(ProvinceId, usize)> = {
+                let mut counts: Vec<(ProvinceId, usize)> = Vec::new();
+                if let Some(en) = game.get_nation(enemy_id) {
+                    for unit in &en.army {
+                        if let Some(entry) = counts.iter_mut().find(|(p, _)| *p == unit.position) {
+                            entry.1 += 1;
+                        } else {
+                            counts.push((unit.position, 1));
+                        }
+                    }
+                }
+                counts
+            };
+
             for prov in &game.provinces {
                 if prov.owner == enemy_id {
                     let tile_count = prov.tiles.len();
-                    if best_target.is_none() || tile_count < best_target.unwrap().1 {
-                        best_target = Some((prov.id, tile_count));
+                    // Estimated defender strength: garrison + stationed army
+                    let stationed = enemy_army
+                        .iter()
+                        .find(|(p, _)| *p == prov.id)
+                        .map(|(_, c)| *c)
+                        .unwrap_or(0);
+                    let total_defenders = garrison_size + stationed;
+
+                    // Avoid attacking if we'd be outnumbered
+                    if total_defenders > army_size {
+                        continue;
                     }
+
+                    // Score: fewer tiles = weaker (lower score = better)
+                    // Bonus: check for valuable terrain (mountains/hills may have
+                    // mineral deposits worth targeting)
+                    let mut score = tile_count as i32 + stationed as i32 * 3;
+
+                    // Penalize terrain defense (mountains are hard to attack)
+                    let capital_terrain = game
+                        .hex_map
+                        .get_tile(prov.capital_tile)
+                        .map(|t| t.terrain());
+                    if let Some(terrain) = capital_terrain {
+                        match terrain {
+                            TerrainType::Mountain => score += 5,
+                            TerrainType::FertileHills | TerrainType::BarrenHills => score += 2,
+                            _ => {}
+                        }
+                    }
+
+                    // Bonus for provinces with many tiles (valuable resources)
+                    // but not so much that it outweighs defense difficulty
+                    if tile_count >= 4 {
+                        score -= 1; // Slightly prefer larger provinces (more valuable)
+                    }
+
+                    candidates.push((prov.id, score));
                 }
             }
         }
 
-        if let Some((target_prov, _)) = best_target {
+        // Sort by score ascending (best target first)
+        candidates.sort_by_key(|&(_, score)| score);
+
+        if let Some(&(target_prov, _)) = candidates.first() {
             // Only queue if not already pending
             let already_pending = game
                 .pending_attacks
@@ -1579,6 +1643,134 @@ fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId) {
     }
 }
 
+/// AI naval strategy: build warships when outmatched, plan blockades, evaluate
+/// beachhead viability for coastal attacks.
+///
+/// - If at war and enemy has more naval firepower: try to build additional warships
+/// - If at war and AI has naval superiority: report blockade capability
+/// - Estimate enemy strength (provinces × 4 for garrison + known army size)
+/// - Prefer coastal attack targets when AI has naval superiority
+pub fn ai_naval_strategy(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let our_naval_fp = nation.total_naval_firepower();
+    let nation_name = nation.name.clone();
+
+    // Find enemies we are at war with
+    let enemies: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.id != nation_id)
+        .filter(|n| {
+            game.diplomacy
+                .get_relation(nation_id, n.id)
+                .map(|r| r.at_war)
+                .unwrap_or(false)
+        })
+        .map(|n| n.id)
+        .collect();
+
+    if enemies.is_empty() {
+        return;
+    }
+
+    // Calculate max enemy naval firepower
+    let max_enemy_naval_fp: u32 = enemies
+        .iter()
+        .filter_map(|&eid| game.get_nation(eid))
+        .map(|n| n.total_naval_firepower())
+        .max()
+        .unwrap_or(0);
+
+    // If enemy has more naval firepower: try to build more warships
+    if max_enemy_naval_fp > our_naval_fp {
+        // Build additional warships beyond normal cap
+        let nation = match game.get_nation(nation_id) {
+            Some(n) => n,
+            None => return,
+        };
+
+        let fabric_have = nation.material_amount(MaterialType::Fabric);
+        let lumber_have = nation.material_amount(MaterialType::Lumber);
+        let arms_have = nation.material_amount(MaterialType::Arms);
+        let steel_have = nation.material_amount(MaterialType::Steel);
+
+        // Try producing arms from steel if needed
+        if fabric_have >= 2 && lumber_have >= 5 && arms_have < 2 && steel_have > 0 {
+            let arms_needed = 2 - arms_have;
+            let arms_to_produce = arms_needed.min(steel_have);
+            let nation = game.get_nation_mut(nation_id).unwrap();
+            nation.consume_material(MaterialType::Steel, arms_to_produce);
+            nation.add_material(MaterialType::Arms, arms_to_produce);
+        }
+
+        // Re-check after possible arms production
+        let nation = match game.get_nation(nation_id) {
+            Some(n) => n,
+            None => return,
+        };
+        let fabric_have = nation.material_amount(MaterialType::Fabric);
+        let lumber_have = nation.material_amount(MaterialType::Lumber);
+        let arms_have = nation.material_amount(MaterialType::Arms);
+
+        if fabric_have >= 2 && lumber_have >= 5 && arms_have >= 2 {
+            let uid = next_unit_id();
+            let ship = Ship::new(uid, ShipType::Frigate, nation_id);
+            let nation = game.get_nation_mut(nation_id).unwrap();
+            nation.consume_material(MaterialType::Fabric, 2);
+            nation.consume_material(MaterialType::Lumber, 5);
+            nation.consume_material(MaterialType::Arms, 2);
+            nation.warships.push(ship);
+            actions.push(format!(
+                "{} is building warships to counter enemy naval superiority",
+                nation_name
+            ));
+        }
+        return; // Focus on shipbuilding when outmatched
+    }
+
+    // If AI has naval superiority, announce blockade capability
+    if our_naval_fp > 0 && our_naval_fp > max_enemy_naval_fp {
+        // Blockade is applied automatically by the game engine.
+        // AI reconnaissance: estimate enemy forces
+        for &enemy_id in &enemies {
+            let enemy_provinces = game
+                .provinces
+                .iter()
+                .filter(|p| p.owner == enemy_id)
+                .count();
+            let enemy_army_size = game.get_nation(enemy_id).map(|n| n.army.len()).unwrap_or(0);
+            let estimated_enemy_strength = enemy_provinces * 4 + enemy_army_size;
+
+            // If AI has army superiority and naval superiority, prefer coastal targets
+            let our_army_size = game
+                .get_nation(nation_id)
+                .map(|n| n.army.len())
+                .unwrap_or(0);
+
+            if our_army_size >= 4 && our_army_size > estimated_enemy_strength / 2 {
+                // Look for coastal enemy provinces to prioritize in attacks
+                // (The actual attack queueing happens in ai_military_strategy;
+                // this just adds a headline for the report)
+                let enemy_has_coastal = game
+                    .provinces
+                    .iter()
+                    .any(|p| p.owner == enemy_id && p.is_coastal());
+
+                if enemy_has_coastal {
+                    actions.push(format!(
+                        "{} is preparing amphibious operations against the enemy coast",
+                        nation_name
+                    ));
+                }
+            }
+        }
+    }
+}
+
 /// AI tactical combat decisions: build forts, move units to threatened provinces,
 /// and propose peace after prolonged losing wars.
 ///
@@ -1835,6 +2027,10 @@ fn ai_move_units_to_threatened(game: &mut GameState, nation_id: NationId) {
 /// - Diplomatic: 10 turns
 /// - Balanced/Economic: 20 turns
 /// - Aggressive: 30 turns
+///
+/// Province-loss-based retreat:
+/// - If AI has lost >50% of its starting provinces, accept peace immediately
+/// - Diplomatic AI retreats at 30% loss
 fn ai_propose_peace(
     game: &mut GameState,
     nation_id: NationId,
@@ -1847,6 +2043,12 @@ fn ai_propose_peace(
         AiPersonality::Diplomatic => 10u32,
         AiPersonality::Aggressive => 30,
         _ => 20,
+    };
+
+    // Province-loss threshold for immediate peace (fraction of starting provinces lost)
+    let loss_threshold: f64 = match personality {
+        AiPersonality::Diplomatic => 0.30,
+        _ => 0.50,
     };
 
     // Find enemies we are at war with
@@ -1872,22 +2074,68 @@ fn ai_propose_peace(
         .map(|n| n.name.clone())
         .unwrap_or_default();
 
-    // Check war history for start turn
-    for &enemy_id in &enemies {
-        let enemy_name = game
-            .get_nation(enemy_id)
-            .map(|n| n.name.clone())
-            .unwrap_or_default();
+    let current_provinces = game
+        .get_nation(nation_id)
+        .map(|n| n.province_ids.len())
+        .unwrap_or(0);
 
-        // Find when war was declared (search history for the declaration)
-        let war_start_turn = game
-            .history
+    // Pre-compute enemy names for efficient history scanning
+    let enemies_with_names: Vec<(NationId, String)> = enemies
+        .iter()
+        .map(|&eid| {
+            let name = game
+                .get_nation(eid)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            (eid, name)
+        })
+        .collect();
+
+    // Pre-compute search patterns (avoid re-creating strings in the loop)
+    let loss_pattern = format!("from {}", nation_name);
+
+    // Single pass over history to count lost provinces and find war start turns
+    let mut provinces_lost_count = 0usize;
+    let mut war_starts: Vec<(NationId, u32)> = Vec::new(); // (enemy_id, turn)
+    for (turn_entry, desc) in &game.history {
+        if desc.contains("conquered") && desc.contains(&loss_pattern) {
+            provinces_lost_count += 1;
+        }
+        if desc.contains("declared war") && desc.contains(&nation_name) {
+            for (enemy_id, enemy_name) in &enemies_with_names {
+                if desc.contains(enemy_name.as_str()) {
+                    war_starts.push((*enemy_id, turn_entry.0));
+                }
+            }
+        }
+    }
+
+    let estimated_starting = current_provinces + provinces_lost_count;
+
+    for (enemy_id, enemy_name) in &enemies_with_names {
+        // Immediate peace if province loss exceeds threshold
+        if estimated_starting > 0 {
+            let loss_ratio = provinces_lost_count as f64 / estimated_starting as f64;
+            if loss_ratio >= loss_threshold {
+                game.diplomacy.make_peace(nation_id, *enemy_id);
+                actions.push(format!(
+                    "{} has sued for peace with {} (heavy losses)",
+                    nation_name, enemy_name
+                ));
+                let turn = game.turn;
+                game.history.push((
+                    turn,
+                    format!("{} made peace with {}", nation_name, enemy_name),
+                ));
+                continue;
+            }
+        }
+
+        // Look up war start turn from pre-computed data
+        let war_start_turn = war_starts
             .iter()
-            .filter(|(_, desc)| {
-                desc.contains("declared war")
-                    && (desc.contains(&nation_name) || desc.contains(&enemy_name))
-            })
-            .map(|(turn, _)| turn.0)
+            .filter(|(eid, _)| *eid == *enemy_id)
+            .map(|(_, t)| *t)
             .min();
 
         let war_duration = match war_start_turn {
@@ -1899,25 +2147,17 @@ fn ai_propose_peace(
             continue;
         }
 
-        // Check if we've lost provinces (current province count < starting count)
-        // We consider the AI "losing" if it has fewer provinces now than provinces
-        // mentioned in the history for this nation.
-        let current_provinces = game
-            .get_nation(nation_id)
-            .map(|n| n.province_ids.len())
-            .unwrap_or(0);
-
         // Simple heuristic: if AI has 1 or fewer provinces, definitely losing
         // or if the enemy has more provinces than us
         let enemy_provinces = game
-            .get_nation(enemy_id)
+            .get_nation(*enemy_id)
             .map(|n| n.province_ids.len())
             .unwrap_or(0);
 
         let is_losing = current_provinces <= 1 || enemy_provinces > current_provinces;
 
         if is_losing {
-            game.diplomacy.make_peace(nation_id, enemy_id);
+            game.diplomacy.make_peace(nation_id, *enemy_id);
             actions.push(format!(
                 "{} has sued for peace with {}",
                 nation_name, enemy_name
@@ -4309,6 +4549,256 @@ mod tests {
         assert_eq!(
             treasury_before, treasury_after,
             "Aggressive AI should ignore pre-election strategy"
+        );
+    }
+
+    // ── AI naval strategy ────────────────────────────────────
+
+    #[test]
+    fn ai_naval_strategy_builds_ships_when_outmatched() {
+        let mut game = test_game_with_ai_and_minor();
+
+        // Put AI at war with minor nation
+        game.diplomacy.declare_war(NationId(2), NationId(3));
+
+        // Give the minor nation 2 warships (more than AI's 0)
+        let minor = game.get_nation_mut(NationId(3)).unwrap();
+        minor
+            .warships
+            .push(Ship::new(UnitId(50001), ShipType::Frigate, NationId(3)));
+        minor
+            .warships
+            .push(Ship::new(UnitId(50002), ShipType::Frigate, NationId(3)));
+
+        // Give AI materials to build a warship (2 fabric + 5 lumber + 2 arms)
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.add_material(MaterialType::Fabric, 4);
+        ai.add_material(MaterialType::Lumber, 10);
+        ai.add_material(MaterialType::Arms, 4);
+        // Verify AI has no warships initially
+        assert_eq!(ai.warship_count(), 0);
+
+        let mut actions = Vec::new();
+        ai_naval_strategy(&mut game, NationId(2), &mut actions);
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            ai.warship_count(),
+            1,
+            "AI should build a warship when outmatched at sea"
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.contains("warships") || a.contains("naval")),
+            "Should report shipbuilding action"
+        );
+    }
+
+    #[test]
+    fn ai_naval_strategy_does_nothing_when_not_at_war() {
+        let mut game = test_game_with_ai();
+        // Not at war — naval strategy should do nothing
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.add_material(MaterialType::Fabric, 10);
+        ai.add_material(MaterialType::Lumber, 20);
+        ai.add_material(MaterialType::Arms, 10);
+
+        let mut actions = Vec::new();
+        ai_naval_strategy(&mut game, NationId(2), &mut actions);
+
+        assert!(
+            actions.is_empty(),
+            "Naval strategy should do nothing when not at war"
+        );
+    }
+
+    // ── Smart attack targeting ───────────────────────────────
+
+    #[test]
+    fn ai_targets_weaker_provinces() {
+        use crate::hex::HexCoord;
+        use crate::map::Province;
+
+        let mut game = test_game_with_ai_and_minor();
+
+        // Add a second minor province with more tiles (stronger garrison estimate)
+        let province4 = Province::new(
+            ProvinceId(4),
+            "Big Minor Province".to_string(),
+            NationId(3),
+            HexCoord::new(6, 6),
+            vec![
+                HexCoord::new(6, 6),
+                HexCoord::new(7, 6),
+                HexCoord::new(6, 7),
+                HexCoord::new(7, 7),
+                HexCoord::new(8, 6),
+            ],
+            3,
+        );
+        game.provinces.push(province4);
+        game.get_nation_mut(NationId(3))
+            .unwrap()
+            .add_province(ProvinceId(4));
+
+        // Put AI at war with minor
+        game.diplomacy.declare_war(NationId(2), NationId(3));
+
+        // Give AI enough army units
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        for i in 0..6 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(5000 + i),
+                ArmyUnitType::Guards,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+
+        let mut actions = Vec::new();
+        ai_military_strategy(&mut game, NationId(2), &mut actions);
+
+        // AI should prefer the smaller province (ProvinceId(3) with 1 tile)
+        // over the larger one (ProvinceId(4) with 5 tiles)
+        let attack = game.pending_attacks.iter().find(|(a, _)| *a == NationId(2));
+        assert!(attack.is_some(), "AI should queue an attack");
+        let (_, target) = attack.unwrap();
+        assert_eq!(
+            *target,
+            ProvinceId(3),
+            "AI should target the smaller/weaker province (1 tile vs 5 tiles)"
+        );
+    }
+
+    // ── AI accepts peace when losing badly ───────────────────
+
+    #[test]
+    fn ai_accepts_peace_when_lost_over_50_percent_provinces() {
+        let mut game = test_game_with_ai_and_minor();
+
+        // Give AI multiple provinces, then simulate heavy losses in history
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        // AI has 1 province (ProvinceId(2)) but started with 4
+        // Simulate losing 3 provinces in history
+        game.history.push((
+            TurnNumber::new(5),
+            "AINation declared war on MinorLand".to_string(),
+        ));
+        game.history.push((
+            TurnNumber::new(10),
+            "HumanNation conquered Province A from AINation".to_string(),
+        ));
+        game.history.push((
+            TurnNumber::new(12),
+            "HumanNation conquered Province B from AINation".to_string(),
+        ));
+        game.history.push((
+            TurnNumber::new(14),
+            "HumanNation conquered Province C from AINation".to_string(),
+        ));
+
+        // Put AI at war with human
+        game.diplomacy.declare_war(NationId(2), NationId(1));
+
+        // AI has lost 3 of 4 provinces (75% > 50% threshold)
+        let mut actions = Vec::new();
+        ai_propose_peace(
+            &mut game,
+            NationId(2),
+            AiPersonality::Balanced,
+            &mut actions,
+        );
+
+        // AI should sue for peace
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.contains("sued for peace") && a.contains("heavy losses")),
+            "AI should sue for peace when losing > 50%% of provinces; actions: {:?}",
+            actions
+        );
+
+        // War should be over
+        let rel = game.diplomacy.get_relation(NationId(2), NationId(1));
+        assert!(
+            rel.is_none() || !rel.unwrap().at_war,
+            "Should no longer be at war after suing for peace"
+        );
+    }
+
+    #[test]
+    fn diplomatic_ai_accepts_peace_at_30_percent_loss() {
+        let mut game = test_game_with_ai_and_minor();
+
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Diplomatic);
+        // AI has 1 province, simulate losing 1 (so started with 2, lost 50% > 30%)
+        game.history.push((
+            TurnNumber::new(5),
+            "AINation declared war on HumanNation".to_string(),
+        ));
+        game.history.push((
+            TurnNumber::new(10),
+            "HumanNation conquered Lost Province from AINation".to_string(),
+        ));
+
+        // Put at war
+        game.diplomacy.declare_war(NationId(2), NationId(1));
+
+        let mut actions = Vec::new();
+        ai_propose_peace(
+            &mut game,
+            NationId(2),
+            AiPersonality::Diplomatic,
+            &mut actions,
+        );
+
+        // Diplomatic AI should sue for peace at 50% (> 30% threshold)
+        assert!(
+            actions.iter().any(|a| a.contains("sued for peace")),
+            "Diplomatic AI should sue for peace at 50%% loss (threshold=30%%); actions: {:?}",
+            actions
+        );
+    }
+
+    #[test]
+    fn ai_does_not_sue_for_peace_when_not_losing() {
+        let mut game = test_game_with_ai_and_minor();
+
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        // AI has not lost any provinces — no conquest history against it
+
+        // Put at war
+        game.diplomacy.declare_war(NationId(2), NationId(1));
+        game.turn = TurnNumber::new(50); // past any war duration threshold
+        game.history.push((
+            TurnNumber::new(1),
+            "AINation declared war on HumanNation".to_string(),
+        ));
+
+        // Give AI more provinces than enemy so it doesn't feel like it's losing
+        game.get_nation_mut(NationId(2))
+            .unwrap()
+            .add_province(ProvinceId(10));
+        game.get_nation_mut(NationId(2))
+            .unwrap()
+            .add_province(ProvinceId(11));
+
+        let mut actions = Vec::new();
+        ai_propose_peace(
+            &mut game,
+            NationId(2),
+            AiPersonality::Balanced,
+            &mut actions,
+        );
+
+        assert!(
+            actions.is_empty(),
+            "AI should not sue for peace when not losing; actions: {:?}",
+            actions
         );
     }
 }

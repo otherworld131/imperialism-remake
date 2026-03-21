@@ -11,16 +11,16 @@ or by having the most governors when the game reaches 1915. Score tracks overall
 - [x] Each province has one governor
 - [x] Total governors = total provinces in the game (7×8 + 16×4 = 120 in standard game)
 - [x] Conquered provinces' governors belong to the conqueror
-- [ ] Minor Nation governors' voting preference:
-  - [ ] Favor powers offering beneficial trade (trade volume, subsidy level)
-  - [ ] Favor powers with high diplomatic relationship scores
+- [x] Minor Nation governors' voting preference:
+  - [x] Favor powers offering beneficial trade (trade volume, subsidy level)
+  - [x] Favor powers with high diplomatic relationship scores
 - [x] Great Power governors' voting preference:
   - [x] Favor the militarily strongest nations
 - [ ] Election held every decade (every 40 turns): 1825, 1835, 1845, ..., 1915
 - [x] Two-thirds majority (≥ 80 out of 120) = immediate victory
 - [x] If no majority by 1915: most governors wins
 - [x] Unit tests: governor vote counting and majority calculation
-- [ ] Unit tests: governor preference calculations (trade-based, military-based)
+- [x] Unit tests: governor preference calculations (trade-based, military-based)
 - [x] Unit tests: decade boundary detection
 
 ### Score Components
@@ -31,7 +31,7 @@ or by having the most governors when the game reaches 1915. Score tracks overall
 - [x] **Diplomatic standing** — accumulated standing value
 - [x] **Provinces controlled** — number of provinces in empire
 - [x] Score recalculated each turn
-- [ ] High score table for completed games
+- [x] High score table for completed games
 - [x] Unit tests: score calculation from game state
 - [x] Unit tests: score components independently testable
 
@@ -49,11 +49,11 @@ or by having the most governors when the game reaches 1915. Score tracks overall
 - [ ] Unit tests: game end detection at decade boundaries and 1915
 
 ### Victory Screen
-- [ ] Display winning nation and victory type
-- [ ] Show final Council of Governors vote breakdown
-- [ ] Show score breakdown by component
-- [ ] Show high score ranking
-- [ ] Compare to previous games
+- [x] Display winning nation and victory type
+- [x] Show final Council of Governors vote breakdown
+- [x] Show score breakdown by component
+- [x] Show high score ranking
+- [x] Compare to previous games
 - [ ] Unit tests: victory screen data assembly
 
 ### Verification Strategy

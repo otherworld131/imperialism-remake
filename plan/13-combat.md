@@ -11,8 +11,8 @@ a province is invaded via beachhead.
 ### Battle Initiation
 - [x] Attacker orders army units to move into an enemy-occupied province
 - [x] Defender's garrison (Militia/Minutemen) + stationed army defend
-- [ ] Counter-attacks: if defender sends reinforcements during the same turn, they arrive for a secondary engagement
-- [ ] Counter-attack reinforcements "have already moved" — no opportunity fire during first move
+- [x] Counter-attacks: if defender sends reinforcements during the same turn, they arrive for a secondary engagement
+- [x] Counter-attack reinforcements "have already moved" — no opportunity fire during first move
 - [ ] Battle can be player-controlled or auto-resolved (player choice in preferences)
 - [x] Unit tests: battle initiation conditions, counter-attack eligibility
 
@@ -64,8 +64,8 @@ a province is invaded via beachhead.
 - [ ] Conquering a Great Power capital: Capitol expansion (recruitment ratio 4:1 → 3:1)
 - [x] Minor Nation provinces become colonies of the conquering power
 - [x] Great Power provinces change ownership
-- [x] Garrison in conquered provinces: none until player stations units
-- [ ] Unit tests: conquest effects and rewards
+- [x] Garrison in conquered provinces: none until player stations units (garrison_count reset to 0)
+- [x] Unit tests: conquest effects and rewards
 
 ### Naval Combat (AI-Only)
 - [x] Naval battles always resolved automatically
@@ -88,4 +88,4 @@ a province is invaded via beachhead.
 - [ ] **Integration test**: Sapper siege scenario → verify tunnel progress over multiple turns → fort destroyed
 - [ ] **Balance test**: Run 1000 battles with various force compositions → verify win rates are reasonable
 - [ ] **Naval test**: Fleet of 3 Frigates vs 1 Ship-of-the-Line → verify plausible outcomes over 100 runs
-- [ ] **Counter-attack test**: Defender sends reinforcements → verify they arrive with no opportunity fire on first move
+- [x] **Counter-attack test**: Defender sends reinforcements → verify they arrive with no opportunity fire on first move
