@@ -44,12 +44,12 @@ beachhead). Naval battles are always resolved by AI.
 - [x] Later ships substitute fabric with coal + steel (steam power)
 - [x] 2-3 ship models available at game start; others unlock via tech
 - [ ] Ship usable the turn after ordering
-- [ ] Unit tests: resource cost deduction, availability timing
+- [x] Unit tests: resource cost deduction, availability timing
 
 ### Naval Operations
 - [ ] **Move** — warship moves between adjacent sea zones
 - [ ] **Patrol** — warship attacks enemies encountered in its sea zone
-- [ ] **Blockade** — warship intercepts enemy merchant ships in the sea zone
+- [x] **Blockade** — warship intercepts enemy merchant ships in the sea zone
 - [ ] **Escort** — warship protects friendly merchant ships from blockade/patrol
 - [ ] **Beachhead** — warships establish landing zone on hostile coastline
   - [ ] Landing force size = total arms used to build all ships in the beachhead fleet
@@ -62,7 +62,7 @@ beachhead). Naval battles are always resolved by AI.
 - [x] Combat factors: firepower, range, armor, hull, speed
 - [x] Damage applied to hull; ship destroyed when hull reaches 0
 - [x] Battle results reported to player
-- [ ] Unit tests: naval combat resolution algorithm
+- [x] Unit tests: naval combat resolution algorithm
 
 ### Obsolescence
 - [x] Technologies can obsolete older ship classes
@@ -78,7 +78,7 @@ beachhead). Naval battles are always resolved by AI.
 - [ ] Unit tests: naval reward trigger conditions
 
 ### Verification Strategy
-- [ ] **Unit tests**: Run test suite — all naval tests pass
+- [x] **Unit tests**: Run test suite — all naval tests pass
 - [x] **Data validation**: Load ship definitions → verify all stats, costs, prerequisites
 - [ ] **Integration test**: Build a Frigate → verify resources deducted, ship appears next turn
 - [ ] **Integration test**: Blockade scenario → verify merchant ships intercepted, trade disrupted

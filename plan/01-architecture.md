@@ -90,9 +90,9 @@ with `--no-default-features` and no rendering framework, the boundary is intact.
 - [ ] Evaluate **Bevy** — pure Rust ECS, active ecosystem, cross-platform, WASM support
 - [ ] Evaluate **Godot 4 via GDExtension** — mature editor, hex support, scene system, visual scripting
 - [ ] Evaluate **macroquad** — minimal, immediate-mode, fast to prototype
-- [ ] Decision: framework chosen and documented in ADR-001
+- [x] Decision: framework chosen and documented in ADR-001
 - [ ] Prototype: render a hex grid, handle input, play a sound — validate the choice
-- [ ] Verify frontend is fully swappable: domain crate compiles + tests pass without any framework dependency
+- [x] Verify frontend is fully swappable: domain crate compiles + tests pass without any framework dependency
 
 ### Dependency Rule Enforcement
 - [x] Domain crate `Cargo.toml`: only `mlua` (+ `serde` with `derive` feature for data structs)
@@ -150,4 +150,4 @@ with `--no-default-features` and no rendering framework, the boundary is intact.
 - [x] **Frontend swap test**: Build domain + application without presentation crate → compiles and tests pass
 - [ ] **Prototype validation**: Hex grid renders, click detected, sound plays — captured in a smoke test script
 - [ ] **Cross-platform check**: `cargo build --target wasm32-unknown-unknown -p domain` compiles (WASM viability)
-- [ ] **ADR review**: Every ADR has Status, Context, Decision, Consequences sections
+- [x] **ADR review**: Every ADR has Status, Context, Decision, Consequences sections

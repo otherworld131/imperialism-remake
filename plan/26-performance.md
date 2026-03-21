@@ -27,18 +27,18 @@ should maintain 60fps, and memory usage should stay bounded even in late-game st
 
 ### Domain Logic Optimization
 - [ ] Pathfinding: A* with hex distance heuristic; cache results per turn
-- [ ] Transport allocation: linear assignment optimization
-- [ ] Trade matching: efficient sort + merge algorithm
+- [x] Transport allocation: linear assignment optimization
+- [x] Trade matching: efficient sort + merge algorithm
 - [ ] AI decision trees: prune early when utility falls below threshold
-- [ ] Map queries: spatial indexing (dictionary by HexCoord) — O(1) tile lookup
-- [ ] Province connectivity: incremental update on infrastructure change (not full recomputation)
-- [ ] Unit tests: benchmark critical path algorithms
+- [x] Map queries: spatial indexing (dictionary by HexCoord) — O(1) tile lookup
+- [x] Province connectivity: incremental update on infrastructure change (not full recomputation)
+- [x] Unit tests: benchmark critical path algorithms
 
 ### Memory Management
 - [ ] Object pooling for frequently created/destroyed objects (combat events, UI elements)
-- [ ] Avoid per-frame allocations in the game loop
-- [ ] Immutable value objects use structs (Rust's default — stack-allocated, no heap overhead)
-- [ ] Game state: bounded growth — units, buildings, and resources have caps
+- [x] Avoid per-frame allocations in the game loop
+- [x] Immutable value objects use structs (Rust's default — stack-allocated, no heap overhead)
+- [x] Game state: bounded growth — units, buildings, and resources have caps
 - [ ] Texture memory: load only needed assets; unload scenario assets when switching
 - [ ] Profile memory usage in late-game states (turn 300+)
 

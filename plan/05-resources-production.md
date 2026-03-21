@@ -29,35 +29,35 @@ goods in factories. Three parallel production chains exist.
 #### Timber Chain
 - [x] Timber → **Lumber Mill** (2 timber + 2 labor → 1 lumber)
 - [x] Lumber → **Furniture Factory** (2 lumber + 2 labor → 1 furniture)
-- [ ] Lumber used for: transport cars, ships, building expansion, railroad construction
-- [ ] Furniture used for: recruiting new workers (immigration), trade revenue
+- [x] Lumber used for: transport cars, ships, building expansion, railroad construction
+- [x] Furniture used for: recruiting new workers (immigration), trade revenue
 
 #### Metal Chain
 - [x] Coal + Iron → **Steel Mill** (1 coal + 1 iron + 2 labor → 1 steel)
 - [x] Steel → **Hardware Factory** (2 steel + 2 labor → 1 hardware)
-- [ ] Steel used for: transport cars, ships, arms production, building expansion, forts
-- [ ] Hardware used for: trade revenue
+- [x] Steel used for: transport cars, ships, arms production, building expansion, forts
+- [x] Hardware used for: trade revenue
 
 #### Textile Chain
 - [x] Cotton or Wool → **Textile Mill** (2 cotton/wool + 2 labor → 1 fabric)
 - [x] Fabric → **Clothing Factory** (2 fabric + 2 labor → 1 clothing)
-- [ ] Fabric used for: ship sails, trade revenue
-- [ ] Clothing used for: recruiting new workers (immigration), trade revenue
+- [x] Fabric used for: ship sails, trade revenue
+- [x] Clothing used for: recruiting new workers (immigration), trade revenue
 
 ### Special Products
-- [ ] **Paper** — produced in Trade School (trains workers); used for specialist training
+- [x] **Paper** — produced in Trade School (trains workers); used for specialist training
 - [x] **Arms** — produced in Armory; used for military unit construction
-- [ ] **Canned Food** — produced in Food Processing from grain/fruit/livestock; feeds population
+- [x] **Canned Food** — produced in Food Processing from grain/fruit/livestock; feeds population
 
 ### Mill & Factory Mechanics
 - [x] Mills process raw resources into materials (2:1 ratio)
 - [x] Factories process materials into finished goods (2:1 ratio)
 - [x] Each mill/factory has a capacity (units processed per turn)
-- [ ] Capacity starts at 2 (Easy) or must be built (harder difficulties)
+- [x] Capacity starts at 2 (Easy) or must be built (harder difficulties)
 - [x] Expansion costs 1 lumber + 1 steel per capacity unit
 - [ ] Capacity progression: 2 → 4 → 8 → 12 → 16 → ...
 - [x] 2-turn delay before new capacity becomes active
-- [ ] Production assignment: player allocates resources to each mill/factory each turn
+- [x] Production assignment: player allocates resources to each mill/factory each turn
 - [x] Unit tests for production calculations
 
 ### Food System
@@ -73,7 +73,7 @@ goods in factories. Three parallel production chains exist.
 - [x] **Untrained Worker** — base labor unit, recruited via Capitol building
 - [x] **Trained Worker** — produced in Trade School (1 untrained + paper)
 - [x] **Expert Worker** — produced in Trade School (1 trained + paper)
-- [ ] Workers assigned to: mills, factories, civilian units, military units
+- [x] Workers assigned to: mills, factories, civilian units, military units
 - [x] Each production facility needs 2 labor units per unit of output
 - [x] Worker pool management — track available vs. assigned workers
 - [x] Worker recruitment limited by province count (1 worker per N provinces)
@@ -82,21 +82,21 @@ goods in factories. Three parallel production chains exist.
 
 ### Warehouse / Inventory
 - [x] `Warehouse` entity — stores all resources, materials, and goods for a nation
-- [ ] Tracks incoming shipments (from transport) vs. available stock
-- [ ] Display of current inventory and expected next-turn deliveries
-- [ ] Resources not transported to capital are lost (no local storage)
+- [x] Tracks incoming shipments (from transport) vs. available stock
+- [x] Display of current inventory and expected next-turn deliveries
+- [x] Resources not transported to capital are lost (no local storage)
 - [x] Unit tests for warehouse accounting
 
 ### Revenue & Treasury
 - [x] Gold and Gems automatically convert to money
-- [ ] Selling goods on trade market generates revenue
+- [x] Selling goods on trade market generates revenue
 - [x] Military maintenance: $25/turn per arm in active army units
-- [ ] Building construction and expansion costs
-- [ ] Civilian unit creation costs
-- [ ] Technology research costs
-- [ ] Diplomatic costs (embassies: $5,000, consulates: $500, grants, subsidies)
+- [x] Building construction and expansion costs
+- [x] Civilian unit creation costs
+- [x] Technology research costs
+- [x] Diplomatic costs (embassies: $5,000, consulates: $500, grants, subsidies)
 - [ ] Bankruptcy protection / deficit handling rules
-- [ ] Unit tests for treasury calculations
+- [x] Unit tests for treasury calculations
 
 ### Verification Strategy
 - [x] **Unit tests**: `cargo test` — all resource, production, food, labor, warehouse, treasury tests pass

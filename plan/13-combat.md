@@ -13,7 +13,7 @@ a province is invaded via beachhead.
 - [x] Defender's garrison (Militia/Minutemen) + stationed army defend
 - [x] Counter-attacks: if defender sends reinforcements during the same turn, they arrive for a secondary engagement
 - [x] Counter-attack reinforcements "have already moved" — no opportunity fire during first move
-- [ ] Battle can be player-controlled or auto-resolved (player choice in preferences)
+- [x] Battle can be player-controlled or auto-resolved (player choice in preferences)
 - [x] Unit tests: battle initiation conditions, counter-attack eligibility
 
 ### Tactical Battle Map
@@ -29,11 +29,11 @@ a province is invaded via beachhead.
 - [ ] Units take turns based on initiative (influenced by General medals + force composition)
 - [ ] Each unit per turn: move (up to movement points) → fire (if in range)
 - [ ] **Opportunity fire**: defending units fire when enemy enters their range during enemy movement
-- [ ] Firepower calculation: base FP × medal modifier × terrain modifier
+- [x] Firepower calculation: base FP × medal modifier × terrain modifier
 - [ ] Range: maximum distance (in hex tiles) a unit can fire
 - [ ] Movement: hex tiles a unit can traverse per combat turn
-- [ ] Damage applied to target health in 5% increments
-- [ ] Unit destroyed at 0% health
+- [x] Damage applied to target health in 5% increments
+- [x] Unit destroyed at 0% health
 - [ ] Unit tests: initiative ordering, opportunity fire triggers, damage calculation
 
 ### Combat Modifiers
@@ -83,7 +83,7 @@ a province is invaded via beachhead.
 
 ### Verification Strategy
 - [x] **Unit tests**: Run test suite — all combat tests pass
-- [ ] **Deterministic combat test**: Fixed seed → same battle always produces same result
+- [x] **Deterministic combat test**: Fixed seed → same battle always produces same result
 - [ ] **Integration test**: 3 Regulars attack province with 4 Militia → verify battle resolves, correct winner determined
 - [ ] **Integration test**: Sapper siege scenario → verify tunnel progress over multiple turns → fort destroyed
 - [ ] **Balance test**: Run 1000 battles with various force compositions → verify win rates are reasonable

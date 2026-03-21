@@ -56,11 +56,11 @@ imperialism-remake/
 ## Checklist
 
 ### Repository Setup
-- [ ] Initialize git repository
-- [ ] Create `.gitignore` (binaries, IDE files, build artifacts, OS files)
+- [x] Initialize git repository
+- [x] Create `.gitignore` (binaries, IDE files, build artifacts, OS files)
 - [ ] Create `.editorconfig` (indentation, charset, line endings)
 - [ ] Set up branch protection rules (`main` requires PR + CI green)
-- [ ] Create `CONTRIBUTING.md` with coding standards
+- [x] Create `CONTRIBUTING.md` with coding standards
 - [ ] Create `LICENSE` file
 
 ### Project Structure
@@ -71,9 +71,9 @@ imperialism-remake/
 - [x] Create `crates/infrastructure` — library crate; deps: `application`, `serde`, `bincode`, `tokio`
 - [x] Create `crates/presentation` — library crate; deps: `application`, `bevy` (or chosen framework)
 - [x] Create `src/main.rs` — binary entry point, composition root, depends on all crates
-- [ ] Create `tests/architecture/` — fitness function tests parsing `Cargo.toml` dependency graphs
-- [ ] Create `tests/integration/` — cross-crate integration tests
-- [ ] Create `tests/simulation/` — multi-turn automated game tests
+- [x] Create `tests/architecture/` — fitness function tests parsing `Cargo.toml` dependency graphs
+- [x] Create `tests/integration/` — cross-crate integration tests
+- [x] Create `tests/simulation/` — multi-turn automated game tests
 
 ### Lua Scripts Directory
 - [ ] Create `scripts/tech/` with a sample tech definition (`seed_drill.lua`)
@@ -105,9 +105,9 @@ imperialism-remake/
 - [ ] Application shuts down cleanly with no resource leaks
 
 ### Verification Strategy
-- [ ] **Build from scratch**: Clone repo → run `build.sh`/`build.ps1` → exits 0, all crates compile
-- [ ] **Test runner**: `cargo test` finds and executes all test crates → 0 failures
-- [ ] **Lint check**: `cargo fmt --check` → no formatting violations
-- [ ] **Directory check**: Run `ls -R src/ tests/ data/` → verify expected directory structure exists
+- [x] **Build from scratch**: Clone repo → run `build.sh`/`build.ps1` → exits 0, all crates compile
+- [x] **Test runner**: `cargo test` finds and executes all test crates → 0 failures
+- [x] **Lint check**: `cargo fmt --check` → no formatting violations
+- [x] **Directory check**: Run `ls -R src/ tests/ data/` → verify expected directory structure exists
 - [ ] **Smoke test script**: Automated script launches the app, waits 5 seconds, verifies process ran and exited cleanly
 - [ ] **Pre-commit hook test**: Stage a badly formatted file → commit → hook rejects it

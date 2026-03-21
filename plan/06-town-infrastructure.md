@@ -14,16 +14,16 @@ and factory capacity.
 - [x] **Village** — intermediate; begins producing when connected and factory built
 - [x] **Town** — fully industrialized; maximum production capacity
 - [x] 6-turn delay from connection before first materials appear
-- [ ] Captured Great Power capitals industrialize immediately (no delay)
+- [x] Captured Great Power capitals industrialize immediately (no delay)
 - [ ] Minor Nation capitals never industrialize
 - [x] Unit tests for settlement progression timing
 
 ### Province Connection
-- [ ] Province is "connected" if a rail depot on/adjacent to its capital links to national capital
-- [ ] Alternative: port connection to capital (via sea route)
+- [x] Province is "connected" if a rail depot on/adjacent to its capital links to national capital
+- [x] Alternative: port connection to capital (via sea route)
 - [x] Connection validation algorithm — pathfinding through rail network or port chain
-- [ ] Disconnection on province loss — recalculate connectivity
-- [ ] Unit tests for connection detection
+- [x] Disconnection on province loss — recalculate connectivity
+- [x] Unit tests for connection detection
 
 ### Town Production
 - [x] Town production requires no labor input
@@ -49,22 +49,22 @@ and factory capacity.
   - [x] Hills: $200 (requires Compound Steam Engine tech)
   - [x] Mountains: requires Dynamite tech
 - [ ] Railroads also used for military transport (1 army unit per 5 freight cars)
-- [ ] Unit tests for railroad construction rules
+- [x] Unit tests for railroad construction rules
 
 ### Infrastructure — Depots
 - [x] Depots are collection points for resources from surrounding tiles
 - [x] Built by Engineer, costs $2,000, takes 3 turns
-- [ ] Must be connected to capital via railroad or port to be useful
+- [x] Must be connected to capital via railroad or port to be useful
 - [x] Placing depot on/adjacent to a province capital triggers industrialization
-- [ ] Unit tests for depot placement and connectivity
+- [x] Unit tests for depot placement and connectivity
 
 ### Infrastructure — Ports
 - [x] Ports provide sea access for trade and military operations
 - [x] Built by Engineer on coastal tiles, costs $3,000, takes 3 turns
 - [x] Ports cannot be built on hill terrain
 - [x] Ports connect provinces to the capital via sea routes
-- [ ] Required for overseas trade with minor nations
-- [ ] Unit tests for port placement validation
+- [x] Required for overseas trade with minor nations
+- [x] Unit tests for port placement validation
 
 ### Infrastructure — Forts
 - [x] Forts provide defensive bonuses in combat
@@ -76,7 +76,7 @@ and factory capacity.
 - [ ] Forts affect tactical battle maps — walls, defensive positions
 - [ ] Sappers can tunnel to destroy fort sections
 - [ ] Heavy artillery can also destroy fort sections
-- [ ] Unit tests for fort construction and defensive bonus calculations
+- [x] Unit tests for fort construction and defensive bonus calculations
 
 ### Capital City Buildings (8 standard)
 - [x] **Armory** — build army units from workers + arms + money
@@ -95,7 +95,7 @@ and factory capacity.
 - [x] **Power Plant** — uses oil for bonuses (unlocked by Oil Drilling tech)
 - [x] All expandable: 1 lumber + 1 steel per capacity unit
 - [x] Easy difficulty: start with 3 mills (cap 2) + 3 factories (cap 1)
-- [ ] Harder difficulties: must be built from scratch
+- [x] Harder difficulties: must be built from scratch
 - [x] Unit tests for building construction and expansion
 
 ### Verification Strategy
