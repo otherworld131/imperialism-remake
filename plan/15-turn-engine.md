@@ -78,7 +78,7 @@ simultaneously.
 - [x] `GameState` aggregate root holds entire game state
 - [ ] State transitions are deterministic given the same inputs (critical for multiplayer sync)
 - [ ] State snapshots for undo/redo consideration
-- [ ] State serialization for save/load (see plan 21)
+- [x] State serialization for save/load (see plan 21)
 - [ ] Unit tests: state determinism — same inputs → same outputs
 
 ### Player Turn Submission
