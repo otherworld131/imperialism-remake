@@ -69,6 +69,17 @@ impl GameState {
         self.provinces.iter_mut().find(|p| p.id == id)
     }
 
+    /// Display string for difficulty.
+    pub fn difficulty_display(&self) -> &str {
+        match self.difficulty {
+            Difficulty::Introductory => "Introductory",
+            Difficulty::Easy => "Easy",
+            Difficulty::Normal => "Normal",
+            Difficulty::Hard => "Hard",
+            Difficulty::NighOnImpossible => "Nigh-On Impossible",
+        }
+    }
+
     /// Returns all Great Power nations.
     pub fn great_powers(&self) -> Vec<&Nation> {
         self.nations.iter().filter(|n| n.is_great_power()).collect()

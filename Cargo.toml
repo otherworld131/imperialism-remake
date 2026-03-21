@@ -21,6 +21,11 @@ edition.workspace = true
 name = "imperialism"
 path = "src/main.rs"
 
+[[bin]]
+name = "imperialism-gui"
+path = "src/gui.rs"
+
 [dependencies]
 domain = { path = "crates/domain" }
 infrastructure = { path = "crates/infrastructure" }
+presentation = { path = "crates/presentation" }
