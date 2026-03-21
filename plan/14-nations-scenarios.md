@@ -32,12 +32,12 @@ historical scenarios with real European powers. Nations are data-driven and modd
 - [x] Unit tests: 16 nations, 4 provinces each
 
 ### Historical Scenarios
-- [ ] **1815 scenario** — post-Napoleonic Europe
+- [x] **1815 scenario** — post-Napoleonic Europe
 - [ ] **1820 scenario**
-- [ ] **1848 scenario** — Year of Revolutions
-- [ ] **1882 scenario** — Scramble for Africa era
-- [ ] Historical Great Powers: Britain, Spain, France, Netherlands, Prussia, Germany, Austria-Hungary, Sardinia, Italy, Russia, Ottoman Empire (availability varies by scenario)
-- [ ] Scenario files define: start year, available nations, map layout, starting resources, pre-researched techs
+- [x] **1848 scenario** — Year of Revolutions
+- [x] **1882 scenario** — Scramble for Africa era
+- [x] Historical Great Powers: Britain, Spain, France, Netherlands, Prussia, Germany, Austria-Hungary, Sardinia, Italy, Russia, Ottoman Empire (availability varies by scenario)
+- [x] Scenario files define: start year, available nations, map layout, starting resources, pre-researched techs
 - [ ] Difficulty ratings per nation per scenario (some nations are harder to play)
 - [ ] Unit tests: scenario loading and validation
 

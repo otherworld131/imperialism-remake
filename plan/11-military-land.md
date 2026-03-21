@@ -86,7 +86,7 @@ significantly boost effectiveness (4 medals ≈ 2× firepower).
 
 ### Rewards
 - [ ] **General**: Build 6 arms' worth of units → free General + first one includes a free unit
-- [ ] **Conquest medal**: Conquering a Minor Nation capital → new army unit starts with 1 medal + statue on Armory
+- [x] **Conquest medal**: Conquering a Minor Nation capital → new army unit starts with 1 medal + statue on Armory
 - [ ] **Capitol expansion**: Conquering a Great Power capital → recruitment from 4 provinces per worker → 3
 - [ ] Unit tests: reward trigger conditions and effects
 
