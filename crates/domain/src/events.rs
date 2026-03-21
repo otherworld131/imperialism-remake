@@ -336,4 +336,29 @@ mod tests {
         assert_eq!(TechId(1), TechId(1));
         assert_ne!(TechId(1), TechId(2));
     }
+
+    #[test]
+    fn all_domain_event_types_can_be_created() {
+        let events = vec![
+            DomainEvent::TurnStarted(TurnStarted {
+                turn: TurnNumber::new(1),
+            }),
+            DomainEvent::TurnEnded(TurnEnded {
+                turn: TurnNumber::new(1),
+            }),
+            DomainEvent::TechnologyResearched(TechnologyResearched {
+                nation: NationId(1),
+                tech: TechId(1),
+            }),
+            DomainEvent::WarDeclared(WarDeclared {
+                attacker: NationId(1),
+                defender: NationId(2),
+            }),
+            DomainEvent::ProvinceConquered(ProvinceConquered {
+                province: ProvinceId(1),
+                new_owner: NationId(1),
+            }),
+        ];
+        assert_eq!(events.len(), 5);
+    }
 }

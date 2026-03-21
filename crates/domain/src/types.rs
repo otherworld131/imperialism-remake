@@ -637,4 +637,38 @@ mod tests {
         let a = Money::dollars(500);
         assert_eq!(a.checked_sub(Money::ZERO), Some(a));
     }
+
+    // ── Identity tests ────────────────────────────────────────
+
+    #[test]
+    fn identity_test_same_id_equal() {
+        assert_eq!(NationId(1), NationId(1));
+        assert_eq!(ProvinceId(42), ProvinceId(42));
+    }
+
+    #[test]
+    fn identity_test_different_id_not_equal() {
+        assert_ne!(NationId(1), NationId(2));
+        assert_ne!(ProvinceId(1), ProvinceId(2));
+    }
+
+    // ── Immutability tests ────────────────────────────────────
+
+    #[test]
+    fn immutability_money_operations_return_new_value() {
+        let a = Money::dollars(100);
+        let b = a + Money::dollars(50);
+        // 'a' is unchanged (it's Copy, so the original value is preserved)
+        assert_eq!(a, Money::dollars(100));
+        assert_eq!(b, Money::dollars(150));
+    }
+
+    #[test]
+    fn immutability_hex_coord_operations_return_new_value() {
+        use crate::hex::HexCoord;
+        let a = HexCoord::new(1, 2);
+        let b = a + HexCoord::new(3, 4);
+        assert_eq!(a, HexCoord::new(1, 2));
+        assert_eq!(b, HexCoord::new(4, 6));
+    }
 }

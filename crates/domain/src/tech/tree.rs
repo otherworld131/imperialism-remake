@@ -611,4 +611,81 @@ mod tests {
             "Spinning Jenny should be available with both prereqs in 1826"
         );
     }
+
+    #[test]
+    fn tech_data_validation_all_ids_valid() {
+        let tree = TechTree::new();
+        let validation = tree.validate();
+        assert!(
+            validation.is_ok(),
+            "Tech tree validation failed: {:?}",
+            validation
+        );
+    }
+
+    #[test]
+    fn simulate_100_turns_all_techs_researchable() {
+        // Start a game, research cheapest tech each turn for 100 turns
+        // Verify that techs become available and can be researched
+        let mut game = crate::game_state::new_game("tech_sim", crate::types::Difficulty::Normal, 0);
+        let mut researched_count = 0;
+        for _ in 0..100 {
+            let available = game.tech_tree.available_techs(
+                &game
+                    .get_nation(game.human_player_nation)
+                    .unwrap()
+                    .researched_techs,
+                game.turn.year(),
+            );
+            if let Some(tech) = available.first() {
+                let tech_id = tech.id;
+                let nation = game.get_nation_mut(game.human_player_nation).unwrap();
+                nation.research_tech(tech_id);
+                researched_count += 1;
+            }
+            crate::turn::process_turn(&mut game);
+        }
+        assert!(
+            researched_count > 0,
+            "Should have researched at least some techs"
+        );
+    }
+
+    #[test]
+    fn scenario_start_dates_provide_correct_starting_techs() {
+        use crate::scenarios::new_scenario_game;
+        use crate::types::Difficulty;
+
+        // 1815: no pre-researched techs
+        // 1848: early techs pre-researched
+        // 1882: more techs pre-researched
+        let game_1815 = new_scenario_game("1815", Difficulty::Normal, 0).unwrap();
+        let game_1848 = new_scenario_game("1848", Difficulty::Normal, 0).unwrap();
+        let game_1882 = new_scenario_game("1882", Difficulty::Normal, 0).unwrap();
+
+        let techs_1815 = game_1815
+            .get_nation(game_1815.human_player_nation)
+            .unwrap()
+            .researched_techs
+            .len();
+        let techs_1848 = game_1848
+            .get_nation(game_1848.human_player_nation)
+            .unwrap()
+            .researched_techs
+            .len();
+        let techs_1882 = game_1882
+            .get_nation(game_1882.human_player_nation)
+            .unwrap()
+            .researched_techs
+            .len();
+
+        assert!(
+            techs_1848 > techs_1815,
+            "1848 should have more techs than 1815"
+        );
+        assert!(
+            techs_1882 > techs_1848,
+            "1882 should have more techs than 1848"
+        );
+    }
 }

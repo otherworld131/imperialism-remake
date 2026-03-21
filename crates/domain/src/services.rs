@@ -31,3 +31,22 @@ pub trait CombatResolver {
 pub trait VictoryChecker {
     fn check_victory(&self, game: &GameState) -> Option<NationId>;
 }
+
+/// Resolves trade session offers/bids.
+pub trait TradeResolver {
+    fn resolve_trades(
+        &self,
+        offers: &[crate::economy::trade::TradeOffer],
+        bids: &[crate::economy::trade::TradeBid],
+    ) -> Vec<crate::economy::trade::TradeTransaction>;
+}
+
+/// Resolves treaty proposals and diplomatic actions.
+pub trait DiplomacyResolver {
+    fn process_diplomacy(&self, game: &mut GameState);
+}
+
+/// Makes AI decisions for a nation.
+pub trait AiDecisionMaker {
+    fn make_decisions(&self, game: &mut GameState, nation_id: NationId);
+}

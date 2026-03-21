@@ -611,4 +611,26 @@ mod tests {
         let meta = read_save_metadata(Path::new("/tmp/nonexistent_saveinfo_99999.json"));
         assert!(meta.is_none());
     }
+
+    #[test]
+    fn autosave_works_across_turns() {
+        let mut game = new_game("autosave_test", Difficulty::Normal, 0);
+        let dir = std::env::temp_dir().join("imperialism_test_autosaves");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("autosave.json");
+
+        for _ in 0..5 {
+            domain::turn::process_turn(&mut game);
+            save_game(&game, &path).unwrap();
+        }
+
+        // Verify autosave exists and is loadable
+        assert!(path.exists());
+        let loaded = load_game(&path).unwrap();
+        assert_eq!(loaded.turn, game.turn);
+
+        // Cleanup
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
 }

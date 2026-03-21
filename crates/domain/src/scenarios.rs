@@ -187,18 +187,37 @@ pub fn new_scenario_game(
         }
     }
 
-    // For 1848+, pre-research some early techs for all nations
+    // For 1848+, pre-research techs whose year windows have closed before the scenario start.
+    // A tech is considered "auto-researched" if its latest_year < scenario.year,
+    // meaning it would no longer be available to research — everyone should already have it.
     if scenario.year >= 1848 {
-        let early_techs: Vec<crate::events::TechId> = game
+        // Iteratively resolve prerequisites: only add techs whose prereqs are all satisfied.
+        let all_techs: Vec<(crate::events::TechId, u32, Vec<crate::events::TechId>)> = game
             .tech_tree
             .all_techs()
             .iter()
-            .filter(|t| t.earliest_year <= 1840)
-            .map(|t| t.id)
+            .map(|t| (t.id, t.latest_year, t.prerequisites.clone()))
             .collect();
+
+        // Build the set of auto-researchable techs using topological ordering
+        let mut auto_researched: Vec<crate::events::TechId> = Vec::new();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (id, latest_year, prereqs) in &all_techs {
+                if *latest_year < scenario.year
+                    && !auto_researched.contains(id)
+                    && prereqs.iter().all(|p| auto_researched.contains(p))
+                {
+                    auto_researched.push(*id);
+                    changed = true;
+                }
+            }
+        }
+
         for nation in &mut game.nations {
             if nation.is_great_power() {
-                for tech_id in &early_techs {
+                for tech_id in &auto_researched {
                     if !nation.has_researched(*tech_id) {
                         nation.research_tech(*tech_id);
                     }
