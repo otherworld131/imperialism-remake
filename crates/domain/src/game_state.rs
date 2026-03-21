@@ -361,11 +361,275 @@ mod tests {
 
     #[test]
     fn new_game_starting_treasury_varies_by_difficulty() {
+        let intro = new_game("test", Difficulty::Introductory, 0);
         let easy = new_game("test", Difficulty::Easy, 0);
+        let normal = new_game("test", Difficulty::Normal, 0);
         let hard = new_game("test", Difficulty::Hard, 0);
+        let noi = new_game("test", Difficulty::NighOnImpossible, 0);
+
+        let intro_cash = intro
+            .get_nation(intro.human_player_nation)
+            .unwrap()
+            .treasury;
         let easy_cash = easy.get_nation(easy.human_player_nation).unwrap().treasury;
+        let normal_cash = normal
+            .get_nation(normal.human_player_nation)
+            .unwrap()
+            .treasury;
         let hard_cash = hard.get_nation(hard.human_player_nation).unwrap().treasury;
-        assert!(easy_cash > hard_cash);
+        let noi_cash = noi.get_nation(noi.human_player_nation).unwrap().treasury;
+
+        assert_eq!(intro_cash, Money::dollars(15000));
+        assert_eq!(easy_cash, Money::dollars(12000));
+        assert_eq!(normal_cash, Money::dollars(10000));
+        assert_eq!(hard_cash, Money::dollars(8000));
+        assert_eq!(noi_cash, Money::dollars(5000));
+
+        assert!(intro_cash > easy_cash);
+        assert!(easy_cash > normal_cash);
+        assert!(normal_cash > hard_cash);
+        assert!(hard_cash > noi_cash);
+    }
+
+    // ── Difficulty-specific starting conditions ───────────────
+
+    #[test]
+    fn new_game_introductory_has_extra_resources() {
+        let gs = new_game("test", Difficulty::Introductory, 0);
+        for nation in gs.great_powers() {
+            // $15,000 starting cash
+            assert_eq!(
+                nation.treasury,
+                Money::dollars(15000),
+                "{} should start with $15,000 on Introductory",
+                nation.name
+            );
+
+            // 5 untrained + 3 trained workers
+            assert_eq!(
+                nation.labor.untrained, 5,
+                "{} should have 5 untrained workers on Introductory",
+                nation.name
+            );
+            assert_eq!(
+                nation.labor.trained, 3,
+                "{} should have 3 trained workers on Introductory",
+                nation.name
+            );
+
+            // Pre-built mills and factories
+            assert!(
+                nation.has_building(BuildingType::LumberMill),
+                "{} should have a LumberMill on Introductory",
+                nation.name
+            );
+            assert!(
+                nation.has_building(BuildingType::SteelMill),
+                "{} should have a SteelMill on Introductory",
+                nation.name
+            );
+            assert!(
+                nation.has_building(BuildingType::TextileMill),
+                "{} should have a TextileMill on Introductory",
+                nation.name
+            );
+            assert!(
+                nation.has_building(BuildingType::FurnitureFactory),
+                "{} should have a FurnitureFactory on Introductory",
+                nation.name
+            );
+            assert!(
+                nation.has_building(BuildingType::HardwareFactory),
+                "{} should have a HardwareFactory on Introductory",
+                nation.name
+            );
+            assert!(
+                nation.has_building(BuildingType::ClothingFactory),
+                "{} should have a ClothingFactory on Introductory",
+                nation.name
+            );
+        }
+    }
+
+    #[test]
+    fn new_game_easy_has_mills_and_factories() {
+        let gs = new_game("test", Difficulty::Easy, 0);
+        for nation in gs.great_powers() {
+            // Easy also gets pre-built mills and factories
+            assert!(
+                nation.has_building(BuildingType::LumberMill),
+                "{} should have a LumberMill on Easy",
+                nation.name
+            );
+            assert!(
+                nation.has_building(BuildingType::SteelMill),
+                "{} should have a SteelMill on Easy",
+                nation.name
+            );
+            assert!(
+                nation.has_building(BuildingType::TextileMill),
+                "{} should have a TextileMill on Easy",
+                nation.name
+            );
+            assert!(
+                nation.has_building(BuildingType::FurnitureFactory),
+                "{} should have a FurnitureFactory on Easy",
+                nation.name
+            );
+
+            // $12,000 starting cash
+            assert_eq!(
+                nation.treasury,
+                Money::dollars(12000),
+                "{} should start with $12,000 on Easy",
+                nation.name
+            );
+
+            // 5 untrained + 3 trained workers
+            assert_eq!(nation.labor.untrained, 5);
+            assert_eq!(nation.labor.trained, 3);
+        }
+    }
+
+    #[test]
+    fn new_game_normal_has_no_mills() {
+        let gs = new_game("test", Difficulty::Normal, 0);
+        for nation in gs.great_powers() {
+            // Normal does NOT get pre-built mills or factories
+            assert!(
+                !nation.has_building(BuildingType::LumberMill),
+                "{} should NOT have a LumberMill on Normal",
+                nation.name
+            );
+            assert!(
+                !nation.has_building(BuildingType::SteelMill),
+                "{} should NOT have a SteelMill on Normal",
+                nation.name
+            );
+            assert!(
+                !nation.has_building(BuildingType::TextileMill),
+                "{} should NOT have a TextileMill on Normal",
+                nation.name
+            );
+            assert!(
+                !nation.has_building(BuildingType::FurnitureFactory),
+                "{} should NOT have a FurnitureFactory on Normal",
+                nation.name
+            );
+
+            // $10,000 starting cash
+            assert_eq!(
+                nation.treasury,
+                Money::dollars(10000),
+                "{} should start with $10,000 on Normal",
+                nation.name
+            );
+
+            // 3 untrained + 1 trained workers
+            assert_eq!(nation.labor.untrained, 3);
+            assert_eq!(nation.labor.trained, 1);
+        }
+    }
+
+    #[test]
+    fn new_game_hard_has_less_starting_cash() {
+        let gs = new_game("test", Difficulty::Hard, 0);
+        for nation in gs.great_powers() {
+            // $8,000 starting cash
+            assert_eq!(
+                nation.treasury,
+                Money::dollars(8000),
+                "{} should start with $8,000 on Hard",
+                nation.name
+            );
+
+            // No mills or factories
+            assert!(
+                !nation.has_building(BuildingType::LumberMill),
+                "{} should NOT have a LumberMill on Hard",
+                nation.name
+            );
+
+            // Only 2 untrained workers, 0 trained
+            assert_eq!(nation.labor.untrained, 2);
+            assert_eq!(nation.labor.trained, 0);
+        }
+    }
+
+    #[test]
+    fn new_game_noi_has_minimal_resources() {
+        let gs = new_game("test", Difficulty::NighOnImpossible, 0);
+        for nation in gs.great_powers() {
+            // $5,000 starting cash
+            assert_eq!(
+                nation.treasury,
+                Money::dollars(5000),
+                "{} should start with $5,000 on NOI",
+                nation.name
+            );
+
+            // Only 2 untrained workers
+            assert_eq!(
+                nation.labor.untrained, 2,
+                "{} should have only 2 untrained workers on NOI",
+                nation.name
+            );
+            assert_eq!(
+                nation.labor.trained, 0,
+                "{} should have 0 trained workers on NOI",
+                nation.name
+            );
+
+            // No mills or factories
+            assert!(!nation.has_building(BuildingType::LumberMill));
+            assert!(!nation.has_building(BuildingType::SteelMill));
+        }
+    }
+
+    #[test]
+    fn each_difficulty_starts_valid_game() {
+        let difficulties = [
+            Difficulty::Introductory,
+            Difficulty::Easy,
+            Difficulty::Normal,
+            Difficulty::Hard,
+            Difficulty::NighOnImpossible,
+        ];
+        for difficulty in &difficulties {
+            let gs = new_game("test", *difficulty, 0);
+            assert_eq!(
+                gs.great_powers().len(),
+                7,
+                "Failed for difficulty {:?}",
+                difficulty
+            );
+            assert_eq!(
+                gs.minor_nations().len(),
+                16,
+                "Failed for difficulty {:?}",
+                difficulty
+            );
+            assert_eq!(
+                gs.provinces.len(),
+                120,
+                "Failed for difficulty {:?}",
+                difficulty
+            );
+            assert_eq!(
+                gs.turn,
+                TurnNumber::new(1),
+                "Failed for difficulty {:?}",
+                difficulty
+            );
+            assert!(
+                !gs.is_game_over(),
+                "Game should not be over at start for {:?}",
+                difficulty
+            );
+            // Human player should exist and be a Great Power
+            let human = gs.get_nation(gs.human_player_nation).unwrap();
+            assert!(human.is_great_power());
+        }
     }
 
     // ── Nation lookup ─────────────────────────────────────────
@@ -544,5 +808,52 @@ mod tests {
                 assert_ne!(all_ids[i], all_ids[j], "All civilian IDs must be unique");
             }
         }
+    }
+
+    // ── find_nation_by_name ──────────────────────────────────
+
+    #[test]
+    fn find_nation_by_name_exact_match() {
+        let gs = new_game("test", Difficulty::Normal, 0);
+        let nation = gs.find_nation_by_name("Deneb");
+        assert!(nation.is_some());
+        assert_eq!(nation.unwrap().name, "Deneb");
+    }
+
+    #[test]
+    fn find_nation_by_name_case_insensitive() {
+        let gs = new_game("test", Difficulty::Normal, 0);
+        let nation = gs.find_nation_by_name("deneb");
+        assert!(nation.is_some());
+        assert_eq!(nation.unwrap().name, "Deneb");
+    }
+
+    #[test]
+    fn find_nation_by_name_no_match() {
+        let gs = new_game("test", Difficulty::Normal, 0);
+        assert!(gs.find_nation_by_name("Atlantis").is_none());
+    }
+
+    #[test]
+    fn find_nation_by_name_ambiguous_partial_match_returns_none() {
+        let gs = new_game("test", Difficulty::Normal, 0);
+        // "Dun" matches both "Dundee" and "Dunbar" etc. in Ordune's provinces,
+        // but we're matching nation names. Let's check a prefix that matches
+        // multiple nations. "D" matches "Deneb", "Devron", "Dedge" — multiple
+        // nations, so it should return None.
+        let result = gs.find_nation_by_name("D");
+        assert!(
+            result.is_none(),
+            "Ambiguous partial match should return None"
+        );
+    }
+
+    // ── is_game_over boundary ────────────────────────────────
+
+    #[test]
+    fn is_game_over_at_exact_boundary_1915_q1() {
+        let mut gs = sample_game_state();
+        gs.turn = TurnNumber::from_year_quarter(1915, 1);
+        assert!(gs.is_game_over(), "Game should be over at exactly 1915 Q1");
     }
 }

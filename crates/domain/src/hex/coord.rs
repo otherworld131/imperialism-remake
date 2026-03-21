@@ -432,4 +432,62 @@ mod tests {
     fn display_format() {
         assert_eq!(format!("{}", HexCoord::new(3, -7)), "(3, -7)");
     }
+
+    // ── Large coordinate edge cases ─────────────────────────────
+
+    #[test]
+    fn distance_large_coordinates() {
+        let origin = HexCoord::new(0, 0);
+        let far = HexCoord::new(100, -50);
+        let dist = origin.distance(far);
+        // With cube coords: dq=100, dr=50, ds=|0-(-100+50)|=|50|=50
+        // distance = max(100, 50, 50) = 100
+        assert_eq!(dist, 100);
+    }
+
+    #[test]
+    fn ring_radius_10_has_exactly_60_hexes() {
+        let c = HexCoord::new(0, 0);
+        let ring = c.ring(10);
+        assert_eq!(
+            ring.len(),
+            60,
+            "Ring of radius 10 should have 6*10 = 60 hexes"
+        );
+        // All should be at distance 10
+        for hex in &ring {
+            assert_eq!(c.distance(*hex), 10);
+        }
+    }
+
+    #[test]
+    fn line_between_adjacent_hexes_has_length_2() {
+        let a = HexCoord::new(0, 0);
+        let b = HexCoord::new(1, 0); // adjacent neighbor
+        assert_eq!(a.distance(b), 1);
+        let line = a.line_to(b);
+        assert_eq!(
+            line.len(),
+            2,
+            "Line between two adjacent hexes should have 2 hexes (start and end)"
+        );
+        assert_eq!(line[0], a);
+        assert_eq!(line[1], b);
+    }
+
+    #[test]
+    fn ring_negative_radius_is_empty() {
+        let c = HexCoord::new(0, 0);
+        assert!(c.ring(-1).is_empty());
+        assert!(c.ring(-100).is_empty());
+    }
+
+    #[test]
+    fn distance_large_negative_coordinates() {
+        let a = HexCoord::new(-50, 25);
+        let b = HexCoord::new(50, -25);
+        // symmetry check
+        assert_eq!(a.distance(b), b.distance(a));
+        assert_eq!(a.distance(b), 100);
+    }
 }

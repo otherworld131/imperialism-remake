@@ -523,4 +523,104 @@ mod tests {
     fn id_display() {
         assert_eq!(format!("{}", NationId(42)), "NationId(42)");
     }
+
+    // ── TurnNumber ordering ────────────────────────────────────
+
+    #[test]
+    fn turn_number_ordering() {
+        let turn1 = TurnNumber::new(1);
+        let turn2 = TurnNumber::new(2);
+        assert!(turn1 < turn2);
+        assert!(turn2 > turn1);
+        assert!(turn1 <= turn1);
+        assert!(turn1 >= turn1);
+    }
+
+    #[test]
+    fn turn_number_ordering_late_game() {
+        let t400 = TurnNumber::new(400);
+        let t401 = TurnNumber::new(401);
+        assert!(t400 < t401);
+    }
+
+    // ── Money negative detection ───────────────────────────────
+
+    #[test]
+    fn money_negative_detection() {
+        assert!(Money::dollars(-1).is_negative());
+        assert!(Money::from_cents(-1).is_negative());
+        assert!(!Money::dollars(0).is_negative());
+        assert!(!Money::dollars(1).is_negative());
+    }
+
+    #[test]
+    fn money_subtraction_can_go_negative() {
+        let result = Money::dollars(100) - Money::dollars(200);
+        assert!(result.is_negative());
+        assert_eq!(result.as_dollars(), -100);
+    }
+
+    // ── Money overflow behavior ────────────────────────────────
+
+    #[test]
+    fn money_very_large_amounts() {
+        let large = Money::dollars(1_000_000_000); // $1 billion
+        assert_eq!(large.as_dollars(), 1_000_000_000);
+        assert!(!large.is_negative());
+
+        // Adding two large amounts should not overflow i64
+        let doubled = large + large;
+        assert_eq!(doubled.as_dollars(), 2_000_000_000);
+    }
+
+    #[test]
+    fn money_multiply_large() {
+        let m = Money::dollars(100_000);
+        let result = m * 10_000;
+        assert_eq!(result.as_dollars(), 1_000_000_000);
+    }
+
+    // ── ResourceType::is_tradeable covers all variants ─────────
+
+    #[test]
+    fn is_tradeable_covers_all_variants() {
+        let all_resources = [
+            ResourceType::Timber,
+            ResourceType::Coal,
+            ResourceType::Iron,
+            ResourceType::Cotton,
+            ResourceType::Wool,
+            ResourceType::Grain,
+            ResourceType::Fruit,
+            ResourceType::Livestock,
+            ResourceType::Horses,
+            ResourceType::Oil,
+            ResourceType::Gold,
+            ResourceType::Gems,
+        ];
+
+        // Exactly Grain and Horses are not tradeable
+        let non_tradeable: Vec<_> = all_resources.iter().filter(|r| !r.is_tradeable()).collect();
+        assert_eq!(non_tradeable.len(), 2);
+        assert!(non_tradeable.contains(&&ResourceType::Grain));
+        assert!(non_tradeable.contains(&&ResourceType::Horses));
+
+        // All others are tradeable
+        let tradeable: Vec<_> = all_resources.iter().filter(|r| r.is_tradeable()).collect();
+        assert_eq!(tradeable.len(), 10);
+    }
+
+    // ── Money checked_sub edge cases ───────────────────────────
+
+    #[test]
+    fn money_checked_sub_equal_amounts() {
+        let a = Money::dollars(500);
+        assert_eq!(a.checked_sub(a), Some(Money::ZERO));
+    }
+
+    #[test]
+    fn money_checked_sub_zero() {
+        let a = Money::dollars(500);
+        assert_eq!(a.checked_sub(Money::ZERO), Some(a));
+    }
 }

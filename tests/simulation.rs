@@ -1,6 +1,9 @@
+mod test_helpers;
+
 use domain::game_state::new_game;
 use domain::turn::process_turn;
 use domain::types::*;
+use test_helpers::{game_at_turn, game_with_difficulty, minimal_game};
 
 /// Run a full game simulation and verify invariants hold throughout.
 fn run_simulation(
@@ -239,7 +242,7 @@ fn test_multiple_difficulties() {
     let mut starting_treasuries: Vec<Money> = Vec::new();
 
     for difficulty in &difficulties {
-        let game = new_game("difficulty_test", *difficulty, 0);
+        let game = game_with_difficulty(*difficulty);
         let human = game.get_nation(game.human_player_nation).unwrap();
         starting_treasuries.push(human.treasury);
 
@@ -303,4 +306,43 @@ fn test_all_nations_as_player() {
         unique_count, 7,
         "Each human_nation_index should select a different Great Power"
     );
+}
+
+// ── Tests using test_helpers builders ────────────────────────────
+
+#[test]
+fn test_minimal_game_is_valid() {
+    let game = minimal_game();
+    assert_valid_game_state(&game);
+    assert_eq!(game.turn, TurnNumber::new(1));
+    assert_eq!(game.difficulty, Difficulty::Normal);
+}
+
+#[test]
+fn test_game_at_turn_advances_correctly() {
+    let game = game_at_turn(11);
+    assert_eq!(game.turn, TurnNumber::new(11));
+    assert_valid_game_state(&game);
+}
+
+#[test]
+fn test_game_at_turn_1_is_initial_state() {
+    let game = game_at_turn(1);
+    assert_eq!(game.turn, TurnNumber::new(1));
+    assert_valid_game_state(&game);
+}
+
+#[test]
+fn test_game_with_difficulty_builder() {
+    for difficulty in [
+        Difficulty::Introductory,
+        Difficulty::Easy,
+        Difficulty::Normal,
+        Difficulty::Hard,
+        Difficulty::NighOnImpossible,
+    ] {
+        let game = game_with_difficulty(difficulty);
+        assert_eq!(game.difficulty, difficulty);
+        assert_valid_game_state(&game);
+    }
 }

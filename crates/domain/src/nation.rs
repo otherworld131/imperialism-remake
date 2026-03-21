@@ -560,4 +560,123 @@ mod tests {
         assert!(!n.consume_goods(GoodsType::Clothing, 5));
         assert_eq!(n.goods_amount(GoodsType::Clothing), 2);
     }
+
+    // ── Province count after adding/removing ─────────────────
+
+    #[test]
+    fn province_count_tracks_additions() {
+        let mut n = sample_great_power();
+        assert_eq!(n.province_count(), 1); // starts with capital
+        n.add_province(ProvinceId(11));
+        n.add_province(ProvinceId(12));
+        n.add_province(ProvinceId(13));
+        assert_eq!(n.province_count(), 4);
+    }
+
+    #[test]
+    fn province_ids_contains_all_added() {
+        let mut n = sample_great_power();
+        n.add_province(ProvinceId(11));
+        n.add_province(ProvinceId(12));
+        assert!(n.province_ids.contains(&ProvinceId(10))); // capital
+        assert!(n.province_ids.contains(&ProvinceId(11)));
+        assert!(n.province_ids.contains(&ProvinceId(12)));
+    }
+
+    // ── Warehouse operations don't go negative ──────────────
+
+    #[test]
+    fn remove_resource_does_not_go_negative() {
+        let mut n = sample_great_power();
+        n.add_resource(ResourceType::Timber, 3);
+        // Try to remove more than available
+        let result = n.remove_resource(ResourceType::Timber, 10);
+        assert!(!result);
+        assert_eq!(n.resource_amount(ResourceType::Timber), 3);
+    }
+
+    #[test]
+    fn consume_material_does_not_go_negative() {
+        let mut n = sample_great_power();
+        n.add_material(MaterialType::Steel, 2);
+        let result = n.consume_material(MaterialType::Steel, 5);
+        assert!(!result);
+        assert_eq!(n.material_amount(MaterialType::Steel), 2);
+    }
+
+    #[test]
+    fn consume_goods_does_not_go_negative() {
+        let mut n = sample_great_power();
+        n.add_goods(GoodsType::Furniture, 1);
+        let result = n.consume_goods(GoodsType::Furniture, 3);
+        assert!(!result);
+        assert_eq!(n.goods_amount(GoodsType::Furniture), 1);
+    }
+
+    #[test]
+    fn remove_resource_from_empty_warehouse() {
+        let mut n = sample_great_power();
+        let result = n.remove_resource(ResourceType::Coal, 1);
+        assert!(!result);
+        assert_eq!(n.resource_amount(ResourceType::Coal), 0);
+    }
+
+    // ── Military firepower calculation with medals ──────────
+
+    #[test]
+    fn total_military_firepower_with_no_units() {
+        let n = sample_great_power();
+        assert!((n.total_military_firepower() - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn total_military_firepower_with_medals() {
+        use crate::map::UnitId;
+        use crate::military::units::{ArmyUnit, ArmyUnitType};
+
+        let mut n = sample_great_power();
+
+        // Add a Regulars unit with 2 medals
+        let mut unit1 = ArmyUnit::new(
+            UnitId(1),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(10),
+        );
+        unit1.award_medal();
+        unit1.award_medal();
+        // Regulars base fp = 2, 2 medals = 1.5x => 3.0
+        n.army.push(unit1);
+
+        // Add a Guards unit with 0 medals
+        let unit2 = ArmyUnit::new(UnitId(2), ArmyUnitType::Guards, NationId(1), ProvinceId(10));
+        // Guards base fp = 5, 0 medals = 1.0x => 5.0
+        n.army.push(unit2);
+
+        // Total: 3.0 + 5.0 = 8.0
+        assert!((n.total_military_firepower() - 8.0).abs() < f64::EPSILON);
+    }
+
+    // ── Building ownership checks ────────────────────────────
+
+    #[test]
+    fn has_building_after_adding() {
+        let mut n = sample_great_power();
+        n.buildings.push(Building::new(BuildingType::LumberMill, 2));
+        assert!(n.has_building(BuildingType::LumberMill));
+        assert!(!n.has_building(BuildingType::SteelMill));
+    }
+
+    #[test]
+    fn get_building_mut_modifies_capacity() {
+        let mut n = sample_great_power();
+        n.buildings.push(Building::new(BuildingType::SteelMill, 1));
+        let mill = n.get_building_mut(BuildingType::SteelMill).unwrap();
+        mill.start_expansion(3);
+        assert!(
+            n.buildings
+                .iter()
+                .any(|b| b.building_type == BuildingType::SteelMill && b.pending_capacity == 3)
+        );
+    }
 }

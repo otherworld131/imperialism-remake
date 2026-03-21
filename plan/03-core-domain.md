@@ -65,7 +65,7 @@ services. It has **zero** external dependencies — no framework, no I/O, no UI.
 - [x] `UnitCreated / UnitDestroyed / UnitUpgraded`
 - [x] `TradeCompleted(NationId buyer, NationId seller, ...)`
 - [x] `BuildingConstructed / BuildingUpgraded`
-- [ ] `NationEliminatedFromCouncil`
+- [x] `NationEliminatedFromCouncil`
 - [x] `VictoryAchieved(NationId winner, VictoryType)`
 
 ### Verification Strategy

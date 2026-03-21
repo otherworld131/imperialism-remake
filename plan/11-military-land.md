@@ -68,8 +68,8 @@ significantly boost effectiveness (4 medals ≈ 2× firepower).
 
 ### Unit Upgrades
 - [x] Most units can be upgraded to a higher-grade version when tech is researched
-- [ ] Upgrade retains the soldier and all earned medals
-- [ ] Only equipment cost is paid (not full unit cost)
+- [x] Upgrade retains the soldier and all earned medals
+- [x] Only equipment cost is paid (not full unit cost)
 - [x] Example: Regulars → Rifle Infantry → Modern Infantry
 - [x] Example: Cuirassiers → Carbine Cavalry → Armour
 - [x] Example: Light Artillery → Field Artillery → Mobile Artillery

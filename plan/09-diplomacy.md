@@ -34,9 +34,9 @@ The Council of Governors voting system is the primary victory path.
   - [x] Refusing to honor alliance: alliance broken + diplomatic standing penalty
   - [x] Negotiating separate peace: also breaks alliance + penalty
   - [x] Unit tests: alliance obligation triggers, penalty calculations
-- [ ] **Request to Join Empire** (Minor Nation → Great Power)
-  - [ ] Triggered when a Minor Nation's relationship with a Great Power is sufficiently high
-  - [ ] Minor Nation voluntarily incorporates into the empire
+- [x] **Request to Join Empire** (Minor Nation → Great Power)
+  - [x] Triggered when a Minor Nation's relationship with a Great Power is sufficiently high
+  - [x] Minor Nation voluntarily incorporates into the empire
   - [ ] Unit tests: voluntary incorporation threshold
 - [x] **Peace Treaty**
   - [x] Ends active war between two nations
