@@ -42,17 +42,17 @@ services. It has **zero** external dependencies — no framework, no I/O, no UI.
 - [x] `Province` entity — name, owner, tiles collection, capital tile, garrison
 - [x] `Tile` entity — HexCoord, terrain, resource, improvement level, infrastructure
 - [x] `Unit` entity — type, owner, position, health, medals, movement points
-- [ ] `Building` entity — type, capacity, upgrades
+- [x] `Building` entity — type, capacity, upgrades
 - [ ] `TechResearch` entity — tech ID, researched flag, turn researched
 
 ### Domain Services (Traits)
-- [ ] `MapGenerator` trait — creates a random map from a seed/key
-- [ ] `TurnProcessor` trait — orchestrates a full turn resolution
-- [ ] `CombatResolver` trait — resolves land and naval battles
+- [x] `MapGenerator` trait — creates a random map from a seed/key
+- [x] `TurnProcessor` trait — orchestrates a full turn resolution
+- [x] `CombatResolver` trait — resolves land and naval battles
 - [ ] `TradeResolver` trait — resolves trade session offers/bids
 - [ ] `DiplomacyResolver` trait — resolves treaty proposals and diplomatic actions
 - [ ] `AiDecisionMaker` trait — trait for AI player strategies
-- [ ] `VictoryChecker` trait — evaluates Council of Governors vote
+- [x] `VictoryChecker` trait — evaluates Council of Governors vote
 
 ### Domain Events (Initial Set)
 - [x] `TurnStarted(TurnNumber)`

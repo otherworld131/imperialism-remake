@@ -131,14 +131,14 @@ with `--no-default-features` and no rendering framework, the boundary is intact.
 - [ ] No DI framework — Rust's type system + manual wiring is sufficient
 
 ### Architectural Decision Records (ADRs)
-- [ ] ADR-001: Language & framework selection (Rust + Lua + Bevy/Godot)
-- [ ] ADR-002: Hex coordinate system (axial vs. offset vs. cube)
-- [ ] ADR-003: State management approach (immutable snapshots vs. mutable + events)
-- [ ] ADR-004: AI architecture (Rust engine + Lua strategy scripts)
-- [ ] ADR-005: Networking model (lockstep vs. client-server vs. relay)
-- [ ] ADR-006: Rust/Lua boundary — what lives where and why
-- [ ] ADR-007: Frontend framework selection and swappability guarantees
-- [ ] Template: `docs/adr/NNNN-title.md` with Status / Context / Decision / Consequences
+- [x] ADR-001: Language & framework selection (Rust + Lua + Bevy/Godot)
+- [x] ADR-002: Hex coordinate system (axial vs. offset vs. cube)
+- [x] ADR-003: State management approach (immutable snapshots vs. mutable + events)
+- [x] ADR-004: AI architecture (Rust engine + Lua strategy scripts)
+- [x] ADR-005: Networking model (lockstep vs. client-server vs. relay)
+- [x] ADR-006: Rust/Lua boundary — what lives where and why
+- [x] ADR-007: Frontend framework selection and swappability guarantees
+- [x] Template: `docs/adr/NNNN-title.md` with Status / Context / Decision / Consequences
 
 ### Verification Strategy
 - [ ] **Compile check**: `cargo build` succeeds with zero warnings across all crates

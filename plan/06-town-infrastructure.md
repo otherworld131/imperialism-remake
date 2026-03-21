@@ -94,7 +94,7 @@ and factory capacity.
 - [x] **Oil Refinery** — process oil (unlocked by Oil Drilling tech)
 - [x] **Power Plant** — uses oil for bonuses (unlocked by Oil Drilling tech)
 - [x] All expandable: 1 lumber + 1 steel per capacity unit
-- [ ] Easy difficulty: start with 3 mills (cap 2) + 3 factories (cap 1)
+- [x] Easy difficulty: start with 3 mills (cap 2) + 3 factories (cap 1)
 - [ ] Harder difficulties: must be built from scratch
 - [x] Unit tests for building construction and expansion
 
