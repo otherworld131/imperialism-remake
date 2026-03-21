@@ -14,7 +14,7 @@ comprehensive.
 - [ ] Every value object: equality, immutability, arithmetic, edge cases
 - [ ] Every entity: creation, state transitions, invariant enforcement
 - [ ] Every domain service: correct output for known inputs
-- [ ] Hex coordinate math: 30+ test cases covering all operations
+- [x] Hex coordinate math: 30+ test cases covering all operations
 - [x] Production chain calculations: all combinations of inputs → outputs
 - [x] Combat resolution: deterministic outcomes for fixed inputs
 - [ ] Tech tree: prerequisite validation, availability windows, effects
@@ -63,11 +63,11 @@ comprehensive.
 - [ ] Test framework: built-in `#[test]` + `rstest` or `test-case`
 - [ ] Assertion library: `assert_eq!`, `assert_matches!`, `pretty_assertions` crate (readable assertions)
 - [ ] Mocking library: `mockall` crate (for port/trait mocking)
-- [ ] Test data builders: fluent builders for complex domain objects
-- [ ] `GameStateBuilder` — creates game states for testing with sensible defaults
-- [ ] `NationBuilder`, `ProvinceBuilder`, `UnitBuilder`, etc.
-- [ ] Deterministic RNG: seedable random for reproducible tests
-- [ ] Test fixtures for common scenarios (early game, mid game, late game, war, peace)
+- [x] Test data builders: fluent builders for complex domain objects
+- [x] `GameStateBuilder` — creates game states for testing with sensible defaults
+- [x] `NationBuilder`, `ProvinceBuilder`, `UnitBuilder`, etc.
+- [x] Deterministic RNG: seedable random for reproducible tests
+- [x] Test fixtures for common scenarios (early game, mid game, late game, war, peace)
 
 ### Property-Based Tests
 - [ ] Map generation: random seeds always produce valid maps

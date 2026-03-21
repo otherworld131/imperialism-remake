@@ -43,7 +43,7 @@ services. It has **zero** external dependencies — no framework, no I/O, no UI.
 - [x] `Tile` entity — HexCoord, terrain, resource, improvement level, infrastructure
 - [x] `Unit` entity — type, owner, position, health, medals, movement points
 - [x] `Building` entity — type, capacity, upgrades
-- [ ] `TechResearch` entity — tech ID, researched flag, turn researched
+- [x] `TechResearch` entity — tech ID, researched flag, turn researched
 
 ### Domain Services (Traits)
 - [x] `MapGenerator` trait — creates a random map from a seed/key

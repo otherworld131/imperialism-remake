@@ -17,12 +17,12 @@ The save format should be stable, versioned, and forward-compatible.
 ### Serialization Format
 - [x] JSON primary format (human-readable, debuggable, moddable)
 - [ ] Binary format option for faster load times (`bincode`, `postcard`, or `rmp-serde`)
-- [ ] Schema versioning: each save file includes a format version number
-- [ ] Forward compatibility: newer game versions can load older saves
-- [ ] Migration system: version N save → version N+1 transformation
+- [x] Schema versioning: each save file includes a format version number
+- [x] Forward compatibility: newer game versions can load older saves
+- [x] Migration system: version N save → version N+1 transformation
 - [ ] Compression: saves compressed with gzip/zstd for disk efficiency
 - [x] Unit tests: serialize → deserialize roundtrip produces identical state
-- [ ] Unit tests: schema migration from older versions
+- [x] Unit tests: schema migration from older versions
 
 ### Save Slots
 - [ ] Multiple save slots (at least 20)
@@ -66,4 +66,4 @@ The save format should be stable, versioned, and forward-compatible.
 - [ ] **Migration test**: Create save with version N schema → migrate to N+1 → load successfully
 - [ ] **Autosave test**: Play 5 turns → verify 5 autosave files created
 - [ ] **Performance test**: Save a full game state (7 nations, 120 provinces, all units) → save < 1 second, load < 2 seconds
-- [ ] **Cross-version test**: Save with build X, load with build X+1 → verify compatibility
+- [x] **Cross-version test**: Save with build X, load with build X+1 → verify compatibility

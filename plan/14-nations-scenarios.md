@@ -73,9 +73,9 @@ historical scenarios with real European powers. Nations are data-driven and modd
 - [x] **Normal** — human and AI on almost equal footing
 - [x] **Hard** — AI advantages
 - [x] **Nigh-On Impossible (NOI)** — for expert players
-- [ ] Difficulty affects: starting cash, warehouse contents, mineral density, capital selection, AI bonuses
+- [x] Difficulty affects: starting cash, warehouse contents, mineral density, capital selection, AI bonuses
 - [ ] Tutorial mode available separately
-- [ ] Unit tests: each difficulty level applies correct modifiers
+- [x] Unit tests: each difficulty level applies correct modifiers
 
 ### Verification Strategy
 - [ ] **Unit tests**: Run test suite — all nation/scenario tests pass
