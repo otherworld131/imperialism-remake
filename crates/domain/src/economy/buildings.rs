@@ -47,6 +47,30 @@ impl Building {
         self.turns_until_upgrade = 2;
     }
 
+    /// Returns the next capacity level following the progression:
+    /// 2 -> 4 -> 8 -> 12 -> 16 -> 20 -> ...
+    pub fn next_capacity(&self) -> u32 {
+        match self.capacity {
+            c if c < 2 => 2,
+            2 => 4,
+            4 => 8,
+            8 => 12,
+            12 => 16,
+            16 => 20,
+            _ => self.capacity + 4,
+        }
+    }
+
+    /// Start expanding this building to its next capacity tier.
+    /// Uses the capacity progression (2 -> 4 -> 8 -> 12 -> 16 -> 20 -> ...).
+    /// Sets pending_capacity and a 2-turn delay before it takes effect.
+    pub fn start_expansion_to_next_tier(&mut self) {
+        let next = self.next_capacity();
+        let increase = next - self.capacity;
+        self.pending_capacity = increase;
+        self.turns_until_upgrade = 2;
+    }
+
     /// Advance the building by one turn. When the upgrade countdown reaches 0,
     /// pending capacity is applied to the building's capacity.
     pub fn tick(&mut self) {
@@ -226,5 +250,76 @@ mod tests {
             let b = Building::new(bt, 1);
             assert_eq!(b.building_type, bt);
         }
+    }
+
+    // ── Capacity progression ──────────────────────────────────────
+
+    #[test]
+    fn next_capacity_from_zero() {
+        let b = Building::new(BuildingType::LumberMill, 0);
+        assert_eq!(b.next_capacity(), 2);
+    }
+
+    #[test]
+    fn next_capacity_from_one() {
+        let b = Building::new(BuildingType::LumberMill, 1);
+        assert_eq!(b.next_capacity(), 2);
+    }
+
+    #[test]
+    fn next_capacity_from_two() {
+        let b = Building::new(BuildingType::LumberMill, 2);
+        assert_eq!(b.next_capacity(), 4);
+    }
+
+    #[test]
+    fn next_capacity_from_four() {
+        let b = Building::new(BuildingType::LumberMill, 4);
+        assert_eq!(b.next_capacity(), 8);
+    }
+
+    #[test]
+    fn next_capacity_from_eight() {
+        let b = Building::new(BuildingType::LumberMill, 8);
+        assert_eq!(b.next_capacity(), 12);
+    }
+
+    #[test]
+    fn next_capacity_from_twelve() {
+        let b = Building::new(BuildingType::LumberMill, 12);
+        assert_eq!(b.next_capacity(), 16);
+    }
+
+    #[test]
+    fn next_capacity_from_sixteen() {
+        let b = Building::new(BuildingType::LumberMill, 16);
+        assert_eq!(b.next_capacity(), 20);
+    }
+
+    #[test]
+    fn next_capacity_from_twenty() {
+        let b = Building::new(BuildingType::LumberMill, 20);
+        assert_eq!(b.next_capacity(), 24);
+    }
+
+    #[test]
+    fn start_expansion_to_next_tier_from_two() {
+        let mut b = Building::new(BuildingType::SteelMill, 2);
+        b.start_expansion_to_next_tier();
+        assert_eq!(b.pending_capacity, 2); // 4 - 2 = 2
+        assert_eq!(b.turns_until_upgrade, 2);
+        b.tick();
+        b.tick();
+        assert_eq!(b.capacity, 4);
+    }
+
+    #[test]
+    fn start_expansion_to_next_tier_from_four() {
+        let mut b = Building::new(BuildingType::SteelMill, 4);
+        b.start_expansion_to_next_tier();
+        assert_eq!(b.pending_capacity, 4); // 8 - 4 = 4
+        b.tick();
+        b.tick();
+        assert_eq!(b.capacity, 8);
     }
 }

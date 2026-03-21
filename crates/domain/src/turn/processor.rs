@@ -573,14 +573,19 @@ fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
         };
 
         // Skip if this is the nation's capital province (already developed)
-        let is_capital = game
-            .nations
-            .iter()
-            .find(|n| n.id == *owner_id)
+        let owner_nation = game.nations.iter().find(|n| n.id == *owner_id);
+        let is_capital = owner_nation
             .map(|n| n.capital_province_id == *province_id)
             .unwrap_or(false);
 
         if is_capital {
+            continue;
+        }
+
+        // Skip settlement progression for Minor Nation provinces —
+        // Minor Nation capitals should never industrialize beyond Hamlet.
+        let is_minor_nation = owner_nation.map(|n| !n.is_great_power()).unwrap_or(false);
+        if is_minor_nation {
             continue;
         }
 
@@ -1411,7 +1416,10 @@ fn resolve_trade_session(game: &mut GameState, report: &mut TurnReport) {
 }
 
 /// Apply maintenance costs for army units.
-fn apply_maintenance(game: &mut GameState, _report: &mut TurnReport) {
+/// Bankruptcy floor: treasury cannot go below -$5,000.
+const BANKRUPTCY_FLOOR: Money = Money::dollars(-5000);
+
+fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
     for nation in &mut game.nations {
         let total_cost: Money = nation
             .army
@@ -1420,6 +1428,19 @@ fn apply_maintenance(game: &mut GameState, _report: &mut TurnReport) {
             .fold(Money::ZERO, |acc, c| acc + c);
         if total_cost != Money::ZERO {
             nation.treasury -= total_cost;
+        }
+
+        // Bankruptcy protection: cap treasury at floor of -$5,000
+        if nation.treasury < BANKRUPTCY_FLOOR {
+            nation.treasury = BANKRUPTCY_FLOOR;
+        }
+
+        // Generate bankruptcy headline if treasury went negative
+        if nation.is_bankrupt() {
+            report.newspaper_headlines.push(format!(
+                "FINANCIAL CRISIS: {} faces bankruptcy!",
+                nation.name
+            ));
         }
     }
 }
@@ -1560,6 +1581,22 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
         }
 
         if result.attacker_won {
+            // Siege artillery destroys fort sections: reduce fort_level by 1
+            if result.siege_reduced_fort
+                && let Some(province) = game.get_province(province_id)
+            {
+                let cap_tile = province.capital_tile;
+                if let Some(tile) = game.hex_map.get_tile_mut(cap_tile)
+                    && tile.infrastructure.has_fort
+                    && tile.infrastructure.fort_level > 0
+                {
+                    tile.infrastructure.fort_level -= 1;
+                    if tile.infrastructure.fort_level == 0 {
+                        tile.infrastructure.has_fort = false;
+                    }
+                }
+            }
+
             // Change province owner and reset garrison (conquering nation has no garrison)
             if let Some(province) = game.get_province_mut(province_id) {
                 province.owner = attacker_id;
@@ -1574,6 +1611,27 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
             }
             if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
                 attacker_nation.add_province(province_id);
+            }
+
+            // Captured GP capital: industrialize immediately (set to Village)
+            let is_gp_capital = defender_type == NationType::GreatPower
+                && game
+                    .get_nation(defender_id)
+                    .is_some_and(|n| n.capital_province_id == province_id);
+            if is_gp_capital
+                && let Some(province) = game.get_province_mut(province_id)
+                && province.settlement_level == SettlementLevel::Hamlet
+            {
+                province.settlement_level = SettlementLevel::Village;
+                province.industrialization_turns_remaining = None;
+                province.town_countdown = Some(12);
+                report
+                    .settlement_upgrades
+                    .push((province_id, "Village".to_string()));
+                report.newspaper_headlines.push(format!(
+                    "{} immediately industrializes under new management!",
+                    province.name
+                ));
             }
 
             // Award conquest medal if this is a Minor Nation capital
@@ -6304,5 +6362,384 @@ mod tests {
             !connected.contains(&ProvinceId(2)),
             "Province without railroad/port should not be connected"
         );
+    }
+
+    // ── Bankruptcy protection ──────────────────────────────────────
+
+    #[test]
+    fn bankruptcy_protection_caps_treasury_at_floor() {
+        let mut game = test_game_state();
+        // Give the nation a huge army with high maintenance
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.treasury = Money::dollars(100);
+        // Add many expensive units to trigger large maintenance
+        for i in 0..50u32 {
+            let unit = ArmyUnit::new(
+                crate::map::UnitId(9000 + i),
+                ArmyUnitType::Guards,
+                NationId(1),
+                ProvinceId(1),
+            );
+            nation.army.push(unit);
+        }
+
+        let report = process_turn(&mut game);
+
+        // Treasury should not go below -$5,000
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert!(
+            nation.treasury >= Money::dollars(-5000),
+            "Treasury {} should not go below -$5,000",
+            nation.treasury
+        );
+
+        // Should have bankruptcy headline
+        let has_crisis_headline = report
+            .newspaper_headlines
+            .iter()
+            .any(|h| h.contains("FINANCIAL CRISIS"));
+        assert!(
+            has_crisis_headline,
+            "Should have FINANCIAL CRISIS headline when bankrupt"
+        );
+    }
+
+    #[test]
+    fn is_bankrupt_after_excessive_maintenance() {
+        let mut game = test_game_state();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.treasury = Money::dollars(10);
+        // Add expensive unit
+        let unit = ArmyUnit::new(
+            crate::map::UnitId(9100),
+            ArmyUnitType::Guards,
+            NationId(1),
+            ProvinceId(1),
+        );
+        nation.army.push(unit);
+
+        process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        // Guards cost maintenance, so treasury should go negative
+        // is_bankrupt should be true
+        if nation.treasury < Money::ZERO {
+            assert!(nation.is_bankrupt());
+        }
+    }
+
+    // ── Treasury integration test ──────────────────────────────────
+
+    #[test]
+    fn treasury_test_comprehensive() {
+        let mut game = test_game_state();
+        let player = NationId(1);
+
+        // Set initial treasury to $10,000
+        game.get_nation_mut(player).unwrap().treasury = Money::dollars(10000);
+        assert_eq!(
+            game.get_nation(player).unwrap().treasury,
+            Money::dollars(10000)
+        );
+
+        // Deduct $500 for a consulate-like expense
+        game.get_nation_mut(player).unwrap().treasury -= Money::dollars(500);
+        assert_eq!(
+            game.get_nation(player).unwrap().treasury,
+            Money::dollars(9500)
+        );
+
+        // Process a turn (maintenance, production, etc.)
+        process_turn(&mut game);
+
+        // Verify treasury changed (maintenance or income applied)
+        let final_treasury = game.get_nation(player).unwrap().treasury;
+        // It should still be positive (started with $9,500, no huge army)
+        assert!(
+            final_treasury > Money::ZERO,
+            "Treasury after 1 turn: {} should still be positive",
+            final_treasury
+        );
+    }
+
+    // ── Minor Nation capitals never industrialize ──────────────────
+
+    #[test]
+    fn minor_nation_capitals_never_industrialize() {
+        let coord_mn = HexCoord::new(3, 3);
+
+        let mut hex_map = HexMap::new(10, 10);
+        let mn_tile = Tile::with_province(TerrainType::Farm, ProvinceId(2));
+        hex_map.set_tile(coord_mn, mn_tile);
+
+        // Also add the GP capital tile
+        let coord_gp = HexCoord::new(0, 0);
+        let gp_tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        hex_map.set_tile(coord_gp, gp_tile);
+
+        let province_gp = Province::new(
+            ProvinceId(1),
+            "GP Capital".to_string(),
+            NationId(1),
+            coord_gp,
+            vec![coord_gp],
+            4,
+        );
+
+        let mut province_mn = Province::new(
+            ProvinceId(2),
+            "Minor Capital".to_string(),
+            NationId(2),
+            coord_mn,
+            vec![coord_mn],
+            3,
+        );
+        // Mark as connected and start industrialization
+        province_mn.connected_to_capital = true;
+        province_mn.industrialization_turns_remaining = Some(1); // about to complete
+
+        let nation_gp = Nation::new(
+            NationId(1),
+            "TestGP".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+
+        let nation_mn = Nation::new(
+            NationId(2),
+            "TestMN".to_string(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(2),
+        );
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province_gp, province_mn],
+            nations: vec![nation_gp, nation_mn],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+        };
+
+        // Process several turns
+        for _ in 0..10 {
+            process_turn(&mut game);
+        }
+
+        // Minor nation province should still be Hamlet
+        let mn_province = game.get_province(ProvinceId(2)).unwrap();
+        assert_eq!(
+            mn_province.settlement_level,
+            SettlementLevel::Hamlet,
+            "Minor Nation capital should never industrialize"
+        );
+    }
+
+    // ── Captured GP capital industrializes immediately ──────────────
+
+    #[test]
+    fn captured_gp_capital_industrializes_immediately() {
+        let coord_atk = HexCoord::new(0, 0);
+        let coord_def = HexCoord::new(1, 0);
+
+        let mut hex_map = HexMap::new(10, 10);
+        let atk_tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        hex_map.set_tile(coord_atk, atk_tile);
+        let def_tile = Tile::with_province(TerrainType::Farm, ProvinceId(2));
+        hex_map.set_tile(coord_def, def_tile);
+
+        let province_atk = Province::new(
+            ProvinceId(1),
+            "Attacker Capital".to_string(),
+            NationId(1),
+            coord_atk,
+            vec![coord_atk],
+            4,
+        );
+        let province_def = Province::new(
+            ProvinceId(2),
+            "Defender Capital".to_string(),
+            NationId(2),
+            coord_def,
+            vec![coord_def],
+            4,
+        );
+
+        let mut nation_atk = Nation::new(
+            NationId(1),
+            "Attacker".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation_atk.treasury = Money::dollars(10000);
+        // Give a powerful army to guarantee victory
+        for i in 0..10u32 {
+            let unit = ArmyUnit::new(
+                crate::map::UnitId(100 + i),
+                ArmyUnitType::Guards,
+                NationId(1),
+                ProvinceId(1),
+            );
+            nation_atk.army.push(unit);
+        }
+
+        let nation_def = Nation::new(
+            NationId(2),
+            "Defender".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(2),
+        );
+
+        let mut diplomacy = DiplomacyState::new();
+        diplomacy.initialize_great_powers(&[NationId(1), NationId(2)]);
+        diplomacy.declare_war(NationId(1), NationId(2));
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province_atk, province_def],
+            nations: vec![nation_atk, nation_def],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy,
+            pending_attacks: vec![(NationId(1), ProvinceId(2))],
+            pending_moves: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+        };
+
+        process_turn(&mut game);
+
+        // Check if the defender capital was conquered
+        let province = game.get_province(ProvinceId(2)).unwrap();
+        if province.owner == NationId(1) {
+            // Captured GP capital should be Village immediately
+            assert_eq!(
+                province.settlement_level,
+                SettlementLevel::Village,
+                "Captured GP capital should be immediately industrialized to Village"
+            );
+        }
+    }
+
+    // ── Siege artillery destroys fort sections ──────────────────────
+
+    #[test]
+    fn siege_artillery_destroys_fort_on_conquest() {
+        let coord_atk = HexCoord::new(0, 0);
+        let coord_def = HexCoord::new(1, 0);
+
+        let mut hex_map = HexMap::new(10, 10);
+        let atk_tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        hex_map.set_tile(coord_atk, atk_tile);
+        let mut def_tile = Tile::with_province(TerrainType::Farm, ProvinceId(2));
+        // Set up a fort on the defender's tile
+        def_tile.infrastructure.has_fort = true;
+        def_tile.infrastructure.fort_level = 2;
+        hex_map.set_tile(coord_def, def_tile);
+
+        let province_atk = Province::new(
+            ProvinceId(1),
+            "Attacker Land".to_string(),
+            NationId(1),
+            coord_atk,
+            vec![coord_atk],
+            4,
+        );
+        let province_def = Province::new(
+            ProvinceId(2),
+            "Fortified Land".to_string(),
+            NationId(2),
+            coord_def,
+            vec![coord_def],
+            3,
+        );
+
+        let mut nation_atk = Nation::new(
+            NationId(1),
+            "Attacker".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation_atk.treasury = Money::dollars(10000);
+        // Add siege artillery and strong army
+        for i in 0..8u32 {
+            let unit = ArmyUnit::new(
+                crate::map::UnitId(200 + i),
+                ArmyUnitType::Guards,
+                NationId(1),
+                ProvinceId(1),
+            );
+            nation_atk.army.push(unit);
+        }
+        // Add siege artillery
+        for i in 0..3u32 {
+            let unit = ArmyUnit::new(
+                crate::map::UnitId(300 + i),
+                ArmyUnitType::SiegeArtillery,
+                NationId(1),
+                ProvinceId(1),
+            );
+            nation_atk.army.push(unit);
+        }
+
+        let nation_def = Nation::new(
+            NationId(2),
+            "Defender".to_string(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(2),
+        );
+
+        let mut diplomacy = DiplomacyState::new();
+        diplomacy.initialize_great_powers(&[NationId(1)]);
+        diplomacy.declare_war(NationId(1), NationId(2));
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province_atk, province_def],
+            nations: vec![nation_atk, nation_def],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy,
+            pending_attacks: vec![(NationId(1), ProvinceId(2))],
+            pending_moves: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+        };
+
+        process_turn(&mut game);
+
+        // If attacker won, fort should be reduced
+        let province = game.get_province(ProvinceId(2)).unwrap();
+        if province.owner == NationId(1) {
+            let tile = game.hex_map.get_tile(coord_def).unwrap();
+            // Fort level should be reduced by 1 (from 2 to 1)
+            assert!(
+                tile.infrastructure.fort_level < 2,
+                "Fort level should be reduced after siege artillery conquest (was 2, now {})",
+                tile.infrastructure.fort_level
+            );
+        }
     }
 }

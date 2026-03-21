@@ -294,6 +294,11 @@ impl Nation {
             self.researched_techs.push(tech);
         }
     }
+
+    /// Returns true if the nation's treasury is negative (in debt).
+    pub fn is_bankrupt(&self) -> bool {
+        self.treasury < Money::ZERO
+    }
 }
 
 #[cfg(test)]
@@ -756,5 +761,27 @@ mod tests {
         assert_eq!(deserialized.trade_history.len(), 1);
         assert_eq!(deserialized.trade_history[0].turn, TurnNumber::new(7));
         assert_eq!(deserialized.trade_history[0].partner, NationId(5));
+    }
+
+    // ── Bankruptcy ──────────────────────────────────────────────
+
+    #[test]
+    fn is_bankrupt_false_at_zero() {
+        let n = sample_great_power();
+        assert!(!n.is_bankrupt());
+    }
+
+    #[test]
+    fn is_bankrupt_false_when_positive() {
+        let mut n = sample_great_power();
+        n.treasury = Money::dollars(1000);
+        assert!(!n.is_bankrupt());
+    }
+
+    #[test]
+    fn is_bankrupt_true_when_negative() {
+        let mut n = sample_great_power();
+        n.treasury = Money::dollars(-1);
+        assert!(n.is_bankrupt());
     }
 }

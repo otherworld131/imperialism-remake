@@ -463,6 +463,20 @@ fn main() {
     }
 }
 
+/// Check if the human player's nation is bankrupt. If so, print a message and return true.
+fn check_bankrupt(game: &GameState) -> bool {
+    let player = game.get_nation(game.human_player_nation).unwrap();
+    if player.is_bankrupt() {
+        println!(
+            "  FINANCIAL CRISIS: Your nation is bankrupt (treasury: {}). No spending allowed until treasury recovers.",
+            player.treasury
+        );
+        true
+    } else {
+        false
+    }
+}
+
 /// Parse a building name string into a BuildingType.
 /// Only mills and factories can be built by the player.
 fn parse_buildable(name: &str) -> Option<BuildingType> {
@@ -484,6 +498,10 @@ fn parse_buildable(name: &str) -> Option<BuildingType> {
 }
 
 fn build_building(game: &mut GameState, query: &str) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let bt = match parse_buildable(query) {
         Some(bt) => bt,
         None => {
@@ -534,6 +552,10 @@ fn build_building(game: &mut GameState, query: &str) {
 }
 
 fn expand_building(game: &mut GameState, query: &str) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let bt = match parse_buildable(query) {
         Some(bt) => bt,
         None => {
@@ -556,8 +578,25 @@ fn expand_building(game: &mut GameState, query: &str) {
         return;
     }
 
-    // Cost: 1 lumber + 1 steel per new capacity unit; expand by 1
-    let expand_amount: u32 = 1;
+    // Calculate the expansion amount using capacity progression (2 -> 4 -> 8 -> 12 -> 16 -> ...)
+    let current_capacity = player
+        .buildings
+        .iter()
+        .find(|b| b.building_type == bt)
+        .map(|b| b.capacity)
+        .unwrap_or(0);
+    let next = match current_capacity {
+        c if c < 2 => 2,
+        2 => 4,
+        4 => 8,
+        8 => 12,
+        12 => 16,
+        16 => 20,
+        _ => current_capacity + 4,
+    };
+    let expand_amount = next - current_capacity;
+
+    // Cost: 1 lumber + 1 steel per new capacity unit
     let (lumber_needed, steel_needed) = Building::expansion_cost(expand_amount);
 
     let lumber_have = player.material_amount(MaterialType::Lumber);
@@ -579,8 +618,8 @@ fn expand_building(game: &mut GameState, query: &str) {
     building.start_expansion(expand_amount);
 
     println!(
-        "  Expanding {:?} by {} capacity (consumed {} lumber, {} steel). Will be ready in 2 turns.",
-        bt, expand_amount, lumber_needed, steel_needed
+        "  Expanding {:?} from {} to {} capacity (consumed {} lumber, {} steel). Will be ready in 2 turns.",
+        bt, current_capacity, next, lumber_needed, steel_needed
     );
 }
 
@@ -600,6 +639,10 @@ fn max_recruitment_capacity(player: &Nation) -> u32 {
 }
 
 fn recruit_worker(game: &mut GameState) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let player_id = game.human_player_nation;
     let player = game.get_nation(player_id).unwrap();
 
@@ -651,6 +694,10 @@ fn recruit_worker(game: &mut GameState) {
 }
 
 fn train_worker(game: &mut GameState) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let player_id = game.human_player_nation;
     let player = game.get_nation(player_id).unwrap();
 
@@ -704,6 +751,10 @@ fn unit_build_cost(unit_type: ArmyUnitType) -> Money {
 }
 
 fn build_unit(game: &mut GameState, query: &str) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let unit_type = match parse_unit_type(query) {
         Some(ut) => ut,
         None => {
@@ -747,6 +798,10 @@ fn build_unit(game: &mut GameState, query: &str) {
 /// Upgrade a unit at the given army index.
 /// Costs $500. Preserves medals and health.
 fn cmd_upgrade_unit(game: &mut GameState, index_str: &str) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let idx: usize = match index_str.parse() {
         Ok(i) => i,
         Err(_) => {
@@ -823,6 +878,10 @@ fn cmd_upgrade_unit(game: &mut GameState, index_str: &str) {
 
 /// Build a merchant ship (trader or indiaman).
 fn cmd_build_ship(game: &mut GameState, query: &str) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let ship_type = match query.to_lowercase().as_str() {
         "trader" => ShipType::Trader,
         "indiaman" => ShipType::Indiaman,
@@ -872,6 +931,10 @@ fn cmd_build_ship(game: &mut GameState, query: &str) {
 
 /// Build a warship (frigate or ship-of-the-line).
 fn cmd_build_warship(game: &mut GameState, query: &str) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let ship_type = match query.to_lowercase().as_str() {
         "frigate" => ShipType::Frigate,
         "ship-of-the-line" | "ship of the line" | "shipoftheline" => ShipType::ShipOfTheLine,
@@ -969,6 +1032,10 @@ fn print_navy(game: &GameState) {
 
 /// Produce arms: convert 1 steel into 1 arms.
 fn cmd_produce_arms(game: &mut GameState) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let player_id = game.human_player_nation;
     let player = game.get_nation(player_id).unwrap();
 
@@ -1965,6 +2032,10 @@ fn print_civilians(game: &GameState) {
 }
 
 fn cmd_hire_civilian(game: &mut GameState, type_name: &str) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let civ_type = match parse_civilian_type(type_name) {
         Some(ct) => ct,
         None => {
@@ -2516,6 +2587,10 @@ fn print_diplomacy(game: &GameState) {
 }
 
 fn cmd_consulate(game: &mut GameState, query: &str) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let player_id = game.human_player_nation;
 
     let target = match game.find_nation_by_name(query) {
@@ -2571,6 +2646,10 @@ fn cmd_consulate(game: &mut GameState, query: &str) {
 }
 
 fn cmd_embassy(game: &mut GameState, query: &str) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let player_id = game.human_player_nation;
 
     let target = match game.find_nation_by_name(query) {
@@ -2899,6 +2978,10 @@ fn cmd_grant(game: &mut GameState, args: &str) {
 }
 
 fn cmd_subsidy(game: &mut GameState, args: &str) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let player_id = game.human_player_nation;
 
     // Parse: subsidy <nation> <amount>
@@ -3114,6 +3197,10 @@ fn print_transport(game: &GameState) {
 }
 
 fn build_freight_car(game: &mut GameState) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let player_id = game.human_player_nation;
     let player = game.get_nation(player_id).unwrap();
 
@@ -3207,6 +3294,10 @@ fn print_military(game: &GameState) {
 }
 
 fn cmd_build_railroad(game: &mut GameState) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let player_id = game.human_player_nation;
     let player = game.get_nation(player_id).unwrap();
     let capital_province_id = player.capital_province_id;
@@ -3269,6 +3360,10 @@ fn cmd_build_railroad(game: &mut GameState) {
 }
 
 fn cmd_build_depot(game: &mut GameState) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let player_id = game.human_player_nation;
     let player = game.get_nation(player_id).unwrap();
     let capital_province_id = player.capital_province_id;
@@ -3302,6 +3397,10 @@ fn cmd_build_depot(game: &mut GameState) {
 }
 
 fn cmd_build_port(game: &mut GameState) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let player_id = game.human_player_nation;
     let player = game.get_nation(player_id).unwrap();
     let capital_province_id = player.capital_province_id;
@@ -3362,6 +3461,10 @@ fn cmd_build_port(game: &mut GameState) {
 }
 
 fn cmd_build_fort(game: &mut GameState, province_query: Option<&str>) {
+    if check_bankrupt(game) {
+        return;
+    }
+
     let player_id = game.human_player_nation;
     let player = game.get_nation(player_id).unwrap();
 
