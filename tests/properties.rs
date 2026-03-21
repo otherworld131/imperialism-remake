@@ -6,7 +6,7 @@
 
 use domain::hex::HexCoord;
 use domain::map::Tile;
-use domain::map::generate_map;
+use domain::map::{generate_map, validate_map};
 use domain::types::*;
 
 // ── Hex coordinate pixel roundtrip ──────────────────────────────
@@ -506,6 +506,136 @@ fn hex_neighbors_always_distance_one() {
 }
 
 // ── ResourceType properties ─────────────────────────────────────
+
+// ── Map invariants for many random seeds ──────────────────────
+
+/// Test that map validation passes for 50 random seeds.
+#[test]
+fn map_invariants_hold_for_50_random_seeds() {
+    for i in 0..50 {
+        let key = format!("prop_test_{}", i);
+        let map = generate_map(&key);
+        let result = validate_map(&map);
+        assert!(
+            result.is_ok(),
+            "Map '{}' failed validation: {:?}",
+            key,
+            result.err()
+        );
+    }
+}
+
+// ── Starting condition viability ──────────────────────────────
+
+/// Test that each Great Power starts with food resources (grain or fruit tiles).
+#[test]
+fn each_great_power_has_food_tiles() {
+    let seeds = ["food_check_a", "food_check_b", "food_check_c"];
+    for seed in &seeds {
+        let map = generate_map(seed);
+        for gp in &map.great_power_nations {
+            let mut has_food = false;
+            for pid in &gp.province_ids {
+                let province = map.provinces.iter().find(|p| p.id == *pid).unwrap();
+                for &tile_coord in &province.tiles {
+                    if let Some(tile) = map.hex_map.get_tile(tile_coord) {
+                        let terrain = tile.terrain();
+                        if matches!(
+                            terrain,
+                            TerrainType::Farm
+                                | TerrainType::Orchard
+                                | TerrainType::DryPlains
+                                | TerrainType::Plantation
+                        ) {
+                            has_food = true;
+                            break;
+                        }
+                    }
+                }
+                if has_food {
+                    break;
+                }
+            }
+            assert!(
+                has_food,
+                "Great Power {} (seed '{}') has no food-producing tiles",
+                gp.name, seed
+            );
+        }
+    }
+}
+
+/// Test that each Great Power starts with timber (forest tiles).
+#[test]
+fn each_great_power_has_timber_tiles() {
+    let seeds = ["timber_check_a", "timber_check_b", "timber_check_c"];
+    for seed in &seeds {
+        let map = generate_map(seed);
+        for gp in &map.great_power_nations {
+            let mut has_timber = false;
+            for pid in &gp.province_ids {
+                let province = map.provinces.iter().find(|p| p.id == *pid).unwrap();
+                for &tile_coord in &province.tiles {
+                    if let Some(tile) = map.hex_map.get_tile(tile_coord) {
+                        let terrain = tile.terrain();
+                        if matches!(
+                            terrain,
+                            TerrainType::HardwoodForest | TerrainType::ScrubForest
+                        ) {
+                            has_timber = true;
+                            break;
+                        }
+                    }
+                }
+                if has_timber {
+                    break;
+                }
+            }
+            assert!(
+                has_timber,
+                "Great Power {} (seed '{}') has no timber-producing tiles",
+                gp.name, seed
+            );
+        }
+    }
+}
+
+/// Test that each Great Power starts with potential minerals (hills or mountains).
+#[test]
+fn each_great_power_has_mineral_potential() {
+    let seeds = ["mineral_check_a", "mineral_check_b", "mineral_check_c"];
+    for seed in &seeds {
+        let map = generate_map(seed);
+        for gp in &map.great_power_nations {
+            let mut has_minerals = false;
+            for pid in &gp.province_ids {
+                let province = map.provinces.iter().find(|p| p.id == *pid).unwrap();
+                for &tile_coord in &province.tiles {
+                    if let Some(tile) = map.hex_map.get_tile(tile_coord) {
+                        let terrain = tile.terrain();
+                        if matches!(
+                            terrain,
+                            TerrainType::BarrenHills
+                                | TerrainType::Mountain
+                                | TerrainType::FertileHills
+                        ) {
+                            has_minerals = true;
+                            break;
+                        }
+                    }
+                }
+                if has_minerals {
+                    break;
+                }
+            }
+            assert!(
+                has_minerals,
+                "Great Power {} (seed '{}') has no hills/mountains for mineral potential",
+                gp.name, seed
+            );
+        }
+    }
+}
 
 /// Test that tradeable/monetary classifications are consistent.
 #[test]

@@ -87,6 +87,19 @@ impl HexMap {
             .collect()
     }
 
+    /// Get all tiles within `radius` hex distance of `center` that exist in the map.
+    ///
+    /// Uses `HexCoord::range` to compute candidate coordinates and filters to
+    /// those present in the map. The center tile itself is **not** included
+    /// (consistent with `HexCoord::range` which excludes self).
+    pub fn tiles_in_range(&self, center: HexCoord, radius: i32) -> Vec<(HexCoord, &Tile)> {
+        center
+            .range(radius)
+            .into_iter()
+            .filter_map(|coord| self.get_tile(coord).map(|tile| (coord, tile)))
+            .collect()
+    }
+
     /// Iterate over all tiles in the map.
     pub fn all_tiles(&self) -> impl Iterator<Item = (HexCoord, &Tile)> {
         self.tiles.iter().map(|(&coord, tile)| (coord, tile))
@@ -210,6 +223,76 @@ mod tests {
             }
         }
         assert_eq!(map.all_tiles().count(), 25);
+    }
+
+    #[test]
+    fn tiles_in_range_radius_1_returns_up_to_6() {
+        let mut map = HexMap::new(20, 20);
+        let center = HexCoord::new(5, 5);
+        map.set_tile(center, Tile::new(TerrainType::Farm));
+
+        // Place all 6 neighbors
+        for n in center.neighbors() {
+            map.set_tile(n, Tile::new(TerrainType::Farm));
+        }
+
+        let in_range = map.tiles_in_range(center, 1);
+        // Range excludes self, so should return exactly 6 neighbors
+        assert_eq!(in_range.len(), 6);
+        // Center should not be in the result
+        assert!(in_range.iter().all(|(coord, _)| *coord != center));
+    }
+
+    #[test]
+    fn tiles_in_range_radius_0_returns_empty() {
+        let mut map = HexMap::new(10, 10);
+        let center = HexCoord::new(3, 3);
+        map.set_tile(center, Tile::new(TerrainType::Farm));
+        for n in center.neighbors() {
+            map.set_tile(n, Tile::new(TerrainType::Farm));
+        }
+
+        // Radius 0: HexCoord::range(0) returns empty, so nothing is returned
+        let in_range = map.tiles_in_range(center, 0);
+        assert!(in_range.is_empty());
+    }
+
+    #[test]
+    fn tiles_in_range_only_returns_existing_tiles() {
+        let mut map = HexMap::new(20, 20);
+        let center = HexCoord::new(10, 10);
+        map.set_tile(center, Tile::new(TerrainType::Farm));
+
+        // Place only 3 of the 6 neighbors
+        let neighbors = center.neighbors();
+        map.set_tile(neighbors[0], Tile::new(TerrainType::Mountain));
+        map.set_tile(neighbors[2], Tile::new(TerrainType::Sea));
+        map.set_tile(neighbors[4], Tile::new(TerrainType::Desert));
+
+        let in_range = map.tiles_in_range(center, 1);
+        // Only 3 neighbors exist in the map
+        assert_eq!(in_range.len(), 3);
+    }
+
+    #[test]
+    fn tiles_in_range_radius_2_includes_ring_1_and_ring_2() {
+        let mut map = HexMap::new(30, 30);
+        let center = HexCoord::new(15, 15);
+        map.set_tile(center, Tile::new(TerrainType::Farm));
+
+        // Fill all tiles within radius 2
+        for coord in center.range(2) {
+            map.set_tile(coord, Tile::new(TerrainType::Farm));
+        }
+
+        let in_range = map.tiles_in_range(center, 2);
+        // range(2) = 18 tiles (excludes self)
+        assert_eq!(in_range.len(), 18);
+        // All should be at distance <= 2 and >= 1 from center
+        for (coord, _) in &in_range {
+            let d = center.distance(*coord);
+            assert!(d >= 1 && d <= 2);
+        }
     }
 
     #[test]

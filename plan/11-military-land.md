@@ -52,18 +52,18 @@ significantly boost effectiveness (4 medals ≈ 2× firepower).
   - [ ] If stationary: 2 tunnel spaces per turn
   - [ ] "S" key skips all units until next Sapper (tactical battle convenience)
   - [ ] Interruption: skip stops if any unit is attacked
-- [ ] **General** — earned as reward (build 6 arms' worth of units); boosts army initiative
-  - [ ] Initiative rating depends on General's medals and force composition
-  - [ ] Subsequent Generals require progressively more arms
-  - [ ] Counts as 1 transport unit
+- [x] **General** — earned as reward (build 6 arms' worth of units); boosts army initiative
+  - [x] Initiative rating depends on General's medals and force composition
+  - [x] Subsequent Generals require progressively more arms
+  - [x] Counts as 1 transport unit
 - [ ] Unit tests: sapper tunnel progress, general initiative bonus
 
 ### Unit Recruitment
 - [x] Built in the Armory — requires worker (mostly trained) + arms + money
 - [x] Cavalry units additionally require horses
-- [ ] Units appear the turn after ordering
+- [x] Units appear the turn after ordering
 - [x] Maintenance: $25/turn per arm in the unit
-- [ ] No food requirement once built
+- [x] No food requirement once built
 - [x] Unit tests: recruitment cost validation, maintenance calculation
 
 ### Unit Upgrades
@@ -85,15 +85,15 @@ significantly boost effectiveness (4 medals ≈ 2× firepower).
 - [ ] Unit tests: movement range calculations, rail transport eligibility
 
 ### Rewards
-- [ ] **General**: Build 6 arms' worth of units → free General + first one includes a free unit
+- [x] **General**: Build 6 arms' worth of units → free General + first one includes a free unit
 - [x] **Conquest medal**: Conquering a Minor Nation capital → new army unit starts with 1 medal + statue on Armory
-- [ ] **Capitol expansion**: Conquering a Great Power capital → recruitment from 4 provinces per worker → 3
-- [ ] Unit tests: reward trigger conditions and effects
+- [x] **Capitol expansion**: Conquering a Great Power capital → recruitment from 4 provinces per worker → 3
+- [x] Unit tests: reward trigger conditions and effects
 
 ### Verification Strategy
 - [x] **Unit tests**: Run test suite — all land unit tests pass
 - [ ] **Data validation test**: Load all unit definitions from data files → verify all have valid stats, costs, prerequisites
-- [ ] **Integration test**: Build a Regulars unit → verify cost deducted, unit appears next turn, maintenance charged
+- [x] **Integration test**: Build a Regulars unit → verify cost deducted, unit appears next turn, maintenance charged
 - [x] **Integration test**: Unit earns 4 medals → verify firepower ≈ 2× base
-- [ ] **Integration test**: Upgrade Regulars → Rifle Infantry → verify medals preserved, only equipment cost charged
-- [ ] **Edge case tests**: Recruit with insufficient funds, recruit without prerequisite tech, upgrade with no valid path
+- [x] **Integration test**: Upgrade Regulars → Rifle Infantry → verify medals preserved, only equipment cost charged
+- [x] **Edge case tests**: Recruit with insufficient funds, recruit without prerequisite tech, upgrade with no valid path

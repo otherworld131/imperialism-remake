@@ -14,7 +14,7 @@ hills, deserts, swamps, and tundra are hidden until prospected).
 - [x] `GetTile(HexCoord)` — O(1) access
 - [x] `GetTilesInProvince(ProvinceId)` — returns all tiles belonging to a province
 - [x] `GetAdjacentTiles(HexCoord)` — returns 6 neighbors (handles map edges)
-- [ ] `GetTilesInRange(HexCoord, int radius)` — BFS within radius
+- [x] `GetTilesInRange(HexCoord, int radius)` — BFS within radius
 - [x] Map boundary handling — tiles outside bounds return `None`
 - [ ] Sea tiles — separate from land, form sea zones for naval operations
 - [x] Unit tests for map queries
@@ -73,12 +73,12 @@ hills, deserts, swamps, and tundra are hidden until prospected).
 - [x] Place 16 Minor Nations (each with 4 provinces)
 - [x] Distribute terrain types according to balance rules
 - [x] Place hidden mineral deposits under hills/mountains/swamp/desert/tundra
-- [ ] Ensure each Great Power has viable starting conditions (food, timber, minerals)
+- [x] Ensure each Great Power has viable starting conditions (food, timber, minerals)
 - [ ] Generate sea zones between landmasses
 - [ ] Place coastal features and ports
-- [ ] Validate map: all provinces contiguous, all nations reachable by sea
+- [x] Validate map: all provinces contiguous, all nations reachable by sea
 - [x] Unit tests: generated map satisfies invariants
-- [ ] Property-based tests: random seeds always produce valid maps
+- [x] Property-based tests: random seeds always produce valid maps
 
 ### Map Rendering Data (provided to Presentation layer)
 - [ ] `MapRenderer` trait — domain provides data, presentation renders
@@ -91,7 +91,7 @@ hills, deserts, swamps, and tundra are hidden until prospected).
 ### Verification Strategy
 - [x] **Unit tests**: `cargo test` — all map, terrain, province, sea zone tests pass
 - [x] **Map generation determinism**: Generate map from key "TestKey123" 10 times → identical output every time
-- [ ] **Map invariant test**: Generate 50 random maps → every map has: 7 GPs × 8 provinces, 16 MNs × 4 provinces, all provinces contiguous, all nations sea-reachable
+- [x] **Map invariant test**: Generate 50 random maps → every map has: 7 GPs × 8 provinces, 16 MNs × 4 provinces, all provinces contiguous, all nations sea-reachable
 - [x] **Terrain yield test**: For each terrain type at each improvement level → verify output matches spec
 - [x] **Province connectivity test**: Build railroad network → verify `IsConnected()` returns true for connected provinces, false for disconnected
 - [x] **Prospecting test**: Prospect a mountain tile → verify hidden mineral revealed correctly

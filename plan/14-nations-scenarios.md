@@ -33,7 +33,7 @@ historical scenarios with real European powers. Nations are data-driven and modd
 
 ### Historical Scenarios
 - [x] **1815 scenario** — post-Napoleonic Europe
-- [ ] **1820 scenario**
+- [x] **1820 scenario**
 - [x] **1848 scenario** — Year of Revolutions
 - [x] **1882 scenario** — Scramble for Africa era
 - [x] Historical Great Powers: Britain, Spain, France, Netherlands, Prussia, Germany, Austria-Hungary, Sardinia, Italy, Russia, Ottoman Empire (availability varies by scenario)
@@ -51,7 +51,7 @@ historical scenarios with real European powers. Nations are data-driven and modd
 
 ### Starting Conditions (Random Game)
 - [x] Starting civilians: prospectors, miners, engineers, possibly farmers (varies by difficulty)
-- [ ] One warship in nearest sea zone
+- [x] One warship in nearest sea zone
 - [x] Easy/Introductory: 6 pre-placed processing buildings; program selects capital location
 - [ ] Normal+: player selects capital on coast or river; food requirement: ideal 3 grain + 2 fruit + 2 meat, minimum 2+1+1
 - [x] Starting treasury varies by difficulty
@@ -60,12 +60,12 @@ historical scenarios with real European powers. Nations are data-driven and modd
 - [x] Unit tests: starting condition generation per difficulty level
 
 ### Nation Selection Criteria (for UI guidance)
-- [ ] Geographic shape: circular nations enable faster railroad expansion
-- [ ] Minor Nation adjacency: 2+ neighbors preferred
-- [ ] Great Power isolation: avoid sharing a continent
-- [ ] Terrain accessibility: reachable without impassable terrain
-- [ ] Resource availability: forests, hills/mountains, cotton/wool sources
-- [ ] These are hints for the player — not enforced rules
+- [x] Geographic shape: circular nations enable faster railroad expansion
+- [x] Minor Nation adjacency: 2+ neighbors preferred
+- [x] Great Power isolation: avoid sharing a continent
+- [x] Terrain accessibility: reachable without impassable terrain
+- [x] Resource availability: forests, hills/mountains, cotton/wool sources
+- [x] These are hints for the player — not enforced rules
 
 ### Difficulty Levels (5)
 - [x] **Introductory** — easiest, program picks capital, extra starting resources

@@ -300,6 +300,73 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
     }
 }
 
+/// Validate that a generated map satisfies game invariants.
+///
+/// Checks:
+/// - Province count: 7 * 8 + 16 * 4 = 120
+/// - Each Great Power has exactly 8 provinces
+/// - Each Minor Nation has exactly 4 provinces
+/// - Every province has at least 1 tile
+/// - Every province capital tile exists in the map
+pub fn validate_map(map: &GeneratedMap) -> Result<(), Vec<String>> {
+    let mut errors = Vec::new();
+
+    // Check province count: should be 7*8 + 16*4 = 120
+    let expected = NUM_GREAT_POWERS * PROVINCES_PER_GREAT_POWER
+        + NUM_MINOR_NATIONS * PROVINCES_PER_MINOR_NATION;
+    if map.provinces.len() != expected {
+        errors.push(format!(
+            "Expected {} provinces, got {}",
+            expected,
+            map.provinces.len()
+        ));
+    }
+
+    // Check each GP has 8 provinces
+    for gp in &map.great_power_nations {
+        if gp.province_ids.len() != PROVINCES_PER_GREAT_POWER {
+            errors.push(format!(
+                "{} has {} provinces, expected {}",
+                gp.name,
+                gp.province_ids.len(),
+                PROVINCES_PER_GREAT_POWER
+            ));
+        }
+    }
+
+    // Check each MN has 4 provinces
+    for mn in &map.minor_nations {
+        if mn.province_ids.len() != PROVINCES_PER_MINOR_NATION {
+            errors.push(format!(
+                "{} has {} provinces, expected {}",
+                mn.name,
+                mn.province_ids.len(),
+                PROVINCES_PER_MINOR_NATION
+            ));
+        }
+    }
+
+    // Check all provinces have at least 1 tile
+    for prov in &map.provinces {
+        if prov.tiles.is_empty() {
+            errors.push(format!("Province {} has no tiles", prov.name));
+        }
+    }
+
+    // Check all province capital tiles exist in the map
+    for prov in &map.provinces {
+        if map.hex_map.get_tile(prov.capital_tile).is_none() {
+            errors.push(format!("Province {} capital tile not in map", prov.name));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
 // ── Internal data structures ───────────────────────────────────
 
 struct ProvinceData {
@@ -812,6 +879,32 @@ mod tests {
                 tile.is_capital,
                 "Capital tile of {} at {} should have is_capital=true",
                 gp.name, capital_coord
+            );
+        }
+    }
+
+    #[test]
+    fn validate_map_passes_for_default_key() {
+        let result = generate_map("test");
+        let validation = validate_map(&result);
+        assert!(
+            validation.is_ok(),
+            "validate_map failed: {:?}",
+            validation.err()
+        );
+    }
+
+    #[test]
+    fn validate_map_passes_for_multiple_keys() {
+        let keys = ["alpha", "beta", "gamma", "delta", "epsilon"];
+        for key in &keys {
+            let result = generate_map(key);
+            let validation = validate_map(&result);
+            assert!(
+                validation.is_ok(),
+                "validate_map failed for key '{}': {:?}",
+                key,
+                validation.err()
             );
         }
     }

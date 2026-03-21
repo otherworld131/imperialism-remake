@@ -109,5 +109,5 @@ imperialism-remake/
 - [x] **Test runner**: `cargo test` finds and executes all test crates → 0 failures
 - [x] **Lint check**: `cargo fmt --check` → no formatting violations
 - [x] **Directory check**: Run `ls -R src/ tests/ data/` → verify expected directory structure exists
-- [ ] **Smoke test script**: Automated script launches the app, waits 5 seconds, verifies process ran and exited cleanly
+- [x] **Smoke test script**: Automated script launches the app, waits 5 seconds, verifies process ran and exited cleanly
 - [ ] **Pre-commit hook test**: Stage a badly formatted file → commit → hook rejects it
