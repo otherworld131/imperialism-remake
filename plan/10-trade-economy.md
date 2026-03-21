@@ -14,9 +14,9 @@ structured sessions each turn after all players submit orders.
 - [ ] Offers: specify goods to sell, quantity, and minimum price
 - [ ] Bids: specify resources to buy, quantity, and maximum price
 - [x] Matching algorithm: pair compatible offers/bids by price
-- [ ] Priority/preference system: Minor Nations prefer partners with higher relationship scores
+- [x] Priority/preference system: Minor Nations prefer partners with higher relationship scores
 - [x] Unit tests: trade matching algorithm correctness
-- [ ] Unit tests: preference-based tie-breaking
+- [x] Unit tests: preference-based tie-breaking
 
 ### Trade Infrastructure Requirements
 - [x] Trade Consulate required before any trade with a Minor Nation
@@ -32,18 +32,18 @@ structured sessions each turn after all players submit orders.
 - [x] Unit tests: trade system rejects non-tradeable resources
 
 ### Trade Subsidies
-- [ ] Player can offer subsidies to Minor Nations
-- [ ] Subsidies increase export prices (Minor Nation gets more for selling to you)
-- [ ] Subsidies decrease import costs (you pay less for buying from them)
-- [ ] Makes trade more profitable and more likely for the Minor Nation
+- [x] Player can offer subsidies to Minor Nations
+- [x] Subsidies increase export prices (Minor Nation gets more for selling to you)
+- [x] Subsidies decrease import costs (you pay less for buying from them)
+- [x] Makes trade more profitable and more likely for the Minor Nation
 - [ ] Ctrl+click auto-calculate: determines the subsidy level needed to become the preferred trade partner
-- [ ] Subsidy cost deducted from treasury each turn it's active
-- [ ] Unit tests: subsidy calculation algorithm
-- [ ] Unit tests: subsidy impact on trade preference
+- [x] Subsidy cost deducted from treasury each turn it's active
+- [x] Unit tests: subsidy calculation algorithm
+- [x] Unit tests: subsidy impact on trade preference
 
 ### Revenue & Pricing
 - [x] Base prices for all tradeable commodities
-- [ ] Supply and demand affect prices (more sellers → lower price)
+- [x] Supply and demand affect prices (more sellers → lower price)
 - [x] Revenue = quantity × price for each sold item
 - [ ] Track profit/loss per trade partner per turn
 - [x] Historical trade data for player reference
