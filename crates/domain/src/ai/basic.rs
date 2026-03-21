@@ -103,6 +103,8 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<String> {
         ai_build_merchant_ships(game, *nation_id);
         ai_build_warships(game, *nation_id);
         ai_military_strategy(game, *nation_id, &mut actions);
+        ai_tactical_decisions(game, *nation_id, &mut actions);
+        ai_train_and_promote_workers(game, *nation_id);
     }
 
     ai_declare_wars(game, &ai_nation_ids, &mut actions);
@@ -1421,6 +1423,394 @@ fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId) {
         nation.consume_material(MaterialType::Fabric, 2);
         nation.consume_material(MaterialType::Lumber, 4);
         nation.merchant_fleet.push(ship);
+    }
+}
+
+/// AI tactical combat decisions: build forts, move units to threatened provinces,
+/// and propose peace after prolonged losing wars.
+///
+/// - **Fort building**: If treasury > $5,000 and a border province exists (adjacent
+///   to an enemy-owned province), build a fort on the capital tile of that province.
+///   Aggressive AI builds forts on offensive staging provinces. Diplomatic AI builds
+///   forts on the capital for defense.
+///
+/// - **Move units to threatened provinces**: If a province borders an enemy and has
+///   no stationed army units, move one unit there from the capital.
+///
+/// - **Retreat from losing wars**: If at war for 20+ turns and has lost provinces
+///   (owns fewer than started with), propose peace. Diplomatic AI: 10 turns.
+///   Aggressive AI: 30 turns.
+pub fn ai_tactical_decisions(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
+    let personality = get_personality(game, nation_id);
+
+    // Phase 1: Build forts on border provinces
+    ai_build_forts(game, nation_id, personality, actions);
+
+    // Phase 2: Move units to threatened (undefended border) provinces
+    ai_move_units_to_threatened(game, nation_id);
+
+    // Phase 3: Propose peace after prolonged losing war
+    ai_propose_peace(game, nation_id, personality, actions);
+}
+
+/// Build a fort on a border province's capital tile if the AI can afford it.
+///
+/// A "border province" is one that has tiles adjacent to tiles belonging to a
+/// province owned by a nation the AI is at war with.
+///
+/// - Aggressive AI: picks the province closest to the enemy (offensive staging)
+/// - Diplomatic AI: always forts the national capital
+/// - Others: pick the first border province found
+fn ai_build_forts(
+    game: &mut GameState,
+    nation_id: NationId,
+    personality: AiPersonality,
+    actions: &mut Vec<String>,
+) {
+    use crate::map::infrastructure::build_fort;
+
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    // Need treasury > $5,000 to build a fort (level 1 costs $5,000)
+    if nation.treasury <= Money::dollars(5000) {
+        return;
+    }
+
+    // Find enemies we are at war with
+    let enemies: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.id != nation_id)
+        .filter(|n| {
+            game.diplomacy
+                .get_relation(nation_id, n.id)
+                .map(|r| r.at_war)
+                .unwrap_or(false)
+        })
+        .map(|n| n.id)
+        .collect();
+
+    if enemies.is_empty() {
+        return;
+    }
+
+    let nation = game.get_nation(nation_id).unwrap();
+    let capital_province_id = nation.capital_province_id;
+    let nation_name = nation.name.clone();
+    let owned_provinces: Vec<ProvinceId> = nation.province_ids.clone();
+
+    // Collect enemy-owned tiles for adjacency check
+    let enemy_province_ids: Vec<ProvinceId> = game
+        .provinces
+        .iter()
+        .filter(|p| enemies.contains(&p.owner))
+        .map(|p| p.id)
+        .collect();
+
+    // Find which of our provinces border enemy territory
+    let mut border_provinces: Vec<ProvinceId> = Vec::new();
+    for &pid in &owned_provinces {
+        if let Some(prov) = game.get_province(pid) {
+            let is_border = prov.tiles.iter().any(|&tile_coord| {
+                tile_coord.neighbors().iter().any(|neighbor| {
+                    game.hex_map
+                        .get_tile(*neighbor)
+                        .and_then(|t| t.province_id)
+                        .is_some_and(|npid| enemy_province_ids.contains(&npid))
+                })
+            });
+            if is_border {
+                border_provinces.push(pid);
+            }
+        }
+    }
+
+    if border_provinces.is_empty() {
+        return;
+    }
+
+    // Choose which province to fort based on personality
+    let target_province = match personality {
+        AiPersonality::Diplomatic => {
+            // Fort the capital for defense
+            if owned_provinces.contains(&capital_province_id) {
+                capital_province_id
+            } else {
+                border_provinces[0]
+            }
+        }
+        AiPersonality::Aggressive => {
+            // Fort the border province (offensive staging)
+            border_provinces[0]
+        }
+        _ => {
+            // Default: first border province
+            border_provinces[0]
+        }
+    };
+
+    // Get the capital tile of that province
+    let fort_coord = match game.get_province(target_province) {
+        Some(p) => p.capital_tile,
+        None => return,
+    };
+
+    // Check if there's already a fort at max level
+    let current_level = game
+        .hex_map
+        .get_tile(fort_coord)
+        .map(|t| t.infrastructure.fort_level)
+        .unwrap_or(0);
+    if current_level >= 3 {
+        return;
+    }
+
+    // Build the fort
+    let new_level = current_level + 1;
+    let cost = match crate::map::infrastructure::fort_cost(new_level) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    // Can we afford it?
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+    if nation.treasury.checked_sub(cost).is_none() {
+        return;
+    }
+
+    if build_fort(&mut game.hex_map, fort_coord).is_ok() {
+        let nation = game.get_nation_mut(nation_id).unwrap();
+        nation.treasury -= cost;
+        actions.push(format!("{} has fortified its borders", nation_name));
+    }
+}
+
+/// Move units to threatened provinces: provinces that border enemy territory
+/// but have no army units stationed there.
+fn ai_move_units_to_threatened(game: &mut GameState, nation_id: NationId) {
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    // Find enemies
+    let enemies: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.id != nation_id)
+        .filter(|n| {
+            game.diplomacy
+                .get_relation(nation_id, n.id)
+                .map(|r| r.at_war)
+                .unwrap_or(false)
+        })
+        .map(|n| n.id)
+        .collect();
+
+    if enemies.is_empty() {
+        return;
+    }
+
+    let owned_provinces: Vec<ProvinceId> = nation.province_ids.clone();
+
+    // Collect enemy province IDs
+    let enemy_province_ids: Vec<ProvinceId> = game
+        .provinces
+        .iter()
+        .filter(|p| enemies.contains(&p.owner))
+        .map(|p| p.id)
+        .collect();
+
+    // Find threatened provinces: border enemy, have no units stationed
+    let nation = game.get_nation(nation_id).unwrap();
+    let mut threatened: Vec<ProvinceId> = Vec::new();
+
+    for &pid in &owned_provinces {
+        // Check if any unit is stationed in this province
+        let has_unit = nation.army.iter().any(|u| u.position == pid);
+        if has_unit {
+            continue;
+        }
+
+        // Check if this province borders enemy territory
+        if let Some(prov) = game.get_province(pid) {
+            let borders_enemy = prov.tiles.iter().any(|&tile_coord| {
+                tile_coord.neighbors().iter().any(|neighbor| {
+                    game.hex_map
+                        .get_tile(*neighbor)
+                        .and_then(|t| t.province_id)
+                        .is_some_and(|npid| enemy_province_ids.contains(&npid))
+                })
+            });
+            if borders_enemy {
+                threatened.push(pid);
+            }
+        }
+    }
+
+    // For each threatened province, try to move a unit from the capital
+    // (or any non-threatened province with units)
+    for target_pid in threatened {
+        let nation = match game.get_nation(nation_id) {
+            Some(n) => n,
+            None => return,
+        };
+
+        // Find an available unit (not already being moved this turn, stationed
+        // in a non-threatened province)
+        let unit_idx = nation.army.iter().position(|u| {
+            u.position != target_pid && !game.pending_moves.iter().any(|(_, uid, _)| *uid == u.id)
+        });
+
+        if let Some(idx) = unit_idx {
+            let unit_id = nation.army[idx].id;
+            game.pending_moves.push((nation_id, unit_id, target_pid));
+        }
+    }
+}
+
+/// If AI has been at war for a prolonged time and is losing (lost provinces),
+/// propose peace.
+///
+/// War duration thresholds by personality:
+/// - Diplomatic: 10 turns
+/// - Balanced/Economic: 20 turns
+/// - Aggressive: 30 turns
+fn ai_propose_peace(
+    game: &mut GameState,
+    nation_id: NationId,
+    personality: AiPersonality,
+    actions: &mut Vec<String>,
+) {
+    let turn_number = game.turn.0;
+
+    let peace_threshold = match personality {
+        AiPersonality::Diplomatic => 10u32,
+        AiPersonality::Aggressive => 30,
+        _ => 20,
+    };
+
+    // Find enemies we are at war with
+    let enemies: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.id != nation_id)
+        .filter(|n| {
+            game.diplomacy
+                .get_relation(nation_id, n.id)
+                .map(|r| r.at_war)
+                .unwrap_or(false)
+        })
+        .map(|n| n.id)
+        .collect();
+
+    if enemies.is_empty() {
+        return;
+    }
+
+    let nation_name = game
+        .get_nation(nation_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_default();
+
+    // Check war history for start turn
+    for &enemy_id in &enemies {
+        let enemy_name = game
+            .get_nation(enemy_id)
+            .map(|n| n.name.clone())
+            .unwrap_or_default();
+
+        // Find when war was declared (search history for the declaration)
+        let war_start_turn = game
+            .history
+            .iter()
+            .filter(|(_, desc)| {
+                desc.contains("declared war")
+                    && (desc.contains(&nation_name) || desc.contains(&enemy_name))
+            })
+            .map(|(turn, _)| turn.0)
+            .min();
+
+        let war_duration = match war_start_turn {
+            Some(start) => turn_number.saturating_sub(start),
+            None => 0,
+        };
+
+        if war_duration < peace_threshold {
+            continue;
+        }
+
+        // Check if we've lost provinces (current province count < starting count)
+        // We consider the AI "losing" if it has fewer provinces now than provinces
+        // mentioned in the history for this nation.
+        let current_provinces = game
+            .get_nation(nation_id)
+            .map(|n| n.province_ids.len())
+            .unwrap_or(0);
+
+        // Simple heuristic: if AI has 1 or fewer provinces, definitely losing
+        // or if the enemy has more provinces than us
+        let enemy_provinces = game
+            .get_nation(enemy_id)
+            .map(|n| n.province_ids.len())
+            .unwrap_or(0);
+
+        let is_losing = current_provinces <= 1 || enemy_provinces > current_provinces;
+
+        if is_losing {
+            game.diplomacy.make_peace(nation_id, enemy_id);
+            actions.push(format!(
+                "{} has sued for peace with {}",
+                nation_name, enemy_name
+            ));
+            let turn = game.turn;
+            game.history.push((
+                turn,
+                format!("{} made peace with {}", nation_name, enemy_name),
+            ));
+        }
+    }
+}
+
+/// AI trains untrained workers and promotes trained workers to expert.
+///
+/// - If AI has > 3 untrained workers, train one per turn (requires 1 paper if available)
+/// - If AI has > 3 trained workers, promote one to expert per turn
+fn ai_train_and_promote_workers(game: &mut GameState, nation_id: NationId) {
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let untrained = nation.labor.untrained;
+    let has_paper = nation.material_amount(MaterialType::Paper) > 0;
+
+    // Train one untrained worker if we have > 3 untrained
+    if untrained > 3 {
+        let nation = game.get_nation_mut(nation_id).unwrap();
+        // Consume paper if available (training requires paper)
+        if has_paper {
+            nation.consume_material(MaterialType::Paper, 1);
+        }
+        nation.labor.train_worker();
+    }
+
+    // Re-read state after potential training
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    // Promote one trained worker to expert if we have > 3 trained
+    if nation.labor.trained > 3 {
+        let nation = game.get_nation_mut(nation_id).unwrap();
+        nation.labor.promote_worker();
     }
 }
 
@@ -3116,5 +3506,544 @@ mod tests {
             "AI should build freight cars proactively, got {}",
             ai.transport.freight_cars
         );
+    }
+
+    // ── Build scripts existence tests ────────────────────────
+
+    #[test]
+    fn build_scripts_exist_and_are_executable() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let scripts = [
+            "scripts/build.sh",
+            "scripts/test.sh",
+            "scripts/check.sh",
+            "scripts/pre-commit",
+        ];
+
+        // Find the workspace root by going up from the crate dir
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let workspace_root = std::path::Path::new(manifest_dir)
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
+
+        for script in &scripts {
+            let path = workspace_root.join(script);
+            assert!(
+                path.exists(),
+                "Script {} should exist at {:?}",
+                script,
+                path
+            );
+
+            let metadata = fs::metadata(&path).unwrap();
+            let mode = metadata.permissions().mode();
+            assert!(
+                mode & 0o111 != 0,
+                "Script {} should be executable (mode: {:o})",
+                script,
+                mode
+            );
+        }
+    }
+
+    // ── AI fort building tests ──────────────────────────────
+
+    /// Build a game state with two adjacent provinces for border tests.
+    fn test_game_with_adjacent_provinces() -> GameState {
+        let mut hex_map = HexMap::new(20, 20);
+
+        // AI province tiles: (0,0) and (1,0)
+        let ai_tile1 = HexCoord::new(0, 0);
+        let ai_tile2 = HexCoord::new(1, 0);
+        hex_map.set_tile(
+            ai_tile1,
+            crate::map::tile::Tile::with_province(TerrainType::Farm, ProvinceId(2)),
+        );
+        hex_map.set_tile(
+            ai_tile2,
+            crate::map::tile::Tile::with_province(TerrainType::Farm, ProvinceId(2)),
+        );
+
+        // Enemy province tile: (2,0) — adjacent to (1,0)
+        let enemy_tile = HexCoord::new(2, 0);
+        hex_map.set_tile(
+            enemy_tile,
+            crate::map::tile::Tile::with_province(TerrainType::Farm, ProvinceId(3)),
+        );
+
+        // Human province tile
+        let human_tile = HexCoord::new(5, 5);
+        hex_map.set_tile(
+            human_tile,
+            crate::map::tile::Tile::with_province(TerrainType::Farm, ProvinceId(1)),
+        );
+
+        let province1 = Province::new(
+            ProvinceId(1),
+            "Human Land".to_string(),
+            NationId(1),
+            human_tile,
+            vec![human_tile],
+            4,
+        );
+        let province2 = Province::new(
+            ProvinceId(2),
+            "AI Land".to_string(),
+            NationId(2),
+            ai_tile1,
+            vec![ai_tile1, ai_tile2],
+            4,
+        );
+        let province3 = Province::new(
+            ProvinceId(3),
+            "Enemy Land".to_string(),
+            NationId(3),
+            enemy_tile,
+            vec![enemy_tile],
+            3,
+        );
+
+        let mut human_nation = Nation::new(
+            NationId(1),
+            "HumanNation".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        human_nation.treasury = Money::dollars(10000);
+
+        let mut ai_nation = Nation::new(
+            NationId(2),
+            "AINation".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(2),
+        );
+        ai_nation.treasury = Money::dollars(20000);
+        ai_nation.ai_personality = Some(AiPersonality::Balanced);
+        // Pre-populate with 4 civilians
+        for i in 0..4 {
+            ai_nation.civilians.push(Civilian::new(
+                UnitId(10000 + i),
+                CivilianType::Farmer,
+                NationId(2),
+            ));
+        }
+
+        let enemy_nation = Nation::new(
+            NationId(3),
+            "EnemyLand".to_string(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(3),
+        );
+
+        let mut diplomacy = DiplomacyState::new();
+        // Declare war between AI and enemy
+        diplomacy.declare_war(NationId(2), NationId(3));
+
+        GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province1, province2, province3],
+            nations: vec![human_nation, ai_nation, enemy_nation],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy,
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            history: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn ai_builds_fort_on_border_province() {
+        let mut game = test_game_with_adjacent_provinces();
+
+        let mut actions = Vec::new();
+        ai_build_forts(
+            &mut game,
+            NationId(2),
+            AiPersonality::Balanced,
+            &mut actions,
+        );
+
+        // Check that a fort was built on the AI province's capital tile
+        let ai_capital_tile = HexCoord::new(0, 0);
+        let tile = game.hex_map.get_tile(ai_capital_tile).unwrap();
+        assert!(
+            tile.infrastructure.has_fort,
+            "AI should build a fort on border province capital tile"
+        );
+        assert_eq!(tile.infrastructure.fort_level, 1, "Fort should be level 1");
+
+        // Treasury should be reduced by $5,000
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            ai.treasury,
+            Money::dollars(15000),
+            "Treasury should be reduced by $5,000 for fort"
+        );
+
+        assert!(
+            actions.iter().any(|a| a.contains("fortified")),
+            "Should report fort building"
+        );
+    }
+
+    #[test]
+    fn ai_does_not_build_fort_when_poor() {
+        let mut game = test_game_with_adjacent_provinces();
+        game.get_nation_mut(NationId(2)).unwrap().treasury = Money::dollars(3000);
+
+        let mut actions = Vec::new();
+        ai_build_forts(
+            &mut game,
+            NationId(2),
+            AiPersonality::Balanced,
+            &mut actions,
+        );
+
+        let ai_capital_tile = HexCoord::new(0, 0);
+        let tile = game.hex_map.get_tile(ai_capital_tile).unwrap();
+        assert!(
+            !tile.infrastructure.has_fort,
+            "AI should not build fort when too poor"
+        );
+    }
+
+    #[test]
+    fn ai_does_not_build_fort_when_not_at_war() {
+        let mut game = test_game_with_adjacent_provinces();
+        // Make peace
+        game.diplomacy.make_peace(NationId(2), NationId(3));
+
+        let mut actions = Vec::new();
+        ai_build_forts(
+            &mut game,
+            NationId(2),
+            AiPersonality::Balanced,
+            &mut actions,
+        );
+
+        let ai_capital_tile = HexCoord::new(0, 0);
+        let tile = game.hex_map.get_tile(ai_capital_tile).unwrap();
+        assert!(
+            !tile.infrastructure.has_fort,
+            "AI should not build fort when not at war"
+        );
+    }
+
+    // ── AI unit movement to threatened provinces ────────────
+
+    #[test]
+    fn ai_moves_unit_to_threatened_province() {
+        let mut game = test_game_with_adjacent_provinces();
+
+        // Give AI a unit stationed at a non-threatened location (capital)
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.army.push(ArmyUnit::new(
+            UnitId(9000),
+            ArmyUnitType::Regulars,
+            NationId(2),
+            ProvinceId(2), // stationed in AI province
+        ));
+
+        // Add another province for the AI that is NOT a border province
+        let safe_tile = HexCoord::new(0, 5);
+        game.hex_map.set_tile(
+            safe_tile,
+            crate::map::tile::Tile::with_province(TerrainType::Farm, ProvinceId(4)),
+        );
+        let safe_province = Province::new(
+            ProvinceId(4),
+            "Safe Province".to_string(),
+            NationId(2),
+            safe_tile,
+            vec![safe_tile],
+            4,
+        );
+        game.provinces.push(safe_province);
+        game.get_nation_mut(NationId(2))
+            .unwrap()
+            .add_province(ProvinceId(4));
+
+        // Move the unit to the safe province so it's available to be moved
+        game.get_nation_mut(NationId(2)).unwrap().army[0].position = ProvinceId(4);
+
+        ai_move_units_to_threatened(&mut game, NationId(2));
+
+        // Should have a pending move to the border province (ProvinceId(2))
+        assert!(
+            game.pending_moves
+                .iter()
+                .any(|(nation, _, dest)| *nation == NationId(2) && *dest == ProvinceId(2)),
+            "AI should queue a move to the threatened border province"
+        );
+    }
+
+    #[test]
+    fn ai_does_not_move_units_when_not_at_war() {
+        let mut game = test_game_with_adjacent_provinces();
+        game.diplomacy.make_peace(NationId(2), NationId(3));
+
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.army.push(ArmyUnit::new(
+            UnitId(9001),
+            ArmyUnitType::Regulars,
+            NationId(2),
+            ProvinceId(2),
+        ));
+
+        ai_move_units_to_threatened(&mut game, NationId(2));
+
+        assert!(
+            game.pending_moves.is_empty(),
+            "No moves should be queued when not at war"
+        );
+    }
+
+    // ── AI peace proposals ──────────────────────────────────
+
+    #[test]
+    fn ai_proposes_peace_after_prolonged_losing_war() {
+        let mut game = test_game_with_adjacent_provinces();
+        game.turn = TurnNumber::new(25);
+
+        // Record war declaration in history at turn 1
+        game.history.push((
+            TurnNumber::new(1),
+            "AINation declared war on EnemyLand".to_string(),
+        ));
+
+        // Make AI "losing": enemy has more provinces
+        game.get_nation_mut(NationId(3))
+            .unwrap()
+            .add_province(ProvinceId(4));
+        game.get_nation_mut(NationId(3))
+            .unwrap()
+            .add_province(ProvinceId(5));
+
+        let mut actions = Vec::new();
+        ai_propose_peace(
+            &mut game,
+            NationId(2),
+            AiPersonality::Balanced,
+            &mut actions,
+        );
+
+        // Should have made peace
+        let at_war = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .map(|r| r.at_war)
+            .unwrap_or(true);
+        assert!(
+            !at_war,
+            "AI should propose peace after 24 turns of losing war (threshold 20 for Balanced)"
+        );
+        assert!(
+            actions.iter().any(|a| a.contains("sued for peace")),
+            "Should report peace proposal"
+        );
+    }
+
+    #[test]
+    fn diplomatic_ai_proposes_peace_earlier() {
+        let mut game = test_game_with_adjacent_provinces();
+        game.turn = TurnNumber::new(15);
+
+        game.history.push((
+            TurnNumber::new(1),
+            "AINation declared war on EnemyLand".to_string(),
+        ));
+
+        // Make AI "losing"
+        game.get_nation_mut(NationId(3))
+            .unwrap()
+            .add_province(ProvinceId(4));
+        game.get_nation_mut(NationId(3))
+            .unwrap()
+            .add_province(ProvinceId(5));
+
+        let mut actions = Vec::new();
+        ai_propose_peace(
+            &mut game,
+            NationId(2),
+            AiPersonality::Diplomatic,
+            &mut actions,
+        );
+
+        let at_war = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .map(|r| r.at_war)
+            .unwrap_or(true);
+        assert!(
+            !at_war,
+            "Diplomatic AI should propose peace after 14 turns (threshold 10)"
+        );
+    }
+
+    #[test]
+    fn aggressive_ai_fights_longer() {
+        let mut game = test_game_with_adjacent_provinces();
+        game.turn = TurnNumber::new(25);
+
+        game.history.push((
+            TurnNumber::new(1),
+            "AINation declared war on EnemyLand".to_string(),
+        ));
+
+        // Make AI "losing"
+        game.get_nation_mut(NationId(3))
+            .unwrap()
+            .add_province(ProvinceId(4));
+        game.get_nation_mut(NationId(3))
+            .unwrap()
+            .add_province(ProvinceId(5));
+
+        let mut actions = Vec::new();
+        ai_propose_peace(
+            &mut game,
+            NationId(2),
+            AiPersonality::Aggressive,
+            &mut actions,
+        );
+
+        // At turn 25 with war starting at turn 1: 24 turns of war < 30 threshold
+        let at_war = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .map(|r| r.at_war)
+            .unwrap_or(false);
+        assert!(
+            at_war,
+            "Aggressive AI should NOT propose peace at 24 turns (threshold is 30)"
+        );
+    }
+
+    // ── AI worker training/promotion tests ──────────────────
+
+    #[test]
+    fn ai_trains_worker_when_many_untrained() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.labor.untrained = 5; // > 3 threshold
+        ai.labor.trained = 0;
+        ai.add_material(MaterialType::Paper, 2);
+
+        ai_train_and_promote_workers(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            ai.labor.untrained, 4,
+            "Should have trained 1 untrained worker"
+        );
+        assert_eq!(ai.labor.trained, 1, "Should have 1 trained worker");
+        assert_eq!(
+            ai.material_amount(MaterialType::Paper),
+            1,
+            "Should consume 1 paper for training"
+        );
+    }
+
+    #[test]
+    fn ai_does_not_train_when_few_untrained() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.labor.untrained = 3; // at threshold, not above
+        ai.labor.trained = 0;
+        ai.add_material(MaterialType::Paper, 2);
+
+        ai_train_and_promote_workers(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            ai.labor.untrained, 3,
+            "Should not train when untrained <= 3"
+        );
+        assert_eq!(ai.labor.trained, 0);
+        assert_eq!(
+            ai.material_amount(MaterialType::Paper),
+            2,
+            "Paper should be unchanged"
+        );
+    }
+
+    #[test]
+    fn ai_promotes_worker_when_many_trained() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.labor.untrained = 0;
+        ai.labor.trained = 5; // > 3 threshold
+        ai.labor.expert = 0;
+
+        ai_train_and_promote_workers(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(ai.labor.trained, 4, "Should have promoted 1 trained worker");
+        assert_eq!(ai.labor.expert, 1, "Should have 1 expert worker");
+    }
+
+    #[test]
+    fn ai_does_not_promote_when_few_trained() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.labor.untrained = 0;
+        ai.labor.trained = 3; // at threshold
+        ai.labor.expert = 0;
+
+        ai_train_and_promote_workers(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(ai.labor.trained, 3, "Should not promote when trained <= 3");
+        assert_eq!(ai.labor.expert, 0);
+    }
+
+    #[test]
+    fn ai_trains_without_paper_available() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.labor.untrained = 5;
+        ai.labor.trained = 0;
+        // No paper available
+
+        ai_train_and_promote_workers(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            ai.labor.untrained, 4,
+            "Should still train even without paper"
+        );
+        assert_eq!(ai.labor.trained, 1);
+    }
+
+    #[test]
+    fn ai_trains_and_promotes_in_same_turn() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.labor.untrained = 5;
+        ai.labor.trained = 4; // will be 5 after training
+        ai.labor.expert = 0;
+        ai.add_material(MaterialType::Paper, 1);
+
+        ai_train_and_promote_workers(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(ai.labor.untrained, 4, "Trained 1 untrained");
+        // trained: was 4, +1 from training = 5, -1 from promotion = 4
+        assert_eq!(
+            ai.labor.trained, 4,
+            "Net trained stays same (trained+1, promoted-1)"
+        );
+        assert_eq!(ai.labor.expert, 1, "Promoted 1 to expert");
     }
 }

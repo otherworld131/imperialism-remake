@@ -1,0 +1,5 @@
+#!/bin/bash
+set -e
+cargo fmt --check 2>/dev/null || { echo "Run 'cargo fmt' first"; exit 1; }
+cargo clippy --workspace 2>/dev/null || { echo "Clippy warnings found"; exit 1; }
+cargo test --workspace 2>/dev/null || { echo "Tests failed"; exit 1; }
