@@ -8,10 +8,10 @@ Initial target: Windows. Architecture supports future macOS/Linux builds.
 ## Checklist
 
 ### Build System
-- [ ] Build tool: `cargo build` — single command
-- [ ] Build configurations: Debug (dev symbols, assertions) and Release (optimized, no debug)
-- [ ] Build script: `build.ps1` / `build.sh` — clean build from scratch
-- [ ] Build all projects in dependency order
+- [x] Build tool: `cargo build` — single command
+- [x] Build configurations: Debug (dev symbols, assertions) and Release (optimized, no debug)
+- [x] Build script: `build.ps1` / `build.sh` — clean build from scratch
+- [x] Build all projects in dependency order
 - [ ] Copy data files (definitions, sprites, audio, localization) to output directory
 - [ ] Build produces a self-contained distributable folder
 - [ ] Build time target: < 60 seconds from clean state

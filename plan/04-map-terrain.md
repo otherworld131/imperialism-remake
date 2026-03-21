@@ -55,7 +55,7 @@ hills, deserts, swamps, and tundra are hidden until prospected).
 - [x] Province ownership — tracks current controlling nation
 - [x] Garrison — immovable Militia/Minutemen (4 for Great Powers, 3 for Minor Nations)
 - [x] Province industrialization state (hamlet → village → town)
-- [ ] Province connectivity check — is it connected to the national capital via transport?
+- [x] Province connectivity check — is it connected to the national capital via transport?
 - [x] Unit tests for province mechanics
 
 ### Sea Zones
@@ -93,6 +93,6 @@ hills, deserts, swamps, and tundra are hidden until prospected).
 - [x] **Map generation determinism**: Generate map from key "TestKey123" 10 times → identical output every time
 - [ ] **Map invariant test**: Generate 50 random maps → every map has: 7 GPs × 8 provinces, 16 MNs × 4 provinces, all provinces contiguous, all nations sea-reachable
 - [x] **Terrain yield test**: For each terrain type at each improvement level → verify output matches spec
-- [ ] **Province connectivity test**: Build railroad network → verify `IsConnected()` returns true for connected provinces, false for disconnected
+- [x] **Province connectivity test**: Build railroad network → verify `IsConnected()` returns true for connected provinces, false for disconnected
 - [x] **Prospecting test**: Prospect a mountain tile → verify hidden mineral revealed correctly
 - [ ] **Sea zone routing test**: Ship in zone A → destination zone C → verify valid route through intermediate zones

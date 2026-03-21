@@ -10,9 +10,9 @@ structured sessions each turn after all players submit orders.
 
 ### Trade Session Mechanics
 - [x] Trade resolved after all players end their turns
-- [ ] Each player sets offers (sell) and bids (buy) on the Trade screen
-- [ ] Offers: specify goods to sell, quantity, and minimum price
-- [ ] Bids: specify resources to buy, quantity, and maximum price
+- [x] Each player sets offers (sell) and bids (buy) on the Trade screen
+- [x] Offers: specify goods to sell, quantity, and minimum price
+- [x] Bids: specify resources to buy, quantity, and maximum price
 - [x] Matching algorithm: pair compatible offers/bids by price
 - [x] Priority/preference system: Minor Nations prefer partners with higher relationship scores
 - [x] Unit tests: trade matching algorithm correctness
@@ -22,7 +22,7 @@ structured sessions each turn after all players submit orders.
 - [x] Trade Consulate required before any trade with a Minor Nation
 - [x] Each trade requires sufficient merchant ship cargo capacity
 - [x] Cargo holds displayed on trade screen — one hold per item
-- [ ] Great Powers use their own ships for items they purchase
+- [x] Great Powers use their own ships for items they purchase
 - [x] Unit tests: consulate prerequisite enforcement
 - [x] Unit tests: cargo capacity limiting trade volume
 
@@ -60,24 +60,24 @@ structured sessions each turn after all players submit orders.
 ### Merchant Marine
 - [x] Merchant ships carry traded goods
 - [x] Ship types with cargo capacity: Trader (2), Indiaman (4), Clipper (4), Paddlewheeler (8)
-- [ ] Ships can be blockaded by enemy warships (some merchant ships may be sunk)
-- [ ] Merchant ships not directly visible on map but appear in battle reports
+- [x] Ships can be blockaded by enemy warships (some merchant ships may be sunk)
+- [x] Merchant ships not directly visible on map but appear in battle reports
 - [x] Merchant marine size contributes to game score
 - [x] Unit tests: cargo capacity calculations
-- [ ] Unit tests: blockade effect on trade
+- [x] Unit tests: blockade effect on trade
 
 ### Trade Screen (Domain Logic)
-- [ ] List all Minor Nations with Trade Consulates
-- [ ] Show available goods and current prices for each partner
-- [ ] Allow setting offers and bids with quantity + price
+- [x] List all Minor Nations with Trade Consulates
+- [x] Show available goods and current prices for each partner
+- [x] Allow setting offers and bids with quantity + price
 - [x] Show current cargo capacity and utilization
-- [ ] Preview expected revenue from current offers
-- [ ] Show diplomatic relationship status per partner
-- [ ] Unit tests: trade screen data aggregation
+- [x] Preview expected revenue from current offers
+- [x] Show diplomatic relationship status per partner
+- [x] Unit tests: trade screen data aggregation
 
 ### Verification Strategy
-- [ ] **Unit tests**: Run test suite — all trade tests pass
-- [ ] **Integration test**: Set up 3 nations, create trade offers/bids → resolve session → verify correct transactions, revenue, and relationship changes
-- [ ] **Integration test**: Verify blockade reduces trade (some merchant ships sunk)
-- [ ] **Edge case tests**: No cargo capacity, all bids above all offers, multiple bidders for same resource
+- [x] **Unit tests**: Run test suite — all trade tests pass
+- [x] **Integration test**: Set up 3 nations, create trade offers/bids → resolve session → verify correct transactions, revenue, and relationship changes
+- [x] **Integration test**: Verify blockade reduces trade (some merchant ships sunk)
+- [x] **Edge case tests**: No cargo capacity, all bids above all offers, multiple bidders for same resource
 - [ ] **Scenario test**: 20-turn trade simulation → verify economic growth trajectory matches expected curves

@@ -68,12 +68,12 @@ to research. Some have prerequisites.
 - [x] Internal Combustion — $150,000, prereq: Chemistry; Armour, Mechanised regiments; oil wells level 3
 
 ### Research Mechanics
-- [ ] Player selects a technology to research from available list
-- [ ] Full cost paid immediately (no incremental research — single purchase)
-- [ ] Technology effect applies starting next turn
-- [ ] Newspaper reports new technology discoveries
-- [ ] Unit tests: research purchase deducts correct money
-- [ ] Unit tests: effects correctly unlock after research
+- [x] Player selects a technology to research from available list
+- [x] Full cost paid immediately (no incremental research — single purchase)
+- [x] Technology effect applies starting next turn
+- [x] Newspaper reports new technology discoveries
+- [x] Unit tests: research purchase deducts correct money
+- [x] Unit tests: effects correctly unlock after research
 
 ### Prerequisite Graph Validation
 - [x] Build directed acyclic graph from tech prerequisites

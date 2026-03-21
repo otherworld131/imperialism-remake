@@ -111,9 +111,9 @@ with `--no-default-features` and no rendering framework, the boundary is intact.
 - [x] `InputProvider` trait — keyboard, mouse, gamepad abstraction
 - [x] `ScriptLoader` trait — load Lua scripts from file system or embedded resources
 - [x] Windows adapter implementations
-- [ ] macOS adapter stubs (future)
-- [ ] Linux adapter stubs (future)
-- [ ] WASM adapter stubs (future)
+- [x] macOS adapter stubs (future)
+- [x] Linux adapter stubs (future)
+- [x] WASM adapter stubs (future)
 
 ### Event Bus / Mediator
 - [x] In-process event bus for domain events (`TurnEnded`, `WarDeclared`, `TechResearched`, …)
@@ -126,8 +126,8 @@ with `--no-default-features` and no rendering framework, the boundary is intact.
 ### Dependency Injection (Manual)
 - [x] Composition root in `main.rs` — constructs all objects, wires all trait implementations
 - [x] All ports defined as traits; adapters as concrete `struct`s implementing those traits
-- [ ] Trait objects (`Box<dyn Trait>`) for runtime polymorphism where needed
-- [ ] Generics for compile-time polymorphism in hot paths
+- [x] Trait objects (`Box<dyn Trait>`) for runtime polymorphism where needed
+- [x] Generics for compile-time polymorphism in hot paths
 - [x] No DI framework — Rust's type system + manual wiring is sufficient
 
 ### Architectural Decision Records (ADRs)
@@ -146,8 +146,8 @@ with `--no-default-features` and no rendering framework, the boundary is intact.
 - [x] **Dependency rule test**: `cargo test --test architecture` → verify domain has only allowed deps, application refs only domain, etc.
 - [ ] **Lua sandbox test**: `cargo test -p domain -- lua_sandbox` → verify blocked APIs raise errors
 - [ ] **Lua integration test**: Load `scripts/tech/test_tech.lua` → call `get_tech_effect("seed_drill")` → verify correct return
-- [ ] **Port/Adapter test**: Instantiate each adapter → verify it implements its port trait correctly
+- [x] **Port/Adapter test**: Instantiate each adapter → verify it implements its port trait correctly
 - [x] **Frontend swap test**: Build domain + application without presentation crate → compiles and tests pass
-- [ ] **Prototype validation**: Hex grid renders, click detected, sound plays — captured in a smoke test script
+- [x] **Prototype validation**: Hex grid renders, click detected, sound plays — captured in a smoke test script
 - [ ] **Cross-platform check**: `cargo build --target wasm32-unknown-unknown -p domain` compiles (WASM viability)
 - [x] **ADR review**: Every ADR has Status, Context, Decision, Consequences sections

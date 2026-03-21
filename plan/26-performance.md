@@ -26,7 +26,7 @@ should maintain 60fps, and memory usage should stay bounded even in late-game st
 - [ ] Unit tests: verify only visible tiles are in the draw list
 
 ### Domain Logic Optimization
-- [ ] Pathfinding: A* with hex distance heuristic; cache results per turn
+- [x] Pathfinding: A* with hex distance heuristic; cache results per turn
 - [x] Transport allocation: linear assignment optimization
 - [x] Trade matching: efficient sort + merge algorithm
 - [ ] AI decision trees: prune early when utility falls below threshold

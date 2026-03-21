@@ -22,7 +22,7 @@ beachhead). Naval battles are always resolved by AI.
 - [x] **Clipper** — FP:0, Armor:0, Hull:25, Cargo:4; costs 2 fabric + 6 lumber; requires Streamlined Hulls
 - [x] **Paddlewheeler** — FP:0, Armor:5, Hull:35, Cargo:8; costs 6 lumber + 2 steel + 10 coal; requires Paddlewheels
 - [x] **Freighter** — requires Marine Engineering (late game, replaces older merchants)
-- [ ] Merchant ships not visible on map; appear in battle reports when engaged
+- [x] Merchant ships not visible on map; appear in battle reports when engaged
 - [x] Each cargo hold carries 1 traded item
 - [x] Some merchant ships have armor/speed advantages for surviving blockades
 - [x] Unit tests: cargo capacity calculations, construction cost validation
@@ -81,6 +81,6 @@ beachhead). Naval battles are always resolved by AI.
 - [x] **Unit tests**: Run test suite — all naval tests pass
 - [x] **Data validation**: Load ship definitions → verify all stats, costs, prerequisites
 - [ ] **Integration test**: Build a Frigate → verify resources deducted, ship appears next turn
-- [ ] **Integration test**: Blockade scenario → verify merchant ships intercepted, trade disrupted
+- [x] **Integration test**: Blockade scenario → verify merchant ships intercepted, trade disrupted
 - [x] **Integration test**: Beachhead → verify landing force size matches fleet arms total
 - [ ] **Combat simulation**: Run 100 naval battles with known fleets → verify outcomes are reasonable

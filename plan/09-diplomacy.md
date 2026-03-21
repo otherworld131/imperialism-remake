@@ -37,7 +37,7 @@ The Council of Governors voting system is the primary victory path.
 - [x] **Request to Join Empire** (Minor Nation → Great Power)
   - [x] Triggered when a Minor Nation's relationship with a Great Power is sufficiently high
   - [x] Minor Nation voluntarily incorporates into the empire
-  - [ ] Unit tests: voluntary incorporation threshold
+  - [x] Unit tests: voluntary incorporation threshold
 - [x] **Peace Treaty**
   - [x] Ends active war between two nations
   - [ ] Separate peace (without allies) damages diplomatic standing

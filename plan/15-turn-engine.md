@@ -32,7 +32,7 @@ simultaneously.
    - [x] View labor pool and assignments
 4. **Trade Screen**
    - [x] Set trade offers (sell goods, set prices)
-   - [ ] Set trade bids (buy resources, set prices)
+   - [x] Set trade bids (buy resources, set prices)
    - [x] View Minor Nation trade partners and available goods
    - [x] Manage trade subsidies
 5. **Diplomacy Screen**
