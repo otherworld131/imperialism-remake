@@ -1,4 +1,4 @@
-use crate::military::ships::{Ship, ShipType};
+use crate::military::ships::{Ship, ShipCategory, ShipType};
 use crate::types::*;
 
 #[derive(Debug, Clone)]
@@ -10,6 +10,94 @@ pub struct NavalBattleResult {
     pub defender_ships_lost: Vec<ShipType>,
     pub attacker_survivors: Vec<Ship>,
     pub defender_survivors: Vec<Ship>,
+}
+
+// ── Naval Operations ────────────────────────────────────────────
+
+/// The type of naval operation a warship can be ordered to perform.
+///
+/// Ships operate globally (simplified: no per-zone movement). Operations
+/// are resolved automatically at the end of each turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum NavalOperation {
+    /// Warship patrols — attacks enemies encountered.
+    Patrol,
+    /// Warship escorts friendly merchant ships, protecting them from blockade/patrol.
+    Escort,
+    /// Warship participates in a blockade against a target nation.
+    Blockade(NationId),
+    /// Warships establish a landing zone (beachhead) on hostile coastline.
+    /// Landing force size = total arms cost of all ships in the beachhead fleet.
+    Beachhead(NationId),
+    /// Warship performs reconnaissance on an enemy nation: estimates ground forces.
+    Reconnaissance(NationId),
+}
+
+/// Result of a naval reconnaissance operation.
+#[derive(Debug, Clone)]
+pub struct ReconResult {
+    /// The nation performing reconnaissance.
+    pub observer: NationId,
+    /// The target nation being observed.
+    pub target: NationId,
+    /// Estimated enemy army strength (provinces * garrison_estimate + known army size).
+    pub estimated_strength: u32,
+    /// Number of coastal provinces the enemy has.
+    pub coastal_provinces: u32,
+}
+
+/// Calculate the beachhead landing force size for a fleet of warships.
+///
+/// Landing force size = total arms_cost used to build all ships in the fleet.
+/// This matches the design: "Landing force size = total arms used to build all ships."
+pub fn beachhead_force_size(warships: &[Ship]) -> u32 {
+    warships
+        .iter()
+        .filter(|s| s.ship_type.category() == ShipCategory::Warship)
+        .map(|s| s.ship_type.stats().arms_cost)
+        .sum()
+}
+
+/// Calculate how many escort warships are needed to fully protect a merchant fleet.
+///
+/// Each escort warship protects 2 cargo capacity from blockade. Returns the number
+/// of escort warships whose firepower counteracts the blockade effect.
+pub fn escort_protection(escort_count: u32, enemy_warship_count: u32) -> u32 {
+    // Each escort neutralizes one enemy warship's blockade effect
+    escort_count.min(enemy_warship_count)
+}
+
+/// Calculate effective blockade impact with escorts.
+///
+/// Escorts reduce the effective number of enemy warships blocking trade.
+/// Each escorting warship neutralizes one enemy blockading warship.
+pub fn blockade_with_escorts(
+    merchant_cargo: u32,
+    enemy_warship_count: u32,
+    escort_count: u32,
+) -> u32 {
+    let effective_enemy = enemy_warship_count.saturating_sub(escort_count);
+    calculate_blockade_effect(merchant_cargo, effective_enemy)
+}
+
+/// Perform naval reconnaissance: estimate enemy ground forces.
+///
+/// Returns an estimated strength based on provinces owned and army size.
+/// Each province is estimated to have ~4 garrison strength, plus known army units.
+pub fn naval_reconnaissance(
+    observer: NationId,
+    target: NationId,
+    target_province_count: usize,
+    target_army_size: usize,
+    target_coastal_provinces: usize,
+) -> ReconResult {
+    let estimated_strength = (target_province_count * 4 + target_army_size) as u32;
+    ReconResult {
+        observer,
+        target,
+        estimated_strength,
+        coastal_provinces: target_coastal_provinces as u32,
+    }
 }
 
 /// Resolve a naval battle (always AI-controlled, never player tactical).
@@ -304,5 +392,98 @@ mod tests {
     #[test]
     fn full_blockade() {
         assert_eq!(calculate_blockade_effect(6, 3), 0);
+    }
+
+    // ── Beachhead force size ────────────────────────────────────
+
+    #[test]
+    fn beachhead_force_size_empty() {
+        assert_eq!(beachhead_force_size(&[]), 0);
+    }
+
+    #[test]
+    fn beachhead_force_size_warships_only() {
+        let fleet = vec![
+            make_ship(1, ShipType::Frigate, NationId(1)), // arms_cost = 2
+            make_ship(2, ShipType::Frigate, NationId(1)), // arms_cost = 2
+            make_ship(3, ShipType::ShipOfTheLine, NationId(1)), // arms_cost = 5
+        ];
+        assert_eq!(beachhead_force_size(&fleet), 2 + 2 + 5);
+    }
+
+    #[test]
+    fn beachhead_force_size_ignores_merchants() {
+        let fleet = vec![
+            make_ship(1, ShipType::Frigate, NationId(1)), // arms_cost = 2
+            make_ship(2, ShipType::Trader, NationId(1)),  // merchant, arms_cost = 0 but filtered
+        ];
+        assert_eq!(beachhead_force_size(&fleet), 2);
+    }
+
+    // ── Escort protection ──────────────────────────────────────
+
+    #[test]
+    fn escort_neutralizes_enemy() {
+        assert_eq!(escort_protection(2, 3), 2);
+        assert_eq!(escort_protection(5, 3), 3);
+        assert_eq!(escort_protection(0, 3), 0);
+    }
+
+    // ── Blockade with escorts ──────────────────────────────────
+
+    #[test]
+    fn blockade_reduced_by_escorts() {
+        // 10 cargo, 3 enemy warships (block 6), 2 escorts neutralize 2 enemies
+        // Effective enemy = 1, blocks 2 cargo => 8
+        assert_eq!(blockade_with_escorts(10, 3, 2), 8);
+    }
+
+    #[test]
+    fn full_escort_negates_blockade() {
+        assert_eq!(blockade_with_escorts(10, 3, 3), 10);
+        assert_eq!(blockade_with_escorts(10, 3, 5), 10);
+    }
+
+    #[test]
+    fn no_escorts_same_as_regular_blockade() {
+        assert_eq!(
+            blockade_with_escorts(10, 3, 0),
+            calculate_blockade_effect(10, 3)
+        );
+    }
+
+    // ── Reconnaissance ─────────────────────────────────────────
+
+    #[test]
+    fn reconnaissance_estimates_strength() {
+        let result = naval_reconnaissance(NationId(1), NationId(2), 5, 3, 2);
+        assert_eq!(result.observer, NationId(1));
+        assert_eq!(result.target, NationId(2));
+        assert_eq!(result.estimated_strength, 5 * 4 + 3);
+        assert_eq!(result.coastal_provinces, 2);
+    }
+
+    #[test]
+    fn reconnaissance_zero_forces() {
+        let result = naval_reconnaissance(NationId(1), NationId(2), 0, 0, 0);
+        assert_eq!(result.estimated_strength, 0);
+        assert_eq!(result.coastal_provinces, 0);
+    }
+
+    // ── Naval operation enum ───────────────────────────────────
+
+    #[test]
+    fn naval_operation_equality() {
+        assert_eq!(NavalOperation::Patrol, NavalOperation::Patrol);
+        assert_eq!(NavalOperation::Escort, NavalOperation::Escort);
+        assert_eq!(
+            NavalOperation::Blockade(NationId(1)),
+            NavalOperation::Blockade(NationId(1))
+        );
+        assert_ne!(
+            NavalOperation::Blockade(NationId(1)),
+            NavalOperation::Blockade(NationId(2))
+        );
+        assert_ne!(NavalOperation::Patrol, NavalOperation::Escort);
     }
 }

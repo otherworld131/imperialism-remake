@@ -1,0 +1,39 @@
+// Unit definitions — data-driven, moddable
+// This file defines all land military unit types and their stats.
+//
+// Format: list of unit definitions with stats, costs, and prerequisites.
+// Currently hardcoded in domain/src/military/units.rs; this file serves as
+// the data-driven reference for future RON-based loading.
+
+(
+    units: [
+        (
+            name: "Militia",
+            firepower: 1.0,
+            category: "Regular",
+            arms_cost: 1,
+            prerequisite_tech: None,
+        ),
+        (
+            name: "Regular Infantry",
+            firepower: 2.0,
+            category: "Regular",
+            arms_cost: 2,
+            prerequisite_tech: None,
+        ),
+        (
+            name: "Cavalry",
+            firepower: 3.0,
+            category: "Cavalry",
+            arms_cost: 3,
+            prerequisite_tech: None,
+        ),
+        (
+            name: "Artillery",
+            firepower: 4.0,
+            category: "Artillery",
+            arms_cost: 4,
+            prerequisite_tech: Some("Improved Cannons"),
+        ),
+    ],
+)

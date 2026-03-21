@@ -1,0 +1,17 @@
+// Terrain definitions — data-driven, moddable
+// Defines terrain types and their properties (resources, defense bonuses).
+
+(
+    terrain_types: [
+        (name: "Plains",    defense_bonus: 0.0,  resources: ["Grain"]),
+        (name: "Forest",    defense_bonus: 0.25, resources: ["Timber"]),
+        (name: "Hills",     defense_bonus: 0.50, resources: ["Ore", "Coal"]),
+        (name: "Mountains", defense_bonus: 0.75, resources: ["Ore", "Gems"]),
+        (name: "Swamp",     defense_bonus: 0.25, resources: []),
+        (name: "Desert",    defense_bonus: 0.0,  resources: []),
+        (name: "Tundra",    defense_bonus: 0.0,  resources: []),
+        (name: "Grassland", defense_bonus: 0.0,  resources: ["Livestock", "Wool"]),
+        (name: "Ocean",     defense_bonus: 0.0,  resources: ["Fish"]),
+        (name: "Coastal",   defense_bonus: 0.0,  resources: ["Fish"]),
+    ],
+)

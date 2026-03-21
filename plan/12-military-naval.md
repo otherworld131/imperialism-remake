@@ -23,7 +23,7 @@ beachhead). Naval battles are always resolved by AI.
 - [x] **Paddlewheeler** — FP:0, Armor:5, Hull:35, Cargo:8; costs 6 lumber + 2 steel + 10 coal; requires Paddlewheels
 - [x] **Freighter** — requires Marine Engineering (late game, replaces older merchants)
 - [ ] Merchant ships not visible on map; appear in battle reports when engaged
-- [ ] Each cargo hold carries 1 traded item
+- [x] Each cargo hold carries 1 traded item
 - [x] Some merchant ships have armor/speed advantages for surviving blockades
 - [x] Unit tests: cargo capacity calculations, construction cost validation
 
@@ -48,14 +48,14 @@ beachhead). Naval battles are always resolved by AI.
 
 ### Naval Operations
 - [ ] **Move** — warship moves between adjacent sea zones
-- [ ] **Patrol** — warship attacks enemies encountered in its sea zone
+- [x] **Patrol** — warship attacks enemies encountered in its sea zone
 - [x] **Blockade** — warship intercepts enemy merchant ships in the sea zone
-- [ ] **Escort** — warship protects friendly merchant ships from blockade/patrol
-- [ ] **Beachhead** — warships establish landing zone on hostile coastline
-  - [ ] Landing force size = total arms used to build all ships in the beachhead fleet
+- [x] **Escort** — warship protects friendly merchant ships from blockade/patrol
+- [x] **Beachhead** — warships establish landing zone on hostile coastline
+  - [x] Landing force size = total arms used to build all ships in the beachhead fleet
   - [ ] Troops can be teleported from friendly ports to the beachhead
-- [ ] **Reconnaissance** — estimate enemy ground forces in adjacent coastal provinces
-- [ ] Unit tests: each operation type's rules and constraints
+- [x] **Reconnaissance** — estimate enemy ground forces in adjacent coastal provinces
+- [x] Unit tests: each operation type's rules and constraints
 
 ### Naval Combat Resolution
 - [x] All naval battles resolved by AI (never player-controlled)
@@ -82,5 +82,5 @@ beachhead). Naval battles are always resolved by AI.
 - [x] **Data validation**: Load ship definitions → verify all stats, costs, prerequisites
 - [ ] **Integration test**: Build a Frigate → verify resources deducted, ship appears next turn
 - [ ] **Integration test**: Blockade scenario → verify merchant ships intercepted, trade disrupted
-- [ ] **Integration test**: Beachhead → verify landing force size matches fleet arms total
+- [x] **Integration test**: Beachhead → verify landing force size matches fleet arms total
 - [ ] **Combat simulation**: Run 100 naval battles with known fleets → verify outcomes are reasonable

@@ -419,6 +419,10 @@ fn main() {
             "produce arms" => {
                 cmd_produce_arms(&mut game);
             }
+            _ if cmd.starts_with("blockade ") => {
+                let nation_query = input.trim()[9..].trim();
+                cmd_blockade(&game, nation_query);
+            }
             _ if cmd.starts_with("sell ") => {
                 let args = input.trim()[5..].trim();
                 cmd_sell(&mut game, args);
@@ -961,6 +965,75 @@ fn cmd_produce_arms(game: &mut GameState) {
         "  Produced 1 arms from 1 steel. Arms: {}, Steel: {}",
         player.material_amount(MaterialType::Arms),
         player.material_amount(MaterialType::Steel)
+    );
+}
+
+/// Show blockade status against a target nation.
+fn cmd_blockade(game: &GameState, query: &str) {
+    let player_id = game.human_player_nation;
+    let player = match game.get_nation(player_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    // Find the target nation by name
+    let target = game
+        .nations
+        .iter()
+        .find(|n| n.name.to_lowercase().contains(&query.to_lowercase()) && n.id != player_id);
+
+    let target = match target {
+        Some(t) => t,
+        None => {
+            println!(
+                "  Unknown nation: '{}'. Use 'nations' to see all nations.",
+                query
+            );
+            return;
+        }
+    };
+
+    // Check if at war
+    let at_war = game
+        .diplomacy
+        .get_relation(player_id, target.id)
+        .is_some_and(|r| r.at_war);
+
+    if !at_war {
+        println!(
+            "  You are not at war with {}. Blockade requires being at war.",
+            target.name
+        );
+        return;
+    }
+
+    let our_warships = player.warship_count();
+    if our_warships == 0 {
+        println!("  You have no warships. Build warships first with 'build warship <type>'.");
+        return;
+    }
+
+    let enemy_cargo = target.total_cargo_capacity();
+    let blocked = domain::military::calculate_blockade_effect(enemy_cargo, our_warships as u32);
+    let cargo_blocked = enemy_cargo.saturating_sub(blocked);
+
+    println!("  NAVAL BLOCKADE vs {}:", target.name);
+    println!("    Your warships: {}", our_warships);
+    println!(
+        "    Your naval firepower: {}",
+        player.total_naval_firepower()
+    );
+    println!("    Enemy merchant cargo: {} holds", enemy_cargo);
+    println!(
+        "    Cargo blocked: {} (each warship blocks 2 holds)",
+        cargo_blocked
+    );
+    println!("    Enemy effective cargo: {} holds", blocked);
+    println!();
+    println!("  Note: Blockade is applied automatically each turn while at war.");
+    println!(
+        "  Enemy warships ({}) will engage yours in naval combat.",
+        target.warship_count()
     );
 }
 
@@ -2040,6 +2113,7 @@ fn print_help() {
     println!("    attack <nation>   — Order an attack on a nation you are at war with");
     println!("    navy              — Show your warship fleet");
     println!("    build warship <t> — Build a warship (frigate, ship-of-the-line)");
+    println!("    blockade <nation> — Show blockade status against an enemy nation");
     println!("    produce arms      — Convert 1 steel into 1 arms");
     println!();
     println!("  {}", color_bold("DIPLOMACY:"));
@@ -3634,6 +3708,67 @@ fn print_turn_report(game: &GameState, report: &TurnReport) {
                     color_red(&format!("DEFEAT at {}", prov_name))
                 );
             }
+        }
+    }
+
+    // Naval battles line
+    let player_naval_battles: Vec<_> = report
+        .naval_battles
+        .iter()
+        .filter(|b| b.attacker == player_id || b.defender == player_id)
+        .collect();
+    if !player_naval_battles.is_empty() {
+        for nb in &player_naval_battles {
+            let enemy_id = if nb.attacker == player_id {
+                nb.defender
+            } else {
+                nb.attacker
+            };
+            let enemy_name = game
+                .get_nation(enemy_id)
+                .map(|n| n.name.as_str())
+                .unwrap_or("Unknown");
+            let we_won = (nb.attacker_won && nb.attacker == player_id)
+                || (!nb.attacker_won && nb.defender == player_id);
+            if we_won {
+                println!(
+                    "  Naval:    {}",
+                    color_green(&format!(
+                        "NAVAL VICTORY vs {} ({} enemy ships sunk)",
+                        enemy_name,
+                        if nb.attacker == player_id {
+                            nb.defender_ships_lost.len()
+                        } else {
+                            nb.attacker_ships_lost.len()
+                        }
+                    ))
+                );
+            } else {
+                println!(
+                    "  Naval:    {}",
+                    color_red(&format!(
+                        "NAVAL DEFEAT vs {} ({} ships lost)",
+                        enemy_name,
+                        if nb.attacker == player_id {
+                            nb.attacker_ships_lost.len()
+                        } else {
+                            nb.defender_ships_lost.len()
+                        }
+                    ))
+                );
+            }
+        }
+    }
+
+    // Blockade effects (show if any headline mentions BLOCKADE for our nation)
+    let blockade_headlines: Vec<_> = report
+        .newspaper_headlines
+        .iter()
+        .filter(|h| h.contains("BLOCKADE"))
+        .collect();
+    if !blockade_headlines.is_empty() {
+        for headline in &blockade_headlines {
+            println!("  Blockade: {}", color_yellow(headline));
         }
     }
 

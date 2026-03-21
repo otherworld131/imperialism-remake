@@ -20,7 +20,7 @@ bottleneck — resources not transported are wasted.
 ### Transport Allocation
 - [x] Player assigns transport priority per resource type each turn
 - [ ] "Give Transport Orders" — sliders determine what percentage of capacity goes to each resource
-- [ ] Resources from connected tiles are collected automatically
+- [x] Resources from connected tiles are collected automatically
 - [x] Only resources from tiles connected via railroad/depot/port reach the capital
 - [x] Unconnected tiles' resources are wasted
 - [x] Excess resources beyond transport capacity are left behind (overflow: resources lost when capacity insufficient)
@@ -30,7 +30,7 @@ bottleneck — resources not transported are wasted.
 ### Military Transport
 - [ ] Army unit transport size = number of arms used to build it
 - [x] Rail transport capacity: 1 army unit per 5 freight cars
-- [ ] Troops can be moved via rail to any connected province in one turn
+- [x] Troops can be moved via rail to any connected province in one turn
 - [x] Amphibious transport: landing force size = total arms of all ships in beachhead fleet
 - [x] Example: 4 frigates (2 arms each) = landing force of size 8
 - [ ] Generals count as 1 transport unit
@@ -46,7 +46,7 @@ bottleneck — resources not transported are wasted.
 - [x] Unit tests: transport screen data calculations
 
 ### Verification Strategy
-- [ ] **Unit tests**: Run `cargo test` — all transport-related tests pass
-- [ ] **Integration test**: Create a game state with 3 connected tiles + 5 freight cars → verify correct resource delivery after turn processing
-- [ ] **Edge case tests**: 0 freight cars, more resources than capacity, disconnected tiles, province captured mid-turn
+- [x] **Unit tests**: Run `cargo test` — all transport-related tests pass
+- [x] **Integration test**: Create a game state with 3 connected tiles + 5 freight cars → verify correct resource delivery after turn processing
+- [x] **Edge case tests**: 0 freight cars, more resources than capacity, disconnected tiles, province captured mid-turn
 - [ ] **Regression test**: Verify barges have no effect (matching original game behavior)

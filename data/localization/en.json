@@ -1,0 +1,80 @@
+{
+    "_comment": "English string table for Imperialism Remake",
+    "_version": "0.1.0",
+
+    "game.title": "Imperialism Remake",
+    "game.subtitle": "An Industrial Revolution Grand Strategy",
+
+    "menu.new_game": "New Game",
+    "menu.load_game": "Load Game",
+    "menu.save_game": "Save Game",
+    "menu.settings": "Settings",
+    "menu.quit": "Quit",
+
+    "turn.end": "End Turn",
+    "turn.report_header": "THE IMPERIAL TIMES",
+    "turn.year_quarter": "{year} Q{quarter}",
+
+    "economy.warehouse": "Warehouse",
+    "economy.buildings": "Buildings",
+    "economy.transport": "Transport",
+    "economy.trade": "Trade",
+    "economy.treasury": "Treasury",
+
+    "military.army": "Army",
+    "military.navy": "Navy",
+    "military.fleet": "Merchant Fleet",
+    "military.build_unit": "Build Unit",
+    "military.build_warship": "Build Warship",
+    "military.blockade": "Naval Blockade",
+
+    "diplomacy.relations": "Diplomatic Relations",
+    "diplomacy.war": "Declare War",
+    "diplomacy.peace": "Propose Peace",
+    "diplomacy.alliance": "Alliance",
+    "diplomacy.pact": "Non-Aggression Pact",
+
+    "tech.research": "Research",
+    "tech.available": "Available Technologies",
+    "tech.researched": "Researched Technologies",
+
+    "map.provinces": "Provinces",
+    "map.infrastructure": "Infrastructure",
+    "map.railroad": "Railroad",
+    "map.depot": "Depot",
+    "map.port": "Port",
+    "map.fort": "Fort",
+
+    "resource.timber": "Timber",
+    "resource.ore": "Ore",
+    "resource.coal": "Coal",
+    "resource.grain": "Grain",
+    "resource.wool": "Wool",
+    "resource.cotton": "Cotton",
+    "resource.fruit": "Fruit",
+    "resource.livestock": "Livestock",
+    "resource.fish": "Fish",
+    "resource.gems": "Gems",
+
+    "material.lumber": "Lumber",
+    "material.steel": "Steel",
+    "material.fabric": "Fabric",
+    "material.arms": "Arms",
+
+    "goods.furniture": "Furniture",
+    "goods.hardware": "Hardware",
+    "goods.clothing": "Clothing",
+
+    "battle.victory": "VICTORY",
+    "battle.defeat": "DEFEAT",
+    "battle.retreat": "RETREAT",
+    "battle.naval_victory": "NAVAL VICTORY",
+    "battle.naval_defeat": "NAVAL DEFEAT",
+
+    "council.vote": "Council of Governors Vote",
+    "council.winner": "WINNER",
+
+    "error.insufficient_funds": "Insufficient funds",
+    "error.insufficient_resources": "Insufficient resources",
+    "error.not_at_war": "You are not at war with this nation"
+}

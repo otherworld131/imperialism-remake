@@ -1,0 +1,70 @@
+// Building definitions — data-driven, moddable
+// Defines all building types, their costs, and production capabilities.
+
+(
+    buildings: [
+        // Mills — convert raw resources into processed materials
+        (
+            name: "Lumber Mill",
+            category: "Mill",
+            input: "Timber",
+            output: "Lumber",
+            base_capacity: 2,
+            expansion_cost_per_unit: (lumber: 1, steel: 1),
+        ),
+        (
+            name: "Steel Mill",
+            category: "Mill",
+            input: "Ore",
+            output: "Steel",
+            base_capacity: 2,
+            expansion_cost_per_unit: (lumber: 1, steel: 1),
+        ),
+        (
+            name: "Textile Mill",
+            category: "Mill",
+            input: "Wool",
+            output: "Fabric",
+            base_capacity: 2,
+            expansion_cost_per_unit: (lumber: 1, steel: 1),
+        ),
+
+        // Factories — convert materials into finished goods
+        (
+            name: "Furniture Factory",
+            category: "Factory",
+            input: "Lumber",
+            output: "Furniture",
+            base_capacity: 2,
+            expansion_cost_per_unit: (lumber: 1, steel: 1),
+        ),
+        (
+            name: "Hardware Factory",
+            category: "Factory",
+            input: "Steel",
+            output: "Hardware",
+            base_capacity: 2,
+            expansion_cost_per_unit: (lumber: 1, steel: 1),
+        ),
+        (
+            name: "Clothing Factory",
+            category: "Factory",
+            input: "Fabric",
+            output: "Clothing",
+            base_capacity: 2,
+            expansion_cost_per_unit: (lumber: 1, steel: 1),
+        ),
+
+        // Infrastructure buildings
+        (
+            name: "Railyard",
+            category: "Infrastructure",
+            purpose: "Build freight cars for transport",
+        ),
+        (
+            name: "Shipyard",
+            category: "Infrastructure",
+            purpose: "Build merchant ships and warships",
+        ),
+    ],
+)

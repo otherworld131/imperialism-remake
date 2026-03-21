@@ -58,10 +58,10 @@ imperialism-remake/
 ### Repository Setup
 - [x] Initialize git repository
 - [x] Create `.gitignore` (binaries, IDE files, build artifacts, OS files)
-- [ ] Create `.editorconfig` (indentation, charset, line endings)
+- [x] Create `.editorconfig` (indentation, charset, line endings)
 - [ ] Set up branch protection rules (`main` requires PR + CI green)
 - [x] Create `CONTRIBUTING.md` with coding standards
-- [ ] Create `LICENSE` file
+- [x] Create `LICENSE` file
 
 ### Project Structure
 - [x] Create `Cargo.toml` workspace with all member crates
@@ -83,11 +83,11 @@ imperialism-remake/
 - [ ] Verify Lua scripts load and execute from `cargo test -p domain`
 
 ### Data Directory
-- [ ] Create `data/definitions/` with placeholder RON files (units.ron, ships.ron, terrain.ron, buildings.ron, nations.ron)
-- [ ] Create `data/scenarios/` with a minimal test scenario
-- [ ] Create `data/sprites/` with placeholder assets
-- [ ] Create `data/audio/` directory structure (bgm/, sfx/)
-- [ ] Create `data/localization/en.json` with initial string table
+- [x] Create `data/definitions/` with placeholder RON files (units.ron, ships.ron, terrain.ron, buildings.ron, nations.ron)
+- [x] Create `data/scenarios/` with a minimal test scenario
+- [x] Create `data/sprites/` with placeholder assets
+- [x] Create `data/audio/` directory structure (bgm/, sfx/)
+- [x] Create `data/localization/en.json` with initial string table
 
 ### Tooling
 - [x] Code formatter configured and enforced (`cargo fmt`)

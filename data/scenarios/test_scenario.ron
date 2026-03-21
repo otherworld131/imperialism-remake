@@ -1,0 +1,13 @@
+// Minimal test scenario — used for integration testing
+// A small 4x4 map with 2 Great Powers and 1 Minor Nation.
+
+(
+    id: "test",
+    name: "Test Scenario",
+    description: "Minimal scenario for automated testing",
+    year: 1815,
+    map_width: 4,
+    map_height: 4,
+    great_powers: ["Dorado", "Deneb"],
+    minor_nations: ["Aldebaran"],
+)

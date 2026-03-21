@@ -1,0 +1,21 @@
+// Nation definitions — data-driven, moddable
+// Defines Great Powers and Minor Nations with starting conditions.
+
+(
+    great_powers: [
+        (name: "Dorado",   color: "Yellow",    ai_personality: "Expansionist"),
+        (name: "Deneb",    color: "Orange",    ai_personality: "Balanced"),
+        (name: "Vega",     color: "LightBlue", ai_personality: "Diplomatic"),
+        (name: "Arcturus", color: "Red",       ai_personality: "Aggressive"),
+        (name: "Capella",  color: "Green",     ai_personality: "Economic"),
+        (name: "Rigel",    color: "Purple",    ai_personality: "Defensive"),
+        (name: "Sirius",   color: "Blue",      ai_personality: "Balanced"),
+    ],
+    minor_nations: [
+        (name: "Aldebaran", resources: ["Timber", "Ore"]),
+        (name: "Pollux",    resources: ["Grain", "Wool"]),
+        (name: "Castor",    resources: ["Coal", "Ore"]),
+        (name: "Procyon",   resources: ["Cotton", "Fruit"]),
+        (name: "Altair",    resources: ["Gems", "Livestock"]),
+    ],
+)
