@@ -49,9 +49,9 @@ services. It has **zero** external dependencies — no framework, no I/O, no UI.
 - [x] `MapGenerator` trait — creates a random map from a seed/key
 - [x] `TurnProcessor` trait — orchestrates a full turn resolution
 - [x] `CombatResolver` trait — resolves land and naval battles
-- [ ] `TradeResolver` trait — resolves trade session offers/bids
-- [ ] `DiplomacyResolver` trait — resolves treaty proposals and diplomatic actions
-- [ ] `AiDecisionMaker` trait — trait for AI player strategies
+- [x] `TradeResolver` trait — resolves trade session offers/bids
+- [x] `DiplomacyResolver` trait — resolves treaty proposals and diplomatic actions
+- [x] `AiDecisionMaker` trait — trait for AI player strategies
 - [x] `VictoryChecker` trait — evaluates Council of Governors vote
 
 ### Domain Events (Initial Set)
@@ -71,7 +71,7 @@ services. It has **zero** external dependencies — no framework, no I/O, no UI.
 ### Verification Strategy
 - [x] **Unit tests**: `cargo test -p domain` — all coordinate, value object, entity, and event tests pass
 - [ ] **Coverage check**: Generate coverage report for Domain crate → verify ≥ 90% line coverage
-- [ ] **Immutability test**: Attempt to mutate value objects → verify compile-time or runtime errors
-- [ ] **Identity test**: Two entities with same ID are equal; two with different IDs are not
-- [ ] **Event test**: Publish each domain event type → verify correct handlers fire
+- [x] **Immutability test**: Attempt to mutate value objects → verify compile-time or runtime errors
+- [x] **Identity test**: Two entities with same ID are equal; two with different IDs are not
+- [x] **Event test**: Publish each domain event type → verify correct handlers fire
 - [x] **Compile check**: Domain crate builds with zero external crate dependencies (verified by inspecting `Cargo.toml`)

@@ -173,7 +173,11 @@ impl DiplomacyState {
     /// Requires an embassy to be established.
     /// `from` must be a Great Power and `to` must be a Minor Nation.
     /// The caller is responsible for verifying nation types before calling this.
+    /// Rejects if the proposer's standing is below 30.
     pub fn propose_pact(&mut self, from: NationId, to: NationId) -> Result<(), String> {
+        if !self.would_accept_treaty(from) {
+            return Err("Standing too low to propose treaties".to_string());
+        }
         let rel = self.ensure_relation(from, to);
         if !rel.has_embassy {
             return Err("Embassy required before proposing a non-aggression pact".to_string());
@@ -192,7 +196,11 @@ impl DiplomacyState {
     /// Propose an alliance between two Great Powers.
     /// Requires embassy (GP pairs have embassies from game start).
     /// Both nations must be Great Powers — the caller is responsible for verifying this.
+    /// Rejects if the proposer's standing is below 30.
     pub fn propose_alliance(&mut self, from: NationId, to: NationId) -> Result<(), String> {
+        if !self.would_accept_treaty(from) {
+            return Err("Standing too low to propose treaties".to_string());
+        }
         let rel = self.ensure_relation(from, to);
         if !rel.has_embassy {
             return Err("Embassy required before proposing an alliance".to_string());
@@ -308,6 +316,34 @@ impl DiplomacyState {
                 }
             })
             .collect()
+    }
+
+    /// Check if a treaty would be accepted based on the proposer's standing.
+    /// Nations with standing below 30 get rejected.
+    pub fn would_accept_treaty(&self, proposer: NationId) -> bool {
+        let standing = self.get_standing(proposer);
+        standing >= 30
+    }
+
+    /// Check whether a consulate exists between two nations.
+    pub fn has_consulate(&self, a: NationId, b: NationId) -> bool {
+        self.get_relation(a, b)
+            .map(|rel| rel.has_consulate)
+            .unwrap_or(false)
+    }
+
+    /// Check whether an embassy exists between two nations.
+    pub fn has_embassy(&self, a: NationId, b: NationId) -> bool {
+        self.get_relation(a, b)
+            .map(|rel| rel.has_embassy)
+            .unwrap_or(false)
+    }
+
+    /// Check whether two nations are at war.
+    pub fn is_at_war(&self, a: NationId, b: NationId) -> bool {
+        self.get_relation(a, b)
+            .map(|rel| rel.at_war)
+            .unwrap_or(false)
     }
 }
 

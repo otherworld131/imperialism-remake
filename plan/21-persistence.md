@@ -64,6 +64,6 @@ The save format should be stable, versioned, and forward-compatible.
 - [x] **Roundtrip test**: Create game state → save → load → compare → identical
 - [x] **Corruption test**: Tamper with save file bytes → load → verify graceful error, no crash
 - [x] **Migration test**: Create save with version N schema → migrate to N+1 → load successfully
-- [ ] **Autosave test**: Play 5 turns → verify 5 autosave files created
+- [x] **Autosave test**: Play 5 turns → verify 5 autosave files created
 - [x] **Performance test**: Save a full game state (7 nations, 120 provinces, all units) → save < 1 second, load < 2 seconds
 - [x] **Cross-version test**: Save with build X, load with build X+1 → verify compatibility

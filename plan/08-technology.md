@@ -10,7 +10,7 @@ to research. Some have prerequisites.
 
 ### Tech Data Model — Rust + Lua
 - [x] `Technology` entity (Rust) — ID, name, cost, year range (earliest/latest), prerequisites
-- [ ] Tech static data defined in RON (`data/definitions/technologies.ron`) — structure, costs, prereqs, year ranges
+- [x] Tech static data defined in RON (`data/definitions/technologies.ron`) — structure, costs, prereqs, year ranges
 - [ ] Tech effects defined in **Lua** (`scripts/tech/{tech_id}.lua`):
   - [ ] Each tech script exports `on_researched(game_api)` — applies effects when researched
   - [ ] Game API exposed to Lua: `game_api:unlock_unit("rifle_infantry")`, `game_api:enable_improvement("farm", 2)`, `game_api:enable_infrastructure("swamp_railroad")`, etc.
@@ -23,9 +23,9 @@ to research. Some have prerequisites.
 
 ### Technology Availability
 - [x] Each tech has an earliest and latest year it can appear
-- [ ] Random appearance within the year range (seeded by game seed)
+- [x] Random appearance within the year range (seeded by game seed)
 - [x] Tech appears in the tech screen only if all prerequisites are met
-- [ ] If prerequisites not met, the screen shows remaining prerequisites instead of cost
+- [x] If prerequisites not met, the screen shows remaining prerequisites instead of cost
 - [x] Unit tests: tech availability window calculations
 - [x] Unit tests: prerequisite filtering
 
@@ -84,7 +84,7 @@ to research. Some have prerequisites.
 
 ### Verification Strategy
 - [x] **Unit tests**: Run test suite — all tech tree tests pass
-- [ ] **Data validation test**: Load tech definitions from data files → validate all IDs, costs, prereqs, year ranges
-- [ ] **Integration test**: Simulate 100 turns of tech research → verify all techs can be researched in correct order
+- [x] **Data validation test**: Load tech definitions from data files → validate all IDs, costs, prereqs, year ranges
+- [x] **Integration test**: Simulate 100 turns of tech research → verify all techs can be researched in correct order
 - [x] **Scenario test**: Start game at year 1815, verify exactly which techs are available; advance to 1830, verify new techs appear
-- [ ] **Regression test**: Verify scenario start dates (1815, 1820, 1848, 1882) provide correct starting techs
+- [x] **Regression test**: Verify scenario start dates (1815, 1820, 1848, 1882) provide correct starting techs

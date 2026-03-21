@@ -692,6 +692,12 @@ fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId], actions: &m
             continue;
         }
 
+        // AI with low standing (<30) avoids declaring wars to limit diplomatic damage
+        let standing = game.diplomacy.get_standing(ai_id);
+        if standing < 30 {
+            continue;
+        }
+
         // Find best target: not already at war, not dogpiled, most tiles (most valuable)
         let mut candidates: Vec<_> = minor_nations
             .iter()
@@ -1330,6 +1336,12 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
                 continue;
             }
 
+            // Skip nations with low standing (<50) — AI is less likely to accept treaties
+            let partner_standing = game.diplomacy.get_standing(gp_id);
+            if partner_standing < 50 {
+                continue;
+            }
+
             // Only propose if score is positive (non-threatening)
             let score = game
                 .diplomacy
@@ -1358,11 +1370,20 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
     }
 
     // Phase 3: Send cash grants to Minor Nations with embassies
+    // AI with high standing (>80) gets better trade deals — sends larger grants
+    // which improves relationships faster.
     if grant_amount > 0
         && grant_every_n_turns > 0
         && turn_number.is_multiple_of(grant_every_n_turns)
     {
-        let grant = Money::dollars(grant_amount);
+        let ai_standing = game.diplomacy.get_standing(nation_id);
+        let adjusted_grant = if ai_standing > 80 {
+            // High standing bonus: 50% more effective grants
+            grant_amount + grant_amount / 2
+        } else {
+            grant_amount
+        };
+        let grant = Money::dollars(adjusted_grant);
         let minor_ids: Vec<NationId> = game
             .nations
             .iter()
