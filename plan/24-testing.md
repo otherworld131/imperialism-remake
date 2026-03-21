@@ -46,9 +46,9 @@ comprehensive.
 - [x] 100-turn endurance test: no state corruption, memory leaks, or runaway values
 - [x] Full game test (to 1915): game completes with valid winner
 - [x] AI-only games: 100 games → verify win distribution, no crashes
-- [ ] Balance tests: no single nation/strategy dominates excessively
+- [x] Balance tests: no single nation/strategy dominates excessively
 - [x] Performance baseline: turn resolution < 5s, frame time < 16ms
-- [ ] Execution time: < 10 minutes (can run in CI on schedule, not every commit)
+- [x] Execution time: < 10 minutes (can run in CI on schedule, not every commit)
 
 #### Layer 5 — Architecture Tests (Fitness Functions)
 - [x] Domain crate has zero external dependencies
@@ -79,7 +79,7 @@ comprehensive.
 ### CI Verification Steps (How Claude Code Validates Each Step)
 - [x] `cargo build` — project compiles with zero warnings
 - [x] `cargo test --lib` — all unit tests pass
-- [ ] `cargo test --test integration` — all integration tests pass
+- [x] `cargo test --test integration` — all integration tests pass
 - [x] `cargo test --test architecture` — all fitness functions pass
 - [x] `cargo fmt --check` — code formatting is correct
 - [x] `cargo clippy` — no linter warnings
