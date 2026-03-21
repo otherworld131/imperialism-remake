@@ -127,6 +127,15 @@ fn main() {
             "t" | "turn" | "end turn" | "" => {
                 let report = process_turn(&mut game);
                 print_turn_report(&game, &report);
+
+                // Autosave (silent)
+                let sdir = saves_dir();
+                if !sdir.exists() {
+                    std::fs::create_dir_all(&sdir).ok();
+                }
+                let autosave_path = sdir.join("autosave.json");
+                persistence::save_game(&game, &autosave_path).ok();
+
                 if game.is_game_over() {
                     println!("  ══════════════════════════════════════");
                     println!("  The year is 1915. The game has ended!");
@@ -226,6 +235,9 @@ fn main() {
             "save" => {
                 save_current_game(&game);
             }
+            "load" => {
+                list_saved_games();
+            }
             _ if cmd.starts_with("load ") => {
                 let filename = input.trim()[5..].trim();
                 match load_saved_game(filename) {
@@ -239,6 +251,19 @@ fn main() {
                     }
                 }
             }
+            "quicksave" | "qs" => {
+                quicksave_game(&game);
+            }
+            "quickload" | "ql" => match load_saved_game("quicksave.json") {
+                Ok(loaded) => {
+                    game = loaded;
+                    println!("  Quickload successful.");
+                    print_status(&game);
+                }
+                Err(e) => {
+                    println!("  Quickload failed: {}", e);
+                }
+            },
             _ if cmd.starts_with("research ") => {
                 let tech_query = input.trim()[9..].trim();
                 research_tech(&mut game, tech_query);
@@ -1901,8 +1926,11 @@ fn print_help() {
     println!("    auto <turns>      — Fast-forward N turns with minimal output");
     println!("    overview          — Comprehensive empire overview");
     println!("    history           — Show timeline of major events");
-    println!("    save              — Save the current game");
+    println!("    save              — Save the current game (shows existing saves)");
+    println!("    load              — List saved games");
     println!("    load <filename>   — Load a saved game");
+    println!("    quicksave / qs    — Quick save to quicksave.json");
+    println!("    quickload / ql    — Quick load from quicksave.json");
     println!("    help              — Show this help");
     println!("    quit              — Exit the game");
 }
@@ -1918,16 +1946,125 @@ fn save_current_game(game: &GameState) {
         return;
     }
 
+    // Show existing saves before saving
+    print_save_list(&dir);
+
     let filename = format!("save_{}_Q{}.json", game.turn.year(), game.turn.quarter());
     let path = dir.join(&filename);
 
     match persistence::save_game(game, &path) {
         Ok(()) => {
-            println!("  Game saved to: {}", path.display());
+            println!("  Game saved to: saves/{}", filename);
         }
         Err(e) => {
             println!("  Failed to save: {}", e);
         }
+    }
+}
+
+fn quicksave_game(game: &GameState) {
+    let dir = saves_dir();
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        println!("  Failed to create saves directory: {}", e);
+        return;
+    }
+    let path = dir.join("quicksave.json");
+    match persistence::save_game(game, &path) {
+        Ok(()) => {
+            println!("  Quicksave complete.");
+        }
+        Err(e) => {
+            println!("  Quicksave failed: {}", e);
+        }
+    }
+}
+
+fn list_saved_games() {
+    let dir = saves_dir();
+    if !dir.exists() {
+        println!("  No saved games found.");
+        println!();
+        println!("  Use: load <filename> (e.g., \"load save_1820_Q1.json\")");
+        return;
+    }
+
+    println!();
+    print_save_list(&dir);
+    println!();
+    println!("  Use: load <filename> (e.g., \"load save_1820_Q1.json\")");
+}
+
+fn print_save_list(dir: &std::path::Path) {
+    let mut entries: Vec<_> = match std::fs::read_dir(dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .collect(),
+        Err(_) => return,
+    };
+
+    if entries.is_empty() {
+        return;
+    }
+
+    // Sort by modification time, most recent first
+    entries.sort_by(|a, b| {
+        let time_a = a
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let time_b = b
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        time_b.cmp(&time_a)
+    });
+
+    println!("  SAVED GAMES:");
+    for (i, entry) in entries.iter().enumerate() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        let meta_str = if let Some(meta) = persistence::read_save_metadata(&entry.path()) {
+            let size_str = entry
+                .metadata()
+                .map(|m| {
+                    let bytes = m.len();
+                    if bytes >= 1_048_576 {
+                        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+                    } else if bytes >= 1024 {
+                        format!("{:.0} KB", bytes as f64 / 1024.0)
+                    } else {
+                        format!("{} B", bytes)
+                    }
+                })
+                .unwrap_or_default();
+            let ts_display = if meta.timestamp.len() >= 16 {
+                // Show "YYYY-MM-DD HH:MM" from ISO 8601
+                meta.timestamp[..16].replace('T', " ")
+            } else {
+                meta.timestamp.clone()
+            };
+            format!(
+                " ({}, {} {}, {})",
+                size_str, meta.nation_name, meta.turn_display, ts_display
+            )
+        } else {
+            let size_str = entry
+                .metadata()
+                .map(|m| {
+                    let bytes = m.len();
+                    if bytes >= 1_048_576 {
+                        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+                    } else if bytes >= 1024 {
+                        format!("{:.0} KB", bytes as f64 / 1024.0)
+                    } else {
+                        format!("{} B", bytes)
+                    }
+                })
+                .unwrap_or_default();
+            format!(" ({})", size_str)
+        };
+        println!("    {}. {}{}", i + 1, name_str, meta_str);
     }
 }
 

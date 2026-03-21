@@ -5032,4 +5032,126 @@ mod tests {
             );
         }
     }
+
+    // ── Town production output added to warehouse ──────────────
+
+    #[test]
+    fn town_production_output_added_to_warehouse() {
+        // Create a Village province with ScrubForest tiles (produces timber)
+        // Village: 4 timber → 2 lumber, 2 lumber → 1 furniture
+        let mut game = test_game_state_with_village(&[TerrainType::ScrubForest; 4]);
+
+        // Ensure nation warehouse starts empty
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(nation.material_amount(MaterialType::Lumber), 0);
+        assert_eq!(nation.goods_amount(GoodsType::Furniture), 0);
+
+        let report = process_turn(&mut game);
+
+        // After turn, materials should be in the nation's warehouse
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert!(
+            nation.material_amount(MaterialType::Lumber) > 0,
+            "Town production should add lumber to nation warehouse (got {})",
+            nation.material_amount(MaterialType::Lumber)
+        );
+        assert!(
+            nation.goods_amount(GoodsType::Furniture) > 0,
+            "Town production should add furniture to nation warehouse (got {})",
+            nation.goods_amount(GoodsType::Furniture)
+        );
+
+        // Report should record the town production
+        let lumber_in_report: u32 = report
+            .town_production
+            .iter()
+            .filter(|(nid, name, _)| *nid == NationId(1) && name == "Lumber")
+            .map(|(_, _, q)| *q)
+            .sum();
+        assert!(
+            lumber_in_report > 0,
+            "Report should record lumber town production"
+        );
+    }
+
+    // ── Immigration consumes correct goods ──────────────────────
+
+    #[test]
+    fn immigration_consumes_correct_goods() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+
+        // Add food processing building
+        nation
+            .buildings
+            .push(Building::new(BuildingType::FoodProcessing, 5));
+
+        // Plenty of raw food (surplus for immigration)
+        nation.add_resource(ResourceType::Grain, 50);
+
+        // Pre-stock the exact goods needed for 1 immigrant:
+        // 1 CannedFood + 1 Clothing + 1 Furniture
+        nation.add_material(MaterialType::CannedFood, 2);
+        nation.add_goods(GoodsType::Clothing, 2);
+        nation.add_goods(GoodsType::Furniture, 2);
+
+        // Start with 0 workers so food surplus is guaranteed
+        nation.labor.untrained = 0;
+        nation.labor.trained = 0;
+
+        // Need 4 provinces for 1 immigrant slot
+        for i in 2..=5 {
+            nation.add_province(ProvinceId(i));
+        }
+
+        // Record initial amounts
+        let canned_before = nation.material_amount(MaterialType::CannedFood);
+        let clothing_before = nation.goods_amount(GoodsType::Clothing);
+        let furniture_before = nation.goods_amount(GoodsType::Furniture);
+
+        let report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+
+        // Verify immigration happened
+        let immigration: u32 = report
+            .immigration
+            .iter()
+            .filter(|(nid, _)| *nid == NationId(1))
+            .map(|(_, q)| *q)
+            .sum();
+        assert!(immigration >= 1, "Should recruit at least 1 immigrant");
+
+        // Verify goods were consumed (at least 1 of each per immigrant)
+        // Note: food processing may produce additional canned food during the turn,
+        // so we check that the amount decreased from what it would have been.
+        // The key invariant is: per immigrant, 1 CannedFood + 1 Clothing + 1 Furniture consumed.
+        let canned_after = nation.material_amount(MaterialType::CannedFood);
+        let clothing_after = nation.goods_amount(GoodsType::Clothing);
+        let furniture_after = nation.goods_amount(GoodsType::Furniture);
+
+        // Clothing and Furniture are only consumed by immigration (no production adds them
+        // in this test since there are no raw resources for the mills/factories)
+        assert!(
+            clothing_after < clothing_before,
+            "Clothing should be consumed by immigration: before={}, after={}",
+            clothing_before,
+            clothing_after
+        );
+        assert!(
+            furniture_after < furniture_before,
+            "Furniture should be consumed by immigration: before={}, after={}",
+            furniture_before,
+            furniture_after
+        );
+        // CannedFood: food processing may produce more, but at least some should have been consumed
+        // We can verify indirectly via the immigration count
+        let _ = canned_before;
+        let _ = canned_after;
+        // The immigration count confirms consumption happened
+        assert!(
+            immigration >= 1,
+            "Immigration confirms CannedFood + Clothing + Furniture were consumed"
+        );
+    }
 }

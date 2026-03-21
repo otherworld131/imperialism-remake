@@ -57,7 +57,7 @@ a province is invaded via beachhead.
 - [x] Victorious attacker occupies the province
 - [x] Surviving units retain damage and earn medals based on performance
 - [x] Province garrison (Militia) is destroyed on conquest — not captured
-- [ ] Unit tests: victory/defeat determination, retreat mechanics, medal award
+- [x] Unit tests: victory/defeat determination, retreat mechanics, medal award
 
 ### Province Conquest
 - [ ] Conquering a Minor Nation capital: new army unit starts with 1 medal + Armory statue

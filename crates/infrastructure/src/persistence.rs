@@ -4,23 +4,114 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Current save file format version.
-pub const CURRENT_SAVE_VERSION: u32 = 1;
+pub const CURRENT_SAVE_VERSION: u32 = 2;
 
 /// Versioned save file wrapper around the game state.
 #[derive(Serialize, Deserialize)]
 pub struct SaveFile {
     /// Format version of this save file.
     pub version: u32,
+    /// Name of the player's nation.
+    #[serde(default)]
+    pub nation_name: String,
+    /// Human-readable turn display, e.g. "1820 Q1".
+    #[serde(default)]
+    pub turn_display: String,
+    /// Difficulty setting name.
+    #[serde(default)]
+    pub difficulty: String,
+    /// ISO 8601 timestamp when the save was created.
+    #[serde(default)]
+    pub timestamp: String,
     /// The game state contained in this save.
     pub game: GameState,
 }
 
+/// Get the current time as an ISO 8601 string (UTC-like, no external deps).
+fn current_timestamp() -> String {
+    // Use UNIX_EPOCH + SystemTime to produce a basic timestamp.
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = duration.as_secs();
+    // Convert to a basic date-time string (approximate, no leap-second handling)
+    let days = secs / 86400;
+    let time_of_day = secs % 86400;
+    let hours = time_of_day / 3600;
+    let minutes = (time_of_day % 3600) / 60;
+    let seconds = time_of_day % 60;
+
+    // Calculate year/month/day from days since epoch (1970-01-01)
+    let (year, month, day) = days_to_ymd(days);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hours, minutes, seconds
+    )
+}
+
+/// Convert days since 1970-01-01 to (year, month, day).
+fn days_to_ymd(days: u64) -> (u64, u64, u64) {
+    // Algorithm for Gregorian calendar
+    let mut remaining = days as i64;
+    let mut year: i64 = 1970;
+
+    loop {
+        let days_in_year = if is_leap(year) { 366 } else { 365 };
+        if remaining < days_in_year {
+            break;
+        }
+        remaining -= days_in_year;
+        year += 1;
+    }
+
+    let leap = is_leap(year);
+    let month_days: [i64; 12] = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut month: usize = 0;
+    while month < 12 && remaining >= month_days[month] {
+        remaining -= month_days[month];
+        month += 1;
+    }
+
+    (year as u64, (month + 1) as u64, (remaining + 1) as u64)
+}
+
+fn is_leap(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
 /// Save a game state to a JSON file at the given path.
 ///
-/// The game state is wrapped in a [`SaveFile`] with the current format version.
+/// The game state is wrapped in a [`SaveFile`] with the current format version
+/// and metadata (nation name, turn display, difficulty, timestamp).
 pub fn save_game(game: &GameState, path: &Path) -> Result<(), String> {
+    let nation_name = game
+        .get_nation(game.human_player_nation)
+        .map(|n| n.name.clone())
+        .unwrap_or_default();
+    let turn_display = format!("{} Q{}", game.turn.year(), game.turn.quarter());
+    let difficulty = format!("{:?}", game.difficulty);
+    let timestamp = current_timestamp();
+
     let save = SaveFile {
         version: CURRENT_SAVE_VERSION,
+        nation_name,
+        turn_display,
+        difficulty,
+        timestamp,
         game: clone_game_state_for_save(game),
     };
     let json =
@@ -57,6 +148,30 @@ pub fn load_game(path: &Path) -> Result<GameState, String> {
     // Reconstruct non-serialized fields
     game.tech_tree = TechTree::new();
     Ok(game)
+}
+
+/// Read save file metadata without loading the full game state.
+/// Returns (nation_name, turn_display, difficulty, timestamp) or None if unreadable.
+pub fn read_save_metadata(path: &Path) -> Option<SaveFileMetadata> {
+    let json = std::fs::read_to_string(path).ok()?;
+    if let Ok(save) = serde_json::from_str::<SaveFile>(&json) {
+        Some(SaveFileMetadata {
+            nation_name: save.nation_name,
+            turn_display: save.turn_display,
+            difficulty: save.difficulty,
+            timestamp: save.timestamp,
+        })
+    } else {
+        None
+    }
+}
+
+/// Metadata extracted from a save file for display in the save browser.
+pub struct SaveFileMetadata {
+    pub nation_name: String,
+    pub turn_display: String,
+    pub difficulty: String,
+    pub timestamp: String,
 }
 
 /// Serialize and re-deserialize the game state to produce a clean copy
@@ -267,14 +382,20 @@ mod tests {
 
     #[test]
     fn backwards_compatibility_version_1_loads() {
+        // Simulate a v1 save file (has version + game, but no metadata fields)
         let game = new_game("test", Difficulty::Easy, 0);
 
         let dir = std::env::temp_dir().join("imperialism_test_backwards_compat");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("v1_save.json");
 
-        // Save with current version (which is 1)
-        save_game(&game, &path).unwrap();
+        // Build a v1-style JSON manually (version + game, no metadata)
+        let game_copy = clone_game_state_for_save(&game);
+        let v1_json = serde_json::json!({
+            "version": 1,
+            "game": serde_json::to_value(&game_copy).unwrap()
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&v1_json).unwrap()).unwrap();
 
         // Verify it loads successfully
         let loaded = load_game(&path).unwrap();
@@ -305,6 +426,40 @@ mod tests {
         let loaded = load_game(&path).unwrap();
         assert_eq!(loaded.turn, game.turn);
         assert_eq!(loaded.difficulty, game.difficulty);
+
+        // Cleanup
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn save_file_includes_metadata() {
+        let game = new_game("test", Difficulty::Normal, 0);
+
+        let dir = std::env::temp_dir().join("imperialism_test_metadata");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("metadata_save.json");
+
+        save_game(&game, &path).unwrap();
+
+        // Read the raw JSON and verify metadata fields
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            parsed["version"].as_u64().unwrap(),
+            CURRENT_SAVE_VERSION as u64
+        );
+        assert!(!parsed["nation_name"].as_str().unwrap().is_empty());
+        assert!(!parsed["turn_display"].as_str().unwrap().is_empty());
+        assert_eq!(parsed["difficulty"].as_str().unwrap(), "Normal");
+        assert!(!parsed["timestamp"].as_str().unwrap().is_empty());
+
+        // Verify metadata via read_save_metadata
+        let meta = read_save_metadata(&path).unwrap();
+        assert!(!meta.nation_name.is_empty());
+        assert!(meta.turn_display.contains("Q"));
+        assert_eq!(meta.difficulty, "Normal");
+        assert!(meta.timestamp.contains("T"));
 
         // Cleanup
         let _ = std::fs::remove_file(&path);

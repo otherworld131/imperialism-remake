@@ -695,4 +695,69 @@ mod tests {
         let state = DiplomacyState::new();
         assert!(!state.has_treaty(NationId(1), NationId(2), TreatyType::Alliance));
     }
+
+    // ── Alliance breaks on war declaration ──────────────────────
+
+    #[test]
+    fn alliance_breaks_on_war_declaration() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2)];
+        state.initialize_great_powers(&gps);
+
+        // Form alliance
+        state.propose_alliance(NationId(1), NationId(2)).unwrap();
+        assert!(state.has_treaty(NationId(1), NationId(2), TreatyType::Alliance));
+
+        // Declare war — alliance should be removed
+        state.declare_war(NationId(1), NationId(2));
+        assert!(
+            !state.has_treaty(NationId(1), NationId(2), TreatyType::Alliance),
+            "Alliance should be broken when war is declared"
+        );
+        let rel = state.get_relation(NationId(1), NationId(2)).unwrap();
+        assert!(rel.at_war);
+        assert!(rel.active_treaties.is_empty());
+    }
+
+    // ── Standing decreases on treaty break ──────────────────────
+
+    #[test]
+    fn standing_decreases_on_treaty_break() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2)];
+        state.initialize_great_powers(&gps);
+        state.propose_alliance(NationId(1), NationId(2)).unwrap();
+
+        let standing_before = state.get_standing(NationId(1));
+        state.break_treaty(NationId(1), NationId(2), TreatyType::Alliance);
+        let standing_after = state.get_standing(NationId(1));
+
+        assert!(
+            standing_after < standing_before,
+            "Standing should decrease after breaking a treaty: {} -> {}",
+            standing_before,
+            standing_after
+        );
+        // break_treaty reduces standing by 15
+        assert_eq!(standing_after, standing_before - 15);
+    }
+
+    // ── Grant improves score proportional to amount ─────────────
+
+    #[test]
+    fn grant_improves_score_proportional_to_amount() {
+        let mut state = DiplomacyState::new();
+        state.build_consulate(NationId(1), NationId(10)).unwrap();
+
+        let score_before = state.get_relation(NationId(1), NationId(10)).unwrap().score;
+        state.send_grant(NationId(1), NationId(10), Money::dollars(1000));
+        let score_after = state.get_relation(NationId(1), NationId(10)).unwrap().score;
+
+        // $1000 grant => 1000/100 = +10 improvement
+        assert_eq!(
+            score_after,
+            score_before + 10,
+            "$1000 grant should give +10 diplomatic score"
+        );
+    }
 }

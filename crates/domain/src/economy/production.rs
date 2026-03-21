@@ -520,4 +520,80 @@ mod tests {
         let consumed = result.materials_consumed[0].1;
         assert_eq!(consumed, produced * 2);
     }
+
+    // ── Steel production requires both coal and iron ────────────
+
+    #[test]
+    fn steel_production_requires_both_coal_and_iron() {
+        // Only coal, no iron => 0 steel
+        let result_coal_only =
+            calculate_mill_production(ProductionChain::Metal, &[(ResourceType::Coal, 10)], 5, 20);
+        assert_eq!(
+            result_coal_only.materials_produced,
+            vec![(MaterialType::Steel, 0)],
+            "Steel mill should produce nothing with only coal"
+        );
+
+        // Only iron, no coal => 0 steel
+        let result_iron_only =
+            calculate_mill_production(ProductionChain::Metal, &[(ResourceType::Iron, 10)], 5, 20);
+        assert_eq!(
+            result_iron_only.materials_produced,
+            vec![(MaterialType::Steel, 0)],
+            "Steel mill should produce nothing with only iron"
+        );
+
+        // Both coal and iron => produces steel
+        let result_both = calculate_mill_production(
+            ProductionChain::Metal,
+            &[(ResourceType::Coal, 4), (ResourceType::Iron, 4)],
+            5,
+            20,
+        );
+        assert_eq!(
+            result_both.materials_produced,
+            vec![(MaterialType::Steel, 4)],
+            "Steel mill should produce steel when both coal and iron are available"
+        );
+    }
+
+    // ── Textile mill accepts cotton or wool ──────────────────────
+
+    #[test]
+    fn textile_mill_accepts_cotton_or_wool() {
+        // Cotton only works
+        let result_cotton = calculate_mill_production(
+            ProductionChain::Textile,
+            &[(ResourceType::Cotton, 4)],
+            5,
+            20,
+        );
+        assert_eq!(
+            result_cotton.materials_produced,
+            vec![(MaterialType::Fabric, 2)],
+            "Textile mill should produce fabric from cotton alone"
+        );
+
+        // Wool only works
+        let result_wool =
+            calculate_mill_production(ProductionChain::Textile, &[(ResourceType::Wool, 4)], 5, 20);
+        assert_eq!(
+            result_wool.materials_produced,
+            vec![(MaterialType::Fabric, 2)],
+            "Textile mill should produce fabric from wool alone"
+        );
+
+        // Mix of cotton and wool works
+        let result_mixed = calculate_mill_production(
+            ProductionChain::Textile,
+            &[(ResourceType::Cotton, 2), (ResourceType::Wool, 2)],
+            5,
+            20,
+        );
+        assert_eq!(
+            result_mixed.materials_produced,
+            vec![(MaterialType::Fabric, 2)],
+            "Textile mill should produce fabric from a mix of cotton and wool"
+        );
+    }
 }

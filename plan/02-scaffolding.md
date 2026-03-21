@@ -90,12 +90,12 @@ imperialism-remake/
 - [ ] Create `data/localization/en.json` with initial string table
 
 ### Tooling
-- [ ] Code formatter configured and enforced (`cargo fmt`)
-- [ ] Linter configured (`cargo clippy`)
-- [ ] Pre-commit hook: format + lint
-- [ ] IDE run configurations for Debug, Release, Tests
-- [ ] Script: `build.sh` / `build.ps1` — clean build from scratch
-- [ ] Script: `test.sh` / `test.ps1` — run all test suites
+- [x] Code formatter configured and enforced (`cargo fmt`)
+- [x] Linter configured (`cargo clippy`)
+- [x] Pre-commit hook: format + lint
+- [x] IDE run configurations for Debug, Release, Tests
+- [x] Script: `build.sh` / `build.ps1` — clean build from scratch
+- [x] Script: `test.sh` / `test.ps1` — run all test suites
 
 ### Initial Smoke Test
 - [ ] Host boots and opens a window with the game framework

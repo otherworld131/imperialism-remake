@@ -681,4 +681,83 @@ mod tests {
             &provinces
         ));
     }
+
+    // ── Province connectivity via both railroad and port ─────────
+
+    #[test]
+    fn province_connectivity_via_railroad_and_port() {
+        let mut map = HexMap::new(20, 20);
+
+        let capital_coord = HexCoord::new(0, 0);
+        let railroad_coord = HexCoord::new(1, 0);
+        let depot_coord = HexCoord::new(2, 0);
+        let port_province_coord = HexCoord::new(8, 8);
+        let sea_near_capital = HexCoord::new(0, 1);
+        let sea_near_port = HexCoord::new(9, 8);
+
+        let capital_pid = ProvinceId(1);
+        let railroad_pid = ProvinceId(2);
+        let port_pid = ProvinceId(3);
+
+        // Capital tile with a port (connected to sea)
+        let mut capital_tile = Tile::with_province(TerrainType::Farm, capital_pid);
+        capital_tile.is_capital = true;
+        capital_tile.infrastructure.has_port = true;
+        map.set_tile(capital_coord, capital_tile);
+        map.set_tile(sea_near_capital, Tile::new(TerrainType::Sea));
+
+        // Railroad chain from capital to province 2 (railroad pathway)
+        let mut rr_tile = Tile::with_province(TerrainType::Farm, capital_pid);
+        rr_tile.infrastructure.has_railroad = true;
+        map.set_tile(railroad_coord, rr_tile);
+
+        let mut depot_tile = Tile::with_province(TerrainType::Farm, railroad_pid);
+        depot_tile.infrastructure.has_depot = true;
+        map.set_tile(depot_coord, depot_tile);
+
+        // Port province (connected via sea to capital's port)
+        let mut port_tile = Tile::with_province(TerrainType::Farm, port_pid);
+        port_tile.infrastructure.has_port = true;
+        map.set_tile(port_province_coord, port_tile);
+        map.set_tile(sea_near_port, Tile::new(TerrainType::Sea));
+
+        let provinces = vec![
+            Province::new(
+                capital_pid,
+                "Capital".to_string(),
+                NationId(1),
+                capital_coord,
+                vec![capital_coord, railroad_coord],
+                4,
+            ),
+            Province::new(
+                railroad_pid,
+                "Railroad Province".to_string(),
+                NationId(1),
+                depot_coord,
+                vec![depot_coord],
+                3,
+            ),
+            Province::new(
+                port_pid,
+                "Port Province".to_string(),
+                NationId(1),
+                port_province_coord,
+                vec![port_province_coord],
+                3,
+            ),
+        ];
+
+        // Province 2 connected via railroad
+        assert!(
+            is_province_connected(&map, capital_coord, railroad_pid, &provinces),
+            "Province should be connected via railroad chain"
+        );
+
+        // Province 3 connected via port
+        assert!(
+            is_province_connected(&map, capital_coord, port_pid, &provinces),
+            "Province should be connected via port-to-port sea route"
+        );
+    }
 }
