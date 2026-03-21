@@ -1318,6 +1318,10 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
             None => continue,
         };
 
+        // Trigger pact defense: if defender (Minor Nation) has a NAP with any GP,
+        // that GP declares war on the attacker.
+        trigger_pact_defense(game, defender_id, attacker_id, report);
+
         // Create attacker force from nation's army
         let attacker_units: Vec<_> = match game.get_nation(attacker_id) {
             Some(n) => n.army.clone(),
@@ -1447,6 +1451,98 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
         }
 
         report.battles.push(result);
+    }
+}
+
+/// Trigger pact defense: when a Minor Nation with a Non-Aggression Pact is attacked,
+/// the Great Power that signed the pact declares war on the attacker.
+///
+/// For AI GPs: automatically declare war. For human GP: generates a newspaper headline
+/// notifying them of the attack (human makes their own decisions).
+fn trigger_pact_defense(
+    game: &mut GameState,
+    defender_nation_id: NationId,
+    attacker_nation_id: NationId,
+    report: &mut TurnReport,
+) {
+    // Only trigger for Minor Nation defenders
+    let is_minor = game
+        .get_nation(defender_nation_id)
+        .is_some_and(|n| !n.is_great_power());
+    if !is_minor {
+        return;
+    }
+
+    let defender_name = game
+        .get_nation(defender_nation_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_default();
+
+    // Find all Great Powers that have a NonAggressionPact with this Minor Nation
+    let gp_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power() && n.id != attacker_nation_id)
+        .map(|n| n.id)
+        .collect();
+
+    let mut pact_holders: Vec<(NationId, String)> = Vec::new();
+    for gp_id in &gp_ids {
+        let has_pact = game.diplomacy.has_treaty(
+            *gp_id,
+            defender_nation_id,
+            crate::events::TreatyType::NonAggressionPact,
+        );
+        if !has_pact {
+            continue;
+        }
+
+        // Check if already at war with the attacker
+        let already_at_war = game
+            .diplomacy
+            .get_relation(*gp_id, attacker_nation_id)
+            .is_some_and(|r| r.at_war);
+        if already_at_war {
+            continue;
+        }
+
+        let gp_name = game
+            .get_nation(*gp_id)
+            .map(|n| n.name.clone())
+            .unwrap_or_default();
+        pact_holders.push((*gp_id, gp_name));
+    }
+
+    let attacker_name = game
+        .get_nation(attacker_nation_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_default();
+
+    for (gp_id, gp_name) in &pact_holders {
+        // Notify about the pact being triggered
+        report.newspaper_headlines.push(format!(
+            "{} requests {}'s aid against {}!",
+            defender_name, gp_name, attacker_name
+        ));
+
+        // AI GPs automatically declare war on the attacker
+        let is_ai = game
+            .get_nation(*gp_id)
+            .is_some_and(|n| n.ai_personality.is_some());
+        if is_ai {
+            game.diplomacy.declare_war(*gp_id, attacker_nation_id);
+            report.newspaper_headlines.push(format!(
+                "{} honors its pact with {} and declares war on {}!",
+                gp_name, defender_name, attacker_name
+            ));
+            game.history.push((
+                game.turn,
+                format!(
+                    "{} declared war on {} to honor pact with {}",
+                    gp_name, attacker_name, defender_name
+                ),
+            ));
+        }
     }
 }
 
@@ -4468,5 +4564,252 @@ mod tests {
         assert_eq!(nation.army[0].unit_type, ArmyUnitType::RifleInfantry);
         assert_eq!(nation.army[0].medals, 3, "Medals should be preserved");
         assert_eq!(nation.army[0].health, 75, "Health should be preserved");
+    }
+
+    // ── Pact defense tests ──────────────────────────────────────
+
+    #[test]
+    fn pact_defense_triggers_when_minor_with_pact_attacked() {
+        // Setup: GP attacker (ID 2), Minor Nation defender (ID 3), GP pact holder (ID 4)
+        let coord = HexCoord::new(0, 0);
+        let hex_map = HexMap::new(10, 10);
+
+        let province1 = Province::new(
+            ProvinceId(1),
+            "Attacker Land".to_string(),
+            NationId(2),
+            coord,
+            vec![coord],
+            4,
+        );
+        let province2 = Province::new(
+            ProvinceId(2),
+            "Minor Land".to_string(),
+            NationId(3),
+            HexCoord::new(3, 3),
+            vec![HexCoord::new(3, 3)],
+            3,
+        );
+        let province3 = Province::new(
+            ProvinceId(3),
+            "Pact Holder Land".to_string(),
+            NationId(4),
+            HexCoord::new(5, 5),
+            vec![HexCoord::new(5, 5)],
+            4,
+        );
+
+        let mut human = Nation::new(
+            NationId(1),
+            "Human".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        human.treasury = Money::dollars(10000);
+
+        let mut attacker = Nation::new(
+            NationId(2),
+            "Attacker".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        attacker.ai_personality = Some(crate::ai::basic::AiPersonality::Aggressive);
+        attacker.treasury = Money::dollars(10000);
+
+        let minor = Nation::new(
+            NationId(3),
+            "MinorDefender".to_string(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(2),
+        );
+
+        let mut pact_holder = Nation::new(
+            NationId(4),
+            "PactHolder".to_string(),
+            NationColor::Green,
+            NationType::GreatPower,
+            ProvinceId(3),
+        );
+        pact_holder.ai_personality = Some(crate::ai::basic::AiPersonality::Balanced);
+        pact_holder.treasury = Money::dollars(10000);
+
+        let mut diplomacy = DiplomacyState::new();
+        // Establish consulate + embassy + pact between PactHolder and MinorDefender
+        diplomacy.build_consulate(NationId(4), NationId(3)).unwrap();
+        diplomacy.build_embassy(NationId(4), NationId(3)).unwrap();
+        diplomacy.propose_pact(NationId(4), NationId(3)).unwrap();
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province1, province2, province3],
+            nations: vec![human, attacker, minor, pact_holder],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy,
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            history: Vec::new(),
+        };
+
+        // Verify pact exists
+        assert!(game.diplomacy.has_treaty(
+            NationId(4),
+            NationId(3),
+            crate::events::TreatyType::NonAggressionPact
+        ));
+
+        // Trigger pact defense
+        let mut report = TurnReport {
+            turn: TurnNumber::new(1),
+            year: 1815,
+            quarter: 1,
+            events: Vec::new(),
+            resource_production: Vec::new(),
+            gold_income: Vec::new(),
+            maintenance_costs: Vec::new(),
+            production_output: Vec::new(),
+            food_consumed: Vec::new(),
+            starvation: Vec::new(),
+            newspaper_headlines: Vec::new(),
+            techs_available: Vec::new(),
+            council_vote: None,
+            trade_transactions: Vec::new(),
+            battles: Vec::new(),
+            naval_battles: Vec::new(),
+            scores: Vec::new(),
+            ai_actions: Vec::new(),
+            civilian_completions: Vec::new(),
+            transport_overflow: Vec::new(),
+            immigration: Vec::new(),
+            settlement_upgrades: Vec::new(),
+            trade_balance: Vec::new(),
+            town_production: Vec::new(),
+            unit_movements: Vec::new(),
+            incorporations: Vec::new(),
+            unit_upgrades: Vec::new(),
+        };
+
+        trigger_pact_defense(&mut game, NationId(3), NationId(2), &mut report);
+
+        // PactHolder (AI) should now be at war with Attacker
+        assert!(
+            game.diplomacy
+                .get_relation(NationId(4), NationId(2))
+                .is_some_and(|r| r.at_war),
+            "PactHolder should declare war on attacker when pact Minor is attacked"
+        );
+
+        // Should have generated headlines
+        assert!(
+            report
+                .newspaper_headlines
+                .iter()
+                .any(|h| h.contains("requests") && h.contains("aid")),
+            "Should generate 'requests aid' headline: {:?}",
+            report.newspaper_headlines
+        );
+        assert!(
+            report
+                .newspaper_headlines
+                .iter()
+                .any(|h| h.contains("honors its pact")),
+            "Should generate 'honors pact' headline: {:?}",
+            report.newspaper_headlines
+        );
+    }
+
+    #[test]
+    fn pact_defense_does_not_trigger_for_great_power_defender() {
+        let coord = HexCoord::new(0, 0);
+        let hex_map = HexMap::new(10, 10);
+
+        let province1 = Province::new(
+            ProvinceId(1),
+            "Land".to_string(),
+            NationId(1),
+            coord,
+            vec![coord],
+            4,
+        );
+
+        let mut nation1 = Nation::new(
+            NationId(1),
+            "GP1".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation1.treasury = Money::dollars(10000);
+
+        let mut nation2 = Nation::new(
+            NationId(2),
+            "GP2".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation2.ai_personality = Some(crate::ai::basic::AiPersonality::Balanced);
+        nation2.treasury = Money::dollars(10000);
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province1],
+            nations: vec![nation1, nation2],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            history: Vec::new(),
+        };
+
+        let mut report = TurnReport {
+            turn: TurnNumber::new(1),
+            year: 1815,
+            quarter: 1,
+            events: Vec::new(),
+            resource_production: Vec::new(),
+            gold_income: Vec::new(),
+            maintenance_costs: Vec::new(),
+            production_output: Vec::new(),
+            food_consumed: Vec::new(),
+            starvation: Vec::new(),
+            newspaper_headlines: Vec::new(),
+            techs_available: Vec::new(),
+            council_vote: None,
+            trade_transactions: Vec::new(),
+            battles: Vec::new(),
+            naval_battles: Vec::new(),
+            scores: Vec::new(),
+            ai_actions: Vec::new(),
+            civilian_completions: Vec::new(),
+            transport_overflow: Vec::new(),
+            immigration: Vec::new(),
+            settlement_upgrades: Vec::new(),
+            trade_balance: Vec::new(),
+            town_production: Vec::new(),
+            unit_movements: Vec::new(),
+            incorporations: Vec::new(),
+            unit_upgrades: Vec::new(),
+        };
+
+        // GP defender - should not trigger pact defense
+        trigger_pact_defense(&mut game, NationId(1), NationId(2), &mut report);
+
+        assert!(
+            report.newspaper_headlines.is_empty(),
+            "No headlines should be generated for GP defenders"
+        );
     }
 }

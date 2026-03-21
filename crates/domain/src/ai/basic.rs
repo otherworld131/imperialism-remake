@@ -92,11 +92,12 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<String> {
     for nation_id in &ai_nation_ids {
         ai_research_tech(game, *nation_id, current_year, &mut actions);
         ai_manage_economy(game, *nation_id);
+        ai_manage_resources(game, *nation_id, &mut actions);
         ai_recruit_workers(game, *nation_id);
         ai_manage_civilians(game, *nation_id);
         ai_build_military(game, *nation_id, &mut actions);
         ai_trade(game, *nation_id);
-        ai_build_transport(game, *nation_id);
+        ai_build_transport_proactive(game, *nation_id);
         ai_build_consulates(game, *nation_id);
         ai_manage_diplomacy(game, *nation_id, &mut actions);
         ai_build_merchant_ships(game, *nation_id);
@@ -886,6 +887,61 @@ fn ai_upgrade_units(game: &mut GameState, nation_id: NationId) {
     }
 }
 
+/// Manage AI resources: sell excess finished goods when treasury is low.
+///
+/// When the AI's treasury drops below $3,000, it sells excess finished goods
+/// (Furniture, Hardware, Clothing) for cash. Each finished good is valued at
+/// a fixed price: Furniture $200, Hardware $250, Clothing $200.
+/// The AI keeps at least 2 of each good in reserve.
+pub fn ai_manage_resources(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    // Only sell goods when treasury is low
+    if nation.treasury >= Money::dollars(3000) {
+        return;
+    }
+
+    let nation_name = nation.name.clone();
+
+    // Define goods to sell and their prices
+    let goods_prices: [(GoodsType, i64); 3] = [
+        (GoodsType::Furniture, 200),
+        (GoodsType::Hardware, 250),
+        (GoodsType::Clothing, 200),
+    ];
+
+    let mut total_revenue = Money::ZERO;
+
+    for (goods_type, price_per_unit) in &goods_prices {
+        let amount = match game.get_nation(nation_id) {
+            Some(n) => n.goods_amount(*goods_type),
+            None => return,
+        };
+        // Keep at least 2 in reserve
+        if amount <= 2 {
+            continue;
+        }
+        let excess = amount - 2;
+        let revenue = Money::dollars(*price_per_unit) * excess as i64;
+
+        let nation = game.get_nation_mut(nation_id).unwrap();
+        nation.consume_goods(*goods_type, excess);
+        nation.treasury += revenue;
+        total_revenue += revenue;
+    }
+
+    if total_revenue > Money::ZERO {
+        actions.push(format!(
+            "{} sold excess goods for ${}",
+            nation_name,
+            total_revenue.as_dollars()
+        ));
+    }
+}
+
 /// Consolidate AI economic decisions.
 ///
 /// - If AI has no mills and has lumber+steel materials: build a LumberMill
@@ -1012,6 +1068,44 @@ fn ai_build_transport(game: &mut GameState, nation_id: NationId) {
         nation.consume_material(MaterialType::Lumber, 2);
         nation.consume_material(MaterialType::Steel, 2);
         nation.transport.build_freight_cars(2);
+    }
+}
+
+/// Proactive transport building: build freight cars when transport capacity
+/// is insufficient for current resource production.
+///
+/// Checks total resources in the warehouse against freight car capacity.
+/// If warehouse resources exceed capacity, builds additional freight cars
+/// (up to 2 per turn) when materials are available.
+fn ai_build_transport_proactive(game: &mut GameState, nation_id: NationId) {
+    // First, use the basic logic to build initial cars if none exist
+    ai_build_transport(game, nation_id);
+
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    // Calculate total resources in warehouse
+    let total_resources: u32 = nation.warehouse.values().sum();
+    let capacity = nation.transport.total_capacity();
+
+    // If resources exceed capacity, we need more freight cars
+    if total_resources <= capacity {
+        return;
+    }
+
+    // Build additional freight cars (1 lumber + 1 steel each, up to 2 per turn)
+    let cars_to_build = 2u32;
+    let lumber_available = nation.material_amount(MaterialType::Lumber);
+    let steel_available = nation.material_amount(MaterialType::Steel);
+    let affordable = cars_to_build.min(lumber_available).min(steel_available);
+
+    if affordable > 0 {
+        let nation = game.get_nation_mut(nation_id).unwrap();
+        nation.consume_material(MaterialType::Lumber, affordable);
+        nation.consume_material(MaterialType::Steel, affordable);
+        nation.transport.build_freight_cars(affordable);
     }
 }
 
@@ -2916,6 +3010,111 @@ mod tests {
             game.diplomacy
                 .has_treaty(ai_id, NationId(4), crate::events::TreatyType::Alliance),
             "Diplomatic AI should propose alliance with non-threatening GP"
+        );
+    }
+
+    // ── AI resource management tests ──────────────────────────────
+
+    #[test]
+    fn ai_sells_excess_goods_when_treasury_low() {
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+
+        // Set treasury below $3,000 threshold
+        game.get_nation_mut(ai_id).unwrap().treasury = Money::dollars(1000);
+
+        // Give AI excess goods
+        game.get_nation_mut(ai_id)
+            .unwrap()
+            .add_goods(GoodsType::Furniture, 5); // 5 - 2 reserve = 3 to sell
+        game.get_nation_mut(ai_id)
+            .unwrap()
+            .add_goods(GoodsType::Hardware, 4); // 4 - 2 reserve = 2 to sell
+        game.get_nation_mut(ai_id)
+            .unwrap()
+            .add_goods(GoodsType::Clothing, 1); // below reserve, won't sell
+
+        let mut actions = Vec::new();
+        ai_manage_resources(&mut game, ai_id, &mut actions);
+
+        let ai = game.get_nation(ai_id).unwrap();
+
+        // Should have sold 3 Furniture @ $200 = $600
+        // and 2 Hardware @ $250 = $500
+        // Total revenue: $1,100
+        assert_eq!(
+            ai.goods_amount(GoodsType::Furniture),
+            2,
+            "Should keep 2 Furniture"
+        );
+        assert_eq!(
+            ai.goods_amount(GoodsType::Hardware),
+            2,
+            "Should keep 2 Hardware"
+        );
+        assert_eq!(
+            ai.goods_amount(GoodsType::Clothing),
+            1,
+            "Should not sell Clothing below reserve"
+        );
+        assert_eq!(
+            ai.treasury,
+            Money::dollars(2100), // 1000 + 600 + 500
+            "Treasury should increase by goods revenue"
+        );
+        assert!(
+            actions.iter().any(|a| a.contains("sold excess goods")),
+            "Should report selling goods"
+        );
+    }
+
+    #[test]
+    fn ai_does_not_sell_goods_when_treasury_sufficient() {
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+
+        // Treasury above threshold
+        game.get_nation_mut(ai_id).unwrap().treasury = Money::dollars(5000);
+
+        // Give AI excess goods
+        game.get_nation_mut(ai_id)
+            .unwrap()
+            .add_goods(GoodsType::Furniture, 10);
+
+        let mut actions = Vec::new();
+        ai_manage_resources(&mut game, ai_id, &mut actions);
+
+        let ai = game.get_nation(ai_id).unwrap();
+        assert_eq!(
+            ai.goods_amount(GoodsType::Furniture),
+            10,
+            "Should not sell goods when treasury is sufficient"
+        );
+        assert!(actions.is_empty(), "No action should be reported");
+    }
+
+    #[test]
+    fn ai_builds_transport_proactively_when_overflow() {
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+
+        // Give AI some resources that exceed transport capacity
+        let ai = game.get_nation_mut(ai_id).unwrap();
+        ai.add_resource(ResourceType::Timber, 20);
+        ai.add_resource(ResourceType::Coal, 10);
+        // Give materials for building freight cars
+        ai.add_material(MaterialType::Lumber, 4);
+        ai.add_material(MaterialType::Steel, 4);
+        // No freight cars initially
+
+        ai_build_transport_proactive(&mut game, ai_id);
+
+        let ai = game.get_nation(ai_id).unwrap();
+        // Should have built freight cars: first the basic (2), then proactive (up to 2 more)
+        assert!(
+            ai.transport.freight_cars >= 2,
+            "AI should build freight cars proactively, got {}",
+            ai.transport.freight_cars
         );
     }
 }
