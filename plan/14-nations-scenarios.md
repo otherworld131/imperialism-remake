@@ -38,16 +38,16 @@ historical scenarios with real European powers. Nations are data-driven and modd
 - [x] **1882 scenario** — Scramble for Africa era
 - [x] Historical Great Powers: Britain, Spain, France, Netherlands, Prussia, Germany, Austria-Hungary, Sardinia, Italy, Russia, Ottoman Empire (availability varies by scenario)
 - [x] Scenario files define: start year, available nations, map layout, starting resources, pre-researched techs
-- [ ] Difficulty ratings per nation per scenario (some nations are harder to play)
+- [x] Difficulty ratings per nation per scenario (some nations are harder to play)
 - [x] Unit tests: scenario loading and validation
 
 ### Scenario Data Format
-- [ ] Define schema for scenario files (JSON/YAML)
-- [ ] Fields: name, start_year, description, map_data, nations[], starting_resources{}, starting_techs[], difficulty_ratings{}
+- [x] Define schema for scenario files (JSON/YAML)
+- [x] Fields: name, start_year, description, map_data, nations[], starting_resources{}, starting_techs[], difficulty_ratings{}
 - [ ] Map data: fixed terrain layout (not randomly generated)
 - [ ] Nation starting conditions: treasury, units, buildings, pre-built infrastructure
-- [ ] Validation: all referenced nation IDs exist, province counts correct, tech IDs valid
-- [ ] Unit tests: schema validation, required fields present
+- [x] Validation: all referenced nation IDs exist, province counts correct, tech IDs valid
+- [x] Unit tests: schema validation, required fields present
 
 ### Starting Conditions (Random Game)
 - [x] Starting civilians: prospectors, miners, engineers, possibly farmers (varies by difficulty)
@@ -55,8 +55,8 @@ historical scenarios with real European powers. Nations are data-driven and modd
 - [x] Easy/Introductory: 6 pre-placed processing buildings; program selects capital location
 - [ ] Normal+: player selects capital on coast or river; food requirement: ideal 3 grain + 2 fruit + 2 meat, minimum 2+1+1
 - [x] Starting treasury varies by difficulty
-- [ ] Starting warehouse contents vary by difficulty
-- [ ] Mineral resource density varies by difficulty (more minerals on easier settings)
+- [x] Starting warehouse contents vary by difficulty
+- [x] Mineral resource density varies by difficulty (more minerals on easier settings)
 - [x] Unit tests: starting condition generation per difficulty level
 
 ### Nation Selection Criteria (for UI guidance)

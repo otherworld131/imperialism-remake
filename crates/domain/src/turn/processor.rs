@@ -1576,6 +1576,21 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 attacker_nation.add_province(province_id);
             }
 
+            // Award conquest medal if this is a Minor Nation capital
+            let is_mn_capital = defender_type == NationType::MinorNation
+                && game
+                    .get_nation(defender_id)
+                    .is_some_and(|n| n.capital_province_id == province_id);
+            if is_mn_capital
+                && let Some(attacker_nation) = game.get_nation_mut(attacker_id)
+                && let Some(first_unit) = attacker_nation.army.first_mut()
+            {
+                first_unit.award_medal();
+                report
+                    .rewards_earned
+                    .push((attacker_id, "Conquest medal awarded!".to_string()));
+            }
+
             // Record event
             report
                 .events

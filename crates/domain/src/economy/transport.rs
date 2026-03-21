@@ -1,4 +1,5 @@
 use crate::military::ships::Ship;
+use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::types::*;
 
 /// The transport system for a nation — freight cars carrying resources.
@@ -167,6 +168,20 @@ pub fn rail_transport_capacity(freight_cars: u32) -> u32 {
 /// Force size = total arms_cost used to build all ships in the fleet.
 pub fn amphibious_force_size(ships: &[Ship]) -> u32 {
     ships.iter().map(|s| s.ship_type.stats().arms_cost).sum()
+}
+
+/// Calculate the transport size of an army unit (= arms required to build it).
+pub fn army_transport_size(unit: &ArmyUnit) -> u32 {
+    unit.unit_type.stats().arms_required
+}
+
+/// General counts as 1 transport unit regardless of arms.
+pub fn unit_transport_size(unit: &ArmyUnit) -> u32 {
+    if unit.unit_type == ArmyUnitType::General {
+        1
+    } else {
+        unit.unit_type.stats().arms_required
+    }
 }
 
 impl Default for TransportSystem {
@@ -464,5 +479,50 @@ mod tests {
             Ship::new(UnitId(2), ShipType::Clipper, NationId(1)), // arms_cost = 0
         ];
         assert_eq!(amphibious_force_size(&ships), 0);
+    }
+
+    // ── Army transport size ─────────────────────────────────────
+
+    #[test]
+    fn army_transport_size_regulars() {
+        use crate::map::UnitId;
+        use crate::military::units::{ArmyUnit, ArmyUnitType};
+
+        let unit = ArmyUnit::new(
+            UnitId(1),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(1),
+        );
+        // Regulars arms_required = 1
+        assert_eq!(army_transport_size(&unit), 1);
+    }
+
+    #[test]
+    fn army_transport_size_guards() {
+        use crate::map::UnitId;
+        use crate::military::units::{ArmyUnit, ArmyUnitType};
+
+        let unit = ArmyUnit::new(UnitId(1), ArmyUnitType::Guards, NationId(1), ProvinceId(1));
+        // Guards arms_required = 3
+        assert_eq!(army_transport_size(&unit), 3);
+    }
+
+    #[test]
+    fn unit_transport_size_general_is_one() {
+        use crate::map::UnitId;
+        use crate::military::units::{ArmyUnit, ArmyUnitType};
+
+        let unit = ArmyUnit::new(UnitId(1), ArmyUnitType::General, NationId(1), ProvinceId(1));
+        assert_eq!(unit_transport_size(&unit), 1);
+    }
+
+    #[test]
+    fn unit_transport_size_non_general_equals_arms() {
+        use crate::map::UnitId;
+        use crate::military::units::{ArmyUnit, ArmyUnitType};
+
+        let unit = ArmyUnit::new(UnitId(1), ArmyUnitType::Guards, NationId(1), ProvinceId(1));
+        assert_eq!(unit_transport_size(&unit), 3);
     }
 }

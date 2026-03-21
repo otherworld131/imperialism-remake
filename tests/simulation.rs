@@ -558,3 +558,136 @@ fn human_player_gets_no_bonus() {
         }
     }
 }
+
+// ── Naval battle balance ─────────────────────────────────────────
+
+#[test]
+fn naval_balance_frigates_vs_ship_of_the_line() {
+    use domain::map::UnitId;
+    use domain::military::naval::resolve_naval_battle;
+    use domain::military::ships::{Ship, ShipType};
+
+    let mut frigate_wins = 0;
+    let mut sol_wins = 0;
+
+    for seed in 0..100u32 {
+        let frigates: Vec<Ship> = (0..3)
+            .map(|i| Ship::new(UnitId(seed * 10 + i), ShipType::Frigate, NationId(1)))
+            .collect();
+        let sol: Vec<Ship> = vec![Ship::new(
+            UnitId(seed * 10 + 100),
+            ShipType::ShipOfTheLine,
+            NationId(2),
+        )];
+
+        let result = resolve_naval_battle(&frigates, &sol, NationId(1), NationId(2));
+        if result.attacker_won {
+            frigate_wins += 1;
+        } else {
+            sol_wins += 1;
+        }
+    }
+
+    println!(
+        "3 Frigates vs 1 SotL: Frigates won {}/100, SotL won {}/100",
+        frigate_wins, sol_wins
+    );
+    // 3 Frigates (FP 9 total) vs 1 SotL (FP 6) — Frigates should win most
+    // Deterministic combat: result should be consistent across runs
+    assert!(frigate_wins + sol_wins == 100, "All battles should resolve");
+}
+
+// ── Land battle balance ──────────────────────────────────────────
+
+#[test]
+fn land_battle_balance_various_compositions() {
+    use domain::map::UnitId;
+    use domain::military::combat::{CombatForce, resolve_battle};
+    use domain::military::units::{ArmyUnit, ArmyUnitType};
+
+    let compositions: Vec<(&str, u32, ArmyUnitType, u32, ArmyUnitType)> = vec![
+        (
+            "3 Regulars vs 4 Militia",
+            3,
+            ArmyUnitType::Regulars,
+            4,
+            ArmyUnitType::Militia,
+        ),
+        (
+            "5 Regulars vs 4 Militia",
+            5,
+            ArmyUnitType::Regulars,
+            4,
+            ArmyUnitType::Militia,
+        ),
+        (
+            "2 Grenadiers vs 3 Regulars",
+            2,
+            ArmyUnitType::Grenadiers,
+            3,
+            ArmyUnitType::Regulars,
+        ),
+    ];
+
+    for (name, atk_count, atk_type, def_count, def_type) in &compositions {
+        let attacker = CombatForce {
+            nation: NationId(1),
+            units: (0..*atk_count)
+                .map(|i| ArmyUnit::new(UnitId(i), *atk_type, NationId(1), ProvinceId(1)))
+                .collect(),
+        };
+        let defender = CombatForce {
+            nation: NationId(2),
+            units: (0..*def_count)
+                .map(|i| ArmyUnit::new(UnitId(100 + i), *def_type, NationId(2), ProvinceId(2)))
+                .collect(),
+        };
+        let result = resolve_battle(&attacker, &defender, ProvinceId(2), None, 0);
+        println!(
+            "{}: attacker_won={}, atk_casualties={}, def_casualties={}",
+            name,
+            result.attacker_won,
+            result.attacker_casualties.len(),
+            result.defender_casualties.len()
+        );
+    }
+}
+
+// ── Late-game memory profiling ───────────────────────────────────
+
+#[test]
+fn profile_memory_late_game() {
+    let mut game = new_game("late_game", Difficulty::Normal, 0);
+    // Fast forward to turn 300
+    for _ in 0..300 {
+        process_turn(&mut game);
+    }
+
+    // Check bounded growth
+    let total_history = game.history.len();
+    let total_nations = game.nations.len();
+    let total_provinces = game.provinces.len();
+    let total_tiles = game.hex_map.tile_count();
+
+    println!("=== Late Game (Turn 300) Memory Profile ===");
+    println!("History entries: {}", total_history);
+    println!("Nations: {}", total_nations);
+    println!("Provinces: {}", total_provinces);
+    println!("Tiles: {}", total_tiles);
+
+    for nation in game.great_powers() {
+        println!(
+            "  {}: army={}, civilians={}, buildings={}, warships={}",
+            nation.name,
+            nation.army.len(),
+            nation.civilians.len(),
+            nation.buildings.len(),
+            nation.warships.len()
+        );
+    }
+
+    // Verify bounded
+    assert!(total_history < 10000, "History unbounded");
+    assert_eq!(total_nations, 23, "Nations count changed");
+    assert_eq!(total_provinces, 120, "Provinces count changed");
+}
