@@ -37,6 +37,9 @@ pub struct GameState {
     /// Pending attacks to resolve this turn: (attacker NationId, target ProvinceId).
     #[serde(default)]
     pub pending_attacks: Vec<(NationId, ProvinceId)>,
+    /// Pending unit movements to resolve this turn: (nation, unit_id, destination province).
+    #[serde(default)]
+    pub pending_moves: Vec<(NationId, crate::map::UnitId, ProvinceId)>,
     /// History of major game events: (turn_number, description).
     #[serde(default)]
     pub history: Vec<(TurnNumber, String)>,
@@ -281,6 +284,7 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         tech_tree: TechTree::new(),
         diplomacy,
         pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
         history: Vec::new(),
     }
 }
@@ -340,6 +344,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
             history: Vec::new(),
         }
     }

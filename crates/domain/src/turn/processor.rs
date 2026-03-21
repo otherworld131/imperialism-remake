@@ -49,6 +49,8 @@ pub struct TurnReport {
     pub trade_balance: Vec<(NationId, Money, Money)>,
     /// Town production output: (nation_id, item_name, quantity).
     pub town_production: Vec<(NationId, String, u32)>,
+    /// Unit movement descriptions: (nation_id, description).
+    pub unit_movements: Vec<(NationId, String)>,
 }
 
 impl TurnReport {
@@ -134,6 +136,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         settlement_upgrades: Vec::new(),
         trade_balance: Vec::new(),
         town_production: Vec::new(),
+        unit_movements: Vec::new(),
     };
 
     // 0. AI decisions for computer-controlled Great Powers
@@ -179,6 +182,9 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 6. Maintenance costs (placeholder)
     apply_maintenance(game, &mut report);
 
+    // 6b. Resolve military unit movement (pending moves)
+    resolve_military_movement(game, &mut report);
+
     // 7. Resolve combat (pending attacks)
     resolve_combat(game, &mut report);
 
@@ -190,6 +196,9 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
 
     // 8. Report available techs
     report_available_techs(game, &mut report);
+
+    // 8b. Resolve technology for AI nations (generate TechnologyResearched events)
+    resolve_technology(game, &mut report);
 
     // 9. Council of Governors vote (at decade boundaries)
     check_council_vote(game, &mut report);
@@ -1220,6 +1229,58 @@ fn apply_maintenance(game: &mut GameState, _report: &mut TurnReport) {
     }
 }
 
+/// Resolve military unit movement from pending_moves.
+///
+/// For each pending move:
+/// 1. Validate the unit exists in the nation's army
+/// 2. If destination is owned by the nation, move the unit there
+/// 3. If destination is owned by an enemy at war, convert to a pending_attack instead
+/// 4. Otherwise, reject the move
+fn resolve_military_movement(game: &mut GameState, report: &mut TurnReport) {
+    let moves: Vec<(NationId, crate::map::UnitId, ProvinceId)> =
+        game.pending_moves.drain(..).collect();
+
+    for (nation_id, unit_id, dest_province_id) in moves {
+        // Look up the destination province owner
+        let dest_owner = match game.get_province(dest_province_id) {
+            Some(p) => p.owner,
+            None => continue,
+        };
+        let dest_name = game
+            .get_province(dest_province_id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        if dest_owner == nation_id {
+            // Friendly province: move the unit
+            if let Some(nation) = game.get_nation_mut(nation_id)
+                && let Some(unit) = nation.army.iter_mut().find(|u| u.id == unit_id)
+            {
+                let unit_type = format!("{:?}", unit.unit_type);
+                unit.position = dest_province_id;
+                report
+                    .unit_movements
+                    .push((nation_id, format!("{} moved to {}", unit_type, dest_name)));
+            }
+        } else {
+            // Check if at war with the destination owner
+            let at_war = game
+                .diplomacy
+                .get_relation(nation_id, dest_owner)
+                .is_some_and(|r| r.at_war);
+            if at_war {
+                // Convert to pending attack
+                game.pending_attacks.push((nation_id, dest_province_id));
+                report.unit_movements.push((
+                    nation_id,
+                    format!("Attack ordered on {} (enemy territory)", dest_name),
+                ));
+            }
+            // Otherwise ignore the invalid move
+        }
+    }
+}
+
 /// Resolve combat for all pending attacks.
 ///
 /// For each pending attack:
@@ -1535,6 +1596,34 @@ fn report_available_techs(game: &GameState, report: &mut TurnReport) {
     }
 }
 
+/// Resolve technology for AI nations that researched tech this turn.
+///
+/// For each AI nation, check if it researched a technology (tracked in ai_actions).
+/// If so, generate a TechnologyResearched domain event and push it to the report.
+fn resolve_technology(game: &mut GameState, report: &mut TurnReport) {
+    // Collect techs researched by AI this turn from ai_actions
+    // AI actions contain strings like "Deneb researched High Pressure Steam Engine ($0)"
+    let researched_pattern = " researched ";
+    for action in &report.ai_actions {
+        if let Some(pos) = action.find(researched_pattern) {
+            let nation_name = &action[..pos];
+            // Find the nation by name
+            if let Some(nation) = game.nations.iter().find(|n| n.name == nation_name) {
+                let nation_id = nation.id;
+                // Find the most recently researched tech
+                if let Some(tech_id) = nation.researched_techs.last().copied() {
+                    report
+                        .events
+                        .push(DomainEvent::TechnologyResearched(TechnologyResearched {
+                            nation: nation_id,
+                            tech: tech_id,
+                        }));
+                }
+            }
+        }
+    }
+}
+
 /// Generate newspaper headlines for the turn report.
 ///
 /// Gathers notable events from the turn: AI actions (tech research, military
@@ -1819,6 +1908,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
             history: Vec::new(),
         }
     }
@@ -1865,6 +1955,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
             history: Vec::new(),
         }
     }
@@ -2074,6 +2165,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
             history: Vec::new(),
         };
 
@@ -2164,6 +2256,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
             history: Vec::new(),
         }
     }
@@ -2769,6 +2862,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
             history: Vec::new(),
         };
 
@@ -3021,6 +3115,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
             history: Vec::new(),
         };
 
@@ -3084,6 +3179,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
             history: Vec::new(),
         };
 
@@ -3211,6 +3307,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
             history: Vec::new(),
         }
     }
@@ -3308,6 +3405,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
             history: Vec::new(),
         };
 
@@ -3474,6 +3572,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
             history: Vec::new(),
         };
 
@@ -3540,6 +3639,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
             history: Vec::new(),
         };
 
@@ -3607,6 +3707,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
             history: Vec::new(),
         };
 

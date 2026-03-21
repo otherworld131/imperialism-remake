@@ -69,6 +69,16 @@ impl Building {
     pub fn expansion_cost(amount: u32) -> (u32, u32) {
         (amount, amount)
     }
+
+    /// Whether this building is currently being expanded.
+    pub fn is_expanding(&self) -> bool {
+        self.turns_until_upgrade > 0
+    }
+
+    /// How many turns remain until expansion completes.
+    pub fn expansion_turns_remaining(&self) -> u8 {
+        self.turns_until_upgrade
+    }
 }
 
 #[cfg(test)]

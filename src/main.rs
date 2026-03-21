@@ -149,6 +149,10 @@ fn main() {
                 println!();
                 print_history(&game);
             }
+            "orders" | "pending" => {
+                println!();
+                print_pending_orders(&game);
+            }
             "turn10" => {
                 cmd_auto(&mut game, 10);
             }
@@ -199,7 +203,11 @@ fn main() {
                 cmd_build_port(&mut game);
             }
             "build fort" => {
-                cmd_build_fort(&mut game);
+                cmd_build_fort(&mut game, None);
+            }
+            _ if cmd.starts_with("build fort ") => {
+                let province_query = input.trim()[11..].trim();
+                cmd_build_fort(&mut game, Some(province_query));
             }
             "infrastructure" | "infra" => {
                 println!();
@@ -1726,9 +1734,11 @@ fn print_help() {
     println!("    build railroad    — Build a railroad in your capital province");
     println!("    build depot       — Build a depot on your capital tile ($2,000)");
     println!("    build port        — Build a port on a coastal tile ($3,000)");
+    println!("    build fort [prov] — Build/upgrade a fort (capital if no province given)");
     println!();
     println!("  {}", color_bold("GAME:"));
     println!("    [Enter] / turn    — End turn (gather resources, advance time)");
+    println!("    orders / pending  — Show pending orders before turn end");
     println!("    auto <turns>      — Fast-forward N turns with minimal output");
     println!("    overview          — Comprehensive empire overview");
     println!("    history           — Show timeline of major events");
@@ -2626,13 +2636,36 @@ fn cmd_build_port(game: &mut GameState) {
     }
 }
 
-fn cmd_build_fort(game: &mut GameState) {
+fn cmd_build_fort(game: &mut GameState, province_query: Option<&str>) {
     let player_id = game.human_player_nation;
     let player = game.get_nation(player_id).unwrap();
-    let capital_province_id = player.capital_province_id;
 
-    let province = game.get_province(capital_province_id).unwrap();
+    // Find the target province: use specified province or fall back to capital
+    let target_province_id = if let Some(query) = province_query {
+        let lower = query.to_lowercase();
+        let matches: Vec<_> = game
+            .provinces
+            .iter()
+            .filter(|p| p.owner == player_id && p.name.to_lowercase().contains(&lower))
+            .collect();
+        match matches.len() {
+            0 => {
+                println!("  No owned province matches '{}'.", query);
+                return;
+            }
+            1 => matches[0].id,
+            _ => {
+                println!("  Multiple provinces match '{}'. Be more specific.", query);
+                return;
+            }
+        }
+    } else {
+        player.capital_province_id
+    };
+
+    let province = game.get_province(target_province_id).unwrap();
     let capital_tile_coord = province.capital_tile;
+    let province_name = province.name.clone();
 
     // Check current fort level
     let current_level = game
@@ -2643,7 +2676,7 @@ fn cmd_build_fort(game: &mut GameState) {
     let next_level = current_level + 1;
 
     if next_level > 3 {
-        println!("  Fort already at maximum level (3).");
+        println!("  Fort in {} already at maximum level (3).", province_name);
         return;
     }
 
@@ -2651,8 +2684,8 @@ fn cmd_build_fort(game: &mut GameState) {
     let treasury = game.get_nation(player_id).unwrap().treasury;
     if treasury.checked_sub(cost).is_none() {
         println!(
-            "  Cannot afford fort level {} (cost: {}, treasury: {}).",
-            next_level, cost, treasury
+            "  Cannot afford fort level {} in {} (cost: {}, treasury: {}).",
+            next_level, province_name, cost, treasury
         );
         return;
     }
@@ -2664,13 +2697,13 @@ fn cmd_build_fort(game: &mut GameState) {
             println!(
                 "  {}",
                 color_green(&format!(
-                    "Fort upgraded to level {}! Cost: {}, treasury now: {}.",
-                    level, cost, player.treasury
+                    "Fort in {} upgraded to level {}! Cost: {}, treasury now: {}.",
+                    province_name, level, cost, player.treasury
                 ))
             );
         }
         Err(e) => {
-            println!("  Cannot build fort: {}", e);
+            println!("  Cannot build fort in {}: {}", province_name, e);
         }
     }
 }
@@ -2855,6 +2888,49 @@ fn print_turn_report(game: &GameState, report: &TurnReport) {
             .map(|(_, item, qty)| format!("{} {}", qty, item))
             .collect();
         println!("  Industry: Produced {}", parts.join(", "));
+    }
+
+    // Town production line
+    let player_town_prod: Vec<_> = report
+        .town_production
+        .iter()
+        .filter(|(nid, _, _)| *nid == player_id)
+        .collect();
+    if !player_town_prod.is_empty() {
+        // Group by province: find producing provinces owned by the player
+        let mut town_parts: Vec<String> = Vec::new();
+        for (_, item, qty) in &player_town_prod {
+            town_parts.push(format!("{} {}", qty, item));
+        }
+        // Find the producing province names
+        let producing_provinces: Vec<String> = game
+            .provinces
+            .iter()
+            .filter(|p| p.owner == player_id && p.can_produce())
+            .map(|p| format!("{} ({:?})", p.name, p.settlement_level))
+            .collect();
+        let prov_info = if producing_provinces.is_empty() {
+            String::new()
+        } else {
+            format!(" from {}", producing_provinces.join(", "))
+        };
+        println!(
+            "  Towns:    Produced {}{}",
+            town_parts.join(", "),
+            prov_info
+        );
+    }
+
+    // Unit movement line
+    let player_movements: Vec<_> = report
+        .unit_movements
+        .iter()
+        .filter(|(nid, _)| *nid == player_id)
+        .collect();
+    if !player_movements.is_empty() {
+        for (_, desc) in &player_movements {
+            println!("  Movement: {}", desc);
+        }
     }
 
     // Military line
@@ -3289,6 +3365,102 @@ fn print_history(game: &GameState) {
     }
 }
 
+fn print_pending_orders(game: &GameState) {
+    let player_id = game.human_player_nation;
+    let mut has_orders = false;
+
+    // Pending attacks
+    let player_attacks: Vec<_> = game
+        .pending_attacks
+        .iter()
+        .filter(|(nid, _)| *nid == player_id)
+        .collect();
+    if !player_attacks.is_empty() {
+        println!("  PENDING ATTACKS:");
+        for (_, province_id) in &player_attacks {
+            let prov_name = game
+                .get_province(*province_id)
+                .map(|p| p.name.as_str())
+                .unwrap_or("Unknown");
+            println!("    -> Attack on {}", prov_name);
+        }
+        has_orders = true;
+    }
+
+    // Pending unit movements
+    let player_moves: Vec<_> = game
+        .pending_moves
+        .iter()
+        .filter(|(nid, _, _)| *nid == player_id)
+        .collect();
+    if !player_moves.is_empty() {
+        println!("  PENDING UNIT MOVEMENTS:");
+        for (_, unit_id, dest_id) in &player_moves {
+            let unit_desc = game
+                .get_nation(player_id)
+                .and_then(|n| n.army.iter().find(|u| u.id == *unit_id))
+                .map(|u| format!("{:?}", u.unit_type))
+                .unwrap_or_else(|| format!("Unit#{}", unit_id.0));
+            let dest_name = game
+                .get_province(*dest_id)
+                .map(|p| p.name.as_str())
+                .unwrap_or("Unknown");
+            println!("    -> {} moving to {}", unit_desc, dest_name);
+        }
+        has_orders = true;
+    }
+
+    // Working civilians
+    if let Some(player) = game.get_nation(player_id) {
+        let working: Vec<_> = player.civilians.iter().filter(|c| c.working).collect();
+        if !working.is_empty() {
+            println!("  WORKING CIVILIANS:");
+            for civ in &working {
+                let pos_str = civ
+                    .position
+                    .map(|p| format!("({}, {})", p.q, p.r))
+                    .unwrap_or_else(|| "unknown".to_string());
+                let remaining = civ.turns_remaining;
+                println!(
+                    "    {} at {} ({} turn{} remaining)",
+                    civ.civilian_type,
+                    pos_str,
+                    remaining,
+                    if remaining == 1 { "" } else { "s" }
+                );
+            }
+            has_orders = true;
+        }
+
+        // Buildings under expansion
+        let expanding: Vec<_> = player
+            .buildings
+            .iter()
+            .filter(|b| b.is_expanding())
+            .collect();
+        if !expanding.is_empty() {
+            println!("  BUILDINGS UNDER EXPANSION:");
+            for bldg in &expanding {
+                println!(
+                    "    {:?} (expanding, {} turn{} remaining)",
+                    bldg.building_type,
+                    bldg.expansion_turns_remaining(),
+                    if bldg.expansion_turns_remaining() == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
+                );
+            }
+            has_orders = true;
+        }
+    }
+
+    if !has_orders {
+        println!("  No pending orders.");
+    }
+}
+
 // ── Auto command ──────────────────────────────────────────────────
 
 fn cmd_auto(game: &mut GameState, turns: u32) {
@@ -3439,6 +3611,7 @@ fn cmd_move_unit(game: &mut GameState, args: &str) {
     }
 
     let unit_type = player.army[index].unit_type;
+    let unit_id = player.army[index].id;
 
     // Militia units cannot move
     if !unit_type.can_move() {
@@ -3446,23 +3619,20 @@ fn cmd_move_unit(game: &mut GameState, args: &str) {
         return;
     }
 
-    // Find target province by name
+    // Find target province by partial name match (any province, not just owned)
     let lower_name = province_name.to_lowercase();
     let matching_provinces: Vec<_> = game
         .provinces
         .iter()
-        .filter(|p| p.owner == player_id && p.name.to_lowercase().contains(&lower_name))
+        .filter(|p| p.name.to_lowercase().contains(&lower_name))
         .collect();
 
-    let target_province_id = match matching_provinces.len() {
+    let target_province = match matching_provinces.len() {
         0 => {
-            println!(
-                "  No owned province matches '{}'. You can only move units between your provinces.",
-                province_name
-            );
+            println!("  No province matches '{}'.", province_name);
             return;
         }
-        1 => matching_provinces[0].id,
+        1 => matching_provinces[0],
         _ => {
             println!(
                 "  Multiple provinces match '{}'. Be more specific.",
@@ -3472,10 +3642,9 @@ fn cmd_move_unit(game: &mut GameState, args: &str) {
         }
     };
 
-    let target_name = matching_provinces
-        .first()
-        .map(|p| p.name.clone())
-        .unwrap_or_default();
+    let target_province_id = target_province.id;
+    let target_name = target_province.name.clone();
+    let target_owner = target_province.owner;
 
     // Check the unit is not already in the target province
     if player.army[index].position == target_province_id {
@@ -3483,9 +3652,43 @@ fn cmd_move_unit(game: &mut GameState, args: &str) {
         return;
     }
 
-    // Move the unit
-    let player = game.get_nation_mut(player_id).unwrap();
-    player.army[index].position = target_province_id;
-
-    println!("  Moved {:?} to {}.", unit_type, target_name);
+    if target_owner == player_id {
+        // Friendly province: move immediately
+        let player = game.get_nation_mut(player_id).unwrap();
+        player.army[index].position = target_province_id;
+        println!("  Moved {:?} to {}.", unit_type, target_name);
+    } else {
+        // Check if at war with the province owner
+        let at_war = game
+            .diplomacy
+            .get_relation(player_id, target_owner)
+            .is_some_and(|r| r.at_war);
+        if at_war {
+            // Queue as a pending move (will become an attack at turn resolution)
+            game.pending_moves
+                .push((player_id, unit_id, target_province_id));
+            let owner_name = game
+                .get_nation(target_owner)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+            println!(
+                "  {} is owned by {} (enemy). Attack queued on {} for end of turn.",
+                target_name, owner_name, target_name
+            );
+            println!(
+                "  {} pending attack(s) queued. End turn to resolve.",
+                game.pending_attacks.len() + game.pending_moves.len()
+            );
+        } else {
+            let owner_name = game
+                .get_nation(target_owner)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+            println!(
+                "  Cannot move to {} -- owned by {} and you are not at war.",
+                target_name, owner_name
+            );
+            println!("  Declare war first with 'war {}'.", owner_name);
+        }
+    }
 }

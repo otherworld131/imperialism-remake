@@ -1399,6 +1399,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
             history: Vec::new(),
         }
     }
@@ -1479,6 +1480,7 @@ mod tests {
             tech_tree: TechTree::new(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
             history: Vec::new(),
         }
     }
