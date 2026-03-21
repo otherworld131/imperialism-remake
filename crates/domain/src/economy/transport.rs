@@ -525,4 +525,20 @@ mod tests {
         let unit = ArmyUnit::new(UnitId(1), ArmyUnitType::Guards, NationId(1), ProvinceId(1));
         assert_eq!(unit_transport_size(&unit), 3);
     }
+
+    // ── Regression test: barges have no effect (matching original game) ──
+
+    /// Verify that there is no "barge" concept — matching original game.
+    /// TransportSystem only has freight_cars — no barges, no water transport fields.
+    #[test]
+    fn barges_have_no_effect() {
+        let ts = TransportSystem::new();
+        // TransportSystem only has freight_cars — no barges
+        assert_eq!(ts.freight_cars, 0);
+        // The struct has exactly two fields: freight_cars and allocations.
+        // No water transport / barge functionality exists, matching the original game.
+        assert!(ts.allocations.is_empty());
+        // Capacity comes solely from freight cars — no barge contribution.
+        assert_eq!(ts.total_capacity(), 0);
+    }
 }

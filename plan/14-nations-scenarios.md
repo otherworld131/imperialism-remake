@@ -45,7 +45,7 @@ historical scenarios with real European powers. Nations are data-driven and modd
 - [x] Define schema for scenario files (JSON/YAML)
 - [x] Fields: name, start_year, description, map_data, nations[], starting_resources{}, starting_techs[], difficulty_ratings{}
 - [ ] Map data: fixed terrain layout (not randomly generated)
-- [ ] Nation starting conditions: treasury, units, buildings, pre-built infrastructure
+- [x] Nation starting conditions: treasury, units, buildings, pre-built infrastructure
 - [x] Validation: all referenced nation IDs exist, province counts correct, tech IDs valid
 - [x] Unit tests: schema validation, required fields present
 

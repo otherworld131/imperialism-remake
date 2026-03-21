@@ -40,8 +40,8 @@ The Council of Governors voting system is the primary victory path.
   - [x] Unit tests: voluntary incorporation threshold
 - [x] **Peace Treaty**
   - [x] Ends active war between two nations
-  - [ ] Separate peace (without allies) damages diplomatic standing
-  - [ ] Unit tests: war termination, standing impacts
+  - [x] Separate peace (without allies) damages diplomatic standing
+  - [x] Unit tests: war termination, standing impacts
 - [x] **War Declaration**
   - [x] "The only treaty which may not be refused"
   - [x] Triggers alliance obligations for all allies of both sides

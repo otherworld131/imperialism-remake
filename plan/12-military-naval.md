@@ -83,4 +83,4 @@ beachhead). Naval battles are always resolved by AI.
 - [ ] **Integration test**: Build a Frigate → verify resources deducted, ship appears next turn
 - [x] **Integration test**: Blockade scenario → verify merchant ships intercepted, trade disrupted
 - [x] **Integration test**: Beachhead → verify landing force size matches fleet arms total
-- [ ] **Combat simulation**: Run 100 naval battles with known fleets → verify outcomes are reasonable
+- [x] **Combat simulation**: Run 100 naval battles with known fleets → verify outcomes are reasonable

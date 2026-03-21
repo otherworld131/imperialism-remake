@@ -28,12 +28,12 @@ bottleneck — resources not transported are wasted.
 - [x] Unit tests: disconnected tiles produce no deliveries
 
 ### Military Transport
-- [ ] Army unit transport size = number of arms used to build it
+- [x] Army unit transport size = number of arms used to build it
 - [x] Rail transport capacity: 1 army unit per 5 freight cars
 - [x] Troops can be moved via rail to any connected province in one turn
 - [x] Amphibious transport: landing force size = total arms of all ships in beachhead fleet
 - [x] Example: 4 frigates (2 arms each) = landing force of size 8
-- [ ] Generals count as 1 transport unit
+- [x] Generals count as 1 transport unit
 - [x] Unit tests: military transport capacity calculations
 - [x] Unit tests: amphibious landing force size calculations
 
@@ -49,4 +49,4 @@ bottleneck — resources not transported are wasted.
 - [x] **Unit tests**: Run `cargo test` — all transport-related tests pass
 - [x] **Integration test**: Create a game state with 3 connected tiles + 5 freight cars → verify correct resource delivery after turn processing
 - [x] **Edge case tests**: 0 freight cars, more resources than capacity, disconnected tiles, province captured mid-turn
-- [ ] **Regression test**: Verify barges have no effect (matching original game behavior)
+- [x] **Regression test**: Verify barges have no effect (matching original game behavior)

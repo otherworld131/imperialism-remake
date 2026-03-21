@@ -48,7 +48,7 @@ and factory capacity.
   - [x] Swamp: $300 (requires Iron Railroad Bridge tech)
   - [x] Hills: $200 (requires Compound Steam Engine tech)
   - [x] Mountains: requires Dynamite tech
-- [ ] Railroads also used for military transport (1 army unit per 5 freight cars)
+- [x] Railroads also used for military transport (1 army unit per 5 freight cars)
 - [x] Unit tests for railroad construction rules
 
 ### Infrastructure — Depots

@@ -1362,4 +1362,43 @@ mod tests {
             result_explicit.defender_casualties.len()
         );
     }
+
+    // ── Damage calculation uses firepower and modifiers ──────────
+
+    /// Verify combat uses FP * medal_modifier * terrain_modifier formula.
+    #[test]
+    fn damage_calculation_uses_firepower_and_modifiers() {
+        // Base effective firepower: Regulars base FP = 2, no medals => 2.0
+        let unit = make_unit(1, ArmyUnitType::Regulars, NationId(1));
+        assert!((unit.effective_firepower() - 2.0).abs() < f64::EPSILON);
+
+        // With 1 medal: FP = 2 * 1.25 = 2.5
+        let mut medaled_unit = make_unit(2, ArmyUnitType::Regulars, NationId(1));
+        medaled_unit.award_medal();
+        assert!((medaled_unit.effective_firepower() - 2.5).abs() < f64::EPSILON);
+
+        // Guards base FP = 5, 2 medals: 5 * 1.5 = 7.5
+        let mut guards = make_unit(3, ArmyUnitType::Guards, NationId(1));
+        guards.award_medal();
+        guards.award_medal();
+        assert!((guards.effective_firepower() - 7.5).abs() < f64::EPSILON);
+
+        // Terrain defense bonus applied to defender
+        let terrain_bonus = terrain_defense_bonus(TerrainType::Mountain);
+        assert!((terrain_bonus - 0.50).abs() < f64::EPSILON);
+
+        let terrain_bonus_hills = terrain_defense_bonus(TerrainType::FertileHills);
+        assert!((terrain_bonus_hills - 0.30).abs() < f64::EPSILON);
+
+        let terrain_bonus_forest = terrain_defense_bonus(TerrainType::HardwoodForest);
+        assert!((terrain_bonus_forest - 0.20).abs() < f64::EPSILON);
+
+        // Fort defense bonus
+        let fort_bonus = fort_defense_bonus(3);
+        assert!((fort_bonus - 0.60).abs() < f64::EPSILON);
+
+        // Siege artillery reduces fort bonus by 50%
+        let effective = effective_fort_bonus(3, true);
+        assert!((effective - 0.30).abs() < f64::EPSILON);
+    }
 }

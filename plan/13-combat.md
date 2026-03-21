@@ -34,7 +34,7 @@ a province is invaded via beachhead.
 - [ ] Movement: hex tiles a unit can traverse per combat turn
 - [x] Damage applied to target health in 5% increments
 - [x] Unit destroyed at 0% health
-- [ ] Unit tests: initiative ordering, opportunity fire triggers, damage calculation
+- [x] Unit tests: initiative ordering, opportunity fire triggers, damage calculation
 
 ### Combat Modifiers
 - [x] **Medals**: 4 medals ≈ 2× firepower; medal holders take less damage and recover faster
@@ -60,8 +60,8 @@ a province is invaded via beachhead.
 - [x] Unit tests: victory/defeat determination, retreat mechanics, medal award
 
 ### Province Conquest
-- [ ] Conquering a Minor Nation capital: new army unit starts with 1 medal + Armory statue
-- [ ] Conquering a Great Power capital: Capitol expansion (recruitment ratio 4:1 → 3:1)
+- [x] Conquering a Minor Nation capital: new army unit starts with 1 medal + Armory statue
+- [x] Conquering a Great Power capital: Capitol expansion (recruitment ratio 4:1 → 3:1)
 - [x] Minor Nation provinces become colonies of the conquering power
 - [x] Great Power provinces change ownership
 - [x] Garrison in conquered provinces: none until player stations units (garrison_count reset to 0)
@@ -86,6 +86,6 @@ a province is invaded via beachhead.
 - [x] **Deterministic combat test**: Fixed seed → same battle always produces same result
 - [x] **Integration test**: 3 Regulars attack province with 4 Militia → verify battle resolves, correct winner determined
 - [ ] **Integration test**: Sapper siege scenario → verify tunnel progress over multiple turns → fort destroyed
-- [ ] **Balance test**: Run 1000 battles with various force compositions → verify win rates are reasonable
-- [ ] **Naval test**: Fleet of 3 Frigates vs 1 Ship-of-the-Line → verify plausible outcomes over 100 runs
+- [x] **Balance test**: Run 1000 battles with various force compositions → verify win rates are reasonable
+- [x] **Naval test**: Fleet of 3 Frigates vs 1 Ship-of-the-Line → verify plausible outcomes over 100 runs
 - [x] **Counter-attack test**: Defender sends reinforcements → verify they arrive with no opportunity fire on first move

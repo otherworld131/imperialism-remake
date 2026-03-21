@@ -40,7 +40,7 @@ should maintain 60fps, and memory usage should stay bounded even in late-game st
 - [x] Immutable value objects use structs (Rust's default — stack-allocated, no heap overhead)
 - [x] Game state: bounded growth — units, buildings, and resources have caps
 - [ ] Texture memory: load only needed assets; unload scenario assets when switching
-- [ ] Profile memory usage in late-game states (turn 300+)
+- [x] Profile memory usage in late-game states (turn 300+)
 
 ### Profiling & Monitoring
 - [ ] Frame time profiler: identify render bottlenecks
