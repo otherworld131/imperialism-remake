@@ -10,6 +10,7 @@ use crate::game_state::GameState;
 use crate::map::SettlementLevel;
 use crate::military::combat::{BattleResult, CombatForce, create_garrison, resolve_battle};
 use crate::military::naval::{NavalBattleResult, calculate_blockade_effect, resolve_naval_battle};
+use crate::military::units::ArmyUnitType;
 use crate::turn::scoring::{CouncilVoteResult, calculate_score, run_council_vote};
 use crate::types::*;
 
@@ -51,6 +52,10 @@ pub struct TurnReport {
     pub town_production: Vec<(NationId, String, u32)>,
     /// Unit movement descriptions: (nation_id, description).
     pub unit_movements: Vec<(NationId, String)>,
+    /// Voluntary incorporations: (minor_nation_id, great_power_id).
+    pub incorporations: Vec<(NationId, NationId)>,
+    /// Unit upgrades: (nation_id, from_type, to_type).
+    pub unit_upgrades: Vec<(NationId, String, String)>,
 }
 
 impl TurnReport {
@@ -137,6 +142,8 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         trade_balance: Vec::new(),
         town_production: Vec::new(),
         unit_movements: Vec::new(),
+        incorporations: Vec::new(),
+        unit_upgrades: Vec::new(),
     };
 
     // 0. AI decisions for computer-controlled Great Powers
@@ -146,7 +153,13 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 0a. Alliance obligations: AI allies automatically join wars
     resolve_alliance_obligations(game, &mut report);
 
-    // 0b. Resolve civilian actions (tick working civilians, apply improvements)
+    // 0b. Voluntary incorporations: Minor Nations with high relations join Great Powers
+    resolve_voluntary_incorporations(game, &mut report);
+
+    // 0c. Unit upgrades for AI nations (auto-upgrade when tech is available)
+    resolve_unit_upgrades(game, &mut report);
+
+    // 0d. Resolve civilian actions (tick working civilians, apply improvements)
     resolve_civilian_actions(game, &mut report);
 
     // 1. Resource production: gather yields from all owned tiles
@@ -1747,6 +1760,169 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
     }
 }
 
+/// Resolve voluntary incorporations: Minor Nations with high relationship scores
+/// voluntarily join the Great Power with the highest score.
+///
+/// For each Minor Nation, checks relationships with all Great Powers.
+/// If any relationship score >= 75, the Minor Nation joins the GP with the highest score.
+/// All of the Minor Nation's provinces are transferred to the Great Power.
+fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnReport) {
+    let minor_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| !n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+
+    let gp_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+
+    let threshold = 75;
+
+    for minor_id in &minor_ids {
+        let mut best_gp: Option<NationId> = None;
+        let mut best_score: i32 = threshold - 1; // must be >= threshold
+
+        for gp_id in &gp_ids {
+            if let Some(rel) = game.diplomacy.get_relation(*minor_id, *gp_id)
+                && rel.score >= threshold
+                && rel.score > best_score
+            {
+                best_score = rel.score;
+                best_gp = Some(*gp_id);
+            }
+        }
+
+        if let Some(gp_id) = best_gp {
+            // Transfer all provinces from minor nation to great power
+            let provinces_to_transfer: Vec<ProvinceId> = game
+                .get_nation(*minor_id)
+                .map(|n| n.province_ids.clone())
+                .unwrap_or_default();
+
+            // Update province owners
+            for pid in &provinces_to_transfer {
+                if let Some(prov) = game.get_province_mut(*pid) {
+                    prov.owner = gp_id;
+                }
+            }
+
+            // Remove provinces from minor nation
+            if let Some(minor) = game.get_nation_mut(*minor_id) {
+                minor.province_ids.clear();
+            }
+
+            // Add provinces to great power
+            if let Some(gp) = game.get_nation_mut(gp_id) {
+                for pid in &provinces_to_transfer {
+                    gp.add_province(*pid);
+                }
+            }
+
+            // Get names for reporting
+            let minor_name = game
+                .get_nation(*minor_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+            let gp_name = game
+                .get_nation(gp_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            // Record event
+            report
+                .events
+                .push(DomainEvent::NationIncorporated(NationIncorporated {
+                    minor_nation: *minor_id,
+                    great_power: gp_id,
+                }));
+
+            report.incorporations.push((*minor_id, gp_id));
+
+            // Record in history
+            game.history.push((
+                game.turn,
+                format!("{} voluntarily joined the {} empire", minor_name, gp_name),
+            ));
+
+            // Newspaper headline added later via report.incorporations
+        }
+    }
+}
+
+/// Resolve unit upgrades for AI nations.
+///
+/// For each AI nation, for each army unit, checks if an upgrade is available:
+/// - The unit type has an `upgrade_to()` path
+/// - The target unit type has a `required_tech()` name
+/// - The nation has researched a tech whose name matches the required tech
+///
+/// Player units are not auto-upgraded (player uses `upgrade <index>` command).
+fn resolve_unit_upgrades(game: &mut GameState, report: &mut TurnReport) {
+    let ai_nation_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.ai_personality.is_some())
+        .map(|n| n.id)
+        .collect();
+
+    for nation_id in &ai_nation_ids {
+        let nation = match game.nations.iter().find(|n| n.id == *nation_id) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        // Collect researched tech names for this nation
+        let researched_tech_names: Vec<String> = nation
+            .researched_techs
+            .iter()
+            .filter_map(|tid| game.tech_tree.get(*tid))
+            .map(|t| t.name.clone())
+            .collect();
+
+        // Find upgrades to perform
+        let mut upgrades: Vec<(usize, ArmyUnitType, ArmyUnitType)> = Vec::new();
+        for (i, unit) in nation.army.iter().enumerate() {
+            if let Some(target_type) = unit.unit_type.upgrade_to()
+                && let Some(required_tech_name) = target_type.required_tech()
+                && researched_tech_names
+                    .iter()
+                    .any(|name| name == required_tech_name)
+            {
+                upgrades.push((i, unit.unit_type, target_type));
+            }
+        }
+
+        // Apply upgrades (preserve medals, health)
+        let nation = match game.nations.iter_mut().find(|n| n.id == *nation_id) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        for (idx, from_type, to_type) in &upgrades {
+            if *idx < nation.army.len() {
+                nation.army[*idx].unit_type = *to_type;
+                // Refresh movement for new type
+                nation.army[*idx].movement_remaining = to_type.stats().movement;
+            }
+            report.unit_upgrades.push((
+                *nation_id,
+                format!("{:?}", from_type),
+                format!("{:?}", to_type),
+            ));
+            report.events.push(DomainEvent::UnitUpgraded(UnitUpgraded {
+                nation: *nation_id,
+                from_type: format!("{:?}", from_type),
+                to_type: format!("{:?}", to_type),
+            }));
+        }
+    }
+}
+
 fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
     let year = game.turn.year();
     let quarter = game.turn.quarter();
@@ -1758,6 +1934,32 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
     // AI actions (tech research, military buildup, war declarations)
     for action in &report.ai_actions {
         report.newspaper_headlines.push(action.clone());
+    }
+
+    // Voluntary incorporations — major headline
+    for (minor_id, gp_id) in &report.incorporations {
+        let minor_name = game
+            .get_nation(*minor_id)
+            .map(|n| n.name.clone())
+            .unwrap_or_else(|| "Unknown".to_string());
+        let gp_name = game
+            .get_nation(*gp_id)
+            .map(|n| n.name.clone())
+            .unwrap_or_else(|| "Unknown".to_string());
+        report.newspaper_headlines.push(format!(
+            "BREAKING: {} has voluntarily joined the {} empire!",
+            minor_name, gp_name
+        ));
+    }
+
+    // Unit upgrades — brief mention
+    if !report.unit_upgrades.is_empty() {
+        let upgrade_count = report.unit_upgrades.len();
+        report.newspaper_headlines.push(format!(
+            "Military modernization: {} unit{} upgraded across the nations",
+            upgrade_count,
+            if upgrade_count == 1 { "" } else { "s" }
+        ));
     }
 
     // Trade activity headline for the human player
@@ -3958,5 +4160,313 @@ mod tests {
             2,
             "Village should produce 2 fabric from 2 cotton + 2 wool"
         );
+    }
+
+    // ── Voluntary incorporation tests ─────────────────────────────
+
+    /// Helper: build a game state with one Great Power and one Minor Nation
+    /// for testing voluntary incorporation.
+    fn test_game_state_with_minor_nation() -> GameState {
+        let coord = HexCoord::new(0, 0);
+        let coord2 = HexCoord::new(1, 0);
+
+        let hex_map = HexMap::new(10, 10);
+
+        let province1 = Province::new(
+            ProvinceId(1),
+            "Homeland".to_string(),
+            NationId(1),
+            coord,
+            vec![coord],
+            4,
+        );
+        let province2 = Province::new(
+            ProvinceId(2),
+            "Minor Land".to_string(),
+            NationId(2),
+            coord2,
+            vec![coord2],
+            3,
+        );
+
+        let mut nation1 = Nation::new(
+            NationId(1),
+            "Testlandia".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation1.treasury = Money::dollars(1000);
+
+        let nation2 = Nation::new(
+            NationId(2),
+            "Smallton".to_string(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(2),
+        );
+
+        let mut diplomacy = DiplomacyState::new();
+        diplomacy.initialize_great_powers(&[NationId(1)]);
+
+        GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province1, province2],
+            nations: vec![nation1, nation2],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy,
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            history: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn voluntary_incorporation_at_threshold() {
+        let mut game = test_game_state_with_minor_nation();
+
+        // Set diplomacy score to exactly 75
+        let rel = game.diplomacy.ensure_relation(NationId(2), NationId(1));
+        rel.score = 75;
+
+        let mut report = TurnReport {
+            turn: game.turn,
+            year: game.turn.year(),
+            quarter: game.turn.quarter(),
+            events: Vec::new(),
+            resource_production: Vec::new(),
+            gold_income: Vec::new(),
+            maintenance_costs: Vec::new(),
+            production_output: Vec::new(),
+            food_consumed: Vec::new(),
+            starvation: Vec::new(),
+            newspaper_headlines: Vec::new(),
+            techs_available: Vec::new(),
+            council_vote: None,
+            trade_transactions: Vec::new(),
+            battles: Vec::new(),
+            naval_battles: Vec::new(),
+            scores: Vec::new(),
+            ai_actions: Vec::new(),
+            civilian_completions: Vec::new(),
+            transport_overflow: Vec::new(),
+            immigration: Vec::new(),
+            settlement_upgrades: Vec::new(),
+            trade_balance: Vec::new(),
+            town_production: Vec::new(),
+            unit_movements: Vec::new(),
+            incorporations: Vec::new(),
+            unit_upgrades: Vec::new(),
+        };
+
+        resolve_voluntary_incorporations(&mut game, &mut report);
+
+        // Minor nation's provinces should be transferred
+        assert_eq!(report.incorporations.len(), 1);
+        assert_eq!(report.incorporations[0], (NationId(2), NationId(1)));
+
+        // Great power now has province 2
+        let gp = game.get_nation(NationId(1)).unwrap();
+        assert!(gp.province_ids.contains(&ProvinceId(2)));
+
+        // Minor nation has no provinces
+        let mn = game.get_nation(NationId(2)).unwrap();
+        assert!(mn.province_ids.is_empty());
+
+        // Province owner updated
+        let prov = game.get_province(ProvinceId(2)).unwrap();
+        assert_eq!(prov.owner, NationId(1));
+
+        // History recorded
+        assert!(!game.history.is_empty());
+        assert!(game.history[0].1.contains("Smallton"));
+        assert!(game.history[0].1.contains("Testlandia"));
+    }
+
+    #[test]
+    fn no_incorporation_below_threshold() {
+        let mut game = test_game_state_with_minor_nation();
+
+        // Set diplomacy score to 74 (just below threshold)
+        let rel = game.diplomacy.ensure_relation(NationId(2), NationId(1));
+        rel.score = 74;
+
+        let mut report = TurnReport {
+            turn: game.turn,
+            year: game.turn.year(),
+            quarter: game.turn.quarter(),
+            events: Vec::new(),
+            resource_production: Vec::new(),
+            gold_income: Vec::new(),
+            maintenance_costs: Vec::new(),
+            production_output: Vec::new(),
+            food_consumed: Vec::new(),
+            starvation: Vec::new(),
+            newspaper_headlines: Vec::new(),
+            techs_available: Vec::new(),
+            council_vote: None,
+            trade_transactions: Vec::new(),
+            battles: Vec::new(),
+            naval_battles: Vec::new(),
+            scores: Vec::new(),
+            ai_actions: Vec::new(),
+            civilian_completions: Vec::new(),
+            transport_overflow: Vec::new(),
+            immigration: Vec::new(),
+            settlement_upgrades: Vec::new(),
+            trade_balance: Vec::new(),
+            town_production: Vec::new(),
+            unit_movements: Vec::new(),
+            incorporations: Vec::new(),
+            unit_upgrades: Vec::new(),
+        };
+
+        resolve_voluntary_incorporations(&mut game, &mut report);
+
+        // No incorporation should happen
+        assert!(report.incorporations.is_empty());
+
+        // Minor nation still has its province
+        let mn = game.get_nation(NationId(2)).unwrap();
+        assert!(mn.province_ids.contains(&ProvinceId(2)));
+
+        // Province owner unchanged
+        let prov = game.get_province(ProvinceId(2)).unwrap();
+        assert_eq!(prov.owner, NationId(2));
+    }
+
+    // ── Unit upgrade tests ────────────────────────────────────────
+
+    #[test]
+    fn unit_upgrade_when_tech_is_researched() {
+        use crate::ai::basic::AiPersonality;
+        use crate::map::UnitId;
+        use crate::military::units::ArmyUnit;
+
+        let mut game = test_game_state();
+
+        // Make nation1 an AI so auto-upgrade triggers
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.ai_personality = Some(AiPersonality::Balanced);
+
+        // Give the nation a Regulars unit
+        let unit = ArmyUnit::new(
+            UnitId(100),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(1),
+        );
+        nation.army.push(unit);
+
+        // Research "Breech-Loading Rifles" (TechId 13) —
+        // RifleInfantry.required_tech() returns "Breech-Loading Rifles"
+        nation.research_tech(crate::events::TechId(13));
+
+        let mut report = TurnReport {
+            turn: game.turn,
+            year: game.turn.year(),
+            quarter: game.turn.quarter(),
+            events: Vec::new(),
+            resource_production: Vec::new(),
+            gold_income: Vec::new(),
+            maintenance_costs: Vec::new(),
+            production_output: Vec::new(),
+            food_consumed: Vec::new(),
+            starvation: Vec::new(),
+            newspaper_headlines: Vec::new(),
+            techs_available: Vec::new(),
+            council_vote: None,
+            trade_transactions: Vec::new(),
+            battles: Vec::new(),
+            naval_battles: Vec::new(),
+            scores: Vec::new(),
+            ai_actions: Vec::new(),
+            civilian_completions: Vec::new(),
+            transport_overflow: Vec::new(),
+            immigration: Vec::new(),
+            settlement_upgrades: Vec::new(),
+            trade_balance: Vec::new(),
+            town_production: Vec::new(),
+            unit_movements: Vec::new(),
+            incorporations: Vec::new(),
+            unit_upgrades: Vec::new(),
+        };
+
+        resolve_unit_upgrades(&mut game, &mut report);
+
+        // The Regulars should be upgraded to RifleInfantry
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(nation.army[0].unit_type, ArmyUnitType::RifleInfantry);
+
+        // Report should record the upgrade
+        assert_eq!(report.unit_upgrades.len(), 1);
+        assert_eq!(report.unit_upgrades[0].0, NationId(1));
+    }
+
+    #[test]
+    fn unit_upgrade_preserves_medals() {
+        use crate::ai::basic::AiPersonality;
+        use crate::map::UnitId;
+        use crate::military::units::ArmyUnit;
+
+        let mut game = test_game_state();
+
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.ai_personality = Some(AiPersonality::Balanced);
+
+        let mut unit = ArmyUnit::new(
+            UnitId(100),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(1),
+        );
+        unit.medals = 3;
+        unit.health = 75;
+        nation.army.push(unit);
+
+        // Research "Breech-Loading Rifles" (TechId 13)
+        nation.research_tech(crate::events::TechId(13));
+
+        let mut report = TurnReport {
+            turn: game.turn,
+            year: game.turn.year(),
+            quarter: game.turn.quarter(),
+            events: Vec::new(),
+            resource_production: Vec::new(),
+            gold_income: Vec::new(),
+            maintenance_costs: Vec::new(),
+            production_output: Vec::new(),
+            food_consumed: Vec::new(),
+            starvation: Vec::new(),
+            newspaper_headlines: Vec::new(),
+            techs_available: Vec::new(),
+            council_vote: None,
+            trade_transactions: Vec::new(),
+            battles: Vec::new(),
+            naval_battles: Vec::new(),
+            scores: Vec::new(),
+            ai_actions: Vec::new(),
+            civilian_completions: Vec::new(),
+            transport_overflow: Vec::new(),
+            immigration: Vec::new(),
+            settlement_upgrades: Vec::new(),
+            trade_balance: Vec::new(),
+            town_production: Vec::new(),
+            unit_movements: Vec::new(),
+            incorporations: Vec::new(),
+            unit_upgrades: Vec::new(),
+        };
+
+        resolve_unit_upgrades(&mut game, &mut report);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(nation.army[0].unit_type, ArmyUnitType::RifleInfantry);
+        assert_eq!(nation.army[0].medals, 3, "Medals should be preserved");
+        assert_eq!(nation.army[0].health, 75, "Health should be preserved");
     }
 }

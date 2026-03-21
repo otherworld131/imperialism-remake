@@ -106,6 +106,19 @@ pub struct VictoryAchieved {
     pub victory_type: VictoryType,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct NationIncorporated {
+    pub minor_nation: NationId,
+    pub great_power: NationId,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnitUpgraded {
+    pub nation: NationId,
+    pub from_type: String,
+    pub to_type: String,
+}
+
 // ── Wrapper enum ───────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
@@ -123,6 +136,8 @@ pub enum DomainEvent {
     TradeCompleted(TradeCompleted),
     BuildingConstructed(BuildingConstructed),
     VictoryAchieved(VictoryAchieved),
+    NationIncorporated(NationIncorporated),
+    UnitUpgraded(UnitUpgraded),
 }
 
 #[cfg(test)]

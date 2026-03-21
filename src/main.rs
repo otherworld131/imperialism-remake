@@ -328,6 +328,10 @@ fn main() {
                 let args = input.trim()[5..].trim();
                 cmd_sell(&mut game, args);
             }
+            _ if cmd.starts_with("upgrade ") => {
+                let index_str = input.trim()[8..].trim();
+                cmd_upgrade_unit(&mut game, index_str);
+            }
             _ => {
                 println!("  Unknown command. Type 'help' for available commands.");
             }
@@ -613,6 +617,83 @@ fn build_unit(game: &mut GameState, query: &str) {
         cost,
         player.treasury,
         player.army.len()
+    );
+}
+
+/// Upgrade a unit at the given army index.
+/// Costs $500. Preserves medals and health.
+fn cmd_upgrade_unit(game: &mut GameState, index_str: &str) {
+    let idx: usize = match index_str.parse() {
+        Ok(i) => i,
+        Err(_) => {
+            println!("  Usage: upgrade <unit_index> (e.g. upgrade 0)");
+            return;
+        }
+    };
+
+    let player_id = game.human_player_nation;
+    let player = game.get_nation(player_id).unwrap();
+
+    if idx >= player.army.len() {
+        println!(
+            "  Invalid unit index {}. You have {} units (0-{}).",
+            idx,
+            player.army.len(),
+            player.army.len().saturating_sub(1)
+        );
+        return;
+    }
+
+    let current_type = player.army[idx].unit_type;
+    let target_type = match current_type.upgrade_to() {
+        Some(t) => t,
+        None => {
+            println!("  {:?} has no available upgrade path.", current_type);
+            return;
+        }
+    };
+
+    // Check if prerequisite tech is researched
+    if let Some(required_tech_name) = target_type.required_tech() {
+        let has_tech = player.researched_techs.iter().any(|tid| {
+            game.tech_tree
+                .get(*tid)
+                .map(|t| t.name == required_tech_name)
+                .unwrap_or(false)
+        });
+        if !has_tech {
+            println!(
+                "  Cannot upgrade {:?} to {:?}: requires '{}' technology.",
+                current_type, target_type, required_tech_name
+            );
+            return;
+        }
+    }
+
+    // Check cost ($500 flat)
+    let cost = Money::dollars(500);
+    if player.treasury.checked_sub(cost).is_none() {
+        println!(
+            "  Cannot afford upgrade (cost: {}, treasury: {}).",
+            cost, player.treasury
+        );
+        return;
+    }
+
+    // Apply upgrade
+    let player = game.get_nation_mut(player_id).unwrap();
+    player.treasury -= cost;
+    let old_medals = player.army[idx].medals;
+    let old_health = player.army[idx].health;
+    player.army[idx].unit_type = target_type;
+    player.army[idx].movement_remaining = target_type.stats().movement;
+    // Preserve medals and health
+    player.army[idx].medals = old_medals;
+    player.army[idx].health = old_health;
+
+    println!(
+        "  Upgraded {:?} -> {:?} (medals: {}, health: {}, cost: {}, treasury: {}).",
+        current_type, target_type, old_medals, old_health, cost, player.treasury
     );
 }
 
@@ -1697,6 +1778,7 @@ fn print_help() {
     println!("  {}", color_bold("MILITARY:"));
     println!("    military / army   — Show your army units and their stats");
     println!("    build unit <type> — Build a military unit");
+    println!("    upgrade <index>   — Upgrade army unit #i to its next type ($500)");
     println!("    move <i> <prov>   — Move army unit #i to a province you own");
     println!("    attack <nation>   — Order an attack on a nation you are at war with");
     println!("    navy              — Show your warship fleet");

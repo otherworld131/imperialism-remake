@@ -321,6 +321,40 @@ impl ArmyUnitType {
         !matches!(self, ArmyUnitType::Militia)
     }
 
+    /// Returns the tech tree name required to build/unlock this unit type, if any.
+    /// Base units available from game start return `None`.
+    /// Names match entries in the tech tree (`TechTree::get_by_name`).
+    pub fn required_tech(&self) -> Option<&str> {
+        match self {
+            // Base units — available from game start
+            Self::Regulars => None,
+            Self::Militia => None,
+            Self::Cuirassiers => None,
+            Self::Scouts => None,
+            Self::LightArtillery => None,
+            // Infantry
+            Self::Grenadiers => Some("Breech-Loading Rifles"),
+            Self::RifleInfantry => Some("Breech-Loading Rifles"),
+            Self::Guards => Some("Breech-Loading Rifles"),
+            Self::Sharpshooters => Some("Bessemer Converter"),
+            Self::ModernInfantry => Some("Machine Guns"),
+            Self::MachineGunners => Some("Machine Guns"),
+            Self::Rangers => Some("Machine Guns"),
+            // Cavalry
+            Self::CarbineCavalry => Some("Breech-Loading Rifles"),
+            Self::Armour => Some("Internal Combustion"),
+            Self::Mechanised => Some("Internal Combustion"),
+            // Artillery
+            Self::StandardArtillery => Some("Rifled Artillery"),
+            Self::FieldArtillery => Some("Rifled Artillery"),
+            Self::SiegeArtillery => Some("Large Artillery"),
+            Self::RailroadGun => Some("Large Artillery"),
+            Self::MobileArtillery => Some("Internal Combustion"),
+            // Special
+            Self::Sapper => Some("Bessemer Converter"),
+        }
+    }
+
     /// Returns the next upgrade for this unit type, if any.
     ///
     /// Upgrade paths:
@@ -867,5 +901,48 @@ mod tests {
             UnitCategory::Artillery
         );
         assert_eq!(ArmyUnitType::Sapper.category(), UnitCategory::Special);
+    }
+
+    // ── required_tech ──────────────────────────────────────────────
+
+    #[test]
+    fn base_units_have_no_required_tech() {
+        assert!(ArmyUnitType::Regulars.required_tech().is_none());
+        assert!(ArmyUnitType::Militia.required_tech().is_none());
+        assert!(ArmyUnitType::Cuirassiers.required_tech().is_none());
+        assert!(ArmyUnitType::Scouts.required_tech().is_none());
+        assert!(ArmyUnitType::LightArtillery.required_tech().is_none());
+    }
+
+    #[test]
+    fn advanced_units_have_required_tech() {
+        assert_eq!(
+            ArmyUnitType::RifleInfantry.required_tech(),
+            Some("Breech-Loading Rifles")
+        );
+        assert_eq!(
+            ArmyUnitType::Guards.required_tech(),
+            Some("Breech-Loading Rifles")
+        );
+        assert_eq!(
+            ArmyUnitType::MachineGunners.required_tech(),
+            Some("Machine Guns")
+        );
+        assert_eq!(
+            ArmyUnitType::CarbineCavalry.required_tech(),
+            Some("Breech-Loading Rifles")
+        );
+        assert_eq!(
+            ArmyUnitType::SiegeArtillery.required_tech(),
+            Some("Large Artillery")
+        );
+    }
+
+    #[test]
+    fn upgrade_target_has_required_tech() {
+        // Regulars -> RifleInfantry requires "Breech-Loading Rifles"
+        let target = ArmyUnitType::Regulars.upgrade_to().unwrap();
+        assert_eq!(target, ArmyUnitType::RifleInfantry);
+        assert_eq!(target.required_tech(), Some("Breech-Loading Rifles"));
     }
 }
