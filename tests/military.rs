@@ -319,3 +319,163 @@ fn build_frigate_deducts_resources_and_adds_ship() {
     assert_eq!(nation.material_amount(MaterialType::Lumber), 5); // 10 - 5
     assert_eq!(nation.material_amount(MaterialType::Arms), 3); // 5 - 2
 }
+
+// ── Data validation: all unit types have valid stats (plan 11) ────
+
+#[test]
+fn all_unit_types_have_valid_stats() {
+    let types = [
+        ArmyUnitType::Militia,
+        ArmyUnitType::Regulars,
+        ArmyUnitType::Grenadiers,
+        ArmyUnitType::RifleInfantry,
+        ArmyUnitType::Guards,
+        ArmyUnitType::Sharpshooters,
+        ArmyUnitType::ModernInfantry,
+        ArmyUnitType::MachineGunners,
+        ArmyUnitType::Rangers,
+        ArmyUnitType::Cuirassiers,
+        ArmyUnitType::Scouts,
+        ArmyUnitType::CarbineCavalry,
+        ArmyUnitType::Armour,
+        ArmyUnitType::Mechanised,
+        ArmyUnitType::LightArtillery,
+        ArmyUnitType::StandardArtillery,
+        ArmyUnitType::FieldArtillery,
+        ArmyUnitType::SiegeArtillery,
+        ArmyUnitType::RailroadGun,
+        ArmyUnitType::MobileArtillery,
+        ArmyUnitType::Sapper,
+        ArmyUnitType::General,
+    ];
+    for unit_type in &types {
+        let stats = unit_type.stats();
+        // Every unit has non-negative movement
+        assert!(
+            stats.movement > 0 || *unit_type == ArmyUnitType::Militia,
+            "{:?} should have positive movement (or be Militia)",
+            unit_type
+        );
+        // Every unit has a category
+        let _cat = unit_type.category();
+        // Cost should be non-negative
+        assert!(
+            !stats.cost.is_negative(),
+            "{:?} has negative cost",
+            unit_type
+        );
+    }
+}
+
+#[test]
+fn all_ship_types_have_valid_stats() {
+    let types = [
+        ShipType::Trader,
+        ShipType::Indiaman,
+        ShipType::Clipper,
+        ShipType::Paddlewheeler,
+        ShipType::Freighter,
+        ShipType::Frigate,
+        ShipType::ShipOfTheLine,
+        ShipType::Raider,
+        ShipType::Ironclad,
+        ShipType::AdvancedIronclad,
+        ShipType::ArmouredCruiser,
+        ShipType::Dreadnought,
+        ShipType::Battlecruiser,
+    ];
+    for ship_type in &types {
+        let stats = ship_type.stats();
+        assert!(stats.hull > 0, "{:?} should have positive hull", ship_type);
+    }
+}
+
+// ── Expert worker capitol expansion reward (plan 05) ──────────────
+
+#[test]
+fn expert_worker_reward_at_10_experts() {
+    let mut game = minimal_game();
+    let player_id = game.human_player_nation;
+
+    // Add 10 expert workers to the labor pool
+    let player = game.get_nation_mut(player_id).unwrap();
+    for _ in 0..10 {
+        player.labor.untrained += 1;
+        player.labor.train_worker();
+        player.labor.promote_worker();
+    }
+    assert_eq!(player.labor.expert, 10);
+
+    let initial_bonus = player.capitol_bonus_capacity;
+
+    // Process a turn — the rewards system should detect 10 experts
+    process_turn(&mut game);
+
+    let player = game.get_nation(player_id).unwrap();
+    assert!(
+        player.capitol_bonus_capacity > initial_bonus,
+        "Capitol bonus should increase at 10 experts (was {}, now {})",
+        initial_bonus,
+        player.capitol_bonus_capacity
+    );
+    assert!(
+        player.expert_rewards_earned >= 1,
+        "expert_rewards_earned should track the reward"
+    );
+}
+
+#[test]
+fn expert_worker_reward_at_30_experts() {
+    let mut game = minimal_game();
+    let player_id = game.human_player_nation;
+
+    // Add 30 expert workers to the labor pool
+    let player = game.get_nation_mut(player_id).unwrap();
+    for _ in 0..30 {
+        player.labor.untrained += 1;
+        player.labor.train_worker();
+        player.labor.promote_worker();
+    }
+    assert_eq!(player.labor.expert, 30);
+
+    // Process a turn — should earn both rewards (10 and 30)
+    process_turn(&mut game);
+
+    let player = game.get_nation(player_id).unwrap();
+    assert!(
+        player.capitol_bonus_capacity >= 2,
+        "Capitol bonus should be at least 2 at 30 experts (got {})",
+        player.capitol_bonus_capacity
+    );
+    assert!(
+        player.expert_rewards_earned >= 2,
+        "expert_rewards_earned should be at least 2 at 30 experts (got {})",
+        player.expert_rewards_earned
+    );
+}
+
+#[test]
+fn expert_worker_reward_not_awarded_twice() {
+    let mut game = minimal_game();
+    let player_id = game.human_player_nation;
+
+    // Add 10 expert workers
+    let player = game.get_nation_mut(player_id).unwrap();
+    for _ in 0..10 {
+        player.labor.untrained += 1;
+        player.labor.train_worker();
+        player.labor.promote_worker();
+    }
+
+    // Process two turns
+    process_turn(&mut game);
+    let bonus_after_first = game.get_nation(player_id).unwrap().capitol_bonus_capacity;
+
+    process_turn(&mut game);
+    let bonus_after_second = game.get_nation(player_id).unwrap().capitol_bonus_capacity;
+
+    assert_eq!(
+        bonus_after_first, bonus_after_second,
+        "Expert reward should not be awarded twice for the same threshold"
+    );
+}

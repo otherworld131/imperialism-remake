@@ -15,7 +15,7 @@ and factory capacity.
 - [x] **Town** — fully industrialized; maximum production capacity
 - [x] 6-turn delay from connection before first materials appear
 - [x] Captured Great Power capitals industrialize immediately (no delay)
-- [ ] Minor Nation capitals never industrialize
+- [x] Minor Nation capitals never industrialize
 - [x] Unit tests for settlement progression timing
 
 ### Province Connection
@@ -29,9 +29,9 @@ and factory capacity.
 - [x] Town production requires no labor input
 - [x] Base ratio: 2 raw resources → 1 material
 - [x] Finished goods: 1/2 of available materials → goods
-- [ ] Production limited by local factory capacity
-- [ ] Factory capacity progression: 4, 8, 12, 16, ...
-- [ ] Factory upgrade cost: materials + 2-turn delay for new capacity
+- [x] Production limited by local factory capacity
+- [x] Factory capacity progression: 4, 8, 12, 16, ...
+- [x] Factory upgrade cost: materials + 2-turn delay for new capacity
 - [ ] Three production chains available per town based on local resources:
   - [x] Timber → Lumber → Furniture
   - [x] Cotton/Wool → Fabric → Clothing
@@ -75,7 +75,7 @@ and factory capacity.
 - [x] Built by Engineer, takes 3 turns per level
 - [ ] Forts affect tactical battle maps — walls, defensive positions
 - [ ] Sappers can tunnel to destroy fort sections
-- [ ] Heavy artillery can also destroy fort sections
+- [x] Heavy artillery can also destroy fort sections
 - [x] Unit tests for fort construction and defensive bonus calculations
 
 ### Capital City Buildings (8 standard)
@@ -100,11 +100,11 @@ and factory capacity.
 
 ### Verification Strategy
 - [x] **Unit tests**: `cargo test` — all town, infrastructure, and building tests pass
-- [ ] **Industrialization test**: Connect depot to province → verify 6-turn delay → materials appear on turn 7
+- [x] **Industrialization test**: Connect depot to province → verify 6-turn delay → materials appear on turn 7
 - [x] **Town production test**: Town with factory capacity 8 + 4 timber available → verify 2 lumber + 1 furniture produced
 - [x] **Railroad cost test**: Build railroad on each terrain type → verify correct cost and tech prerequisite enforced
-- [ ] **Fort siege test**: Build level 3 fort → verify combat defense bonus applied; sapper destroys section → bonus reduced
+- [x] **Fort siege test**: Build level 3 fort → verify combat defense bonus applied; sapper destroys section → bonus reduced
 - [x] **Building expansion test**: Expand mill from cap 2 → 4 → verify cost = 2 lumber + 2 steel, 2-turn delay
 - [x] **Connectivity test**: Province connected via port → rail severed → verify province still connected via sea route
-- [ ] **Captured capital test**: Capture Great Power capital → verify immediate industrialization (no 6-turn delay)
-- [ ] **Minor capital test**: Capture Minor Nation capital → verify it does NOT industrialize
+- [x] **Captured capital test**: Capture Great Power capital → verify immediate industrialization (no 6-turn delay)
+- [x] **Minor capital test**: Capture Minor Nation capital → verify it does NOT industrialize

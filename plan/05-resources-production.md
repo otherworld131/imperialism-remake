@@ -55,7 +55,7 @@ goods in factories. Three parallel production chains exist.
 - [x] Each mill/factory has a capacity (units processed per turn)
 - [x] Capacity starts at 2 (Easy) or must be built (harder difficulties)
 - [x] Expansion costs 1 lumber + 1 steel per capacity unit
-- [ ] Capacity progression: 2 → 4 → 8 → 12 → 16 → ...
+- [x] Capacity progression: 2 → 4 → 8 → 12 → 16 → ...
 - [x] 2-turn delay before new capacity becomes active
 - [x] Production assignment: player allocates resources to each mill/factory each turn
 - [x] Unit tests for production calculations
@@ -95,7 +95,7 @@ goods in factories. Three parallel production chains exist.
 - [x] Civilian unit creation costs
 - [x] Technology research costs
 - [x] Diplomatic costs (embassies: $5,000, consulates: $500, grants, subsidies)
-- [ ] Bankruptcy protection / deficit handling rules
+- [x] Bankruptcy protection / deficit handling rules
 - [x] Unit tests for treasury calculations
 
 ### Verification Strategy
@@ -106,4 +106,4 @@ goods in factories. Three parallel production chains exist.
 - [x] **Worker pipeline test**: Recruit untrained → train → expert → specialist → verify each step costs correct resources
 - [x] **Mill capacity test**: Mill at capacity 4, feed 8 timber → verify 4 lumber produced; feed 10 timber → verify still only 4 (capped)
 - [x] **Factory expansion test**: Expand factory → verify 2-turn delay before new capacity active
-- [ ] **Treasury test**: Start with $10,000, spend $3,000 on tech, $500 on consulate, earn $2,000 from trade → verify balance = $8,500
+- [x] **Treasury test**: Start with $10,000, spend $3,000 on tech, $500 on consulate, earn $2,000 from trade → verify balance = $8,500

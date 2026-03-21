@@ -2674,6 +2674,52 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
             ));
         }
     }
+
+    // Expert worker reward: at 10 experts -> +1 capitol_bonus_capacity,
+    // at 30 experts -> +1 more. Tracked by expert_rewards_earned to prevent duplicates.
+    let expert_thresholds: [(u32, u8); 2] = [(10, 1), (30, 2)];
+    for nation_id in &nation_ids {
+        let nation = match game.nations.iter().find(|n| n.id == *nation_id) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        let expert_count = nation.labor.expert;
+        let already_earned = nation.expert_rewards_earned;
+
+        // Determine how many rewards should have been earned by now
+        let mut should_have_earned: u8 = 0;
+        for &(threshold, reward_level) in &expert_thresholds {
+            if expert_count >= threshold {
+                should_have_earned = reward_level;
+            }
+        }
+
+        if should_have_earned > already_earned {
+            let new_rewards = should_have_earned - already_earned;
+            let nation = match game.nations.iter_mut().find(|n| n.id == *nation_id) {
+                Some(n) => n,
+                None => continue,
+            };
+            nation.expert_rewards_earned = should_have_earned;
+            nation.capitol_bonus_capacity += new_rewards as u32;
+
+            let nation_name = nation.name.clone();
+            for _ in 0..new_rewards {
+                report.rewards_earned.push((
+                    *nation_id,
+                    format!(
+                        "{}'s capitol has expanded from expert workforce development!",
+                        nation_name
+                    ),
+                ));
+                report.newspaper_headlines.push(format!(
+                    "{}'s expert workforce drives capitol expansion!",
+                    nation_name
+                ));
+            }
+        }
+    }
 }
 
 fn generate_newspaper(game: &GameState, report: &mut TurnReport) {

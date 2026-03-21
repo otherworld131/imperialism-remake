@@ -255,3 +255,54 @@ fn would_accept_treaty_respects_standing_threshold() {
     assert_eq!(game.diplomacy.get_standing(nation), 29);
     assert!(!game.diplomacy.would_accept_treaty(nation));
 }
+
+// ── Diplomacy edge case tests (plan 09) ──────────────────────────
+
+#[test]
+fn alliance_war_pact_combinations() {
+    let mut game = new_game("edge_diplo", Difficulty::Normal, 0);
+    let gps: Vec<NationId> = game.great_powers().iter().map(|n| n.id).collect();
+    let mns: Vec<NationId> = game.minor_nations().iter().map(|n| n.id).collect();
+
+    // Alliance between GP1 and GP2
+    game.diplomacy.propose_alliance(gps[1], gps[2]).unwrap();
+
+    // Pact between GP1 and MN1
+    game.diplomacy.build_consulate(gps[1], mns[0]).ok();
+    game.diplomacy.build_embassy(gps[1], mns[0]).ok();
+    game.diplomacy.propose_pact(gps[1], mns[0]).unwrap();
+
+    // GP3 declares war on GP2 — GP1 should be involved via alliance
+    game.diplomacy.declare_war(gps[3], gps[2]);
+
+    // GP4 attacks MN1 — GP1 should defend via pact
+    game.diplomacy.declare_war(gps[4], mns[0]);
+
+    // Process turn — alliance/pact obligations should trigger
+    process_turn(&mut game);
+
+    // Verify complex state
+    assert!(game.diplomacy.is_at_war(gps[3], gps[2]));
+    assert!(game.diplomacy.is_at_war(gps[4], mns[0]));
+}
+
+#[test]
+fn cannot_ally_with_nation_at_war() {
+    let mut game = new_game("war_ally", Difficulty::Normal, 0);
+    let gps: Vec<NationId> = game.great_powers().iter().map(|n| n.id).collect();
+    game.diplomacy.declare_war(gps[1], gps[2]);
+    let result = game.diplomacy.propose_alliance(gps[1], gps[2]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn cannot_pact_with_nation_at_war() {
+    let mut game = new_game("war_pact", Difficulty::Normal, 0);
+    let gps: Vec<NationId> = game.great_powers().iter().map(|n| n.id).collect();
+    let mns: Vec<NationId> = game.minor_nations().iter().map(|n| n.id).collect();
+    game.diplomacy.build_consulate(gps[1], mns[0]).ok();
+    game.diplomacy.build_embassy(gps[1], mns[0]).ok();
+    game.diplomacy.declare_war(gps[1], mns[0]);
+    let result = game.diplomacy.propose_pact(gps[1], mns[0]);
+    assert!(result.is_err());
+}

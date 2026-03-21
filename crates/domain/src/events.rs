@@ -339,7 +339,7 @@ mod tests {
 
     #[test]
     fn all_domain_event_types_can_be_created() {
-        let events = vec![
+        let events = [
             DomainEvent::TurnStarted(TurnStarted {
                 turn: TurnNumber::new(1),
             }),

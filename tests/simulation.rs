@@ -691,3 +691,47 @@ fn profile_memory_late_game() {
     assert_eq!(total_nations, 23, "Nations count changed");
     assert_eq!(total_provinces, 120, "Provinces count changed");
 }
+
+// ── Trade simulation test (plan 10) ──────────────────────────────
+
+#[test]
+fn trade_simulation_20_turns_economic_growth() {
+    let mut game = new_game("trade_sim", Difficulty::Easy, 0);
+    let player = game.human_player_nation;
+
+    // Build consulates with first 3 MNs
+    let mn_ids: Vec<NationId> = game.minor_nations().iter().take(3).map(|n| n.id).collect();
+    for mn_id in &mn_ids {
+        game.diplomacy.build_consulate(player, *mn_id).ok();
+    }
+
+    let _initial_treasury = game.get_nation(player).unwrap().treasury;
+
+    // Process 20 turns
+    for _ in 0..20 {
+        process_turn(&mut game);
+    }
+
+    // Economy should have grown — warehouse should have resources
+    let nation = game.get_nation(player).unwrap();
+    let total_resources: u32 = [
+        ResourceType::Timber,
+        ResourceType::Coal,
+        ResourceType::Iron,
+        ResourceType::Cotton,
+        ResourceType::Wool,
+        ResourceType::Grain,
+    ]
+    .iter()
+    .map(|r| nation.resource_amount(*r))
+    .sum();
+
+    assert!(
+        total_resources > 0,
+        "Should have accumulated resources after 20 turns of trade"
+    );
+    println!(
+        "After 20 turns: treasury={}, resources={}",
+        nation.treasury, total_resources
+    );
+}

@@ -104,6 +104,9 @@ pub struct Nation {
     /// Whether this nation has established its first colony (MN province conquered/incorporated).
     #[serde(default)]
     pub has_colony: bool,
+    /// Number of expert worker rewards already earned (tracks reward thresholds at 10 and 30 experts).
+    #[serde(default)]
+    pub expert_rewards_earned: u8,
 }
 
 impl Nation {
@@ -143,6 +146,7 @@ impl Nation {
             total_ships_of_the_line_built: 0,
             admirals_earned: 0,
             has_colony: false,
+            expert_rewards_earned: 0,
         }
     }
 
