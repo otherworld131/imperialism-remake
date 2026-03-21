@@ -38,6 +38,12 @@ pub struct Province {
     /// Starts at 6 when a province first becomes connected.
     /// `None` means either not yet connected or already industrialized.
     pub industrialization_turns_remaining: Option<u8>,
+    /// Turns remaining until this Village upgrades to Town.
+    /// `Some(n)` means upgrade in progress; starts at 12 when a province
+    /// first reaches Village status while connected.
+    /// `None` means not yet a Village or already a Town.
+    #[serde(default)]
+    pub town_countdown: Option<u8>,
 }
 
 impl Province {
@@ -68,6 +74,7 @@ impl Province {
             settlement_level: SettlementLevel::Hamlet,
             connected_to_capital: false,
             industrialization_turns_remaining: None,
+            town_countdown: None,
         }
     }
 
@@ -77,6 +84,16 @@ impl Province {
     /// `"{nation_name} City"` (e.g., "France City", "Britain City").
     pub fn capital_city_name(nation_name: &str) -> String {
         format!("{nation_name} City")
+    }
+
+    /// Whether this province can autonomously produce materials and goods.
+    ///
+    /// Only Village and Town settlements produce autonomously.
+    pub fn can_produce(&self) -> bool {
+        matches!(
+            self.settlement_level,
+            SettlementLevel::Village | SettlementLevel::Town
+        )
     }
 
     /// Whether this province contains any coastal tile.
@@ -210,6 +227,44 @@ mod tests {
         assert_eq!(p.settlement_level, SettlementLevel::Village);
         p.settlement_level = SettlementLevel::Town;
         assert_eq!(p.settlement_level, SettlementLevel::Town);
+    }
+
+    // ── can_produce ─────────────────────────────────────────────
+
+    #[test]
+    fn hamlet_cannot_produce() {
+        let p = sample_province();
+        assert_eq!(p.settlement_level, SettlementLevel::Hamlet);
+        assert!(!p.can_produce());
+    }
+
+    #[test]
+    fn village_can_produce() {
+        let mut p = sample_province();
+        p.settlement_level = SettlementLevel::Village;
+        assert!(p.can_produce());
+    }
+
+    #[test]
+    fn town_can_produce() {
+        let mut p = sample_province();
+        p.settlement_level = SettlementLevel::Town;
+        assert!(p.can_produce());
+    }
+
+    // ── town_countdown ──────────────────────────────────────────
+
+    #[test]
+    fn town_countdown_defaults_to_none() {
+        let p = sample_province();
+        assert_eq!(p.town_countdown, None);
+    }
+
+    #[test]
+    fn town_countdown_can_be_set() {
+        let mut p = sample_province();
+        p.town_countdown = Some(12);
+        assert_eq!(p.town_countdown, Some(12));
     }
 
     // ── connectivity & industrialization ────────────────────────

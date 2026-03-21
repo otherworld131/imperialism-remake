@@ -24,16 +24,16 @@ The Council of Governors voting system is the primary victory path.
 - [x] Unit tests: infrastructure prerequisite validation
 
 ### Treaty Types (5 types)
-- [ ] **Non-Aggression Pact** (Great Power ↔ Minor Nation only)
-  - [ ] Minor Nation requests help if attacked
-  - [ ] Honoring the request: Minor Nation becomes a colony of the Great Power
-  - [ ] Refusing: diplomatic penalty
-  - [ ] Unit tests: pact trigger on attack, colony incorporation
-- [ ] **Alliance** (Great Power ↔ Great Power only)
-  - [ ] When one ally enters war, the other is expected to join
-  - [ ] Refusing to honor alliance: alliance broken + diplomatic standing penalty
-  - [ ] Negotiating separate peace: also breaks alliance + penalty
-  - [ ] Unit tests: alliance obligation triggers, penalty calculations
+- [x] **Non-Aggression Pact** (Great Power ↔ Minor Nation only)
+  - [x] Minor Nation requests help if attacked
+  - [x] Honoring the request: Minor Nation becomes a colony of the Great Power
+  - [x] Refusing: diplomatic penalty
+  - [x] Unit tests: pact trigger on attack, colony incorporation
+- [x] **Alliance** (Great Power ↔ Great Power only)
+  - [x] When one ally enters war, the other is expected to join
+  - [x] Refusing to honor alliance: alliance broken + diplomatic standing penalty
+  - [x] Negotiating separate peace: also breaks alliance + penalty
+  - [x] Unit tests: alliance obligation triggers, penalty calculations
 - [ ] **Request to Join Empire** (Minor Nation → Great Power)
   - [ ] Triggered when a Minor Nation's relationship with a Great Power is sufficiently high
   - [ ] Minor Nation voluntarily incorporates into the empire
@@ -44,15 +44,15 @@ The Council of Governors voting system is the primary victory path.
   - [ ] Unit tests: war termination, standing impacts
 - [x] **War Declaration**
   - [x] "The only treaty which may not be refused"
-  - [ ] Triggers alliance obligations for all allies of both sides
-  - [ ] Unit tests: war declaration cascade through alliances
+  - [x] Triggers alliance obligations for all allies of both sides
+  - [x] Unit tests: war declaration cascade through alliances
 
 ### Diplomatic Actions
-- [ ] **Cash Grants** — direct money transfer to improve relations
+- [x] **Cash Grants** — direct money transfer to improve relations
 - [ ] **Trade Subsidies** — increase export prices, decrease import costs for a Minor Nation
   - [ ] Ctrl+click on Minor Nation auto-calculates necessary subsidy to become preferred partner
   - [ ] Subsidy calculation algorithm
-- [ ] **Treaty Proposals** — propose any applicable treaty type
+- [x] **Treaty Proposals** — propose any applicable treaty type
 - [x] **War Declaration** — initiate hostilities
 - [ ] Unit tests: grant and subsidy effects on relationship scores
 

@@ -47,6 +47,8 @@ pub struct TurnReport {
     pub settlement_upgrades: Vec<(ProvinceId, String)>,
     /// Trade balance: (nation_id, total_spent, total_earned).
     pub trade_balance: Vec<(NationId, Money, Money)>,
+    /// Town production output: (nation_id, item_name, quantity).
+    pub town_production: Vec<(NationId, String, u32)>,
 }
 
 impl TurnReport {
@@ -131,6 +133,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         immigration: Vec::new(),
         settlement_upgrades: Vec::new(),
         trade_balance: Vec::new(),
+        town_production: Vec::new(),
     };
 
     // 0. AI decisions for computer-controlled Great Powers
@@ -154,6 +157,9 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
 
     // 3. Run production chains (mills then factories)
     run_production(game, &mut report);
+
+    // 3a. Town production: Villages and Towns produce materials and goods autonomously
+    resolve_town_production(game, &mut report);
 
     // 3b. Trade session: Minor Nations sell resources to Great Powers
     resolve_trade_session(game, &mut report);
@@ -460,6 +466,8 @@ fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
         }
 
         if province.connected_to_capital {
+            let mut just_became_village = false;
+
             match province.industrialization_turns_remaining {
                 None => {
                     // Just connected or already industrialized; if still Hamlet, start countdown
@@ -484,6 +492,9 @@ fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
                         if prov.settlement_level == SettlementLevel::Hamlet {
                             prov.settlement_level = SettlementLevel::Village;
                             prov.industrialization_turns_remaining = None;
+                            // Start the Town countdown (12 turns)
+                            prov.town_countdown = Some(12);
+                            just_became_village = true;
 
                             let headline = format!("{} has grown into a Village!", prov.name);
                             report.newspaper_headlines.push(headline.clone());
@@ -501,6 +512,41 @@ fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
                             .find(|p| p.id == *province_id)
                             .unwrap();
                         prov.industrialization_turns_remaining = Some(remaining - 1);
+                    }
+                }
+            }
+
+            // Village → Town progression: tick down the town_countdown
+            // Skip if the province just became a Village this turn
+            if !just_became_village {
+                let prov_level = game
+                    .provinces
+                    .iter()
+                    .find(|p| p.id == *province_id)
+                    .map(|p| (p.settlement_level, p.town_countdown));
+
+                if let Some((SettlementLevel::Village, Some(remaining))) = prov_level {
+                    if remaining <= 1 {
+                        let prov = game
+                            .provinces
+                            .iter_mut()
+                            .find(|p| p.id == *province_id)
+                            .unwrap();
+                        prov.settlement_level = SettlementLevel::Town;
+                        prov.town_countdown = None;
+
+                        let headline = format!("{} has grown into a Town!", prov.name);
+                        report.newspaper_headlines.push(headline.clone());
+                        report
+                            .settlement_upgrades
+                            .push((*province_id, "Town".to_string()));
+                    } else {
+                        let prov = game
+                            .provinces
+                            .iter_mut()
+                            .find(|p| p.id == *province_id)
+                            .unwrap();
+                        prov.town_countdown = Some(remaining - 1);
                     }
                 }
             }
@@ -798,6 +844,147 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
                         .production_output
                         .push((nation_id, format!("{:?}", good), *amount));
                 }
+            }
+        }
+    }
+}
+
+/// Resolve autonomous town production for Village and Town provinces.
+///
+/// For each province that `can_produce()`:
+/// 1. Sum resource yields from all tiles in the province.
+/// 2. Apply 2:1 conversion for raw resources → materials:
+///    - Timber → Lumber (2 timber → 1 lumber)
+///    - Coal + Iron → Steel (1 coal + 1 iron → 1 steel)
+///    - Cotton/Wool → Fabric (2 cotton/wool → 1 fabric)
+/// 3. Convert half of materials to goods (2:1):
+///    - Lumber → Furniture (2 lumber → 1 furniture)
+///    - Steel → Hardware (2 steel → 1 hardware)
+///    - Fabric → Clothing (2 fabric → 1 clothing)
+/// 4. Towns produce at double rate (multiplier 2).
+/// 5. Add produced materials and goods to the owning nation's warehouse.
+fn resolve_town_production(game: &mut GameState, report: &mut TurnReport) {
+    // Phase 1: calculate production for each producing province
+    struct TownOutput {
+        owner: NationId,
+        lumber: u32,
+        steel: u32,
+        fabric: u32,
+        furniture: u32,
+        hardware: u32,
+        clothing: u32,
+    }
+
+    let mut outputs: Vec<TownOutput> = Vec::new();
+
+    for province in &game.provinces {
+        if !province.can_produce() {
+            continue;
+        }
+
+        let rate_multiplier: u32 = if province.settlement_level == SettlementLevel::Town {
+            2
+        } else {
+            1
+        };
+
+        // Sum resource yields from all tiles in the province
+        let mut timber_yield: u32 = 0;
+        let mut coal_yield: u32 = 0;
+        let mut iron_yield: u32 = 0;
+        let mut cotton_yield: u32 = 0;
+        let mut wool_yield: u32 = 0;
+
+        for tile_coord in &province.tiles {
+            if let Some(tile) = game.hex_map.get_tile(*tile_coord)
+                && let Some(yield_amount) = tile.calculate_yield()
+            {
+                match yield_amount.resource {
+                    ResourceType::Timber => timber_yield += yield_amount.quantity,
+                    ResourceType::Coal => coal_yield += yield_amount.quantity,
+                    ResourceType::Iron => iron_yield += yield_amount.quantity,
+                    ResourceType::Cotton => cotton_yield += yield_amount.quantity,
+                    ResourceType::Wool => wool_yield += yield_amount.quantity,
+                    _ => {} // other resources don't participate in town production
+                }
+            }
+        }
+
+        // Apply rate multiplier for Town
+        timber_yield *= rate_multiplier;
+        coal_yield *= rate_multiplier;
+        iron_yield *= rate_multiplier;
+        cotton_yield *= rate_multiplier;
+        wool_yield *= rate_multiplier;
+
+        // Step 2: Convert raw resources to materials (2:1 ratio)
+        let lumber = timber_yield / 2;
+        let steel = coal_yield.min(iron_yield); // 1 coal + 1 iron → 1 steel
+        let fabric = (cotton_yield + wool_yield) / 2;
+
+        // Step 3: Convert half of materials to goods (2:1 ratio)
+        let furniture = lumber / 2;
+        let hardware = steel / 2;
+        let clothing = fabric / 2;
+
+        // Only record if something was produced
+        if lumber > 0 || steel > 0 || fabric > 0 || furniture > 0 || hardware > 0 || clothing > 0 {
+            outputs.push(TownOutput {
+                owner: province.owner,
+                lumber,
+                steel,
+                fabric,
+                furniture,
+                hardware,
+                clothing,
+            });
+        }
+    }
+
+    // Phase 2: apply to nations
+    for output in &outputs {
+        if let Some(nation) = game.nations.iter_mut().find(|n| n.id == output.owner) {
+            if output.lumber > 0 {
+                nation.add_material(MaterialType::Lumber, output.lumber);
+                report
+                    .town_production
+                    .push((output.owner, "Lumber".to_string(), output.lumber));
+            }
+            if output.steel > 0 {
+                nation.add_material(MaterialType::Steel, output.steel);
+                report
+                    .town_production
+                    .push((output.owner, "Steel".to_string(), output.steel));
+            }
+            if output.fabric > 0 {
+                nation.add_material(MaterialType::Fabric, output.fabric);
+                report
+                    .town_production
+                    .push((output.owner, "Fabric".to_string(), output.fabric));
+            }
+            if output.furniture > 0 {
+                nation.add_goods(GoodsType::Furniture, output.furniture);
+                report.town_production.push((
+                    output.owner,
+                    "Furniture".to_string(),
+                    output.furniture,
+                ));
+            }
+            if output.hardware > 0 {
+                nation.add_goods(GoodsType::Hardware, output.hardware);
+                report.town_production.push((
+                    output.owner,
+                    "Hardware".to_string(),
+                    output.hardware,
+                ));
+            }
+            if output.clothing > 0 {
+                nation.add_goods(GoodsType::Clothing, output.clothing);
+                report.town_production.push((
+                    output.owner,
+                    "Clothing".to_string(),
+                    output.clothing,
+                ));
             }
         }
     }
@@ -2955,5 +3142,720 @@ mod tests {
         assert_eq!(super::format_number_with_commas(1234567), "1,234,567");
         assert_eq!(super::format_number_with_commas(-500), "-500");
         assert_eq!(super::format_number_with_commas(-1234), "-1,234");
+    }
+
+    // ── Town production ────────────────────────────────────────
+
+    /// Helper: build a game state with a Village province containing timber tiles.
+    fn test_game_state_with_village(terrain_types: &[TerrainType]) -> GameState {
+        let mut hex_map = HexMap::new(20, 20);
+        let mut tiles = Vec::new();
+        let capital_coord = HexCoord::new(0, 0);
+
+        // Capital province (just a simple farm)
+        let cap_tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        hex_map.set_tile(capital_coord, cap_tile);
+
+        // Village province with given terrain types
+        for (i, terrain) in terrain_types.iter().enumerate() {
+            let coord = HexCoord::new(5 + i as i32, 0);
+            let tile = Tile::with_province(*terrain, ProvinceId(2));
+            hex_map.set_tile(coord, tile);
+            tiles.push(coord);
+        }
+
+        let province_capital = Province::new(
+            ProvinceId(1),
+            "Capital".to_string(),
+            NationId(1),
+            capital_coord,
+            vec![capital_coord],
+            4,
+        );
+
+        let village_capital = if tiles.is_empty() {
+            HexCoord::new(5, 0)
+        } else {
+            tiles[0]
+        };
+        let mut province_village = Province::new(
+            ProvinceId(2),
+            "Villageton".to_string(),
+            NationId(1),
+            village_capital,
+            tiles,
+            4,
+        );
+        province_village.settlement_level = SettlementLevel::Village;
+        province_village.connected_to_capital = true;
+
+        let mut nation = Nation::new(
+            NationId(1),
+            "TownNation".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation.treasury = Money::dollars(5000);
+        nation.add_province(ProvinceId(2));
+
+        GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province_capital, province_village],
+            nations: vec![nation],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            history: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn town_production_village_produces_lumber_from_timber() {
+        // Village with 4 ScrubForest tiles: each yields 1 Timber = 4 total
+        // 4 timber / 2 = 2 lumber
+        // 2 lumber / 2 = 1 furniture
+        let mut game = test_game_state_with_village(&[TerrainType::ScrubForest; 4]);
+
+        let report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(
+            nation.material_amount(MaterialType::Lumber),
+            2,
+            "Village should produce 2 lumber from 4 timber"
+        );
+        assert_eq!(
+            nation.goods_amount(GoodsType::Furniture),
+            1,
+            "Village should produce 1 furniture from 2 lumber"
+        );
+
+        // Check report tracks town production
+        let lumber_output: u32 = report
+            .town_production
+            .iter()
+            .filter(|(_, name, _)| name == "Lumber")
+            .map(|(_, _, q)| *q)
+            .sum();
+        assert_eq!(lumber_output, 2);
+    }
+
+    #[test]
+    fn town_production_village_produces_steel_from_coal_and_iron() {
+        // Create a village with prospected BarrenHills tiles containing coal and iron
+        let mut hex_map = HexMap::new(20, 20);
+        let capital_coord = HexCoord::new(0, 0);
+        let cap_tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        hex_map.set_tile(capital_coord, cap_tile);
+
+        // 2 Coal tiles and 2 Iron tiles (BarrenHills with revealed deposits)
+        let coords: Vec<HexCoord> = (0..4).map(|i| HexCoord::new(5 + i, 0)).collect();
+        for (i, &coord) in coords.iter().enumerate() {
+            let mut tile = Tile::with_province(TerrainType::BarrenHills, ProvinceId(2));
+            if i < 2 {
+                tile.reveal_deposit(ResourceType::Coal);
+            } else {
+                tile.reveal_deposit(ResourceType::Iron);
+            }
+            hex_map.set_tile(coord, tile);
+        }
+
+        let province_capital = Province::new(
+            ProvinceId(1),
+            "Capital".to_string(),
+            NationId(1),
+            capital_coord,
+            vec![capital_coord],
+            4,
+        );
+
+        let mut province_village = Province::new(
+            ProvinceId(2),
+            "SteelVillage".to_string(),
+            NationId(1),
+            coords[0],
+            coords.clone(),
+            4,
+        );
+        province_village.settlement_level = SettlementLevel::Village;
+        province_village.connected_to_capital = true;
+
+        let mut nation = Nation::new(
+            NationId(1),
+            "SteelNation".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation.treasury = Money::dollars(5000);
+        nation.add_province(ProvinceId(2));
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province_capital, province_village],
+            nations: vec![nation],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            history: Vec::new(),
+        };
+
+        let report = process_turn(&mut game);
+
+        // Coal: 2 tiles * 1 yield = 2, Iron: 2 tiles * 1 yield = 2
+        // Steel = min(2, 2) = 2
+        // Hardware = 2 / 2 = 1
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(
+            nation.material_amount(MaterialType::Steel),
+            2,
+            "Village should produce 2 steel from 2 coal + 2 iron"
+        );
+        assert_eq!(
+            nation.goods_amount(GoodsType::Hardware),
+            1,
+            "Village should produce 1 hardware from 2 steel"
+        );
+
+        let steel_output: u32 = report
+            .town_production
+            .iter()
+            .filter(|(_, name, _)| name == "Steel")
+            .map(|(_, _, q)| *q)
+            .sum();
+        assert_eq!(steel_output, 2);
+    }
+
+    #[test]
+    fn town_production_village_produces_fabric_and_clothing() {
+        // Village with 4 Plantation tiles (Cotton): each yields 1 cotton = 4 total
+        // 4 cotton / 2 = 2 fabric
+        // 2 fabric / 2 = 1 clothing
+        let mut game = test_game_state_with_village(&[TerrainType::Plantation; 4]);
+
+        let report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(
+            nation.material_amount(MaterialType::Fabric),
+            2,
+            "Village should produce 2 fabric from 4 cotton"
+        );
+        assert_eq!(
+            nation.goods_amount(GoodsType::Clothing),
+            1,
+            "Village should produce 1 clothing from 2 fabric"
+        );
+
+        let fabric_output: u32 = report
+            .town_production
+            .iter()
+            .filter(|(_, name, _)| name == "Fabric")
+            .map(|(_, _, q)| *q)
+            .sum();
+        assert_eq!(fabric_output, 2);
+    }
+
+    #[test]
+    fn town_production_hamlet_does_not_produce() {
+        // Same setup but settlement is Hamlet, not Village
+        let mut game = test_game_state_with_village(&[TerrainType::ScrubForest; 4]);
+        // Override to Hamlet
+        game.provinces
+            .iter_mut()
+            .find(|p| p.id == ProvinceId(2))
+            .unwrap()
+            .settlement_level = SettlementLevel::Hamlet;
+
+        let report = process_turn(&mut game);
+
+        // Should have no town production
+        assert!(
+            report.town_production.is_empty(),
+            "Hamlet province should not produce via town production"
+        );
+    }
+
+    #[test]
+    fn town_produces_at_double_rate() {
+        // Town with 4 ScrubForest tiles
+        // Village rate: 4 timber → 2 lumber → 1 furniture
+        // Town rate: 4*2=8 timber → 4 lumber → 2 furniture
+        let mut game = test_game_state_with_village(&[TerrainType::ScrubForest; 4]);
+        // Upgrade to Town
+        game.provinces
+            .iter_mut()
+            .find(|p| p.id == ProvinceId(2))
+            .unwrap()
+            .settlement_level = SettlementLevel::Town;
+
+        let report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(
+            nation.material_amount(MaterialType::Lumber),
+            4,
+            "Town should produce 4 lumber (double rate)"
+        );
+        assert_eq!(
+            nation.goods_amount(GoodsType::Furniture),
+            2,
+            "Town should produce 2 furniture (double rate)"
+        );
+
+        let lumber_output: u32 = report
+            .town_production
+            .iter()
+            .filter(|(_, name, _)| name == "Lumber")
+            .map(|(_, _, q)| *q)
+            .sum();
+        assert_eq!(lumber_output, 4);
+    }
+
+    // ── Village → Town progression ─────────────────────────────
+
+    #[test]
+    fn village_upgrades_to_town_after_12_connected_turns() {
+        let coord1 = HexCoord::new(0, 0);
+        let coord2 = HexCoord::new(3, 3);
+        let hex_map = HexMap::new(10, 10);
+
+        let province_capital = Province::new(
+            ProvinceId(1),
+            "Capital".to_string(),
+            NationId(1),
+            coord1,
+            vec![coord1],
+            4,
+        );
+
+        let mut province_village = Province::new(
+            ProvinceId(2),
+            "Growing Town".to_string(),
+            NationId(1),
+            coord2,
+            vec![coord2],
+            4,
+        );
+        province_village.settlement_level = SettlementLevel::Village;
+        province_village.connected_to_capital = true;
+        province_village.town_countdown = Some(12);
+
+        let mut nation = Nation::new(
+            NationId(1),
+            "GrowthNation".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation.treasury = Money::dollars(5000);
+        nation.add_province(ProvinceId(2));
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province_capital, province_village],
+            nations: vec![nation],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            history: Vec::new(),
+        };
+
+        // Process 12 turns to count down the town_countdown
+        for _ in 0..12 {
+            process_turn(&mut game);
+        }
+
+        let province = game.get_province(ProvinceId(2)).unwrap();
+        assert_eq!(
+            province.settlement_level,
+            SettlementLevel::Town,
+            "Province should have upgraded to Town after 12 turns"
+        );
+        assert_eq!(province.town_countdown, None);
+    }
+
+    #[test]
+    fn village_does_not_upgrade_to_town_before_12_turns() {
+        let coord1 = HexCoord::new(0, 0);
+        let coord2 = HexCoord::new(3, 3);
+        let hex_map = HexMap::new(10, 10);
+
+        let province_capital = Province::new(
+            ProvinceId(1),
+            "Capital".to_string(),
+            NationId(1),
+            coord1,
+            vec![coord1],
+            4,
+        );
+
+        let mut province_village = Province::new(
+            ProvinceId(2),
+            "Still Village".to_string(),
+            NationId(1),
+            coord2,
+            vec![coord2],
+            4,
+        );
+        province_village.settlement_level = SettlementLevel::Village;
+        province_village.connected_to_capital = true;
+        province_village.town_countdown = Some(12);
+
+        let mut nation = Nation::new(
+            NationId(1),
+            "PatientNation".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation.treasury = Money::dollars(5000);
+        nation.add_province(ProvinceId(2));
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province_capital, province_village],
+            nations: vec![nation],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            history: Vec::new(),
+        };
+
+        // Process only 11 turns — not enough
+        for _ in 0..11 {
+            process_turn(&mut game);
+        }
+
+        let province = game.get_province(ProvinceId(2)).unwrap();
+        assert_eq!(
+            province.settlement_level,
+            SettlementLevel::Village,
+            "Province should still be Village after only 11 turns"
+        );
+        assert_eq!(province.town_countdown, Some(1));
+    }
+
+    // ── Full settlement progression: Hamlet → Village → Town ───
+
+    #[test]
+    fn full_settlement_progression_hamlet_to_village_to_town() {
+        let coord1 = HexCoord::new(0, 0);
+        let coord2 = HexCoord::new(3, 3);
+        let hex_map = HexMap::new(10, 10);
+
+        let province_capital = Province::new(
+            ProvinceId(1),
+            "Capital".to_string(),
+            NationId(1),
+            coord1,
+            vec![coord1],
+            4,
+        );
+
+        let mut province_remote = Province::new(
+            ProvinceId(2),
+            "RemoteLand".to_string(),
+            NationId(1),
+            coord2,
+            vec![coord2],
+            4,
+        );
+        province_remote.connected_to_capital = true;
+        // Starts as Hamlet
+
+        let mut nation = Nation::new(
+            NationId(1),
+            "ProgressNation".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation.treasury = Money::dollars(5000);
+        nation.add_province(ProvinceId(2));
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province_capital, province_remote],
+            nations: vec![nation],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            tech_tree: TechTree::new(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            history: Vec::new(),
+        };
+
+        // 7 turns: Hamlet → Village (1 to start countdown + 6 to count down)
+        for _ in 0..7 {
+            process_turn(&mut game);
+        }
+        let province = game.get_province(ProvinceId(2)).unwrap();
+        assert_eq!(province.settlement_level, SettlementLevel::Village);
+        assert_eq!(
+            province.town_countdown,
+            Some(12),
+            "Town countdown should start at 12 upon becoming Village"
+        );
+
+        // 12 more turns: Village → Town
+        for _ in 0..12 {
+            process_turn(&mut game);
+        }
+        let province = game.get_province(ProvinceId(2)).unwrap();
+        assert_eq!(
+            province.settlement_level,
+            SettlementLevel::Town,
+            "Province should have upgraded to Town after 7 + 12 = 19 turns"
+        );
+    }
+
+    // ── Economy integration tests ──────────────────────────────
+
+    #[test]
+    fn full_economic_cycle_resources_to_goods_to_trade() {
+        // Set up a nation with full production chain
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+
+        // Add raw resources for all chains
+        nation.add_resource(ResourceType::Timber, 10);
+        nation.add_resource(ResourceType::Coal, 10);
+        nation.add_resource(ResourceType::Iron, 10);
+        nation.add_resource(ResourceType::Cotton, 10);
+
+        let report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        // LumberMill cap 2: 10 timber → 2 lumber (4 timber consumed), 6 remain
+        // SteelMill cap 2: 10 coal + 10 iron → 2 steel (2 each consumed), 8 each remain
+        // TextileMill cap 2: 10 cotton → 2 fabric (4 consumed), 6 remain
+        // FurnitureFactory cap 1: 2 lumber → 1 furniture (2 consumed), 0 lumber remain
+        // HardwareFactory cap 1: 2 steel → 1 hardware (2 consumed), 0 steel remain
+        // ClothingFactory cap 1: 2 fabric → 1 clothing (2 consumed), 0 fabric remain
+        assert_eq!(nation.goods_amount(GoodsType::Furniture), 1);
+        assert_eq!(nation.goods_amount(GoodsType::Hardware), 1);
+        assert_eq!(nation.goods_amount(GoodsType::Clothing), 1);
+
+        // Verify production was reported
+        let has_furniture = report
+            .production_output
+            .iter()
+            .any(|(_, name, q)| name == "Furniture" && *q == 1);
+        let has_hardware = report
+            .production_output
+            .iter()
+            .any(|(_, name, q)| name == "Hardware" && *q == 1);
+        let has_clothing = report
+            .production_output
+            .iter()
+            .any(|(_, name, q)| name == "Clothing" && *q == 1);
+        assert!(has_furniture);
+        assert!(has_hardware);
+        assert!(has_clothing);
+    }
+
+    #[test]
+    fn immigration_cycle_food_canned_food_clothing_furniture_new_worker() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+
+        // Add food processing building
+        nation
+            .buildings
+            .push(Building::new(BuildingType::FoodProcessing, 5));
+
+        // Plenty of raw food for canning and surplus
+        nation.add_resource(ResourceType::Grain, 50);
+
+        // Pre-stock clothing and furniture for immigration
+        nation.add_goods(GoodsType::Clothing, 5);
+        nation.add_goods(GoodsType::Furniture, 5);
+
+        // Start with 0 workers so food surplus is guaranteed
+        nation.labor.untrained = 0;
+
+        // Need at least 4 provinces for 1 immigrant per turn
+        for i in 2..=5 {
+            nation.add_province(ProvinceId(i));
+        }
+
+        // Run one turn: food processing creates CannedFood, immigration uses it
+        let report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+
+        // Should have recruited at least 1 immigrant
+        let immigration: u32 = report
+            .immigration
+            .iter()
+            .filter(|(nid, _)| *nid == NationId(1))
+            .map(|(_, q)| *q)
+            .sum();
+        assert_eq!(immigration, 1, "Should recruit 1 immigrant");
+        assert_eq!(
+            nation.labor.untrained, 1,
+            "Should have 1 untrained worker after immigration"
+        );
+    }
+
+    #[test]
+    fn starvation_insufficient_food_kills_workers() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.labor.untrained = 8;
+        // Give only 3 food, need 8, deficit = 5, capped at 2 deaths
+        nation.add_resource(ResourceType::Grain, 3);
+
+        let report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(
+            nation.labor.total_workers(),
+            6,
+            "Should lose 2 workers (capped)"
+        );
+
+        let starved: u32 = report
+            .starvation
+            .iter()
+            .filter(|(nid, _)| *nid == NationId(1))
+            .map(|(_, q)| *q)
+            .sum();
+        assert_eq!(starved, 2, "Should report 2 workers lost to starvation");
+    }
+
+    // ── Combat tests ───────────────────────────────────────────
+
+    #[test]
+    fn fort_defense_bonus_applies_correctly() {
+        use crate::military::combat::fort_defense_bonus;
+
+        assert_eq!(fort_defense_bonus(0), 0.0);
+        assert!((fort_defense_bonus(1) - 0.20).abs() < f64::EPSILON);
+        assert!((fort_defense_bonus(2) - 0.40).abs() < f64::EPSILON);
+        assert!((fort_defense_bonus(3) - 0.60).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn medal_boosted_unit_has_higher_firepower() {
+        use crate::map::UnitId;
+        use crate::military::units::{ArmyUnit, ArmyUnitType};
+
+        let base_unit = ArmyUnit::new(
+            UnitId(1),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(1),
+        );
+        let base_fp = base_unit.effective_firepower();
+
+        let mut medal_unit = ArmyUnit::new(
+            UnitId(2),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(1),
+        );
+        medal_unit.award_medal();
+        medal_unit.award_medal();
+        let medal_fp = medal_unit.effective_firepower();
+
+        // 2 medals = 1.0 + 2*0.25 = 1.5x multiplier
+        assert!(
+            medal_fp > base_fp,
+            "Medal unit firepower ({}) should exceed base ({})",
+            medal_fp,
+            base_fp
+        );
+        assert!(
+            (medal_fp - base_fp * 1.5).abs() < f64::EPSILON,
+            "2 medals should give 1.5x firepower"
+        );
+    }
+
+    #[test]
+    fn garrison_created_correctly_for_gp_and_mn() {
+        use crate::military::combat::create_garrison;
+
+        let gp_garrison = create_garrison(NationType::GreatPower);
+        assert_eq!(
+            gp_garrison.len(),
+            4,
+            "Great Power garrison should have 4 units"
+        );
+
+        let mn_garrison = create_garrison(NationType::MinorNation);
+        assert_eq!(
+            mn_garrison.len(),
+            3,
+            "Minor Nation garrison should have 3 units"
+        );
+    }
+
+    #[test]
+    fn town_production_wool_produces_fabric() {
+        // Village with 4 FertileHills tiles (Wool): each yields 1 wool = 4 total
+        // 4 wool / 2 = 2 fabric
+        // 2 fabric / 2 = 1 clothing
+        let mut game = test_game_state_with_village(&[TerrainType::FertileHills; 4]);
+
+        let _report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(
+            nation.material_amount(MaterialType::Fabric),
+            2,
+            "Village should produce 2 fabric from 4 wool"
+        );
+        assert_eq!(
+            nation.goods_amount(GoodsType::Clothing),
+            1,
+            "Village should produce 1 clothing from 2 fabric"
+        );
+    }
+
+    #[test]
+    fn town_production_mixed_cotton_and_wool() {
+        // Village with 2 Plantation (Cotton) + 2 FertileHills (Wool) tiles
+        // total cotton+wool = 4 → 2 fabric → 1 clothing
+        let mut game = test_game_state_with_village(&[
+            TerrainType::Plantation,
+            TerrainType::Plantation,
+            TerrainType::FertileHills,
+            TerrainType::FertileHills,
+        ]);
+
+        let _report = process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(
+            nation.material_amount(MaterialType::Fabric),
+            2,
+            "Village should produce 2 fabric from 2 cotton + 2 wool"
+        );
     }
 }

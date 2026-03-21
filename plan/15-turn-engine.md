@@ -53,7 +53,7 @@ simultaneously.
   4. [x] **Immigration resolves** — new workers arrive if canned food + clothing + furniture available
   5. [ ] **Technology resolves** — newly purchased techs take effect; new techs become available
   6. [x] **Trade resolves** — offers/bids matched, transactions executed, revenue generated
-  7. [ ] **Diplomacy resolves** — treaties accepted/rejected, relationship scores updated
+  7. [x] **Diplomacy resolves** — treaties accepted/rejected, relationship scores updated
   8. [ ] **Military movement resolves** — units move to ordered destinations
   9. [x] **Combat resolves** — battles fought in provinces with opposing forces
   10. [x] **Naval combat resolves** — naval battles in contested sea zones

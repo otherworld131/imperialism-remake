@@ -67,12 +67,12 @@ and factory capacity.
 - [ ] Unit tests for port placement validation
 
 ### Infrastructure — Forts
-- [ ] Forts provide defensive bonuses in combat
-- [ ] Three levels:
-  - [ ] Level 1: $5,000 (available from start)
-  - [ ] Level 2: $7,500 (requires Bessemer Converter tech)
-  - [ ] Level 3: $10,000 (requires Large Artillery tech)
-- [ ] Built by Engineer, takes 3 turns per level
+- [x] Forts provide defensive bonuses in combat
+- [x] Three levels:
+  - [x] Level 1: $5,000 (available from start)
+  - [x] Level 2: $7,500 (requires Bessemer Converter tech)
+  - [x] Level 3: $10,000 (requires Large Artillery tech)
+- [x] Built by Engineer, takes 3 turns per level
 - [ ] Forts affect tactical battle maps — walls, defensive positions
 - [ ] Sappers can tunnel to destroy fort sections
 - [ ] Heavy artillery can also destroy fort sections
