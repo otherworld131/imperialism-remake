@@ -29,6 +29,21 @@ pub fn list_scenarios() -> Vec<ScenarioInfo> {
             ],
         },
         ScenarioInfo {
+            id: "1820",
+            name: "Concert of Europe",
+            year: 1820,
+            description: "The Concert of Europe maintains a fragile balance of power.",
+            great_powers: vec![
+                "Britain",
+                "France",
+                "Prussia",
+                "Austria",
+                "Russia",
+                "Spain",
+                "Ottoman Empire",
+            ],
+        },
+        ScenarioInfo {
             id: "1848",
             name: "Year of Revolutions",
             year: 1848,
@@ -92,6 +107,20 @@ pub fn new_scenario_game(
         }
     }
 
+    // For 1820, pre-research the first 2 free techs (High Pressure Steam Engine, Seed Drill)
+    if scenario.year >= 1820 && scenario.year < 1848 {
+        let free_techs = vec![crate::events::TechId(1), crate::events::TechId(2)];
+        for nation in &mut game.nations {
+            if nation.is_great_power() {
+                for tech_id in &free_techs {
+                    if !nation.has_researched(*tech_id) {
+                        nation.research_tech(*tech_id);
+                    }
+                }
+            }
+        }
+    }
+
     // For 1848+, pre-research some early techs for all nations
     if scenario.year >= 1848 {
         let early_techs: Vec<crate::events::TechId> = game
@@ -120,16 +149,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scenario_list_returns_3_scenarios() {
+    fn scenario_list_returns_4_scenarios() {
         let scenarios = list_scenarios();
-        assert_eq!(scenarios.len(), 3);
+        assert_eq!(scenarios.len(), 4);
     }
 
     #[test]
     fn scenario_ids_are_unique() {
         let scenarios = list_scenarios();
         let ids: Vec<&str> = scenarios.iter().map(|s| s.id).collect();
-        assert_eq!(ids, vec!["1815", "1848", "1882"]);
+        assert_eq!(ids, vec!["1815", "1820", "1848", "1882"]);
     }
 
     #[test]
@@ -237,6 +266,55 @@ mod tests {
             assert!(
                 nation.has_researched(crate::events::TechId(3)),
                 "{} should have researched Cotton Gin",
+                nation.name
+            );
+        }
+    }
+
+    #[test]
+    fn scenario_game_starts_at_correct_year_1820() {
+        let game = new_scenario_game("1820", Difficulty::Normal, 0).unwrap();
+        assert_eq!(game.turn.year(), 1820);
+        assert_eq!(game.turn.quarter(), 1);
+    }
+
+    #[test]
+    fn scenario_game_has_correct_nation_names_1820() {
+        let game = new_scenario_game("1820", Difficulty::Normal, 0).unwrap();
+        let gp_names: Vec<String> = game.great_powers().iter().map(|n| n.name.clone()).collect();
+        assert_eq!(
+            gp_names,
+            vec![
+                "Britain",
+                "France",
+                "Prussia",
+                "Austria",
+                "Russia",
+                "Spain",
+                "Ottoman Empire"
+            ]
+        );
+    }
+
+    #[test]
+    fn scenario_1820_pre_researches_first_two_free_techs() {
+        let game = new_scenario_game("1820", Difficulty::Normal, 0).unwrap();
+        for nation in game.great_powers() {
+            assert!(
+                nation.has_researched(crate::events::TechId(1)),
+                "{} should have researched High Pressure Steam Engine in 1820 scenario",
+                nation.name
+            );
+            assert!(
+                nation.has_researched(crate::events::TechId(2)),
+                "{} should have researched Seed Drill in 1820 scenario",
+                nation.name
+            );
+            // Should NOT have researched later techs
+            assert_eq!(
+                nation.researched_techs.len(),
+                2,
+                "{} should have exactly 2 pre-researched techs in 1820 scenario",
                 nation.name
             );
         }

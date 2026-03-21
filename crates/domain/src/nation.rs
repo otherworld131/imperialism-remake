@@ -85,6 +85,16 @@ pub struct Nation {
     /// Trade history: records of past trade transactions for player reference.
     #[serde(default)]
     pub trade_history: Vec<crate::economy::trade::TradeHistoryEntry>,
+    /// Bonus capitol capacity earned from conquering Great Power capitals.
+    /// Each +1 improves worker recruitment rate (1 per 3 provinces instead of 4).
+    #[serde(default)]
+    pub capitol_bonus_capacity: u32,
+    /// Total arms built across all army units (tracked for General rewards).
+    #[serde(default)]
+    pub total_arms_built: u32,
+    /// Number of Generals already earned (tracks reward thresholds).
+    #[serde(default)]
+    pub generals_earned: u32,
 }
 
 impl Nation {
@@ -118,6 +128,9 @@ impl Nation {
             ai_personality: None,
             trade_subsidies: HashMap::new(),
             trade_history: Vec::new(),
+            capitol_bonus_capacity: 0,
+            total_arms_built: 0,
+            generals_earned: 0,
         }
     }
 

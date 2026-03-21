@@ -240,6 +240,14 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         );
         nation.merchant_fleet.push(trader);
 
+        // Starting warship: 1 Frigate for each Great Power
+        let frigate = Ship::new(
+            UnitId(2_500_000 + i as u32),
+            ShipType::Frigate,
+            setup.nation_id,
+        );
+        nation.warships.push(frigate);
+
         // Assign AI personality for non-human Great Powers
         if i != human_nation_index.min(generated.great_power_nations.len() - 1) {
             nation.ai_personality = Some(personality_for_nation_index(i));

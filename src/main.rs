@@ -113,6 +113,11 @@ fn main() {
     print_legend();
     println!();
 
+    // Nation selection hints
+    println!("  Tip: Circular nations allow faster railroad expansion.");
+    println!("  Tip: Nations with 2+ Minor Nation neighbors enable easier trade.");
+    println!();
+
     // ── Interactive game loop ────────────────────────────────────
     loop {
         print_prompt(&game);

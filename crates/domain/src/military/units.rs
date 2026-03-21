@@ -38,6 +38,7 @@ pub enum ArmyUnitType {
     MobileArtillery,
     // Special
     Sapper,
+    General, // earned as reward, boosts initiative
 }
 
 #[derive(Debug, Clone)]
@@ -308,6 +309,17 @@ impl ArmyUnitType {
                 maintenance_per_turn: Money::dollars(25),
                 prerequisite_tech: Some("Engineering".to_string()),
             },
+            ArmyUnitType::General => UnitStats {
+                firepower: 0,
+                movement: 8,
+                range: 0,
+                cost: Money::dollars(0),
+                arms_required: 0,
+                requires_horse: false,
+                category: UnitCategory::Special,
+                maintenance_per_turn: Money::dollars(0),
+                prerequisite_tech: None,
+            },
         }
     }
 
@@ -319,6 +331,12 @@ impl ArmyUnitType {
     /// Returns whether this unit type can move. Militia (garrison) cannot.
     pub fn can_move(&self) -> bool {
         !matches!(self, ArmyUnitType::Militia)
+    }
+
+    /// Returns whether this unit type can be manually built by the player.
+    /// Generals cannot be built — they are earned as rewards.
+    pub fn can_build(&self) -> bool {
+        !matches!(self, ArmyUnitType::General)
     }
 
     /// Returns the tech tree name required to build/unlock this unit type, if any.
@@ -352,6 +370,7 @@ impl ArmyUnitType {
             Self::MobileArtillery => Some("Internal Combustion"),
             // Special
             Self::Sapper => Some("Bessemer Converter"),
+            Self::General => None, // earned, not built
         }
     }
 
@@ -944,5 +963,86 @@ mod tests {
         let target = ArmyUnitType::Regulars.upgrade_to().unwrap();
         assert_eq!(target, ArmyUnitType::RifleInfantry);
         assert_eq!(target.required_tech(), Some("Breech-Loading Rifles"));
+    }
+
+    // ── General unit type ─────────────────────────────────────────
+
+    #[test]
+    fn general_stats() {
+        let stats = ArmyUnitType::General.stats();
+        assert_eq!(stats.firepower, 0);
+        assert_eq!(stats.movement, 8);
+        assert_eq!(stats.range, 0);
+        assert_eq!(stats.cost, Money::dollars(0));
+        assert_eq!(stats.arms_required, 0);
+        assert!(!stats.requires_horse);
+        assert_eq!(stats.category, UnitCategory::Special);
+        assert_eq!(stats.maintenance_per_turn, Money::dollars(0));
+        assert!(stats.prerequisite_tech.is_none());
+    }
+
+    #[test]
+    fn general_is_special_category() {
+        assert_eq!(ArmyUnitType::General.category(), UnitCategory::Special);
+    }
+
+    #[test]
+    fn general_can_move() {
+        assert!(ArmyUnitType::General.can_move());
+    }
+
+    #[test]
+    fn general_cannot_be_built() {
+        assert!(!ArmyUnitType::General.can_build());
+    }
+
+    #[test]
+    fn general_has_no_required_tech() {
+        assert!(ArmyUnitType::General.required_tech().is_none());
+    }
+
+    #[test]
+    fn general_has_no_upgrade() {
+        assert_eq!(ArmyUnitType::General.upgrade_to(), None);
+    }
+
+    #[test]
+    fn general_zero_maintenance() {
+        let unit = ArmyUnit::new(
+            UnitId(99),
+            ArmyUnitType::General,
+            NationId(1),
+            ProvinceId(1),
+        );
+        assert_eq!(unit.maintenance_cost(), Money::dollars(0));
+    }
+
+    #[test]
+    fn general_zero_effective_firepower() {
+        let unit = ArmyUnit::new(
+            UnitId(99),
+            ArmyUnitType::General,
+            NationId(1),
+            ProvinceId(1),
+        );
+        assert!((unit.effective_firepower() - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn general_movement_is_8() {
+        let unit = ArmyUnit::new(
+            UnitId(99),
+            ArmyUnitType::General,
+            NationId(1),
+            ProvinceId(1),
+        );
+        assert_eq!(unit.movement_remaining, 8);
+    }
+
+    #[test]
+    fn other_units_can_be_built() {
+        assert!(ArmyUnitType::Regulars.can_build());
+        assert!(ArmyUnitType::Sapper.can_build());
+        assert!(ArmyUnitType::Militia.can_build());
     }
 }

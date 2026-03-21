@@ -64,6 +64,8 @@ pub struct TurnReport {
     pub trade_diplomacy: Vec<(NationId, NationId, i32)>,
     /// Resources lost because the producing province was disconnected from the capital.
     pub disconnected_resources: Vec<(NationId, ResourceType, u32)>,
+    /// Rewards earned this turn: (nation_id, description).
+    pub rewards_earned: Vec<(NationId, String)>,
 }
 
 impl TurnReport {
@@ -155,6 +157,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         subsidy_costs: Vec::new(),
         trade_diplomacy: Vec::new(),
         disconnected_resources: Vec::new(),
+        rewards_earned: Vec::new(),
     };
 
     // 0. AI decisions for computer-controlled Great Powers
@@ -217,6 +220,9 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
 
     // 7c. Apply blockade effects (reduce trade cargo for blockaded nations)
     apply_blockade_effects(game, &mut report);
+
+    // 7d. Resolve rewards (Generals earned, capitol expansion)
+    resolve_rewards(game, &mut report);
 
     // 8. Report available techs
     report_available_techs(game, &mut report);
@@ -2340,6 +2346,111 @@ fn resolve_unit_upgrades(game: &mut GameState, report: &mut TurnReport) {
                 from_type: format!("{:?}", from_type),
                 to_type: format!("{:?}", to_type),
             }));
+        }
+    }
+}
+
+/// Resolve rewards: Generals earned from arms buildup, capitol expansion from GP capital conquest.
+fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
+    use crate::map::UnitId;
+
+    let nation_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+
+    for nation_id in &nation_ids {
+        let nation = match game.nations.iter().find(|n| n.id == *nation_id) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        // Calculate total arms built (sum of arms_required for all army units)
+        let total_arms: u32 = nation
+            .army
+            .iter()
+            .map(|u| u.unit_type.stats().arms_required)
+            .sum();
+
+        // Update the tracked total
+        let current_total = total_arms.max(nation.total_arms_built);
+
+        // General thresholds: 6, 12, 20, 30, ...
+        // The nth general is earned at: 6, 12, 20, 30 (6 + 6 + 8 + 10...)
+        // Simplified: thresholds are 6, 12, 20, 30, 42, 56, ...
+        let general_thresholds = [6u32, 12, 20, 30, 42, 56, 72, 90];
+        let generals_earned_now = nation.generals_earned;
+
+        let mut new_generals = 0u32;
+        for (i, threshold) in general_thresholds.iter().enumerate() {
+            if i as u32 >= generals_earned_now && current_total >= *threshold {
+                new_generals += 1;
+            }
+        }
+
+        if new_generals > 0 || current_total != nation.total_arms_built {
+            let nation = match game.nations.iter_mut().find(|n| n.id == *nation_id) {
+                Some(n) => n,
+                None => continue,
+            };
+            nation.total_arms_built = current_total;
+
+            for _ in 0..new_generals {
+                nation.generals_earned += 1;
+                let gen_id = UnitId(3_000_000 + nation.id.0 * 100 + nation.generals_earned);
+                let general_unit = ArmyUnit::new(
+                    gen_id,
+                    ArmyUnitType::General,
+                    *nation_id,
+                    nation.capital_province_id,
+                );
+                nation.army.push(general_unit);
+
+                let nation_name = nation.name.clone();
+                report
+                    .rewards_earned
+                    .push((*nation_id, format!("{} has earned a General!", nation_name)));
+                report
+                    .newspaper_headlines
+                    .push(format!("{} has earned a General!", nation_name));
+            }
+        }
+    }
+
+    // Capitol expansion: check if any GP conquered another GP's capital this turn
+    // We detect this by checking battles where the attacker won and the province
+    // was a capital of a Great Power.
+    let battle_results: Vec<(NationId, ProvinceId)> = report
+        .battles
+        .iter()
+        .filter(|b| b.attacker_won)
+        .map(|b| (b.attacker, b.province))
+        .collect();
+
+    for (attacker_id, province_id) in battle_results {
+        // Check if this province is a capital of any Great Power
+        let is_gp_capital = game.nations.iter().any(|n| {
+            n.is_great_power() && n.capital_province_id == province_id && n.id != attacker_id
+        });
+
+        if is_gp_capital
+            && let Some(attacker) = game.nations.iter_mut().find(|n| n.id == attacker_id)
+        {
+            attacker.capitol_bonus_capacity += 1;
+            let attacker_name = attacker.name.clone();
+            report.rewards_earned.push((
+                attacker_id,
+                format!(
+                    "{}'s capitol building has expanded from conquering a Great Power's capital!",
+                    attacker_name
+                ),
+            ));
+            report.newspaper_headlines.push(format!(
+                "{}'s capitol building has expanded!",
+                attacker_name
+            ));
         }
     }
 }
@@ -4699,6 +4810,7 @@ mod tests {
             subsidy_costs: Vec::new(),
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
+            rewards_earned: Vec::new(),
         };
 
         resolve_voluntary_incorporations(&mut game, &mut report);
@@ -4764,6 +4876,7 @@ mod tests {
             subsidy_costs: Vec::new(),
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
+            rewards_earned: Vec::new(),
         };
 
         resolve_voluntary_incorporations(&mut game, &mut report);
@@ -4838,6 +4951,7 @@ mod tests {
             subsidy_costs: Vec::new(),
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
+            rewards_earned: Vec::new(),
         };
 
         resolve_unit_upgrades(&mut game, &mut report);
@@ -4906,6 +5020,7 @@ mod tests {
             subsidy_costs: Vec::new(),
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
+            rewards_earned: Vec::new(),
         };
 
         resolve_unit_upgrades(&mut game, &mut report);
@@ -5048,6 +5163,7 @@ mod tests {
             subsidy_costs: Vec::new(),
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
+            rewards_earned: Vec::new(),
         };
 
         trigger_pact_defense(&mut game, NationId(3), NationId(2), &mut report);
@@ -5160,6 +5276,7 @@ mod tests {
             subsidy_costs: Vec::new(),
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
+            rewards_earned: Vec::new(),
         };
 
         // GP defender - should not trigger pact defense
@@ -5808,6 +5925,7 @@ mod tests {
             subsidy_costs: Vec::new(),
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
+            rewards_earned: Vec::new(),
         };
 
         collect_resources(&mut game, &mut report);
@@ -5917,6 +6035,7 @@ mod tests {
             subsidy_costs: Vec::new(),
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
+            rewards_earned: Vec::new(),
         };
 
         collect_resources(&mut game, &mut report);
