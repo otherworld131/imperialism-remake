@@ -329,6 +329,9 @@ mod tests {
         let human_id = game.human_player_nation;
         let nation = game.get_nation_mut(human_id).unwrap();
 
+        // Clear any starting warehouse contents to get a clean baseline
+        nation.warehouse.clear();
+
         // Give the nation some freight cars and resources
         nation.transport.build_freight_cars(10);
         nation.add_resource(ResourceType::Timber, 3);

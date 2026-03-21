@@ -3,8 +3,8 @@ pub mod naval;
 pub mod ships;
 pub mod units;
 pub use combat::{
-    BattleResult, CombatForce, create_garrison, effective_fort_bonus, fort_defense_bonus,
-    resolve_battle, terrain_defense_bonus,
+    BattleResult, CombatForce, TargetingPriority, create_garrison, effective_fort_bonus,
+    fort_defense_bonus, resolve_battle, resolve_battle_with_targeting, terrain_defense_bonus,
 };
 pub use naval::{
     NavalBattleResult, NavalOperation, ReconResult, beachhead_force_size, blockade_with_escorts,

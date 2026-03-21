@@ -63,6 +63,14 @@ fn main() {
                 println!("    {} — {} ({})", s.id, s.name, s.year);
                 println!("      {}", s.description);
                 println!("      Powers: {}", s.great_powers.join(", "));
+                if !s.difficulty_ratings.is_empty() {
+                    let ratings: Vec<String> = s
+                        .difficulty_ratings
+                        .iter()
+                        .map(|(nation, rating)| format!("{}: {}", nation, rating))
+                        .collect();
+                    println!("      Ratings: {}", ratings.join(", "));
+                }
             }
             std::process::exit(0);
         });
@@ -191,6 +199,14 @@ fn main() {
                     println!("    {} — {} ({})", s.id, s.name, s.year);
                     println!("      {}", s.description);
                     println!("      Powers: {}", s.great_powers.join(", "));
+                    if !s.difficulty_ratings.is_empty() {
+                        let ratings: Vec<String> = s
+                            .difficulty_ratings
+                            .iter()
+                            .map(|(nation, rating)| format!("{}: {}", nation, rating))
+                            .collect();
+                        println!("      Ratings: {}", ratings.join(", "));
+                    }
                 }
             }
             "b" | "buildings" => {

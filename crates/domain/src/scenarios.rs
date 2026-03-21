@@ -8,6 +8,36 @@ pub struct ScenarioInfo {
     pub year: u32,
     pub description: &'static str,
     pub great_powers: Vec<&'static str>,
+    /// Per-nation difficulty ratings: (nation_name, rating).
+    pub difficulty_ratings: Vec<(&'static str, &'static str)>,
+}
+
+/// Validate a ScenarioInfo has all required fields.
+pub fn validate_scenario(scenario: &ScenarioInfo) -> Result<(), Vec<String>> {
+    let mut errors = Vec::new();
+    if scenario.id.is_empty() {
+        errors.push("Missing id".into());
+    }
+    if scenario.name.is_empty() {
+        errors.push("Missing name".into());
+    }
+    if scenario.year < 1815 || scenario.year > 1915 {
+        errors.push(format!("Invalid year: {}", scenario.year));
+    }
+    if scenario.description.is_empty() {
+        errors.push("Missing description".into());
+    }
+    if scenario.great_powers.len() != 7 {
+        errors.push(format!(
+            "Expected 7 great powers, got {}",
+            scenario.great_powers.len()
+        ));
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 /// List available scenarios.
@@ -27,6 +57,15 @@ pub fn list_scenarios() -> Vec<ScenarioInfo> {
                 "Spain",
                 "Netherlands",
             ],
+            difficulty_ratings: vec![
+                ("Britain", "Easy"),
+                ("France", "Normal"),
+                ("Prussia", "Normal"),
+                ("Austria", "Normal"),
+                ("Russia", "Hard"),
+                ("Spain", "Hard"),
+                ("Netherlands", "Hard"),
+            ],
         },
         ScenarioInfo {
             id: "1820",
@@ -41,6 +80,15 @@ pub fn list_scenarios() -> Vec<ScenarioInfo> {
                 "Russia",
                 "Spain",
                 "Ottoman Empire",
+            ],
+            difficulty_ratings: vec![
+                ("Britain", "Easy"),
+                ("France", "Normal"),
+                ("Prussia", "Normal"),
+                ("Austria", "Normal"),
+                ("Russia", "Normal"),
+                ("Spain", "Hard"),
+                ("Ottoman Empire", "Hard"),
             ],
         },
         ScenarioInfo {
@@ -57,6 +105,15 @@ pub fn list_scenarios() -> Vec<ScenarioInfo> {
                 "Sardinia",
                 "Ottoman Empire",
             ],
+            difficulty_ratings: vec![
+                ("Britain", "Easy"),
+                ("France", "Normal"),
+                ("Prussia", "Normal"),
+                ("Austria", "Hard"),
+                ("Russia", "Normal"),
+                ("Sardinia", "Hard"),
+                ("Ottoman Empire", "Hard"),
+            ],
         },
         ScenarioInfo {
             id: "1882",
@@ -71,6 +128,15 @@ pub fn list_scenarios() -> Vec<ScenarioInfo> {
                 "Russia",
                 "Ottoman Empire",
                 "Austria-Hungary",
+            ],
+            difficulty_ratings: vec![
+                ("Britain", "Easy"),
+                ("France", "Normal"),
+                ("Germany", "Normal"),
+                ("Italy", "Hard"),
+                ("Russia", "Normal"),
+                ("Ottoman Empire", "Hard"),
+                ("Austria-Hungary", "Normal"),
             ],
         },
     ]
@@ -361,5 +427,38 @@ mod tests {
         // The third Great Power should be the human player
         let gps = game.great_powers();
         assert_eq!(game.human_player_nation, gps[2].id);
+    }
+
+    #[test]
+    fn all_scenarios_pass_validation() {
+        for scenario in list_scenarios() {
+            let result = validate_scenario(&scenario);
+            assert!(
+                result.is_ok(),
+                "Scenario '{}' failed validation: {:?}",
+                scenario.id,
+                result.err()
+            );
+        }
+    }
+
+    #[test]
+    fn scenario_difficulty_ratings_match_great_powers() {
+        for scenario in list_scenarios() {
+            assert_eq!(
+                scenario.difficulty_ratings.len(),
+                scenario.great_powers.len(),
+                "Scenario '{}' should have one difficulty rating per great power",
+                scenario.id
+            );
+            for (nation, _rating) in &scenario.difficulty_ratings {
+                assert!(
+                    scenario.great_powers.contains(nation),
+                    "Scenario '{}' has rating for '{}' which is not a great power",
+                    scenario.id,
+                    nation
+                );
+            }
+        }
     }
 }

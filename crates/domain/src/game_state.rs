@@ -211,6 +211,27 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
                 .push(Building::new(BuildingType::ClothingFactory, 1));
         }
 
+        // Starting warehouse contents based on difficulty
+        match difficulty {
+            Difficulty::Introductory | Difficulty::Easy => {
+                nation.add_resource(ResourceType::Timber, 10);
+                nation.add_resource(ResourceType::Coal, 5);
+                nation.add_resource(ResourceType::Iron, 5);
+                nation.add_resource(ResourceType::Cotton, 5);
+                nation.add_resource(ResourceType::Grain, 10);
+                nation.add_resource(ResourceType::Fruit, 5);
+            }
+            Difficulty::Normal => {
+                nation.add_resource(ResourceType::Timber, 5);
+                nation.add_resource(ResourceType::Coal, 2);
+                nation.add_resource(ResourceType::Iron, 2);
+                nation.add_resource(ResourceType::Grain, 5);
+            }
+            Difficulty::Hard | Difficulty::NighOnImpossible => {
+                // Empty warehouse — no starting resources
+            }
+        }
+
         // Starting workers based on difficulty
         match difficulty {
             Difficulty::Introductory | Difficulty::Easy => {
@@ -296,7 +317,7 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         .collect();
     diplomacy.initialize_great_powers(&gp_ids);
 
-    GameState {
+    let mut game_state = GameState {
         turn: TurnNumber::new(1),
         difficulty,
         map_key: map_key.to_string(),
@@ -311,7 +332,45 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         pending_moves: Vec::new(),
         history: Vec::new(),
         high_scores: Vec::new(),
+    };
+
+    // On Easy/Introductory, auto-prospect tiles in the human player's capital province
+    // to reveal any existing mineral deposits, giving the player a head start.
+    if matches!(difficulty, Difficulty::Easy | Difficulty::Introductory) {
+        // Find the human player's capital province
+        let capital_province_id = game_state
+            .get_nation(human_nation_id)
+            .map(|n| n.capital_province_id);
+
+        if let Some(cap_pid) = capital_province_id {
+            // Get the tiles in the capital province
+            let capital_tiles: Vec<crate::hex::HexCoord> = game_state
+                .get_province(cap_pid)
+                .map(|p| p.tiles.clone())
+                .unwrap_or_default();
+
+            for tile_coord in &capital_tiles {
+                if let Some(tile) = game_state.hex_map.get_tile_mut(*tile_coord) {
+                    // Only auto-reveal on tiles that require prospecting and already
+                    // have a deposit placed by the map generator. We don't fabricate
+                    // deposits — we just reveal what the generator already placed.
+                    // The generator sets resource_deposit on ~40% of prospectable tiles,
+                    // so the tile may already have a deposit. We mark it as "prospected"
+                    // by bumping improvement_level if it has a deposit.
+                    if tile.terrain().requires_prospecting() && tile.resource_deposit().is_some() {
+                        // Already revealed by generator — ensure it stays visible.
+                        // The deposit is already set, so it's effectively auto-prospected.
+                        // We bump improvement to 1 to signal it's been prospected.
+                        if tile.improvement_level() == 0 {
+                            tile.improve();
+                        }
+                    }
+                }
+            }
+        }
     }
+
+    game_state
 }
 
 #[cfg(test)]
@@ -926,5 +985,116 @@ mod tests {
         assert_eq!(gs.high_scores.len(), 1);
         assert_eq!(gs.high_scores[0].0, "France");
         assert_eq!(gs.high_scores[0].2, "1915 Q1");
+    }
+
+    // ── Starting warehouse by difficulty ──────────────────────────
+
+    #[test]
+    fn new_game_easy_has_starting_warehouse() {
+        let gs = new_game("test", Difficulty::Easy, 0);
+        let human = gs.get_nation(gs.human_player_nation).unwrap();
+        assert_eq!(human.resource_amount(ResourceType::Timber), 10);
+        assert_eq!(human.resource_amount(ResourceType::Coal), 5);
+        assert_eq!(human.resource_amount(ResourceType::Iron), 5);
+        assert_eq!(human.resource_amount(ResourceType::Cotton), 5);
+        assert_eq!(human.resource_amount(ResourceType::Grain), 10);
+        assert_eq!(human.resource_amount(ResourceType::Fruit), 5);
+    }
+
+    #[test]
+    fn new_game_introductory_has_starting_warehouse() {
+        let gs = new_game("test", Difficulty::Introductory, 0);
+        let human = gs.get_nation(gs.human_player_nation).unwrap();
+        assert_eq!(human.resource_amount(ResourceType::Timber), 10);
+        assert_eq!(human.resource_amount(ResourceType::Coal), 5);
+        assert_eq!(human.resource_amount(ResourceType::Iron), 5);
+        assert_eq!(human.resource_amount(ResourceType::Cotton), 5);
+        assert_eq!(human.resource_amount(ResourceType::Grain), 10);
+        assert_eq!(human.resource_amount(ResourceType::Fruit), 5);
+    }
+
+    #[test]
+    fn new_game_normal_has_smaller_starting_warehouse() {
+        let gs = new_game("test", Difficulty::Normal, 0);
+        let human = gs.get_nation(gs.human_player_nation).unwrap();
+        assert_eq!(human.resource_amount(ResourceType::Timber), 5);
+        assert_eq!(human.resource_amount(ResourceType::Coal), 2);
+        assert_eq!(human.resource_amount(ResourceType::Iron), 2);
+        assert_eq!(human.resource_amount(ResourceType::Grain), 5);
+        // No cotton or fruit on Normal
+        assert_eq!(human.resource_amount(ResourceType::Cotton), 0);
+        assert_eq!(human.resource_amount(ResourceType::Fruit), 0);
+    }
+
+    #[test]
+    fn new_game_hard_has_empty_warehouse() {
+        let gs = new_game("test", Difficulty::Hard, 0);
+        let human = gs.get_nation(gs.human_player_nation).unwrap();
+        assert_eq!(human.resource_amount(ResourceType::Timber), 0);
+        assert_eq!(human.resource_amount(ResourceType::Coal), 0);
+        assert_eq!(human.resource_amount(ResourceType::Iron), 0);
+        assert_eq!(human.resource_amount(ResourceType::Cotton), 0);
+        assert_eq!(human.resource_amount(ResourceType::Grain), 0);
+        assert_eq!(human.resource_amount(ResourceType::Fruit), 0);
+    }
+
+    #[test]
+    fn new_game_noi_has_empty_warehouse() {
+        let gs = new_game("test", Difficulty::NighOnImpossible, 0);
+        let human = gs.get_nation(gs.human_player_nation).unwrap();
+        assert_eq!(human.resource_amount(ResourceType::Timber), 0);
+        assert_eq!(human.resource_amount(ResourceType::Coal), 0);
+        assert_eq!(human.resource_amount(ResourceType::Iron), 0);
+        assert_eq!(human.resource_amount(ResourceType::Grain), 0);
+    }
+
+    // ── Auto-prospecting on Easy/Introductory ─────────────────────
+
+    #[test]
+    fn new_game_easy_auto_prospects_capital_province() {
+        let gs = new_game("auto_prospect_test", Difficulty::Easy, 0);
+        let human = gs.get_nation(gs.human_player_nation).unwrap();
+        let capital_pid = human.capital_province_id;
+        let province = gs.get_province(capital_pid).unwrap();
+
+        // Check that any tiles with deposits in the capital province
+        // have improvement_level >= 1 (meaning they were auto-prospected).
+        for tile_coord in &province.tiles {
+            if let Some(tile) = gs.hex_map.get_tile(*tile_coord)
+                && tile.terrain().requires_prospecting()
+                && tile.resource_deposit().is_some()
+            {
+                assert!(
+                    tile.improvement_level() >= 1,
+                    "Tile at ({},{}) in capital province should be auto-prospected on Easy",
+                    tile_coord.q,
+                    tile_coord.r
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn new_game_hard_does_not_auto_prospect() {
+        let gs = new_game("no_prospect_test", Difficulty::Hard, 0);
+        let human = gs.get_nation(gs.human_player_nation).unwrap();
+        let capital_pid = human.capital_province_id;
+        let province = gs.get_province(capital_pid).unwrap();
+
+        // On Hard, tiles with deposits should NOT be auto-prospected
+        // (improvement_level should still be 0 for prospectable terrain).
+        for tile_coord in &province.tiles {
+            if let Some(tile) = gs.hex_map.get_tile(*tile_coord)
+                && tile.terrain().requires_prospecting()
+            {
+                assert_eq!(
+                    tile.improvement_level(),
+                    0,
+                    "Tile at ({},{}) should NOT be auto-prospected on Hard",
+                    tile_coord.q,
+                    tile_coord.r
+                );
+            }
+        }
     }
 }

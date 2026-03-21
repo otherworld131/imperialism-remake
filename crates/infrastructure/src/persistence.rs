@@ -295,13 +295,14 @@ mod tests {
 
         assert_eq!(loaded.turn, game.turn);
         let loaded_player = loaded.get_nation(player_id).unwrap();
+        // Easy difficulty starts with 10 timber + 5 coal, plus the 15 + 8 added above
         assert_eq!(
             loaded_player.resource_amount(domain::types::ResourceType::Timber),
-            15
+            25
         );
         assert_eq!(
             loaded_player.resource_amount(domain::types::ResourceType::Coal),
-            8
+            13
         );
         assert_eq!(loaded_player.treasury, domain::types::Money::dollars(7500));
 

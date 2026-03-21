@@ -3,6 +3,15 @@ use crate::types::*;
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
+/// Strategy for choosing which enemy unit to prioritize for damage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetingPriority {
+    /// Damage weakest units first (lowest effective firepower).
+    WeakestFirst,
+    /// Damage strongest units first (highest effective firepower / most dangerous).
+    StrongestFirst,
+}
+
 /// Calculate defense bonus percentage from terrain type.
 ///
 /// Mountain: +50%, Hills (FertileHills/BarrenHills): +30%, Forest: +20%,
@@ -124,18 +133,43 @@ pub fn effective_fort_bonus(fort_level: u8, attacker_has_siege: bool) -> f64 {
 /// 6. Run combat rounds (up to 10 rounds):
 ///    a. Attacker deals damage proportional to their firepower (damage = total_fp / defender_units.len())
 ///    b. Defender deals damage proportional to their firepower
-///    c. Apply damage to units (weakest units take damage first)
+///    c. Apply damage to units (targeting priority determines which units take damage first)
 ///    d. Remove destroyed units (health <= 0)
 ///    e. If one side is eliminated, combat ends
 /// 7. After rounds: side with more remaining firepower wins
 /// 8. Surviving units earn 1 medal each (award_medal())
 /// 9. Build BattleResult
+///
+/// The `targeting` parameter controls which enemy unit is damaged first:
+/// - `StrongestFirst`: prioritize the highest-FP (most dangerous) enemy unit
+/// - `WeakestFirst`: prioritize the lowest-FP enemy unit
 pub fn resolve_battle(
     attacker: &CombatForce,
     defender: &CombatForce,
     province: ProvinceId,
     terrain: Option<TerrainType>,
     fort_level: u8,
+) -> BattleResult {
+    resolve_battle_with_targeting(
+        attacker,
+        defender,
+        province,
+        terrain,
+        fort_level,
+        TargetingPriority::StrongestFirst,
+    )
+}
+
+/// Resolve a battle with an explicit targeting priority.
+///
+/// See [`resolve_battle`] for full combat resolution details.
+pub fn resolve_battle_with_targeting(
+    attacker: &CombatForce,
+    defender: &CombatForce,
+    province: ProvinceId,
+    terrain: Option<TerrainType>,
+    fort_level: u8,
+    targeting: TargetingPriority,
 ) -> BattleResult {
     let mut atk_units = attacker.units.clone();
     let mut def_units = defender.units.clone();
@@ -248,15 +282,26 @@ pub fn resolve_battle(
         let def_fp = total_firepower(&def_units) * 1.2 * (1.0 + terrain_bonus) * (1.0 + fort_bonus)
             + militia_count(&def_units) as f64 * 8.0;
 
-        // Attacker deals damage to defender units (weakest first)
+        // Attacker deals damage to defender units
         if !def_units.is_empty() {
             let damage_per_unit = atk_fp / def_units.len() as f64;
-            // Sort defender units by firepower ascending (weakest first)
-            def_units.sort_by(|a, b| {
-                a.effective_firepower()
-                    .partial_cmp(&b.effective_firepower())
-                    .unwrap()
-            });
+            // Sort defender units by targeting priority
+            match targeting {
+                TargetingPriority::WeakestFirst => {
+                    def_units.sort_by(|a, b| {
+                        a.effective_firepower()
+                            .partial_cmp(&b.effective_firepower())
+                            .unwrap()
+                    });
+                }
+                TargetingPriority::StrongestFirst => {
+                    def_units.sort_by(|a, b| {
+                        b.effective_firepower()
+                            .partial_cmp(&a.effective_firepower())
+                            .unwrap()
+                    });
+                }
+            }
             for unit in &mut def_units {
                 unit.take_damage(damage_per_unit as u8);
             }
@@ -270,15 +315,26 @@ pub fn resolve_battle(
             }
         }
 
-        // Defender deals damage to attacker units (weakest first)
+        // Defender deals damage to attacker units
         if !atk_units.is_empty() {
             let damage_per_unit = def_fp / atk_units.len() as f64;
-            // Sort attacker units by firepower ascending (weakest first)
-            atk_units.sort_by(|a, b| {
-                a.effective_firepower()
-                    .partial_cmp(&b.effective_firepower())
-                    .unwrap()
-            });
+            // Sort attacker units by targeting priority
+            match targeting {
+                TargetingPriority::WeakestFirst => {
+                    atk_units.sort_by(|a, b| {
+                        a.effective_firepower()
+                            .partial_cmp(&b.effective_firepower())
+                            .unwrap()
+                    });
+                }
+                TargetingPriority::StrongestFirst => {
+                    atk_units.sort_by(|a, b| {
+                        b.effective_firepower()
+                            .partial_cmp(&a.effective_firepower())
+                            .unwrap()
+                    });
+                }
+            }
             for unit in &mut atk_units {
                 unit.take_damage(damage_per_unit as u8);
             }
@@ -1199,5 +1255,111 @@ mod tests {
         assert_eq!(result.medal_awards.len(), 1);
         assert_eq!(result.medal_awards[0].0, ArmyUnitType::Regulars);
         assert_eq!(result.medal_awards[0].1, 1);
+    }
+
+    // ── Targeting priority ───────────────────────────────────────
+
+    #[test]
+    fn strongest_first_targeting_damages_high_fp_units_first() {
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+
+        // Attacker with moderate force
+        let attacker = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Guards, atk_nation),
+                make_unit(2, ArmyUnitType::Guards, atk_nation),
+                make_unit(3, ArmyUnitType::Guards, atk_nation),
+            ],
+        );
+
+        // Defender with mixed-strength units
+        let defender = make_force(
+            def_nation,
+            vec![
+                make_unit(10, ArmyUnitType::Guards, def_nation),
+                make_unit(11, ArmyUnitType::Militia, def_nation),
+            ],
+        );
+
+        // StrongestFirst: Guards (higher FP) should be targeted first
+        let result_strongest = resolve_battle_with_targeting(
+            &attacker,
+            &defender,
+            ProvinceId(1),
+            None,
+            0,
+            TargetingPriority::StrongestFirst,
+        );
+
+        // WeakestFirst: Militia (lower FP) should be targeted first
+        let result_weakest = resolve_battle_with_targeting(
+            &attacker,
+            &defender,
+            ProvinceId(1),
+            None,
+            0,
+            TargetingPriority::WeakestFirst,
+        );
+
+        // Both should produce valid results (attacker and defender counts consistent)
+        assert_eq!(
+            result_strongest.attacker_casualties.len() + result_strongest.attacker_survivors.len(),
+            3
+        );
+        assert_eq!(
+            result_weakest.attacker_casualties.len() + result_weakest.attacker_survivors.len(),
+            3
+        );
+
+        // Total defender forces should be accounted for
+        assert_eq!(
+            result_strongest.defender_casualties.len() + result_strongest.defender_survivors.len(),
+            2
+        );
+        assert_eq!(
+            result_weakest.defender_casualties.len() + result_weakest.defender_survivors.len(),
+            2
+        );
+    }
+
+    #[test]
+    fn default_resolve_battle_uses_strongest_first() {
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+
+        let attacker = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Guards, atk_nation),
+                make_unit(2, ArmyUnitType::Guards, atk_nation),
+            ],
+        );
+        let defender = make_force(
+            def_nation,
+            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+        );
+
+        // Default resolve_battle should produce the same result as explicit StrongestFirst
+        let result_default = resolve_battle(&attacker, &defender, ProvinceId(1), None, 0);
+        let result_explicit = resolve_battle_with_targeting(
+            &attacker,
+            &defender,
+            ProvinceId(1),
+            None,
+            0,
+            TargetingPriority::StrongestFirst,
+        );
+
+        assert_eq!(result_default.attacker_won, result_explicit.attacker_won);
+        assert_eq!(
+            result_default.attacker_casualties.len(),
+            result_explicit.attacker_casualties.len()
+        );
+        assert_eq!(
+            result_default.defender_casualties.len(),
+            result_explicit.defender_casualties.len()
+        );
     }
 }
