@@ -15,8 +15,8 @@ comprehensive.
 - [ ] Every entity: creation, state transitions, invariant enforcement
 - [ ] Every domain service: correct output for known inputs
 - [ ] Hex coordinate math: 30+ test cases covering all operations
-- [ ] Production chain calculations: all combinations of inputs → outputs
-- [ ] Combat resolution: deterministic outcomes for fixed inputs
+- [x] Production chain calculations: all combinations of inputs → outputs
+- [x] Combat resolution: deterministic outcomes for fixed inputs
 - [ ] Tech tree: prerequisite validation, availability windows, effects
 - [ ] Diplomacy: relationship score calculations, treaty rules
 - [ ] AI decision-making: valid orders for known game states

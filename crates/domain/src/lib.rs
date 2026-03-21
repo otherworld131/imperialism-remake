@@ -9,6 +9,7 @@ pub mod hex;
 pub mod map;
 pub mod military;
 pub mod nation;
+pub mod services;
 pub mod tech;
 pub mod turn;
 pub mod types;

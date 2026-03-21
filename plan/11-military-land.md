@@ -78,7 +78,7 @@ significantly boost effectiveness (4 medals ≈ 2× firepower).
 
 ### Unit Movement
 - [x] Movement measured in hex tiles per turn
-- [ ] Movement to adjacent province only (march)
+- [x] Movement to adjacent province only (march)
 - [ ] Rail transport: move to any connected province (1 unit per 5 freight cars)
 - [ ] Amphibious transport via port → beachhead (force size = arms of fleet)
 - [x] Militia/Minutemen: immovable — cannot move at all

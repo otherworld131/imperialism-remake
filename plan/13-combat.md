@@ -82,7 +82,7 @@ a province is invaded via beachhead.
 - [x] Unit tests: auto-resolve produces valid outcomes
 
 ### Verification Strategy
-- [ ] **Unit tests**: Run test suite — all combat tests pass
+- [x] **Unit tests**: Run test suite — all combat tests pass
 - [ ] **Deterministic combat test**: Fixed seed → same battle always produces same result
 - [ ] **Integration test**: 3 Regulars attack province with 4 Militia → verify battle resolves, correct winner determined
 - [ ] **Integration test**: Sapper siege scenario → verify tunnel progress over multiple turns → fort destroyed

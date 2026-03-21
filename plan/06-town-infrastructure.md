@@ -12,7 +12,7 @@ and factory capacity.
 ### Settlement Progression
 - [x] **Hamlet** — initial state; produces raw resources only
 - [x] **Village** — intermediate; begins producing when connected and factory built
-- [ ] **Town** — fully industrialized; maximum production capacity
+- [x] **Town** — fully industrialized; maximum production capacity
 - [x] 6-turn delay from connection before first materials appear
 - [ ] Captured Great Power capitals industrialize immediately (no delay)
 - [ ] Minor Nation capitals never industrialize
@@ -26,18 +26,18 @@ and factory capacity.
 - [ ] Unit tests for connection detection
 
 ### Town Production
-- [ ] Town production requires no labor input
-- [ ] Base ratio: 2 raw resources → 1 material
-- [ ] Finished goods: 1/2 of available materials → goods
+- [x] Town production requires no labor input
+- [x] Base ratio: 2 raw resources → 1 material
+- [x] Finished goods: 1/2 of available materials → goods
 - [ ] Production limited by local factory capacity
 - [ ] Factory capacity progression: 4, 8, 12, 16, ...
 - [ ] Factory upgrade cost: materials + 2-turn delay for new capacity
 - [ ] Three production chains available per town based on local resources:
-  - [ ] Timber → Lumber → Furniture
-  - [ ] Cotton/Wool → Fabric → Clothing
-  - [ ] Coal + Iron → Steel → Hardware
-- [ ] Towns with multiple resource types (especially coal + iron) are especially valuable
-- [ ] Unit tests for town production calculations at each capacity level
+  - [x] Timber → Lumber → Furniture
+  - [x] Cotton/Wool → Fabric → Clothing
+  - [x] Coal + Iron → Steel → Hardware
+- [x] Towns with multiple resource types (especially coal + iron) are especially valuable
+- [x] Unit tests for town production calculations at each capacity level
 
 ### Infrastructure — Railroads
 - [x] Railroads connect tiles, enabling resource transport to capital
@@ -101,7 +101,7 @@ and factory capacity.
 ### Verification Strategy
 - [x] **Unit tests**: `cargo test` — all town, infrastructure, and building tests pass
 - [ ] **Industrialization test**: Connect depot to province → verify 6-turn delay → materials appear on turn 7
-- [ ] **Town production test**: Town with factory capacity 8 + 4 timber available → verify 2 lumber + 1 furniture produced
+- [x] **Town production test**: Town with factory capacity 8 + 4 timber available → verify 2 lumber + 1 furniture produced
 - [ ] **Railroad cost test**: Build railroad on each terrain type → verify correct cost and tech prerequisite enforced
 - [ ] **Fort siege test**: Build level 3 fort → verify combat defense bonus applied; sapper destroys section → bonus reduced
 - [x] **Building expansion test**: Expand mill from cap 2 → 4 → verify cost = 2 lumber + 2 steel, 2-turn delay
