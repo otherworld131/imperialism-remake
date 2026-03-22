@@ -1659,11 +1659,11 @@ fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
         return;
     }
 
-    // Gather minor nation IDs
+    // Gather minor nation IDs — only those that still have provinces
     let minor_ids: Vec<NationId> = game
         .nations
         .iter()
-        .filter(|n| !n.is_great_power())
+        .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
         .map(|n| n.id)
         .collect();
 
@@ -1766,10 +1766,11 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
 
     // Phase 1: Propose non-aggression pacts with Minor Nations that have embassies
     if propose_pact_chance {
+        // Only propose pacts with minor nations that still have provinces
         let minor_ids: Vec<NationId> = game
             .nations
             .iter()
-            .filter(|n| !n.is_great_power())
+            .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
             .map(|n| n.id)
             .collect();
 
@@ -1942,7 +1943,7 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
         let minor_ids: Vec<NationId> = game
             .nations
             .iter()
-            .filter(|n| !n.is_great_power())
+            .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
             .map(|n| n.id)
             .collect();
 
@@ -2003,7 +2004,7 @@ pub fn ai_pre_election_strategy(
     let minor_ids: Vec<NationId> = game
         .nations
         .iter()
-        .filter(|n| !n.is_great_power())
+        .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
         .map(|n| n.id)
         .collect();
 
