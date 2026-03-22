@@ -4515,6 +4515,66 @@ fn auto_manage_human(game: &mut GameState) {
                 .push(Building::new(BuildingType::TextileMill, 2));
         }
     }
+
+    // Auto-build factories if the corresponding mill exists and we have materials
+    let nation_ref = game.get_nation(player_id).unwrap();
+    let has_lumber_mill = nation_ref.has_building(BuildingType::LumberMill);
+    let has_steel_mill = nation_ref.has_building(BuildingType::SteelMill);
+    let has_textile_mill = nation_ref.has_building(BuildingType::TextileMill);
+    let has_furniture_factory = nation_ref.has_building(BuildingType::FurnitureFactory);
+    let has_hardware_factory = nation_ref.has_building(BuildingType::HardwareFactory);
+    let has_clothing_factory = nation_ref.has_building(BuildingType::ClothingFactory);
+    let lumber_available = nation_ref.material_amount(MaterialType::Lumber);
+    let steel_available = nation_ref.material_amount(MaterialType::Steel);
+
+    let needs_furniture = has_lumber_mill && !has_furniture_factory;
+    let needs_hardware = has_steel_mill && !has_hardware_factory;
+    let needs_clothing = has_textile_mill && !has_clothing_factory;
+
+    if let Some(nation) = game.get_nation_mut(player_id) {
+        let mut lumber_left = lumber_available;
+        let mut steel_left = steel_available;
+
+        if needs_furniture && lumber_left >= 2 && steel_left >= 2 {
+            nation
+                .buildings
+                .push(Building::new(BuildingType::FurnitureFactory, 1));
+            nation.consume_material(MaterialType::Lumber, 1);
+            nation.consume_material(MaterialType::Steel, 1);
+            lumber_left -= 1;
+            steel_left -= 1;
+        }
+        if needs_hardware && lumber_left >= 2 && steel_left >= 2 {
+            nation
+                .buildings
+                .push(Building::new(BuildingType::HardwareFactory, 1));
+            nation.consume_material(MaterialType::Lumber, 1);
+            nation.consume_material(MaterialType::Steel, 1);
+            lumber_left -= 1;
+            steel_left -= 1;
+        }
+        if needs_clothing && lumber_left >= 2 && steel_left >= 2 {
+            nation
+                .buildings
+                .push(Building::new(BuildingType::ClothingFactory, 1));
+            nation.consume_material(MaterialType::Lumber, 1);
+            nation.consume_material(MaterialType::Steel, 1);
+            lumber_left -= 1;
+            steel_left -= 1;
+        }
+
+        // Auto-build freight cars: target province_count.max(5), up to 2 per turn
+        let target_cars = (nation.province_count() as u32).max(5);
+        if nation.transport.freight_cars < target_cars {
+            let cars_to_build = (target_cars - nation.transport.freight_cars).min(2);
+            let affordable = cars_to_build.min(lumber_left).min(steel_left);
+            if affordable > 0 {
+                nation.consume_material(MaterialType::Lumber, affordable);
+                nation.consume_material(MaterialType::Steel, affordable);
+                nation.transport.build_freight_cars(affordable);
+            }
+        }
+    }
 }
 
 fn cmd_auto(game: &mut GameState, turns: u32) {

@@ -46,7 +46,7 @@ impl std::fmt::Display for AiPersonality {
 pub fn personality_for_nation_index(index: usize) -> AiPersonality {
     match index {
         0 => AiPersonality::Balanced,
-        1 => AiPersonality::Aggressive,
+        1 => AiPersonality::Balanced,
         2 => AiPersonality::Economic,
         3 => AiPersonality::Aggressive,
         4 => AiPersonality::Diplomatic,
@@ -89,7 +89,15 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<String> {
 
     let mut actions: Vec<String> = Vec::new();
 
-    for nation_id in &ai_nation_ids {
+    // Shuffle AI nation processing order to prevent first-mover advantage
+    let mut ai_ids = ai_nation_ids.clone();
+    let turn_seed = game.turn.0 as usize;
+    for i in (1..ai_ids.len()).rev() {
+        let j = (turn_seed.wrapping_mul(i + 7)) % (i + 1);
+        ai_ids.swap(i, j);
+    }
+
+    for nation_id in &ai_ids {
         ai_research_tech(game, *nation_id, current_year, &mut actions);
         ai_manage_economy(game, *nation_id);
         ai_build_map_infrastructure(game, *nation_id);
@@ -110,7 +118,7 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<String> {
         ai_train_and_promote_workers(game, *nation_id);
     }
 
-    ai_declare_wars(game, &ai_nation_ids, &mut actions);
+    ai_declare_wars(game, &ai_ids, &mut actions);
 
     actions
 }
@@ -3585,7 +3593,7 @@ mod tests {
     #[test]
     fn personality_assignment_is_deterministic() {
         assert_eq!(personality_for_nation_index(0), AiPersonality::Balanced);
-        assert_eq!(personality_for_nation_index(1), AiPersonality::Aggressive);
+        assert_eq!(personality_for_nation_index(1), AiPersonality::Balanced);
         assert_eq!(personality_for_nation_index(2), AiPersonality::Economic);
         assert_eq!(personality_for_nation_index(3), AiPersonality::Aggressive);
         assert_eq!(personality_for_nation_index(4), AiPersonality::Diplomatic);
