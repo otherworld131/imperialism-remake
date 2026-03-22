@@ -236,6 +236,8 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
                 nation.add_material(MaterialType::Lumber, 10);
                 nation.add_material(MaterialType::Steel, 5);
                 nation.add_material(MaterialType::Fabric, 5);
+                // Starting food supply to prevent early starvation
+                nation.add_material(MaterialType::CannedFood, 20);
             }
             Difficulty::Normal => {
                 nation.add_resource(ResourceType::Timber, 5);
@@ -245,11 +247,15 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
                 // Starting materials so AI can build factories before mills produce
                 nation.add_material(MaterialType::Lumber, 5);
                 nation.add_material(MaterialType::Steel, 3);
+                // Starting food supply — enough for ~10 turns while building food chain
+                nation.add_material(MaterialType::CannedFood, 10);
             }
             Difficulty::Hard | Difficulty::NighOnImpossible => {
                 // Minimal starting materials to bootstrap economy
                 nation.add_material(MaterialType::Lumber, 2);
                 nation.add_material(MaterialType::Steel, 1);
+                // Small food buffer
+                nation.add_material(MaterialType::CannedFood, 5);
             }
         }
 
