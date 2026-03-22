@@ -487,7 +487,13 @@ fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
     let total_food = grain + fruit + livestock;
 
     // Scale max workers with province count (2 per province, min 5)
-    let max_workers = (nation.province_count() as u32 * 2).max(5);
+    // Wealthy nations invest in workforce growth (3 per province)
+    let workers_per_province: u32 = if nation.treasury > Money::dollars(20_000) {
+        3
+    } else {
+        2
+    };
+    let max_workers = (nation.province_count() as u32 * workers_per_province).max(5);
 
     // Only recruit if workforce is below target AND there is surplus food
     if total_workers < max_workers && total_food > total_workers {
@@ -1530,6 +1536,12 @@ fn ai_trade(game: &mut GameState, nation_id: NationId) {
         None => return,
     };
 
+    // Don't sell resources when already sitting on a huge treasury —
+    // keep the materials for building ships, units, and infrastructure instead.
+    if nation.treasury > Money::dollars(50_000) {
+        return;
+    }
+
     // Check all tradeable resource types for surplus
     let tradeable_resources = [
         ResourceType::Timber,
@@ -2100,9 +2112,17 @@ fn ai_build_warships(game: &mut GameState, nation_id: NationId) {
         None => return,
     };
 
-    let max_warships: usize = match personality {
-        AiPersonality::Aggressive => 4,
-        _ => 2,
+    // Wealthy nations invest in larger navies
+    let max_warships: usize = if nation.treasury > Money::dollars(8_000) {
+        match personality {
+            AiPersonality::Aggressive => 6,
+            _ => 4,
+        }
+    } else {
+        match personality {
+            AiPersonality::Aggressive => 4,
+            _ => 2,
+        }
     };
 
     if nation.warship_count() >= max_warships {
@@ -2151,14 +2171,23 @@ fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId) {
         None => return,
     };
 
-    // Ship cap depends on personality
-    let max_ships: usize = match personality {
-        AiPersonality::Economic => 3,
-        _ => 1,
+    let treasury = nation.treasury;
+
+    // Ship cap depends on personality; wealthy nations always aim for 5
+    let max_ships: usize = if treasury > Money::dollars(5_000) {
+        5
+    } else {
+        match personality {
+            AiPersonality::Economic => 3,
+            _ => 1,
+        }
     };
 
-    // For non-Economic, only build if cargo capacity is 0
-    if personality != AiPersonality::Economic && nation.total_cargo_capacity() > 0 {
+    // For non-Economic with low treasury, only build if cargo capacity is 0
+    if personality != AiPersonality::Economic
+        && treasury <= Money::dollars(5_000)
+        && nation.total_cargo_capacity() > 0
+    {
         return;
     }
 
@@ -4079,6 +4108,7 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Economic);
+        ai.treasury = Money::dollars(3_000); // below $5K threshold: cap is 3
         ai.add_material(MaterialType::Fabric, 10);
         ai.add_material(MaterialType::Lumber, 20);
 
@@ -4116,6 +4146,7 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.treasury = Money::dollars(3_000); // below $5K threshold: cap is 1
         ai.add_material(MaterialType::Fabric, 10);
         ai.add_material(MaterialType::Lumber, 20);
 
@@ -4194,6 +4225,7 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Aggressive);
+        ai.treasury = Money::dollars(5_000); // below $8K threshold: cap is 4
         ai.add_material(MaterialType::Fabric, 20);
         ai.add_material(MaterialType::Lumber, 40);
         ai.add_material(MaterialType::Arms, 20);
@@ -4221,6 +4253,7 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.treasury = Money::dollars(5_000); // below $8K threshold: cap is 2
         ai.add_material(MaterialType::Fabric, 20);
         ai.add_material(MaterialType::Lumber, 40);
         ai.add_material(MaterialType::Arms, 20);
