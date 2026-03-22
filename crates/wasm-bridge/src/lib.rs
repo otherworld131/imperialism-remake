@@ -92,14 +92,19 @@ pub fn wasm_get_map_data(game_json: &str) -> String {
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
 
-    // Build province→nation lookup
+    // Build province→nation lookup and identify country capitals
     let mut province_nation: std::collections::HashMap<ProvinceId, (String, String)> =
         std::collections::HashMap::new();
+    let mut country_capital_provinces: std::collections::HashSet<ProvinceId> =
+        std::collections::HashSet::new();
     for nation in &game.nations {
         for pid in &nation.province_ids {
             province_nation.insert(*pid, (nation.name.clone(), format!("{:?}", nation.color)));
         }
+        country_capital_provinces.insert(nation.capital_province_id);
     }
+
+    let map_width = game.hex_map.width();
 
     let tiles: Vec<serde_json::Value> = game
         .hex_map
@@ -117,11 +122,19 @@ pub fn wasm_get_map_data(game_json: &str) -> String {
                 .map(|p| p.name.as_str())
                 .unwrap_or("");
 
+            // A tile is a country capital if it's marked as capital AND is in
+            // the nation's capital province
+            let is_country_capital = tile.is_capital
+                && tile
+                    .province_id
+                    .is_some_and(|pid| country_capital_provinces.contains(&pid));
+
             serde_json::json!({
                 "q": coord.q,
                 "r": coord.r,
                 "terrain": format!("{:?}", tile.terrain()),
                 "is_capital": tile.is_capital,
+                "is_country_capital": is_country_capital,
                 "improvement_level": tile.improvement_level(),
                 "owner": owner_name,
                 "owner_color": owner_color,
@@ -131,6 +144,7 @@ pub fn wasm_get_map_data(game_json: &str) -> String {
                 "has_port": tile.infrastructure.has_port,
                 "has_fort": tile.infrastructure.has_fort,
                 "fort_level": tile.infrastructure.fort_level,
+                "map_width": map_width,
             })
         })
         .collect();

@@ -19,10 +19,12 @@ export async function initWasm() {
 export interface TileData {
   q: number; r: number;
   terrain: string; is_capital: boolean;
+  is_country_capital: boolean;
   improvement_level: number;
   owner: string; owner_color: string; province: string;
   has_railroad: boolean; has_depot: boolean; has_port: boolean;
   has_fort: boolean; fort_level: number;
+  map_width: number;
 }
 
 export function newGame(mapKey: string, difficulty: number, nationIndex: number): string {
