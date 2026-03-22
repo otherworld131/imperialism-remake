@@ -329,7 +329,7 @@ fn ai_build_infrastructure(game: &mut GameState, nation_id: NationId) {
         }
     }
 
-    // Build factories if the nation has the corresponding mill but not the factory
+    // Build factories: first one of each type is free (bootstrap), same as mills
     let mill_factory_pairs = [
         (BuildingType::LumberMill, BuildingType::FurnitureFactory),
         (BuildingType::SteelMill, BuildingType::HardwareFactory),
@@ -337,23 +337,7 @@ fn ai_build_infrastructure(game: &mut GameState, nation_id: NationId) {
     ];
     for (mill, factory) in mill_factory_pairs {
         if nation.has_building(mill) && !nation.has_building(factory) {
-            let has_lumber = nation
-                .materials
-                .get(&MaterialType::Lumber)
-                .copied()
-                .unwrap_or(0)
-                >= 1;
-            let has_steel = nation
-                .materials
-                .get(&MaterialType::Steel)
-                .copied()
-                .unwrap_or(0)
-                >= 1;
-            if has_lumber && has_steel {
-                *nation.materials.entry(MaterialType::Lumber).or_insert(0) -= 1;
-                *nation.materials.entry(MaterialType::Steel).or_insert(0) -= 1;
-                nation.buildings.push(Building::new(factory, 1));
-            }
+            nation.buildings.push(Building::new(factory, 1));
         }
     }
 }
