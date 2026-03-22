@@ -66,7 +66,7 @@ pub fn calculate_score(nation: &Nation) -> NationScore {
     let transport_score = nation.transport.freight_cars * 5;
     let merchant_marine_score = nation.total_cargo_capacity() * 20;
     let diplomatic_score = 50; // placeholder
-    let province_score = nation.province_count() as u32 * 100;
+    let province_score = nation.province_count() as u32 * 75;
 
     // Economic scoring components to prevent game stagnation
     let tech_score = nation.researched_techs.len() as u32 * 30;
@@ -321,8 +321,8 @@ mod tests {
         assert_eq!(score.transport_score, 0); // placeholder
         assert_eq!(score.merchant_marine_score, 0); // placeholder
         assert_eq!(score.diplomatic_score, 50); // placeholder
-        assert_eq!(score.province_score, 500); // 5 provinces * 100
-        assert_eq!(score.total, 600); // 0 + 50 + 0 + 0 + 50 + 500
+        assert_eq!(score.province_score, 375); // 5 provinces * 75
+        assert_eq!(score.total, 475); // 0 + 50 + 0 + 0 + 50 + 375
     }
 
     #[test]

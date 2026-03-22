@@ -46,11 +46,11 @@ impl std::fmt::Display for AiPersonality {
 pub fn personality_for_nation_index(index: usize) -> AiPersonality {
     match index {
         0 => AiPersonality::Balanced,
-        1 => AiPersonality::Balanced,
+        1 => AiPersonality::Aggressive,
         2 => AiPersonality::Economic,
-        3 => AiPersonality::Aggressive,
+        3 => AiPersonality::Balanced,
         4 => AiPersonality::Diplomatic,
-        5 => AiPersonality::Economic,
+        5 => AiPersonality::Aggressive,
         6 => AiPersonality::Balanced,
         _ => AiPersonality::Balanced,
     }
@@ -3003,14 +3003,14 @@ mod tests {
     }
 
     #[test]
-    fn ai_does_not_build_without_materials() {
+    fn ai_bootstraps_mills_and_factories() {
         let mut game = test_game_with_ai();
         // AI has no materials at all
 
         run_ai_turns(&mut game);
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        // First mills are free (bootstrap) — they should be built even without materials
+        // First mills and factories are free (bootstrap)
         assert!(
             ai.has_building(BuildingType::LumberMill),
             "AI should bootstrap first LumberMill for free"
@@ -3019,14 +3019,13 @@ mod tests {
             ai.has_building(BuildingType::SteelMill),
             "AI should bootstrap first SteelMill for free"
         );
-        // But factories should NOT be built without materials
         assert!(
-            !ai.has_building(BuildingType::FurnitureFactory),
-            "AI should not build factories without materials"
+            ai.has_building(BuildingType::FurnitureFactory),
+            "AI should bootstrap first FurnitureFactory for free"
         );
         assert!(
-            !ai.has_building(BuildingType::HardwareFactory),
-            "AI should not build factories without materials"
+            ai.has_building(BuildingType::ClothingFactory),
+            "AI should bootstrap first ClothingFactory for free"
         );
     }
 
@@ -3696,11 +3695,11 @@ mod tests {
     #[test]
     fn personality_assignment_is_deterministic() {
         assert_eq!(personality_for_nation_index(0), AiPersonality::Balanced);
-        assert_eq!(personality_for_nation_index(1), AiPersonality::Balanced);
+        assert_eq!(personality_for_nation_index(1), AiPersonality::Aggressive);
         assert_eq!(personality_for_nation_index(2), AiPersonality::Economic);
-        assert_eq!(personality_for_nation_index(3), AiPersonality::Aggressive);
+        assert_eq!(personality_for_nation_index(3), AiPersonality::Balanced);
         assert_eq!(personality_for_nation_index(4), AiPersonality::Diplomatic);
-        assert_eq!(personality_for_nation_index(5), AiPersonality::Economic);
+        assert_eq!(personality_for_nation_index(5), AiPersonality::Aggressive);
         assert_eq!(personality_for_nation_index(6), AiPersonality::Balanced);
         // Out-of-range defaults to Balanced
         assert_eq!(personality_for_nation_index(99), AiPersonality::Balanced);
