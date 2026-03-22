@@ -1,0 +1,19 @@
+// Scenario: Congress of Vienna (1815)
+// Post-Napoleonic Europe. The Great Powers redraw the map.
+
+(
+    id: "1815",
+    name: "Congress of Vienna",
+    year: 1815,
+    description: "Post-Napoleonic Europe. The Great Powers redraw the map.",
+    great_powers: ["Britain", "France", "Prussia", "Austria", "Russia", "Spain", "Netherlands"],
+    difficulty_ratings: [
+        (nation: "Britain", rating: "Easy"),
+        (nation: "France", rating: "Normal"),
+        (nation: "Prussia", rating: "Normal"),
+        (nation: "Austria", rating: "Normal"),
+        (nation: "Russia", rating: "Hard"),
+        (nation: "Spain", rating: "Hard"),
+        (nation: "Netherlands", rating: "Hard"),
+    ],
+)

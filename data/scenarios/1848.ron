@@ -1,0 +1,19 @@
+// Scenario: Year of Revolutions (1848)
+// Revolution sweeps across Europe. Empires tremble.
+
+(
+    id: "1848",
+    name: "Year of Revolutions",
+    year: 1848,
+    description: "Revolution sweeps across Europe. Empires tremble.",
+    great_powers: ["Britain", "France", "Prussia", "Austria", "Russia", "Sardinia", "Ottoman Empire"],
+    difficulty_ratings: [
+        (nation: "Britain", rating: "Easy"),
+        (nation: "France", rating: "Normal"),
+        (nation: "Prussia", rating: "Normal"),
+        (nation: "Austria", rating: "Hard"),
+        (nation: "Russia", rating: "Normal"),
+        (nation: "Sardinia", rating: "Hard"),
+        (nation: "Ottoman Empire", rating: "Hard"),
+    ],
+)

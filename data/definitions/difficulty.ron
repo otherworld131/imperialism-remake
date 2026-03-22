@@ -1,0 +1,81 @@
+// Difficulty definitions — data-driven, moddable
+// Per-difficulty starting conditions for Great Power nations.
+//
+// starting_cash: Treasury in dollars at game start.
+// ai_cash_bonus: Extra cash given to AI nations on this difficulty.
+// starting_mills/factories: Whether nations start with pre-built production buildings.
+// starting_resources: Initial warehouse contents.
+
+(
+    difficulties: [
+        (
+            name: "Introductory",
+            starting_cash: 15000,
+            untrained_workers: 5,
+            trained_workers: 3,
+            starting_mills: true,
+            starting_factories: true,
+            ai_cash_bonus: 0,
+            starting_resources: [
+                (resource: "Timber", amount: 10),
+                (resource: "Coal", amount: 5),
+                (resource: "Iron", amount: 5),
+                (resource: "Cotton", amount: 5),
+                (resource: "Grain", amount: 10),
+                (resource: "Fruit", amount: 5),
+            ],
+        ),
+        (
+            name: "Easy",
+            starting_cash: 12000,
+            untrained_workers: 5,
+            trained_workers: 3,
+            starting_mills: true,
+            starting_factories: true,
+            ai_cash_bonus: 0,
+            starting_resources: [
+                (resource: "Timber", amount: 10),
+                (resource: "Coal", amount: 5),
+                (resource: "Iron", amount: 5),
+                (resource: "Cotton", amount: 5),
+                (resource: "Grain", amount: 10),
+                (resource: "Fruit", amount: 5),
+            ],
+        ),
+        (
+            name: "Normal",
+            starting_cash: 10000,
+            untrained_workers: 3,
+            trained_workers: 1,
+            starting_mills: false,
+            starting_factories: false,
+            ai_cash_bonus: 0,
+            starting_resources: [
+                (resource: "Timber", amount: 5),
+                (resource: "Coal", amount: 2),
+                (resource: "Iron", amount: 2),
+                (resource: "Grain", amount: 5),
+            ],
+        ),
+        (
+            name: "Hard",
+            starting_cash: 8000,
+            untrained_workers: 2,
+            trained_workers: 0,
+            starting_mills: false,
+            starting_factories: false,
+            ai_cash_bonus: 1000,
+            starting_resources: [],
+        ),
+        (
+            name: "NighOnImpossible",
+            starting_cash: 5000,
+            untrained_workers: 2,
+            trained_workers: 0,
+            starting_mills: false,
+            starting_factories: false,
+            ai_cash_bonus: 5000,
+            starting_resources: [],
+        ),
+    ],
+)

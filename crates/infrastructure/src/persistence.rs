@@ -1,5 +1,5 @@
+use domain::data::GameData;
 use domain::game_state::GameState;
-use domain::tech::TechTree;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -138,7 +138,7 @@ pub fn load_game(path: &Path) -> Result<GameState, String> {
             ));
         }
         let mut game = save.game;
-        game.tech_tree = TechTree::new();
+        game.game_data = GameData::default();
         return Ok(game);
     }
 
@@ -146,7 +146,7 @@ pub fn load_game(path: &Path) -> Result<GameState, String> {
     let mut game: GameState =
         serde_json::from_str(&json).map_err(|e| format!("Deserialization error: {}", e))?;
     // Reconstruct non-serialized fields
-    game.tech_tree = TechTree::new();
+    game.game_data = GameData::default();
     Ok(game)
 }
 
@@ -213,7 +213,7 @@ fn clone_game_state_for_save(game: &GameState) -> GameState {
     let value = serde_json::to_value(game).expect("GameState should always serialize");
     let mut copy: GameState =
         serde_json::from_value(value).expect("GameState should always deserialize");
-    copy.tech_tree = TechTree::new();
+    copy.game_data = GameData::default();
     copy
 }
 
@@ -248,7 +248,7 @@ mod tests {
         assert_eq!(loaded.hex_map.tile_count(), game.hex_map.tile_count());
 
         // Verify tech_tree was reconstructed
-        assert_eq!(loaded.tech_tree.all_techs().len(), 28);
+        assert_eq!(loaded.game_data.tech_tree.all_techs().len(), 28);
 
         // Verify events are empty (they are transient)
         assert!(loaded.events.is_empty());

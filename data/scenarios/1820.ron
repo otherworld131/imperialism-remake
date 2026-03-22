@@ -1,0 +1,19 @@
+// Scenario: Concert of Europe (1820)
+// The Concert of Europe maintains a fragile balance of power.
+
+(
+    id: "1820",
+    name: "Concert of Europe",
+    year: 1820,
+    description: "The Concert of Europe maintains a fragile balance of power.",
+    great_powers: ["Britain", "France", "Prussia", "Austria", "Russia", "Spain", "Ottoman Empire"],
+    difficulty_ratings: [
+        (nation: "Britain", rating: "Easy"),
+        (nation: "France", rating: "Normal"),
+        (nation: "Prussia", rating: "Normal"),
+        (nation: "Austria", rating: "Normal"),
+        (nation: "Russia", rating: "Normal"),
+        (nation: "Spain", rating: "Hard"),
+        (nation: "Ottoman Empire", rating: "Hard"),
+    ],
+)

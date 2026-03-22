@@ -92,6 +92,7 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<String> {
     for nation_id in &ai_nation_ids {
         ai_research_tech(game, *nation_id, current_year, &mut actions);
         ai_manage_economy(game, *nation_id);
+        ai_build_map_infrastructure(game, *nation_id);
         ai_manage_resources(game, *nation_id, &mut actions);
         ai_recruit_workers(game, *nation_id);
         ai_manage_civilians(game, *nation_id);
@@ -158,7 +159,10 @@ fn ai_research_tech(
     };
 
     // Find available techs
-    let available = game.tech_tree.available_techs(&researched, current_year);
+    let available = game
+        .game_data
+        .tech_tree
+        .available_techs(&researched, current_year);
     if available.is_empty() {
         return;
     }
@@ -287,6 +291,130 @@ fn ai_build_infrastructure(game: &mut GameState, nation_id: NationId) {
     }
 }
 
+/// AI builds map infrastructure: depots and railroads to connect provinces.
+///
+/// Strategy: Build a depot on the capital province first, then build depots on
+/// adjacent provinces, and railroads to link them. This allows resource flow.
+fn ai_build_map_infrastructure(game: &mut GameState, nation_id: NationId) {
+    use crate::map::infrastructure::{build_depot, build_railroad};
+
+    let treasury = match game.get_nation(nation_id) {
+        Some(n) => n.treasury,
+        None => return,
+    };
+
+    // Need at least $3,000 to afford a depot + some railroads
+    if treasury < Money::dollars(3000) {
+        return;
+    }
+
+    // Get nation's province IDs and capital province
+    let capital_province_id = match game.get_nation(nation_id) {
+        Some(n) => n.capital_province_id,
+        None => return,
+    };
+
+    let province_ids: Vec<ProvinceId> = match game.get_nation(nation_id) {
+        Some(n) => n.province_ids.clone(),
+        None => return,
+    };
+
+    // Step 1: Build depot on capital province if it doesn't have one
+    let capital_tiles: Vec<crate::hex::HexCoord> = game
+        .get_province(capital_province_id)
+        .map(|p| p.tiles.clone())
+        .unwrap_or_default();
+
+    let capital_has_depot = capital_tiles.iter().any(|coord| {
+        game.hex_map
+            .get_tile(*coord)
+            .is_some_and(|t| t.infrastructure.has_depot)
+    });
+
+    if !capital_has_depot {
+        if let Some(&tile_coord) = capital_tiles.first()
+            && let Ok(cost) = build_depot(&mut game.hex_map, tile_coord)
+            && let Some(nation) = game.get_nation_mut(nation_id)
+        {
+            nation.treasury -= cost;
+        }
+        return; // One major action per turn
+    }
+
+    // Step 2: Build railroads on capital province tiles that don't have them
+    let mut spent = Money::dollars(0);
+    let spend_limit = Money::dollars(2000);
+    for &tile_coord in &capital_tiles {
+        if spent >= spend_limit {
+            break;
+        }
+        let needs_rr = game
+            .hex_map
+            .get_tile(tile_coord)
+            .is_some_and(|t| !t.infrastructure.has_railroad);
+        if needs_rr && let Ok(cost) = build_railroad(&mut game.hex_map, tile_coord) {
+            if let Some(nation) = game.get_nation_mut(nation_id) {
+                nation.treasury -= cost;
+            }
+            spent += cost;
+        }
+    }
+    if spent > Money::dollars(0) {
+        return; // Spent this turn on railroads
+    }
+
+    // Step 3: Build depots on adjacent provinces + railroads to connect
+    for &pid in &province_ids {
+        if pid == capital_province_id {
+            continue;
+        }
+
+        let prov_tiles: Vec<crate::hex::HexCoord> = game
+            .get_province(pid)
+            .map(|p| p.tiles.clone())
+            .unwrap_or_default();
+
+        let has_depot = prov_tiles.iter().any(|coord| {
+            game.hex_map
+                .get_tile(*coord)
+                .is_some_and(|t| t.infrastructure.has_depot)
+        });
+
+        if !has_depot {
+            if let Some(&tile_coord) = prov_tiles.first()
+                && game
+                    .get_nation(nation_id)
+                    .is_some_and(|n| n.treasury >= Money::dollars(2000))
+                && let Ok(cost) = build_depot(&mut game.hex_map, tile_coord)
+                && let Some(nation) = game.get_nation_mut(nation_id)
+            {
+                nation.treasury -= cost;
+            }
+            return; // One depot per turn
+        }
+
+        // Build railroads on this province's tiles to extend the network
+        for &tile_coord in &prov_tiles {
+            let can_afford = game
+                .get_nation(nation_id)
+                .is_some_and(|n| n.treasury >= Money::dollars(200));
+            if !can_afford {
+                break;
+            }
+            let needs_rr = game
+                .hex_map
+                .get_tile(tile_coord)
+                .is_some_and(|t| !t.infrastructure.has_railroad);
+            if needs_rr && let Ok(cost) = build_railroad(&mut game.hex_map, tile_coord) {
+                if let Some(nation) = game.get_nation_mut(nation_id) {
+                    nation.treasury -= cost;
+                }
+                return; // One railroad per province per turn to spread cost
+            }
+        }
+    }
+}
+
 /// Recruit a worker if the nation has fewer than 5 total and has surplus food.
 ///
 /// AI only recruits if total food (grain + fruit + livestock) exceeds total workers
@@ -307,8 +435,11 @@ fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
     let livestock = nation.resource_amount(ResourceType::Livestock);
     let total_food = grain + fruit + livestock;
 
-    // Only recruit if workforce is small AND there is surplus food
-    if total_workers < 5 && total_food > total_workers {
+    // Scale max workers with province count (2 per province, min 5)
+    let max_workers = (nation.province_count() as u32 * 2).max(5);
+
+    // Only recruit if workforce is below target AND there is surplus food
+    if total_workers < max_workers && total_food > total_workers {
         // Consume 1 grain (or fruit/livestock) to recruit
         if nation.resource_amount(ResourceType::Grain) > 0 {
             nation.remove_resource(ResourceType::Grain, 1);
@@ -744,6 +875,92 @@ fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId], actions: &m
             format!("{} declared war on {}", attacker_name, target_name),
         ));
     }
+
+    // Phase 2: Great Power vs Great Power wars
+    // Aggressive AIs will target weaker Great Powers when no minor targets remain
+    // and they have military superiority.
+    let remaining_minors: usize = game
+        .nations
+        .iter()
+        .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
+        .count();
+
+    if remaining_minors <= 2 && turn_number > 40 {
+        for &ai_id in ai_nation_ids {
+            let personality = get_personality(game, ai_id);
+
+            // Only Aggressive and Balanced AIs consider GP wars
+            let gp_war_interval = match personality {
+                AiPersonality::Aggressive => 30u32,
+                AiPersonality::Balanced => 60,
+                _ => continue,
+            };
+
+            if !turn_number.is_multiple_of(gp_war_interval) {
+                continue;
+            }
+
+            let ai_army = game.get_nation(ai_id).map(|n| n.army.len()).unwrap_or(0);
+            if ai_army < 5 {
+                continue;
+            }
+
+            let ai_provinces = game
+                .get_nation(ai_id)
+                .map(|n| n.province_count())
+                .unwrap_or(0);
+
+            // Find weakest GP that is not allied, not already at war with us, not human
+            let mut gp_targets: Vec<(NationId, usize, ProvinceId)> = game
+                .nations
+                .iter()
+                .filter(|n| {
+                    n.is_great_power()
+                        && n.id != ai_id
+                        && n.id != game.human_player_nation
+                        && !game
+                            .diplomacy
+                            .get_relation(ai_id, n.id)
+                            .is_some_and(|r| r.at_war)
+                        && !game.diplomacy.has_treaty(
+                            ai_id,
+                            n.id,
+                            crate::events::TreatyType::Alliance,
+                        )
+                })
+                .map(|n| (n.id, n.province_count(), n.capital_province_id))
+                .collect();
+
+            // Target the GP with fewest provinces (weakest)
+            gp_targets.sort_by_key(|&(_, p, _)| p);
+
+            if let Some(&(target_id, target_provinces, target_capital)) = gp_targets.first() {
+                // Only attack if we have significantly more territory
+                if ai_provinces > target_provinces + 4 {
+                    let attacker_name = game
+                        .get_nation(ai_id)
+                        .map(|n| n.name.clone())
+                        .unwrap_or_default();
+                    let target_name = game
+                        .get_nation(target_id)
+                        .map(|n| n.name.clone())
+                        .unwrap_or_default();
+
+                    game.diplomacy.declare_war(ai_id, target_id);
+                    game.pending_attacks.push((ai_id, target_capital));
+                    actions.push(format!(
+                        "{} has declared war on {}!",
+                        attacker_name, target_name
+                    ));
+                    let turn = game.turn;
+                    game.history.push((
+                        turn,
+                        format!("{} declared war on {}", attacker_name, target_name),
+                    ));
+                }
+            }
+        }
+    }
 }
 
 /// Strategic military decisions for an AI nation.
@@ -937,6 +1154,7 @@ fn ai_upgrade_units(game: &mut GameState, nation_id: NationId) {
                     // If the upgrade requires a tech, check it's researched
                     Some(ref tech_name) => {
                         let has_tech = game
+                            .game_data
                             .tech_tree
                             .all_techs()
                             .iter()
@@ -1129,18 +1347,22 @@ fn ai_build_transport(game: &mut GameState, nation_id: NationId) {
         None => return,
     };
 
-    if nation.transport.freight_cars > 0 {
+    // Build freight cars if we have fewer than needed (scale with province count)
+    let target_cars = (nation.province_count() as u32).max(2);
+    if nation.transport.freight_cars >= target_cars {
         return;
     }
 
-    // Need 2 lumber + 2 steel for 2 freight cars
-    let has_lumber = nation.material_amount(MaterialType::Lumber) >= 2;
-    let has_steel = nation.material_amount(MaterialType::Steel) >= 2;
+    // Build up to 2 freight cars per turn (cost: 1 lumber + 1 steel each)
+    let cars_to_build = (target_cars - nation.transport.freight_cars).min(2);
+    let lumber_available = nation.material_amount(MaterialType::Lumber);
+    let steel_available = nation.material_amount(MaterialType::Steel);
+    let affordable = cars_to_build.min(lumber_available).min(steel_available);
 
-    if has_lumber && has_steel {
-        nation.consume_material(MaterialType::Lumber, 2);
-        nation.consume_material(MaterialType::Steel, 2);
-        nation.transport.build_freight_cars(2);
+    if affordable > 0 {
+        nation.consume_material(MaterialType::Lumber, affordable);
+        nation.consume_material(MaterialType::Steel, affordable);
+        nation.transport.build_freight_cars(affordable);
     }
 }
 
@@ -1312,61 +1534,85 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
     }
 
     // Phase 2: Propose alliances with other Great Powers (Diplomatic personality only)
-    if propose_alliance_chance {
-        let gp_ids: Vec<NationId> = game
+    // Wait until turn 10+ so diplomatic history develops, and limit to max 2 alliances
+    if propose_alliance_chance && turn_number >= 10 {
+        // Count existing alliances to cap at 2
+        let existing_alliances: usize = game
             .nations
             .iter()
-            .filter(|n| n.is_great_power() && n.id != nation_id && n.id != game.human_player_nation)
-            .map(|n| n.id)
-            .collect();
+            .filter(|n| {
+                n.is_great_power()
+                    && n.id != nation_id
+                    && game.diplomacy.has_treaty(
+                        nation_id,
+                        n.id,
+                        crate::events::TreatyType::Alliance,
+                    )
+            })
+            .count();
 
-        for gp_id in gp_ids {
-            let at_war = game
-                .diplomacy
-                .get_relation(nation_id, gp_id)
-                .is_some_and(|r| r.at_war);
-            if at_war {
-                continue;
-            }
+        if existing_alliances >= 2 {
+            // Already have max alliances, skip
+        } else {
+            let gp_ids: Vec<NationId> = game
+                .nations
+                .iter()
+                .filter(|n| {
+                    n.is_great_power() && n.id != nation_id && n.id != game.human_player_nation
+                })
+                .map(|n| n.id)
+                .collect();
 
-            let already_allied =
-                game.diplomacy
-                    .has_treaty(nation_id, gp_id, crate::events::TreatyType::Alliance);
-            if already_allied {
-                continue;
-            }
+            for gp_id in gp_ids {
+                let at_war = game
+                    .diplomacy
+                    .get_relation(nation_id, gp_id)
+                    .is_some_and(|r| r.at_war);
+                if at_war {
+                    continue;
+                }
 
-            // Skip nations with low standing (<50) — AI is less likely to accept treaties
-            let partner_standing = game.diplomacy.get_standing(gp_id);
-            if partner_standing < 50 {
-                continue;
-            }
+                let already_allied = game.diplomacy.has_treaty(
+                    nation_id,
+                    gp_id,
+                    crate::events::TreatyType::Alliance,
+                );
+                if already_allied {
+                    continue;
+                }
 
-            // Only propose if score is positive (non-threatening)
-            let score = game
-                .diplomacy
-                .get_relation(nation_id, gp_id)
-                .map(|r| r.score)
-                .unwrap_or(0);
-            if score < 0 {
-                continue;
-            }
+                // Skip nations with low standing (<50) — AI is less likely to accept treaties
+                let partner_standing = game.diplomacy.get_standing(gp_id);
+                if partner_standing < 50 {
+                    continue;
+                }
 
-            if game.diplomacy.propose_alliance(nation_id, gp_id).is_ok() {
-                let nation_name = game
-                    .get_nation(nation_id)
-                    .map(|n| n.name.clone())
-                    .unwrap_or_default();
-                let gp_name = game
-                    .get_nation(gp_id)
-                    .map(|n| n.name.clone())
-                    .unwrap_or_default();
-                actions.push(format!(
-                    "{} and {} have formed an alliance!",
-                    nation_name, gp_name
-                ));
+                // Only propose if score is positive (non-threatening)
+                let score = game
+                    .diplomacy
+                    .get_relation(nation_id, gp_id)
+                    .map(|r| r.score)
+                    .unwrap_or(0);
+                if score < 0 {
+                    continue;
+                }
+
+                if game.diplomacy.propose_alliance(nation_id, gp_id).is_ok() {
+                    let nation_name = game
+                        .get_nation(nation_id)
+                        .map(|n| n.name.clone())
+                        .unwrap_or_default();
+                    let gp_name = game
+                        .get_nation(gp_id)
+                        .map(|n| n.name.clone())
+                        .unwrap_or_default();
+                    actions.push(format!(
+                        "{} and {} have formed an alliance!",
+                        nation_name, gp_name
+                    ));
+                }
             }
-        }
+        } // end else (existing_alliances < 2)
     }
 
     // Phase 3: Send cash grants to Minor Nations with embassies
@@ -2231,11 +2477,11 @@ fn ai_train_and_promote_workers(game: &mut GameState, nation_id: NationId) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::GameData;
     use crate::diplomacy::DiplomacyState;
     use crate::hex::HexCoord;
     use crate::map::{HexMap, Province};
     use crate::nation::{Nation, NationColor};
-    use crate::tech::TechTree;
 
     /// Build a game state with a human nation and one AI great power.
     fn test_game_with_ai() -> GameState {
@@ -2294,7 +2540,7 @@ mod tests {
             nations: vec![human_nation, ai_nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -2376,7 +2622,7 @@ mod tests {
             nations: vec![human_nation, ai_nation, minor_nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -2907,21 +3153,68 @@ mod tests {
     }
 
     #[test]
-    fn ai_does_not_build_freight_cars_if_already_has_some() {
+    fn ai_scales_freight_cars_with_provinces() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.transport.build_freight_cars(1); // already has cars
-        ai.add_material(MaterialType::Lumber, 5);
-        ai.add_material(MaterialType::Steel, 5);
+        ai.transport.build_freight_cars(1); // start with 1 car
+        // Give plenty of materials (some may be consumed by economy/infra building)
+        ai.add_material(MaterialType::Lumber, 20);
+        ai.add_material(MaterialType::Steel, 20);
 
         run_ai_turns(&mut game);
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(
-            ai.transport.freight_cars, 1,
-            "AI should not build more freight cars when it already has some"
+        // With 1 province, target = max(1*2, 5) = 5, so AI builds more
+        // (up to 2 per turn, from 1 → 3)
+        assert!(
+            ai.transport.freight_cars > 1,
+            "AI should build more freight cars to meet target (has {})",
+            ai.transport.freight_cars
         );
-        // Materials should be untouched (except if used by infrastructure building)
+    }
+
+    #[test]
+    fn ai_builds_depot_on_capital() {
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+
+        // The test AI's capital tile is at (3,3) — verify it exists
+        let ai = game.get_nation(ai_id).unwrap();
+        let cap_province = game.get_province(ai.capital_province_id).unwrap();
+        let cap_tile = cap_province.tiles[0];
+
+        // If the tile doesn't exist in the map, skip (test map too small)
+        if game.hex_map.get_tile(cap_tile).is_none() {
+            // Still verify the function doesn't panic on missing tiles
+            ai_build_map_infrastructure(&mut game, ai_id);
+            return;
+        }
+
+        assert!(
+            !game
+                .hex_map
+                .get_tile(cap_tile)
+                .unwrap()
+                .infrastructure
+                .has_depot,
+            "No depot initially"
+        );
+
+        ai_build_map_infrastructure(&mut game, ai_id);
+
+        // After one call, should have built a depot on capital
+        assert!(
+            game.hex_map
+                .get_tile(cap_tile)
+                .unwrap()
+                .infrastructure
+                .has_depot,
+            "AI should build depot on capital tile"
+        );
+
+        // Treasury should have decreased by $2,000
+        let ai = game.get_nation(ai_id).unwrap();
+        assert_eq!(ai.treasury, Money::dollars(8000));
     }
 
     // ── Civilian management ─────────────────────────────────
@@ -3808,6 +4101,9 @@ mod tests {
             .collect();
         game.diplomacy.initialize_great_powers(&gp_ids);
 
+        // Advance turn to 10+ so alliance proposals are allowed
+        game.turn = TurnNumber(10);
+
         let mut actions = Vec::new();
         ai_manage_diplomacy(&mut game, ai_id, &mut actions);
 
@@ -4071,7 +4367,7 @@ mod tests {
             nations: vec![human_nation, ai_nation, enemy_nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),

@@ -17,11 +17,19 @@ pub struct Technology {
 pub enum TechEffect {
     UnlockUnit(String),
     UnlockBuilding(String),
-    EnableTerrainImprovement { terrain: String, max_level: u8 },
+    EnableTerrainImprovement {
+        terrain: String,
+        max_level: u8,
+    },
     EnableInfrastructure(String),
     UnlockShip(String),
-    UpgradeUnit { from: String, to: String },
+    UpgradeUnit {
+        from: String,
+        to: String,
+    },
     EnableCivilian(String),
+    /// Run a Lua script when this tech is researched.
+    LuaScript(String),
 }
 
 pub struct TechTree {
@@ -29,6 +37,12 @@ pub struct TechTree {
 }
 
 impl TechTree {
+    /// Creates a TechTree from a pre-built list of technologies.
+    /// Used by the data loader to construct a tree from RON definitions.
+    pub fn from_technologies(technologies: Vec<Technology>) -> Self {
+        Self { technologies }
+    }
+
     /// Creates the full tech tree with all 28 technologies from the original game.
     pub fn new() -> Self {
         let technologies = vec![
@@ -630,7 +644,7 @@ mod tests {
         let mut game = crate::game_state::new_game("tech_sim", crate::types::Difficulty::Normal, 0);
         let mut researched_count = 0;
         for _ in 0..100 {
-            let available = game.tech_tree.available_techs(
+            let available = game.game_data.tech_tree.available_techs(
                 &game
                     .get_nation(game.human_player_nation)
                     .unwrap()

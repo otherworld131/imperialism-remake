@@ -1,4 +1,5 @@
 use crate::ai::basic::personality_for_nation_index;
+use crate::data::GameData;
 use crate::diplomacy::DiplomacyState;
 use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::civilians::{Civilian, CivilianType, next_civilian_id};
@@ -6,7 +7,6 @@ use crate::events::DomainEvent;
 use crate::map::{HexMap, Province, UnitId};
 use crate::military::ships::{Ship, ShipType};
 use crate::nation::{Nation, NationColor};
-use crate::tech::TechTree;
 use crate::types::*;
 
 /// Top-level aggregate root representing the complete state of a game.
@@ -29,9 +29,10 @@ pub struct GameState {
     /// Event log for the current turn (transient, not saved).
     #[serde(skip)]
     pub events: Vec<DomainEvent>,
-    /// The technology tree for this game (reconstructed on load).
-    #[serde(skip, default = "TechTree::default")]
-    pub tech_tree: TechTree,
+    /// All data-driven game definitions (tech tree, unit stats, etc.).
+    /// Reconstructed on load — not serialized.
+    #[serde(skip, default = "GameData::default")]
+    pub game_data: GameData,
     /// Diplomatic relations and standing between nations.
     pub diplomacy: DiplomacyState,
     /// Pending attacks to resolve this turn: (attacker NationId, target ProvinceId).
@@ -337,7 +338,7 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         nations,
         human_player_nation: human_nation_id,
         events: Vec::new(),
-        tech_tree: TechTree::new(),
+        game_data: GameData::default(),
         diplomacy,
         pending_attacks: Vec::new(),
         pending_moves: Vec::new(),
@@ -392,6 +393,7 @@ mod tests {
     use crate::nation::NationColor;
 
     /// Helper: build a minimal GameState for testing.
+    #[allow(dead_code)]
     fn sample_game_state() -> GameState {
         let capital_tile = HexCoord::new(0, 0);
 
@@ -436,7 +438,7 @@ mod tests {
             nations: vec![nation1, nation2],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),

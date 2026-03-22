@@ -1,0 +1,19 @@
+// Scenario: Scramble for Africa (1882)
+// The Great Powers compete for colonial dominance.
+
+(
+    id: "1882",
+    name: "Scramble for Africa",
+    year: 1882,
+    description: "The Great Powers compete for colonial dominance.",
+    great_powers: ["Britain", "France", "Germany", "Italy", "Russia", "Ottoman Empire", "Austria-Hungary"],
+    difficulty_ratings: [
+        (nation: "Britain", rating: "Easy"),
+        (nation: "France", rating: "Normal"),
+        (nation: "Germany", rating: "Normal"),
+        (nation: "Italy", rating: "Hard"),
+        (nation: "Russia", rating: "Normal"),
+        (nation: "Ottoman Empire", rating: "Hard"),
+        (nation: "Austria-Hungary", rating: "Normal"),
+    ],
+)

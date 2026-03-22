@@ -193,6 +193,7 @@ pub fn new_scenario_game(
     if scenario.year >= 1848 {
         // Iteratively resolve prerequisites: only add techs whose prereqs are all satisfied.
         let all_techs: Vec<(crate::events::TechId, u32, Vec<crate::events::TechId>)> = game
+            .game_data
             .tech_tree
             .all_techs()
             .iter()

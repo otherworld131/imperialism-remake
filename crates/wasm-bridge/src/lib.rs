@@ -1,6 +1,6 @@
 use wasm_bindgen::prelude::*;
 
-use domain::game_state::{new_game, GameState};
+use domain::game_state::{GameState, new_game};
 use domain::scenarios::{list_scenarios, new_scenario_game};
 use domain::turn::process_turn;
 use domain::types::*;
@@ -31,7 +31,9 @@ pub fn wasm_new_scenario_game(scenario_id: &str, difficulty: u8, nation_index: u
         _ => Difficulty::Normal,
     };
     match new_scenario_game(scenario_id, diff, nation_index) {
-        Ok(game) => serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e)),
+        Ok(game) => {
+            serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+        }
         Err(e) => format!("{{\"error\":\"{}\"}}", e),
     }
 }
@@ -45,7 +47,7 @@ pub fn wasm_process_turn(game_json: &str) -> String {
     };
 
     // Reconstruct tech tree (skipped in serialization)
-    game.tech_tree = domain::tech::TechTree::new();
+    game.game_data = domain::data::GameData::default();
 
     let report = process_turn(&mut game);
 
@@ -143,7 +145,7 @@ pub fn wasm_get_available_techs(game_json: &str) -> String {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
-    game.tech_tree = domain::tech::TechTree::new();
+    game.game_data = domain::data::GameData::default();
 
     let nation = match game.get_nation(game.human_player_nation) {
         Some(n) => n,
@@ -151,6 +153,7 @@ pub fn wasm_get_available_techs(game_json: &str) -> String {
     };
 
     let available = game
+        .game_data
         .tech_tree
         .available_techs(&nation.researched_techs, game.turn.year());
 
@@ -175,7 +178,7 @@ pub fn wasm_research_tech(game_json: &str, tech_name: &str) -> String {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
-    game.tech_tree = domain::tech::TechTree::new();
+    game.game_data = domain::data::GameData::default();
 
     let nation = match game.get_nation(game.human_player_nation) {
         Some(n) => n,
@@ -184,6 +187,7 @@ pub fn wasm_research_tech(game_json: &str, tech_name: &str) -> String {
 
     let lower = tech_name.to_lowercase();
     let tech = game
+        .game_data
         .tech_tree
         .available_techs(&nation.researched_techs, game.turn.year())
         .into_iter()

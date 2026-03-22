@@ -835,7 +835,8 @@ fn cmd_upgrade_unit(game: &mut GameState, index_str: &str) {
     // Check if prerequisite tech is researched
     if let Some(required_tech_name) = target_type.required_tech() {
         let has_tech = player.researched_techs.iter().any(|tid| {
-            game.tech_tree
+            game.game_data
+                .tech_tree
                 .get(*tid)
                 .map(|t| t.name == required_tech_name)
                 .unwrap_or(false)
@@ -1799,7 +1800,7 @@ fn print_tech(game: &GameState) {
         println!("    (none)");
     } else {
         for tech_id in &player.researched_techs {
-            if let Some(tech) = game.tech_tree.get(*tech_id) {
+            if let Some(tech) = game.game_data.tech_tree.get(*tech_id) {
                 println!("    [x] {}", tech.name);
             }
         }
@@ -1808,6 +1809,7 @@ fn print_tech(game: &GameState) {
 
     // Show available technologies
     let available = game
+        .game_data
         .tech_tree
         .available_techs(&player.researched_techs, year);
     println!("  AVAILABLE FOR RESEARCH (year {}):", year);
@@ -1831,6 +1833,7 @@ fn research_tech(game: &mut GameState, query: &str) {
     // Get available techs and find a case-insensitive partial match
     let player = game.get_nation(player_id).unwrap();
     let available = game
+        .game_data
         .tech_tree
         .available_techs(&player.researched_techs, year);
 
@@ -4183,7 +4186,10 @@ fn print_overview(game: &GameState) {
 
     // Army
     let army_count = player.army.len();
-    let army_fp = player.total_military_firepower();
+    let army_fp = {
+        let fp = player.total_military_firepower();
+        if fp == 0.0 { 0.0 } else { fp }
+    };
 
     // Civilians
     let civilian_count = player.civilians.len();
@@ -4237,7 +4243,7 @@ fn print_overview(game: &GameState) {
 
     // Tech
     let researched_count = player.researched_techs.len();
-    let total_techs = game.tech_tree.total_tech_count();
+    let total_techs = game.game_data.tech_tree.total_tech_count();
 
     // Score
     let score = calculate_score(player);

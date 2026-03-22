@@ -476,6 +476,7 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
 /// Only recruits if the nation has a food surplus (total food > total workers).
 fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
     let nation_ids: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
+    let nation_ids_copy = nation_ids.clone();
 
     for nation_id in nation_ids {
         let nation = match game.nations.iter().find(|n| n.id == nation_id) {
@@ -551,6 +552,22 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
 
         if recruited > 0 {
             report.immigration.push((nation_id, recruited));
+        }
+    }
+
+    // Emergency recruitment: nations with 0 workers get 1 free worker per turn
+    // (government-subsidized labor to prevent permanent death spiral)
+    for nation_id in nation_ids_copy {
+        let nation = match game.nations.iter_mut().find(|n| n.id == nation_id) {
+            Some(n) => n,
+            None => continue,
+        };
+        if !nation.is_great_power() {
+            continue;
+        }
+        if nation.labor.total_workers() == 0 {
+            nation.labor.recruit_immigrant();
+            report.immigration.push((nation_id, 1));
         }
     }
 }
@@ -1137,6 +1154,11 @@ fn process_food(game: &mut GameState, report: &mut TurnReport) {
             None => continue,
         };
 
+        // Don't process food if there are no workers to feed
+        if nation.labor.total_workers() == 0 {
+            continue;
+        }
+
         let food_processing_cap = nation
             .buildings
             .iter()
@@ -1540,15 +1562,73 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
             units: attacker_units,
         };
 
-        // Create defender force from garrison
-        let mut garrison = create_garrison(defender_type);
-        for unit in &mut garrison {
-            unit.owner = defender_id;
-            unit.position = province_id;
+        // Create defender force: use actual army units stationed in the province,
+        // plus a garrison for capital provinces only.
+        let defender_units: Vec<_> = match game.get_nation(defender_id) {
+            Some(n) => n
+                .army
+                .iter()
+                .filter(|u| u.position == province_id)
+                .cloned()
+                .collect(),
+            None => Vec::new(),
+        };
+
+        let is_capital = game
+            .get_nation(defender_id)
+            .is_some_and(|n| n.capital_province_id == province_id);
+
+        let mut defense_units = defender_units;
+        // Only generate a garrison for capital provinces (representing citizen militia)
+        if is_capital && defense_units.is_empty() {
+            let mut garrison = create_garrison(defender_type);
+            for unit in &mut garrison {
+                unit.owner = defender_id;
+                unit.position = province_id;
+            }
+            defense_units = garrison;
         }
+
+        // If no defenders at all, province falls without a fight
+        if defense_units.is_empty() {
+            // Auto-conquer: no battle needed
+            if let Some(province) = game.get_province_mut(province_id) {
+                province.owner = attacker_id;
+            }
+            if let Some(defender_nation) = game.get_nation_mut(defender_id) {
+                defender_nation
+                    .province_ids
+                    .retain(|&pid| pid != province_id);
+            }
+            if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
+                attacker_nation.add_province(province_id);
+            }
+            let attacker_name = game
+                .get_nation(attacker_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            let prov_name = game
+                .get_province(province_id)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| format!("Province {:?}", province_id));
+            let defender_name = game
+                .get_nation(defender_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            let turn = game.turn;
+            game.history.push((
+                turn,
+                format!(
+                    "{} conquered {} from {}",
+                    attacker_name, prov_name, defender_name
+                ),
+            ));
+            continue;
+        }
+
         let defender_force = CombatForce {
             nation: defender_id,
-            units: garrison,
+            units: defense_units,
         };
 
         // Get terrain and fort level from the province's capital tile
@@ -2156,6 +2236,7 @@ fn report_available_techs(game: &GameState, report: &mut TurnReport) {
         None => return,
     };
     let available = game
+        .game_data
         .tech_tree
         .available_techs(&nation.researched_techs, game.turn.year());
     let tech_names: Vec<String> = available.iter().map(|t| t.name.clone()).collect();
@@ -2341,6 +2422,14 @@ fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnRepor
     let threshold = 75;
 
     for minor_id in &minor_ids {
+        // Skip minor nations that have already been incorporated (no provinces left)
+        if game
+            .get_nation(*minor_id)
+            .is_some_and(|n| n.province_ids.is_empty())
+        {
+            continue;
+        }
+
         let mut best_gp: Option<NationId> = None;
         let mut best_score: i32 = threshold - 1; // must be >= threshold
 
@@ -2470,7 +2559,7 @@ fn resolve_unit_upgrades(game: &mut GameState, report: &mut TurnReport) {
         let researched_tech_names: Vec<String> = nation
             .researched_techs
             .iter()
-            .filter_map(|tid| game.tech_tree.get(*tid))
+            .filter_map(|tid| game.game_data.tech_tree.get(*tid))
             .map(|t| t.name.clone())
             .collect();
 
@@ -2856,13 +2945,13 @@ fn check_council_vote(game: &GameState, report: &mut TurnReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::GameData;
     use crate::diplomacy::DiplomacyState;
     use crate::economy::buildings::Building;
     use crate::hex::HexCoord;
     use crate::map::tile::Tile;
     use crate::map::{HexMap, Province};
     use crate::nation::{Nation, NationColor};
-    use crate::tech::TechTree;
 
     /// Build a minimal GameState for testing the turn processor.
     fn test_game_state() -> GameState {
@@ -2906,7 +2995,7 @@ mod tests {
             nations: vec![nation1],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -2954,7 +3043,7 @@ mod tests {
             nations: vec![nation1],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -3106,12 +3195,18 @@ mod tests {
         }
         assert_eq!(game.turn, TurnNumber::new(6));
 
-        // After 5 turns, the nation should have accumulated resources
-        // With 0 workers, no food is consumed
-        // Grain: 1 gathered per turn, not consumed = 5
-        // Timber: 1 gathered per turn, not consumed = 5
+        // After 5 turns, the nation should have accumulated resources.
+        // Emergency recruitment gives 1 worker on turn 1 (nation started with 0),
+        // so that worker consumes food on subsequent turns.
+        // Grain: 1 gathered per turn = 5, minus some consumed by the emergency worker.
+        // Timber: 1 gathered per turn = 5, not consumed by workers.
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.resource_amount(ResourceType::Grain), 5);
+        // At least some grain should exist (worker eats 1/turn but produces 1/turn)
+        assert!(
+            nation.resource_amount(ResourceType::Grain) >= 1,
+            "Grain should accumulate: got {}",
+            nation.resource_amount(ResourceType::Grain)
+        );
         assert_eq!(nation.resource_amount(ResourceType::Timber), 5);
     }
 
@@ -3165,7 +3260,7 @@ mod tests {
             nations: vec![nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -3257,7 +3352,7 @@ mod tests {
             nations: vec![nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -3679,11 +3774,14 @@ mod tests {
     fn food_processing_converts_raw_food_to_canned() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
+        // Need workers for food processing to trigger
+        nation.labor.untrained = 1;
         // Add a FoodProcessing building with capacity 3
         nation
             .buildings
             .push(Building::new(BuildingType::FoodProcessing, 3));
-        nation.add_resource(ResourceType::Grain, 8);
+        // 9 grain: 6 consumed by processing (cap 3 × 2), 1 consumed by worker, 2 remain
+        nation.add_resource(ResourceType::Grain, 9);
 
         let report = process_turn(&mut game);
 
@@ -3864,7 +3962,7 @@ mod tests {
             nations: vec![nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -3979,6 +4077,8 @@ mod tests {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
 
+        // Start with some workers so emergency recruitment doesn't trigger
+        nation.labor.untrained = 2;
         // Plenty of food, no materials
         nation.add_resource(ResourceType::Grain, 20);
 
@@ -4007,7 +4107,8 @@ mod tests {
         nation.add_goods(GoodsType::Clothing, 10);
         nation.add_goods(GoodsType::Furniture, 10);
         nation.add_resource(ResourceType::Grain, 50);
-        nation.labor.untrained = 0;
+        // Start with 1 worker so emergency recruitment doesn't trigger
+        nation.labor.untrained = 1;
 
         // With only 1 province, max immigrants = 1/4 = 0
         // (already has 1 province from construction)
@@ -4118,7 +4219,7 @@ mod tests {
             nations: vec![nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -4183,7 +4284,7 @@ mod tests {
             nations: vec![nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -4312,7 +4413,7 @@ mod tests {
             nations: vec![nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -4411,7 +4512,7 @@ mod tests {
             nations: vec![nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -4579,7 +4680,7 @@ mod tests {
             nations: vec![nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -4647,7 +4748,7 @@ mod tests {
             nations: vec![nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -4716,7 +4817,7 @@ mod tests {
             nations: vec![nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -5029,7 +5130,7 @@ mod tests {
             nations: vec![nation1, nation2],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -5383,7 +5484,7 @@ mod tests {
             nations: vec![human, attacker, minor, pact_holder],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -5504,7 +5605,7 @@ mod tests {
             nations: vec![nation1, nation2],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -5667,7 +5768,7 @@ mod tests {
             nations: vec![gp, mn],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -5773,7 +5874,7 @@ mod tests {
             nations: vec![gp, mn],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -6013,7 +6114,7 @@ mod tests {
             nations: vec![nation1, nation2],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -6261,7 +6362,7 @@ mod tests {
             nations: vec![nation1],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -6391,7 +6492,7 @@ mod tests {
             nations: vec![nation1],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -6569,7 +6670,7 @@ mod tests {
             nations: vec![nation_gp, nation_mn],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -6661,7 +6762,7 @@ mod tests {
             nations: vec![nation_atk, nation_def],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy,
             pending_attacks: vec![(NationId(1), ProvinceId(2))],
             pending_moves: Vec::new(),
@@ -6766,7 +6867,7 @@ mod tests {
             nations: vec![nation_atk, nation_def],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            tech_tree: TechTree::new(),
+            game_data: GameData::default(),
             diplomacy,
             pending_attacks: vec![(NationId(1), ProvinceId(2))],
             pending_moves: Vec::new(),

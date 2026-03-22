@@ -1,0 +1,34 @@
+// Production chain definitions — data-driven, moddable
+// Defines production ratios for mill and factory processing chains.
+//
+// Each chain converts raw resources → materials (mills) → finished goods (factories).
+// Labor cost is per unit of output produced.
+
+(
+    chains: [
+        (
+            name: "Timber",
+            mill_input_ratio: 2,
+            mill_output_ratio: 1,
+            factory_input_ratio: 2,
+            factory_output_ratio: 1,
+            labor_per_unit: 2,
+        ),
+        (
+            name: "Metal",
+            mill_input_ratio: 1,
+            mill_output_ratio: 1,
+            factory_input_ratio: 2,
+            factory_output_ratio: 1,
+            labor_per_unit: 2,
+        ),
+        (
+            name: "Textile",
+            mill_input_ratio: 2,
+            mill_output_ratio: 1,
+            factory_input_ratio: 2,
+            factory_output_ratio: 1,
+            labor_per_unit: 2,
+        ),
+    ],
+)
