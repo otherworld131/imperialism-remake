@@ -763,13 +763,18 @@ fn ai_build_military(game: &mut GameState, nation_id: NationId, actions: &mut Ve
 fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId], actions: &mut Vec<String>) {
     let turn_number = game.turn.0;
 
-    // Collect minor nation IDs, their capitals, names, and tile counts
+    // Collect minor nation IDs, their capitals, names, and tile counts.
+    // Skip minor nations that have been fully conquered: check both
+    // province_ids (ownership tracking) and actual province ownership.
     let minor_nations: Vec<(NationId, ProvinceId, String, usize)> = game
         .nations
         .iter()
         .filter(|n| !n.is_great_power())
+        .filter(|n| {
+            // Must still actually own at least one province
+            game.provinces.iter().any(|p| p.owner == n.id)
+        })
         .map(|n| {
-            // Count total tiles across all provinces owned by this minor
             let total_tiles: usize = game
                 .provinces
                 .iter()
@@ -846,6 +851,9 @@ fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId], actions: &m
             })
             .collect();
 
+        // Skip candidates with 0 tiles (already fully conquered)
+        candidates.retain(|c| c.3 > 0);
+
         // Sort by tile count descending (most valuable first)
         candidates.sort_by(|a, b| b.3.cmp(&a.3));
 
@@ -858,12 +866,25 @@ fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId], actions: &m
         let target_index = seed % pick_range;
         let (target_id, target_capital, ref target_name, _) = *candidates[target_index];
 
+        // Find a province actually owned by the target to attack
+        let attack_province = game
+            .provinces
+            .iter()
+            .find(|p| p.owner == target_id)
+            .map(|p| p.id)
+            .unwrap_or(target_capital);
+
+        // Skip if no province is actually owned by the target
+        if game.provinces.iter().all(|p| p.owner != target_id) {
+            continue;
+        }
+
         let attacker_name = game
             .get_nation(ai_id)
             .map(|n| n.name.clone())
             .unwrap_or_else(|| "Unknown".to_string());
         game.diplomacy.declare_war(ai_id, target_id);
-        game.pending_attacks.push((ai_id, target_capital));
+        game.pending_attacks.push((ai_id, attack_province));
         targeted_this_round.push(target_id);
         actions.push(format!(
             "{} has declared war on {}!",
@@ -1477,6 +1498,50 @@ fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
 /// - **Economic**: proposes pacts for trade security, sends grants.
 /// - **All AI**: send small grants ($500) to Minor Nations with embassies to improve relations.
 pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
+    // Auto-make peace with any nation that has 0 provinces left.
+    // There is nothing left to fight over, so continuing a war is pointless.
+    {
+        let war_targets: Vec<NationId> = game
+            .nations
+            .iter()
+            .filter(|n| {
+                n.id != nation_id
+                    && n.province_ids.is_empty()
+                    && game
+                        .diplomacy
+                        .get_relation(nation_id, n.id)
+                        .is_some_and(|r| r.at_war)
+            })
+            .map(|n| n.id)
+            .collect();
+
+        for target_id in war_targets {
+            // Skip peace if we have pending attacks against provinces owned by this nation
+            let has_pending_attack = game.pending_attacks.iter().any(|(attacker, prov_id)| {
+                *attacker == nation_id
+                    && game
+                        .get_province(*prov_id)
+                        .is_some_and(|p| p.owner == target_id)
+            });
+            if has_pending_attack {
+                continue;
+            }
+            game.diplomacy.make_peace(nation_id, target_id);
+            let nation_name = game
+                .get_nation(nation_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            let target_name = game
+                .get_nation(target_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            actions.push(format!(
+                "{} made peace with {} (no provinces remaining)",
+                nation_name, target_name
+            ));
+        }
+    }
+
     let personality = get_personality(game, nation_id);
     let turn_number = game.turn.0;
 
@@ -1563,7 +1628,13 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
                 .map(|n| n.id)
                 .collect();
 
+            let mut alliances_formed = existing_alliances;
             for gp_id in gp_ids {
+                // Re-check cap inside loop to prevent forming more than 2 total
+                if alliances_formed >= 2 {
+                    break;
+                }
+
                 let at_war = game
                     .diplomacy
                     .get_relation(nation_id, gp_id)
@@ -1598,6 +1669,7 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
                 }
 
                 if game.diplomacy.propose_alliance(nation_id, gp_id).is_ok() {
+                    alliances_formed += 1;
                     let nation_name = game
                         .get_nation(nation_id)
                         .map(|n| n.name.clone())
@@ -2380,6 +2452,17 @@ fn ai_propose_peace(
     let estimated_starting = current_provinces + provinces_lost_count;
 
     for (enemy_id, enemy_name) in &enemies_with_names {
+        // Skip peace if we have pending attacks against provinces owned by this enemy
+        let has_pending_attack = game.pending_attacks.iter().any(|(attacker, prov_id)| {
+            *attacker == nation_id
+                && game
+                    .get_province(*prov_id)
+                    .is_some_and(|p| p.owner == *enemy_id)
+        });
+        if has_pending_attack {
+            continue;
+        }
+
         // Immediate peace if province loss exceeds threshold
         if estimated_starting > 0 {
             let loss_ratio = provinces_lost_count as f64 / estimated_starting as f64;
@@ -5116,6 +5199,158 @@ mod tests {
             actions.is_empty(),
             "AI should not sue for peace when not losing; actions: {:?}",
             actions
+        );
+    }
+
+    // ── Regression: C5 — AI never declares war on Great Powers ──
+
+    #[test]
+    fn ai_does_not_declare_war_on_great_powers() {
+        let mut game = test_game_with_ai();
+        // Turn 20 is a war-consideration turn for Balanced AI
+        game.turn = TurnNumber::new(20);
+
+        // Give AI enough army units to meet the threshold (4 for Balanced)
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        for i in 0..6 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(5000 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+
+        // No minor nations exist in this game — only two Great Powers
+        let mut actions = Vec::new();
+        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
+
+        // AI should NOT declare war on the human Great Power
+        let at_war = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(1))
+            .map(|r| r.at_war)
+            .unwrap_or(false);
+        assert!(
+            !at_war,
+            "AI should never declare war on a Great Power; only minor nations are valid targets"
+        );
+        assert!(
+            game.pending_attacks.is_empty(),
+            "No attacks should be pending against a Great Power"
+        );
+    }
+
+    // ── Regression: H2 — Alliance spam prevention ──────────────
+
+    #[test]
+    fn no_alliances_formed_before_turn_10() {
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+
+        // Set AI to Diplomatic personality (the only one that proposes alliances)
+        game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Diplomatic);
+
+        // Add a third GP that is AI-controlled
+        let mut gp3 = Nation::new(
+            NationId(4),
+            "ThirdPower".to_string(),
+            NationColor::Green,
+            NationType::GreatPower,
+            ProvinceId(2),
+        );
+        gp3.ai_personality = Some(AiPersonality::Balanced);
+        gp3.treasury = Money::dollars(10000);
+        game.nations.push(gp3);
+
+        // Initialize GP embassies
+        let gp_ids: Vec<NationId> = game
+            .nations
+            .iter()
+            .filter(|n| n.is_great_power())
+            .map(|n| n.id)
+            .collect();
+        game.diplomacy.initialize_great_powers(&gp_ids);
+
+        // Turn 1: alliances should NOT be proposed (turn < 10)
+        game.turn = TurnNumber(1);
+
+        let mut actions = Vec::new();
+        ai_manage_diplomacy(&mut game, ai_id, &mut actions);
+
+        let alliance_count: usize = game
+            .nations
+            .iter()
+            .filter(|n| {
+                n.is_great_power()
+                    && n.id != ai_id
+                    && game
+                        .diplomacy
+                        .has_treaty(ai_id, n.id, crate::events::TreatyType::Alliance)
+            })
+            .count();
+        assert_eq!(
+            alliance_count, 0,
+            "No alliances should form before turn 10; got {}",
+            alliance_count
+        );
+    }
+
+    #[test]
+    fn alliances_capped_at_two() {
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+
+        // Set AI to Diplomatic personality
+        game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Diplomatic);
+
+        // Add multiple AI-controlled Great Powers
+        for i in 4..=7 {
+            let mut gp = Nation::new(
+                NationId(i),
+                format!("Power{}", i),
+                NationColor::Green,
+                NationType::GreatPower,
+                ProvinceId(2),
+            );
+            gp.ai_personality = Some(AiPersonality::Balanced);
+            gp.treasury = Money::dollars(10000);
+            game.nations.push(gp);
+        }
+
+        // Initialize GP embassies
+        let gp_ids: Vec<NationId> = game
+            .nations
+            .iter()
+            .filter(|n| n.is_great_power())
+            .map(|n| n.id)
+            .collect();
+        game.diplomacy.initialize_great_powers(&gp_ids);
+
+        // Set turn to 40 (well past the turn 10 threshold)
+        game.turn = TurnNumber(40);
+
+        // Run diplomacy multiple times to give it every chance to form alliances
+        for _ in 0..5 {
+            let mut actions = Vec::new();
+            ai_manage_diplomacy(&mut game, ai_id, &mut actions);
+        }
+
+        let alliance_count: usize = game
+            .nations
+            .iter()
+            .filter(|n| {
+                n.is_great_power()
+                    && n.id != ai_id
+                    && game
+                        .diplomacy
+                        .has_treaty(ai_id, n.id, crate::events::TreatyType::Alliance)
+            })
+            .count();
+        assert!(
+            alliance_count <= 2,
+            "Diplomatic AI should have at most 2 alliances; got {}",
+            alliance_count
         );
     }
 }

@@ -1438,8 +1438,8 @@ fn resolve_trade_session(game: &mut GameState, report: &mut TurnReport) {
 }
 
 /// Apply maintenance costs for army units.
-/// Bankruptcy floor: treasury cannot go below -$5,000.
-const BANKRUPTCY_FLOOR: Money = Money::dollars(-5000);
+/// Bankruptcy floor: treasury cannot go below $0.
+const BANKRUPTCY_FLOOR: Money = Money::ZERO;
 
 fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
     for nation in &mut game.nations {
@@ -1452,7 +1452,7 @@ fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
             nation.treasury -= total_cost;
         }
 
-        // Bankruptcy protection: cap treasury at floor of -$5,000
+        // Bankruptcy protection: treasury cannot go below $0
         if nation.treasury < BANKRUPTCY_FLOOR {
             nation.treasury = BANKRUPTCY_FLOOR;
         }
@@ -1530,12 +1530,25 @@ fn resolve_military_movement(game: &mut GameState, report: &mut TurnReport) {
 fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
     let attacks: Vec<(NationId, ProvinceId)> = game.pending_attacks.drain(..).collect();
 
+    // Track provinces that have already changed hands this turn to prevent
+    // ping-pong (Province A going X → Y → Z in one turn).
+    let mut already_contested: HashSet<ProvinceId> = HashSet::new();
+
     for (attacker_id, province_id) in attacks {
+        // Skip attacks on provinces that already changed hands this turn
+        if already_contested.contains(&province_id) {
+            continue;
+        }
         // Look up province owner
         let defender_id = match game.get_province(province_id) {
             Some(p) => p.owner,
             None => continue,
         };
+
+        // Skip self-conquest (attacker already owns the province)
+        if attacker_id == defender_id {
+            continue;
+        }
 
         // Get defender nation type for garrison creation
         let defender_type = match game.get_nation(defender_id) {
@@ -1603,6 +1616,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
             if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
                 attacker_nation.add_province(province_id);
             }
+            already_contested.insert(province_id);
             let attacker_name = game
                 .get_nation(attacker_id)
                 .map(|n| n.name.clone())
@@ -1692,6 +1706,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
             if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
                 attacker_nation.add_province(province_id);
             }
+            already_contested.insert(province_id);
 
             // Captured GP capital: industrialize immediately (set to Village)
             let is_gp_capital = defender_type == NationType::GreatPower
@@ -2309,6 +2324,13 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
             if *ally == *attacker {
                 continue;
             }
+            // Skip joining wars against nations that have 0 provinces (already defeated)
+            let attacker_has_provinces = game
+                .get_nation(*attacker)
+                .is_some_and(|n| !n.province_ids.is_empty());
+            if !attacker_has_provinces {
+                continue;
+            }
             // Check if this ally is already at war with the attacker
             let already_at_war = game
                 .diplomacy
@@ -2348,6 +2370,13 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
         let attacker_allies = game.diplomacy.get_allies(*attacker);
         for ally in &attacker_allies {
             if *ally == *defender {
+                continue;
+            }
+            // Skip joining wars against nations that have 0 provinces (already defeated)
+            let defender_has_provinces = game
+                .get_nation(*defender)
+                .is_some_and(|n| !n.province_ids.is_empty());
+            if !defender_has_provinces {
                 continue;
             }
             let already_at_war = game
@@ -6532,22 +6561,22 @@ mod tests {
 
         let report = process_turn(&mut game);
 
-        // Treasury should not go below -$5,000
+        // Treasury should not go below $0
         let nation = game.get_nation(NationId(1)).unwrap();
         assert!(
-            nation.treasury >= Money::dollars(-5000),
-            "Treasury {} should not go below -$5,000",
+            nation.treasury >= Money::ZERO,
+            "Treasury {} should not go below $0",
             nation.treasury
         );
 
-        // Should have bankruptcy headline
+        // With floor at $0, nation is NOT bankrupt (treasury == $0, not negative)
         let has_crisis_headline = report
             .newspaper_headlines
             .iter()
             .any(|h| h.contains("FINANCIAL CRISIS"));
         assert!(
-            has_crisis_headline,
-            "Should have FINANCIAL CRISIS headline when bankrupt"
+            !has_crisis_headline,
+            "Should NOT have FINANCIAL CRISIS headline when floor is $0"
         );
     }
 
@@ -6568,11 +6597,40 @@ mod tests {
         process_turn(&mut game);
 
         let nation = game.get_nation(NationId(1)).unwrap();
-        // Guards cost maintenance, so treasury should go negative
-        // is_bankrupt should be true
-        if nation.treasury < Money::ZERO {
-            assert!(nation.is_bankrupt());
+        // With floor at $0, treasury should be capped at zero, not negative
+        assert!(
+            nation.treasury >= Money::ZERO,
+            "Treasury {} should not go below $0",
+            nation.treasury
+        );
+        assert!(!nation.is_bankrupt());
+    }
+
+    #[test]
+    fn treasury_floor_zero_after_maintenance() {
+        let mut game = test_game_state();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        // Start with $0 treasury
+        nation.treasury = Money::ZERO;
+        // Add army units that will incur maintenance costs
+        for i in 0..5u32 {
+            let unit = ArmyUnit::new(
+                crate::map::UnitId(8000 + i),
+                ArmyUnitType::Regulars,
+                NationId(1),
+                ProvinceId(1),
+            );
+            nation.army.push(unit);
         }
+
+        process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert!(
+            nation.treasury >= Money::ZERO,
+            "Treasury {} must not go below $0 after maintenance",
+            nation.treasury
+        );
     }
 
     // ── Treasury integration test ──────────────────────────────────
@@ -6888,5 +6946,177 @@ mod tests {
                 tile.infrastructure.fort_level
             );
         }
+    }
+
+    // ── Regression: C1 — Voluntary incorporation spam ──────────
+
+    #[test]
+    fn no_reincorporation_of_already_incorporated_minor() {
+        let mut game = test_game_state_with_minor_nation();
+
+        // Set diplomacy score to 80 (above threshold)
+        let rel = game.diplomacy.ensure_relation(NationId(2), NationId(1));
+        rel.score = 80;
+
+        // Simulate that the minor nation was already incorporated (0 provinces)
+        let minor = game.get_nation_mut(NationId(2)).unwrap();
+        minor.province_ids.clear();
+
+        // Process multiple turns
+        for _ in 0..5 {
+            let report = process_turn(&mut game);
+
+            // No incorporations should happen because the minor has 0 provinces
+            assert!(
+                report.incorporations.is_empty(),
+                "Already-incorporated minor (0 provinces) should not be re-incorporated; turn {}",
+                game.turn.0 - 1
+            );
+        }
+    }
+
+    // ── Regression: C2 — Worker starvation death spiral ────────
+
+    #[test]
+    fn emergency_recruitment_when_zero_workers() {
+        let mut game = test_game_state();
+
+        // Verify nation starts with 0 workers
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(
+            nation.labor.total_workers(),
+            0,
+            "Nation should start with 0 workers"
+        );
+
+        // Process one turn
+        process_turn(&mut game);
+
+        // Emergency recruitment should have given at least 1 worker
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert!(
+            nation.labor.total_workers() >= 1,
+            "Emergency recruitment should give at least 1 worker; got {}",
+            nation.labor.total_workers()
+        );
+    }
+
+    // ── Regression: C4 — Phantom defenders (auto-conquer) ──────
+
+    #[test]
+    fn undefended_non_capital_province_is_auto_conquered() {
+        use crate::map::UnitId;
+        use crate::military::units::ArmyUnit;
+
+        let coord1 = HexCoord::new(0, 0);
+        let coord2 = HexCoord::new(1, 0);
+        let coord3 = HexCoord::new(2, 0);
+
+        let mut hex_map = HexMap::new(10, 10);
+        let tile1 = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        let tile2 = Tile::with_province(TerrainType::DryPlains, ProvinceId(2));
+        let tile3 = Tile::with_province(TerrainType::DryPlains, ProvinceId(3));
+        hex_map.set_tile(coord1, tile1);
+        hex_map.set_tile(coord2, tile2);
+        hex_map.set_tile(coord3, tile3);
+
+        let province1 = Province::new(
+            ProvinceId(1),
+            "Attacker Land".to_string(),
+            NationId(1),
+            coord1,
+            vec![coord1],
+            4,
+        );
+        // Province 2 is a non-capital province of the defender
+        let province2 = Province::new(
+            ProvinceId(2),
+            "Target Province".to_string(),
+            NationId(2),
+            coord2,
+            vec![coord2],
+            3,
+        );
+        // Province 3 is the defender's capital
+        let province3 = Province::new(
+            ProvinceId(3),
+            "Defender Capital".to_string(),
+            NationId(2),
+            coord3,
+            vec![coord3],
+            3,
+        );
+
+        let mut nation1 = Nation::new(
+            NationId(1),
+            "Attacker".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation1.treasury = Money::dollars(10000);
+        // Give attacker army units
+        for i in 0..4 {
+            nation1.army.push(ArmyUnit::new(
+                UnitId(100 + i),
+                ArmyUnitType::Regulars,
+                NationId(1),
+                ProvinceId(1),
+            ));
+        }
+
+        let mut nation2 = Nation::new(
+            NationId(2),
+            "Defender".to_string(),
+            NationColor::Red,
+            NationType::MinorNation,
+            ProvinceId(3), // capital is Province 3, NOT Province 2
+        );
+        nation2.add_province(ProvinceId(2));
+        // Defender has NO army units in Province 2 (the target)
+
+        let mut diplomacy = DiplomacyState::new();
+        diplomacy.declare_war(NationId(1), NationId(2));
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province1, province2, province3],
+            nations: vec![nation1, nation2],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy,
+            pending_attacks: vec![(NationId(1), ProvinceId(2))],
+            pending_moves: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+        };
+
+        process_turn(&mut game);
+
+        // Province 2 should have been auto-conquered (no defenders, non-capital)
+        let province = game.get_province(ProvinceId(2)).unwrap();
+        assert_eq!(
+            province.owner,
+            NationId(1),
+            "Undefended non-capital province should be auto-conquered by attacker"
+        );
+
+        // Attacker should now own Province 2
+        let attacker = game.get_nation(NationId(1)).unwrap();
+        assert!(
+            attacker.province_ids.contains(&ProvinceId(2)),
+            "Attacker should have Province 2 in its province list"
+        );
+
+        // Defender should no longer own Province 2
+        let defender = game.get_nation(NationId(2)).unwrap();
+        assert!(
+            !defender.province_ids.contains(&ProvinceId(2)),
+            "Defender should no longer have Province 2"
+        );
     }
 }
