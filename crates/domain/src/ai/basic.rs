@@ -793,31 +793,42 @@ fn ai_build_military(game: &mut GameState, nation_id: NationId, actions: &mut Ve
         }
     } else if army_count >= tier2_max && treasury > tier3_treasury {
         // Tier 3: advanced units with some variety
-        let tier3_options: &[ArmyUnitType] = match personality {
-            AiPersonality::Aggressive => &[
-                ArmyUnitType::LightArtillery,
-                ArmyUnitType::LightArtillery,
-                ArmyUnitType::Grenadiers,
-            ],
-            _ => &[
-                ArmyUnitType::LightArtillery,
-                ArmyUnitType::Grenadiers,
-                ArmyUnitType::LightArtillery,
-            ],
+        // Cap total army size to prevent runaway military buildup
+        let tier3_max = match personality {
+            AiPersonality::Aggressive => 15,
+            AiPersonality::Diplomatic => 8,
+            AiPersonality::Economic => 10,
+            AiPersonality::Balanced => 12,
         };
-        let unit_type = tier3_options[variety_seed % tier3_options.len()];
-        let cost = if unit_type == ArmyUnitType::LightArtillery {
-            Money::dollars(2000)
-        } else {
-            Money::dollars(1000)
-        };
-        nation.treasury -= cost;
-        let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
-        nation.army.push(unit);
-        actions.push(format!(
-            "{} has been expanding its military forces",
-            nation_name
-        ));
+        if army_count < tier3_max {
+            let tier3_options: &[ArmyUnitType] = match personality {
+                AiPersonality::Aggressive => &[
+                    ArmyUnitType::LightArtillery,
+                    ArmyUnitType::LightArtillery,
+                    ArmyUnitType::Grenadiers,
+                ],
+                _ => &[
+                    ArmyUnitType::LightArtillery,
+                    ArmyUnitType::Grenadiers,
+                    ArmyUnitType::LightArtillery,
+                ],
+            };
+            let unit_type = tier3_options[variety_seed % tier3_options.len()];
+            let cost = if unit_type == ArmyUnitType::LightArtillery {
+                Money::dollars(2000)
+            } else {
+                Money::dollars(1000)
+            };
+            if let Some(remaining) = nation.treasury.checked_sub(cost) {
+                nation.treasury = remaining;
+                let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
+                nation.army.push(unit);
+                actions.push(format!(
+                    "{} has been expanding its military forces",
+                    nation_name
+                ));
+            }
+        }
     }
 }
 
