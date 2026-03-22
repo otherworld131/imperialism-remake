@@ -1609,6 +1609,8 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
     // Track nations that have already conquered a province this turn
     // to prevent territory swap loops (A takes from B while B takes from A).
     let mut already_conquered: HashSet<NationId> = HashSet::new();
+    // Track nations that lost a province this turn — they cannot attack.
+    let mut lost_province: HashSet<NationId> = HashSet::new();
 
     for (attacker_id, province_id) in attacks {
         // Skip attacks on provinces that already changed hands this turn
@@ -1617,6 +1619,10 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
         }
         // Limit each nation to one conquest per turn to prevent swap loops
         if already_conquered.contains(&attacker_id) {
+            continue;
+        }
+        // Nations that lost a province this turn cannot attack (prevents revenge loops)
+        if lost_province.contains(&attacker_id) {
             continue;
         }
         // Look up province owner
@@ -1698,6 +1704,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
             }
             already_contested.insert(province_id);
             already_conquered.insert(attacker_id);
+            lost_province.insert(defender_id);
             let attacker_name = game
                 .get_nation(attacker_id)
                 .map(|n| n.name.clone())
@@ -1789,6 +1796,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
             }
             already_contested.insert(province_id);
             already_conquered.insert(attacker_id);
+            lost_province.insert(defender_id);
 
             // Captured GP capital: industrialize immediately (set to Village)
             let is_gp_capital = defender_type == NationType::GreatPower

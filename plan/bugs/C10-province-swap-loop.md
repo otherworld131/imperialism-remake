@@ -10,4 +10,5 @@ an endless tit-for-tat swap pattern filling the history log.
 
 **Fix:**
 - [x] Added `already_conquered` tracking — each nation can only conquer one province per turn
+- [x] Added `lost_province` tracking — nations that lost a province this turn cannot attack
 - Province swap spam eliminated from late-game history

@@ -453,8 +453,11 @@ impl ArmyUnit {
     }
 
     /// Award a medal to this unit, incrementing the medal count.
+    /// Capped at 4 medals (2x firepower multiplier) per the original game.
     pub fn award_medal(&mut self) {
-        self.medals = self.medals.saturating_add(1);
+        if self.medals < 4 {
+            self.medals += 1;
+        }
     }
 
     /// Returns true if the unit is still alive (health > 0).
