@@ -4464,23 +4464,159 @@ fn print_pending_orders(game: &GameState) {
 fn auto_manage_human(game: &mut GameState) {
     let player_id = game.human_player_nation;
 
-    // Auto-research free techs
+    // Auto-sell excess resources for income (same as AI trade logic)
+    if let Some(nation) = game.get_nation_mut(player_id) {
+        let tradeable = [
+            ResourceType::Timber,
+            ResourceType::Coal,
+            ResourceType::Iron,
+            ResourceType::Cotton,
+            ResourceType::Wool,
+            ResourceType::Fruit,
+            ResourceType::Livestock,
+            ResourceType::Oil,
+        ];
+        for resource in tradeable {
+            let amount = nation.resource_amount(resource);
+            if amount > 10 {
+                let excess = amount - 10;
+                let price = domain::economy::trade::base_price(resource);
+                if price != Money::ZERO {
+                    let revenue = price * excess as i64;
+                    nation.remove_resource(resource, excess);
+                    nation.treasury += revenue;
+                }
+            }
+        }
+    }
+
+    // Auto-research techs: free ones always, affordable ones when treasury allows
     let researched: Vec<_> = match game.get_nation(player_id) {
         Some(n) => n.researched_techs.clone(),
         None => return,
     };
+    let treasury = game
+        .get_nation(player_id)
+        .map(|n| n.treasury)
+        .unwrap_or(Money::ZERO);
     let available = game
         .game_data
         .tech_tree
         .available_techs(&researched, game.turn.year());
-    let free_techs: Vec<_> = available
+    // Pick cheapest affordable tech
+    let mut affordable_techs: Vec<_> = available
         .iter()
-        .filter(|t| t.cost == Money::ZERO)
-        .map(|t| t.id)
+        .filter(|t| treasury.checked_sub(t.cost).is_some())
         .collect();
-    for tech_id in free_techs {
+    affordable_techs.sort_by_key(|t| t.cost.as_dollars());
+    if let Some(tech) = affordable_techs.first() {
+        let tech_id = tech.id;
+        let cost = tech.cost;
         if let Some(nation) = game.get_nation_mut(player_id) {
+            nation.treasury -= cost;
             nation.research_tech(tech_id);
+        }
+    }
+
+    // Auto-build depot on capital and railroads (same as AI)
+    {
+        let capital_pid = game
+            .get_nation(player_id)
+            .map(|n| n.capital_province_id)
+            .unwrap();
+        let capital_tiles: Vec<HexCoord> = game
+            .get_province(capital_pid)
+            .map(|p| p.tiles.clone())
+            .unwrap_or_default();
+        // Build depot on first capital tile if affordable
+        if let Some(&tile_coord) = capital_tiles.first() {
+            let has_depot = game
+                .hex_map
+                .get_tile(tile_coord)
+                .is_some_and(|t| t.infrastructure.has_depot);
+            if !has_depot
+                && let Ok(cost) = infrastructure::build_depot(&mut game.hex_map, tile_coord)
+                && let Some(nation) = game.get_nation_mut(player_id)
+                && nation.treasury.checked_sub(cost).is_some()
+            {
+                nation.treasury -= cost;
+            }
+        }
+        // Build railroads on capital tiles
+        for &tile_coord in &capital_tiles {
+            let needs_rr = game
+                .hex_map
+                .get_tile(tile_coord)
+                .is_some_and(|t| !t.infrastructure.has_railroad);
+            if needs_rr
+                && let Ok(cost) = infrastructure::build_railroad(&mut game.hex_map, tile_coord)
+                && let Some(nation) = game.get_nation_mut(player_id)
+                && let Some(remaining) = nation.treasury.checked_sub(cost)
+            {
+                nation.treasury = remaining;
+            }
+        }
+    }
+
+    // Auto-build depots and railroads on non-capital provinces (expand infrastructure)
+    {
+        let province_ids: Vec<ProvinceId> = game
+            .get_nation(player_id)
+            .map(|n| n.province_ids.clone())
+            .unwrap_or_default();
+        let capital_pid = game
+            .get_nation(player_id)
+            .map(|n| n.capital_province_id)
+            .unwrap();
+
+        for &pid in &province_ids {
+            if pid == capital_pid {
+                continue;
+            }
+            let can_afford = game
+                .get_nation(player_id)
+                .is_some_and(|n| n.treasury >= Money::dollars(500));
+            if !can_afford {
+                break;
+            }
+            let tiles: Vec<HexCoord> = game
+                .get_province(pid)
+                .map(|p| p.tiles.clone())
+                .unwrap_or_default();
+            // Build depot on first tile
+            if let Some(&tile_coord) = tiles.first() {
+                let has_depot = game
+                    .hex_map
+                    .get_tile(tile_coord)
+                    .is_some_and(|t| t.infrastructure.has_depot);
+                if !has_depot
+                    && let Ok(cost) = infrastructure::build_depot(&mut game.hex_map, tile_coord)
+                    && let Some(nation) = game.get_nation_mut(player_id)
+                    && let Some(remaining) = nation.treasury.checked_sub(cost)
+                {
+                    nation.treasury = remaining;
+                }
+            }
+            // Build railroads on tiles
+            for &tile_coord in &tiles {
+                let can_afford_rr = game
+                    .get_nation(player_id)
+                    .is_some_and(|n| n.treasury >= Money::dollars(200));
+                if !can_afford_rr {
+                    break;
+                }
+                let needs_rr = game
+                    .hex_map
+                    .get_tile(tile_coord)
+                    .is_some_and(|t| !t.infrastructure.has_railroad);
+                if needs_rr
+                    && let Ok(cost) = infrastructure::build_railroad(&mut game.hex_map, tile_coord)
+                    && let Some(nation) = game.get_nation_mut(player_id)
+                    && let Some(remaining) = nation.treasury.checked_sub(cost)
+                {
+                    nation.treasury = remaining;
+                }
+            }
         }
     }
 
