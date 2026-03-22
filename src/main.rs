@@ -413,7 +413,7 @@ fn main() {
                 let args = input.trim()[6..].trim();
                 cmd_grant(&mut game, args);
             }
-            "civilians" => {
+            "civilians" | "civilian" => {
                 println!();
                 print_civilians(&game);
             }
