@@ -33,20 +33,15 @@ const NATION_COLORS: Record<string, string> = {
   Indigo: '#4d0080',
 };
 
-// Lighter, semi-transparent versions for political map fills
 function politicalFill(nationHex: string): string {
   const c = parseInt(nationHex.slice(1), 16);
   const r = (c >> 16) & 0xff, g = (c >> 8) & 0xff, b = c & 0xff;
-  // Lighten and desaturate slightly
-  const lr = Math.min(255, r + Math.round((255 - r) * 0.45));
-  const lg = Math.min(255, g + Math.round((255 - g) * 0.45));
-  const lb = Math.min(255, b + Math.round((255 - b) * 0.45));
-  return `rgb(${lr},${lg},${lb})`;
+  return `rgb(${Math.min(255, r + Math.round((255 - r) * 0.45))},${Math.min(255, g + Math.round((255 - g) * 0.45))},${Math.min(255, b + Math.round((255 - b) * 0.45))})`;
 }
 
 const ZOOM_CLOSE = 2.0;
 const ZOOM_FAR = 0.7;
-const POLITICAL_THRESHOLD = 1.1; // Below this scale → political map
+const POLITICAL_THRESHOLD = 1.1;
 
 function hexToPixel(q: number, r: number): [number, number] {
   return [HEX_SIZE * (SQRT3 * q + SQRT3 / 2 * r), HEX_SIZE * (3 / 2 * r)];
@@ -61,6 +56,16 @@ function drawHexagon(ctx: CanvasRenderingContext2D, cx: number, cy: number, size
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
   ctx.closePath();
+}
+
+// Precompute the 6 vertex offsets for a hex of given size
+function hexVertices(size: number): [number, number][] {
+  const verts: [number, number][] = [];
+  for (let i = 0; i < 6; i++) {
+    const angle = (Math.PI / 180) * (60 * i - 30);
+    verts.push([size * Math.cos(angle), size * Math.sin(angle)]);
+  }
+  return verts;
 }
 
 function hexNeighbors(q: number, r: number): [number, number][] {
@@ -91,8 +96,6 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [scale, setScale] = useState(ZOOM_FAR);
 
-  const mapWidth = tiles.length > 0 ? (tiles[0].map_width || 60) : 60;
-  const mapPixelWidth = HEX_SIZE * SQRT3 * mapWidth;
   const isPolitical = scale < POLITICAL_THRESHOLD;
 
   const render = useCallback(() => {
@@ -110,157 +113,173 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
       tileMap.set(`${tile.q},${tile.r}`, tile);
     }
 
-    // Compute nation centroids for label placement
-    const nationTiles = new Map<string, { sx: number; sy: number; count: number; color: string }>();
+    const verts = hexVertices(HEX_SIZE);
 
-    const wraps = [-1, 0, 1];
+    // Nation centroids for labels
+    const nationInfo = new Map<string, { sx: number; sy: number; count: number; color: string }>();
 
-    for (const wrapOffset of wraps) {
-      ctx.save();
-      ctx.translate(offset.x + wrapOffset * mapPixelWidth * scale, offset.y);
-      ctx.scale(scale, scale);
+    ctx.save();
+    ctx.translate(offset.x, offset.y);
+    ctx.scale(scale, scale);
 
-      // ── Pass 1: Fill hexagons ──
-      for (const tile of tiles) {
-        const [px, py] = hexToPixel(tile.q, tile.r);
-        let color: string;
+    // ── Pass 1: Fill all hexagons ──
+    for (const tile of tiles) {
+      const [px, py] = hexToPixel(tile.q, tile.r);
+      let color: string;
+
+      if (tile.terrain === 'Sea') {
+        color = TERRAIN_COLORS.Sea;
+      } else if (isPolitical && tile.owner_color) {
+        const nc = NATION_COLORS[tile.owner_color];
+        color = nc ? politicalFill(nc) : (TERRAIN_COLORS[tile.terrain] || '#666');
+      } else {
+        color = TERRAIN_COLORS[tile.terrain] || '#666';
+        if (tile.owner_color) {
+          const nc = NATION_COLORS[tile.owner_color];
+          if (nc) color = tintColor(color, nc, 0.15);
+        }
+      }
+
+      drawHexagon(ctx, px, py, HEX_SIZE);
+      ctx.fillStyle = color;
+      ctx.fill();
+
+      // Accumulate nation centroid
+      if (tile.owner && tile.terrain !== 'Sea') {
+        const entry = nationInfo.get(tile.owner);
+        if (entry) { entry.sx += px; entry.sy += py; entry.count++; }
+        else nationInfo.set(tile.owner, { sx: px, sy: py, count: 1, color: NATION_COLORS[tile.owner_color] || '#333' });
+      }
+    }
+
+    // ── Pass 2: Draw each hex side with appropriate thickness ──
+    // Collect segments into 3 buckets by thickness
+    const normalEdges: number[] = [];   // x1,y1,x2,y2 flat array
+    const provinceEdges: number[] = [];
+    const countryEdges: number[] = [];
+
+    for (const tile of tiles) {
+      const [px, py] = hexToPixel(tile.q, tile.r);
+      const neighbors = hexNeighbors(tile.q, tile.r);
+
+      for (let i = 0; i < 6; i++) {
+        const [nq, nr] = neighbors[i];
+        const neighbor = tileMap.get(`${nq},${nr}`);
+
+        // Determine border type for THIS side
+        let borderType: 0 | 1 | 2; // 0=normal, 1=province, 2=country
 
         if (tile.terrain === 'Sea') {
-          color = TERRAIN_COLORS.Sea;
-        } else if (isPolitical && tile.owner_color) {
-          // Political mode: fill with light nation color
-          const nc = NATION_COLORS[tile.owner_color];
-          color = nc ? politicalFill(nc) : (TERRAIN_COLORS[tile.terrain] || '#666');
+          // Sea tiles: only draw if neighbor is land (coastline from land side handles it)
+          borderType = 0;
+        } else if (!neighbor || neighbor.terrain === 'Sea') {
+          // Edge of map or coast: country border if owned
+          borderType = tile.owner ? 2 : 0;
+        } else if (tile.owner !== neighbor.owner) {
+          // Different countries
+          borderType = 2;
+        } else if (tile.owner && tile.province !== neighbor.province) {
+          // Same country, different province
+          borderType = 1;
         } else {
-          // Geographical mode: terrain color with subtle nation tint
-          color = TERRAIN_COLORS[tile.terrain] || '#666';
-          if (tile.owner_color) {
-            const nc = NATION_COLORS[tile.owner_color];
-            if (nc) color = tintColor(color, nc, 0.15);
-          }
+          // Same country, same province: normal thin edge
+          borderType = 0;
         }
 
-        drawHexagon(ctx, px, py, HEX_SIZE);
-        ctx.fillStyle = color;
-        ctx.fill();
+        // Get the two vertices of this edge
+        const v1 = verts[i];
+        const v2 = verts[(i + 1) % 6];
+        const x1 = px + v1[0], y1 = py + v1[1];
+        const x2 = px + v2[0], y2 = py + v2[1];
 
-        // Accumulate centroid for nation labels (only for wrap 0)
-        if (wrapOffset === 0 && tile.owner && tile.terrain !== 'Sea') {
-          const key = tile.owner;
-          const entry = nationTiles.get(key);
-          if (entry) {
-            entry.sx += px;
-            entry.sy += py;
-            entry.count++;
-          } else {
-            nationTiles.set(key, {
-              sx: px, sy: py, count: 1,
-              color: NATION_COLORS[tile.owner_color] || '#333',
-            });
-          }
-        }
-      }
-
-      // ── Pass 2: Border hexagon outlines ──
-      // Instead of drawing individual edge segments (which leave gaps),
-      // draw the full hexagon outline for tiles that have ANY border edge.
-      // Country-border hexes get a thick outline, province-border hexes get thinner.
-
-      // First: identify which hexes need which border type
-      const countryBorderHexes: TileData[] = [];
-      const provinceBorderHexes: TileData[] = [];
-
-      for (const tile of tiles) {
-        if (tile.terrain === 'Sea') continue;
-        const neighbors = hexNeighbors(tile.q, tile.r);
-        let hasCountryBorder = false;
-        let hasProvinceBorder = false;
-
-        for (const [nq, nr] of neighbors) {
-          const neighbor = tileMap.get(`${nq},${nr}`);
-          if (!neighbor || neighbor.terrain === 'Sea') {
-            if (tile.owner) hasCountryBorder = true;
-          } else if (tile.owner !== neighbor.owner) {
-            hasCountryBorder = true;
-          } else if (tile.owner && tile.province !== neighbor.province) {
-            hasProvinceBorder = true;
-          }
-        }
-
-        if (hasCountryBorder) countryBorderHexes.push(tile);
-        else if (hasProvinceBorder) provinceBorderHexes.push(tile);
-      }
-
-      // Draw province borders: outline the full hex
-      ctx.strokeStyle = 'rgba(30,20,10,0.35)';
-      ctx.lineWidth = 1.2;
-      for (const tile of provinceBorderHexes) {
-        const [px, py] = hexToPixel(tile.q, tile.r);
-        drawHexagon(ctx, px, py, HEX_SIZE);
-        ctx.stroke();
-      }
-
-      // Draw country borders: outline the full hex with thick line
-      ctx.strokeStyle = 'rgba(10,5,0,0.85)';
-      ctx.lineWidth = 3;
-      for (const tile of countryBorderHexes) {
-        const [px, py] = hexToPixel(tile.q, tile.r);
-        drawHexagon(ctx, px, py, HEX_SIZE);
-        ctx.stroke();
-      }
-
-      // ── Pass 3: Capitals ──
-      for (const tile of tiles) {
-        if (!tile.is_capital || tile.terrain === 'Sea') continue;
-        const [px, py] = hexToPixel(tile.q, tile.r);
-
-        if (tile.is_country_capital) {
-          // Country capital: large gold star with black outline
-          const sz = Math.max(15, HEX_SIZE * 0.9);
-          ctx.font = `bold ${sz}px serif`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          // Black outline via strokeText
-          ctx.lineWidth = 2.5;
-          ctx.strokeStyle = 'rgba(0,0,0,0.8)';
-          ctx.strokeText('\u2605', px, py);
-          ctx.fillStyle = '#ffd700';
-          ctx.fillText('\u2605', px, py);
+        if (borderType === 2) {
+          countryEdges.push(x1, y1, x2, y2);
+        } else if (borderType === 1) {
+          provinceEdges.push(x1, y1, x2, y2);
         } else {
-          // Province capital: small white dot
-          ctx.beginPath();
-          ctx.arc(px, py, 2.5, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(255,255,255,0.7)';
-          ctx.fill();
-          ctx.strokeStyle = 'rgba(0,0,0,0.4)';
-          ctx.lineWidth = 0.8;
-          ctx.stroke();
+          normalEdges.push(x1, y1, x2, y2);
         }
       }
+    }
 
-      // ── Pass 4: Nation name labels (political mode only, wrap 0) ──
-      if (isPolitical && wrapOffset === 0) {
+    // Draw normal edges (very thin, subtle)
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+    ctx.lineWidth = 0.5;
+    ctx.lineCap = 'butt';
+    ctx.beginPath();
+    for (let i = 0; i < normalEdges.length; i += 4) {
+      ctx.moveTo(normalEdges[i], normalEdges[i + 1]);
+      ctx.lineTo(normalEdges[i + 2], normalEdges[i + 3]);
+    }
+    ctx.stroke();
+
+    // Draw province edges (medium)
+    ctx.strokeStyle = 'rgba(20,15,10,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.lineCap = 'butt';
+    ctx.beginPath();
+    for (let i = 0; i < provinceEdges.length; i += 4) {
+      ctx.moveTo(provinceEdges[i], provinceEdges[i + 1]);
+      ctx.lineTo(provinceEdges[i + 2], provinceEdges[i + 3]);
+    }
+    ctx.stroke();
+
+    // Draw country edges (thick, on top)
+    ctx.strokeStyle = 'rgba(10,5,0,0.9)';
+    ctx.lineWidth = 3.5;
+    ctx.lineCap = 'butt';
+    ctx.beginPath();
+    for (let i = 0; i < countryEdges.length; i += 4) {
+      ctx.moveTo(countryEdges[i], countryEdges[i + 1]);
+      ctx.lineTo(countryEdges[i + 2], countryEdges[i + 3]);
+    }
+    ctx.stroke();
+
+    // ── Pass 3: Capitals ──
+    for (const tile of tiles) {
+      if (!tile.is_capital || tile.terrain === 'Sea') continue;
+      const [px, py] = hexToPixel(tile.q, tile.r);
+
+      if (tile.is_country_capital) {
+        const sz = Math.max(15, HEX_SIZE * 0.9);
+        ctx.font = `bold ${sz}px serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        for (const [name, info] of nationTiles) {
-          const cx = info.sx / info.count;
-          const cy = info.sy / info.count;
-          // Scale font with territory size
-          const fontSize = Math.max(12, Math.min(28, Math.sqrt(info.count) * 3));
-          ctx.font = `bold ${fontSize}px Georgia, serif`;
-          // Dark outline
-          ctx.lineWidth = 3;
-          ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-          ctx.strokeText(name.toUpperCase(), cx, cy);
-          // White fill
-          ctx.fillStyle = 'rgba(255,255,255,0.9)';
-          ctx.fillText(name.toUpperCase(), cx, cy);
-        }
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+        ctx.strokeText('\u2605', px, py);
+        ctx.fillStyle = '#ffd700';
+        ctx.fillText('\u2605', px, py);
+      } else {
+        ctx.beginPath();
+        ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
       }
-
-      ctx.restore();
     }
-  }, [tiles, offset, scale, mapPixelWidth, isPolitical]);
+
+    // ── Pass 4: Nation name labels (political mode) ──
+    if (isPolitical) {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const [name, info] of nationInfo) {
+        const cx = info.sx / info.count;
+        const cy = info.sy / info.count;
+        const fontSize = Math.max(12, Math.min(28, Math.sqrt(info.count) * 3));
+        ctx.font = `bold ${fontSize}px Georgia, serif`;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+        ctx.strokeText(name.toUpperCase(), cx, cy);
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.fillText(name.toUpperCase(), cx, cy);
+      }
+    }
+
+    ctx.restore();
+  }, [tiles, offset, scale, isPolitical]);
 
   useEffect(() => { render(); }, [render]);
 
@@ -280,10 +299,8 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
       let minDist = Infinity;
       for (const tile of tiles) {
         const [px, py] = hexToPixel(tile.q, tile.r);
-        for (const w of [-1, 0, 1]) {
-          const d = Math.hypot(mx - px - w * mapPixelWidth, my - py);
-          if (d < HEX_SIZE && d < minDist) { minDist = d; closest = tile; }
-        }
+        const d = Math.hypot(mx - px, my - py);
+        if (d < HEX_SIZE && d < minDist) { minDist = d; closest = tile; }
       }
       onTileHover(closest);
     }
@@ -308,10 +325,8 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
       let minDist = Infinity;
       for (const tile of tiles) {
         const [px, py] = hexToPixel(tile.q, tile.r);
-        for (const w of [-1, 0, 1]) {
-          const d = Math.hypot(mx - px - w * mapPixelWidth, my - py);
-          if (d < HEX_SIZE && d < minDist) { minDist = d; closest = tile; }
-        }
+        const d = Math.hypot(mx - px, my - py);
+        if (d < HEX_SIZE && d < minDist) { minDist = d; closest = tile; }
       }
       if (closest) onTileClick(closest);
     }
