@@ -339,6 +339,14 @@ fn main() {
                 let unit_query = input.trim()[11..].trim();
                 build_unit(&mut game, unit_query);
             }
+            _ if cmd.starts_with("build ship ") => {
+                let ship_query = input.trim()[11..].trim();
+                cmd_build_ship(&mut game, ship_query);
+            }
+            _ if cmd.starts_with("build warship ") => {
+                let ship_query = input.trim()[14..].trim();
+                cmd_build_warship(&mut game, ship_query);
+            }
             _ if cmd.starts_with("build ") => {
                 let building_query = input.trim()[6..].trim();
                 build_building(&mut game, building_query);
@@ -421,16 +429,6 @@ fn main() {
                 let args = input.trim()[5..].trim();
                 cmd_move_unit(&mut game, args);
             }
-            "build ship trader" => {
-                cmd_build_ship(&mut game, "trader");
-            }
-            "build ship indiaman" => {
-                cmd_build_ship(&mut game, "indiaman");
-            }
-            _ if cmd.starts_with("build ship ") => {
-                let ship_query = input.trim()[11..].trim();
-                cmd_build_ship(&mut game, ship_query);
-            }
             "fleet" => {
                 println!();
                 print_fleet(&game);
@@ -438,10 +436,6 @@ fn main() {
             "navy" => {
                 println!();
                 print_navy(&game);
-            }
-            _ if cmd.starts_with("build warship ") => {
-                let ship_query = input.trim()[14..].trim();
-                cmd_build_warship(&mut game, ship_query);
             }
             "produce arms" => {
                 cmd_produce_arms(&mut game);
