@@ -1536,9 +1536,9 @@ fn ai_trade(game: &mut GameState, nation_id: NationId) {
         None => return,
     };
 
-    // Don't sell resources when already sitting on a huge treasury —
+    // Don't sell resources when already sitting on a large treasury —
     // keep the materials for building ships, units, and infrastructure instead.
-    if nation.treasury > Money::dollars(50_000) {
+    if nation.treasury > Money::dollars(20_000) {
         return;
     }
 
@@ -1914,18 +1914,29 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
     }
 
     // Phase 3: Send cash grants to Minor Nations with embassies
-    // AI with high standing (>80) gets better trade deals — sends larger grants
-    // which improves relationships faster.
+    // Wealthy AIs send much larger grants to burn excess treasury.
     if grant_amount > 0
         && grant_every_n_turns > 0
         && turn_number.is_multiple_of(grant_every_n_turns)
     {
+        let treasury_val = game
+            .get_nation(nation_id)
+            .map(|n| n.treasury.as_dollars())
+            .unwrap_or(0);
+        let wealth_multiplier = if treasury_val > 100_000 {
+            20 // Very wealthy: grant 20x more
+        } else if treasury_val > 50_000 {
+            10
+        } else if treasury_val > 20_000 {
+            5
+        } else {
+            1
+        };
         let ai_standing = game.diplomacy.get_standing(nation_id);
         let adjusted_grant = if ai_standing > 80 {
-            // High standing bonus: 50% more effective grants
-            grant_amount + grant_amount / 2
+            (grant_amount + grant_amount / 2) * wealth_multiplier
         } else {
-            grant_amount
+            grant_amount * wealth_multiplier
         };
         let grant = Money::dollars(adjusted_grant);
         let minor_ids: Vec<NationId> = game
