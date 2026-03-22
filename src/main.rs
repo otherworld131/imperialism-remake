@@ -329,6 +329,12 @@ fn main() {
                 println!();
                 print_infrastructure(&game);
             }
+            "build militia" => {
+                build_unit(&mut game, "militia");
+            }
+            "build freight" => {
+                build_freight_car(&mut game);
+            }
             _ if cmd.starts_with("build unit ") => {
                 let unit_query = input.trim()[11..].trim();
                 build_unit(&mut game, unit_query);
@@ -729,6 +735,7 @@ fn train_worker(game: &mut GameState) {
 /// Parse a unit type name string.
 fn parse_unit_type(name: &str) -> Option<ArmyUnitType> {
     match name.to_lowercase().as_str() {
+        "militia" => Some(ArmyUnitType::Militia),
         "regulars" => Some(ArmyUnitType::Regulars),
         "grenadiers" => Some(ArmyUnitType::Grenadiers),
         "cuirassiers" => Some(ArmyUnitType::Cuirassiers),
@@ -1873,10 +1880,16 @@ fn research_tech(game: &mut GameState, query: &str) {
             println!("  {}", color_green(&format!("Researched: {}!", tech_name)));
             println!("  Cost: {} (treasury now: {})", tech_cost, player.treasury);
 
-            // Record history event
+            // Record history event (deduplicate: skip if same text already exists for this turn)
             let turn = game.turn;
-            game.history
-                .push((turn, format!("{} researched {}", player_name, tech_name)));
+            let entry_text = format!("{} researched {}", player_name, tech_name);
+            if !game
+                .history
+                .iter()
+                .any(|(t, text)| *t == turn && text == &entry_text)
+            {
+                game.history.push((turn, entry_text));
+            }
         }
         _ => {
             println!(
@@ -4443,17 +4456,82 @@ fn print_pending_orders(game: &GameState) {
 
 // ── Auto command ──────────────────────────────────────────────────
 
+/// Basic economic automation for the human player during auto-play.
+///
+/// This gives the human player minimal management so they don't fall behind
+/// while fast-forwarding: free tech research and bootstrap mills (same logic
+/// the AI gets in `ai_research_tech` / `ai_build_infrastructure`).
+fn auto_manage_human(game: &mut GameState) {
+    let player_id = game.human_player_nation;
+
+    // Auto-research free techs
+    let researched: Vec<_> = match game.get_nation(player_id) {
+        Some(n) => n.researched_techs.clone(),
+        None => return,
+    };
+    let available = game
+        .game_data
+        .tech_tree
+        .available_techs(&researched, game.turn.year());
+    let free_techs: Vec<_> = available
+        .iter()
+        .filter(|t| t.cost == Money::ZERO)
+        .map(|t| t.id)
+        .collect();
+    for tech_id in free_techs {
+        if let Some(nation) = game.get_nation_mut(player_id) {
+            nation.research_tech(tech_id);
+        }
+    }
+
+    // Auto-build first mills (free bootstrap, same as AI)
+    let needs_lumber_mill = !game
+        .get_nation(player_id)
+        .unwrap()
+        .has_building(BuildingType::LumberMill);
+    let needs_steel_mill = !game
+        .get_nation(player_id)
+        .unwrap()
+        .has_building(BuildingType::SteelMill);
+    let needs_textile_mill = !game
+        .get_nation(player_id)
+        .unwrap()
+        .has_building(BuildingType::TextileMill);
+
+    if let Some(nation) = game.get_nation_mut(player_id) {
+        if needs_lumber_mill {
+            nation
+                .buildings
+                .push(Building::new(BuildingType::LumberMill, 2));
+        }
+        if needs_steel_mill {
+            nation
+                .buildings
+                .push(Building::new(BuildingType::SteelMill, 2));
+        }
+        if needs_textile_mill {
+            nation
+                .buildings
+                .push(Building::new(BuildingType::TextileMill, 2));
+        }
+    }
+}
+
 fn cmd_auto(game: &mut GameState, turns: u32) {
     println!("  Auto-playing {} turns...", turns);
 
+    let mut game_ended = false;
+
     for i in 1..=turns {
         if game.is_game_over() {
-            println!("  Game ended at turn {}.", game.turn.0);
+            println!("  Game already ended at turn {}.", game.turn.0);
+            game_ended = true;
             break;
         }
+        auto_manage_human(game);
         process_turn(game);
 
-        if i % 10 == 0 || i == turns {
+        if i % 10 == 0 || i == turns || game.is_game_over() {
             println!(
                 "  ...turn {} ({} Q{})",
                 i,
@@ -4461,6 +4539,35 @@ fn cmd_auto(game: &mut GameState, turns: u32) {
                 game.turn.quarter()
             );
         }
+
+        if game.is_game_over() {
+            game_ended = true;
+            break;
+        }
+    }
+
+    if game_ended && game.is_game_over() {
+        // Record high scores
+        let date_str = format!("{} Q{}", game.turn.year(), game.turn.quarter());
+        let gp_scores: Vec<(String, u32)> = game
+            .great_powers()
+            .iter()
+            .map(|gp| (gp.name.clone(), calculate_score(gp).total))
+            .collect();
+        for (name, total) in gp_scores {
+            game.high_scores.push((name, total, date_str.clone()));
+        }
+        game.high_scores.sort_by(|a, b| b.1.cmp(&a.1));
+
+        println!();
+        println!("  ══════════════════════════════════════");
+        println!("  The game has ended!");
+        println!("  ══════════════════════════════════════");
+        println!();
+
+        // Show final summary: scores, winner, and human ranking
+        print_auto_game_end_summary(game);
+        return;
     }
 
     let player = game.get_nation(game.human_player_nation).unwrap();
@@ -4486,6 +4593,84 @@ fn cmd_auto(game: &mut GameState, turns: u32) {
         format_number(score.total),
         rank
     );
+}
+
+/// Game-over summary for auto-play (no TurnReport needed).
+fn print_auto_game_end_summary(game: &GameState) {
+    println!("  ╔════════════════════════════════════════╗");
+    println!("  ║        FINAL GAME SUMMARY              ║");
+    println!("  ╚════════════════════════════════════════╝");
+    println!();
+
+    // Final scores for all Great Powers
+    println!("    {:<12} {:>8} {:>8}", "Nation", "Score", "Provinces");
+    println!("    {}", "-".repeat(32));
+
+    let mut scores: Vec<_> = game
+        .great_powers()
+        .iter()
+        .map(|n| {
+            let s = calculate_score(n);
+            (n.id, n.name.clone(), s.total, n.province_count())
+        })
+        .collect();
+    scores.sort_by(|a, b| b.2.cmp(&a.2));
+
+    for (id, name, total, prov_count) in &scores {
+        let marker = if *id == game.human_player_nation {
+            " <-- YOU"
+        } else {
+            ""
+        };
+        println!(
+            "    {:<12} {:>8} {:>8}{}",
+            name,
+            format_number(*total),
+            prov_count,
+            marker
+        );
+    }
+    println!();
+
+    // Winner announcement
+    let winner = scores.first();
+    if let Some((wid, winner_name, _, _)) = winner {
+        if *wid == game.human_player_nation {
+            println!(
+                "  *** CONGRATULATIONS! {} (YOU) wins the game! ***",
+                winner_name
+            );
+        } else {
+            println!("  {} wins the game.", winner_name);
+        }
+    }
+
+    // Human player ranking
+    let human_rank = scores
+        .iter()
+        .position(|(id, _, _, _)| *id == game.human_player_nation)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let total_gp = scores.len();
+    println!(
+        "  Your ranking: #{} of {} Great Powers",
+        human_rank, total_gp
+    );
+    println!();
+
+    // Show high scores
+    if !game.high_scores.is_empty() {
+        println!("  High Scores:");
+        for (i, (name, score, date)) in game.high_scores.iter().enumerate() {
+            println!(
+                "    {}. {} - {} ({})",
+                i + 1,
+                name,
+                format_number(*score),
+                date
+            );
+        }
+    }
 }
 
 fn render_map(hex_map: &HexMap, nations: &[Nation]) {

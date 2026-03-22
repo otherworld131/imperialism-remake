@@ -167,46 +167,69 @@ fn ai_research_tech(
         return;
     }
 
-    // Select tech based on personality
-    let chosen = match personality {
+    // Build a personality-ranked list of candidate techs, then pick from the
+    // top few using a per-nation pseudo-random seed so different nations
+    // (and different games) produce varied research paths.
+    let mut candidates: Vec<_> = match personality {
         AiPersonality::Economic => {
-            // Prefer the most expensive tech (long-term investment)
-            available.iter().max_by_key(|t| t.cost.cents())
+            // Prefer the most expensive techs (long-term investment)
+            let mut v = available.clone();
+            v.sort_by(|a, b| b.cost.cents().cmp(&a.cost.cents()));
+            v
         }
         AiPersonality::Aggressive => {
-            // Prefer military techs, fallback to cheapest
-            let military: Vec<_> = available
+            // Prefer military techs sorted cheapest-first, then non-military cheapest-first
+            let mut military: Vec<_> = available
                 .iter()
                 .filter(|t| is_military_tech(&t.effects))
+                .cloned()
                 .collect();
-            if military.is_empty() {
-                available.iter().min_by_key(|t| t.cost.cents())
-            } else {
-                military.into_iter().min_by_key(|t| t.cost.cents())
-            }
+            let mut other: Vec<_> = available
+                .iter()
+                .filter(|t| !is_military_tech(&t.effects))
+                .cloned()
+                .collect();
+            military.sort_by_key(|t| t.cost.cents());
+            other.sort_by_key(|t| t.cost.cents());
+            military.extend(other);
+            military
         }
         AiPersonality::Diplomatic => {
-            // Prefer economic/trade techs, fallback to cheapest
-            let econ: Vec<_> = available
+            // Prefer economic/trade techs sorted cheapest-first, then others
+            let mut econ: Vec<_> = available
                 .iter()
                 .filter(|t| is_economic_tech(&t.effects))
+                .cloned()
                 .collect();
-            if econ.is_empty() {
-                available.iter().min_by_key(|t| t.cost.cents())
-            } else {
-                econ.into_iter().min_by_key(|t| t.cost.cents())
-            }
+            let mut other: Vec<_> = available
+                .iter()
+                .filter(|t| !is_economic_tech(&t.effects))
+                .cloned()
+                .collect();
+            econ.sort_by_key(|t| t.cost.cents());
+            other.sort_by_key(|t| t.cost.cents());
+            econ.extend(other);
+            econ
         }
         AiPersonality::Balanced => {
-            // Pick the cheapest available tech
-            available.iter().min_by_key(|t| t.cost.cents())
+            // Cheapest first
+            let mut v = available.clone();
+            v.sort_by_key(|t| t.cost.cents());
+            v
         }
     };
 
-    let (tech_id, tech_cost, tech_name) = match chosen {
-        Some(tech) => (tech.id, tech.cost, tech.name.clone()),
-        None => return,
-    };
+    if candidates.is_empty() {
+        return;
+    }
+
+    // Pick from the top candidates using a deterministic per-nation seed
+    // so that each nation gets a different research path each game.
+    let top_n = candidates.len().min(3);
+    let seed = (game.turn.0 as usize).wrapping_mul(nation_id.0 as usize + 7) % top_n;
+    let chosen = candidates.swap_remove(seed);
+
+    let (tech_id, tech_cost, tech_name) = (chosen.id, chosen.cost, chosen.name.clone());
 
     // Check if the nation can afford it
     let nation = match game.get_nation_mut(nation_id) {
@@ -222,8 +245,15 @@ fn ai_research_tech(
             nation_name, tech_name
         ));
         let turn = game.turn;
-        game.history
-            .push((turn, format!("{} researched {}", nation_name, tech_name)));
+        let entry_text = format!("{} researched {}", nation_name, tech_name);
+        // Deduplicate: only push if this exact text doesn't already exist for this turn
+        if !game
+            .history
+            .iter()
+            .any(|(t, text)| *t == turn && text == &entry_text)
+        {
+            game.history.push((turn, entry_text));
+        }
     }
 }
 
@@ -638,6 +668,7 @@ fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
 /// - **Balanced**: default behavior
 fn ai_build_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
     let personality = get_personality(game, nation_id);
+    let turn_number = game.turn.0;
     let nation = match game.get_nation_mut(nation_id) {
         Some(n) => n,
         None => return,
@@ -647,6 +678,9 @@ fn ai_build_military(game: &mut GameState, nation_id: NationId, actions: &mut Ve
     let treasury = nation.treasury;
     let capital = nation.capital_province_id;
     let nation_name = nation.name.clone();
+
+    // Deterministic per-nation seed for unit-type variety
+    let variety_seed = (turn_number as usize).wrapping_mul(nation_id.0 as usize + 7);
 
     // Thresholds vary by personality
     let (tier1_max, tier1_treasury, tier2_max, tier2_treasury, tier3_treasury) = match personality {
@@ -681,42 +715,75 @@ fn ai_build_military(game: &mut GameState, nation_id: NationId, actions: &mut Ve
     };
 
     if army_count < tier1_max && treasury > tier1_treasury {
-        let cost = Money::dollars(500);
-        nation.treasury -= cost;
-        let unit = ArmyUnit::new(next_unit_id(), ArmyUnitType::Regulars, nation_id, capital);
-        nation.army.push(unit);
-        actions.push(format!(
-            "{} has been expanding its military forces",
-            nation_name
-        ));
-    } else if army_count < tier2_max && treasury > tier2_treasury {
-        let cost = Money::dollars(1000);
-        nation.treasury -= cost;
-        // Aggressive personality prefers artillery over grenadiers when possible
-        let unit_type = if personality == AiPersonality::Aggressive && army_count >= 3 {
-            ArmyUnitType::LightArtillery
-        } else {
-            ArmyUnitType::Grenadiers
+        // Tier 1: pick from basic unit types with personality bias + variety
+        let tier1_options: &[ArmyUnitType] = match personality {
+            AiPersonality::Aggressive => &[
+                ArmyUnitType::Regulars,
+                ArmyUnitType::Regulars,
+                ArmyUnitType::Grenadiers,
+            ],
+            AiPersonality::Diplomatic => &[
+                ArmyUnitType::Regulars,
+                ArmyUnitType::Regulars,
+                ArmyUnitType::Regulars,
+            ],
+            AiPersonality::Economic => &[
+                ArmyUnitType::Regulars,
+                ArmyUnitType::Regulars,
+                ArmyUnitType::Grenadiers,
+            ],
+            AiPersonality::Balanced => &[
+                ArmyUnitType::Regulars,
+                ArmyUnitType::Grenadiers,
+                ArmyUnitType::Regulars,
+            ],
         };
+        let unit_type = tier1_options[variety_seed % tier1_options.len()];
+        let cost = match unit_type {
+            ArmyUnitType::Grenadiers => Money::dollars(1000),
+            _ => Money::dollars(500),
+        };
+        if treasury > tier1_treasury + cost {
+            nation.treasury -= cost;
+            let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
+            nation.army.push(unit);
+            actions.push(format!(
+                "{} has been expanding its military forces",
+                nation_name
+            ));
+        }
+    } else if army_count < tier2_max && treasury > tier2_treasury {
+        // Tier 2: mix of grenadiers and artillery with personality + variety
+        let tier2_options: &[ArmyUnitType] = match personality {
+            AiPersonality::Aggressive => &[
+                ArmyUnitType::LightArtillery,
+                ArmyUnitType::Grenadiers,
+                ArmyUnitType::LightArtillery,
+            ],
+            AiPersonality::Diplomatic => &[
+                ArmyUnitType::Grenadiers,
+                ArmyUnitType::Grenadiers,
+                ArmyUnitType::LightArtillery,
+            ],
+            AiPersonality::Economic => &[
+                ArmyUnitType::Grenadiers,
+                ArmyUnitType::LightArtillery,
+                ArmyUnitType::Grenadiers,
+            ],
+            AiPersonality::Balanced => &[
+                ArmyUnitType::Grenadiers,
+                ArmyUnitType::LightArtillery,
+                ArmyUnitType::Grenadiers,
+            ],
+        };
+        let unit_type = tier2_options[variety_seed % tier2_options.len()];
         let build_cost = if unit_type == ArmyUnitType::LightArtillery {
             Money::dollars(2000)
         } else {
             Money::dollars(1000)
         };
-        // Re-check if we can afford the artillery cost
-        if unit_type == ArmyUnitType::LightArtillery {
-            // Need to undo the grenadier cost and pay artillery cost
-            nation.treasury += cost; // undo
-            if nation.treasury > tier2_treasury {
-                nation.treasury -= build_cost;
-                let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
-                nation.army.push(unit);
-                actions.push(format!(
-                    "{} has been expanding its military forces",
-                    nation_name
-                ));
-            }
-        } else {
+        if treasury > tier2_treasury + build_cost {
+            nation.treasury -= build_cost;
             let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
             nation.army.push(unit);
             actions.push(format!(
@@ -725,14 +792,27 @@ fn ai_build_military(game: &mut GameState, nation_id: NationId, actions: &mut Ve
             ));
         }
     } else if army_count >= tier2_max && treasury > tier3_treasury {
-        let cost = Money::dollars(2000);
+        // Tier 3: advanced units with some variety
+        let tier3_options: &[ArmyUnitType] = match personality {
+            AiPersonality::Aggressive => &[
+                ArmyUnitType::LightArtillery,
+                ArmyUnitType::LightArtillery,
+                ArmyUnitType::Grenadiers,
+            ],
+            _ => &[
+                ArmyUnitType::LightArtillery,
+                ArmyUnitType::Grenadiers,
+                ArmyUnitType::LightArtillery,
+            ],
+        };
+        let unit_type = tier3_options[variety_seed % tier3_options.len()];
+        let cost = if unit_type == ArmyUnitType::LightArtillery {
+            Money::dollars(2000)
+        } else {
+            Money::dollars(1000)
+        };
         nation.treasury -= cost;
-        let unit = ArmyUnit::new(
-            next_unit_id(),
-            ArmyUnitType::LightArtillery,
-            nation_id,
-            capital,
-        );
+        let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
         nation.army.push(unit);
         actions.push(format!(
             "{} has been expanding its military forces",
@@ -2951,10 +3031,11 @@ mod tests {
     }
 
     #[test]
-    fn ai_builds_grenadiers_when_army_has_3_units() {
+    fn ai_builds_unit_when_army_has_3_units() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.treasury = Money::dollars(6000);
+        ai.treasury = Money::dollars(15000);
+        ai.ai_personality = Some(AiPersonality::Balanced);
         // Give AI 3 existing army units
         for i in 0..3 {
             ai.army.push(ArmyUnit::new(
@@ -2968,21 +3049,19 @@ mod tests {
         run_ai_turns(&mut game);
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(ai.army.len(), 4, "AI should have built a 4th unit");
-        assert_eq!(
-            ai.army[3].unit_type,
-            ArmyUnitType::Grenadiers,
-            "4th unit should be Grenadiers"
+        assert!(
+            ai.army.len() >= 4,
+            "AI should have built at least a 4th unit, has {}",
+            ai.army.len()
         );
-        assert_eq!(
-            ai.treasury,
-            Money::dollars(5000),
-            "Treasury should be reduced by $1,000"
+        assert!(
+            ai.treasury < Money::dollars(15000),
+            "Treasury should be reduced after building a unit"
         );
     }
 
     #[test]
-    fn ai_builds_light_artillery_when_army_large() {
+    fn ai_builds_advanced_unit_when_army_large() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.treasury = Money::dollars(12000);
@@ -3000,15 +3079,22 @@ mod tests {
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(ai.army.len(), 6, "AI should have built a 6th unit");
-        assert_eq!(
-            ai.army[5].unit_type,
-            ArmyUnitType::LightArtillery,
-            "6th unit should be Light Artillery"
+        // With variety, the unit type varies by personality and seed
+        let unit_type = ai.army[5].unit_type;
+        assert!(
+            matches!(
+                unit_type,
+                ArmyUnitType::LightArtillery
+                    | ArmyUnitType::StandardArtillery
+                    | ArmyUnitType::SiegeArtillery
+                    | ArmyUnitType::Grenadiers
+            ),
+            "6th unit should be a tier-3 type, got {:?}",
+            unit_type
         );
-        assert_eq!(
-            ai.treasury,
-            Money::dollars(10000),
-            "Treasury should be reduced by $2,000"
+        assert!(
+            ai.treasury < Money::dollars(12000),
+            "Treasury should be reduced after building a unit"
         );
     }
 

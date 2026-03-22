@@ -1,5 +1,6 @@
 # L3. No game-over screen
 
-**Severity:** Low / UX
+**Severity:** Low / UX — FIXED
 
-- [ ] Add final summary display
+- [x] Added `print_auto_game_end_summary()` that shows final scores, winner, and rankings
+  when game ends during auto-play

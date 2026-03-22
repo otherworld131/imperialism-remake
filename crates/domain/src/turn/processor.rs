@@ -194,6 +194,9 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 3b. Trade session: Minor Nations sell resources to Great Powers
     resolve_trade_session(game, &mut report);
 
+    // 3c. Warehouse capacity caps: prevent infinite resource accumulation
+    apply_warehouse_caps(game);
+
     // 4. Tick buildings (process expansion timers)
     tick_buildings(game);
 
@@ -3039,6 +3042,48 @@ fn check_council_vote(game: &GameState, report: &mut TurnReport) {
     }
 
     report.council_vote = Some(result);
+}
+
+/// Apply warehouse capacity caps to prevent infinite resource accumulation.
+///
+/// Each nation's Warehouse building capacity determines storage limits:
+/// - Raw resources: capped at `50 * warehouse_capacity` per resource type
+/// - Materials: capped at `50 * warehouse_capacity` per material type
+/// - Finished goods: capped at `25 * warehouse_capacity` per goods type
+///
+/// Excess resources above the cap are silently lost (spoilage/waste).
+/// Nations without a Warehouse building use a default capacity of 1.
+fn apply_warehouse_caps(game: &mut GameState) {
+    for nation in &mut game.nations {
+        let warehouse_capacity = nation
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::Warehouse)
+            .map(|b| b.effective_capacity())
+            .unwrap_or(1);
+
+        let raw_cap = 50 * warehouse_capacity;
+        let material_cap = 50 * warehouse_capacity;
+        let goods_cap = 25 * warehouse_capacity;
+
+        for amount in nation.warehouse.values_mut() {
+            if *amount > raw_cap {
+                *amount = raw_cap;
+            }
+        }
+
+        for amount in nation.materials.values_mut() {
+            if *amount > material_cap {
+                *amount = material_cap;
+            }
+        }
+
+        for amount in nation.goods.values_mut() {
+            if *amount > goods_cap {
+                *amount = goods_cap;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -7187,5 +7232,67 @@ mod tests {
             !defender.province_ids.contains(&ProvinceId(2)),
             "Defender should no longer have Province 2"
         );
+    }
+
+    // ── Warehouse capacity caps ───────────────────────────────────
+
+    #[test]
+    fn warehouse_caps_raw_resources() {
+        let mut game = test_game_state();
+        // Default warehouse capacity is 1, so raw cap = 50
+        game.nations[0].add_resource(ResourceType::Timber, 100);
+        assert_eq!(game.nations[0].resource_amount(ResourceType::Timber), 100);
+
+        apply_warehouse_caps(&mut game);
+        assert_eq!(game.nations[0].resource_amount(ResourceType::Timber), 50);
+    }
+
+    #[test]
+    fn warehouse_caps_materials() {
+        let mut game = test_game_state();
+        // Default warehouse capacity is 1, so material cap = 50
+        game.nations[0].add_material(MaterialType::Lumber, 80);
+
+        apply_warehouse_caps(&mut game);
+        assert_eq!(game.nations[0].material_amount(MaterialType::Lumber), 50);
+    }
+
+    #[test]
+    fn warehouse_caps_finished_goods() {
+        let mut game = test_game_state();
+        // Default warehouse capacity is 1, so goods cap = 25
+        game.nations[0].add_goods(GoodsType::Furniture, 40);
+
+        apply_warehouse_caps(&mut game);
+        assert_eq!(game.nations[0].goods_amount(GoodsType::Furniture), 25);
+    }
+
+    #[test]
+    fn warehouse_caps_scale_with_capacity() {
+        let mut game = test_game_state();
+        // Add a Warehouse building with capacity 4: raw cap = 200, material cap = 200, goods cap = 100
+        game.nations[0]
+            .buildings
+            .push(Building::new(BuildingType::Warehouse, 4));
+
+        game.nations[0].add_resource(ResourceType::Coal, 250);
+        game.nations[0].add_material(MaterialType::Steel, 250);
+        game.nations[0].add_goods(GoodsType::Hardware, 150);
+
+        apply_warehouse_caps(&mut game);
+        assert_eq!(game.nations[0].resource_amount(ResourceType::Coal), 200);
+        assert_eq!(game.nations[0].material_amount(MaterialType::Steel), 200);
+        assert_eq!(game.nations[0].goods_amount(GoodsType::Hardware), 100);
+    }
+
+    #[test]
+    fn warehouse_caps_do_not_reduce_below_cap() {
+        let mut game = test_game_state();
+        // Default warehouse capacity is 1, so raw cap = 50
+        game.nations[0].add_resource(ResourceType::Iron, 30);
+
+        apply_warehouse_caps(&mut game);
+        // Should remain unchanged since 30 < 50
+        assert_eq!(game.nations[0].resource_amount(ResourceType::Iron), 30);
     }
 }

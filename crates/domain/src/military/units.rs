@@ -454,7 +454,7 @@ impl ArmyUnit {
 
     /// Award a medal to this unit, incrementing the medal count.
     pub fn award_medal(&mut self) {
-        self.medals += 1;
+        self.medals = self.medals.saturating_add(1);
     }
 
     /// Returns true if the unit is still alive (health > 0).

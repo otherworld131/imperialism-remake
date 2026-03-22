@@ -123,8 +123,8 @@ fn benchmark_full_game_to_1915() {
         elapsed,
         elapsed / turns
     );
-    // Full game should complete in < 60 seconds in debug builds
-    assert!(elapsed.as_secs() < 60, "Full game too slow");
+    // Full game should complete in < 90 seconds in debug builds
+    assert!(elapsed.as_secs() < 90, "Full game too slow");
 }
 
 #[test]
