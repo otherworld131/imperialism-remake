@@ -68,12 +68,20 @@ pub fn calculate_score(nation: &Nation) -> NationScore {
     let diplomatic_score = 50; // placeholder
     let province_score = nation.province_count() as u32 * 100;
 
+    // Economic scoring components to prevent game stagnation
+    let tech_score = nation.researched_techs.len() as u32 * 30;
+    let treasury_score = (nation.treasury.as_dollars().max(0) / 100).min(500) as u32;
+    let building_score = nation.buildings.len() as u32 * 10;
+
     let total = military_score
         + labor_score
         + transport_score
         + merchant_marine_score
         + diplomatic_score
-        + province_score;
+        + province_score
+        + tech_score
+        + treasury_score
+        + building_score;
 
     NationScore {
         military_score,

@@ -1102,6 +1102,17 @@ fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId], actions: &m
             if let Some(&(target_id, target_provinces, target_capital)) = gp_targets.first() {
                 // Only attack if we have more territory
                 if ai_provinces > target_provinces + 2 {
+                    // Find the weakest province of the target GP (fewest tiles)
+                    // rather than always attacking the capital which is often
+                    // the most heavily defended.
+                    let attack_province = game
+                        .provinces
+                        .iter()
+                        .filter(|p| p.owner == target_id)
+                        .min_by_key(|p| p.tiles.len())
+                        .map(|p| p.id)
+                        .unwrap_or(target_capital);
+
                     let attacker_name = game
                         .get_nation(ai_id)
                         .map(|n| n.name.clone())
@@ -1112,7 +1123,7 @@ fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId], actions: &m
                         .unwrap_or_default();
 
                     game.diplomacy.declare_war(ai_id, target_id);
-                    game.pending_attacks.push((ai_id, target_capital));
+                    game.pending_attacks.push((ai_id, attack_province));
                     actions.push(format!(
                         "{} has declared war on {}!",
                         attacker_name, target_name
@@ -1166,14 +1177,10 @@ fn ai_military_strategy(game: &mut GameState, nation_id: NationId, actions: &mut
         // Score each enemy province — lower score = better target
         let mut candidates: Vec<(ProvinceId, i32)> = Vec::new();
         for &enemy_id in &enemies {
-            let enemy_type = game
+            let enemy_is_gp = game
                 .get_nation(enemy_id)
-                .map(|n| n.nation_type)
-                .unwrap_or(NationType::MinorNation);
-            let garrison_size: usize = match enemy_type {
-                NationType::GreatPower => 4,
-                NationType::MinorNation => 3,
-            };
+                .map(|n| n.is_great_power())
+                .unwrap_or(false);
             // Count enemy army units in each province
             let enemy_army: Vec<(ProvinceId, usize)> = {
                 let mut counts: Vec<(ProvinceId, usize)> = Vec::new();
@@ -1192,6 +1199,8 @@ fn ai_military_strategy(game: &mut GameState, nation_id: NationId, actions: &mut
             for prov in &game.provinces {
                 if prov.owner == enemy_id {
                     let tile_count = prov.tiles.len();
+                    // Use actual garrison count from the province
+                    let garrison_size = prov.garrison_count as usize;
                     // Estimated defender strength: garrison + stationed army
                     let stationed = enemy_army
                         .iter()
@@ -1200,8 +1209,18 @@ fn ai_military_strategy(game: &mut GameState, nation_id: NationId, actions: &mut
                         .unwrap_or(0);
                     let total_defenders = garrison_size + stationed;
 
-                    // Avoid attacking if we'd be outnumbered
-                    if total_defenders > army_size {
+                    // For GP enemies, be more aggressive: attack if we have at
+                    // least 2/3 of their defenders (wars stagnate otherwise
+                    // because neither side ever attacks).
+                    // For minor nations, keep the conservative check.
+                    let dominated = if enemy_is_gp {
+                        // Allow attacking GP provinces when we have a reasonable
+                        // force, even if not strictly outnumbering defenders.
+                        total_defenders > army_size + army_size / 2
+                    } else {
+                        total_defenders > army_size
+                    };
+                    if dominated {
                         continue;
                     }
 
@@ -1227,6 +1246,12 @@ fn ai_military_strategy(game: &mut GameState, nation_id: NationId, actions: &mut
                     // but not so much that it outweighs defense difficulty
                     if tile_count >= 4 {
                         score -= 1; // Slightly prefer larger provinces (more valuable)
+                    }
+
+                    // Prefer attacking GP enemies (they are higher-value targets
+                    // and wars should not stagnate)
+                    if enemy_is_gp {
+                        score -= 3;
                     }
 
                     candidates.push((prov.id, score));
