@@ -234,7 +234,10 @@ fn ai_build_infrastructure(game: &mut GameState, nation_id: NationId) {
         None => return,
     };
 
-    // Build mills if the nation doesn't have them and has materials (1 lumber + 1 steel each)
+    // Build mills if the nation doesn't have them.
+    // First mill of each type is free (bootstrap) — this prevents the chicken-and-egg
+    // problem where mills require Lumber+Steel that can only be produced by mills.
+    // This mirrors the original Imperialism where nations had basic industry from the start.
     let mill_types = [
         BuildingType::LumberMill,
         BuildingType::SteelMill,
@@ -242,23 +245,8 @@ fn ai_build_infrastructure(game: &mut GameState, nation_id: NationId) {
     ];
     for mill_type in mill_types {
         if !nation.has_building(mill_type) {
-            let has_lumber = nation
-                .materials
-                .get(&MaterialType::Lumber)
-                .copied()
-                .unwrap_or(0)
-                >= 1;
-            let has_steel = nation
-                .materials
-                .get(&MaterialType::Steel)
-                .copied()
-                .unwrap_or(0)
-                >= 1;
-            if has_lumber && has_steel {
-                *nation.materials.entry(MaterialType::Lumber).or_insert(0) -= 1;
-                *nation.materials.entry(MaterialType::Steel).or_insert(0) -= 1;
-                nation.buildings.push(Building::new(mill_type, 2));
-            }
+            // First mill is free (bootstrap) — no material cost
+            nation.buildings.push(Building::new(mill_type, 2));
         }
     }
 
@@ -811,10 +799,10 @@ fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId], actions: &m
 
         // War frequency and army threshold depend on personality
         let (war_interval, army_threshold) = match personality {
-            AiPersonality::Aggressive => (15u32, 3),
+            AiPersonality::Aggressive => (25u32, 5),
             AiPersonality::Diplomatic => (40, 8),
             AiPersonality::Economic => (30, 5),
-            AiPersonality::Balanced => (20, 4),
+            AiPersonality::Balanced => (25, 4),
         };
 
         // Check if this is a war-consideration turn for this AI
@@ -1108,10 +1096,12 @@ fn ai_military_strategy(game: &mut GameState, nation_id: NationId, actions: &mut
     // If not at war and has >= 6 army units and turn > 40, consider proactive war
     if enemies.is_empty() && army_size >= 6 && game.turn.0 > 40 {
         // Find weakest Minor Nation (fewest total tiles, not at war with anyone)
+        // Skip nations that have been fully conquered (0 provinces)
         let minor_nations: Vec<(NationId, ProvinceId, usize)> = game
             .nations
             .iter()
             .filter(|n| !n.is_great_power())
+            .filter(|n| game.provinces.iter().any(|p| p.owner == n.id))
             .map(|n| {
                 let total_tiles: usize = game
                     .provinces
@@ -1121,12 +1111,13 @@ fn ai_military_strategy(game: &mut GameState, nation_id: NationId, actions: &mut
                     .sum();
                 (n.id, n.capital_province_id, total_tiles)
             })
-            .filter(|(mn_id, _, _)| {
-                !game
-                    .diplomacy
-                    .get_relation(nation_id, *mn_id)
-                    .map(|r| r.at_war)
-                    .unwrap_or(false)
+            .filter(|(mn_id, _, tiles)| {
+                *tiles > 0
+                    && !game
+                        .diplomacy
+                        .get_relation(nation_id, *mn_id)
+                        .map(|r| r.at_war)
+                        .unwrap_or(false)
             })
             .collect();
 
@@ -1134,13 +1125,18 @@ fn ai_military_strategy(game: &mut GameState, nation_id: NationId, actions: &mut
         let mut sorted = minor_nations;
         sorted.sort_by_key(|&(_, _, tiles)| tiles);
 
-        if let Some(&(target_id, target_capital, _)) = sorted.first() {
+        if let Some(&(target_id, _, _)) = sorted.first() {
+            // Find a province actually owned by the target
+            let attack_province = match game.provinces.iter().find(|p| p.owner == target_id) {
+                Some(p) => p.id,
+                None => return, // Target has no provinces left
+            };
             let target_name = game
                 .get_nation(target_id)
                 .map(|n| n.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
             game.diplomacy.declare_war(nation_id, target_id);
-            game.pending_attacks.push((nation_id, target_capital));
+            game.pending_attacks.push((nation_id, attack_province));
             actions.push(format!(
                 "{} has declared war on {}!",
                 nation_name, target_name
@@ -2812,13 +2808,23 @@ mod tests {
         run_ai_turns(&mut game);
 
         let ai = game.get_nation(NationId(2)).unwrap();
+        // First mills are free (bootstrap) — they should be built even without materials
         assert!(
-            !ai.has_building(BuildingType::LumberMill),
-            "AI should not build buildings without materials"
+            ai.has_building(BuildingType::LumberMill),
+            "AI should bootstrap first LumberMill for free"
         );
         assert!(
-            !ai.has_building(BuildingType::SteelMill),
-            "AI should not build buildings without materials"
+            ai.has_building(BuildingType::SteelMill),
+            "AI should bootstrap first SteelMill for free"
+        );
+        // But factories should NOT be built without materials
+        assert!(
+            !ai.has_building(BuildingType::FurnitureFactory),
+            "AI should not build factories without materials"
+        );
+        assert!(
+            !ai.has_building(BuildingType::HardwareFactory),
+            "AI should not build factories without materials"
         );
     }
 
@@ -3030,10 +3036,10 @@ mod tests {
     // ── War declaration ──────────────────────────────────────
 
     #[test]
-    fn ai_declares_war_on_turn_20() {
+    fn ai_declares_war_on_turn_25() {
         let mut game = test_game_with_ai_and_minor();
-        // Set to turn 20 (divisible by 20)
-        game.turn = TurnNumber::new(20);
+        // Set to turn 25 (divisible by 25, the Balanced war interval)
+        game.turn = TurnNumber::new(25);
         // Give AI enough army units to meet the >= 4 threshold for war declaration
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         for i in 0..4 {
@@ -3064,7 +3070,7 @@ mod tests {
     }
 
     #[test]
-    fn ai_does_not_declare_war_on_non_multiple_of_20() {
+    fn ai_does_not_declare_war_on_non_multiple_of_25() {
         let mut game = test_game_with_ai_and_minor();
         game.turn = TurnNumber::new(15);
 
@@ -3075,7 +3081,7 @@ mod tests {
         let at_war = rel.map(|r| r.at_war).unwrap_or(false);
         assert!(
             !at_war,
-            "AI should not declare war on non-multiple-of-20 turns"
+            "AI should not declare war on non-multiple-of-25 turns"
         );
         assert!(
             game.pending_attacks.is_empty(),
@@ -3086,7 +3092,7 @@ mod tests {
     #[test]
     fn ai_does_not_redeclare_war_on_existing_enemy() {
         let mut game = test_game_with_ai_and_minor();
-        game.turn = TurnNumber::new(20);
+        game.turn = TurnNumber::new(25);
 
         // Pre-set war
         game.diplomacy.declare_war(NationId(2), NationId(3));
@@ -3606,13 +3612,13 @@ mod tests {
     // ── Personality affects war declaration ──────────────────
 
     #[test]
-    fn aggressive_ai_declares_war_on_turn_15() {
+    fn aggressive_ai_declares_war_on_turn_25() {
         let mut game = test_game_with_ai_and_minor();
         // Set Aggressive personality
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Aggressive);
-        // Give AI 3 army units (Aggressive threshold is 3)
-        for i in 0..3 {
+        // Give AI 5 army units (Aggressive threshold is 5)
+        for i in 0..5 {
             ai.army.push(ArmyUnit::new(
                 UnitId(5000 + i),
                 ArmyUnitType::Regulars,
@@ -3621,8 +3627,8 @@ mod tests {
             ));
         }
 
-        // Turn 15: Aggressive declares (every 15 turns), Balanced would not (every 20)
-        game.turn = TurnNumber::new(15);
+        // Turn 25: Aggressive declares (every 25 turns)
+        game.turn = TurnNumber::new(25);
 
         let mut actions = Vec::new();
         ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
@@ -3630,7 +3636,7 @@ mod tests {
         let rel = game.diplomacy.get_relation(NationId(2), NationId(3));
         assert!(
             rel.is_some() && rel.unwrap().at_war,
-            "Aggressive AI should declare war on turn 15"
+            "Aggressive AI should declare war on turn 25"
         );
     }
 

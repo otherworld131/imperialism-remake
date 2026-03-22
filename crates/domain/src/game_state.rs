@@ -232,15 +232,24 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
                 nation.add_resource(ResourceType::Cotton, 5);
                 nation.add_resource(ResourceType::Grain, 10);
                 nation.add_resource(ResourceType::Fruit, 5);
+                // Starting materials for easy difficulties (already have mills)
+                nation.add_material(MaterialType::Lumber, 10);
+                nation.add_material(MaterialType::Steel, 5);
+                nation.add_material(MaterialType::Fabric, 5);
             }
             Difficulty::Normal => {
                 nation.add_resource(ResourceType::Timber, 5);
                 nation.add_resource(ResourceType::Coal, 2);
                 nation.add_resource(ResourceType::Iron, 2);
                 nation.add_resource(ResourceType::Grain, 5);
+                // Starting materials so AI can build factories before mills produce
+                nation.add_material(MaterialType::Lumber, 5);
+                nation.add_material(MaterialType::Steel, 3);
             }
             Difficulty::Hard | Difficulty::NighOnImpossible => {
-                // Empty warehouse — no starting resources
+                // Minimal starting materials to bootstrap economy
+                nation.add_material(MaterialType::Lumber, 2);
+                nation.add_material(MaterialType::Steel, 1);
             }
         }
 

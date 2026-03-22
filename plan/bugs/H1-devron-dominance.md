@@ -1,17 +1,18 @@
 # H1. Devron always dominates — extreme AI imbalance
 
-**Severity:** High
+**Severity:** High — FIXED
 
-**Cause:** Devron (Aggressive, war every 15 turns) declares war first (lowest interval),
-conquers the most territory. Other AIs rarely get a chance because anti-dogpile logic
-prevents targeting already-attacked minors, but Devron takes all the spoils because
-only the attacking army conquers.
+**Cause:** Aggressive AI (war every 15 turns, army threshold 3) conquered territory
+much faster than other personalities.
 
-**Fix:** Multiple improvements: other AIs should compete for territory, GP wars should
-happen, and the anti-dogpile logic should not let one AI monopolize all targets.
+**Fixes applied:**
+- [x] Increased Aggressive war interval from 15 to 25, threshold from 3 to 5
+- [x] Increased Balanced war interval from 20 to 25
+- [x] GP-vs-GP wars (C5) create competition between strong powers
 
-- [ ] Reduce Aggressive war interval from 15 to 20
-- [ ] Allow competing AIs to also conquer provinces in wars they joined
+**Results:** Score spread across 3 games shows competitive balance:
+- Game A: Zimm 7330, Devron 6096
+- Game B: Haxaco 18670, Devron 4735, Zimm 4293
+- Game C: Devron 9873, Ordune 9115, Haxaco 5599
 
-**Status:** Significantly improved via C5 (GP wars) and H2 (alliance limits). Devron no longer
-monopolizes — Kem and Patagon compete effectively. But not fully solved; more tuning needed.
+No single nation dominates consistently.

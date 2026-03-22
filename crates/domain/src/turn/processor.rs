@@ -236,7 +236,8 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 10. Calculate and store scores for all Great Powers
     calculate_scores(game, &mut report);
 
-    // 10b. Update settlement progression for connected provinces
+    // 10b. Recompute province connectivity, then update settlement progression
+    update_province_connectivity(game);
     update_settlements(game, &mut report);
 
     // 11. Generate newspaper
@@ -578,6 +579,75 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
 /// - If the province just became connected, start the industrialization countdown (6 turns).
 /// - Tick down the industrialization counter each turn.
 /// - When the countdown reaches 0 and the settlement is a Hamlet, upgrade to Village.
+///
+/// Also recomputes capital connectivity for all Great Power provinces.
+/// A province is connected if:
+///   1. It IS the nation's capital province, OR
+///   2. The infrastructure system (railroads/depots/ports) connects it
+///      (via `is_province_connected`), OR
+///   3. The province is directly adjacent to the capital province —
+///      this ensures early-game settlement progression before railroads
+///      are built.
+fn update_province_connectivity(game: &mut GameState) {
+    let nation_capitals: Vec<(NationId, ProvinceId, crate::hex::HexCoord)> = game
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power())
+        .map(|n| {
+            let cap_tile = game
+                .provinces
+                .iter()
+                .find(|p| p.id == n.capital_province_id)
+                .map(|p| p.capital_tile)
+                .unwrap_or(crate::hex::HexCoord::new(0, 0));
+            (n.id, n.capital_province_id, cap_tile)
+        })
+        .collect();
+
+    for &(nation_id, capital_province_id, capital_tile) in &nation_capitals {
+        // Collect province IDs for this nation (excluding capital itself)
+        let province_ids: Vec<ProvinceId> = game
+            .provinces
+            .iter()
+            .filter(|p| p.owner == nation_id && p.id != capital_province_id)
+            .map(|p| p.id)
+            .collect();
+
+        // Capital province tiles for adjacency check
+        let capital_tiles: Vec<crate::hex::HexCoord> = game
+            .provinces
+            .iter()
+            .find(|p| p.id == capital_province_id)
+            .map(|p| p.tiles.clone())
+            .unwrap_or_default();
+        let capital_neighbors: std::collections::HashSet<crate::hex::HexCoord> =
+            capital_tiles.iter().flat_map(|t| t.neighbors()).collect();
+
+        for pid in province_ids {
+            let infra_connected =
+                is_province_connected(&game.hex_map, capital_tile, pid, &game.provinces);
+
+            // Adjacency: at least one tile of the province is a neighbor of a capital tile
+            let adjacent = game
+                .provinces
+                .iter()
+                .find(|p| p.id == pid)
+                .map(|p| p.tiles.iter().any(|t| capital_neighbors.contains(t)))
+                .unwrap_or(false);
+
+            let connected = infra_connected || adjacent;
+
+            if let Some(prov) = game.provinces.iter_mut().find(|p| p.id == pid) {
+                // Only upgrade connectivity (false → true), never downgrade.
+                // Full disconnection tracking will be added with the transport system.
+                if connected {
+                    prov.connected_to_capital = true;
+                }
+            }
+        }
+    }
+}
+
 fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
     // Collect province IDs and their owner for processing
     let province_data: Vec<(ProvinceId, NationId)> =
@@ -4204,7 +4274,8 @@ mod tests {
     #[test]
     fn settlement_upgrades_after_six_turns_connected() {
         let coord1 = HexCoord::new(0, 0);
-        let coord2 = HexCoord::new(3, 3);
+        // Place adjacent to capital so connectivity is computed automatically
+        let coord2 = HexCoord::new(1, 0);
 
         let hex_map = HexMap::new(10, 10);
 
@@ -4217,7 +4288,7 @@ mod tests {
             4,
         );
 
-        let mut province_remote = Province::new(
+        let province_remote = Province::new(
             ProvinceId(2),
             "Remote Land".to_string(),
             NationId(1),
@@ -4225,9 +4296,7 @@ mod tests {
             vec![coord2],
             4,
         );
-        // Mark as connected to capital
-        province_remote.connected_to_capital = true;
-        // Settlement starts as Hamlet
+        // Settlement starts as Hamlet (connectivity computed by update_settlements)
 
         let mut nation = Nation::new(
             NationId(1),

@@ -315,8 +315,10 @@ fn build_frigate_deducts_resources_and_adds_ship() {
         .push(Ship::new(UnitId(9999), ShipType::Frigate, player));
 
     assert_eq!(nation.warships.len(), initial_warships + 1);
-    assert_eq!(nation.material_amount(MaterialType::Fabric), 3); // 5 - 2
-    assert_eq!(nation.material_amount(MaterialType::Lumber), 5); // 10 - 5
+    // Easy difficulty starts with 10 Lumber, 5 Steel, 5 Fabric
+    // So totals are: Fabric 5+5=10-2=8, Lumber 10+10=20-5=15, Arms 0+5-2=3
+    assert_eq!(nation.material_amount(MaterialType::Fabric), 8); // (5 starting + 5 given) - 2
+    assert_eq!(nation.material_amount(MaterialType::Lumber), 15); // (10 starting + 10 given) - 5
     assert_eq!(nation.material_amount(MaterialType::Arms), 3); // 5 - 2
 }
 
