@@ -608,6 +608,15 @@ fn update_province_connectivity(game: &mut GameState) {
         .collect();
 
     for &(nation_id, capital_province_id, capital_tile) in &nation_capitals {
+        // The capital province is always connected to itself
+        if let Some(cap_prov) = game
+            .provinces
+            .iter_mut()
+            .find(|p| p.id == capital_province_id)
+        {
+            cap_prov.connected_to_capital = true;
+        }
+
         // Collect province IDs for this nation (excluding capital itself)
         let province_ids: Vec<ProvinceId> = game
             .provinces
@@ -662,15 +671,7 @@ fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
             None => continue,
         };
 
-        // Skip if this is the nation's capital province (already developed)
         let owner_nation = game.nations.iter().find(|n| n.id == *owner_id);
-        let is_capital = owner_nation
-            .map(|n| n.capital_province_id == *province_id)
-            .unwrap_or(false);
-
-        if is_capital {
-            continue;
-        }
 
         // Skip settlement progression for Minor Nation provinces —
         // Minor Nation capitals should never industrialize beyond Hamlet.

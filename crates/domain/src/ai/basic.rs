@@ -178,7 +178,7 @@ fn ai_research_tech(
     // Build a personality-ranked list of candidate techs, then pick from the
     // top few using a per-nation pseudo-random seed so different nations
     // (and different games) produce varied research paths.
-    let mut candidates: Vec<_> = match personality {
+    let candidates: Vec<_> = match personality {
         AiPersonality::Economic => {
             // Prefer the most expensive techs (long-term investment)
             let mut v = available.clone();
@@ -231,13 +231,17 @@ fn ai_research_tech(
         return;
     }
 
+    // Collect all candidate data as owned values so we can release the borrow on game
+    let all_candidates: Vec<(TechId, Money, String)> = candidates
+        .iter()
+        .map(|t| (t.id, t.cost, t.name.clone()))
+        .collect();
+
     // Pick from the top candidates using a deterministic per-nation seed
     // so that each nation gets a different research path each game.
-    let top_n = candidates.len().min(3);
+    let top_n = all_candidates.len().min(3);
     let seed = (game.turn.0 as usize).wrapping_mul(nation_id.0 as usize + 7) % top_n;
-    let chosen = candidates.swap_remove(seed);
-
-    let (tech_id, tech_cost, tech_name) = (chosen.id, chosen.cost, chosen.name.clone());
+    let (tech_id, tech_cost, ref tech_name) = all_candidates[seed];
 
     // Check if the nation can afford it
     let nation = match game.get_nation_mut(nation_id) {
@@ -261,6 +265,43 @@ fn ai_research_tech(
             .any(|(t, text)| *t == turn && text == &entry_text)
         {
             game.history.push((turn, entry_text));
+        }
+        return; // Successfully researched
+    }
+
+    // Second pass: if we couldn't afford the preferred tech and treasury is high,
+    // try ANY available tech (cheapest first) to avoid hoarding cash.
+    let treasury = match game.get_nation(nation_id) {
+        Some(n) => n.treasury,
+        None => return,
+    };
+    if treasury > Money::dollars(10_000) {
+        let mut fallback_candidates = all_candidates;
+        fallback_candidates.sort_by_key(|(_, cost, _)| cost.cents());
+        for (cand_id, cand_cost, cand_name) in &fallback_candidates {
+            let nation = match game.get_nation_mut(nation_id) {
+                Some(n) => n,
+                None => return,
+            };
+            if let Some(remaining) = nation.treasury.checked_sub(*cand_cost) {
+                nation.treasury = remaining;
+                nation.research_tech(*cand_id);
+                let nation_name = nation.name.clone();
+                actions.push(format!(
+                    "Scientists in {} have discovered {}!",
+                    nation_name, cand_name
+                ));
+                let turn = game.turn;
+                let entry_text = format!("{} researched {}", nation_name, cand_name);
+                if !game
+                    .history
+                    .iter()
+                    .any(|(t, text)| *t == turn && text == &entry_text)
+                {
+                    game.history.push((turn, entry_text));
+                }
+                return;
+            }
         }
     }
 }
@@ -821,20 +862,35 @@ fn ai_build_military(game: &mut GameState, nation_id: NationId, actions: &mut Ve
                     ArmyUnitType::LightArtillery,
                 ],
             };
-            let unit_type = tier3_options[variety_seed % tier3_options.len()];
-            let cost = if unit_type == ArmyUnitType::LightArtillery {
-                Money::dollars(2000)
+            // Build up to 2 units per turn when treasury is very high (> $20,000)
+            let units_to_build = if treasury > Money::dollars(20_000) {
+                2
             } else {
-                Money::dollars(1000)
+                1
             };
-            if let Some(remaining) = nation.treasury.checked_sub(cost) {
-                nation.treasury = remaining;
-                let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
-                nation.army.push(unit);
-                actions.push(format!(
-                    "{} has been expanding its military forces",
-                    nation_name
-                ));
+            for i in 0..units_to_build {
+                if nation.army.len() >= tier3_max {
+                    break;
+                }
+                let unit_type = tier3_options[(variety_seed.wrapping_add(i)) % tier3_options.len()];
+                let cost = if unit_type == ArmyUnitType::LightArtillery {
+                    Money::dollars(2000)
+                } else {
+                    Money::dollars(1000)
+                };
+                if let Some(remaining) = nation.treasury.checked_sub(cost) {
+                    nation.treasury = remaining;
+                    let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
+                    nation.army.push(unit);
+                    if i == 0 {
+                        actions.push(format!(
+                            "{} has been expanding its military forces",
+                            nation_name
+                        ));
+                    }
+                } else {
+                    break;
+                }
             }
         }
     }
@@ -997,9 +1053,10 @@ fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId], actions: &m
         for &ai_id in ai_nation_ids {
             let personality = get_personality(game, ai_id);
 
-            // Only Aggressive and Balanced AIs consider GP wars
+            // Aggressive, Balanced, and Economic AIs consider GP wars
             let gp_war_interval = match personality {
                 AiPersonality::Aggressive => 30u32,
+                AiPersonality::Economic => 50,
                 AiPersonality::Balanced => 60,
                 _ => continue,
             };
@@ -1009,7 +1066,7 @@ fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId], actions: &m
             }
 
             let ai_army = game.get_nation(ai_id).map(|n| n.army.len()).unwrap_or(0);
-            if ai_army < 5 {
+            if ai_army < 4 {
                 continue;
             }
 
@@ -1043,8 +1100,8 @@ fn ai_declare_wars(game: &mut GameState, ai_nation_ids: &[NationId], actions: &m
             gp_targets.sort_by_key(|&(_, p, _)| p);
 
             if let Some(&(target_id, target_provinces, target_capital)) = gp_targets.first() {
-                // Only attack if we have significantly more territory
-                if ai_provinces > target_provinces + 4 {
+                // Only attack if we have more territory
+                if ai_provinces > target_provinces + 2 {
                     let attacker_name = game
                         .get_nation(ai_id)
                         .map(|n| n.name.clone())
@@ -1412,6 +1469,43 @@ fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
             nation.consume_material(MaterialType::Steel, 1);
             if let Some(building) = nation.get_building_mut(bt) {
                 building.start_expansion(1);
+            }
+        }
+    }
+
+    // When treasury is very high, expand existing mills/factories even without
+    // surplus resources — invest in future capacity growth.
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+    if nation.treasury > Money::dollars(15_000) {
+        let expandable: Vec<BuildingType> = nation
+            .buildings
+            .iter()
+            .filter(|b| {
+                matches!(
+                    b.building_type,
+                    BuildingType::LumberMill | BuildingType::SteelMill | BuildingType::TextileMill
+                ) && b.pending_capacity == 0
+            })
+            .map(|b| b.building_type)
+            .collect();
+
+        for bt in expandable {
+            let nation = match game.get_nation(nation_id) {
+                Some(n) => n,
+                None => return,
+            };
+            let has_lumber = nation.material_amount(MaterialType::Lumber) >= 1;
+            let has_steel = nation.material_amount(MaterialType::Steel) >= 1;
+            if has_lumber && has_steel {
+                let nation = game.get_nation_mut(nation_id).unwrap();
+                nation.consume_material(MaterialType::Lumber, 1);
+                nation.consume_material(MaterialType::Steel, 1);
+                if let Some(building) = nation.get_building_mut(bt) {
+                    building.start_expansion(1);
+                }
             }
         }
     }
