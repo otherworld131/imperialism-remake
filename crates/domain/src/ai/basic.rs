@@ -1800,10 +1800,19 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
                     .get_nation(mn_id)
                     .map(|n| n.name.clone())
                     .unwrap_or_default();
-                actions.push(format!(
+                let pact_text = format!(
                     "{} signed a non-aggression pact with {}",
                     nation_name, mn_name
-                ));
+                );
+                actions.push(pact_text.clone());
+                let turn = game.turn;
+                if !game
+                    .history
+                    .iter()
+                    .any(|(t, text)| *t == turn && text == &pact_text)
+                {
+                    game.history.push((turn, pact_text));
+                }
             }
         }
     }
@@ -1888,10 +1897,17 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
                         .get_nation(gp_id)
                         .map(|n| n.name.clone())
                         .unwrap_or_default();
-                    actions.push(format!(
-                        "{} and {} have formed an alliance!",
-                        nation_name, gp_name
-                    ));
+                    let alliance_text =
+                        format!("{} and {} have formed an alliance!", nation_name, gp_name);
+                    actions.push(alliance_text.clone());
+                    let turn = game.turn;
+                    if !game
+                        .history
+                        .iter()
+                        .any(|(t, text)| *t == turn && text == &alliance_text)
+                    {
+                        game.history.push((turn, alliance_text));
+                    }
                 }
             }
         } // end else (existing_alliances < 2)
@@ -2002,9 +2018,18 @@ pub fn ai_pre_election_strategy(
         }
     }
 
-    // Diplomatic personality also tries to build embassies with MNs that have consulates
-    if personality == AiPersonality::Diplomatic {
-        let embassy_cost = Money::dollars(5000);
+    // All personalities try to build embassies with MNs that have consulates,
+    // but with different treasury thresholds based on personality.
+    let embassy_treasury_threshold = match personality {
+        AiPersonality::Diplomatic => Money::dollars(5000),
+        AiPersonality::Balanced | AiPersonality::Economic => Money::dollars(10_000),
+        AiPersonality::Aggressive => Money::dollars(15_000),
+    };
+    let embassy_cost = Money::dollars(5000);
+    let treasury_ok = game
+        .get_nation(nation_id)
+        .is_some_and(|n| n.treasury >= embassy_treasury_threshold);
+    if treasury_ok {
         for mn_id in &minor_ids {
             let has_consulate_no_embassy = game
                 .diplomacy
