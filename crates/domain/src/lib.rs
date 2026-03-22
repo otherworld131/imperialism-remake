@@ -12,6 +12,7 @@ pub mod military;
 pub mod nation;
 pub mod platform;
 pub mod scenarios;
+#[cfg(feature = "lua")]
 pub mod scripting;
 pub mod services;
 pub mod tech;

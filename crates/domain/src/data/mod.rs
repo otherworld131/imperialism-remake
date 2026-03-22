@@ -10,6 +10,7 @@ pub mod loader;
 
 use crate::military::ships::{ShipStats, ShipType};
 use crate::military::units::{ArmyUnitType, UnitStats};
+#[cfg(feature = "lua")]
 use crate::scripting::LuaEngine;
 use crate::tech::TechTree;
 use std::collections::HashMap;
@@ -22,6 +23,7 @@ pub struct GameData {
     pub tech_tree: TechTree,
     pub unit_stats: HashMap<ArmyUnitType, UnitStats>,
     pub ship_stats: HashMap<ShipType, ShipStats>,
+    #[cfg(feature = "lua")]
     pub lua_engine: Option<LuaEngine>,
 }
 
@@ -49,6 +51,7 @@ impl GameData {
             tech_tree,
             unit_stats,
             ship_stats,
+            #[cfg(feature = "lua")]
             lua_engine: LuaEngine::new().ok(),
         }
     }
@@ -60,6 +63,7 @@ impl Default for GameData {
             tech_tree: TechTree::default(),
             unit_stats: default_unit_stats(),
             ship_stats: default_ship_stats(),
+            #[cfg(feature = "lua")]
             lua_engine: LuaEngine::new().ok(),
         }
     }

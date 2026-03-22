@@ -92,15 +92,23 @@ pub fn wasm_get_map_data(game_json: &str) -> String {
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
 
-    // Build province→nation lookup and identify country capitals
+    // Build province→nation lookup using Province.owner (the ground truth)
+    // and identify country capitals
+    let nation_lookup: std::collections::HashMap<NationId, (&str, String)> = game
+        .nations
+        .iter()
+        .map(|n| (n.id, (n.name.as_str(), format!("{:?}", n.color))))
+        .collect();
     let mut province_nation: std::collections::HashMap<ProvinceId, (String, String)> =
         std::collections::HashMap::new();
+    for prov in &game.provinces {
+        if let Some((name, color)) = nation_lookup.get(&prov.owner) {
+            province_nation.insert(prov.id, (name.to_string(), color.clone()));
+        }
+    }
     let mut country_capital_provinces: std::collections::HashSet<ProvinceId> =
         std::collections::HashSet::new();
     for nation in &game.nations {
-        for pid in &nation.province_ids {
-            province_nation.insert(*pid, (nation.name.clone(), format!("{:?}", nation.color)));
-        }
         country_capital_provinces.insert(nation.capital_province_id);
     }
 
