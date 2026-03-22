@@ -1,6 +1,6 @@
 # H4. Negative treasury allowed
 
-**Severity:** High
+**Severity:** High — FIXED
 
 **File:** `crates/domain/src/turn/processor.rs` → `apply_maintenance()`
 
