@@ -52,7 +52,13 @@ impl GameData {
             unit_stats,
             ship_stats,
             #[cfg(feature = "lua")]
-            lua_engine: LuaEngine::new().ok(),
+            lua_engine: {
+                let engine = LuaEngine::new().ok();
+                if let Some(ref e) = engine {
+                    let _ = crate::ai::lua_bridge::load_personality_scripts(e);
+                }
+                engine
+            },
         }
     }
 }
@@ -64,7 +70,13 @@ impl Default for GameData {
             unit_stats: default_unit_stats(),
             ship_stats: default_ship_stats(),
             #[cfg(feature = "lua")]
-            lua_engine: LuaEngine::new().ok(),
+            lua_engine: {
+                let engine = LuaEngine::new().ok();
+                if let Some(ref e) = engine {
+                    let _ = crate::ai::lua_bridge::load_personality_scripts(e);
+                }
+                engine
+            },
         }
     }
 }

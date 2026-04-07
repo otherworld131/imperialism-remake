@@ -1,0 +1,1061 @@
+use crate::game_state::GameState;
+use crate::types::*;
+
+use super::common::{AiPersonality, get_personality};
+
+pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
+    let personality = get_personality(game, nation_id);
+    let cost = Money::dollars(500);
+    let treasury_threshold = Money::dollars(2000);
+
+    let max_per_turn = match personality {
+        AiPersonality::Diplomatic => 4,
+        _ => 2,
+    };
+
+    // Check treasury threshold
+    let treasury = match game.get_nation(nation_id) {
+        Some(n) => n.treasury,
+        None => return,
+    };
+    if treasury < treasury_threshold {
+        return;
+    }
+
+    // Gather minor nation IDs — only those that still have provinces
+    let minor_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
+        .map(|n| n.id)
+        .collect();
+
+    let mut built = 0;
+    for mn_id in minor_ids {
+        if built >= max_per_turn {
+            break;
+        }
+
+        let treasury = match game.get_nation(nation_id) {
+            Some(n) => n.treasury,
+            None => return,
+        };
+        if treasury.checked_sub(cost).is_none() {
+            break;
+        }
+
+        // Check if consulate already exists
+        let already_has = game
+            .diplomacy
+            .get_relation(nation_id, mn_id)
+            .is_some_and(|r| r.has_consulate);
+        if already_has {
+            continue;
+        }
+
+        // Build consulate
+        if game.diplomacy.build_consulate(nation_id, mn_id).is_ok() {
+            if let Some(nation) = game.get_nation_mut(nation_id) {
+                nation.treasury -= cost;
+            }
+            built += 1;
+        }
+    }
+}
+
+/// AI manages diplomatic relations: proposes treaties, sends grants.
+///
+/// - **Diplomatic**: proposes pacts with all Minor Nations it has embassies with,
+///   proposes alliances with non-threatening GPs, sends grants to MNs with embassies.
+/// - **Aggressive**: rarely proposes treaties, breaks alliances more easily.
+/// - **Economic**: proposes pacts for trade security, sends grants.
+/// - **All AI**: send small grants ($500) to Minor Nations with embassies to improve relations.
+pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
+    // Auto-make peace with any nation that has 0 provinces left.
+    // There is nothing left to fight over, so continuing a war is pointless.
+    {
+        let war_targets: Vec<NationId> = game
+            .nations
+            .iter()
+            .filter(|n| {
+                n.id != nation_id
+                    && n.province_ids.is_empty()
+                    && game
+                        .diplomacy
+                        .get_relation(nation_id, n.id)
+                        .is_some_and(|r| r.at_war)
+            })
+            .map(|n| n.id)
+            .collect();
+
+        for target_id in war_targets {
+            // Skip peace if we have pending attacks against provinces owned by this nation
+            let has_pending_attack = game.pending_attacks.iter().any(|(attacker, prov_id)| {
+                *attacker == nation_id
+                    && game
+                        .get_province(*prov_id)
+                        .is_some_and(|p| p.owner == target_id)
+            });
+            if has_pending_attack {
+                continue;
+            }
+            game.diplomacy.make_peace(nation_id, target_id);
+            let nation_name = game
+                .get_nation(nation_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            let target_name = game
+                .get_nation(target_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            actions.push(format!(
+                "{} made peace with {} (no provinces remaining)",
+                nation_name, target_name
+            ));
+        }
+    }
+
+    let personality = get_personality(game, nation_id);
+    let turn_number = game.turn.0;
+
+    if game.ai_debug {
+        let nation_name = game
+            .get_nation(nation_id)
+            .map(|n| n.name.as_str())
+            .unwrap_or("?");
+        eprintln!(
+            "[AI:{}:diplomacy] personality={}, turn={}",
+            nation_name, personality, turn_number
+        );
+    }
+
+    // Determine behavior parameters based on personality
+    let (propose_pact_chance, propose_alliance_chance, grant_amount, grant_every_n_turns) =
+        match personality {
+            AiPersonality::Diplomatic => (true, true, 500i64, 4u32),
+            AiPersonality::Economic => (true, false, 500, 6),
+            AiPersonality::Aggressive => (false, false, 0, 0),
+            AiPersonality::Balanced => (true, false, 500, 8),
+        };
+
+    // Phase 1: Propose non-aggression pacts with Minor Nations that have embassies
+    if propose_pact_chance {
+        // Only propose pacts with minor nations that still have provinces
+        let minor_ids: Vec<NationId> = game
+            .nations
+            .iter()
+            .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
+            .map(|n| n.id)
+            .collect();
+
+        for mn_id in minor_ids {
+            let has_embassy = game
+                .diplomacy
+                .get_relation(nation_id, mn_id)
+                .is_some_and(|r| r.has_embassy);
+            if !has_embassy {
+                continue;
+            }
+
+            let already_has_pact = game.diplomacy.has_treaty(
+                nation_id,
+                mn_id,
+                crate::events::TreatyType::NonAggressionPact,
+            );
+            if already_has_pact {
+                continue;
+            }
+
+            if game.diplomacy.propose_pact(nation_id, mn_id).is_ok() {
+                let nation_name = game
+                    .get_nation(nation_id)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_default();
+                let mn_name = game
+                    .get_nation(mn_id)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_default();
+                let pact_text = format!(
+                    "{} signed a non-aggression pact with {}",
+                    nation_name, mn_name
+                );
+                actions.push(pact_text.clone());
+                let turn = game.turn;
+                if !game
+                    .history
+                    .iter()
+                    .any(|(t, text)| *t == turn && text == &pact_text)
+                {
+                    game.history.push((turn, pact_text));
+                }
+            }
+        }
+    }
+
+    // Phase 2: Propose alliances with other Great Powers (Diplomatic personality only)
+    // Wait until turn 10+ so diplomatic history develops, and limit to max 2 alliances
+    if propose_alliance_chance && turn_number >= 10 {
+        // Count existing alliances to cap at 2
+        let existing_alliances: usize = game
+            .nations
+            .iter()
+            .filter(|n| {
+                n.is_great_power()
+                    && n.id != nation_id
+                    && game.diplomacy.has_treaty(
+                        nation_id,
+                        n.id,
+                        crate::events::TreatyType::Alliance,
+                    )
+            })
+            .count();
+
+        if existing_alliances >= 2 {
+            // Already have max alliances, skip
+        } else {
+            let gp_ids: Vec<NationId> = game
+                .nations
+                .iter()
+                .filter(|n| {
+                    n.is_great_power() && n.id != nation_id && n.id != game.human_player_nation
+                })
+                .map(|n| n.id)
+                .collect();
+
+            let mut alliances_formed = existing_alliances;
+            for gp_id in gp_ids {
+                // Re-check cap inside loop to prevent forming more than 2 total
+                if alliances_formed >= 2 {
+                    break;
+                }
+
+                let at_war = game
+                    .diplomacy
+                    .get_relation(nation_id, gp_id)
+                    .is_some_and(|r| r.at_war);
+                if at_war {
+                    continue;
+                }
+
+                let already_allied = game.diplomacy.has_treaty(
+                    nation_id,
+                    gp_id,
+                    crate::events::TreatyType::Alliance,
+                );
+                if already_allied {
+                    continue;
+                }
+
+                // Skip nations with low standing (<50) — AI is less likely to accept treaties
+                let partner_standing = game.diplomacy.get_standing(gp_id);
+                if partner_standing < 50 {
+                    continue;
+                }
+
+                // Only propose if score is positive (non-threatening)
+                let score = game
+                    .diplomacy
+                    .get_relation(nation_id, gp_id)
+                    .map(|r| r.score)
+                    .unwrap_or(0);
+                if score < 0 {
+                    continue;
+                }
+
+                if game.diplomacy.propose_alliance(nation_id, gp_id).is_ok() {
+                    alliances_formed += 1;
+                    let nation_name = game
+                        .get_nation(nation_id)
+                        .map(|n| n.name.clone())
+                        .unwrap_or_default();
+                    let gp_name = game
+                        .get_nation(gp_id)
+                        .map(|n| n.name.clone())
+                        .unwrap_or_default();
+                    let alliance_text =
+                        format!("{} and {} have formed an alliance!", nation_name, gp_name);
+                    actions.push(alliance_text.clone());
+                    let turn = game.turn;
+                    if !game
+                        .history
+                        .iter()
+                        .any(|(t, text)| *t == turn && text == &alliance_text)
+                    {
+                        game.history.push((turn, alliance_text));
+                    }
+                }
+            }
+        } // end else (existing_alliances < 2)
+    }
+
+    // Phase 3: Send cash grants to Minor Nations with embassies
+    // Wealthy AIs send much larger grants to burn excess treasury.
+    if grant_amount > 0
+        && grant_every_n_turns > 0
+        && turn_number.is_multiple_of(grant_every_n_turns)
+    {
+        let treasury_val = game
+            .get_nation(nation_id)
+            .map(|n| n.treasury.as_dollars())
+            .unwrap_or(0);
+        let wealth_multiplier = if treasury_val > 100_000 {
+            20 // Very wealthy: grant 20x more
+        } else if treasury_val > 50_000 {
+            10
+        } else if treasury_val > 20_000 {
+            5
+        } else {
+            1
+        };
+        let ai_standing = game.diplomacy.get_standing(nation_id);
+        let adjusted_grant = if ai_standing > 80 {
+            (grant_amount + grant_amount / 2) * wealth_multiplier
+        } else {
+            grant_amount * wealth_multiplier
+        };
+        let grant = Money::dollars(adjusted_grant);
+        let minor_ids: Vec<NationId> = game
+            .nations
+            .iter()
+            .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
+            .map(|n| n.id)
+            .collect();
+
+        for mn_id in minor_ids {
+            let has_embassy = game
+                .diplomacy
+                .get_relation(nation_id, mn_id)
+                .is_some_and(|r| r.has_embassy);
+            if !has_embassy {
+                continue;
+            }
+
+            let can_afford = game
+                .get_nation(nation_id)
+                .is_some_and(|n| n.treasury.checked_sub(grant).is_some());
+            if !can_afford {
+                break;
+            }
+
+            game.diplomacy.send_grant(nation_id, mn_id, grant);
+            if let Some(nation) = game.get_nation_mut(nation_id) {
+                nation.treasury -= grant;
+            }
+        }
+    }
+}
+
+/// AI pre-election strategy: when approaching a decade election (within 4 turns),
+/// send larger cash grants to Minor Nation partners to boost relationship scores,
+/// and build more consulates/embassies to expand influence.
+///
+/// - **Diplomatic** personality: sends double grants and builds embassies aggressively
+/// - **Balanced/Economic**: sends standard grants
+/// - **Aggressive**: does nothing extra
+pub fn ai_pre_election_strategy(
+    game: &mut GameState,
+    nation_id: NationId,
+    actions: &mut Vec<String>,
+) {
+    // Only activate within 4 turns of a decade election
+    if !game.turn.is_near_decade_election(4) {
+        return;
+    }
+
+    let personality = get_personality(game, nation_id);
+
+    // Aggressive nations don't care about elections
+    if personality == AiPersonality::Aggressive {
+        return;
+    }
+
+    let grant_amount = match personality {
+        AiPersonality::Diplomatic => Money::dollars(1000),
+        _ => Money::dollars(500),
+    };
+
+    // Send grants to all MNs with embassies to boost relationship before the vote
+    let minor_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
+        .map(|n| n.id)
+        .collect();
+
+    for mn_id in &minor_ids {
+        let has_embassy = game
+            .diplomacy
+            .get_relation(nation_id, *mn_id)
+            .is_some_and(|r| r.has_embassy);
+        if !has_embassy {
+            continue;
+        }
+
+        let can_afford = game
+            .get_nation(nation_id)
+            .is_some_and(|n| n.treasury.checked_sub(grant_amount).is_some());
+        if !can_afford {
+            break;
+        }
+
+        game.diplomacy.send_grant(nation_id, *mn_id, grant_amount);
+        if let Some(nation) = game.get_nation_mut(nation_id) {
+            nation.treasury -= grant_amount;
+        }
+    }
+
+    // All personalities try to build embassies with MNs that have consulates,
+    // but with different treasury thresholds based on personality.
+    let embassy_treasury_threshold = match personality {
+        AiPersonality::Diplomatic => Money::dollars(5000),
+        AiPersonality::Balanced | AiPersonality::Economic => Money::dollars(10_000),
+        AiPersonality::Aggressive => Money::dollars(15_000),
+    };
+    let embassy_cost = Money::dollars(5000);
+    let treasury_ok = game
+        .get_nation(nation_id)
+        .is_some_and(|n| n.treasury >= embassy_treasury_threshold);
+    if treasury_ok {
+        for mn_id in &minor_ids {
+            let has_consulate_no_embassy = game
+                .diplomacy
+                .get_relation(nation_id, *mn_id)
+                .is_some_and(|r| r.has_consulate && !r.has_embassy);
+            if !has_consulate_no_embassy {
+                continue;
+            }
+
+            let can_afford = game
+                .get_nation(nation_id)
+                .is_some_and(|n| n.treasury.checked_sub(embassy_cost).is_some());
+            if !can_afford {
+                break;
+            }
+
+            if game.diplomacy.build_embassy(nation_id, *mn_id).is_ok() {
+                if let Some(nation) = game.get_nation_mut(nation_id) {
+                    nation.treasury -= embassy_cost;
+                }
+                let nation_name = game
+                    .get_nation(nation_id)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_default();
+                let mn_name = game
+                    .get_nation(*mn_id)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_default();
+                actions.push(format!(
+                    "{} built an embassy in {} ahead of the election",
+                    nation_name, mn_name
+                ));
+            }
+        }
+    }
+}
+
+/// Minor Nation bonus trade: when a MN has an embassy with a GP and relationship > 50,
+/// it offers 1 extra of each resource type the MN has.
+///
+/// This function should be called during the trade phase to add bonus resources
+/// for preferred trade partners.
+pub fn minor_nation_bonus_trade(game: &mut GameState) {
+    // Collect MN/GP pairs that qualify
+    let mut bonus_pairs: Vec<(NationId, NationId)> = Vec::new();
+
+    let minor_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| !n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+    let gp_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+
+    for &mn_id in &minor_ids {
+        for &gp_id in &gp_ids {
+            let qualifies = game
+                .diplomacy
+                .get_relation(mn_id, gp_id)
+                .is_some_and(|r| r.has_embassy && r.score > 50);
+            if qualifies {
+                bonus_pairs.push((mn_id, gp_id));
+            }
+        }
+    }
+
+    // For each qualifying pair, give 1 bonus of each resource type the GP has
+    // (simulating the MN offering bonus trade goods to preferred partners)
+    for (_, gp_id) in bonus_pairs {
+        let resources = [
+            ResourceType::Timber,
+            ResourceType::Iron,
+            ResourceType::Coal,
+            ResourceType::Grain,
+            ResourceType::Cotton,
+            ResourceType::Wool,
+        ];
+        if let Some(gp) = game.get_nation_mut(gp_id) {
+            for resource in &resources {
+                gp.add_resource(*resource, 1);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::common::test_helpers::{test_game_with_ai, test_game_with_ai_and_minor};
+    use crate::hex::HexCoord;
+    use crate::map::Province;
+    use crate::nation::{Nation, NationColor};
+
+    #[test]
+    fn diplomatic_ai_builds_more_consulates() {
+        let mut game = test_game_with_ai_and_minor();
+        // Add more minor nations for the test
+        let province4 = Province::new(
+            ProvinceId(4),
+            "Minor Capital 2".to_string(),
+            NationId(4),
+            HexCoord::new(7, 7),
+            vec![HexCoord::new(7, 7)],
+            3,
+        );
+        let province5 = Province::new(
+            ProvinceId(5),
+            "Minor Capital 3".to_string(),
+            NationId(5),
+            HexCoord::new(8, 8),
+            vec![HexCoord::new(8, 8)],
+            3,
+        );
+        let province6 = Province::new(
+            ProvinceId(6),
+            "Minor Capital 4".to_string(),
+            NationId(6),
+            HexCoord::new(9, 9),
+            vec![HexCoord::new(9, 9)],
+            3,
+        );
+        let province7 = Province::new(
+            ProvinceId(7),
+            "Minor Capital 5".to_string(),
+            NationId(7),
+            HexCoord::new(4, 4),
+            vec![HexCoord::new(4, 4)],
+            3,
+        );
+        game.provinces.push(province4);
+        game.provinces.push(province5);
+        game.provinces.push(province6);
+        game.provinces.push(province7);
+        game.nations.push(Nation::new(
+            NationId(4),
+            "Minor2".to_string(),
+            NationColor::Brown,
+            NationType::MinorNation,
+            ProvinceId(4),
+        ));
+        game.nations.push(Nation::new(
+            NationId(5),
+            "Minor3".to_string(),
+            NationColor::Pink,
+            NationType::MinorNation,
+            ProvinceId(5),
+        ));
+        game.nations.push(Nation::new(
+            NationId(6),
+            "Minor4".to_string(),
+            NationColor::Teal,
+            NationType::MinorNation,
+            ProvinceId(6),
+        ));
+        game.nations.push(Nation::new(
+            NationId(7),
+            "Minor5".to_string(),
+            NationColor::Olive,
+            NationType::MinorNation,
+            ProvinceId(7),
+        ));
+
+        // Set Diplomatic personality
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Diplomatic);
+        ai.treasury = Money::dollars(10000);
+
+        ai_build_consulates(&mut game, NationId(2));
+
+        // Count consulates built
+        let consulate_count = [
+            NationId(3),
+            NationId(4),
+            NationId(5),
+            NationId(6),
+            NationId(7),
+        ]
+        .iter()
+        .filter(|&&mn_id| {
+            game.diplomacy
+                .get_relation(NationId(2), mn_id)
+                .is_some_and(|r| r.has_consulate)
+        })
+        .count();
+
+        assert_eq!(
+            consulate_count, 4,
+            "Diplomatic AI should build up to 4 consulates"
+        );
+    }
+
+    #[test]
+    fn balanced_ai_builds_fewer_consulates() {
+        let mut game = test_game_with_ai_and_minor();
+        // Add more minor nations
+        game.provinces.push(Province::new(
+            ProvinceId(4),
+            "Minor2 Capital".to_string(),
+            NationId(4),
+            HexCoord::new(7, 7),
+            vec![HexCoord::new(7, 7)],
+            3,
+        ));
+        game.provinces.push(Province::new(
+            ProvinceId(5),
+            "Minor3 Capital".to_string(),
+            NationId(5),
+            HexCoord::new(8, 8),
+            vec![HexCoord::new(8, 8)],
+            3,
+        ));
+        game.provinces.push(Province::new(
+            ProvinceId(6),
+            "Minor4 Capital".to_string(),
+            NationId(6),
+            HexCoord::new(9, 9),
+            vec![HexCoord::new(9, 9)],
+            3,
+        ));
+        game.nations.push(Nation::new(
+            NationId(4),
+            "Minor2".to_string(),
+            NationColor::Brown,
+            NationType::MinorNation,
+            ProvinceId(4),
+        ));
+        game.nations.push(Nation::new(
+            NationId(5),
+            "Minor3".to_string(),
+            NationColor::Pink,
+            NationType::MinorNation,
+            ProvinceId(5),
+        ));
+        game.nations.push(Nation::new(
+            NationId(6),
+            "Minor4".to_string(),
+            NationColor::Teal,
+            NationType::MinorNation,
+            ProvinceId(6),
+        ));
+
+        // Set Balanced personality
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.treasury = Money::dollars(10000);
+
+        ai_build_consulates(&mut game, NationId(2));
+
+        // Count consulates built
+        let consulate_count = [NationId(3), NationId(4), NationId(5), NationId(6)]
+            .iter()
+            .filter(|&&mn_id| {
+                game.diplomacy
+                    .get_relation(NationId(2), mn_id)
+                    .is_some_and(|r| r.has_consulate)
+            })
+            .count();
+
+        assert_eq!(
+            consulate_count, 2,
+            "Balanced AI should build up to 2 consulates"
+        );
+    }
+
+    #[test]
+    fn ai_does_not_build_consulates_when_poor() {
+        let mut game = test_game_with_ai_and_minor();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.treasury = Money::dollars(1000); // Below $2,000 threshold
+
+        ai_build_consulates(&mut game, NationId(2));
+
+        let has_consulate = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .is_some_and(|r| r.has_consulate);
+        assert!(
+            !has_consulate,
+            "AI should not build consulates when treasury < $2,000"
+        );
+    }
+
+    #[test]
+    fn diplomatic_ai_proposes_pacts_with_embassy_nations() {
+        let mut game = test_game_with_ai_and_minor();
+        let ai_id = NationId(2);
+        let mn_id = NationId(3);
+
+        // Set AI to Diplomatic personality
+        game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Diplomatic);
+
+        // Build consulate and embassy for the AI with the minor nation
+        game.diplomacy.build_consulate(ai_id, mn_id).unwrap();
+        game.diplomacy.build_embassy(ai_id, mn_id).unwrap();
+
+        let mut actions = Vec::new();
+        ai_manage_diplomacy(&mut game, ai_id, &mut actions);
+
+        // Diplomatic AI should propose a pact
+        assert!(
+            game.diplomacy
+                .has_treaty(ai_id, mn_id, crate::events::TreatyType::NonAggressionPact),
+            "Diplomatic AI should propose pact with Minor Nation it has embassy with"
+        );
+        assert!(
+            actions.iter().any(|a| a.contains("non-aggression pact")),
+            "Should report pact in actions"
+        );
+    }
+
+    #[test]
+    fn aggressive_ai_does_not_propose_treaties() {
+        let mut game = test_game_with_ai_and_minor();
+        let ai_id = NationId(2);
+        let mn_id = NationId(3);
+
+        // Set AI to Aggressive personality
+        game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Aggressive);
+
+        // Build consulate and embassy
+        game.diplomacy.build_consulate(ai_id, mn_id).unwrap();
+        game.diplomacy.build_embassy(ai_id, mn_id).unwrap();
+
+        let mut actions = Vec::new();
+        ai_manage_diplomacy(&mut game, ai_id, &mut actions);
+
+        // Aggressive AI should NOT propose pacts
+        assert!(
+            !game
+                .diplomacy
+                .has_treaty(ai_id, mn_id, crate::events::TreatyType::NonAggressionPact),
+            "Aggressive AI should not propose pacts"
+        );
+        assert!(
+            actions.is_empty(),
+            "Aggressive AI should not take diplomatic actions"
+        );
+    }
+
+    #[test]
+    fn diplomatic_ai_sends_grants() {
+        let mut game = test_game_with_ai_and_minor();
+        let ai_id = NationId(2);
+        let mn_id = NationId(3);
+
+        // Set AI to Diplomatic personality
+        game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Diplomatic);
+        // Set turn to multiple of 4 so Diplomatic AI sends grants
+        game.turn = TurnNumber::new(4);
+
+        // Build consulate and embassy
+        game.diplomacy.build_consulate(ai_id, mn_id).unwrap();
+        game.diplomacy.build_embassy(ai_id, mn_id).unwrap();
+
+        let score_before = game.diplomacy.get_relation(ai_id, mn_id).unwrap().score;
+
+        let mut actions = Vec::new();
+        ai_manage_diplomacy(&mut game, ai_id, &mut actions);
+
+        let score_after = game.diplomacy.get_relation(ai_id, mn_id).unwrap().score;
+
+        // Score should have improved (pact gives +10, grant gives +5)
+        assert!(
+            score_after > score_before,
+            "AI grant should improve relationship score (before: {}, after: {})",
+            score_before,
+            score_after
+        );
+
+        // Treasury should have decreased by $500 for the grant
+        assert!(
+            game.get_nation(ai_id).unwrap().treasury < Money::dollars(10000),
+            "AI treasury should decrease after sending grant"
+        );
+    }
+
+    #[test]
+    fn diplomatic_ai_proposes_alliances_with_gps() {
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+
+        // Set AI to Diplomatic personality
+        game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Diplomatic);
+
+        // Add a third GP that is AI-controlled (non-human, non-current-AI)
+        let mut gp3 = Nation::new(
+            NationId(4),
+            "ThirdPower".to_string(),
+            NationColor::Green,
+            NationType::GreatPower,
+            ProvinceId(2),
+        );
+        gp3.ai_personality = Some(AiPersonality::Balanced);
+        gp3.treasury = Money::dollars(10000);
+        game.nations.push(gp3);
+
+        // Initialize GP embassies (so they have embassies with each other)
+        let gp_ids: Vec<NationId> = game
+            .nations
+            .iter()
+            .filter(|n| n.is_great_power())
+            .map(|n| n.id)
+            .collect();
+        game.diplomacy.initialize_great_powers(&gp_ids);
+
+        // Advance turn to 10+ so alliance proposals are allowed
+        game.turn = TurnNumber(10);
+
+        let mut actions = Vec::new();
+        ai_manage_diplomacy(&mut game, ai_id, &mut actions);
+
+        // Diplomatic AI should propose alliance with ThirdPower (not human player)
+        assert!(
+            game.diplomacy
+                .has_treaty(ai_id, NationId(4), crate::events::TreatyType::Alliance),
+            "Diplomatic AI should propose alliance with non-threatening GP"
+        );
+    }
+
+    #[test]
+    fn ai_pre_election_grants_within_4_turns() {
+        let mut game = test_game_with_ai_and_minor();
+        // Set turn to 3 turns before an election at 1825 Q1 (turn 41).
+        // Turn 38 = 1824 Q2 (within 4 turns of turn 41)
+        game.turn = TurnNumber::from_year_quarter(1824, 2);
+
+        // Give AI a Balanced personality (not Aggressive, so it will send grants)
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.treasury = Money::dollars(10000);
+
+        // Set up embassy between AI(2) and MN(3)
+        game.diplomacy
+            .build_consulate(NationId(2), NationId(3))
+            .unwrap();
+        game.diplomacy
+            .build_embassy(NationId(2), NationId(3))
+            .unwrap();
+
+        let score_before = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .unwrap()
+            .score;
+
+        let mut actions = Vec::new();
+        ai_pre_election_strategy(&mut game, NationId(2), &mut actions);
+
+        let score_after = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .unwrap()
+            .score;
+        assert!(
+            score_after > score_before,
+            "Pre-election grants should improve relationship: before={}, after={}",
+            score_before,
+            score_after
+        );
+
+        // Treasury should have decreased
+        let treasury_after = game.get_nation(NationId(2)).unwrap().treasury;
+        assert!(
+            treasury_after < Money::dollars(10000),
+            "Treasury should decrease from pre-election grants"
+        );
+    }
+
+    #[test]
+    fn ai_pre_election_does_nothing_when_far_from_election() {
+        let mut game = test_game_with_ai_and_minor();
+        // Set turn to 1820 Q1 — far from any election
+        game.turn = TurnNumber::from_year_quarter(1820, 1);
+
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.treasury = Money::dollars(10000);
+
+        // Set up embassy
+        game.diplomacy
+            .build_consulate(NationId(2), NationId(3))
+            .unwrap();
+        game.diplomacy
+            .build_embassy(NationId(2), NationId(3))
+            .unwrap();
+
+        let treasury_before = game.get_nation(NationId(2)).unwrap().treasury;
+        let mut actions = Vec::new();
+        ai_pre_election_strategy(&mut game, NationId(2), &mut actions);
+
+        let treasury_after = game.get_nation(NationId(2)).unwrap().treasury;
+        assert_eq!(
+            treasury_before, treasury_after,
+            "Pre-election strategy should do nothing when far from election"
+        );
+    }
+
+    #[test]
+    fn ai_aggressive_ignores_pre_election() {
+        let mut game = test_game_with_ai_and_minor();
+        // Set turn near election
+        game.turn = TurnNumber::from_year_quarter(1824, 2);
+
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Aggressive);
+        ai.treasury = Money::dollars(10000);
+
+        // Set up embassy
+        game.diplomacy
+            .build_consulate(NationId(2), NationId(3))
+            .unwrap();
+        game.diplomacy
+            .build_embassy(NationId(2), NationId(3))
+            .unwrap();
+
+        let treasury_before = game.get_nation(NationId(2)).unwrap().treasury;
+        let mut actions = Vec::new();
+        ai_pre_election_strategy(&mut game, NationId(2), &mut actions);
+
+        let treasury_after = game.get_nation(NationId(2)).unwrap().treasury;
+        assert_eq!(
+            treasury_before, treasury_after,
+            "Aggressive AI should ignore pre-election strategy"
+        );
+    }
+
+    #[test]
+    fn no_alliances_formed_before_turn_10() {
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+
+        // Set AI to Diplomatic personality (the only one that proposes alliances)
+        game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Diplomatic);
+
+        // Add a third GP that is AI-controlled
+        let mut gp3 = Nation::new(
+            NationId(4),
+            "ThirdPower".to_string(),
+            NationColor::Green,
+            NationType::GreatPower,
+            ProvinceId(2),
+        );
+        gp3.ai_personality = Some(AiPersonality::Balanced);
+        gp3.treasury = Money::dollars(10000);
+        game.nations.push(gp3);
+
+        // Initialize GP embassies
+        let gp_ids: Vec<NationId> = game
+            .nations
+            .iter()
+            .filter(|n| n.is_great_power())
+            .map(|n| n.id)
+            .collect();
+        game.diplomacy.initialize_great_powers(&gp_ids);
+
+        // Turn 1: alliances should NOT be proposed (turn < 10)
+        game.turn = TurnNumber(1);
+
+        let mut actions = Vec::new();
+        ai_manage_diplomacy(&mut game, ai_id, &mut actions);
+
+        let alliance_count: usize = game
+            .nations
+            .iter()
+            .filter(|n| {
+                n.is_great_power()
+                    && n.id != ai_id
+                    && game
+                        .diplomacy
+                        .has_treaty(ai_id, n.id, crate::events::TreatyType::Alliance)
+            })
+            .count();
+        assert_eq!(
+            alliance_count, 0,
+            "No alliances should form before turn 10; got {}",
+            alliance_count
+        );
+    }
+
+    #[test]
+    fn alliances_capped_at_two() {
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+
+        // Set AI to Diplomatic personality
+        game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Diplomatic);
+
+        // Add multiple AI-controlled Great Powers
+        for i in 4..=7 {
+            let mut gp = Nation::new(
+                NationId(i),
+                format!("Power{}", i),
+                NationColor::Green,
+                NationType::GreatPower,
+                ProvinceId(2),
+            );
+            gp.ai_personality = Some(AiPersonality::Balanced);
+            gp.treasury = Money::dollars(10000);
+            game.nations.push(gp);
+        }
+
+        // Initialize GP embassies
+        let gp_ids: Vec<NationId> = game
+            .nations
+            .iter()
+            .filter(|n| n.is_great_power())
+            .map(|n| n.id)
+            .collect();
+        game.diplomacy.initialize_great_powers(&gp_ids);
+
+        // Set turn to 40 (well past the turn 10 threshold)
+        game.turn = TurnNumber(40);
+
+        // Run diplomacy multiple times to give it every chance to form alliances
+        for _ in 0..5 {
+            let mut actions = Vec::new();
+            ai_manage_diplomacy(&mut game, ai_id, &mut actions);
+        }
+
+        let alliance_count: usize = game
+            .nations
+            .iter()
+            .filter(|n| {
+                n.is_great_power()
+                    && n.id != ai_id
+                    && game
+                        .diplomacy
+                        .has_treaty(ai_id, n.id, crate::events::TreatyType::Alliance)
+            })
+            .count();
+        assert!(
+            alliance_count <= 2,
+            "Diplomatic AI should have at most 2 alliances; got {}",
+            alliance_count
+        );
+    }
+}

@@ -1,4 +1,4 @@
-use crate::ai::basic::AiPersonality;
+use crate::ai::AiPersonality;
 use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::civilians::Civilian;
 use crate::economy::labor::LaborPool;

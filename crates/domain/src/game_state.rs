@@ -1,4 +1,4 @@
-use crate::ai::basic::personality_for_nation_index;
+use crate::ai::personality_for_nation_index;
 use crate::data::GameData;
 use crate::diplomacy::DiplomacyState;
 use crate::economy::buildings::{Building, BuildingType};
@@ -47,6 +47,9 @@ pub struct GameState {
     /// High score table: (nation_name, score, date_string).
     #[serde(default)]
     pub high_scores: Vec<(String, u32, String)>,
+    /// When true, AI functions print detailed decision traces to stderr.
+    #[serde(skip, default)]
+    pub ai_debug: bool,
 }
 
 impl GameState {
@@ -359,6 +362,7 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         pending_moves: Vec::new(),
         history: Vec::new(),
         high_scores: Vec::new(),
+        ai_debug: false,
     };
 
     // On Easy/Introductory, auto-prospect tiles in the human player's capital province
@@ -459,6 +463,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         }
     }
 

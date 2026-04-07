@@ -1,0 +1,388 @@
+use crate::game_state::GameState;
+use crate::map::UnitId;
+use crate::types::*;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// AI personality types that affect decision-making priorities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum AiPersonality {
+    /// Prioritizes military, declares wars early.
+    Aggressive,
+    /// Prioritizes trade and alliances, avoids war.
+    Diplomatic,
+    /// Prioritizes production and tech investment.
+    Economic,
+    /// Default: adapts to circumstances.
+    Balanced,
+}
+
+impl std::fmt::Display for AiPersonality {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AiPersonality::Aggressive => write!(f, "Aggressive"),
+            AiPersonality::Diplomatic => write!(f, "Diplomatic"),
+            AiPersonality::Economic => write!(f, "Economic"),
+            AiPersonality::Balanced => write!(f, "Balanced"),
+        }
+    }
+}
+
+/// Returns the default AI personality for a Great Power based on nation index.
+///
+/// - Index 0 (Deneb): Balanced (usually human-controlled)
+/// - Index 1 (Devron): Aggressive
+/// - Index 2 (Haxaco): Economic
+/// - Index 3 (Kem): Aggressive
+/// - Index 4 (Ordune): Diplomatic
+/// - Index 5 (Patagon): Economic
+/// - Index 6 (Zimm): Balanced
+pub fn personality_for_nation_index(index: usize) -> AiPersonality {
+    match index {
+        0 => AiPersonality::Balanced,
+        1 => AiPersonality::Aggressive,
+        2 => AiPersonality::Economic,
+        3 => AiPersonality::Balanced,
+        4 => AiPersonality::Diplomatic,
+        5 => AiPersonality::Aggressive,
+        6 => AiPersonality::Balanced,
+        _ => AiPersonality::Balanced,
+    }
+}
+
+/// Global counter for generating unique UnitIds for AI-built army units.
+static AI_UNIT_ID_COUNTER: AtomicU32 = AtomicU32::new(2_000_000);
+
+/// Generate a unique UnitId for an AI-built unit.
+pub(crate) fn next_unit_id() -> UnitId {
+    UnitId(AI_UNIT_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Get the AI personality for a nation, defaulting to Balanced.
+pub(crate) fn get_personality(game: &GameState, nation_id: NationId) -> AiPersonality {
+    game.get_nation(nation_id)
+        .and_then(|n| n.ai_personality)
+        .unwrap_or(AiPersonality::Balanced)
+}
+
+#[cfg(test)]
+pub(crate) mod test_helpers {
+    use super::*;
+    use crate::data::GameData;
+    use crate::diplomacy::DiplomacyState;
+    use crate::economy::civilians::{Civilian, CivilianType};
+    use crate::hex::HexCoord;
+    use crate::map::{HexMap, Province};
+    use crate::nation::{Nation, NationColor};
+
+    /// Build a game state with a human nation and one AI great power.
+    pub(crate) fn test_game_with_ai() -> GameState {
+        let coord = HexCoord::new(0, 0);
+        let hex_map = HexMap::new(10, 10);
+
+        let province1 = Province::new(
+            ProvinceId(1),
+            "Human Land".to_string(),
+            NationId(1),
+            coord,
+            vec![coord],
+            4,
+        );
+        let province2 = Province::new(
+            ProvinceId(2),
+            "AI Land".to_string(),
+            NationId(2),
+            HexCoord::new(3, 3),
+            vec![HexCoord::new(3, 3)],
+            4,
+        );
+
+        let mut human_nation = Nation::new(
+            NationId(1),
+            "HumanNation".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        human_nation.treasury = Money::dollars(10000);
+
+        let mut ai_nation = Nation::new(
+            NationId(2),
+            "AINation".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(2),
+        );
+        ai_nation.treasury = Money::dollars(10000);
+        // Pre-populate with 4 civilians so AI does not hire more during tests
+        for i in 0..4 {
+            ai_nation.civilians.push(Civilian::new(
+                UnitId(10000 + i),
+                CivilianType::Farmer,
+                NationId(2),
+            ));
+        }
+
+        GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province1, province2],
+            nations: vec![human_nation, ai_nation],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            ai_debug: false,
+        }
+    }
+
+    /// Build a game state that includes a minor nation for war tests.
+    pub(crate) fn test_game_with_ai_and_minor() -> GameState {
+        let coord = HexCoord::new(0, 0);
+        let hex_map = HexMap::new(10, 10);
+
+        let province1 = Province::new(
+            ProvinceId(1),
+            "Human Land".to_string(),
+            NationId(1),
+            coord,
+            vec![coord],
+            4,
+        );
+        let province2 = Province::new(
+            ProvinceId(2),
+            "AI Land".to_string(),
+            NationId(2),
+            HexCoord::new(3, 3),
+            vec![HexCoord::new(3, 3)],
+            4,
+        );
+        let province3 = Province::new(
+            ProvinceId(3),
+            "Minor Capital".to_string(),
+            NationId(3),
+            HexCoord::new(5, 5),
+            vec![HexCoord::new(5, 5)],
+            3,
+        );
+
+        let mut human_nation = Nation::new(
+            NationId(1),
+            "HumanNation".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        human_nation.treasury = Money::dollars(10000);
+
+        let mut ai_nation = Nation::new(
+            NationId(2),
+            "AINation".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(2),
+        );
+        ai_nation.treasury = Money::dollars(10000);
+        // Pre-populate with 4 civilians so AI does not hire more during tests
+        for i in 0..4 {
+            ai_nation.civilians.push(Civilian::new(
+                UnitId(10000 + i),
+                CivilianType::Farmer,
+                NationId(2),
+            ));
+        }
+
+        let minor_nation = Nation::new(
+            NationId(3),
+            "MinorLand".to_string(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(3),
+        );
+
+        GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province1, province2, province3],
+            nations: vec![human_nation, ai_nation, minor_nation],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            ai_debug: false,
+        }
+    }
+
+    /// Build a game state with two adjacent provinces for border tests.
+    pub(crate) fn test_game_with_adjacent_provinces() -> GameState {
+        let mut hex_map = HexMap::new(20, 20);
+
+        // AI province tiles: (0,0) and (1,0)
+        let ai_tile1 = HexCoord::new(0, 0);
+        let ai_tile2 = HexCoord::new(1, 0);
+        hex_map.set_tile(
+            ai_tile1,
+            crate::map::tile::Tile::with_province(TerrainType::Farm, ProvinceId(2)),
+        );
+        hex_map.set_tile(
+            ai_tile2,
+            crate::map::tile::Tile::with_province(TerrainType::Farm, ProvinceId(2)),
+        );
+
+        // Enemy province tile: (2,0) — adjacent to (1,0)
+        let enemy_tile = HexCoord::new(2, 0);
+        hex_map.set_tile(
+            enemy_tile,
+            crate::map::tile::Tile::with_province(TerrainType::Farm, ProvinceId(3)),
+        );
+
+        // Human province tile
+        let human_tile = HexCoord::new(5, 5);
+        hex_map.set_tile(
+            human_tile,
+            crate::map::tile::Tile::with_province(TerrainType::Farm, ProvinceId(1)),
+        );
+
+        let province1 = Province::new(
+            ProvinceId(1),
+            "Human Land".to_string(),
+            NationId(1),
+            human_tile,
+            vec![human_tile],
+            4,
+        );
+        let province2 = Province::new(
+            ProvinceId(2),
+            "AI Land".to_string(),
+            NationId(2),
+            ai_tile1,
+            vec![ai_tile1, ai_tile2],
+            4,
+        );
+        let province3 = Province::new(
+            ProvinceId(3),
+            "Enemy Land".to_string(),
+            NationId(3),
+            enemy_tile,
+            vec![enemy_tile],
+            3,
+        );
+
+        let mut human_nation = Nation::new(
+            NationId(1),
+            "HumanNation".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        human_nation.treasury = Money::dollars(10000);
+
+        let mut ai_nation = Nation::new(
+            NationId(2),
+            "AINation".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(2),
+        );
+        ai_nation.treasury = Money::dollars(20000);
+        ai_nation.ai_personality = Some(AiPersonality::Balanced);
+        // Pre-populate with 4 civilians
+        for i in 0..4 {
+            ai_nation.civilians.push(Civilian::new(
+                UnitId(10000 + i),
+                CivilianType::Farmer,
+                NationId(2),
+            ));
+        }
+
+        let enemy_nation = Nation::new(
+            NationId(3),
+            "EnemyLand".to_string(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(3),
+        );
+
+        let mut diplomacy = DiplomacyState::new();
+        // Declare war between AI and enemy
+        diplomacy.declare_war(NationId(2), NationId(3));
+
+        GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province1, province2, province3],
+            nations: vec![human_nation, ai_nation, enemy_nation],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy,
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            ai_debug: false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn personality_assignment_is_deterministic() {
+        assert_eq!(personality_for_nation_index(0), AiPersonality::Balanced);
+        assert_eq!(personality_for_nation_index(1), AiPersonality::Aggressive);
+        assert_eq!(personality_for_nation_index(2), AiPersonality::Economic);
+        assert_eq!(personality_for_nation_index(3), AiPersonality::Balanced);
+        assert_eq!(personality_for_nation_index(4), AiPersonality::Diplomatic);
+        assert_eq!(personality_for_nation_index(5), AiPersonality::Aggressive);
+        assert_eq!(personality_for_nation_index(6), AiPersonality::Balanced);
+        // Out-of-range defaults to Balanced
+        assert_eq!(personality_for_nation_index(99), AiPersonality::Balanced);
+    }
+
+    #[test]
+    fn personality_display_format() {
+        assert_eq!(format!("{}", AiPersonality::Aggressive), "Aggressive");
+        assert_eq!(format!("{}", AiPersonality::Diplomatic), "Diplomatic");
+        assert_eq!(format!("{}", AiPersonality::Economic), "Economic");
+        assert_eq!(format!("{}", AiPersonality::Balanced), "Balanced");
+    }
+
+    #[test]
+    fn new_game_assigns_ai_personalities() {
+        let gs = crate::game_state::new_game("test", Difficulty::Normal, 0);
+        // Human player (index 0, Deneb) should have no personality
+        let human = gs.get_nation(gs.human_player_nation).unwrap();
+        assert_eq!(
+            human.ai_personality, None,
+            "Human player should not have an AI personality"
+        );
+
+        // Other Great Powers should have personalities
+        for nation in gs.great_powers() {
+            if nation.id == gs.human_player_nation {
+                continue;
+            }
+            assert!(
+                nation.ai_personality.is_some(),
+                "AI Great Power {} should have a personality",
+                nation.name
+            );
+        }
+    }
+}

@@ -48,6 +48,7 @@ fn main() {
 
     // Check for --scenario flag
     let scenario_flag = args.iter().position(|a| a == "--scenario");
+    let ai_debug = args.iter().any(|a| a == "--ai-debug");
 
     println!("╔══════════════════════════════════════════════╗");
     println!("║         IMPERIALISM REMAKE v0.1.0            ║");
@@ -99,10 +100,22 @@ fn main() {
             }
         }
     } else {
-        let map_key = args.get(1).map(|s| s.as_str()).unwrap_or("imperialism");
-        let nation_index: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+        // Filter out flags (--ai-debug, etc.) to get positional args
+        let positional: Vec<&str> = args
+            .iter()
+            .skip(1)
+            .filter(|a| !a.starts_with("--"))
+            .map(|s| s.as_str())
+            .collect();
+        let map_key = positional.first().copied().unwrap_or("imperialism");
+        let nation_index: usize = positional
+            .get(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
         new_game(map_key, Difficulty::Normal, nation_index)
     };
+
+    game.ai_debug = ai_debug;
 
     // Show initial map
     println!("  Map key: \"{}\"", game.map_key);
@@ -276,6 +289,7 @@ fn main() {
                 match load_saved_game(filename) {
                     Ok(loaded) => {
                         game = loaded;
+                        game.ai_debug = ai_debug;
                         println!("  Game loaded successfully.");
                         print_status(&game);
                     }
@@ -298,6 +312,7 @@ fn main() {
             "quickload" | "ql" => match load_saved_game("quicksave.json") {
                 Ok(loaded) => {
                     game = loaded;
+                    game.ai_debug = ai_debug;
                     println!("  Quickload successful.");
                     print_status(&game);
                 }
@@ -3620,7 +3635,7 @@ fn print_turn_report(game: &GameState, report: &TurnReport) {
     println!("  \u{2554}{}\u{2557}", "\u{2550}".repeat(42));
     println!("  \u{2551}  {}{}  \u{2551}", date_str, " ".repeat(pad));
     println!("  \u{255a}{}\u{255d}", "\u{2550}".repeat(42));
-    for headline in &report.newspaper_headlines {
+    for (headline, _cat) in &report.newspaper_headlines {
         println!("    {}", headline);
     }
     println!();
@@ -3898,10 +3913,10 @@ fn print_turn_report(game: &GameState, report: &TurnReport) {
     let blockade_headlines: Vec<_> = report
         .newspaper_headlines
         .iter()
-        .filter(|h| h.contains("BLOCKADE"))
+        .filter(|(h, _)| h.contains("BLOCKADE"))
         .collect();
     if !blockade_headlines.is_empty() {
-        for headline in &blockade_headlines {
+        for (headline, _) in &blockade_headlines {
             println!("  Blockade: {}", color_yellow(headline));
         }
     }
