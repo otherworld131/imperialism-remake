@@ -8,7 +8,6 @@ aggressive = {
 
     -- Trade and diplomacy
     trade_priority = 0.3,       -- low trade focus
-    war_declaration_interval = 15, -- frequent war declarations
     alliance_preference = 0.2,  -- rarely seeks alliances
 
     -- Military
@@ -22,10 +21,53 @@ aggressive = {
 
     -- Research
     research_strategy = "military", -- prioritize military techs
+
+    -- War (cooldown-based system)
+    war_cooldown = 8,           -- turns between war declarations
+    war_threshold = 0.3,        -- low bar for declaring war
+    army_min_for_war = 3,       -- attacks with smaller armies
+    opportunism_weight = 0.8,   -- strongly exploits weakness
+
+    -- Army building tiers
+    tier1_army_max = 4,
+    tier2_army_max = 7,
+    tier3_army_max = 15,
+    tier1_treasury = 1500,
+    tier2_treasury = 3000,
+    tier3_treasury = 6000,
+
+    -- Diplomacy
+    consulate_max_per_turn = 2,
+    propose_pacts = false,
+    propose_alliances = false,
+    grant_amount = 0,
+    grant_interval = 0,
+    embassy_treasury_threshold = 15000,
+    max_alliances = 0,
+
+    -- Naval
+    max_warships_low_treasury = 4,
+    max_warships_high_treasury = 6,
+    max_merchant_ships = 1,
+
+    -- Economy
+    expansion_threshold_multiplier = 2,
+
+    -- Tactical
+    peace_war_duration_threshold = 30,
+    peace_province_loss_ratio = 0.50,
+    fort_strategy = "offensive",
 }
 
-function aggressive.evaluate_war(nation_id, target_id, relations)
-    -- Aggressive: low threshold for war
+function aggressive.evaluate_war(nation_id, target_id, relations, need_score, opportunity_score)
+    -- Use need/opportunity if available (new system)
+    if need_score and opportunity_score then
+        local score = (need_score or 0) + (opportunity_score or 0) * 0.8
+        if score > 0.3 then
+            return true
+        end
+    end
+    -- Fallback: low threshold for war
     if relations < -20 then
         return true
     end

@@ -30,17 +30,55 @@ pub fn load_personality_scripts(engine: &LuaEngine) -> Result<(), String> {
 }
 
 /// Config parameters read from Lua personality tables.
+/// Core fields always present (with defaults); extended fields are optional
+/// and fall back to hardcoded personality defaults when absent.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Will be used when more subsystems integrate Lua config
+#[allow(dead_code)]
 pub struct LuaAiConfig {
+    // Core (always populated with Lua defaults)
     pub trade_priority: f64,
-    pub war_declaration_interval: u32,
     pub alliance_preference: f64,
     pub min_army_size: u32,
     pub max_army_size: u32,
     pub infrastructure_budget: i64,
     pub research_strategy: String,
     pub worker_threshold: u32,
+
+    // War (replaces interval-based system)
+    pub war_cooldown: Option<u32>,
+    pub war_threshold: Option<f64>,
+    pub army_min_for_war: Option<usize>,
+    pub opportunism_weight: Option<f64>,
+
+    // Army building tiers
+    pub tier1_army_max: Option<usize>,
+    pub tier2_army_max: Option<usize>,
+    pub tier3_army_max: Option<usize>,
+    pub tier1_treasury: Option<i64>,
+    pub tier2_treasury: Option<i64>,
+    pub tier3_treasury: Option<i64>,
+
+    // Diplomacy
+    pub consulate_max_per_turn: Option<u32>,
+    pub propose_pacts: Option<bool>,
+    pub propose_alliances: Option<bool>,
+    pub grant_amount: Option<i64>,
+    pub grant_interval: Option<u32>,
+    pub embassy_treasury_threshold: Option<i64>,
+    pub max_alliances: Option<usize>,
+
+    // Naval
+    pub max_warships_low_treasury: Option<usize>,
+    pub max_warships_high_treasury: Option<usize>,
+    pub max_merchant_ships: Option<usize>,
+
+    // Economy
+    pub expansion_threshold_multiplier: Option<u32>,
+
+    // Tactical
+    pub peace_war_duration_threshold: Option<u32>,
+    pub peace_province_loss_ratio: Option<f64>,
+    pub fort_strategy: Option<String>,
 }
 
 fn personality_table_name(personality: AiPersonality) -> &'static str {
@@ -53,15 +91,15 @@ fn personality_table_name(personality: AiPersonality) -> &'static str {
 }
 
 /// Read the config table for a personality from Lua.
-#[allow(dead_code)] // Will be used when more subsystems integrate Lua config
+#[allow(dead_code)]
 pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<LuaAiConfig> {
     let lua = engine.lua();
     let table_name = personality_table_name(personality);
     let table: mlua::Table = lua.globals().get(table_name).ok()?;
 
     Some(LuaAiConfig {
+        // Core
         trade_priority: table.get("trade_priority").unwrap_or(0.5),
-        war_declaration_interval: table.get("war_declaration_interval").unwrap_or(25),
         alliance_preference: table.get("alliance_preference").unwrap_or(0.5),
         min_army_size: table.get("min_army_size").unwrap_or(3),
         max_army_size: table.get("max_army_size").unwrap_or(7),
@@ -70,6 +108,36 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             .get::<String>("research_strategy")
             .unwrap_or_else(|_| "cheapest".to_string()),
         worker_threshold: table.get("worker_threshold").unwrap_or(5),
+        // War
+        war_cooldown: table.get("war_cooldown").ok(),
+        war_threshold: table.get("war_threshold").ok(),
+        army_min_for_war: table.get::<usize>("army_min_for_war").ok(),
+        opportunism_weight: table.get("opportunism_weight").ok(),
+        // Army tiers
+        tier1_army_max: table.get::<usize>("tier1_army_max").ok(),
+        tier2_army_max: table.get::<usize>("tier2_army_max").ok(),
+        tier3_army_max: table.get::<usize>("tier3_army_max").ok(),
+        tier1_treasury: table.get("tier1_treasury").ok(),
+        tier2_treasury: table.get("tier2_treasury").ok(),
+        tier3_treasury: table.get("tier3_treasury").ok(),
+        // Diplomacy
+        consulate_max_per_turn: table.get("consulate_max_per_turn").ok(),
+        propose_pacts: table.get("propose_pacts").ok(),
+        propose_alliances: table.get("propose_alliances").ok(),
+        grant_amount: table.get("grant_amount").ok(),
+        grant_interval: table.get("grant_interval").ok(),
+        embassy_treasury_threshold: table.get("embassy_treasury_threshold").ok(),
+        max_alliances: table.get::<usize>("max_alliances").ok(),
+        // Naval
+        max_warships_low_treasury: table.get::<usize>("max_warships_low_treasury").ok(),
+        max_warships_high_treasury: table.get::<usize>("max_warships_high_treasury").ok(),
+        max_merchant_ships: table.get::<usize>("max_merchant_ships").ok(),
+        // Economy
+        expansion_threshold_multiplier: table.get("expansion_threshold_multiplier").ok(),
+        // Tactical
+        peace_war_duration_threshold: table.get("peace_war_duration_threshold").ok(),
+        peace_province_loss_ratio: table.get("peace_province_loss_ratio").ok(),
+        fort_strategy: table.get::<String>("fort_strategy").ok(),
     })
 }
 
@@ -129,14 +197,17 @@ pub fn lua_pick_tech(
     Some(TechId(tech_id))
 }
 
-/// Call the Lua `<personality>.evaluate_war(nation_id, target_id, relations)` function.
+/// Call the Lua `<personality>.evaluate_war(nation_id, target_id, relations, need, opportunity)`.
 /// Returns Some(true/false) from Lua, or None if Lua fails.
+/// Extra params are silently ignored by Lua scripts that don't use them.
 pub fn lua_evaluate_war(
     game: &GameState,
     personality: AiPersonality,
     nation_id: NationId,
     target_id: NationId,
     relations: i32,
+    need_score: f64,
+    opportunity_score: f64,
 ) -> Option<bool> {
     let engine = game.game_data.lua_engine.as_ref()?;
     let lua = engine.lua();
@@ -145,7 +216,13 @@ pub fn lua_evaluate_war(
     let personality_table: mlua::Table = lua.globals().get(table_name).ok()?;
     let evaluate_war: mlua::Function = personality_table.get("evaluate_war").ok()?;
     let result: bool = evaluate_war
-        .call::<bool>((nation_id.0 as i64, target_id.0 as i64, relations))
+        .call::<bool>((
+            nation_id.0 as i64,
+            target_id.0 as i64,
+            relations,
+            need_score,
+            opportunity_score,
+        ))
         .ok()?;
     Some(result)
 }
@@ -172,10 +249,15 @@ mod tests {
         let engine = engine_with_scripts();
         let config = lua_get_config(&engine, AiPersonality::Balanced).unwrap();
         assert_eq!(config.research_strategy, "cheapest");
-        assert_eq!(config.war_declaration_interval, 20);
         assert!((config.trade_priority - 0.5).abs() < f64::EPSILON);
         assert_eq!(config.min_army_size, 3);
         assert_eq!(config.max_army_size, 7);
+        // Extended fields now populated from scripts
+        assert_eq!(config.war_cooldown, Some(12));
+        assert_eq!(config.tier1_army_max, Some(3));
+        assert_eq!(config.tier1_treasury, Some(2000));
+        assert_eq!(config.consulate_max_per_turn, Some(2));
+        assert_eq!(config.fort_strategy.as_deref(), Some("border"));
     }
 
     #[test]
@@ -183,7 +265,6 @@ mod tests {
         let engine = engine_with_scripts();
         let config = lua_get_config(&engine, AiPersonality::Aggressive).unwrap();
         assert_eq!(config.research_strategy, "military");
-        assert_eq!(config.war_declaration_interval, 15);
         assert_eq!(config.min_army_size, 5);
         assert_eq!(config.max_army_size, 12);
     }
@@ -193,7 +274,6 @@ mod tests {
         let engine = engine_with_scripts();
         let config = lua_get_config(&engine, AiPersonality::Diplomatic).unwrap();
         assert_eq!(config.research_strategy, "economic");
-        assert_eq!(config.war_declaration_interval, 40);
         assert!((config.alliance_preference - 0.9).abs() < f64::EPSILON);
     }
 

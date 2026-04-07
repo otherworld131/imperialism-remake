@@ -244,156 +244,174 @@ pub(crate) fn ai_declare_wars(
         })
         .collect();
 
-    if minor_nations.is_empty() {
-        return;
-    }
+    // Phase 1: Wars against Minor Nations (skip if none remain)
+    if !minor_nations.is_empty() {
+        // Track which minors are being targeted this round to avoid dogpiling
+        let mut targeted_this_round: Vec<NationId> = Vec::new();
 
-    // Track which minors are being targeted this round to avoid dogpiling
-    let mut targeted_this_round: Vec<NationId> = Vec::new();
-
-    // Also check which minors are already at war with any AI
-    let already_targeted: Vec<NationId> = minor_nations
-        .iter()
-        .filter(|(mn_id, _, _, _)| {
-            ai_nation_ids.iter().any(|&ai_id| {
-                game.diplomacy
-                    .get_relation(ai_id, *mn_id)
-                    .map(|r| r.at_war)
-                    .unwrap_or(false)
-            })
-        })
-        .map(|(mn_id, _, _, _)| *mn_id)
-        .collect();
-
-    for &ai_id in ai_nation_ids {
-        let personality = get_personality(game, ai_id);
-
-        // War frequency and army threshold depend on personality
-        let (war_interval, army_threshold) = match personality {
-            AiPersonality::Aggressive => (25u32, 5),
-            AiPersonality::Diplomatic => (40, 8),
-            AiPersonality::Economic => (30, 5),
-            AiPersonality::Balanced => (25, 4),
-        };
-
-        // Check if this is a war-consideration turn for this AI
-        if !turn_number.is_multiple_of(war_interval) {
-            continue;
-        }
-
-        // Only attack if AI has enough army units
-        let army_size = game.get_nation(ai_id).map(|n| n.army.len()).unwrap_or(0);
-        if army_size < army_threshold {
-            continue;
-        }
-
-        // AI with low standing (<30) avoids declaring wars to limit diplomatic damage
-        let standing = game.diplomacy.get_standing(ai_id);
-        if standing < 30 {
-            continue;
-        }
-
-        // Find best target: not already at war, not dogpiled, most tiles (most valuable)
-        let mut candidates: Vec<_> = minor_nations
+        // Also check which minors are already at war with any AI
+        let already_targeted: Vec<NationId> = minor_nations
             .iter()
             .filter(|(mn_id, _, _, _)| {
-                // Not already at war with this AI
-                let at_war = game
-                    .diplomacy
-                    .get_relation(ai_id, *mn_id)
-                    .map(|r| r.at_war)
-                    .unwrap_or(false);
-                // Not already targeted by another AI (anti-dogpile)
-                let dogpiled =
-                    already_targeted.contains(mn_id) || targeted_this_round.contains(mn_id);
-                !at_war && !dogpiled
+                ai_nation_ids.iter().any(|&ai_id| {
+                    game.diplomacy
+                        .get_relation(ai_id, *mn_id)
+                        .map(|r| r.at_war)
+                        .unwrap_or(false)
+                })
             })
+            .map(|(mn_id, _, _, _)| *mn_id)
             .collect();
 
-        // Skip candidates with 0 tiles (already fully conquered)
-        candidates.retain(|c| c.3 > 0);
+        for &ai_id in ai_nation_ids {
+            let personality = get_personality(game, ai_id);
 
-        // Sort by tile count descending (most valuable first)
-        candidates.sort_by(|a, b| b.3.cmp(&a.3));
+            // War frequency and army threshold depend on personality
+            let (war_interval, army_threshold) = match personality {
+                AiPersonality::Aggressive => (25u32, 5),
+                AiPersonality::Diplomatic => (40, 8),
+                AiPersonality::Economic => (30, 5),
+                AiPersonality::Balanced => (25, 4),
+            };
 
-        // Use pseudo-random seed to add some variety: pick from top 3 candidates
-        if candidates.is_empty() {
-            continue;
-        }
-        let seed = (game.turn.0 as usize).wrapping_add(ai_id.0 as usize);
-        let pick_range = candidates.len().min(3);
-        let target_index = seed % pick_range;
-        let (target_id, target_capital, ref target_name, _) = *candidates[target_index];
-
-        // Find a province actually owned by the target to attack
-        let attack_province = game
-            .provinces
-            .iter()
-            .find(|p| p.owner == target_id)
-            .map(|p| p.id)
-            .unwrap_or(target_capital);
-
-        // Skip if no province is actually owned by the target
-        if game.provinces.iter().all(|p| p.owner != target_id) {
-            continue;
-        }
-
-        // Consult Lua for war evaluation — only when a relation has a non-zero score
-        // (fresh consulates start at 0; only evaluate when there's real diplomatic history)
-        #[cfg(feature = "lua")]
-        if let Some(rel) = game
-            .diplomacy
-            .get_relation(ai_id, target_id)
-            .filter(|r| r.score != 0)
-        {
-            let relations = rel.score;
-            if let Some(false) =
-                super::lua_bridge::lua_evaluate_war(game, personality, ai_id, target_id, relations)
-            {
-                if game.ai_debug {
-                    eprintln!(
-                        "[AI:war] Lua vetoed war on {} (relations={})",
-                        target_name, relations
-                    );
-                }
+            // Check if this is a war-consideration turn for this AI
+            if !turn_number.is_multiple_of(war_interval) {
                 continue;
             }
-        }
 
-        let attacker_name = game
-            .get_nation(ai_id)
-            .map(|n| n.name.clone())
-            .unwrap_or_else(|| "Unknown".to_string());
-        if game.ai_debug {
-            eprintln!(
-                "[AI:{}:war] Declaring war on {} (army={}, interval={}, standing={})",
-                attacker_name, target_name, army_size, war_interval, standing
-            );
+            // Only attack if AI has enough army units
+            let army_size = game.get_nation(ai_id).map(|n| n.army.len()).unwrap_or(0);
+            if army_size < army_threshold {
+                continue;
+            }
+
+            // AI with low standing (<30) avoids declaring wars to limit diplomatic damage
+            let standing = game.diplomacy.get_standing(ai_id);
+            if standing < 30 {
+                continue;
+            }
+
+            // Find best target: not already at war, not dogpiled, most tiles (most valuable)
+            let mut candidates: Vec<_> = minor_nations
+                .iter()
+                .filter(|(mn_id, _, _, _)| {
+                    // Not already at war with this AI
+                    let at_war = game
+                        .diplomacy
+                        .get_relation(ai_id, *mn_id)
+                        .map(|r| r.at_war)
+                        .unwrap_or(false);
+                    // Not already targeted by another AI (anti-dogpile)
+                    let dogpiled =
+                        already_targeted.contains(mn_id) || targeted_this_round.contains(mn_id);
+                    !at_war && !dogpiled
+                })
+                .collect();
+
+            // Skip candidates with 0 tiles (already fully conquered)
+            candidates.retain(|c| c.3 > 0);
+
+            // Sort by tile count descending (most valuable first)
+            candidates.sort_by(|a, b| b.3.cmp(&a.3));
+
+            // Use pseudo-random seed to add some variety: pick from top 3 candidates
+            if candidates.is_empty() {
+                continue;
+            }
+            let seed = (game.turn.0 as usize).wrapping_add(ai_id.0 as usize);
+            let pick_range = candidates.len().min(3);
+            let target_index = seed % pick_range;
+            let (target_id, target_capital, ref target_name, _) = *candidates[target_index];
+
+            // Find a province actually owned by the target to attack
+            let attack_province = game
+                .provinces
+                .iter()
+                .find(|p| p.owner == target_id)
+                .map(|p| p.id)
+                .unwrap_or(target_capital);
+
+            // Skip if no province is actually owned by the target
+            if game.provinces.iter().all(|p| p.owner != target_id) {
+                continue;
+            }
+
+            // Consult Lua for war evaluation — only when a relation has a non-zero score
+            // (fresh consulates start at 0; only evaluate when there's real diplomatic history)
+            #[cfg(feature = "lua")]
+            if let Some(rel) = game
+                .diplomacy
+                .get_relation(ai_id, target_id)
+                .filter(|r| r.score != 0)
+            {
+                let relations = rel.score;
+                if let Some(false) = super::lua_bridge::lua_evaluate_war(
+                    game,
+                    personality,
+                    ai_id,
+                    target_id,
+                    relations,
+                    0.0,
+                    0.0,
+                ) {
+                    if game.ai_debug {
+                        eprintln!(
+                            "[AI:war] Lua vetoed war on {} (relations={})",
+                            target_name, relations
+                        );
+                    }
+                    continue;
+                }
+            }
+
+            let attacker_name = game
+                .get_nation(ai_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+            if game.ai_debug {
+                eprintln!(
+                    "[AI:{}:war] Declaring war on {} (army={}, interval={}, standing={})",
+                    attacker_name, target_name, army_size, war_interval, standing
+                );
+            }
+            game.diplomacy.declare_war(ai_id, target_id);
+            game.pending_attacks.push((ai_id, attack_province));
+            targeted_this_round.push(target_id);
+            actions.push(format!(
+                "{} has declared war on {}!",
+                attacker_name, target_name
+            ));
+            let turn = game.turn;
+            game.history.push((
+                turn,
+                format!("{} declared war on {}", attacker_name, target_name),
+            ));
         }
-        game.diplomacy.declare_war(ai_id, target_id);
-        game.pending_attacks.push((ai_id, attack_province));
-        targeted_this_round.push(target_id);
-        actions.push(format!(
-            "{} has declared war on {}!",
-            attacker_name, target_name
-        ));
-        let turn = game.turn;
-        game.history.push((
-            turn,
-            format!("{} declared war on {}", attacker_name, target_name),
-        ));
-    }
+    } // end Phase 1
 
     // Phase 2: Great Power vs Great Power wars
-    // Aggressive AIs will target weaker Great Powers when no minor targets remain
+    // Aggressive AIs will target weaker Great Powers when few minor targets remain
     // and they have military superiority.
     let remaining_minors: usize = game
-        .nations
+        .provinces
         .iter()
-        .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
-        .count();
+        .filter(|p| {
+            game.nations
+                .iter()
+                .any(|n| !n.is_great_power() && n.id == p.owner)
+        })
+        .map(|p| p.owner)
+        .collect::<std::collections::HashSet<_>>()
+        .len();
 
-    if remaining_minors <= 2 && turn_number > 40 {
+    if game.ai_debug {
+        eprintln!(
+            "[AI:war:phase2] remaining_minors={}, turn={}",
+            remaining_minors, turn_number
+        );
+    }
+
+    if remaining_minors <= 6 && turn_number > 40 {
         for &ai_id in ai_nation_ids {
             let personality = get_personality(game, ai_id);
 
@@ -444,8 +462,22 @@ pub(crate) fn ai_declare_wars(
             gp_targets.sort_by_key(|&(_, p, _)| p);
 
             if let Some(&(target_id, target_provinces, target_capital)) = gp_targets.first() {
+                if game.ai_debug {
+                    let ai_name = game
+                        .get_nation(ai_id)
+                        .map(|n| n.name.as_str())
+                        .unwrap_or("?");
+                    let target_name = game
+                        .get_nation(target_id)
+                        .map(|n| n.name.as_str())
+                        .unwrap_or("?");
+                    eprintln!(
+                        "[AI:{}:war:gp] Considering {} (our_provinces={}, their_provinces={})",
+                        ai_name, target_name, ai_provinces, target_provinces
+                    );
+                }
                 // Only attack if we have more territory
-                if ai_provinces > target_provinces + 2 {
+                if ai_provinces > target_provinces + 1 {
                     // Find the weakest province of the target GP (fewest tiles)
                     // rather than always attacking the capital which is often
                     // the most heavily defended.
@@ -466,6 +498,12 @@ pub(crate) fn ai_declare_wars(
                         .map(|n| n.name.clone())
                         .unwrap_or_default();
 
+                    if game.ai_debug {
+                        eprintln!(
+                            "[AI:{}:war:gp] Declaring war on {} (GP vs GP)!",
+                            attacker_name, target_name
+                        );
+                    }
                     game.diplomacy.declare_war(ai_id, target_id);
                     game.pending_attacks.push((ai_id, attack_province));
                     actions.push(format!(

@@ -3,6 +3,8 @@ use crate::types::*;
 
 use super::common::{AiPersonality, get_personality};
 
+/// AI builds trade consulates with Minor Nations, prioritizing those with
+/// the most tradeable resources (since trade increases relation scores).
 pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
     let personality = get_personality(game, nation_id);
     let cost = Money::dollars(500);
@@ -22,16 +24,42 @@ pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
         return;
     }
 
-    // Gather minor nation IDs — only those that still have provinces
-    let minor_ids: Vec<NationId> = game
+    // Score minor nations by trade potential: count tradeable resource tiles
+    // in their provinces. Prioritize nations with more resources to trade.
+    let mut candidates: Vec<(NationId, u32)> = game
         .nations
         .iter()
         .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
-        .map(|n| n.id)
+        .filter(|n| {
+            !game
+                .diplomacy
+                .get_relation(nation_id, n.id)
+                .is_some_and(|r| r.has_consulate)
+        })
+        .map(|n| {
+            let trade_potential: u32 = game
+                .provinces
+                .iter()
+                .filter(|p| p.owner == n.id)
+                .flat_map(|p| &p.tiles)
+                .filter_map(|coord| {
+                    game.hex_map
+                        .get_tile(*coord)
+                        .and_then(|t| t.calculate_yield())
+                })
+                .filter(|y| y.resource.is_tradeable())
+                .map(|y| y.quantity)
+                .sum();
+            (n.id, trade_potential)
+        })
+        .filter(|(_, potential)| *potential > 0) // Only build where there's something to trade
         .collect();
 
+    // Sort by trade potential descending — richest trade partners first
+    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+
     let mut built = 0;
-    for mn_id in minor_ids {
+    for (mn_id, _trade_potential) in candidates {
         if built >= max_per_turn {
             break;
         }
@@ -42,15 +70,6 @@ pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
         };
         if treasury.checked_sub(cost).is_none() {
             break;
-        }
-
-        // Check if consulate already exists
-        let already_has = game
-            .diplomacy
-            .get_relation(nation_id, mn_id)
-            .is_some_and(|r| r.has_consulate);
-        if already_has {
-            continue;
         }
 
         // Build consulate
@@ -514,6 +533,13 @@ mod tests {
     use crate::map::Province;
     use crate::nation::{Nation, NationColor};
 
+    /// Set a tile with tradeable terrain (ScrubForest → Timber) at the given coord,
+    /// assigned to the given province. Required so ai_build_consulates sees trade potential.
+    fn set_tradeable_tile(game: &mut GameState, coord: HexCoord, province_id: ProvinceId) {
+        let tile = crate::map::tile::Tile::with_province(TerrainType::ScrubForest, province_id);
+        game.hex_map.set_tile(coord, tile);
+    }
+
     #[test]
     fn diplomatic_ai_builds_more_consulates() {
         let mut game = test_game_with_ai_and_minor();
@@ -582,6 +608,13 @@ mod tests {
             NationType::MinorNation,
             ProvinceId(7),
         ));
+
+        // Set tradeable tiles so consulate builder sees trade potential
+        set_tradeable_tile(&mut game, HexCoord::new(5, 5), ProvinceId(3));
+        set_tradeable_tile(&mut game, HexCoord::new(7, 7), ProvinceId(4));
+        set_tradeable_tile(&mut game, HexCoord::new(8, 8), ProvinceId(5));
+        set_tradeable_tile(&mut game, HexCoord::new(9, 9), ProvinceId(6));
+        set_tradeable_tile(&mut game, HexCoord::new(4, 4), ProvinceId(7));
 
         // Set Diplomatic personality
         let ai = game.get_nation_mut(NationId(2)).unwrap();
@@ -661,6 +694,12 @@ mod tests {
             NationType::MinorNation,
             ProvinceId(6),
         ));
+
+        // Set tradeable tiles so consulate builder sees trade potential
+        set_tradeable_tile(&mut game, HexCoord::new(5, 5), ProvinceId(3));
+        set_tradeable_tile(&mut game, HexCoord::new(7, 7), ProvinceId(4));
+        set_tradeable_tile(&mut game, HexCoord::new(8, 8), ProvinceId(5));
+        set_tradeable_tile(&mut game, HexCoord::new(9, 9), ProvinceId(6));
 
         // Set Balanced personality
         let ai = game.get_nation_mut(NationId(2)).unwrap();

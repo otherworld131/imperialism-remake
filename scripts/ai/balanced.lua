@@ -8,7 +8,6 @@ balanced = {
 
     -- Trade and diplomacy
     trade_priority = 0.5,       -- moderate trade focus
-    war_declaration_interval = 20, -- turns between war declarations
     alliance_preference = 0.5,  -- moderate preference for alliances
 
     -- Military
@@ -22,10 +21,53 @@ balanced = {
 
     -- Research
     research_strategy = "cheapest", -- pick cheapest available tech
+
+    -- War (cooldown-based system)
+    war_cooldown = 12,          -- turns between war declarations
+    war_threshold = 0.5,        -- moderate bar for declaring war
+    army_min_for_war = 4,       -- needs decent army
+    opportunism_weight = 0.5,   -- moderate exploitation of weakness
+
+    -- Army building tiers
+    tier1_army_max = 3,
+    tier2_army_max = 5,
+    tier3_army_max = 12,
+    tier1_treasury = 2000,
+    tier2_treasury = 5000,
+    tier3_treasury = 10000,
+
+    -- Diplomacy
+    consulate_max_per_turn = 2,
+    propose_pacts = true,
+    propose_alliances = false,
+    grant_amount = 500,
+    grant_interval = 8,
+    embassy_treasury_threshold = 10000,
+    max_alliances = 1,
+
+    -- Naval
+    max_warships_low_treasury = 2,
+    max_warships_high_treasury = 4,
+    max_merchant_ships = 3,
+
+    -- Economy
+    expansion_threshold_multiplier = 2,
+
+    -- Tactical
+    peace_war_duration_threshold = 20,
+    peace_province_loss_ratio = 0.50,
+    fort_strategy = "border",
 }
 
-function balanced.evaluate_war(nation_id, target_id, relations)
-    -- Balanced: declare war only if relations are poor and army is strong
+function balanced.evaluate_war(nation_id, target_id, relations, need_score, opportunity_score)
+    -- Use need/opportunity if available (new system)
+    if need_score and opportunity_score then
+        local score = (need_score or 0) + (opportunity_score or 0) * 0.5
+        if score > 0.5 then
+            return true
+        end
+    end
+    -- Fallback: declare war only if relations are poor
     if relations < -50 then
         return true
     end
