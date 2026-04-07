@@ -33,15 +33,21 @@ pub fn load_personality_scripts(engine: &LuaEngine) -> Result<(), String> {
 /// Core fields always present (with defaults); extended fields are optional
 /// and fall back to hardcoded personality defaults when absent.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct LuaAiConfig {
-    // Core (always populated with Lua defaults)
+    // Core (always populated with Lua defaults — used by research/labor subsystems and tests)
+    #[allow(dead_code)]
     pub trade_priority: f64,
+    #[allow(dead_code)]
     pub alliance_preference: f64,
+    #[allow(dead_code)]
     pub min_army_size: u32,
+    #[allow(dead_code)]
     pub max_army_size: u32,
+    #[allow(dead_code)]
     pub infrastructure_budget: i64,
+    #[allow(dead_code)]
     pub research_strategy: String,
+    #[allow(dead_code)]
     pub worker_threshold: u32,
 
     // War (replaces interval-based system)
@@ -91,7 +97,6 @@ fn personality_table_name(personality: AiPersonality) -> &'static str {
 }
 
 /// Read the config table for a personality from Lua.
-#[allow(dead_code)]
 pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<LuaAiConfig> {
     let lua = engine.lua();
     let table_name = personality_table_name(personality);

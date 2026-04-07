@@ -1,3 +1,4 @@
+#![allow(unused_labels)]
 use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::trade;
 use crate::game_state::GameState;
@@ -242,10 +243,29 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
     // Build infrastructure handles mills and factories
     ai_build_infrastructure(game, nation_id);
 
-    // Economic personality expands more aggressively
-    let expansion_threshold_multiplier: u32 = match personality {
-        AiPersonality::Economic => 1,
-        _ => 2,
+    // ── Read Lua config (feature-gated) ──────────────────────
+    #[cfg(feature = "lua")]
+    let lua_cfg = game
+        .game_data
+        .lua_engine
+        .as_ref()
+        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+    #[cfg(not(feature = "lua"))]
+    let _lua_cfg: Option<()> = None;
+
+    // Economic personality expands more aggressively (Lua overrides Rust defaults)
+    let expansion_threshold_multiplier: u32 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg
+            .as_ref()
+            .and_then(|c| c.expansion_threshold_multiplier)
+        {
+            break 'val v;
+        }
+        match personality {
+            AiPersonality::Economic => 1,
+            _ => 2,
+        }
     };
 
     // Expand mills when input resources exceed capacity * threshold

@@ -1,3 +1,4 @@
+#![allow(unused_labels)]
 use crate::game_state::GameState;
 use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::types::*;
@@ -30,6 +31,17 @@ pub(crate) fn ai_build_military(
         );
     }
 
+    // ── Read Lua config (feature-gated) ──────────────────────
+    // Must happen before the mutable borrow of game below.
+    #[cfg(feature = "lua")]
+    let lua_cfg = game
+        .game_data
+        .lua_engine
+        .as_ref()
+        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+    #[cfg(not(feature = "lua"))]
+    let _lua_cfg: Option<()> = None;
+
     let nation = match game.get_nation_mut(nation_id) {
         Some(n) => n,
         None => return,
@@ -43,36 +55,66 @@ pub(crate) fn ai_build_military(
     // Deterministic per-nation seed for unit-type variety
     let variety_seed = (turn_number as usize).wrapping_mul(nation_id.0 as usize + 7);
 
-    // Thresholds vary by personality
-    let (tier1_max, tier1_treasury, tier2_max, tier2_treasury, tier3_treasury) = match personality {
-        AiPersonality::Aggressive => (
-            4,
-            Money::dollars(1500),
-            7,
-            Money::dollars(3000),
-            Money::dollars(6000),
-        ),
-        AiPersonality::Diplomatic => (
-            2,
-            Money::dollars(3000),
-            4,
-            Money::dollars(8000),
-            Money::dollars(15000),
-        ),
-        AiPersonality::Economic => (
-            3,
-            Money::dollars(2500),
-            5,
-            Money::dollars(6000),
-            Money::dollars(12000),
-        ),
-        AiPersonality::Balanced => (
-            3,
-            Money::dollars(2000),
-            5,
-            Money::dollars(5000),
-            Money::dollars(10000),
-        ),
+    // Thresholds vary by personality (Lua overrides Rust defaults)
+    let tier1_max: usize = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.tier1_army_max) {
+            break 'val v;
+        }
+        match personality {
+            AiPersonality::Aggressive => 4,
+            AiPersonality::Diplomatic => 2,
+            AiPersonality::Economic => 3,
+            AiPersonality::Balanced => 3,
+        }
+    };
+    let tier1_treasury: Money = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.tier1_treasury) {
+            break 'val Money::dollars(v);
+        }
+        match personality {
+            AiPersonality::Aggressive => Money::dollars(1500),
+            AiPersonality::Diplomatic => Money::dollars(3000),
+            AiPersonality::Economic => Money::dollars(2500),
+            AiPersonality::Balanced => Money::dollars(2000),
+        }
+    };
+    let tier2_max: usize = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.tier2_army_max) {
+            break 'val v;
+        }
+        match personality {
+            AiPersonality::Aggressive => 7,
+            AiPersonality::Diplomatic => 4,
+            AiPersonality::Economic => 5,
+            AiPersonality::Balanced => 5,
+        }
+    };
+    let tier2_treasury: Money = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.tier2_treasury) {
+            break 'val Money::dollars(v);
+        }
+        match personality {
+            AiPersonality::Aggressive => Money::dollars(3000),
+            AiPersonality::Diplomatic => Money::dollars(8000),
+            AiPersonality::Economic => Money::dollars(6000),
+            AiPersonality::Balanced => Money::dollars(5000),
+        }
+    };
+    let tier3_treasury: Money = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.tier3_treasury) {
+            break 'val Money::dollars(v);
+        }
+        match personality {
+            AiPersonality::Aggressive => Money::dollars(6000),
+            AiPersonality::Diplomatic => Money::dollars(15000),
+            AiPersonality::Economic => Money::dollars(12000),
+            AiPersonality::Balanced => Money::dollars(10000),
+        }
     };
 
     if army_count < tier1_max && treasury > tier1_treasury {
@@ -155,11 +197,17 @@ pub(crate) fn ai_build_military(
     } else if army_count >= tier2_max && treasury > tier3_treasury {
         // Tier 3: advanced units with some variety
         // Cap total army size to prevent runaway military buildup
-        let tier3_max = match personality {
-            AiPersonality::Aggressive => 15,
-            AiPersonality::Diplomatic => 8,
-            AiPersonality::Economic => 10,
-            AiPersonality::Balanced => 12,
+        let tier3_max: usize = 'val: {
+            #[cfg(feature = "lua")]
+            if let Some(v) = lua_cfg.as_ref().and_then(|c| c.tier3_army_max) {
+                break 'val v;
+            }
+            match personality {
+                AiPersonality::Aggressive => 15,
+                AiPersonality::Diplomatic => 8,
+                AiPersonality::Economic => 10,
+                AiPersonality::Balanced => 12,
+            }
         };
         if army_count < tier3_max {
             let tier3_options: &[ArmyUnitType] = match personality {
@@ -208,13 +256,12 @@ pub(crate) fn ai_build_military(
     }
 }
 
-/// Periodically, each AI Great Power considers declaring war on a Minor Nation.
-/// Frequency and army threshold depend on personality:
+/// Unified war-declaration logic with cooldown + need/opportunity scoring.
 ///
-/// - **Aggressive**: every 15 turns, needs >= 3 units
-/// - **Diplomatic**: every 40 turns, needs >= 8 units
-/// - **Economic**: every 30 turns, needs >= 5 units
-/// - **Balanced**: every 20 turns, needs >= 4 units
+/// Every turn, each AI nation evaluates ALL other nations (minor and GP) as
+/// potential targets using a combined score of need, opportunity, and
+/// relationship penalty. Personality affects cooldown, thresholds, army
+/// minimums, and opportunism weighting.
 pub(crate) fn ai_declare_wars(
     game: &mut GameState,
     ai_nation_ids: &[NationId],
@@ -222,123 +269,283 @@ pub(crate) fn ai_declare_wars(
 ) {
     let turn_number = game.turn.0;
 
-    // Collect minor nation IDs, their capitals, names, and tile counts.
-    // Skip minor nations that have been fully conquered: check both
-    // province_ids (ownership tracking) and actual province ownership.
-    let minor_nations: Vec<(NationId, ProvinceId, String, usize)> = game
-        .nations
-        .iter()
-        .filter(|n| !n.is_great_power())
-        .filter(|n| {
-            // Must still actually own at least one province
-            game.provinces.iter().any(|p| p.owner == n.id)
-        })
-        .map(|n| {
-            let total_tiles: usize = game
-                .provinces
-                .iter()
-                .filter(|p| p.owner == n.id)
-                .map(|p| p.tiles.len())
-                .sum();
-            (n.id, n.capital_province_id, n.name.clone(), total_tiles)
-        })
-        .collect();
+    // Anti-dogpile: track targets selected this round so multiple AIs
+    // don't pile onto the same nation in a single turn.
+    let mut targeted_this_round: Vec<NationId> = Vec::new();
 
-    // Phase 1: Wars against Minor Nations (skip if none remain)
-    if !minor_nations.is_empty() {
-        // Track which minors are being targeted this round to avoid dogpiling
-        let mut targeted_this_round: Vec<NationId> = Vec::new();
+    for &ai_id in ai_nation_ids {
+        let personality = get_personality(game, ai_id);
 
-        // Also check which minors are already at war with any AI
-        let already_targeted: Vec<NationId> = minor_nations
-            .iter()
-            .filter(|(mn_id, _, _, _)| {
-                ai_nation_ids.iter().any(|&ai_id| {
-                    game.diplomacy
-                        .get_relation(ai_id, *mn_id)
-                        .map(|r| r.at_war)
-                        .unwrap_or(false)
-                })
-            })
-            .map(|(mn_id, _, _, _)| *mn_id)
-            .collect();
-
-        for &ai_id in ai_nation_ids {
-            let personality = get_personality(game, ai_id);
-
-            // War frequency and army threshold depend on personality
-            let (war_interval, army_threshold) = match personality {
-                AiPersonality::Aggressive => (25u32, 5),
-                AiPersonality::Diplomatic => (40, 8),
-                AiPersonality::Economic => (30, 5),
-                AiPersonality::Balanced => (25, 4),
+        // ── Per-personality defaults ────────────────────────────
+        let (default_cooldown, default_army_min, default_threshold, default_opportunism) =
+            match personality {
+                AiPersonality::Aggressive => (8u32, 3usize, 0.3f64, 1.2f64),
+                AiPersonality::Balanced => (12, 4, 0.5, 1.0),
+                AiPersonality::Economic => (15, 5, 0.6, 0.8),
+                AiPersonality::Diplomatic => (20, 8, 0.9, 0.6),
             };
 
-            // Check if this is a war-consideration turn for this AI
-            if !turn_number.is_multiple_of(war_interval) {
+        // ── Read Lua overrides (feature-gated) ─────────────────
+        #[cfg(feature = "lua")]
+        let lua_cfg = game
+            .game_data
+            .lua_engine
+            .as_ref()
+            .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+        #[cfg(not(feature = "lua"))]
+        let _lua_cfg: Option<()> = None;
+
+        #[cfg(feature = "lua")]
+        let war_cooldown = lua_cfg
+            .as_ref()
+            .and_then(|c| c.war_cooldown)
+            .unwrap_or(default_cooldown);
+        #[cfg(not(feature = "lua"))]
+        let war_cooldown = default_cooldown;
+
+        #[cfg(feature = "lua")]
+        let army_min_for_war = lua_cfg
+            .as_ref()
+            .and_then(|c| c.army_min_for_war)
+            .unwrap_or(default_army_min);
+        #[cfg(not(feature = "lua"))]
+        let army_min_for_war = default_army_min;
+
+        #[cfg(feature = "lua")]
+        let war_threshold = lua_cfg
+            .as_ref()
+            .and_then(|c| c.war_threshold)
+            .unwrap_or(default_threshold);
+        #[cfg(not(feature = "lua"))]
+        let war_threshold = default_threshold;
+
+        #[cfg(feature = "lua")]
+        let opportunism_weight = lua_cfg
+            .as_ref()
+            .and_then(|c| c.opportunism_weight)
+            .unwrap_or(default_opportunism);
+        #[cfg(not(feature = "lua"))]
+        let opportunism_weight = default_opportunism;
+
+        let attacker_name = game
+            .get_nation(ai_id)
+            .map(|n| n.name.clone())
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        // ── 1. Cooldown check ──────────────────────────────────
+        let war_prefix = format!("{} declared war on", attacker_name);
+        let last_war_turn: Option<u32> = game
+            .history
+            .iter()
+            .filter(|(_, msg)| msg.starts_with(&war_prefix))
+            .map(|(t, _)| t.0)
+            .max();
+        if let Some(last) = last_war_turn
+            && turn_number.saturating_sub(last) < war_cooldown
+        {
+            continue;
+        }
+
+        // ── 2. Military readiness ──────────────────────────────
+        let ai_army = game.get_nation(ai_id).map(|n| n.army.len()).unwrap_or(0);
+        if ai_army < army_min_for_war {
+            continue;
+        }
+
+        // ── 3. Standing check ──────────────────────────────────
+        let standing = game.diplomacy.get_standing(ai_id);
+        if standing < 30 {
+            continue;
+        }
+
+        // ── 4. Target evaluation ───────────────────────────────
+        let ai_provinces = game
+            .get_nation(ai_id)
+            .map(|n| n.province_count())
+            .unwrap_or(0);
+
+        // Collect AI warehouse resources for need scoring
+        let ai_resources: std::collections::HashSet<ResourceType> = game
+            .get_nation(ai_id)
+            .map(|n| {
+                n.warehouse
+                    .iter()
+                    .filter(|(_, qty)| **qty > 0)
+                    .map(|(r, _)| *r)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        struct Candidate {
+            target_id: NationId,
+            combined_score: f64,
+            #[allow(dead_code)]
+            need_score: f64,
+            #[allow(dead_code)]
+            opportunity_score: f64,
+        }
+
+        let mut best: Option<Candidate> = None;
+
+        // Snapshot nation IDs and info to avoid borrow issues
+        let nation_infos: Vec<(NationId, String, usize, usize, ProvinceId)> = game
+            .nations
+            .iter()
+            .map(|n| {
+                let prov_count = game.provinces.iter().filter(|p| p.owner == n.id).count();
+                (
+                    n.id,
+                    n.name.clone(),
+                    n.army.len(),
+                    prov_count,
+                    n.capital_province_id,
+                )
+            })
+            .collect();
+
+        for &(target_id, ref _target_name, target_army, target_provinces, _target_capital) in
+            &nation_infos
+        {
+            // Skip self
+            if target_id == ai_id {
+                continue;
+            }
+            // Skip human player
+            if target_id == game.human_player_nation {
+                continue;
+            }
+            // Skip already at war
+            if game
+                .diplomacy
+                .get_relation(ai_id, target_id)
+                .map(|r| r.at_war)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            // Skip allies
+            if game
+                .diplomacy
+                .has_treaty(ai_id, target_id, crate::events::TreatyType::Alliance)
+            {
+                continue;
+            }
+            // Skip conquered (0 provinces)
+            if target_provinces == 0 {
+                continue;
+            }
+            // Anti-dogpile: skip if another AI targeted this nation this round
+            if targeted_this_round.contains(&target_id) {
                 continue;
             }
 
-            // Only attack if AI has enough army units
-            let army_size = game.get_nation(ai_id).map(|n| n.army.len()).unwrap_or(0);
-            if army_size < army_threshold {
-                continue;
-            }
-
-            // AI with low standing (<30) avoids declaring wars to limit diplomatic damage
-            let standing = game.diplomacy.get_standing(ai_id);
-            if standing < 30 {
-                continue;
-            }
-
-            // Find best target: not already at war, not dogpiled, most tiles (most valuable)
-            let mut candidates: Vec<_> = minor_nations
-                .iter()
-                .filter(|(mn_id, _, _, _)| {
-                    // Not already at war with this AI
-                    let at_war = game
-                        .diplomacy
-                        .get_relation(ai_id, *mn_id)
-                        .map(|r| r.at_war)
-                        .unwrap_or(false);
-                    // Not already targeted by another AI (anti-dogpile)
-                    let dogpiled =
-                        already_targeted.contains(mn_id) || targeted_this_round.contains(mn_id);
-                    !at_war && !dogpiled
-                })
-                .collect();
-
-            // Skip candidates with 0 tiles (already fully conquered)
-            candidates.retain(|c| c.3 > 0);
-
-            // Sort by tile count descending (most valuable first)
-            candidates.sort_by(|a, b| b.3.cmp(&a.3));
-
-            // Use pseudo-random seed to add some variety: pick from top 3 candidates
-            if candidates.is_empty() {
-                continue;
-            }
-            let seed = (game.turn.0 as usize).wrapping_add(ai_id.0 as usize);
-            let pick_range = candidates.len().min(3);
-            let target_index = seed % pick_range;
-            let (target_id, target_capital, ref target_name, _) = *candidates[target_index];
-
-            // Find a province actually owned by the target to attack
-            let attack_province = game
+            // ── need_score ─────────────────────────────────────
+            let base_need = (target_provinces as f64 / 5.0).min(1.0);
+            // Resource bonus: check target's province tiles for resources the AI lacks
+            let target_tile_resources: std::collections::HashSet<ResourceType> = game
                 .provinces
                 .iter()
-                .find(|p| p.owner == target_id)
-                .map(|p| p.id)
-                .unwrap_or(target_capital);
+                .filter(|p| p.owner == target_id)
+                .flat_map(|p| {
+                    p.tiles.iter().filter_map(|&coord| {
+                        game.hex_map
+                            .get_tile(coord)
+                            .and_then(|t| t.resource_deposit())
+                    })
+                })
+                .collect();
+            let missing_count = target_tile_resources
+                .iter()
+                .filter(|r| !ai_resources.contains(r))
+                .count();
+            let resource_bonus = (missing_count as f64 * 0.15).min(0.4);
+            let need_score = (base_need + resource_bonus).min(1.0);
 
-            // Skip if no province is actually owned by the target
-            if game.provinces.iter().all(|p| p.owner != target_id) {
-                continue;
+            // ── opportunity_score ──────────────────────────────
+            let army_ratio = (1.0 - (target_army as f64 / (ai_army as f64 + 1.0))).clamp(0.0, 1.0);
+            let province_bonus = if ai_provinces > target_provinces {
+                0.2
+            } else {
+                0.0
+            };
+            // Check if target is at war with someone else
+            let target_at_war_with_other = nation_infos.iter().any(|&(other_id, _, _, _, _)| {
+                other_id != ai_id
+                    && other_id != target_id
+                    && game
+                        .diplomacy
+                        .get_relation(target_id, other_id)
+                        .map(|r| r.at_war)
+                        .unwrap_or(false)
+            });
+            let at_war_bonus = if target_at_war_with_other { 0.3 } else { 0.0 };
+            let opportunity_score = (army_ratio + province_bonus + at_war_bonus).clamp(0.0, 1.0);
+
+            // ── relationship_penalty ──────────────────────────
+            let mut relationship_penalty = 0.0f64;
+            if let Some(rel) = game.diplomacy.get_relation(ai_id, target_id) {
+                if rel.score > 0 {
+                    relationship_penalty += (rel.score as f64 / 100.0).min(0.5);
+                }
+                if rel.has_consulate {
+                    relationship_penalty += 0.1;
+                }
+                if rel.has_embassy {
+                    relationship_penalty += 0.2;
+                }
+                if rel.has_treaty(crate::events::TreatyType::NonAggressionPact) {
+                    relationship_penalty += 0.4;
+                }
             }
+            relationship_penalty = relationship_penalty.clamp(0.0, 1.0);
 
-            // Consult Lua for war evaluation — only when a relation has a non-zero score
-            // (fresh consulates start at 0; only evaluate when there's real diplomatic history)
-            #[cfg(feature = "lua")]
+            // ── combined_score ─────────────────────────────────
+            let combined_score =
+                need_score + opportunity_score * opportunism_weight - relationship_penalty;
+
+            if best
+                .as_ref()
+                .map(|b| combined_score > b.combined_score)
+                .unwrap_or(true)
+            {
+                best = Some(Candidate {
+                    target_id,
+                    combined_score,
+                    need_score,
+                    opportunity_score,
+                });
+            }
+        }
+
+        // ── 5-6. Best target + threshold check ────────────────
+        let candidate = match best {
+            Some(c) if c.combined_score > war_threshold => c,
+            _ => continue,
+        };
+
+        let target_id = candidate.target_id;
+        let target_name = nation_infos
+            .iter()
+            .find(|(id, _, _, _, _)| *id == target_id)
+            .map(|(_, name, _, _, _)| name.clone())
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        // Debug output
+        if game.ai_debug {
+            eprintln!(
+                "[AI:{}:war] Top candidate={} need={:.2} opp={:.2} combined={:.2} threshold={:.2}",
+                attacker_name,
+                target_name,
+                candidate.need_score,
+                candidate.opportunity_score,
+                candidate.combined_score,
+                war_threshold,
+            );
+        }
+
+        // ── 7. Lua check (feature-gated) ──────────────────────
+        #[cfg(feature = "lua")]
+        {
             if let Some(rel) = game
                 .diplomacy
                 .get_relation(ai_id, target_id)
@@ -351,8 +558,8 @@ pub(crate) fn ai_declare_wars(
                     ai_id,
                     target_id,
                     relations,
-                    0.0,
-                    0.0,
+                    candidate.need_score,
+                    candidate.opportunity_score,
                 ) {
                     if game.ai_debug {
                         eprintln!(
@@ -363,173 +570,60 @@ pub(crate) fn ai_declare_wars(
                     continue;
                 }
             }
-
-            let attacker_name = game
-                .get_nation(ai_id)
-                .map(|n| n.name.clone())
-                .unwrap_or_else(|| "Unknown".to_string());
-            if game.ai_debug {
-                eprintln!(
-                    "[AI:{}:war] Declaring war on {} (army={}, interval={}, standing={})",
-                    attacker_name, target_name, army_size, war_interval, standing
-                );
-            }
-            game.diplomacy.declare_war(ai_id, target_id);
-            game.pending_attacks.push((ai_id, attack_province));
-            targeted_this_round.push(target_id);
-            actions.push(format!(
-                "{} has declared war on {}!",
-                attacker_name, target_name
-            ));
-            let turn = game.turn;
-            game.history.push((
-                turn,
-                format!("{} declared war on {}", attacker_name, target_name),
-            ));
         }
-    } // end Phase 1
 
-    // Phase 2: Great Power vs Great Power wars
-    // Aggressive AIs will target weaker Great Powers when few minor targets remain
-    // and they have military superiority.
-    let remaining_minors: usize = game
-        .provinces
-        .iter()
-        .filter(|p| {
-            game.nations
-                .iter()
-                .any(|n| !n.is_great_power() && n.id == p.owner)
-        })
-        .map(|p| p.owner)
-        .collect::<std::collections::HashSet<_>>()
-        .len();
+        // ── 8. Declare war ─────────────────────────────────────
+        // Find the target's weakest province (fewest tiles)
+        let target_capital = nation_infos
+            .iter()
+            .find(|(id, _, _, _, _)| *id == target_id)
+            .map(|(_, _, _, _, cap)| *cap)
+            .unwrap_or(ProvinceId(0));
 
-    if game.ai_debug {
-        eprintln!(
-            "[AI:war:phase2] remaining_minors={}, turn={}",
-            remaining_minors, turn_number
-        );
-    }
+        let attack_province = game
+            .provinces
+            .iter()
+            .filter(|p| p.owner == target_id)
+            .min_by_key(|p| p.tiles.len())
+            .map(|p| p.id)
+            .unwrap_or(target_capital);
 
-    if remaining_minors <= 6 && turn_number > 40 {
-        for &ai_id in ai_nation_ids {
-            let personality = get_personality(game, ai_id);
-
-            // Aggressive, Balanced, and Economic AIs consider GP wars
-            let gp_war_interval = match personality {
-                AiPersonality::Aggressive => 30u32,
-                AiPersonality::Economic => 50,
-                AiPersonality::Balanced => 60,
-                _ => continue,
-            };
-
-            if !turn_number.is_multiple_of(gp_war_interval) {
-                continue;
-            }
-
-            let ai_army = game.get_nation(ai_id).map(|n| n.army.len()).unwrap_or(0);
-            if ai_army < 4 {
-                continue;
-            }
-
-            let ai_provinces = game
-                .get_nation(ai_id)
-                .map(|n| n.province_count())
-                .unwrap_or(0);
-
-            // Find weakest GP that is not allied, not already at war with us, not human
-            let mut gp_targets: Vec<(NationId, usize, ProvinceId)> = game
-                .nations
-                .iter()
-                .filter(|n| {
-                    n.is_great_power()
-                        && n.id != ai_id
-                        && n.id != game.human_player_nation
-                        && !game
-                            .diplomacy
-                            .get_relation(ai_id, n.id)
-                            .is_some_and(|r| r.at_war)
-                        && !game.diplomacy.has_treaty(
-                            ai_id,
-                            n.id,
-                            crate::events::TreatyType::Alliance,
-                        )
-                })
-                .map(|n| (n.id, n.province_count(), n.capital_province_id))
-                .collect();
-
-            // Target the GP with fewest provinces (weakest)
-            gp_targets.sort_by_key(|&(_, p, _)| p);
-
-            if let Some(&(target_id, target_provinces, target_capital)) = gp_targets.first() {
-                if game.ai_debug {
-                    let ai_name = game
-                        .get_nation(ai_id)
-                        .map(|n| n.name.as_str())
-                        .unwrap_or("?");
-                    let target_name = game
-                        .get_nation(target_id)
-                        .map(|n| n.name.as_str())
-                        .unwrap_or("?");
-                    eprintln!(
-                        "[AI:{}:war:gp] Considering {} (our_provinces={}, their_provinces={})",
-                        ai_name, target_name, ai_provinces, target_provinces
-                    );
-                }
-                // Only attack if we have more territory
-                if ai_provinces > target_provinces + 1 {
-                    // Find the weakest province of the target GP (fewest tiles)
-                    // rather than always attacking the capital which is often
-                    // the most heavily defended.
-                    let attack_province = game
-                        .provinces
-                        .iter()
-                        .filter(|p| p.owner == target_id)
-                        .min_by_key(|p| p.tiles.len())
-                        .map(|p| p.id)
-                        .unwrap_or(target_capital);
-
-                    let attacker_name = game
-                        .get_nation(ai_id)
-                        .map(|n| n.name.clone())
-                        .unwrap_or_default();
-                    let target_name = game
-                        .get_nation(target_id)
-                        .map(|n| n.name.clone())
-                        .unwrap_or_default();
-
-                    if game.ai_debug {
-                        eprintln!(
-                            "[AI:{}:war:gp] Declaring war on {} (GP vs GP)!",
-                            attacker_name, target_name
-                        );
-                    }
-                    game.diplomacy.declare_war(ai_id, target_id);
-                    game.pending_attacks.push((ai_id, attack_province));
-                    actions.push(format!(
-                        "{} has declared war on {}!",
-                        attacker_name, target_name
-                    ));
-                    let turn = game.turn;
-                    game.history.push((
-                        turn,
-                        format!("{} declared war on {}", attacker_name, target_name),
-                    ));
-                }
-            }
+        // Final guard: target must still own at least one province
+        if game.provinces.iter().all(|p| p.owner != target_id) {
+            continue;
         }
+
+        if game.ai_debug {
+            eprintln!(
+                "[AI:{}:war] Declaring war on {} (army={}, standing={}, score={:.2})",
+                attacker_name, target_name, ai_army, standing, candidate.combined_score,
+            );
+        }
+        game.diplomacy.declare_war(ai_id, target_id);
+        game.pending_attacks.push((ai_id, attack_province));
+        targeted_this_round.push(target_id);
+        actions.push(format!(
+            "{} has declared war on {}!",
+            attacker_name, target_name
+        ));
+        let turn = game.turn;
+        game.history.push((
+            turn,
+            format!("{} declared war on {}", attacker_name, target_name),
+        ));
     }
 }
 
 /// Strategic military decisions for an AI nation.
 ///
 /// - If at war and has >= 4 army units, queue an attack on the enemy's weakest province
-/// - If not at war and has >= 6 army units and turn > 40, consider declaring war on a weak Minor Nation
 /// - Upgrade units when tech allows (call unit_type.upgrade_to(), check if prereq tech is researched)
+///
+/// War declaration is handled separately by `ai_declare_wars`.
 pub(crate) fn ai_military_strategy(
     game: &mut GameState,
     nation_id: NationId,
-    actions: &mut Vec<String>,
+    _actions: &mut Vec<String>,
 ) {
     // Phase 1: Upgrade units if possible
     ai_upgrade_units(game, nation_id);
@@ -540,7 +634,6 @@ pub(crate) fn ai_military_strategy(
     };
 
     let army_size = nation.army.len();
-    let nation_name = nation.name.clone();
 
     // Find nations we are at war with
     let enemies: Vec<NationId> = game
@@ -657,62 +750,6 @@ pub(crate) fn ai_military_strategy(
             if !already_pending {
                 game.pending_attacks.push((nation_id, target_prov));
             }
-        }
-    }
-
-    // If not at war and has >= 6 army units and turn > 40, consider proactive war
-    if enemies.is_empty() && army_size >= 6 && game.turn.0 > 40 {
-        // Find weakest Minor Nation (fewest total tiles, not at war with anyone)
-        // Skip nations that have been fully conquered (0 provinces)
-        let minor_nations: Vec<(NationId, ProvinceId, usize)> = game
-            .nations
-            .iter()
-            .filter(|n| !n.is_great_power())
-            .filter(|n| game.provinces.iter().any(|p| p.owner == n.id))
-            .map(|n| {
-                let total_tiles: usize = game
-                    .provinces
-                    .iter()
-                    .filter(|p| p.owner == n.id)
-                    .map(|p| p.tiles.len())
-                    .sum();
-                (n.id, n.capital_province_id, total_tiles)
-            })
-            .filter(|(mn_id, _, tiles)| {
-                *tiles > 0
-                    && !game
-                        .diplomacy
-                        .get_relation(nation_id, *mn_id)
-                        .map(|r| r.at_war)
-                        .unwrap_or(false)
-            })
-            .collect();
-
-        // Sort by tile count ascending to find weakest
-        let mut sorted = minor_nations;
-        sorted.sort_by_key(|&(_, _, tiles)| tiles);
-
-        if let Some(&(target_id, _, _)) = sorted.first() {
-            // Find a province actually owned by the target
-            let attack_province = match game.provinces.iter().find(|p| p.owner == target_id) {
-                Some(p) => p.id,
-                None => return, // Target has no provinces left
-            };
-            let target_name = game
-                .get_nation(target_id)
-                .map(|n| n.name.clone())
-                .unwrap_or_else(|| "Unknown".to_string());
-            game.diplomacy.declare_war(nation_id, target_id);
-            game.pending_attacks.push((nation_id, attack_province));
-            actions.push(format!(
-                "{} has declared war on {}!",
-                nation_name, target_name
-            ));
-            let turn = game.turn;
-            game.history.push((
-                turn,
-                format!("{} declared war on {}", nation_name, target_name),
-            ));
         }
     }
 }
@@ -899,13 +936,12 @@ mod tests {
     // ── War declaration ──────────────────────────────────────
 
     #[test]
-    fn ai_declares_war_on_turn_25() {
+    fn ai_declares_war_when_target_vulnerable() {
         let mut game = test_game_with_ai_and_minor();
-        // Set to turn 25 (divisible by 25, the Balanced war interval)
-        game.turn = TurnNumber::new(25);
-        // Give AI enough army units to meet the >= 4 threshold for war declaration
+        // Give AI enough army units (Balanced army_min_for_war = 4)
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        for i in 0..4 {
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        for i in 0..5 {
             ai.army.push(ArmyUnit::new(
                 UnitId(5000 + i),
                 ArmyUnitType::Regulars,
@@ -913,105 +949,59 @@ mod tests {
                 ProvinceId(2),
             ));
         }
+        game.turn = TurnNumber::new(10);
 
-        run_ai_turns(&mut game);
+        let mut actions = Vec::new();
+        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
 
-        // AI should have declared war on the minor nation
+        // AI should declare war on the minor — it has provinces, low army, no relationship
         let rel = game.diplomacy.get_relation(NationId(2), NationId(3));
         assert!(rel.is_some(), "Relation between AI and minor should exist");
         assert!(
             rel.unwrap().at_war,
             "AI should be at war with the minor nation"
         );
-        // Should have queued a pending attack on the minor's capital
+        // Should have queued a pending attack
         assert!(
             game.pending_attacks
                 .iter()
-                .any(|(attacker, target)| *attacker == NationId(2) && *target == ProvinceId(3)),
-            "AI should queue an attack on the minor's capital"
-        );
-    }
-
-    #[test]
-    fn ai_does_not_declare_war_on_non_multiple_of_25() {
-        let mut game = test_game_with_ai_and_minor();
-        game.turn = TurnNumber::new(15);
-
-        run_ai_turns(&mut game);
-
-        let rel = game.diplomacy.get_relation(NationId(2), NationId(3));
-        // Either no relation exists, or it's not at war
-        let at_war = rel.map(|r| r.at_war).unwrap_or(false);
-        assert!(
-            !at_war,
-            "AI should not declare war on non-multiple-of-25 turns"
-        );
-        assert!(
-            game.pending_attacks.is_empty(),
-            "No attacks should be pending"
+                .any(|(attacker, _)| *attacker == NationId(2)),
+            "AI should queue an attack on the minor"
         );
     }
 
     #[test]
     fn ai_does_not_redeclare_war_on_existing_enemy() {
         let mut game = test_game_with_ai_and_minor();
-        game.turn = TurnNumber::new(25);
+        game.turn = TurnNumber::new(10);
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        for i in 0..5 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(5000 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
 
         // Pre-set war
         game.diplomacy.declare_war(NationId(2), NationId(3));
 
-        run_ai_turns(&mut game);
-
-        // Should not have queued a duplicate pending attack
-        let attack_count = game
-            .pending_attacks
-            .iter()
-            .filter(|(a, _)| *a == NationId(2))
-            .count();
-        assert_eq!(
-            attack_count, 0,
-            "AI should not queue attack if already at war"
-        );
-    }
-
-    // ── Personality affects war declaration ──────────────────
-
-    #[test]
-    fn aggressive_ai_declares_war_on_turn_25() {
-        let mut game = test_game_with_ai_and_minor();
-        // Set Aggressive personality
-        let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Aggressive);
-        // Give AI 5 army units (Aggressive threshold is 5)
-        for i in 0..5 {
-            ai.army.push(ArmyUnit::new(
-                UnitId(5000 + i),
-                ArmyUnitType::Regulars,
-                NationId(2),
-                ProvinceId(2),
-            ));
-        }
-
-        // Turn 25: Aggressive declares (every 25 turns)
-        game.turn = TurnNumber::new(25);
-
         let mut actions = Vec::new();
         ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
 
-        let rel = game.diplomacy.get_relation(NationId(2), NationId(3));
+        // Should not have queued any attack (already at war, and no other targets)
         assert!(
-            rel.is_some() && rel.unwrap().at_war,
-            "Aggressive AI should declare war on turn 25"
+            game.pending_attacks.is_empty(),
+            "AI should not queue attack via ai_declare_wars if already at war"
         );
     }
 
     #[test]
-    fn diplomatic_ai_does_not_declare_war_on_turn_20() {
+    fn ai_respects_war_cooldown() {
         let mut game = test_game_with_ai_and_minor();
-        // Set Diplomatic personality
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Diplomatic);
-        // Give AI 5 army units (enough for Balanced, not enough for Diplomatic which needs 8)
+        ai.ai_personality = Some(AiPersonality::Balanced); // cooldown = 12
         for i in 0..5 {
             ai.army.push(ArmyUnit::new(
                 UnitId(5000 + i),
@@ -1021,12 +1011,17 @@ mod tests {
             ));
         }
 
-        game.turn = TurnNumber::new(20);
+        // Simulate a recent war declaration in history
+        game.turn = TurnNumber::new(15);
+        game.history.push((
+            TurnNumber::new(10),
+            "AINation declared war on SomeNation".to_string(),
+        ));
 
         let mut actions = Vec::new();
         ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
 
-        // Turn 20 is not a multiple of 40, so Diplomatic AI should not declare war
+        // Turn 15 - Turn 10 = 5 turns < cooldown of 12, so should NOT declare war
         let at_war = game
             .diplomacy
             .get_relation(NationId(2), NationId(3))
@@ -1034,7 +1029,143 @@ mod tests {
             .unwrap_or(false);
         assert!(
             !at_war,
-            "Diplomatic AI should not declare war on turn 20 (interval is 40)"
+            "AI should not declare war while within cooldown period"
+        );
+    }
+
+    // ── Personality affects war declaration ──────────────────
+
+    #[test]
+    fn aggressive_ai_declares_war_easily() {
+        let mut game = test_game_with_ai_and_minor();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Aggressive);
+        // Aggressive only needs 3 army units
+        for i in 0..3 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(5000 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        game.turn = TurnNumber::new(5);
+
+        let mut actions = Vec::new();
+        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
+
+        let rel = game.diplomacy.get_relation(NationId(2), NationId(3));
+        assert!(
+            rel.is_some() && rel.unwrap().at_war,
+            "Aggressive AI should declare war with low threshold and small army"
+        );
+    }
+
+    #[test]
+    fn diplomatic_ai_needs_high_score_to_declare_war() {
+        let mut game = test_game_with_ai_and_minor();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Diplomatic);
+        // Diplomatic needs >= 8 army units; give exactly 8
+        for i in 0..8 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(5000 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        // Establish a consulate + positive relations to raise relationship_penalty
+        let _ = game.diplomacy.build_consulate(NationId(2), NationId(3));
+        // Improve score to make it harder to declare war
+        if let Some(rel) = game.diplomacy.get_relation_mut(NationId(2), NationId(3)) {
+            rel.improve_score(40);
+        }
+        game.turn = TurnNumber::new(5);
+
+        let mut actions = Vec::new();
+        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
+
+        // Diplomatic threshold is 0.9, the relationship penalty from consulate (+0.1)
+        // and positive relations (+0.4) should push the score below threshold.
+        // The minor only has 1 province so need_score is low (0.2).
+        let at_war = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .map(|r| r.at_war)
+            .unwrap_or(false);
+        assert!(
+            !at_war,
+            "Diplomatic AI should not declare war when relationship penalty is high"
+        );
+    }
+
+    #[test]
+    fn ai_can_target_great_powers() {
+        // Set up a game with two AI GPs and no minor nations
+        let mut game = test_game_with_ai();
+        // Add a second AI great power (NationId(1) is human, NationId(2) is AI)
+        // We need a third nation that is a GP and AI-controlled
+        use crate::hex::HexCoord;
+        use crate::map::Province;
+        use crate::nation::{Nation, NationColor};
+        use crate::types::NationType;
+
+        let province3 = Province::new(
+            ProvinceId(3),
+            "GP3 Land".to_string(),
+            NationId(3),
+            HexCoord::new(6, 6),
+            vec![HexCoord::new(6, 6)],
+            2,
+        );
+        game.provinces.push(province3);
+
+        let mut gp3 = Nation::new(
+            NationId(3),
+            "WeakGP".to_string(),
+            NationColor::Gray,
+            NationType::GreatPower,
+            ProvinceId(3),
+        );
+        gp3.treasury = Money::dollars(1000);
+        // WeakGP has 0 army units — very vulnerable
+        game.nations.push(gp3);
+
+        // Give the AI attacker a strong army
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Aggressive);
+        for i in 0..6 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(5000 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        game.turn = TurnNumber::new(10);
+
+        let mut actions = Vec::new();
+        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
+
+        // AI should target the weak GP (NationId(3)), not the human (NationId(1))
+        let at_war_with_gp3 = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .map(|r| r.at_war)
+            .unwrap_or(false);
+        let at_war_with_human = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(1))
+            .map(|r| r.at_war)
+            .unwrap_or(false);
+        assert!(
+            at_war_with_gp3,
+            "AI should be able to declare war on a weak Great Power"
+        );
+        assert!(
+            !at_war_with_human,
+            "AI should never target the human player"
         );
     }
 
@@ -1093,45 +1224,6 @@ mod tests {
             *target,
             ProvinceId(3),
             "AI should target the smaller/weaker province (1 tile vs 5 tiles)"
-        );
-    }
-
-    // ── Regression: C5 — AI never declares war on Great Powers ──
-
-    #[test]
-    fn ai_does_not_declare_war_on_great_powers() {
-        let mut game = test_game_with_ai();
-        // Turn 20 is a war-consideration turn for Balanced AI
-        game.turn = TurnNumber::new(20);
-
-        // Give AI enough army units to meet the threshold (4 for Balanced)
-        let ai = game.get_nation_mut(NationId(2)).unwrap();
-        for i in 0..6 {
-            ai.army.push(ArmyUnit::new(
-                UnitId(5000 + i),
-                ArmyUnitType::Regulars,
-                NationId(2),
-                ProvinceId(2),
-            ));
-        }
-
-        // No minor nations exist in this game — only two Great Powers
-        let mut actions = Vec::new();
-        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
-
-        // AI should NOT declare war on the human Great Power
-        let at_war = game
-            .diplomacy
-            .get_relation(NationId(2), NationId(1))
-            .map(|r| r.at_war)
-            .unwrap_or(false);
-        assert!(
-            !at_war,
-            "AI should never declare war on a Great Power; only minor nations are valid targets"
-        );
-        assert!(
-            game.pending_attacks.is_empty(),
-            "No attacks should be pending against a Great Power"
         );
     }
 }

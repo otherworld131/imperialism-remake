@@ -1,3 +1,4 @@
+#![allow(unused_labels)]
 use crate::game_state::GameState;
 use crate::types::*;
 
@@ -124,24 +125,39 @@ fn ai_build_forts(
         return;
     }
 
-    // Choose which province to fort based on personality
-    let target_province = match personality {
-        AiPersonality::Diplomatic => {
-            // Fort the capital for defense
-            if owned_provinces.contains(&capital_province_id) {
-                capital_province_id
-            } else {
-                border_provinces[0]
-            }
+    // ── Read Lua config (feature-gated) ──────────────────────
+    #[cfg(feature = "lua")]
+    let lua_cfg = game
+        .game_data
+        .lua_engine
+        .as_ref()
+        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+    #[cfg(not(feature = "lua"))]
+    let _lua_cfg: Option<()> = None;
+
+    // Choose which province to fort based on personality / Lua fort_strategy
+    let fort_strategy: String = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.fort_strategy.clone()) {
+            break 'val v;
         }
-        AiPersonality::Aggressive => {
-            // Fort the border province (offensive staging)
+        match personality {
+            AiPersonality::Diplomatic => "capital".to_string(),
+            AiPersonality::Aggressive => "border".to_string(),
+            _ => "border".to_string(),
+        }
+    };
+
+    let target_province = if fort_strategy == "capital" {
+        // Fort the capital for defense
+        if owned_provinces.contains(&capital_province_id) {
+            capital_province_id
+        } else {
             border_provinces[0]
         }
-        _ => {
-            // Default: first border province
-            border_provinces[0]
-        }
+    } else {
+        // "border" or any other value: first border province
+        border_provinces[0]
     };
 
     // Get the capital tile of that province
@@ -286,16 +302,41 @@ fn ai_propose_peace(
 ) {
     let turn_number = game.turn.0;
 
-    let peace_threshold = match personality {
-        AiPersonality::Diplomatic => 10u32,
-        AiPersonality::Aggressive => 30,
-        _ => 20,
+    // ── Read Lua config (feature-gated) ──────────────────────
+    #[cfg(feature = "lua")]
+    let lua_cfg = game
+        .game_data
+        .lua_engine
+        .as_ref()
+        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+    #[cfg(not(feature = "lua"))]
+    let _lua_cfg: Option<()> = None;
+
+    let peace_threshold: u32 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg
+            .as_ref()
+            .and_then(|c| c.peace_war_duration_threshold)
+        {
+            break 'val v;
+        }
+        match personality {
+            AiPersonality::Diplomatic => 10,
+            AiPersonality::Aggressive => 30,
+            _ => 20,
+        }
     };
 
     // Province-loss threshold for immediate peace (fraction of starting provinces lost)
-    let loss_threshold: f64 = match personality {
-        AiPersonality::Diplomatic => 0.30,
-        _ => 0.50,
+    let loss_threshold: f64 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.peace_province_loss_ratio) {
+            break 'val v;
+        }
+        match personality {
+            AiPersonality::Diplomatic => 0.30,
+            _ => 0.50,
+        }
     };
 
     // Find enemies we are at war with

@@ -1,3 +1,4 @@
+#![allow(unused_labels)]
 use crate::game_state::GameState;
 use crate::military::ships::{Ship, ShipType};
 use crate::types::*;
@@ -16,16 +17,38 @@ pub(crate) fn ai_build_warships(game: &mut GameState, nation_id: NationId) {
         None => return,
     };
 
-    // Wealthy nations invest in larger navies
+    // ── Read Lua config (feature-gated) ──────────────────────
+    #[cfg(feature = "lua")]
+    let lua_cfg = game
+        .game_data
+        .lua_engine
+        .as_ref()
+        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+    #[cfg(not(feature = "lua"))]
+    let _lua_cfg: Option<()> = None;
+
+    // Wealthy nations invest in larger navies (Lua overrides Rust defaults)
     let max_warships: usize = if nation.treasury > Money::dollars(8_000) {
-        match personality {
-            AiPersonality::Aggressive => 6,
-            _ => 4,
+        'val: {
+            #[cfg(feature = "lua")]
+            if let Some(v) = lua_cfg.as_ref().and_then(|c| c.max_warships_high_treasury) {
+                break 'val v;
+            }
+            match personality {
+                AiPersonality::Aggressive => 6,
+                _ => 4,
+            }
         }
     } else {
-        match personality {
-            AiPersonality::Aggressive => 4,
-            _ => 2,
+        'val: {
+            #[cfg(feature = "lua")]
+            if let Some(v) = lua_cfg.as_ref().and_then(|c| c.max_warships_low_treasury) {
+                break 'val v;
+            }
+            match personality {
+                AiPersonality::Aggressive => 4,
+                _ => 2,
+            }
         }
     };
 
@@ -77,13 +100,29 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
 
     let treasury = nation.treasury;
 
+    // ── Read Lua config (feature-gated) ──────────────────────
+    #[cfg(feature = "lua")]
+    let lua_cfg = game
+        .game_data
+        .lua_engine
+        .as_ref()
+        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+    #[cfg(not(feature = "lua"))]
+    let _lua_cfg: Option<()> = None;
+
     // Ship cap depends on personality; wealthy nations always aim for 5
     let max_ships: usize = if treasury > Money::dollars(5_000) {
         5
     } else {
-        match personality {
-            AiPersonality::Economic => 3,
-            _ => 1,
+        'val: {
+            #[cfg(feature = "lua")]
+            if let Some(v) = lua_cfg.as_ref().and_then(|c| c.max_merchant_ships) {
+                break 'val v;
+            }
+            match personality {
+                AiPersonality::Economic => 3,
+                _ => 1,
+            }
         }
     };
 

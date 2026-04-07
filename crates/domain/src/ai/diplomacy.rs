@@ -1,3 +1,4 @@
+#![allow(unused_labels)]
 use crate::game_state::GameState;
 use crate::types::*;
 
@@ -10,9 +11,25 @@ pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
     let cost = Money::dollars(500);
     let treasury_threshold = Money::dollars(2000);
 
-    let max_per_turn = match personality {
-        AiPersonality::Diplomatic => 4,
-        _ => 2,
+    // ── Read Lua config (feature-gated) ──────────────────────
+    #[cfg(feature = "lua")]
+    let lua_cfg = game
+        .game_data
+        .lua_engine
+        .as_ref()
+        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+    #[cfg(not(feature = "lua"))]
+    let _lua_cfg: Option<()> = None;
+
+    let max_per_turn: u32 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.consulate_max_per_turn) {
+            break 'val v;
+        }
+        match personality {
+            AiPersonality::Diplomatic => 4,
+            _ => 2,
+        }
     };
 
     // Check treasury threshold
@@ -148,14 +165,60 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
         );
     }
 
-    // Determine behavior parameters based on personality
-    let (propose_pact_chance, propose_alliance_chance, grant_amount, grant_every_n_turns) =
+    // ── Read Lua config (feature-gated) ──────────────────────
+    #[cfg(feature = "lua")]
+    let lua_cfg = game
+        .game_data
+        .lua_engine
+        .as_ref()
+        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+    #[cfg(not(feature = "lua"))]
+    let _lua_cfg: Option<()> = None;
+
+    // Determine behavior parameters based on personality (Lua overrides Rust defaults)
+    let propose_pact_chance: bool = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.propose_pacts) {
+            break 'val v;
+        }
         match personality {
-            AiPersonality::Diplomatic => (true, true, 500i64, 4u32),
-            AiPersonality::Economic => (true, false, 500, 6),
-            AiPersonality::Aggressive => (false, false, 0, 0),
-            AiPersonality::Balanced => (true, false, 500, 8),
-        };
+            AiPersonality::Diplomatic => true,
+            AiPersonality::Economic => true,
+            AiPersonality::Aggressive => false,
+            AiPersonality::Balanced => true,
+        }
+    };
+    let propose_alliance_chance: bool = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.propose_alliances) {
+            break 'val v;
+        }
+        matches!(personality, AiPersonality::Diplomatic)
+    };
+    let grant_amount: i64 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.grant_amount) {
+            break 'val v;
+        }
+        match personality {
+            AiPersonality::Diplomatic => 500,
+            AiPersonality::Economic => 500,
+            AiPersonality::Aggressive => 0,
+            AiPersonality::Balanced => 500,
+        }
+    };
+    let grant_every_n_turns: u32 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.grant_interval) {
+            break 'val v;
+        }
+        match personality {
+            AiPersonality::Diplomatic => 4,
+            AiPersonality::Economic => 6,
+            AiPersonality::Aggressive => 0,
+            AiPersonality::Balanced => 8,
+        }
+    };
 
     // Phase 1: Propose non-aggression pacts with Minor Nations that have embassies
     if propose_pact_chance {
@@ -212,9 +275,17 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
     }
 
     // Phase 2: Propose alliances with other Great Powers (Diplomatic personality only)
-    // Wait until turn 10+ so diplomatic history develops, and limit to max 2 alliances
+    // Wait until turn 10+ so diplomatic history develops, and limit alliances
     if propose_alliance_chance && turn_number >= 10 {
-        // Count existing alliances to cap at 2
+        let max_alliances: usize = 'val: {
+            #[cfg(feature = "lua")]
+            if let Some(v) = lua_cfg.as_ref().and_then(|c| c.max_alliances) {
+                break 'val v;
+            }
+            2
+        };
+
+        // Count existing alliances to cap
         let existing_alliances: usize = game
             .nations
             .iter()
@@ -229,7 +300,7 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
             })
             .count();
 
-        if existing_alliances >= 2 {
+        if existing_alliances >= max_alliances {
             // Already have max alliances, skip
         } else {
             let gp_ids: Vec<NationId> = game
@@ -243,8 +314,8 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
 
             let mut alliances_formed = existing_alliances;
             for gp_id in gp_ids {
-                // Re-check cap inside loop to prevent forming more than 2 total
-                if alliances_formed >= 2 {
+                // Re-check cap inside loop to prevent forming more than max total
+                if alliances_formed >= max_alliances {
                     break;
                 }
 
@@ -388,9 +459,25 @@ pub fn ai_pre_election_strategy(
         return;
     }
 
-    let grant_amount = match personality {
-        AiPersonality::Diplomatic => Money::dollars(1000),
-        _ => Money::dollars(500),
+    // ── Read Lua config (feature-gated) ──────────────────────
+    #[cfg(feature = "lua")]
+    let lua_cfg = game
+        .game_data
+        .lua_engine
+        .as_ref()
+        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+    #[cfg(not(feature = "lua"))]
+    let _lua_cfg: Option<()> = None;
+
+    let grant_amount: Money = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.grant_amount) {
+            break 'val Money::dollars(v);
+        }
+        match personality {
+            AiPersonality::Diplomatic => Money::dollars(1000),
+            _ => Money::dollars(500),
+        }
     };
 
     // Send grants to all MNs with embassies to boost relationship before the vote
@@ -425,10 +512,16 @@ pub fn ai_pre_election_strategy(
 
     // All personalities try to build embassies with MNs that have consulates,
     // but with different treasury thresholds based on personality.
-    let embassy_treasury_threshold = match personality {
-        AiPersonality::Diplomatic => Money::dollars(5000),
-        AiPersonality::Balanced | AiPersonality::Economic => Money::dollars(10_000),
-        AiPersonality::Aggressive => Money::dollars(15_000),
+    let embassy_treasury_threshold: Money = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.embassy_treasury_threshold) {
+            break 'val Money::dollars(v);
+        }
+        match personality {
+            AiPersonality::Diplomatic => Money::dollars(5000),
+            AiPersonality::Balanced | AiPersonality::Economic => Money::dollars(10_000),
+            AiPersonality::Aggressive => Money::dollars(15_000),
+        }
     };
     let embassy_cost = Money::dollars(5000);
     let treasury_ok = game
