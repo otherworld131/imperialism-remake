@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use ::infrastructure::persistence;
 use domain::economy::buildings::{Building, BuildingType};
 use domain::economy::civilians::{next_civilian_id, parse_civilian_type};
-use domain::game_state::{GameState, new_game};
+use domain::game_state::{GameState, new_game, new_game_with_seed};
 use domain::hex::HexCoord;
 use domain::map::infrastructure;
 use domain::map::{HexMap, UnitId};
@@ -20,6 +20,61 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Global counter for generating unique UnitIds when building units via CLI.
 static NEXT_UNIT_ID: AtomicU32 = AtomicU32::new(2_000_000);
+
+// ── Batch mode data structures ───────────────────────────────────
+
+#[derive(serde::Serialize)]
+struct BatchReport {
+    num_games: u32,
+    difficulty: String,
+    games: Vec<GameReport>,
+    aggregate: AggregateReport,
+}
+
+#[derive(serde::Serialize)]
+struct GameReport {
+    seed: String,
+    personalities: std::collections::HashMap<String, String>,
+    snapshots: std::collections::BTreeMap<u32, std::collections::HashMap<String, NationSnapshot>>,
+    final_scores: std::collections::HashMap<String, u32>,
+    wars_declared: std::collections::HashMap<String, u32>,
+    winner: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct NationSnapshot {
+    treasury: i64,
+    provinces: usize,
+    army_size: usize,
+    worker_count: u32,
+    mills: usize,
+    factories: usize,
+    other_buildings: usize,
+    warships: usize,
+    merchant_ships: usize,
+    freight_cars: u32,
+    tech_count: usize,
+    depots: u32,
+    railroads: u32,
+    forts: u32,
+    alliances: usize,
+    naps: usize,
+    active_wars: usize,
+    provinces_gained: i32,
+}
+
+#[derive(serde::Serialize)]
+struct AggregateReport {
+    by_personality: std::collections::HashMap<String, PersonalityStats>,
+}
+
+#[derive(serde::Serialize)]
+struct PersonalityStats {
+    games_played: u32,
+    avg_final_score: f64,
+    stddev: f64,
+    win_rate: f64,
+}
 
 // ── Colored output helpers ────────────────────────────────────────
 
@@ -45,6 +100,20 @@ fn color_bold(s: &str) -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+
+    // Check for --batch flag (runs N games headless, outputs JSON)
+    let batch_flag = args.iter().position(|a| a == "--batch");
+    if let Some(idx) = batch_flag {
+        let n: u32 = args
+            .get(idx + 1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| {
+                eprintln!("Usage: imperialism --batch <N>");
+                std::process::exit(1);
+            });
+        run_batch(n);
+        return;
+    }
 
     // Check for --scenario flag
     let scenario_flag = args.iter().position(|a| a == "--scenario");
@@ -108,10 +177,7 @@ fn main() {
             .map(|s| s.as_str())
             .collect();
         let map_key = positional.first().copied().unwrap_or("imperialism");
-        let nation_index: usize = positional
-            .get(1)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
+        let nation_index: usize = positional.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
         new_game(map_key, Difficulty::Normal, nation_index)
     };
 
@@ -4461,6 +4527,280 @@ fn print_pending_orders(game: &GameState) {
     if !has_orders {
         println!("  No pending orders.");
     }
+}
+
+// ── Batch mode ───────────────────────────────────────────────────
+
+fn take_snapshot(game: &GameState) -> std::collections::HashMap<String, NationSnapshot> {
+    let mut snapshots = std::collections::HashMap::new();
+    for nation in game.great_powers() {
+        let mut depots = 0u32;
+        let mut railroads = 0u32;
+        let mut forts = 0u32;
+        for &pid in &nation.province_ids {
+            if let Some(province) = game.get_province(pid) {
+                for &coord in &province.tiles {
+                    if let Some(tile) = game.hex_map.get_tile(coord) {
+                        if tile.infrastructure.has_depot {
+                            depots += 1;
+                        }
+                        if tile.infrastructure.has_railroad {
+                            railroads += 1;
+                        }
+                        if tile.infrastructure.has_fort {
+                            forts += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        let mills = nation
+            .buildings
+            .iter()
+            .filter(|b| {
+                matches!(
+                    b.building_type,
+                    BuildingType::LumberMill | BuildingType::SteelMill | BuildingType::TextileMill
+                )
+            })
+            .count();
+        let factories = nation
+            .buildings
+            .iter()
+            .filter(|b| {
+                matches!(
+                    b.building_type,
+                    BuildingType::FurnitureFactory
+                        | BuildingType::HardwareFactory
+                        | BuildingType::ClothingFactory
+                )
+            })
+            .count();
+        let other_buildings = nation.buildings.len() - mills - factories;
+
+        let mut alliances = 0usize;
+        let mut naps = 0usize;
+        let mut active_wars = 0usize;
+        for other in &game.nations {
+            if other.id == nation.id {
+                continue;
+            }
+            if game
+                .diplomacy
+                .has_treaty(nation.id, other.id, domain::events::TreatyType::Alliance)
+            {
+                alliances += 1;
+            }
+            if game.diplomacy.has_treaty(
+                nation.id,
+                other.id,
+                domain::events::TreatyType::NonAggressionPact,
+            ) {
+                naps += 1;
+            }
+            if let Some(rel) = game.diplomacy.get_relation(nation.id, other.id)
+                && rel.at_war
+            {
+                active_wars += 1;
+            }
+        }
+
+        snapshots.insert(
+            nation.name.clone(),
+            NationSnapshot {
+                treasury: nation.treasury.as_dollars(),
+                provinces: nation.province_count(),
+                army_size: nation.army.len(),
+                worker_count: nation.labor.total_workers(),
+                mills,
+                factories,
+                other_buildings,
+                warships: nation.warships.len(),
+                merchant_ships: nation.merchant_fleet.len(),
+                freight_cars: nation.transport.freight_cars,
+                tech_count: nation.researched_techs.len(),
+                depots,
+                railroads,
+                forts,
+                alliances,
+                naps,
+                active_wars,
+                provinces_gained: nation.province_count() as i32 - 8,
+            },
+        );
+    }
+    snapshots
+}
+
+fn get_war_pairs(game: &GameState) -> std::collections::HashSet<(NationId, NationId)> {
+    let mut pairs = std::collections::HashSet::new();
+    for a in &game.nations {
+        for b in &game.nations {
+            if a.id.0 < b.id.0
+                && let Some(rel) = game.diplomacy.get_relation(a.id, b.id)
+                && rel.at_war
+            {
+                pairs.insert((a.id, b.id));
+            }
+        }
+    }
+    pairs
+}
+
+fn compute_aggregate(games: &[GameReport]) -> AggregateReport {
+    let personality_types = ["Aggressive", "Diplomatic", "Economic", "Balanced"];
+    let mut by_personality = std::collections::HashMap::new();
+
+    for ptype in &personality_types {
+        let mut scores: Vec<f64> = Vec::new();
+        let mut wins = 0u32;
+
+        for game in games {
+            for (nation_name, personality) in &game.personalities {
+                if personality == *ptype {
+                    if let Some(&score) = game.final_scores.get(nation_name) {
+                        scores.push(score as f64);
+                    }
+                    if game.winner.as_deref() == Some(nation_name.as_str()) {
+                        wins += 1;
+                    }
+                }
+            }
+        }
+
+        let count = scores.len();
+        if count == 0 {
+            by_personality.insert(
+                ptype.to_string(),
+                PersonalityStats {
+                    games_played: 0,
+                    avg_final_score: 0.0,
+                    stddev: 0.0,
+                    win_rate: 0.0,
+                },
+            );
+            continue;
+        }
+
+        let mean = scores.iter().sum::<f64>() / count as f64;
+        let variance = scores.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / count as f64;
+        let stddev = variance.sqrt();
+        let win_rate = wins as f64 / games.len() as f64;
+
+        by_personality.insert(
+            ptype.to_string(),
+            PersonalityStats {
+                games_played: count as u32,
+                avg_final_score: (mean * 10.0).round() / 10.0,
+                stddev: (stddev * 10.0).round() / 10.0,
+                win_rate: (win_rate * 1000.0).round() / 1000.0,
+            },
+        );
+    }
+
+    AggregateReport { by_personality }
+}
+
+fn run_batch(n: u32) {
+    let snapshot_years: &[u32] = &[1815, 1830, 1845, 1860, 1875, 1890, 1915];
+    let mut games_data: Vec<GameReport> = Vec::with_capacity(n as usize);
+
+    for game_idx in 0..n {
+        let map_key = format!("batch_{}", game_idx);
+        let personality_seed = game_idx as u64 * 6_364_136_223_846_793_005 + 1;
+        let mut game = new_game_with_seed(&map_key, Difficulty::Normal, 0, personality_seed);
+
+        // Record personality assignments
+        let mut personalities = std::collections::HashMap::new();
+        for nation in game.great_powers() {
+            if let Some(p) = nation.ai_personality {
+                personalities.insert(nation.name.clone(), p.to_string());
+            } else {
+                personalities.insert(nation.name.clone(), "Human".to_string());
+            }
+        }
+
+        let mut snapshots = std::collections::BTreeMap::new();
+
+        // Track war declarations by diffing diplomacy state
+        let mut wars_declared: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+
+        while !game.is_game_over() {
+            let year = game.turn.year();
+            let quarter = game.turn.quarter();
+
+            // Snapshot at Q1 of key years
+            if snapshot_years.contains(&year) && quarter == 1 && !snapshots.contains_key(&year) {
+                snapshots.insert(year, take_snapshot(&game));
+            }
+
+            // Record current war state before processing
+            let current_wars = get_war_pairs(&game);
+
+            auto_manage_human(&mut game);
+            let _report = process_turn(&mut game);
+
+            // Detect new wars
+            let new_wars = get_war_pairs(&game);
+            for pair in &new_wars {
+                if !current_wars.contains(pair) {
+                    if let Some(n) = game.get_nation(pair.0) {
+                        *wars_declared.entry(n.name.clone()).or_insert(0) += 1;
+                    }
+                    if let Some(n) = game.get_nation(pair.1) {
+                        *wars_declared.entry(n.name.clone()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        // Final snapshot
+        let final_year = game.turn.year();
+        snapshots.insert(final_year, take_snapshot(&game));
+
+        // Final scores + winner
+        let mut final_scores = std::collections::HashMap::new();
+        let mut best_name = None;
+        let mut best_score = 0u32;
+        for nation in game.great_powers() {
+            let score = calculate_score(nation);
+            final_scores.insert(nation.name.clone(), score.total);
+            if score.total > best_score {
+                best_score = score.total;
+                best_name = Some(nation.name.clone());
+            }
+        }
+
+        games_data.push(GameReport {
+            seed: map_key,
+            personalities,
+            snapshots,
+            final_scores,
+            wars_declared,
+            winner: best_name,
+        });
+
+        eprintln!(
+            "Game {}/{} complete ({})",
+            game_idx + 1,
+            n,
+            game.turn.year()
+        );
+    }
+
+    // Aggregate
+    let aggregate = compute_aggregate(&games_data);
+
+    let report = BatchReport {
+        num_games: n,
+        difficulty: "Normal".to_string(),
+        games: games_data,
+        aggregate,
+    };
+
+    println!("{}", serde_json::to_string_pretty(&report).unwrap());
 }
 
 // ── Auto command ──────────────────────────────────────────────────

@@ -49,6 +49,29 @@ pub fn personality_for_nation_index(index: usize) -> AiPersonality {
     }
 }
 
+const ALL_PERSONALITIES: [AiPersonality; 4] = [
+    AiPersonality::Aggressive,
+    AiPersonality::Diplomatic,
+    AiPersonality::Economic,
+    AiPersonality::Balanced,
+];
+
+/// Generate random AI personalities for `count` nations using a deterministic seed.
+/// Each slot independently picks from the four personality types.
+pub fn random_personalities(seed: u64, count: usize) -> Vec<AiPersonality> {
+    let mut state = seed.max(1);
+    let mut result = Vec::with_capacity(count);
+    for _ in 0..count {
+        // xorshift64
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let idx = (state as usize) % ALL_PERSONALITIES.len();
+        result.push(ALL_PERSONALITIES[idx]);
+    }
+    result
+}
+
 /// Global counter for generating unique UnitIds for AI-built army units.
 static AI_UNIT_ID_COUNTER: AtomicU32 = AtomicU32::new(2_000_000);
 
@@ -384,5 +407,44 @@ mod tests {
                 nation.name
             );
         }
+    }
+
+    #[test]
+    fn random_personalities_deterministic() {
+        let a = random_personalities(42, 6);
+        let b = random_personalities(42, 6);
+        assert_eq!(a, b, "Same seed should produce same result");
+    }
+
+    #[test]
+    fn random_personalities_different_seeds_differ() {
+        let a = random_personalities(1, 6);
+        let b = random_personalities(2, 6);
+        assert_ne!(
+            a, b,
+            "Different seeds should usually produce different results"
+        );
+    }
+
+    #[test]
+    fn random_personalities_correct_length() {
+        assert_eq!(random_personalities(99, 0).len(), 0);
+        assert_eq!(random_personalities(99, 3).len(), 3);
+        assert_eq!(random_personalities(99, 6).len(), 6);
+    }
+
+    #[test]
+    fn random_personalities_produces_variety_across_seeds() {
+        let mut seen = std::collections::HashSet::new();
+        for seed in 0..100 {
+            for p in random_personalities(seed, 6) {
+                seen.insert(p);
+            }
+        }
+        assert_eq!(
+            seen.len(),
+            4,
+            "All 4 personality types should appear across 100 seeds"
+        );
     }
 }

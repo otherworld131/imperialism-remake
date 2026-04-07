@@ -2905,6 +2905,8 @@ dependencies = [
  "domain",
  "infrastructure",
  "presentation",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5044,7 +5046,6 @@ dependencies = [
 name = "wasm-bridge"
 version = "0.1.0"
 dependencies = [
- "application",
  "domain",
  "serde",
  "serde_json",

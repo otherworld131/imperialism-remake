@@ -1,4 +1,4 @@
-use crate::ai::personality_for_nation_index;
+use crate::ai::common::random_personalities;
 use crate::data::GameData;
 use crate::diplomacy::DiplomacyState;
 use crate::economy::buildings::{Building, BuildingType};
@@ -163,9 +163,34 @@ const MN_COLORS: [NationColor; 16] = [
 /// Create a new game from a map key and difficulty.
 /// This is the main entry point for starting a game.
 pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize) -> GameState {
+    // Derive personality seed from map key (XOR with constant to decouple from map gen)
+    let personality_seed = {
+        let mut h: u64 = 5381;
+        for b in map_key.bytes() {
+            h = h.wrapping_mul(33).wrapping_add(b as u64);
+        }
+        h ^ 0xA1CA_FE42
+    };
+    new_game_with_seed(map_key, difficulty, human_nation_index, personality_seed)
+}
+
+/// Create a new game with an explicit personality seed.
+/// Used by batch mode to produce different personality assignments per game.
+pub fn new_game_with_seed(
+    map_key: &str,
+    difficulty: Difficulty,
+    human_nation_index: usize,
+    personality_seed: u64,
+) -> GameState {
     let generated = crate::map::generate_map(map_key);
 
+    // Pre-generate random personalities for all AI nations
+    let human_idx = human_nation_index.min(generated.great_power_nations.len() - 1);
+    let ai_count = generated.great_power_nations.len() - 1; // minus human
+    let personalities = random_personalities(personality_seed, ai_count);
+
     let mut nations = Vec::new();
+    let mut ai_personality_idx = 0;
 
     // Create Great Power nations
     for (i, setup) in generated.great_power_nations.iter().enumerate() {
@@ -300,10 +325,9 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         nation.warships.push(frigate);
 
         // Assign AI personality for non-human Great Powers
-        let human_nation_index_clamped =
-            human_nation_index.min(generated.great_power_nations.len() - 1);
-        if i != human_nation_index_clamped {
-            nation.ai_personality = Some(personality_for_nation_index(i));
+        if i != human_idx {
+            nation.ai_personality = Some(personalities[ai_personality_idx]);
+            ai_personality_idx += 1;
 
             // AI difficulty bonuses (applied to AI nations only, not human)
             match difficulty {
