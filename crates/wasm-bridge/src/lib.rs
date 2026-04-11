@@ -58,7 +58,9 @@ pub fn wasm_process_turn(game_json: &str) -> String {
             "turn": format!("{}", report.turn),
             "year": report.year,
             "quarter": report.quarter,
-            "headlines": report.newspaper_headlines,
+            "headlines": report.newspaper_headlines.iter()
+                .map(|(text, cat)| serde_json::json!({"text": text, "category": cat}))
+                .collect::<Vec<_>>(),
             "resources": report.resource_production.iter()
                 .filter(|(nid, _, _)| *nid == game.human_player_nation)
                 .map(|(_, r, q)| serde_json::json!({"resource": format!("{:?}", r), "quantity": q}))

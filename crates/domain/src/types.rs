@@ -187,8 +187,9 @@ pub enum ResourceType {
 
 impl ResourceType {
     /// Whether this resource can be traded on the international market.
+    /// All resources are tradeable — nations can buy food and horses from Minor Nations.
     pub const fn is_tradeable(self) -> bool {
-        !matches!(self, Self::Grain | Self::Horses)
+        true
     }
 
     /// Whether this resource directly converts to money (no processing needed).
@@ -459,13 +460,10 @@ mod tests {
     // ── ResourceType ────────────────────────────────────────────
 
     #[test]
-    fn grain_not_tradeable() {
-        assert!(!ResourceType::Grain.is_tradeable());
-    }
-
-    #[test]
-    fn horses_not_tradeable() {
-        assert!(!ResourceType::Horses.is_tradeable());
+    fn all_resources_tradeable() {
+        assert!(ResourceType::Grain.is_tradeable());
+        assert!(ResourceType::Horses.is_tradeable());
+        assert!(ResourceType::Timber.is_tradeable());
     }
 
     #[test]
@@ -613,15 +611,9 @@ mod tests {
             ResourceType::Gems,
         ];
 
-        // Exactly Grain and Horses are not tradeable
-        let non_tradeable: Vec<_> = all_resources.iter().filter(|r| !r.is_tradeable()).collect();
-        assert_eq!(non_tradeable.len(), 2);
-        assert!(non_tradeable.contains(&&ResourceType::Grain));
-        assert!(non_tradeable.contains(&&ResourceType::Horses));
-
-        // All others are tradeable
+        // All resources are tradeable
         let tradeable: Vec<_> = all_resources.iter().filter(|r| r.is_tradeable()).collect();
-        assert_eq!(tradeable.len(), 10);
+        assert_eq!(tradeable.len(), 12);
     }
 
     // ── Money checked_sub edge cases ───────────────────────────

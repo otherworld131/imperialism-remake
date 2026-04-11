@@ -49,6 +49,8 @@ struct NationSnapshot {
     worker_count: u32,
     mills: usize,
     factories: usize,
+    total_mill_capacity: u32,
+    total_factory_capacity: u32,
     other_buildings: usize,
     warships: usize,
     merchant_ships: usize,
@@ -2141,7 +2143,14 @@ fn cmd_hire_civilian(game: &mut GameState, type_name: &str) {
 
     let cost = civ_type.creation_cost();
     let player_id = game.human_player_nation;
+    let civilian_costs_expert = game.game_data.game_config.civilian_costs_expert;
     let player = game.get_nation(player_id).unwrap();
+
+    if civilian_costs_expert && player.labor.expert == 0 {
+        println!("  Cannot hire civilian: requires an expert worker (you have none).");
+        println!("  Train workers at the Trade School first.");
+        return;
+    }
 
     if player.treasury.checked_sub(cost).is_none() {
         println!(
@@ -2156,12 +2165,21 @@ fn cmd_hire_civilian(game: &mut GameState, type_name: &str) {
 
     let player = game.get_nation_mut(player_id).unwrap();
     player.treasury -= cost;
+    if civilian_costs_expert {
+        player.labor.expert -= 1;
+    }
     player.civilians.push(civilian);
 
     println!(
         "  Hired {} (cost: {}, treasury now: {}). Use 'deploy <index> <province>' to deploy.",
         civ_type, cost, player.treasury
     );
+    if civilian_costs_expert {
+        println!(
+            "  (Lost 1 expert worker — {} expert workers remain)",
+            player.labor.expert
+        );
+    }
 }
 
 fn cmd_deploy_civilian(game: &mut GameState, args: &str) {
@@ -4555,7 +4573,7 @@ fn take_snapshot(game: &GameState) -> std::collections::HashMap<String, NationSn
             }
         }
 
-        let mills = nation
+        let mill_buildings: Vec<&Building> = nation
             .buildings
             .iter()
             .filter(|b| {
@@ -4564,8 +4582,8 @@ fn take_snapshot(game: &GameState) -> std::collections::HashMap<String, NationSn
                     BuildingType::LumberMill | BuildingType::SteelMill | BuildingType::TextileMill
                 )
             })
-            .count();
-        let factories = nation
+            .collect();
+        let factory_buildings: Vec<&Building> = nation
             .buildings
             .iter()
             .filter(|b| {
@@ -4576,7 +4594,12 @@ fn take_snapshot(game: &GameState) -> std::collections::HashMap<String, NationSn
                         | BuildingType::ClothingFactory
                 )
             })
-            .count();
+            .collect();
+        let mills = mill_buildings.len();
+        let total_mill_capacity: u32 = mill_buildings.iter().map(|b| b.effective_capacity()).sum();
+        let factories = factory_buildings.len();
+        let total_factory_capacity: u32 =
+            factory_buildings.iter().map(|b| b.effective_capacity()).sum();
         let other_buildings = nation.buildings.len() - mills - factories;
 
         let mut alliances = 0usize;
@@ -4615,6 +4638,8 @@ fn take_snapshot(game: &GameState) -> std::collections::HashMap<String, NationSn
                 worker_count: nation.labor.total_workers(),
                 mills,
                 factories,
+                total_mill_capacity,
+                total_factory_capacity,
                 other_buildings,
                 warships: nation.warships.len(),
                 merchant_ships: nation.merchant_fleet.len(),
@@ -4703,6 +4728,7 @@ fn compute_aggregate(games: &[GameReport]) -> AggregateReport {
 }
 
 fn run_batch(n: u32) {
+    let ai_debug = std::env::args().any(|a| a == "--ai-debug");
     let snapshot_years: &[u32] = &[1815, 1830, 1845, 1860, 1875, 1890, 1915];
     let mut games_data: Vec<GameReport> = Vec::with_capacity(n as usize);
 
@@ -4710,6 +4736,7 @@ fn run_batch(n: u32) {
         let map_key = format!("batch_{}", game_idx);
         let personality_seed = game_idx as u64 * 6_364_136_223_846_793_005 + 1;
         let mut game = new_game_with_seed(&map_key, Difficulty::Normal, 0, personality_seed);
+        game.ai_debug = ai_debug;
 
         // Record personality assignments
         let mut personalities = std::collections::HashMap::new();

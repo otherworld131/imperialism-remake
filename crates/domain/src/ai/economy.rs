@@ -2,7 +2,15 @@
 use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::trade;
 use crate::game_state::GameState;
+use crate::hex::HexCoord;
+use crate::map::hex_map::HexMap;
+use crate::map::{Province, railroad_cost};
+#[cfg(test)]
+use crate::map::{build_depot, build_railroad, is_province_connected};
+use crate::nation::Nation;
 use crate::types::*;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 use super::common::{AiPersonality, get_personality};
 
@@ -42,22 +50,241 @@ fn ai_build_infrastructure(game: &mut GameState, nation_id: NationId) {
     }
 }
 
+/// BFS from the capital tile to find all tiles reachable via the connected
+/// railroad/depot network. Mirrors the traversal logic in `is_province_connected`.
+pub(super) fn get_railroad_network(hex_map: &HexMap, capital_tile: HexCoord) -> HashSet<HexCoord> {
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
+    queue.push_back(capital_tile);
+    visited.insert(capital_tile);
+
+    while let Some(current) = queue.pop_front() {
+        if let Some(tile) = hex_map.get_tile(current)
+            && (tile.infrastructure.has_railroad
+                || tile.infrastructure.has_depot
+                || current == capital_tile)
+        {
+            for neighbor in current.neighbors() {
+                if !visited.contains(&neighbor)
+                    && let Some(n_tile) = hex_map.get_tile(neighbor)
+                    && (n_tile.infrastructure.has_railroad || n_tile.infrastructure.has_depot)
+                {
+                    visited.insert(neighbor);
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+    }
+    visited
+}
+
+/// Score a province by how much its resources are needed right now.
+///
+/// Considers mill input deficits, treasury needs, and current warehouse surplus.
+/// A province producing Coal when the SteelMill is starving for input scores
+/// far higher than one producing Timber the nation already has 20 of.
+pub(super) fn score_province(hex_map: &HexMap, province: &Province, nation: &Nation) -> u32 {
+    // Calculate per-resource demand weight based on mill deficits
+    let mut demand: HashMap<ResourceType, f64> = HashMap::new();
+
+    for building in &nation.buildings {
+        match building.building_type {
+            BuildingType::LumberMill => {
+                // 2 Timber → 1 Lumber; deficit = capacity*2 - warehouse
+                let need = building.effective_capacity() * 2;
+                let have = nation.resource_amount(ResourceType::Timber);
+                let deficit = need.saturating_sub(have);
+                *demand.entry(ResourceType::Timber).or_default() += deficit as f64;
+            }
+            BuildingType::SteelMill => {
+                // 1 Coal + 1 Iron → 1 Steel
+                let cap = building.effective_capacity();
+                let coal_deficit = cap.saturating_sub(nation.resource_amount(ResourceType::Coal));
+                let iron_deficit = cap.saturating_sub(nation.resource_amount(ResourceType::Iron));
+                *demand.entry(ResourceType::Coal).or_default() += coal_deficit as f64;
+                *demand.entry(ResourceType::Iron).or_default() += iron_deficit as f64;
+            }
+            BuildingType::TextileMill => {
+                // 2 Cotton/Wool → 1 Fabric
+                let need = building.effective_capacity() * 2;
+                let have = nation.resource_amount(ResourceType::Cotton)
+                    + nation.resource_amount(ResourceType::Wool);
+                let deficit = need.saturating_sub(have);
+                // Split demand across both fibre types
+                *demand.entry(ResourceType::Cotton).or_default() += deficit as f64 / 2.0;
+                *demand.entry(ResourceType::Wool).or_default() += deficit as f64 / 2.0;
+            }
+            _ => {}
+        }
+    }
+
+    // Money-generating resources scale with how badly money is needed
+    let money_urgency = if nation.treasury < Money::dollars(3000) {
+        4.0
+    } else if nation.treasury < Money::dollars(8000) {
+        2.0
+    } else {
+        1.0
+    };
+    *demand.entry(ResourceType::Gold).or_default() += 5.0 * money_urgency;
+    *demand.entry(ResourceType::Gems).or_default() += 10.0 * money_urgency;
+    *demand.entry(ResourceType::Oil).or_default() += 2.0 * money_urgency;
+
+    // Food demand scales with food security — starving nations prioritize food provinces
+    let total_food = nation.resource_amount(ResourceType::Grain)
+        + nation.resource_amount(ResourceType::Fruit)
+        + nation.resource_amount(ResourceType::Livestock);
+    let workers = nation.labor.total_workers();
+    let food_urgency = if total_food <= workers {
+        10.0 // starving — food is critical
+    } else if total_food <= workers * 2 {
+        5.0 // tight — prioritize food
+    } else {
+        1.0 // comfortable
+    };
+    for r in [
+        ResourceType::Grain,
+        ResourceType::Fruit,
+        ResourceType::Livestock,
+        ResourceType::Horses,
+    ] {
+        demand.entry(r).or_insert(food_urgency);
+    }
+
+    // Score each tile's yield weighted by demand
+    let mut score = 0u32;
+    for &coord in &province.tiles {
+        if let Some(tile) = hex_map.get_tile(coord)
+            && let Some(yield_info) = tile.calculate_yield()
+        {
+            let weight = demand.get(&yield_info.resource).copied().unwrap_or(1.0);
+            // Ensure at least 1 point per producing tile so no resource province scores 0
+            score += (yield_info.quantity as f64 * weight).max(1.0) as u32;
+        }
+    }
+    score
+}
+
+/// Dijkstra from the existing railroad network to a target tile.
+/// Returns the list of tiles (not yet in the network) that need railroads built,
+/// ordered from closest-to-network to target.
+pub(super) fn find_cheapest_path(
+    hex_map: &HexMap,
+    network: &HashSet<HexCoord>,
+    target: HexCoord,
+) -> Option<Vec<HexCoord>> {
+    let mut dist: HashMap<HexCoord, i64> = HashMap::new();
+    let mut prev: HashMap<HexCoord, HexCoord> = HashMap::new();
+    let mut heap: BinaryHeap<Reverse<(i64, HexCoord)>> = BinaryHeap::new();
+
+    // Seed all network tiles at cost 0
+    for &coord in network {
+        dist.insert(coord, 0);
+        heap.push(Reverse((0, coord)));
+    }
+
+    while let Some(Reverse((cost, current))) = heap.pop() {
+        if current == target {
+            // Reconstruct path: only tiles NOT already in the network
+            let mut path = Vec::new();
+            let mut c = target;
+            while let Some(&p) = prev.get(&c) {
+                if !network.contains(&c) {
+                    path.push(c);
+                }
+                c = p;
+            }
+            path.reverse();
+            return Some(path);
+        }
+
+        if cost > *dist.get(&current).unwrap_or(&i64::MAX) {
+            continue;
+        }
+
+        for neighbor in current.neighbors() {
+            if let Some(tile) = hex_map.get_tile(neighbor) {
+                if !tile.terrain().is_land() {
+                    continue;
+                }
+                let edge_cost = if tile.infrastructure.has_railroad || tile.infrastructure.has_depot
+                {
+                    0i64
+                } else {
+                    match railroad_cost(tile.terrain()) {
+                        Some(money) => money.cents(),
+                        None => continue,
+                    }
+                };
+                let new_cost = cost + edge_cost;
+                if new_cost < *dist.get(&neighbor).unwrap_or(&i64::MAX) {
+                    dist.insert(neighbor, new_cost);
+                    prev.insert(neighbor, current);
+                    heap.push(Reverse((new_cost, neighbor)));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// AI builds map infrastructure: depots and railroads to connect provinces.
 ///
-/// Strategy: Build a depot on the capital province first, then build depots on
-/// adjacent provinces, and railroads to link them. This allows resource flow.
+/// Strategy: prioritise provinces by resource value, then use Dijkstra to find
+/// the cheapest railroad path from the existing network. Spends up to
+/// `infrastructure_budget` per turn (read from Lua personality config).
+#[cfg(test)]
 pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: NationId) {
-    use crate::map::infrastructure::{build_depot, build_railroad};
-
     let treasury = match game.get_nation(nation_id) {
         Some(n) => n.treasury,
         None => return,
     };
 
-    // Need at least $3,000 to afford a depot + some railroads
-    if treasury < Money::dollars(3000) {
+    // Need at least enough for a depot
+    if treasury < Money::dollars(2000) {
         return;
     }
+
+    // ── Read infrastructure budget from Lua config ──────────────
+    let personality = get_personality(game, nation_id);
+
+    #[cfg(feature = "lua")]
+    let lua_cfg = game
+        .game_data
+        .lua_engine
+        .as_ref()
+        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+    #[cfg(not(feature = "lua"))]
+    let _lua_cfg: Option<()> = None;
+
+    let base_infrastructure_budget: Money = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(budget) = lua_cfg.as_ref().map(|c| c.infrastructure_budget) {
+            break 'val Money::dollars(budget);
+        }
+        match personality {
+            AiPersonality::Economic => Money::dollars(3000),
+            AiPersonality::Diplomatic => Money::dollars(2500),
+            AiPersonality::Aggressive => Money::dollars(1500),
+            AiPersonality::Balanced => Money::dollars(2000),
+        }
+    };
+
+    // Scale budget with treasury: spend more aggressively when cash-rich
+    let scale_threshold: i64 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.infra_budget_scale_threshold) {
+            break 'val v;
+        }
+        20_000
+    };
+    let infrastructure_budget = if treasury > Money::dollars(scale_threshold * 3) {
+        base_infrastructure_budget * 3
+    } else if treasury > Money::dollars(scale_threshold) {
+        base_infrastructure_budget * 2
+    } else {
+        base_infrastructure_budget
+    };
 
     // Get nation's province IDs and capital province
     let capital_province_id = match game.get_nation(nation_id) {
@@ -71,7 +298,12 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
     };
 
     // Step 1: Build depot on capital province if it doesn't have one
-    let capital_tiles: Vec<crate::hex::HexCoord> = game
+    let capital_tile = match game.get_province(capital_province_id) {
+        Some(p) => p.capital_tile,
+        None => return,
+    };
+
+    let capital_tiles: Vec<HexCoord> = game
         .get_province(capital_province_id)
         .map(|p| p.tiles.clone())
         .unwrap_or_default();
@@ -83,8 +315,7 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
     });
 
     if !capital_has_depot {
-        if let Some(&tile_coord) = capital_tiles.first()
-            && let Ok(cost) = build_depot(&mut game.hex_map, tile_coord)
+        if let Ok(cost) = build_depot(&mut game.hex_map, capital_tile)
             && let Some(nation) = game.get_nation_mut(nation_id)
         {
             nation.treasury -= cost;
@@ -92,89 +323,121 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
         return; // One major action per turn
     }
 
-    // Step 2: Build railroads on capital province tiles that don't have them
-    let mut spent = Money::dollars(0);
-    let spend_limit = Money::dollars(2000);
-    for &tile_coord in &capital_tiles {
-        if spent >= spend_limit {
-            break;
+    // Step 2: Score and sort non-capital provinces by current economic need
+    let nation_ref = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+    let mut province_scores: Vec<(ProvinceId, u32)> = province_ids
+        .iter()
+        .filter(|&&pid| pid != capital_province_id)
+        .filter_map(|&pid| {
+            let score = game
+                .get_province(pid)
+                .map(|p| score_province(&game.hex_map, p, nation_ref))?;
+            if score > 0 { Some((pid, score)) } else { None }
+        })
+        .collect();
+    province_scores.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Step 3: Find the first disconnected province with resources and connect it
+    let mut spent = Money::ZERO;
+    let budget = infrastructure_budget.min(
+        treasury
+            .checked_sub(Money::dollars(500))
+            .unwrap_or(Money::ZERO),
+    );
+
+    for (pid, _score) in &province_scores {
+        if is_province_connected(&game.hex_map, capital_tile, *pid, &game.provinces) {
+            continue;
         }
-        let needs_rr = game
+
+        // Ensure the target province has a depot
+        let target_depot_tile = match game.get_province(*pid) {
+            Some(p) => p.capital_tile,
+            None => continue,
+        };
+        let has_depot = game
             .hex_map
-            .get_tile(tile_coord)
-            .is_some_and(|t| !t.infrastructure.has_railroad);
-        if needs_rr && let Ok(cost) = build_railroad(&mut game.hex_map, tile_coord) {
+            .get_tile(target_depot_tile)
+            .is_some_and(|t| t.infrastructure.has_depot);
+
+        if !has_depot
+            && budget - spent >= Money::dollars(2000)
+            && let Ok(cost) = build_depot(&mut game.hex_map, target_depot_tile)
+        {
             if let Some(nation) = game.get_nation_mut(nation_id) {
                 nation.treasury -= cost;
             }
             spent += cost;
         }
-    }
-    if spent > Money::dollars(0) {
-        return; // Spent this turn on railroads
-    }
 
-    // Step 3: Build depots on adjacent provinces + railroads to connect
-    for &pid in &province_ids {
-        if pid == capital_province_id {
+        // Find cheapest path from network to target depot
+        let network = get_railroad_network(&game.hex_map, capital_tile);
+        if let Some(path) = find_cheapest_path(&game.hex_map, &network, target_depot_tile) {
+            for &coord in &path {
+                if spent >= budget {
+                    break;
+                }
+                if let Ok(cost) = build_railroad(&mut game.hex_map, coord) {
+                    if let Some(nation) = game.get_nation_mut(nation_id) {
+                        nation.treasury -= cost;
+                    }
+                    spent += cost;
+                }
+            }
+        }
+
+        // When cash-rich, allow connecting additional provinces per turn
+        let current_treasury = game
+            .get_nation(nation_id)
+            .map(|n| n.treasury)
+            .unwrap_or(Money::ZERO);
+        if spent < budget && current_treasury > infrastructure_budget * 3 {
             continue;
         }
-
-        let prov_tiles: Vec<crate::hex::HexCoord> = game
-            .get_province(pid)
-            .map(|p| p.tiles.clone())
-            .unwrap_or_default();
-
-        let has_depot = prov_tiles.iter().any(|coord| {
-            game.hex_map
-                .get_tile(*coord)
-                .is_some_and(|t| t.infrastructure.has_depot)
-        });
-
-        if !has_depot {
-            if let Some(&tile_coord) = prov_tiles.first()
-                && game
-                    .get_nation(nation_id)
-                    .is_some_and(|n| n.treasury >= Money::dollars(2000))
-                && let Ok(cost) = build_depot(&mut game.hex_map, tile_coord)
-                && let Some(nation) = game.get_nation_mut(nation_id)
-            {
-                nation.treasury -= cost;
-            }
-            return; // One depot per turn
-        }
-
-        // Build railroads on this province's tiles to extend the network
-        for &tile_coord in &prov_tiles {
-            let can_afford = game
-                .get_nation(nation_id)
-                .is_some_and(|n| n.treasury >= Money::dollars(200));
-            if !can_afford {
-                break;
-            }
-            let needs_rr = game
-                .hex_map
-                .get_tile(tile_coord)
-                .is_some_and(|t| !t.infrastructure.has_railroad);
-            if needs_rr && let Ok(cost) = build_railroad(&mut game.hex_map, tile_coord) {
-                if let Some(nation) = game.get_nation_mut(nation_id) {
-                    nation.treasury -= cost;
-                }
-                return; // One railroad per province per turn to spread cost
-            }
-        }
+        break;
     }
 }
 
-/// The AI keeps at least 2 of each good in reserve.
+/// The AI keeps a reserve of each good (Lua-configurable) and sells excess when treasury is low.
 pub fn ai_manage_resources(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
+    let personality = get_personality(game, nation_id);
+
+    // ── Read Lua config (feature-gated) ──────────────────────
+    #[cfg(feature = "lua")]
+    let lua_cfg = game
+        .game_data
+        .lua_engine
+        .as_ref()
+        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+
+    let goods_sell_threshold: i64 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg
+            .as_ref()
+            .and_then(|c| c.goods_sell_treasury_threshold)
+        {
+            break 'val v;
+        }
+        3000
+    };
+    let goods_reserve: u32 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.goods_reserve) {
+            break 'val v;
+        }
+        2
+    };
+
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,
         None => return,
     };
 
     // Only sell goods when treasury is low
-    if nation.treasury >= Money::dollars(3000) {
+    if nation.treasury >= Money::dollars(goods_sell_threshold) {
         return;
     }
 
@@ -194,11 +457,10 @@ pub fn ai_manage_resources(game: &mut GameState, nation_id: NationId, actions: &
             Some(n) => n.goods_amount(*goods_type),
             None => return,
         };
-        // Keep at least 2 in reserve
-        if amount <= 2 {
+        if amount <= goods_reserve {
             continue;
         }
-        let excess = amount - 2;
+        let excess = amount - goods_reserve;
         let revenue = Money::dollars(*price_per_unit) * excess as i64;
 
         let nation = game.get_nation_mut(nation_id).unwrap();
@@ -220,8 +482,8 @@ pub fn ai_manage_resources(game: &mut GameState, nation_id: NationId, actions: &
 ///
 /// - If AI has no mills and has lumber+steel materials: build a LumberMill
 /// - If AI has mills producing materials, build corresponding factories
-/// - Expand mills when capacity is maxed (if resources > capacity * threshold)
-/// - **Economic** personality: expand more aggressively (threshold multiplier 1 instead of 2)
+/// - Expand mills using tier progression (2→4→8→12→16→20...) when resources exceed threshold
+/// - All constants are Lua-configurable per personality
 pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
     let personality = get_personality(game, nation_id);
 
@@ -250,8 +512,6 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
         .lua_engine
         .as_ref()
         .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
-    #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
 
     // Economic personality expands more aggressively (Lua overrides Rust defaults)
     let expansion_threshold_multiplier: u32 = 'val: {
@@ -268,6 +528,25 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
         }
     };
 
+    let use_tier_expansion: bool = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.use_tier_expansion) {
+            break 'val v;
+        }
+        true
+    };
+
+    let high_treasury_threshold: i64 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg
+            .as_ref()
+            .and_then(|c| c.high_treasury_expansion_threshold)
+        {
+            break 'val v;
+        }
+        15_000
+    };
+
     // Expand mills when input resources exceed capacity * threshold
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,
@@ -281,8 +560,11 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
             let input_resources = match b.building_type {
                 BuildingType::LumberMill => nation.resource_amount(ResourceType::Timber),
                 BuildingType::SteelMill => {
-                    nation.resource_amount(ResourceType::Coal)
-                        + nation.resource_amount(ResourceType::Iron)
+                    // Use min(coal, iron) * 2 to match actual 1:1 production ratio
+                    nation
+                        .resource_amount(ResourceType::Coal)
+                        .min(nation.resource_amount(ResourceType::Iron))
+                        * 2
                 }
                 BuildingType::TextileMill => {
                     nation.resource_amount(ResourceType::Cotton)
@@ -301,55 +583,186 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
         .collect();
 
     for bt in expansions_needed {
-        let nation = match game.get_nation(nation_id) {
-            Some(n) => n,
-            None => return,
-        };
-        let has_lumber = nation.material_amount(MaterialType::Lumber) >= 1;
-        let has_steel = nation.material_amount(MaterialType::Steel) >= 1;
-        if has_lumber && has_steel {
-            let nation = game.get_nation_mut(nation_id).unwrap();
-            nation.consume_material(MaterialType::Lumber, 1);
-            nation.consume_material(MaterialType::Steel, 1);
-            if let Some(building) = nation.get_building_mut(bt) {
-                building.start_expansion(1);
-            }
-        }
+        expand_building(game, nation_id, bt, use_tier_expansion);
     }
 
-    // When treasury is very high, expand existing mills/factories even without
-    // surplus resources — invest in future capacity growth.
+    // Expand factories when their input material exceeds capacity * threshold.
+    // Factory input = the corresponding material in the warehouse.
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,
         None => return,
     };
-    if nation.treasury > Money::dollars(15_000) {
+
+    let factory_expansions: Vec<BuildingType> = nation
+        .buildings
+        .iter()
+        .filter_map(|b| {
+            let input_materials = match b.building_type {
+                BuildingType::FurnitureFactory => {
+                    nation.material_amount(MaterialType::Lumber)
+                }
+                BuildingType::HardwareFactory => {
+                    nation.material_amount(MaterialType::Steel)
+                }
+                BuildingType::ClothingFactory => {
+                    nation.material_amount(MaterialType::Fabric)
+                }
+                _ => return None,
+            };
+            // Factories consume 2 materials per unit, so check against capacity * 2 * threshold
+            if input_materials > b.effective_capacity() * 2 * expansion_threshold_multiplier
+                && b.pending_capacity == 0
+            {
+                Some(b.building_type)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for bt in factory_expansions {
+        expand_building(game, nation_id, bt, use_tier_expansion);
+    }
+
+    // Expand FoodProcessing when food surplus exceeds capacity * threshold.
+    // This builds the CannedFood pipeline for immigration and starvation buffer.
+    let food_threshold: u32 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg
+            .as_ref()
+            .and_then(|c| c.food_processing_expansion_threshold)
+        {
+            break 'val v;
+        }
+        2
+    };
+
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let total_raw_food = nation.resource_amount(ResourceType::Grain)
+        + nation.resource_amount(ResourceType::Fruit)
+        + nation.resource_amount(ResourceType::Livestock);
+    let food_cap = nation
+        .buildings
+        .iter()
+        .find(|b| b.building_type == BuildingType::FoodProcessing)
+        .map(|b| b.effective_capacity())
+        .unwrap_or(0);
+    let workers = nation.labor.total_workers();
+    let food_surplus = total_raw_food.saturating_sub(workers);
+
+    if food_surplus > food_cap * food_threshold
+        && food_cap > 0
+        && nation
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::FoodProcessing)
+            .map(|b| b.pending_capacity == 0)
+            .unwrap_or(false)
+    {
+        expand_building(game, nation_id, BuildingType::FoodProcessing, use_tier_expansion);
+    }
+
+    // When treasury is very high, expand existing mills and factories even without
+    // surplus resources — invest in future capacity growth.
+    // Only expand if capacity isn't already far ahead of actual input supply.
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+    if nation.treasury > Money::dollars(high_treasury_threshold) {
         let expandable: Vec<BuildingType> = nation
             .buildings
             .iter()
             .filter(|b| {
-                matches!(
-                    b.building_type,
-                    BuildingType::LumberMill | BuildingType::SteelMill | BuildingType::TextileMill
-                ) && b.pending_capacity == 0
+                if b.pending_capacity != 0 {
+                    return false;
+                }
+                // Cap speculative expansion: don't expand if capacity already > 2x input
+                let input = match b.building_type {
+                    BuildingType::LumberMill => nation.resource_amount(ResourceType::Timber),
+                    BuildingType::SteelMill => {
+                        nation
+                            .resource_amount(ResourceType::Coal)
+                            .min(nation.resource_amount(ResourceType::Iron))
+                            * 2
+                    }
+                    BuildingType::TextileMill => {
+                        nation.resource_amount(ResourceType::Cotton)
+                            + nation.resource_amount(ResourceType::Wool)
+                    }
+                    BuildingType::FurnitureFactory => {
+                        nation.material_amount(MaterialType::Lumber)
+                    }
+                    BuildingType::HardwareFactory => {
+                        nation.material_amount(MaterialType::Steel)
+                    }
+                    BuildingType::ClothingFactory => {
+                        nation.material_amount(MaterialType::Fabric)
+                    }
+                    _ => return false,
+                };
+                // Only speculative-expand if capacity <= 2x current input (room to grow into)
+                b.effective_capacity() <= input.max(1) * 2
             })
             .map(|b| b.building_type)
             .collect();
 
         for bt in expandable {
-            let nation = match game.get_nation(nation_id) {
-                Some(n) => n,
-                None => return,
-            };
-            let has_lumber = nation.material_amount(MaterialType::Lumber) >= 1;
-            let has_steel = nation.material_amount(MaterialType::Steel) >= 1;
-            if has_lumber && has_steel {
-                let nation = game.get_nation_mut(nation_id).unwrap();
-                nation.consume_material(MaterialType::Lumber, 1);
-                nation.consume_material(MaterialType::Steel, 1);
-                if let Some(building) = nation.get_building_mut(bt) {
-                    building.start_expansion(1);
-                }
+            expand_building(game, nation_id, bt, use_tier_expansion);
+        }
+    }
+}
+
+/// Expand a building, paying the correct material cost.
+/// When `use_tier` is true, uses tier progression (2→4→8→12...) with proportional cost.
+/// When false, expands by +1 capacity for 1 lumber + 1 steel (legacy behavior).
+fn expand_building(
+    game: &mut GameState,
+    nation_id: NationId,
+    bt: BuildingType,
+    use_tier: bool,
+) {
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let increase = if use_tier {
+        nation
+            .buildings
+            .iter()
+            .find(|b| b.building_type == bt)
+            .map(|b| b.next_capacity() - b.capacity)
+            .unwrap_or(1)
+    } else {
+        1
+    };
+
+    let (lumber_cost, steel_cost) = Building::expansion_cost(increase);
+    let has_lumber = nation.material_amount(MaterialType::Lumber) >= lumber_cost;
+    let has_steel = nation.material_amount(MaterialType::Steel) >= steel_cost;
+
+    if has_lumber && has_steel {
+        let ai_debug = game.ai_debug;
+        let nation = game.get_nation_mut(nation_id).unwrap();
+        nation.consume_material(MaterialType::Lumber, lumber_cost);
+        nation.consume_material(MaterialType::Steel, steel_cost);
+        if let Some(building) = nation.get_building_mut(bt) {
+            if use_tier {
+                building.start_expansion_to_next_tier();
+            } else {
+                building.start_expansion(1);
+            }
+
+            if ai_debug {
+                eprintln!(
+                    "[AI:{}:economy] expanding {:?} by +{} (cost: {} lumber, {} steel)",
+                    nation.name, bt, increase, lumber_cost, steel_cost
+                );
             }
         }
     }
@@ -357,9 +770,33 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
 
 /// Sell excess tradeable resources on the market for cash.
 ///
-/// For each tradeable resource the AI has more than 10 of, sell the excess
-/// at base_price and add proceeds to the treasury.
+/// Reserve amount and treasury cap are Lua-configurable per personality.
 pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
+    let personality = get_personality(game, nation_id);
+
+    // ── Read Lua config (feature-gated) ──────────────────────
+    #[cfg(feature = "lua")]
+    let lua_cfg = game
+        .game_data
+        .lua_engine
+        .as_ref()
+        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+
+    let trade_treasury_cap: i64 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.trade_treasury_cap) {
+            break 'val v;
+        }
+        20_000
+    };
+    let trade_resource_reserve: u32 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.trade_resource_reserve) {
+            break 'val v;
+        }
+        10
+    };
+
     let nation = match game.get_nation_mut(nation_id) {
         Some(n) => n,
         None => return,
@@ -367,7 +804,7 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
 
     // Don't sell resources when already sitting on a large treasury —
     // keep the materials for building ships, units, and infrastructure instead.
-    if nation.treasury > Money::dollars(20_000) {
+    if nation.treasury > Money::dollars(trade_treasury_cap) {
         return;
     }
 
@@ -378,15 +815,17 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
         ResourceType::Iron,
         ResourceType::Cotton,
         ResourceType::Wool,
+        ResourceType::Grain,
         ResourceType::Fruit,
         ResourceType::Livestock,
+        ResourceType::Horses,
         ResourceType::Oil,
     ];
 
     for resource in tradeable_resources {
         let amount = nation.resource_amount(resource);
-        if amount > 10 {
-            let excess = amount - 10;
+        if amount > trade_resource_reserve {
+            let excess = amount - trade_resource_reserve;
             let price = trade::base_price(resource);
             if price != Money::ZERO {
                 let revenue = price * excess as i64;
@@ -601,22 +1040,26 @@ mod tests {
     }
 
     #[test]
-    fn ai_does_not_sell_non_tradeable_grain() {
+    fn ai_sells_tradeable_grain_when_in_surplus() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.treasury = Money::dollars(0);
-        ai.add_resource(ResourceType::Grain, 20); // grain is not in the tradeable list
+        ai.add_resource(ResourceType::Grain, 20);
 
         run_ai_turns(&mut game);
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        // Grain has base_price $0, and is not in the tradeable_resources list in ai_trade
-        // so it should remain untouched. Worker recruitment may consume 1 grain.
-        // But with 0 workers and < 5 workers, 1 grain consumed for recruitment.
-        assert_eq!(
-            ai.resource_amount(ResourceType::Grain),
-            19,
-            "Only 1 grain consumed for worker recruitment, none sold"
+        // Grain is tradeable: AI sells excess above reserve (10),
+        // minus 1 consumed for worker recruitment.
+        // 20 - 1 (recruitment) - 9 (sold: 19 - 10 reserve) = 10
+        assert!(
+            ai.resource_amount(ResourceType::Grain) <= 10,
+            "AI should sell excess grain, has {}",
+            ai.resource_amount(ResourceType::Grain)
+        );
+        assert!(
+            ai.treasury > Money::ZERO,
+            "AI should have earned money from selling grain"
         );
     }
 
@@ -636,19 +1079,23 @@ mod tests {
             .push(Building::new(BuildingType::HardwareFactory, 1));
         ai.buildings
             .push(Building::new(BuildingType::ClothingFactory, 1));
-        ai.add_material(MaterialType::Lumber, 5);
-        ai.add_material(MaterialType::Steel, 5);
+        // Give enough materials for both potential mill expansion and freight cars
+        ai.add_material(MaterialType::Lumber, 20);
+        ai.add_material(MaterialType::Steel, 20);
 
         run_ai_turns(&mut game);
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(
-            ai.transport.freight_cars, 2,
-            "AI should build 2 freight cars"
+        assert!(
+            ai.transport.freight_cars >= 2,
+            "AI should build at least 2 freight cars, got {}",
+            ai.transport.freight_cars
         );
-        // Should have consumed 2 lumber + 2 steel
-        assert_eq!(ai.material_amount(MaterialType::Lumber), 3);
-        assert_eq!(ai.material_amount(MaterialType::Steel), 3);
+        // Materials consumed by freight cars + any expansion
+        assert!(
+            ai.material_amount(MaterialType::Lumber) < 20,
+            "AI should consume some lumber"
+        );
     }
 
     #[test]

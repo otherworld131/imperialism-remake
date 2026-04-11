@@ -15,6 +15,79 @@ use crate::scripting::LuaEngine;
 use crate::tech::TechTree;
 use std::collections::HashMap;
 
+/// Global game-rule constants. Loaded from `scripts/config/game.lua` when the
+/// Lua feature is enabled; otherwise uses hardcoded defaults.
+/// These define fundamental mechanics, NOT personality preferences.
+#[derive(Debug, Clone)]
+pub struct GameConfig {
+    // Labor
+    pub untrained_labor: u32,
+    pub trained_labor: u32,
+    pub expert_labor: u32,
+    pub labor_per_production: u32,
+    pub civilian_costs_expert: bool,
+    // Production ratios
+    pub resources_per_material: u32,
+    pub materials_per_good: u32,
+    pub coal_iron_ratio: u32,
+    // Food
+    pub food_per_worker: u32,
+    pub starvation_cap: u32,
+    pub canned_food_ratio: u32,
+    // Immigration
+    pub immigration_canned_food: u32,
+    pub immigration_clothing: u32,
+    pub immigration_furniture: u32,
+    pub provinces_per_immigrant: u32,
+    pub provinces_per_immigrant_upgraded: u32,
+    // Monetary
+    pub gold_value: i64,
+    pub gems_value: i64,
+    // Buildings
+    pub expansion_delay_turns: u8,
+    pub use_tier_expansion: bool,
+    // Diplomacy costs
+    pub consulate_cost: i64,
+    pub embassy_cost: i64,
+    // Starting conditions
+    pub starting_freight_cars: u32,
+    // Map generation
+    pub min_food_tile_percent: u32,
+    pub food_cluster_chance: u32,
+}
+
+impl Default for GameConfig {
+    fn default() -> Self {
+        Self {
+            untrained_labor: 1,
+            trained_labor: 2,
+            expert_labor: 4,
+            labor_per_production: 2,
+            civilian_costs_expert: true,
+            resources_per_material: 2,
+            materials_per_good: 2,
+            coal_iron_ratio: 1,
+            food_per_worker: 1,
+            starvation_cap: 2,
+            canned_food_ratio: 2,
+            immigration_canned_food: 1,
+            immigration_clothing: 1,
+            immigration_furniture: 1,
+            provinces_per_immigrant: 4,
+            provinces_per_immigrant_upgraded: 3,
+            gold_value: 500,
+            gems_value: 1000,
+            expansion_delay_turns: 2,
+            use_tier_expansion: true,
+            consulate_cost: 500,
+            embassy_cost: 5000,
+            starting_freight_cars: 5,
+            min_food_tile_percent: 20,
+            food_cluster_chance: 40,
+        }
+    }
+}
+
 /// Aggregate container for all data-driven game definitions.
 ///
 /// Stored in `GameState` and threaded through the game via `&self` references.
@@ -25,6 +98,8 @@ pub struct GameData {
     pub ship_stats: HashMap<ShipType, ShipStats>,
     #[cfg(feature = "lua")]
     pub lua_engine: Option<LuaEngine>,
+    /// Global game-rule constants from scripts/config/game.lua.
+    pub game_config: GameConfig,
 }
 
 impl GameData {
@@ -47,36 +122,50 @@ impl GameData {
             .and_then(|s| loader::load_ship_stats(s).ok())
             .unwrap_or_else(default_ship_stats);
 
+        let mut game_config = GameConfig::default();
+
+        #[cfg(feature = "lua")]
+        let lua_engine = {
+            let engine = LuaEngine::new().ok();
+            if let Some(ref e) = engine {
+                let _ = crate::ai::lua_bridge::load_scripts(e);
+                game_config = crate::ai::lua_bridge::load_game_config(e);
+            }
+            engine
+        };
+
         GameData {
             tech_tree,
             unit_stats,
             ship_stats,
             #[cfg(feature = "lua")]
-            lua_engine: {
-                let engine = LuaEngine::new().ok();
-                if let Some(ref e) = engine {
-                    let _ = crate::ai::lua_bridge::load_personality_scripts(e);
-                }
-                engine
-            },
+            lua_engine,
+            game_config,
         }
     }
 }
 
 impl Default for GameData {
     fn default() -> Self {
+        let mut game_config = GameConfig::default();
+
+        #[cfg(feature = "lua")]
+        let lua_engine = {
+            let engine = LuaEngine::new().ok();
+            if let Some(ref e) = engine {
+                let _ = crate::ai::lua_bridge::load_scripts(e);
+                game_config = crate::ai::lua_bridge::load_game_config(e);
+            }
+            engine
+        };
+
         GameData {
             tech_tree: TechTree::default(),
             unit_stats: default_unit_stats(),
             ship_stats: default_ship_stats(),
             #[cfg(feature = "lua")]
-            lua_engine: {
-                let engine = LuaEngine::new().ok();
-                if let Some(ref e) = engine {
-                    let _ = crate::ai::lua_bridge::load_personality_scripts(e);
-                }
-                engine
-            },
+            lua_engine,
+            game_config,
         }
     }
 }

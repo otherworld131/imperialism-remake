@@ -201,6 +201,16 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
         }
     }
 
+    // Cluster food terrain: spread food tiles to neighbors for natural farm belts
+    cluster_food_terrain(&mut hex_map, &all_province_data, &mut rng, 15);
+
+    // Guarantee minimum food tiles across the map
+    let min_food_percent: usize = 20;
+    enforce_minimum_food_tiles(&mut hex_map, &all_province_data, &mut rng, min_food_percent);
+
+    // Relocate Great Power capitals to best tile (coastal + food-rich)
+    relocate_capitals(&mut hex_map, &all_province_data, &nation_province_map);
+
     // Place hidden mineral deposits on prospectable terrain
     for q in 0..MAP_WIDTH {
         for r in 0..MAP_HEIGHT {
@@ -233,7 +243,18 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
 
         let nation_id = NationId(nation_idx as u32);
         let pid = ProvinceId(pdata.id);
-        let capital_tile = pdata.tiles[0];
+        // Find the tile marked as capital (may have been relocated)
+        let capital_tile = pdata
+            .tiles
+            .iter()
+            .find(|&&coord| {
+                hex_map
+                    .get_tile(coord)
+                    .map(|t| t.is_capital)
+                    .unwrap_or(false)
+            })
+            .copied()
+            .unwrap_or(pdata.tiles[0]);
 
         let garrison = if nation_idx < NUM_GREAT_POWERS { 4 } else { 3 };
 
@@ -622,6 +643,231 @@ fn subdivide_into_provinces(
     }
 
     groups
+}
+
+// ── Food tile guarantee ───────────────────────────────────────
+
+fn is_food_terrain(terrain: TerrainType) -> bool {
+    matches!(
+        terrain,
+        TerrainType::Farm | TerrainType::Orchard | TerrainType::DryPlains | TerrainType::OpenRange
+    )
+}
+
+/// Preferred terrain types to replace when adding food tiles (least valuable first).
+fn is_replaceable_for_food(terrain: TerrainType) -> bool {
+    matches!(
+        terrain,
+        TerrainType::Desert
+            | TerrainType::Tundra
+            | TerrainType::Swamp
+            | TerrainType::BarrenHills
+            | TerrainType::Mountain
+            | TerrainType::ScrubForest
+    )
+}
+
+/// Ensure at least `min_percent`% of land tiles produce food.
+/// Replaces barren/desert/mountain tiles with random food terrain if needed.
+fn enforce_minimum_food_tiles(
+    hex_map: &mut super::hex_map::HexMap,
+    province_data: &[ProvinceData],
+    rng: &mut Rng,
+    min_percent: usize,
+) {
+    // Collect all land tile coordinates with their province
+    let all_land: Vec<HexCoord> = province_data
+        .iter()
+        .flat_map(|p| p.tiles.iter().copied())
+        .collect();
+
+    if all_land.is_empty() {
+        return;
+    }
+
+    let food_count = all_land
+        .iter()
+        .filter(|&&coord| {
+            hex_map
+                .get_tile(coord)
+                .map(|t| is_food_terrain(t.terrain()))
+                .unwrap_or(false)
+        })
+        .count();
+
+    let min_food = all_land.len() * min_percent / 100;
+
+    if food_count >= min_food {
+        return;
+    }
+
+    let needed = min_food - food_count;
+
+    // Collect replaceable non-food tiles (not capital tiles)
+    let mut replaceable: Vec<HexCoord> = all_land
+        .iter()
+        .filter(|&&coord| {
+            hex_map
+                .get_tile(coord)
+                .map(|t| !t.is_capital && is_replaceable_for_food(t.terrain()))
+                .unwrap_or(false)
+        })
+        .copied()
+        .collect();
+
+    // Shuffle for even distribution
+    for i in (1..replaceable.len()).rev() {
+        let j = rng.range(0, i as i32 + 1) as usize;
+        replaceable.swap(i, j);
+    }
+
+    for &coord in replaceable.iter().take(needed) {
+        let pid = hex_map
+            .get_tile(coord)
+            .and_then(|t| t.province_id)
+            .unwrap_or(ProvinceId(0));
+        let food_terrain = match rng.range(0, 3) as u32 {
+            0 => TerrainType::Farm,
+            1 => TerrainType::Orchard,
+            _ => TerrainType::OpenRange,
+        };
+        let mut tile = super::tile::Tile::with_province(food_terrain, pid);
+        tile.is_capital = false;
+        hex_map.set_tile(coord, tile);
+    }
+}
+
+// ── Food clustering ──────────────────────────────────────────
+
+/// Spread food terrain to adjacent tiles to create natural clusters (farm belts, pasture regions).
+/// Each food tile has `chance_percent`% chance to convert each replaceable neighbor to the same type.
+fn cluster_food_terrain(
+    hex_map: &mut super::hex_map::HexMap,
+    _province_data: &[ProvinceData],
+    rng: &mut Rng,
+    chance_percent: i32,
+) {
+    // Collect all current food tiles (snapshot before mutation)
+    let mut food_tiles: Vec<(HexCoord, TerrainType)> = Vec::new();
+    for q in 0..MAP_WIDTH {
+        for r in 0..MAP_HEIGHT {
+            let coord = HexCoord::new(q, r);
+            if let Some(tile) = hex_map.get_tile(coord)
+                && is_food_terrain(tile.terrain())
+            {
+                food_tiles.push((coord, tile.terrain()));
+            }
+        }
+    }
+
+    // For each food tile, chance to spread to replaceable neighbors
+    for (coord, terrain) in &food_tiles {
+        for neighbor in coord.neighbors() {
+            if rng.range(0, 100) >= chance_percent {
+                continue;
+            }
+            // Only replace truly barren terrain for clustering (not forests — they produce timber)
+            if let Some(tile) = hex_map.get_tile(neighbor)
+                && tile.province_id.is_some()
+                && !tile.is_capital
+                && matches!(
+                    tile.terrain(),
+                    TerrainType::Desert | TerrainType::Tundra | TerrainType::Swamp
+                )
+            {
+                let pid = tile.province_id.unwrap();
+                hex_map.set_tile(neighbor, super::tile::Tile::with_province(*terrain, pid));
+            }
+        }
+    }
+}
+
+// ── Capital relocation ──────────────────────────────────────────
+
+/// Score a tile as a potential capital location.
+/// Prefers coastal tiles with nearby food.
+fn score_capital_candidate(coord: HexCoord, hex_map: &super::hex_map::HexMap) -> u32 {
+    let mut score: u32 = 0;
+
+    // Coastal bonus: adjacent to sea tile
+    let is_coastal = coord.neighbors().iter().any(|n| {
+        hex_map
+            .get_tile(*n)
+            .map(|t| t.terrain() == TerrainType::Sea)
+            .unwrap_or(false)
+    });
+    if is_coastal {
+        score += 20;
+    }
+
+    // Food tiles within 2 hexes
+    for nearby in coord.range(2) {
+        if let Some(tile) = hex_map.get_tile(nearby)
+            && is_food_terrain(tile.terrain())
+        {
+            score += 5;
+        }
+    }
+
+    // Penalty for being on undesirable terrain
+    if let Some(tile) = hex_map.get_tile(coord)
+        && matches!(
+            tile.terrain(),
+            TerrainType::Desert
+                | TerrainType::Tundra
+                | TerrainType::Swamp
+                | TerrainType::Mountain
+        )
+    {
+        score = score.saturating_sub(15);
+    }
+
+    score
+}
+
+/// Relocate each Great Power's capital to the best-scoring tile in their capital province.
+fn relocate_capitals(
+    hex_map: &mut super::hex_map::HexMap,
+    province_data: &[ProvinceData],
+    nation_province_map: &[Vec<u32>],
+) {
+    for nation_idx in 0..NUM_GREAT_POWERS {
+        if nation_idx >= nation_province_map.len() {
+            continue;
+        }
+        let capital_province_id = match nation_province_map[nation_idx].first() {
+            Some(&id) => id,
+            None => continue,
+        };
+        let pdata = match province_data.iter().find(|p| p.id == capital_province_id) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        // Score all tiles in the capital province
+        let mut best_coord: Option<HexCoord> = None;
+        let mut best_score: u32 = 0;
+        for &coord in &pdata.tiles {
+            let s = score_capital_candidate(coord, hex_map);
+            if s > best_score {
+                best_score = s;
+                best_coord = Some(coord);
+            }
+        }
+
+        if let Some(new_capital) = best_coord {
+            // Clear old capital flag
+            for &coord in &pdata.tiles {
+                if let Some(tile) = hex_map.get_tile_mut(coord) {
+                    tile.is_capital = false;
+                }
+            }
+            // Set new capital
+            if let Some(tile) = hex_map.get_tile_mut(new_capital) {
+                tile.is_capital = true;
+            }
+        }
+    }
 }
 
 // ── Terrain generation ─────────────────────────────────────────

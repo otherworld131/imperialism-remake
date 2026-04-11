@@ -293,14 +293,29 @@ fn ai_move_units_to_threatened(game: &mut GameState, nation_id: NationId) {
 ///
 /// Province-loss-based retreat:
 /// - If AI has lost >50% of its starting provinces, accept peace immediately
-/// - Diplomatic AI retreats at 30% loss
+///
+/// Propose peace using coalition-aware assessment.
+///
+/// The AI evaluates each ongoing war through two lenses:
+///   1. **Assessment**: relative coalition strength (military + provinces + economy + momentum)
+///   2. **Worthiness**: whether continuing the war is still worthwhile (captures, losses, diminishing returns)
+///
+/// Peace is proposed when:
+///   - `lost_enough`: heavy losses or low win_likelihood
+///   - `won_enough`: captured enough and diminishing returns
+///   - Stalemate: near-equal power for prolonged duration
+///
+/// For AI-to-AI wars, the proposal is evaluated inline (both decide in the same turn).
+/// For AI-to-human wars, a `DiplomaticProposal` is created for the UI to display.
 fn ai_propose_peace(
     game: &mut GameState,
     nation_id: NationId,
     personality: AiPersonality,
     actions: &mut Vec<String>,
 ) {
-    let turn_number = game.turn.0;
+    use super::assessment::{
+        evaluate_coalition_strength, evaluate_peace_proposal, evaluate_war_worthiness,
+    };
 
     // ── Read Lua config (feature-gated) ──────────────────────
     #[cfg(feature = "lua")]
@@ -312,30 +327,15 @@ fn ai_propose_peace(
     #[cfg(not(feature = "lua"))]
     let _lua_cfg: Option<()> = None;
 
-    let peace_threshold: u32 = 'val: {
+    let stalemate_duration: u32 = 'val: {
         #[cfg(feature = "lua")]
-        if let Some(v) = lua_cfg
-            .as_ref()
-            .and_then(|c| c.peace_war_duration_threshold)
-        {
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.peace_stalemate_duration) {
             break 'val v;
         }
         match personality {
-            AiPersonality::Diplomatic => 10,
-            AiPersonality::Aggressive => 30,
-            _ => 20,
-        }
-    };
-
-    // Province-loss threshold for immediate peace (fraction of starting provinces lost)
-    let loss_threshold: f64 = 'val: {
-        #[cfg(feature = "lua")]
-        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.peace_province_loss_ratio) {
-            break 'val v;
-        }
-        match personality {
-            AiPersonality::Diplomatic => 0.30,
-            _ => 0.50,
+            AiPersonality::Diplomatic => 12,
+            AiPersonality::Aggressive => 25,
+            _ => 15,
         }
     };
 
@@ -362,104 +362,169 @@ fn ai_propose_peace(
         .map(|n| n.name.clone())
         .unwrap_or_default();
 
-    let current_provinces = game
-        .get_nation(nation_id)
-        .map(|n| n.province_ids.len())
-        .unwrap_or(0);
+    for &enemy_id in &enemies {
+        let enemy_name = game
+            .get_nation(enemy_id)
+            .map(|n| n.name.clone())
+            .unwrap_or_default();
 
-    // Pre-compute enemy names for efficient history scanning
-    let enemies_with_names: Vec<(NationId, String)> = enemies
-        .iter()
-        .map(|&eid| {
-            let name = game
-                .get_nation(eid)
-                .map(|n| n.name.clone())
-                .unwrap_or_default();
-            (eid, name)
-        })
-        .collect();
-
-    // Pre-compute search patterns (avoid re-creating strings in the loop)
-    let loss_pattern = format!("from {}", nation_name);
-
-    // Single pass over history to count lost provinces and find war start turns
-    let mut provinces_lost_count = 0usize;
-    let mut war_starts: Vec<(NationId, u32)> = Vec::new(); // (enemy_id, turn)
-    for (turn_entry, desc) in &game.history {
-        if desc.contains("conquered") && desc.contains(&loss_pattern) {
-            provinces_lost_count += 1;
-        }
-        if desc.contains("declared war") && desc.contains(&nation_name) {
-            for (enemy_id, enemy_name) in &enemies_with_names {
-                if desc.contains(enemy_name.as_str()) {
-                    war_starts.push((*enemy_id, turn_entry.0));
-                }
-            }
-        }
-    }
-
-    let estimated_starting = current_provinces + provinces_lost_count;
-
-    for (enemy_id, enemy_name) in &enemies_with_names {
         // Skip peace if we have pending attacks against provinces owned by this enemy
         let has_pending_attack = game.pending_attacks.iter().any(|(attacker, prov_id)| {
             *attacker == nation_id
                 && game
                     .get_province(*prov_id)
-                    .is_some_and(|p| p.owner == *enemy_id)
+                    .is_some_and(|p| p.owner == enemy_id)
         });
         if has_pending_attack {
             continue;
         }
 
-        // Immediate peace if province loss exceeds threshold
-        if estimated_starting > 0 {
-            let loss_ratio = provinces_lost_count as f64 / estimated_starting as f64;
-            if loss_ratio >= loss_threshold {
-                game.diplomacy.make_peace(nation_id, *enemy_id);
+        // ── Assess the war ──────────────────────────────────
+        let assessment = evaluate_coalition_strength(
+            game,
+            nation_id,
+            enemy_id,
+            #[cfg(feature = "lua")]
+            lua_cfg.as_ref(),
+        );
+        let worthiness = evaluate_war_worthiness(
+            game,
+            nation_id,
+            enemy_id,
+            personality,
+            assessment.win_likelihood,
+            #[cfg(feature = "lua")]
+            lua_cfg.as_ref(),
+        );
+
+        // ── Decide whether to propose peace ─────────────────
+        // Lua hook can override the decision
+        let war_start = super::assessment::find_war_start_turn(game, &nation_name, &enemy_name);
+        let war_duration = war_start
+            .map(|start| game.turn.0.saturating_sub(start))
+            .unwrap_or(0);
+
+        let should_propose = 'decide: {
+            #[cfg(feature = "lua")]
+            if let Some(lua_result) = super::lua_bridge::lua_evaluate_peace(
+                game,
+                personality,
+                nation_id,
+                enemy_id,
+                assessment.win_likelihood,
+                worthiness.provinces_captured,
+                worthiness.provinces_lost,
+                war_duration,
+            ) {
+                break 'decide lua_result;
+            }
+
+            if worthiness.lost_enough {
+                break 'decide true;
+            }
+            if worthiness.won_enough {
+                break 'decide true;
+            }
+            // Stalemate: near-equal power for a long time
+            assessment.win_likelihood > 0.4
+                && assessment.win_likelihood < 0.6
+                && war_duration > stalemate_duration
+        };
+
+        if !should_propose {
+            continue;
+        }
+
+        if game.ai_debug {
+            eprintln!(
+                "[AI:{}:peace] Proposing peace with {} (win={:.2}, captured={}, lost={}, won_enough={}, lost_enough={})",
+                nation_name,
+                enemy_name,
+                assessment.win_likelihood,
+                worthiness.provinces_captured,
+                worthiness.provinces_lost,
+                worthiness.won_enough,
+                worthiness.lost_enough,
+            );
+        }
+
+        // ── Determine target type: AI GP, human, or minor nation ─
+        let target_is_ai = game
+            .get_nation(enemy_id)
+            .is_some_and(|n| n.ai_personality.is_some());
+        let target_is_human = enemy_id == game.human_player_nation;
+
+        if target_is_ai {
+            // AI-to-AI: evaluate inline — get the receiver's personality and decide
+            let receiver_personality = super::common::get_personality(game, enemy_id);
+
+            #[cfg(feature = "lua")]
+            let receiver_lua_cfg = game
+                .game_data
+                .lua_engine
+                .as_ref()
+                .and_then(|e| super::lua_bridge::lua_get_config(e, receiver_personality));
+
+            let accepted = evaluate_peace_proposal(
+                game,
+                nation_id,
+                enemy_id,
+                receiver_personality,
+                #[cfg(feature = "lua")]
+                receiver_lua_cfg.as_ref(),
+            );
+
+            if accepted {
+                game.diplomacy.make_peace(nation_id, enemy_id);
+                let reason = if worthiness.lost_enough {
+                    " (heavy losses)"
+                } else if worthiness.won_enough {
+                    " (objectives achieved)"
+                } else {
+                    ""
+                };
                 actions.push(format!(
-                    "{} has sued for peace with {} (heavy losses)",
-                    nation_name, enemy_name
+                    "{} has sued for peace with {}{}",
+                    nation_name, enemy_name, reason
                 ));
                 let turn = game.turn;
                 game.history.push((
                     turn,
                     format!("{} made peace with {}", nation_name, enemy_name),
                 ));
-                continue;
+            } else if game.ai_debug {
+                eprintln!(
+                    "[AI:{}:peace] {} rejected peace proposal",
+                    nation_name, enemy_name,
+                );
             }
-        }
-
-        // Look up war start turn from pre-computed data
-        let war_start_turn = war_starts
-            .iter()
-            .filter(|(eid, _)| *eid == *enemy_id)
-            .map(|(_, t)| *t)
-            .min();
-
-        let war_duration = match war_start_turn {
-            Some(start) => turn_number.saturating_sub(start),
-            None => 0,
-        };
-
-        if war_duration < peace_threshold {
-            continue;
-        }
-
-        // Simple heuristic: if AI has 1 or fewer provinces, definitely losing
-        // or if the enemy has more provinces than us
-        let enemy_provinces = game
-            .get_nation(*enemy_id)
-            .map(|n| n.province_ids.len())
-            .unwrap_or(0);
-
-        let is_losing = current_provinces <= 1 || enemy_provinces > current_provinces;
-
-        if is_losing {
-            game.diplomacy.make_peace(nation_id, *enemy_id);
+        } else if target_is_human {
+            // AI-to-human: create a pending proposal for the UI
+            let _ = game.diplomacy.propose_peace(nation_id, enemy_id, game.turn);
+            let reason = if worthiness.lost_enough {
+                " (heavy losses)"
+            } else if worthiness.won_enough {
+                " (objectives achieved)"
+            } else {
+                ""
+            };
             actions.push(format!(
-                "{} has sued for peace with {}",
-                nation_name, enemy_name
+                "{} proposes peace with {}{}",
+                nation_name, enemy_name, reason
+            ));
+        } else {
+            // AI-to-minor-nation: auto-accept (minor nations are passive)
+            game.diplomacy.make_peace(nation_id, enemy_id);
+            let reason = if worthiness.lost_enough {
+                " (heavy losses)"
+            } else if worthiness.won_enough {
+                " (objectives achieved)"
+            } else {
+                ""
+            };
+            actions.push(format!(
+                "{} has sued for peace with {}{}",
+                nation_name, enemy_name, reason
             ));
             let turn = game.turn;
             game.history.push((
@@ -626,17 +691,26 @@ mod tests {
     }
 
     #[test]
-    fn ai_proposes_peace_after_prolonged_losing_war() {
+    fn ai_proposes_peace_after_heavy_losses() {
         let mut game = test_game_with_adjacent_provinces();
         game.turn = TurnNumber::new(25);
 
-        // Record war declaration in history at turn 1
+        // Record war declaration and province losses in history
         game.history.push((
             TurnNumber::new(1),
             "AINation declared war on EnemyLand".to_string(),
         ));
+        // AI lost 2 provinces (meeting Balanced lost_enough_losses threshold)
+        game.history.push((
+            TurnNumber::new(10),
+            "EnemyLand conquered Province A from AINation".to_string(),
+        ));
+        game.history.push((
+            TurnNumber::new(15),
+            "EnemyLand conquered Province B from AINation".to_string(),
+        ));
 
-        // Make AI "losing": enemy has more provinces
+        // Make AI weaker: enemy has more provinces
         game.get_nation_mut(NationId(3))
             .unwrap()
             .add_province(ProvinceId(4));
@@ -652,7 +726,7 @@ mod tests {
             &mut actions,
         );
 
-        // Should have made peace
+        // Should have made peace (AI-to-MinorNation: auto-accepted)
         let at_war = game
             .diplomacy
             .get_relation(NationId(2), NationId(3))
@@ -660,7 +734,7 @@ mod tests {
             .unwrap_or(true);
         assert!(
             !at_war,
-            "AI should propose peace after 24 turns of losing war (threshold 20 for Balanced)"
+            "AI should propose peace after heavy losses (lost_enough triggered)"
         );
         assert!(
             actions.iter().any(|a| a.contains("sued for peace")),
@@ -744,17 +818,16 @@ mod tests {
     }
 
     #[test]
-    fn ai_accepts_peace_when_lost_over_50_percent_provinces() {
+    fn ai_proposes_peace_to_human_when_lost_heavily() {
         let mut game = test_game_with_ai_and_minor();
 
         // Give AI multiple provinces, then simulate heavy losses in history
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Balanced);
-        // AI has 1 province (ProvinceId(2)) but started with 4
-        // Simulate losing 3 provinces in history
+        // AI has 1 province (ProvinceId(2)) but lost 3 provinces in history
         game.history.push((
             TurnNumber::new(5),
-            "AINation declared war on MinorLand".to_string(),
+            "AINation declared war on HumanNation".to_string(),
         ));
         game.history.push((
             TurnNumber::new(10),
@@ -772,7 +845,6 @@ mod tests {
         // Put AI at war with human
         game.diplomacy.declare_war(NationId(2), NationId(1));
 
-        // AI has lost 3 of 4 provinces (75% > 50% threshold)
         let mut actions = Vec::new();
         ai_propose_peace(
             &mut game,
@@ -781,30 +853,40 @@ mod tests {
             &mut actions,
         );
 
-        // AI should sue for peace
+        // AI-to-human: should create a pending proposal, NOT immediate peace
         assert!(
             actions
                 .iter()
-                .any(|a| a.contains("sued for peace") && a.contains("heavy losses")),
-            "AI should sue for peace when losing > 50%% of provinces; actions: {:?}",
+                .any(|a| a.contains("proposes peace") && a.contains("heavy losses")),
+            "AI should propose peace when heavily losing; actions: {:?}",
             actions
         );
 
-        // War should be over
-        let rel = game.diplomacy.get_relation(NationId(2), NationId(1));
+        // War is still active (human hasn't accepted yet)
         assert!(
-            rel.is_none() || !rel.unwrap().at_war,
-            "Should no longer be at war after suing for peace"
+            game.diplomacy.is_at_war(NationId(2), NationId(1)),
+            "War should still be active until human accepts"
+        );
+
+        // But a pending peace proposal should exist
+        assert!(
+            game.diplomacy.pending_proposals.iter().any(|p| {
+                p.from == NationId(2)
+                    && p.to == NationId(1)
+                    && p.proposal_type == crate::events::TreatyType::PeaceTreaty
+            }),
+            "Should have a pending peace proposal to human player"
         );
     }
 
     #[test]
-    fn diplomatic_ai_accepts_peace_at_30_percent_loss() {
+    fn diplomatic_ai_proposes_peace_to_human_at_low_loss() {
         let mut game = test_game_with_ai_and_minor();
 
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Diplomatic);
-        // AI has 1 province, simulate losing 1 (so started with 2, lost 50% > 30%)
+        // Diplomatic AI has low lost_enough_losses threshold (1)
+        // Simulate losing 1 province
         game.history.push((
             TurnNumber::new(5),
             "AINation declared war on HumanNation".to_string(),
@@ -825,11 +907,20 @@ mod tests {
             &mut actions,
         );
 
-        // Diplomatic AI should sue for peace at 50% (> 30% threshold)
+        // Diplomatic AI should propose peace (lost_enough: 1 loss >= threshold of 1)
         assert!(
-            actions.iter().any(|a| a.contains("sued for peace")),
-            "Diplomatic AI should sue for peace at 50%% loss (threshold=30%%); actions: {:?}",
+            actions.iter().any(|a| a.contains("proposes peace")),
+            "Diplomatic AI should propose peace after 1 province loss; actions: {:?}",
             actions
+        );
+        // Should be a pending proposal to human
+        assert!(
+            game.diplomacy.pending_proposals.iter().any(|p| {
+                p.from == NationId(2)
+                    && p.to == NationId(1)
+                    && p.proposal_type == crate::events::TreatyType::PeaceTreaty
+            }),
+            "Should have a pending peace proposal"
         );
     }
 

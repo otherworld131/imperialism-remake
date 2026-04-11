@@ -86,7 +86,10 @@ pub fn render_hex_map(
         },
         Transform::from_xyz(map_center.x, map_center.y, 10.0),
     ));
-    println!("Spawned RED test square at map center ({}, {})", map_center.x, map_center.y);
+    println!(
+        "Spawned RED test square at map center ({}, {})",
+        map_center.x, map_center.y
+    );
 
     // Green square at origin
     commands.spawn((
@@ -111,7 +114,10 @@ pub fn render_hex_map(
         },
         Transform::from_xyz(first_tile_pos.x, first_tile_pos.y, 10.0),
     ));
-    println!("Spawned BLUE test square at first tile ({}, {})", first_tile_pos.x, first_tile_pos.y);
+    println!(
+        "Spawned BLUE test square at first tile ({}, {})",
+        first_tile_pos.x, first_tile_pos.y
+    );
 
     // === Step 3: Build province→nation color lookup ===
     let mut province_colors: std::collections::HashMap<ProvinceId, Color> =

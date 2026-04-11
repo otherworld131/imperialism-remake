@@ -1,5 +1,7 @@
 use crate::economy::buildings::BuildingType;
-use crate::economy::civilians::{Civilian, CivilianType, next_civilian_id};
+use crate::economy::civilians::CivilianType;
+#[cfg(test)]
+use crate::economy::civilians::{Civilian, next_civilian_id};
 use crate::game_state::GameState;
 use crate::types::*;
 
@@ -115,6 +117,7 @@ fn ai_process_food(game: &mut GameState, nation_id: NationId) {
 ///
 /// Deployment: for each idle civilian, find an improvable tile in the nation's provinces
 /// that matches the civilian type and has improvement_level < max_improvement_level.
+#[cfg(test)]
 pub(crate) fn ai_manage_civilians(game: &mut GameState, nation_id: NationId) {
     // Phase 1: Hire civilians
     ai_hire_civilians(game, nation_id);
@@ -124,6 +127,7 @@ pub(crate) fn ai_manage_civilians(game: &mut GameState, nation_id: NationId) {
 }
 
 /// Hire new civilian units if the nation can afford them.
+#[cfg(test)]
 fn ai_hire_civilians(game: &mut GameState, nation_id: NationId) {
     let nation = match game.get_nation_mut(nation_id) {
         Some(n) => n,
@@ -165,7 +169,7 @@ fn ai_hire_civilians(game: &mut GameState, nation_id: NationId) {
 }
 
 /// Deploy idle civilians to improvable tiles in the nation's provinces.
-fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
+pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
     // Collect province IDs owned by this nation
     let province_ids: Vec<ProvinceId> = match game.get_nation(nation_id) {
         Some(n) => n.province_ids.clone(),
@@ -235,9 +239,35 @@ fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
 
 /// AI trains untrained workers and promotes trained workers to expert.
 ///
-/// - If AI has > 3 untrained workers, train one per turn (requires 1 paper if available)
-/// - If AI has > 3 trained workers, promote one to expert per turn
+/// Thresholds are Lua-configurable per personality:
+/// - `worker_train_threshold`: train when untrained > threshold (default 1)
+/// - `worker_promote_threshold`: promote when trained > threshold (default 2)
 pub(crate) fn ai_train_and_promote_workers(game: &mut GameState, nation_id: NationId) {
+    let personality = super::common::get_personality(game, nation_id);
+
+    // ── Read Lua config (feature-gated) ──────────────────────
+    #[cfg(feature = "lua")]
+    let lua_cfg = game
+        .game_data
+        .lua_engine
+        .as_ref()
+        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+
+    let train_threshold: u32 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.worker_train_threshold) {
+            break 'val v;
+        }
+        1
+    };
+    let promote_threshold: u32 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.worker_promote_threshold) {
+            break 'val v;
+        }
+        2
+    };
+
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,
         None => return,
@@ -246,8 +276,8 @@ pub(crate) fn ai_train_and_promote_workers(game: &mut GameState, nation_id: Nati
     let untrained = nation.labor.untrained;
     let has_paper = nation.material_amount(MaterialType::Paper) > 0;
 
-    // Train one untrained worker if we have > 3 untrained
-    if untrained > 3 {
+    // Train one untrained worker if above threshold
+    if untrained > train_threshold {
         let nation = game.get_nation_mut(nation_id).unwrap();
         // Consume paper if available (training requires paper)
         if has_paper {
@@ -262,8 +292,8 @@ pub(crate) fn ai_train_and_promote_workers(game: &mut GameState, nation_id: Nati
         None => return,
     };
 
-    // Promote one trained worker to expert if we have > 3 trained
-    if nation.labor.trained > 3 {
+    // Promote one trained worker to expert if above threshold
+    if nation.labor.trained > promote_threshold {
         let nation = game.get_nation_mut(nation_id).unwrap();
         nation.labor.promote_worker();
     }
@@ -542,10 +572,10 @@ mod tests {
     }
 
     #[test]
-    fn ai_does_not_train_when_few_untrained() {
+    fn ai_does_not_train_when_at_threshold() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.labor.untrained = 3; // at threshold, not above
+        ai.labor.untrained = 1; // at default threshold (1), not above
         ai.labor.trained = 0;
         ai.add_material(MaterialType::Paper, 2);
 
@@ -553,8 +583,8 @@ mod tests {
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
-            ai.labor.untrained, 3,
-            "Should not train when untrained <= 3"
+            ai.labor.untrained, 1,
+            "Should not train when untrained <= threshold"
         );
         assert_eq!(ai.labor.trained, 0);
         assert_eq!(
@@ -580,17 +610,20 @@ mod tests {
     }
 
     #[test]
-    fn ai_does_not_promote_when_few_trained() {
+    fn ai_does_not_promote_when_at_threshold() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.labor.untrained = 0;
-        ai.labor.trained = 3; // at threshold
+        ai.labor.trained = 2; // at default promote threshold (2)
         ai.labor.expert = 0;
 
         ai_train_and_promote_workers(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(ai.labor.trained, 3, "Should not promote when trained <= 3");
+        assert_eq!(
+            ai.labor.trained, 2,
+            "Should not promote when trained <= threshold"
+        );
         assert_eq!(ai.labor.expert, 0);
     }
 

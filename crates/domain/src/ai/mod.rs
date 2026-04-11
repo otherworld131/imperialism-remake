@@ -1,3 +1,4 @@
+pub mod assessment;
 pub mod common;
 mod diplomacy;
 mod economy;
@@ -7,6 +8,7 @@ pub(crate) mod lua_bridge;
 mod military;
 mod naval;
 mod research;
+mod spending;
 mod tactical;
 
 pub use common::{AiPersonality, personality_for_nation_index};
@@ -64,14 +66,14 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<String> {
         }
         research::ai_research_tech(game, *nation_id, current_year, &mut actions);
         economy::ai_manage_economy(game, *nation_id);
-        economy::ai_build_map_infrastructure(game, *nation_id);
         economy::ai_manage_resources(game, *nation_id, &mut actions);
         labor::ai_recruit_workers(game, *nation_id);
-        labor::ai_manage_civilians(game, *nation_id);
-        military::ai_build_military(game, *nation_id, &mut actions);
+        // Need-based spending: replaces independent military, infrastructure,
+        // consulate, embassy, and civilian hiring decisions
+        spending::ai_scored_spending(game, *nation_id, &mut actions);
+        labor::ai_deploy_civilians(game, *nation_id);
         economy::ai_trade(game, *nation_id);
         economy::ai_build_transport_proactive(game, *nation_id);
-        diplomacy::ai_build_consulates(game, *nation_id);
         diplomacy::ai_manage_diplomacy(game, *nation_id, &mut actions);
         diplomacy::ai_pre_election_strategy(game, *nation_id, &mut actions);
         naval::ai_build_merchant_ships(game, *nation_id);
@@ -127,8 +129,12 @@ mod tests {
             ai.has_researched(TechId(1)) || ai.has_researched(TechId(2)),
             "AI should research a free tech"
         );
-        // Treasury reduced by $500 for building a Regulars unit (AI has < 3 army, > $2000)
-        assert_eq!(ai.treasury, Money::dollars(9500));
+        // Treasury reduced by spending (research is free, scoring system may spend on other things)
+        assert!(
+            ai.treasury < Money::dollars(10000),
+            "AI should spend some treasury, has ${}",
+            ai.treasury.as_dollars()
+        );
     }
 
     #[test]

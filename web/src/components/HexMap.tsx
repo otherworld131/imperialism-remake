@@ -70,8 +70,12 @@ function hexVertices(size: number): [number, number][] {
 
 function hexNeighbors(q: number, r: number): [number, number][] {
   return [
-    [q + 1, r], [q + 1, r - 1], [q, r - 1],
-    [q - 1, r], [q - 1, r + 1], [q, r + 1],
+    [q + 1, r],     // E  → edge 0
+    [q, r + 1],     // SE → edge 1
+    [q - 1, r + 1], // SW → edge 2
+    [q - 1, r],     // W  → edge 3
+    [q, r - 1],     // NW → edge 4
+    [q + 1, r - 1], // NE → edge 5
   ];
 }
 
@@ -115,9 +119,6 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
 
     const verts = hexVertices(HEX_SIZE);
 
-    // Nation centroids for labels
-    const nationInfo = new Map<string, { sx: number; sy: number; count: number; color: string }>();
-
     ctx.save();
     ctx.translate(offset.x, offset.y);
     ctx.scale(scale, scale);
@@ -143,13 +144,6 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
       drawHexagon(ctx, px, py, HEX_SIZE);
       ctx.fillStyle = color;
       ctx.fill();
-
-      // Accumulate nation centroid
-      if (tile.owner && tile.terrain !== 'Sea') {
-        const entry = nationInfo.get(tile.owner);
-        if (entry) { entry.sx += px; entry.sy += py; entry.count++; }
-        else nationInfo.set(tile.owner, { sx: px, sy: py, count: 1, color: NATION_COLORS[tile.owner_color] || '#333' });
-      }
     }
 
     // ── Pass 2: Draw each hex side with appropriate thickness ──
@@ -261,20 +255,120 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
       }
     }
 
-    // ── Pass 4: Nation name labels (political mode) ──
+    // ── Pass 4: Infrastructure icons ──
+    if (scale > 0.8) {
+      const iconSize = Math.max(8, HEX_SIZE * 0.5);
+      for (const tile of tiles) {
+        if (tile.terrain === 'Sea') continue;
+        if (!tile.has_railroad && !tile.has_depot && !tile.has_port && !tile.has_fort) continue;
+        const [px, py] = hexToPixel(tile.q, tile.r);
+        ctx.font = `${iconSize}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        if (tile.has_railroad) {
+          // Draw small railroad tracks (two parallel lines)
+          const rw = HEX_SIZE * 0.35;
+          ctx.strokeStyle = 'rgba(100,60,20,0.8)';
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          ctx.moveTo(px - rw, py - 2); ctx.lineTo(px + rw, py - 2);
+          ctx.moveTo(px - rw, py + 2); ctx.lineTo(px + rw, py + 2);
+          // Cross-ties
+          for (let t = -rw + 2; t <= rw - 2; t += 5) {
+            ctx.moveTo(px + t, py - 3); ctx.lineTo(px + t, py + 3);
+          }
+          ctx.stroke();
+        }
+        if (tile.has_depot) {
+          ctx.fillStyle = 'rgba(139,90,43,0.9)';
+          const ds = HEX_SIZE * 0.2;
+          ctx.fillRect(px - ds + HEX_SIZE * 0.3, py - ds, ds * 2, ds * 2);
+          ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+          ctx.lineWidth = 0.8;
+          ctx.strokeRect(px - ds + HEX_SIZE * 0.3, py - ds, ds * 2, ds * 2);
+        }
+        if (tile.has_port) {
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+          ctx.strokeText('\u2693', px - HEX_SIZE * 0.3, py);
+          ctx.fillStyle = 'rgba(70,130,200,0.9)';
+          ctx.fillText('\u2693', px - HEX_SIZE * 0.3, py);
+        }
+        if (tile.has_fort) {
+          const fl = tile.fort_level || 1;
+          const fs = iconSize * (0.8 + fl * 0.2);
+          ctx.font = `${fs}px sans-serif`;
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+          ctx.strokeText('\u26ED', px, py - HEX_SIZE * 0.3);
+          ctx.fillStyle = `rgba(120,120,130,0.9)`;
+          ctx.fillText('\u26ED', px, py - HEX_SIZE * 0.3);
+        }
+      }
+    }
+
+    // ── Pass 5: Nation name labels (political mode, per-landmass) ──
     if (isPolitical) {
+      // Group land tiles by nation
+      const nationTiles = new Map<string, Set<string>>();
+      for (const tile of tiles) {
+        if (tile.terrain === 'Sea' || !tile.owner) continue;
+        const key = `${tile.q},${tile.r}`;
+        let s = nationTiles.get(tile.owner);
+        if (!s) { s = new Set(); nationTiles.set(tile.owner, s); }
+        s.add(key);
+      }
+
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      for (const [name, info] of nationInfo) {
-        const cx = info.sx / info.count;
-        const cy = info.sy / info.count;
-        const fontSize = Math.max(12, Math.min(28, Math.sqrt(info.count) * 3));
-        ctx.font = `bold ${fontSize}px Georgia, serif`;
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-        ctx.strokeText(name.toUpperCase(), cx, cy);
-        ctx.fillStyle = 'rgba(255,255,255,0.9)';
-        ctx.fillText(name.toUpperCase(), cx, cy);
+
+      // For each nation, find connected components via BFS
+      for (const [name, tileKeys] of nationTiles) {
+        const visited = new Set<string>();
+
+        for (const startKey of tileKeys) {
+          if (visited.has(startKey)) continue;
+
+          // BFS to find connected component
+          const component: string[] = [];
+          const queue = [startKey];
+          visited.add(startKey);
+
+          while (queue.length > 0) {
+            const cur = queue.shift()!;
+            component.push(cur);
+            const [cq, cr] = cur.split(',').map(Number);
+            const nbrs = hexNeighbors(cq, cr);
+            for (const [nq, nr] of nbrs) {
+              const nk = `${nq},${nr}`;
+              if (!visited.has(nk) && tileKeys.has(nk)) {
+                visited.add(nk);
+                queue.push(nk);
+              }
+            }
+          }
+
+          // Only label landmasses with >= 3 hexes
+          if (component.length < 3) continue;
+
+          // Compute centroid
+          let sx = 0, sy = 0;
+          for (const k of component) {
+            const [cq, cr] = k.split(',').map(Number);
+            const [px, py] = hexToPixel(cq, cr);
+            sx += px; sy += py;
+          }
+          const cx = sx / component.length;
+          const cy = sy / component.length;
+          const fontSize = Math.max(12, Math.min(28, Math.sqrt(component.length) * 3));
+          ctx.font = `bold ${fontSize}px Georgia, serif`;
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+          ctx.strokeText(name.toUpperCase(), cx, cy);
+          ctx.fillStyle = 'rgba(255,255,255,0.9)';
+          ctx.fillText(name.toUpperCase(), cx, cy);
+        }
       }
     }
 

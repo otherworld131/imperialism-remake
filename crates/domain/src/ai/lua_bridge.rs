@@ -12,21 +12,65 @@ use crate::types::*;
 
 use super::common::AiPersonality;
 
-// Embed personality scripts at compile time for sandboxing safety.
+// Embed scripts at compile time for sandboxing safety.
+const GAME_CONFIG_LUA: &str = include_str!("../../../../scripts/config/game.lua");
 const BALANCED_LUA: &str = include_str!("../../../../scripts/ai/balanced.lua");
 const AGGRESSIVE_LUA: &str = include_str!("../../../../scripts/ai/aggressive.lua");
 const DIPLOMATIC_LUA: &str = include_str!("../../../../scripts/ai/diplomatic.lua");
 const ECONOMIC_LUA: &str = include_str!("../../../../scripts/ai/economic.lua");
 
-/// Load all four personality scripts into the Lua VM.
-/// Each script defines a global table (e.g., `balanced`, `aggressive`) with
-/// config fields and methods (`pick_tech`, `evaluate_war`).
-pub fn load_personality_scripts(engine: &LuaEngine) -> Result<(), String> {
+use crate::data::GameConfig;
+
+/// Load the game config from the Lua `game_config` global table.
+pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
+    let lua = engine.lua();
+    let table: mlua::Table = match lua.globals().get("game_config") {
+        Ok(t) => t,
+        Err(_) => return GameConfig::default(),
+    };
+    GameConfig {
+        untrained_labor: table.get("untrained_labor").unwrap_or(1),
+        trained_labor: table.get("trained_labor").unwrap_or(2),
+        expert_labor: table.get("expert_labor").unwrap_or(4),
+        labor_per_production: table.get("labor_per_production").unwrap_or(2),
+        civilian_costs_expert: table.get("civilian_costs_expert").unwrap_or(true),
+        resources_per_material: table.get("resources_per_material").unwrap_or(2),
+        materials_per_good: table.get("materials_per_good").unwrap_or(2),
+        coal_iron_ratio: table.get("coal_iron_ratio").unwrap_or(1),
+        food_per_worker: table.get("food_per_worker").unwrap_or(1),
+        starvation_cap: table.get("starvation_cap").unwrap_or(2),
+        canned_food_ratio: table.get("canned_food_ratio").unwrap_or(2),
+        immigration_canned_food: table.get("immigration_canned_food").unwrap_or(1),
+        immigration_clothing: table.get("immigration_clothing").unwrap_or(1),
+        immigration_furniture: table.get("immigration_furniture").unwrap_or(1),
+        provinces_per_immigrant: table.get("provinces_per_immigrant").unwrap_or(4),
+        provinces_per_immigrant_upgraded: table.get("provinces_per_immigrant_upgraded").unwrap_or(3),
+        gold_value: table.get("gold_value").unwrap_or(500),
+        gems_value: table.get("gems_value").unwrap_or(1000),
+        expansion_delay_turns: table.get::<u32>("expansion_delay_turns").unwrap_or(2) as u8,
+        use_tier_expansion: table.get("use_tier_expansion").unwrap_or(true),
+        consulate_cost: table.get("consulate_cost").unwrap_or(500),
+        embassy_cost: table.get("embassy_cost").unwrap_or(5000),
+        starting_freight_cars: table.get("starting_freight_cars").unwrap_or(5),
+        min_food_tile_percent: table.get("min_food_tile_percent").unwrap_or(20),
+        food_cluster_chance: table.get("food_cluster_chance").unwrap_or(40),
+    }
+}
+
+/// Load game config and all personality scripts into the Lua VM.
+pub fn load_scripts(engine: &LuaEngine) -> Result<(), String> {
+    engine.exec(GAME_CONFIG_LUA)?;
     engine.exec(BALANCED_LUA)?;
     engine.exec(AGGRESSIVE_LUA)?;
     engine.exec(DIPLOMATIC_LUA)?;
     engine.exec(ECONOMIC_LUA)?;
     Ok(())
+}
+
+/// Load all four personality scripts into the Lua VM (used by tests).
+#[cfg(test)]
+pub fn load_personality_scripts(engine: &LuaEngine) -> Result<(), String> {
+    load_scripts(engine)
 }
 
 /// Config parameters read from Lua personality tables.
@@ -63,6 +107,7 @@ pub struct LuaAiConfig {
     pub tier1_treasury: Option<i64>,
     pub tier2_treasury: Option<i64>,
     pub tier3_treasury: Option<i64>,
+    pub tier4_treasury: Option<i64>,
 
     // Diplomacy
     pub consulate_max_per_turn: Option<u32>,
@@ -80,11 +125,56 @@ pub struct LuaAiConfig {
 
     // Economy
     pub expansion_threshold_multiplier: Option<u32>,
+    pub use_tier_expansion: Option<bool>,
+    pub high_treasury_expansion_threshold: Option<i64>,
+    pub trade_resource_reserve: Option<u32>,
+    pub trade_treasury_cap: Option<i64>,
+    pub goods_sell_treasury_threshold: Option<i64>,
+    pub goods_reserve: Option<u32>,
+    pub food_processing_expansion_threshold: Option<u32>,
+    pub infra_budget_scale_threshold: Option<i64>,
+
+    // Spending weights (need-based scoring system)
+    pub spending_military_weight: Option<f64>,
+    pub spending_economy_weight: Option<f64>,
+    pub spending_diplomacy_weight: Option<f64>,
+    pub treasury_reserve: Option<i64>,
+    pub min_score_threshold: Option<f64>,
+
+    // Worker training thresholds
+    pub worker_train_threshold: Option<u32>,
+    pub worker_promote_threshold: Option<u32>,
 
     // Tactical
     pub peace_war_duration_threshold: Option<u32>,
     pub peace_province_loss_ratio: Option<f64>,
     pub fort_strategy: Option<String>,
+
+    // Coalition assessment weights
+    pub coalition_mil_weight: Option<f64>,
+    pub coalition_prov_weight: Option<f64>,
+    pub coalition_econ_weight: Option<f64>,
+    pub coalition_momentum_weight: Option<f64>,
+    pub coalition_naval_weight: Option<f64>,
+    pub coalition_sigmoid_steepness: Option<f64>,
+
+    // Peace proposal thresholds
+    pub peace_accept_threshold: Option<f64>,
+    pub peace_reject_threshold: Option<f64>,
+    pub peace_stalemate_duration: Option<u32>,
+
+    // War worthiness thresholds
+    pub won_enough_captures: Option<usize>,
+    pub won_enough_marginal: Option<f64>,
+    pub lost_enough_losses: Option<usize>,
+    pub lost_enough_likelihood: Option<f64>,
+
+    // Treaty evaluation thresholds
+    pub nap_accept_threshold: Option<f64>,
+    pub alliance_accept_threshold: Option<f64>,
+    pub alliance_rival_penalty: Option<f64>,
+    pub alliance_overcommit_penalty: Option<f64>,
+    pub treaty_personality_bias: Option<f64>,
 }
 
 fn personality_table_name(personality: AiPersonality) -> &'static str {
@@ -125,6 +215,7 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
         tier1_treasury: table.get("tier1_treasury").ok(),
         tier2_treasury: table.get("tier2_treasury").ok(),
         tier3_treasury: table.get("tier3_treasury").ok(),
+        tier4_treasury: table.get("tier4_treasury").ok(),
         // Diplomacy
         consulate_max_per_turn: table.get("consulate_max_per_turn").ok(),
         propose_pacts: table.get("propose_pacts").ok(),
@@ -139,10 +230,49 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
         max_merchant_ships: table.get::<usize>("max_merchant_ships").ok(),
         // Economy
         expansion_threshold_multiplier: table.get("expansion_threshold_multiplier").ok(),
+        use_tier_expansion: table.get("use_tier_expansion").ok(),
+        high_treasury_expansion_threshold: table.get("high_treasury_expansion_threshold").ok(),
+        trade_resource_reserve: table.get("trade_resource_reserve").ok(),
+        trade_treasury_cap: table.get("trade_treasury_cap").ok(),
+        goods_sell_treasury_threshold: table.get("goods_sell_treasury_threshold").ok(),
+        goods_reserve: table.get("goods_reserve").ok(),
+        food_processing_expansion_threshold: table.get("food_processing_expansion_threshold").ok(),
+        infra_budget_scale_threshold: table.get("infra_budget_scale_threshold").ok(),
+        // Spending weights
+        spending_military_weight: table.get("spending_military_weight").ok(),
+        spending_economy_weight: table.get("spending_economy_weight").ok(),
+        spending_diplomacy_weight: table.get("spending_diplomacy_weight").ok(),
+        treasury_reserve: table.get("treasury_reserve").ok(),
+        min_score_threshold: table.get("min_score_threshold").ok(),
+        // Worker training
+        worker_train_threshold: table.get("worker_train_threshold").ok(),
+        worker_promote_threshold: table.get("worker_promote_threshold").ok(),
         // Tactical
         peace_war_duration_threshold: table.get("peace_war_duration_threshold").ok(),
         peace_province_loss_ratio: table.get("peace_province_loss_ratio").ok(),
         fort_strategy: table.get::<String>("fort_strategy").ok(),
+        // Coalition assessment weights
+        coalition_mil_weight: table.get("coalition_mil_weight").ok(),
+        coalition_prov_weight: table.get("coalition_prov_weight").ok(),
+        coalition_econ_weight: table.get("coalition_econ_weight").ok(),
+        coalition_momentum_weight: table.get("coalition_momentum_weight").ok(),
+        coalition_naval_weight: table.get("coalition_naval_weight").ok(),
+        coalition_sigmoid_steepness: table.get("coalition_sigmoid_steepness").ok(),
+        // Peace proposal thresholds
+        peace_accept_threshold: table.get("peace_accept_threshold").ok(),
+        peace_reject_threshold: table.get("peace_reject_threshold").ok(),
+        peace_stalemate_duration: table.get("peace_stalemate_duration").ok(),
+        // War worthiness thresholds
+        won_enough_captures: table.get::<usize>("won_enough_captures").ok(),
+        won_enough_marginal: table.get("won_enough_marginal").ok(),
+        lost_enough_losses: table.get::<usize>("lost_enough_losses").ok(),
+        lost_enough_likelihood: table.get("lost_enough_likelihood").ok(),
+        // Treaty evaluation thresholds
+        nap_accept_threshold: table.get("nap_accept_threshold").ok(),
+        alliance_accept_threshold: table.get("alliance_accept_threshold").ok(),
+        alliance_rival_penalty: table.get("alliance_rival_penalty").ok(),
+        alliance_overcommit_penalty: table.get("alliance_overcommit_penalty").ok(),
+        treaty_personality_bias: table.get("treaty_personality_bias").ok(),
     })
 }
 
@@ -230,6 +360,73 @@ pub fn lua_evaluate_war(
         ))
         .ok()?;
     Some(result)
+}
+
+/// Call the Lua `<personality>.evaluate_peace(nation_id, enemy_id, win_likelihood, captured, lost, duration)`.
+/// Returns Some(true) to propose peace, Some(false) to not propose, or None to fall through.
+#[allow(clippy::too_many_arguments)]
+pub fn lua_evaluate_peace(
+    game: &GameState,
+    personality: AiPersonality,
+    nation_id: NationId,
+    enemy_id: NationId,
+    win_likelihood: f64,
+    captured: usize,
+    lost: usize,
+    duration: u32,
+) -> Option<bool> {
+    let engine = game.game_data.lua_engine.as_ref()?;
+    let lua = engine.lua();
+    let table_name = personality_table_name(personality);
+
+    let personality_table: mlua::Table = lua.globals().get(table_name).ok()?;
+    let evaluate_peace: mlua::Function = personality_table.get("evaluate_peace").ok()?;
+    let result: mlua::Value = evaluate_peace
+        .call::<mlua::Value>((
+            nation_id.0 as i64,
+            enemy_id.0 as i64,
+            win_likelihood,
+            captured as i64,
+            lost as i64,
+            duration as i64,
+        ))
+        .ok()?;
+    match result {
+        mlua::Value::Boolean(b) => Some(b),
+        _ => None, // nil = fall through to Rust logic
+    }
+}
+
+/// Call the Lua `<personality>.evaluate_treaty_response(nation_id, proposer_id, treaty_type, relationship, power_ratio)`.
+/// Returns Some(true) to accept, Some(false) to reject, or None to fall through.
+pub fn lua_evaluate_treaty_response(
+    game: &GameState,
+    personality: AiPersonality,
+    nation_id: NationId,
+    proposer_id: NationId,
+    treaty_type_str: &str,
+    relationship: i32,
+    power_ratio: f64,
+) -> Option<bool> {
+    let engine = game.game_data.lua_engine.as_ref()?;
+    let lua = engine.lua();
+    let table_name = personality_table_name(personality);
+
+    let personality_table: mlua::Table = lua.globals().get(table_name).ok()?;
+    let evaluate_treaty: mlua::Function = personality_table.get("evaluate_treaty_response").ok()?;
+    let result: mlua::Value = evaluate_treaty
+        .call::<mlua::Value>((
+            nation_id.0 as i64,
+            proposer_id.0 as i64,
+            treaty_type_str.to_string(),
+            relationship,
+            power_ratio,
+        ))
+        .ok()?;
+    match result {
+        mlua::Value::Boolean(b) => Some(b),
+        _ => None, // nil = fall through to Rust logic
+    }
 }
 
 #[cfg(test)]

@@ -29,7 +29,7 @@ pub struct TurnReport {
     pub production_output: Vec<(NationId, String, u32)>,
     pub food_consumed: Vec<(NationId, u32)>,
     pub starvation: Vec<(NationId, u32)>,
-    pub newspaper_headlines: Vec<String>,
+    pub newspaper_headlines: Vec<(String, HeadlineCategory)>,
     pub techs_available: Vec<(NationId, Vec<String>)>,
     pub council_vote: Option<CouncilVoteResult>,
     pub trade_transactions: Vec<TradeTransaction>,
@@ -164,6 +164,10 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     let ai_actions = run_ai_turns(game);
     report.ai_actions = ai_actions;
 
+    // 0-post. Resolve pending diplomatic proposals (AI-to-AI evaluated inline,
+    // but this handles any proposals from the turn processor level — e.g. mutual proposals)
+    resolve_diplomatic_proposals(game, &mut report);
+
     // 0a. Alliance obligations: AI allies automatically join wars
     resolve_alliance_obligations(game, &mut report);
 
@@ -258,10 +262,15 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     report
 }
 
-/// Compute the set of province IDs connected to a nation's capital via railroad/port.
+/// Compute the set of province IDs connected to a nation's capital.
 ///
-/// The capital province is always considered connected. Other provinces are checked
-/// via [`is_province_connected`].
+/// A province is connected if:
+///   1. It IS the capital province, OR
+///   2. Infrastructure (railroads/depots/ports) connects it, OR
+///   3. It is directly adjacent to the capital province (shares a hex neighbor).
+///
+/// Adjacency ensures early-game resource delivery before railroads are built,
+/// matching the connectivity logic used for settlement progression.
 pub fn connected_provinces(game: &GameState, nation_id: NationId) -> HashSet<ProvinceId> {
     let mut connected = HashSet::new();
     let nation = match game.get_nation(nation_id) {
@@ -277,11 +286,28 @@ pub fn connected_provinces(game: &GameState, nation_id: NationId) -> HashSet<Pro
     };
     let capital_tile = capital_province.capital_tile;
 
+    // Precompute capital province neighbors for adjacency check
+    let capital_neighbors: HashSet<crate::hex::HexCoord> = capital_province
+        .tiles
+        .iter()
+        .flat_map(|t| t.neighbors())
+        .collect();
+
     for &pid in &nation.province_ids {
         if pid == capital_pid {
             continue;
         }
+
+        // Infrastructure connection (railroad/depot/port)
         if is_province_connected(&game.hex_map, capital_tile, pid, &game.provinces) {
+            connected.insert(pid);
+            continue;
+        }
+
+        // Adjacency: at least one tile of the province neighbors a capital tile
+        if let Some(province) = game.get_province(pid)
+            && province.tiles.iter().any(|t| capital_neighbors.contains(t))
+        {
             connected.insert(pid);
         }
     }
@@ -365,6 +391,29 @@ fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
         }
     }
 
+    // Debug: log food collected per Great Power this turn
+    if game.ai_debug {
+        let food_types = [ResourceType::Grain, ResourceType::Fruit, ResourceType::Livestock];
+        for nation in game.nations.iter().filter(|n| n.is_great_power()) {
+            let collected: u32 = production_data
+                .iter()
+                .filter(|(nid, r, _)| *nid == nation.id && food_types.contains(r))
+                .map(|(_, _, a)| a)
+                .sum();
+            let disconnected: u32 = disconnected_data
+                .iter()
+                .filter(|(nid, r, _)| *nid == nation.id && food_types.contains(r))
+                .map(|(_, _, a)| a)
+                .sum();
+            if collected > 0 || disconnected > 0 {
+                eprintln!(
+                    "[COLLECT:{}] food_delivered={}, food_disconnected={}, freight_cars={}",
+                    nation.name, collected, disconnected, nation.transport.freight_cars
+                );
+            }
+        }
+    }
+
     // Record in report
     report.resource_production.extend(production_data);
     report.disconnected_resources.extend(disconnected_data);
@@ -391,9 +440,33 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
             None => continue,
         };
 
-        let capacity = nation.transport.total_capacity();
+        let freight_capacity = nation.transport.total_capacity();
 
-        // Aggregate this turn's resource production for this nation
+        // Aggregate this turn's resource production for this nation, split by source
+        let capital_province_id = nation.capital_province_id;
+        let capital_tiles: std::collections::HashSet<crate::hex::HexCoord> = game
+            .provinces
+            .iter()
+            .find(|p| p.id == capital_province_id)
+            .map(|p| p.tiles.iter().copied().collect())
+            .unwrap_or_default();
+
+        // Also include tiles from adjacent provinces (they deliver without transport)
+        let adjacent_tiles: std::collections::HashSet<crate::hex::HexCoord> = {
+            let cap_neighbors: std::collections::HashSet<crate::hex::HexCoord> = capital_tiles
+                .iter()
+                .flat_map(|t| t.neighbors())
+                .collect();
+            game.provinces
+                .iter()
+                .filter(|p| p.owner == nation_id && p.id != capital_province_id)
+                .filter(|p| p.tiles.iter().any(|t| cap_neighbors.contains(t)))
+                .flat_map(|p| p.tiles.iter().copied())
+                .collect()
+        };
+
+        // Count total production this turn
+        let mut total_produced: u32 = 0;
         let mut produced_this_turn: Vec<(ResourceType, u32)> = Vec::new();
         for (nid, resource, amount) in &report.resource_production {
             if *nid == nation_id && *amount > 0 {
@@ -402,56 +475,27 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
                 } else {
                     produced_this_turn.push((*resource, *amount));
                 }
+                total_produced += amount;
             }
         }
 
-        let total_produced: u32 = produced_this_turn.iter().map(|(_, q)| q).sum();
         if total_produced == 0 {
             continue;
         }
 
-        if capacity == 0 {
-            // Zero freight cars: only capital province resources are delivered.
-            // Calculate how many resources came from capital province tiles.
-            let capital_province_id = nation.capital_province_id;
-            let capital_tile_count = game
-                .provinces
-                .iter()
-                .find(|p| p.id == capital_province_id)
-                .map(|p| p.tiles.len() as u32)
-                .unwrap_or(0);
+        // Capital province + adjacent province resources are delivered for free.
+        // Only resources from distant provinces require freight cars.
+        let local_tile_count = (capital_tiles.len() + adjacent_tiles.len()) as u32;
+        let local_delivery = local_tile_count.min(total_produced);
+        let remote_delivery = total_produced - local_delivery;
 
-            // Keep resources up to capital_tile_count (those are adjacent to capital).
-            let keep = capital_tile_count.min(total_produced);
-            if total_produced > keep {
-                let overflow = total_produced - keep;
-                let nation = game.nations.iter_mut().find(|n| n.id == nation_id).unwrap();
-                let mut remaining_to_remove = overflow;
-
-                for (resource, produced) in &produced_this_turn {
-                    if remaining_to_remove == 0 {
-                        break;
-                    }
-                    let current_in_warehouse = nation.resource_amount(*resource);
-                    let removable = (*produced)
-                        .min(current_in_warehouse)
-                        .min(remaining_to_remove);
-                    if removable > 0 {
-                        nation.remove_resource(*resource, removable);
-                        report
-                            .transport_overflow
-                            .push((nation_id, *resource, removable));
-                        remaining_to_remove -= removable;
-                    }
-                }
-            }
-        } else if total_produced > capacity {
-            // Has freight cars but this turn's production exceeds capacity.
-            let overflow = total_produced - capacity;
-
+        // Remote resources are capped by freight car capacity
+        if remote_delivery > freight_capacity {
+            let overflow = remote_delivery - freight_capacity;
             let nation = game.nations.iter_mut().find(|n| n.id == nation_id).unwrap();
             let mut remaining_to_remove = overflow;
 
+            // Remove overflow from remote resources (approximation: remove proportionally)
             for (resource, produced) in &produced_this_turn {
                 if remaining_to_remove == 0 {
                     break;
@@ -479,6 +523,13 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
 /// Limit: max 1 immigrant per 4 provinces (or per 3 if Capitol building is expanded beyond level 1).
 /// Only recruits if the nation has a food surplus (total food > total workers).
 fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
+    let cfg = &game.game_data.game_config;
+    let prov_per_imm = cfg.provinces_per_immigrant;
+    let prov_per_imm_upgraded = cfg.provinces_per_immigrant_upgraded;
+    let req_canned = cfg.immigration_canned_food;
+    let req_clothing = cfg.immigration_clothing;
+    let req_furniture = cfg.immigration_furniture;
+
     let nation_ids: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
     let nation_ids_copy = nation_ids.clone();
 
@@ -512,7 +563,11 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
             .map(|b| b.effective_capacity() > 1)
             .unwrap_or(false);
 
-        let provinces_per_immigrant = if capitol_expanded { 3 } else { 4 };
+        let provinces_per_immigrant = if capitol_expanded {
+            prov_per_imm_upgraded
+        } else {
+            prov_per_imm
+        };
         let province_count = nation.province_count() as u32;
         let max_immigrants = if province_count == 0 {
             0
@@ -524,10 +579,10 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
             continue;
         }
 
-        // Check if nation has required materials: 1 CannedFood + 1 Clothing + 1 Furniture
-        let has_canned_food = nation.material_amount(MaterialType::CannedFood) >= 1;
-        let has_clothing = nation.goods_amount(GoodsType::Clothing) >= 1;
-        let has_furniture = nation.goods_amount(GoodsType::Furniture) >= 1;
+        // Check if nation has required materials for immigration
+        let has_canned_food = nation.material_amount(MaterialType::CannedFood) >= req_canned;
+        let has_clothing = nation.goods_amount(GoodsType::Clothing) >= req_clothing;
+        let has_furniture = nation.goods_amount(GoodsType::Furniture) >= req_furniture;
 
         if !has_canned_food || !has_clothing || !has_furniture {
             continue;
@@ -539,17 +594,17 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
 
         for _ in 0..max_immigrants {
             // Check materials for each immigrant
-            let can_food = nation.material_amount(MaterialType::CannedFood) >= 1;
-            let can_clothing = nation.goods_amount(GoodsType::Clothing) >= 1;
-            let can_furniture = nation.goods_amount(GoodsType::Furniture) >= 1;
+            let can_food = nation.material_amount(MaterialType::CannedFood) >= req_canned;
+            let can_clothing = nation.goods_amount(GoodsType::Clothing) >= req_clothing;
+            let can_furniture = nation.goods_amount(GoodsType::Furniture) >= req_furniture;
 
             if !can_food || !can_clothing || !can_furniture {
                 break;
             }
 
-            nation.consume_material(MaterialType::CannedFood, 1);
-            nation.consume_goods(GoodsType::Clothing, 1);
-            nation.consume_goods(GoodsType::Furniture, 1);
+            nation.consume_material(MaterialType::CannedFood, req_canned);
+            nation.consume_goods(GoodsType::Clothing, req_clothing);
+            nation.consume_goods(GoodsType::Furniture, req_furniture);
             nation.labor.recruit_immigrant();
             recruited += 1;
         }
@@ -712,7 +767,9 @@ fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
                             just_became_village = true;
 
                             let headline = format!("{} has grown into a Village!", prov.name);
-                            report.newspaper_headlines.push(headline.clone());
+                            report
+                                .newspaper_headlines
+                                .push((headline.clone(), HeadlineCategory::Growth));
                             report
                                 .settlement_upgrades
                                 .push((*province_id, "Village".to_string()));
@@ -751,7 +808,9 @@ fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
                         prov.town_countdown = None;
 
                         let headline = format!("{} has grown into a Town!", prov.name);
-                        report.newspaper_headlines.push(headline.clone());
+                        report
+                            .newspaper_headlines
+                            .push((headline.clone(), HeadlineCategory::Growth));
                         report
                             .settlement_upgrades
                             .push((*province_id, "Town".to_string()));
@@ -854,13 +913,13 @@ fn convert_monetary_resources(game: &mut GameState, report: &mut TurnReport) {
         let mut income = Money::ZERO;
 
         if gold_amount > 0 {
-            let gold_value = Money::dollars(gold_amount as i64 * 500);
+            let gold_value = Money::dollars(gold_amount as i64 * game.game_data.game_config.gold_value);
             income += gold_value;
             nation.remove_resource(ResourceType::Gold, gold_amount);
         }
 
         if gems_amount > 0 {
-            let gems_value = Money::dollars(gems_amount as i64 * 1000);
+            let gems_value = Money::dollars(gems_amount as i64 * game.game_data.game_config.gems_value);
             income += gems_value;
             nation.remove_resource(ResourceType::Gems, gems_amount);
         }
@@ -874,8 +933,15 @@ fn convert_monetary_resources(game: &mut GameState, report: &mut TurnReport) {
 
 /// Run production chains: mills convert resources to materials, factories convert materials to goods.
 ///
-/// Labor is simplified for now: assumes sufficient labor (constraints added later).
+/// Labor is a shared pool: workers provide labor based on training level (untrained=1,
+/// trained=2, expert=4). Each unit of production costs labor_per_production (default 2).
+/// Mills consume labor first, then remaining labor feeds factories.
 fn run_production(game: &mut GameState, report: &mut TurnReport) {
+    let cfg = &game.game_data.game_config;
+    let untrained_mult = cfg.untrained_labor;
+    let trained_mult = cfg.trained_labor;
+    let expert_mult = cfg.expert_labor;
+
     let nation_ids: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
 
     for nation_id in nation_ids {
@@ -887,9 +953,12 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
         // Gather current resource inventory as slices
         let resources: Vec<(ResourceType, u32)> =
             nation.warehouse.iter().map(|(r, q)| (*r, *q)).collect();
-        let available_labor = u32::MAX; // simplified: assume sufficient labor
 
-        // ── Mills: resources → materials ──
+        // Labor is a shared pool across all production this turn
+        let mut remaining_labor =
+            nation.labor.total_labor_units_with(untrained_mult, trained_mult, expert_mult);
+
+        // ── Mills: resources → materials (consume labor first) ──
 
         // Timber chain: LumberMill
         let lumber_mill_cap = nation
@@ -900,12 +969,14 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
             .unwrap_or(0);
 
         let timber_result = if lumber_mill_cap > 0 {
-            Some(calculate_mill_production(
+            let result = calculate_mill_production(
                 ProductionChain::Timber,
                 &resources,
                 lumber_mill_cap,
-                available_labor,
-            ))
+                remaining_labor,
+            );
+            remaining_labor -= result.labor_used;
+            Some(result)
         } else {
             None
         };
@@ -919,12 +990,14 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
             .unwrap_or(0);
 
         let metal_result = if steel_mill_cap > 0 {
-            Some(calculate_mill_production(
+            let result = calculate_mill_production(
                 ProductionChain::Metal,
                 &resources,
                 steel_mill_cap,
-                available_labor,
-            ))
+                remaining_labor,
+            );
+            remaining_labor -= result.labor_used;
+            Some(result)
         } else {
             None
         };
@@ -938,12 +1011,14 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
             .unwrap_or(0);
 
         let textile_result = if textile_mill_cap > 0 {
-            Some(calculate_mill_production(
+            let result = calculate_mill_production(
                 ProductionChain::Textile,
                 &resources,
                 textile_mill_cap,
-                available_labor,
-            ))
+                remaining_labor,
+            );
+            remaining_labor -= result.labor_used;
+            Some(result)
         } else {
             None
         };
@@ -991,12 +1066,14 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
             .unwrap_or(0);
 
         let furniture_result = if furniture_cap > 0 {
-            Some(calculate_factory_production(
+            let result = calculate_factory_production(
                 ProductionChain::Timber,
                 &materials_inventory,
                 furniture_cap,
-                available_labor,
-            ))
+                remaining_labor,
+            );
+            remaining_labor -= result.labor_used;
+            Some(result)
         } else {
             None
         };
@@ -1010,12 +1087,14 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
             .unwrap_or(0);
 
         let hardware_result = if hardware_cap > 0 {
-            Some(calculate_factory_production(
+            let result = calculate_factory_production(
                 ProductionChain::Metal,
                 &materials_inventory,
                 hardware_cap,
-                available_labor,
-            ))
+                remaining_labor,
+            );
+            remaining_labor -= result.labor_used;
+            Some(result)
         } else {
             None
         };
@@ -1029,12 +1108,14 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
             .unwrap_or(0);
 
         let clothing_result = if clothing_cap > 0 {
-            Some(calculate_factory_production(
+            let result = calculate_factory_production(
                 ProductionChain::Textile,
                 &materials_inventory,
                 clothing_cap,
-                available_labor,
-            ))
+                remaining_labor,
+            );
+            let _ = remaining_labor - result.labor_used; // track for future use
+            Some(result)
         } else {
             None
         };
@@ -1249,12 +1330,17 @@ fn process_food(game: &mut GameState, report: &mut TurnReport) {
         let livestock = nation.resource_amount(ResourceType::Livestock);
         let total_raw_food = grain + fruit + livestock;
 
-        if total_raw_food < 2 {
+        // Reserve raw food for worker consumption (runs next step).
+        // Only convert surplus beyond what workers need to eat.
+        let workers = nation.labor.total_workers();
+        let food_after_workers = total_raw_food.saturating_sub(workers);
+
+        if food_after_workers < 2 {
             continue;
         }
 
-        // Maximum units we can produce: limited by capacity and raw food
-        let raw_food_limited = total_raw_food / 2;
+        // Maximum units we can produce: limited by capacity and surplus food
+        let raw_food_limited = food_after_workers / 2;
         let units_to_produce = food_processing_cap.min(raw_food_limited);
 
         if units_to_produce == 0 {
@@ -1296,9 +1382,10 @@ fn process_food(game: &mut GameState, report: &mut TurnReport) {
 /// Consume food for each nation based on population.
 ///
 /// Each worker (untrained + trained + expert) needs 1 food per turn.
-/// Food priority: Grain first (preferred by 50%+), then Fruit, then Livestock.
+/// Food priority: Grain first, then Fruit, then Livestock, then CannedFood as fallback.
 /// If not enough food: 1 worker dies per missing food unit, up to 2 max per turn.
 fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
+    let ai_debug = game.ai_debug;
     for nation in &mut game.nations {
         let population = nation.labor.total_workers();
         if population == 0 {
@@ -1308,13 +1395,21 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
         let grain = nation.resource_amount(ResourceType::Grain);
         let fruit = nation.resource_amount(ResourceType::Fruit);
         let livestock = nation.resource_amount(ResourceType::Livestock);
-        let total_food = grain + fruit + livestock;
+        let canned = nation.material_amount(MaterialType::CannedFood);
+        let total_food = grain + fruit + livestock + canned;
+
+        if ai_debug && nation.is_great_power() {
+            eprintln!(
+                "[FOOD:{}] workers={}, grain={}, fruit={}, livestock={}, canned={}, total={}, deficit={}",
+                nation.name, population, grain, fruit, livestock, canned, total_food,
+                population.saturating_sub(total_food)
+            );
+        }
 
         let food_needed = population;
         let food_to_consume = food_needed.min(total_food);
 
-        // Consume food in priority order: Grain first, then Fruit, then Livestock
-        // Grain is preferred by 50%+ of population
+        // Consume food in priority order: Grain → Fruit → Livestock → CannedFood
         let mut remaining = food_to_consume;
 
         let grain_consumed = grain.min(remaining);
@@ -1333,15 +1428,23 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
         if livestock_consumed > 0 {
             nation.remove_resource(ResourceType::Livestock, livestock_consumed);
         }
+        remaining -= livestock_consumed;
+
+        // CannedFood as fallback when raw food is insufficient
+        let canned_consumed = canned.min(remaining);
+        if canned_consumed > 0 {
+            nation.consume_material(MaterialType::CannedFood, canned_consumed);
+        }
+        let _ = remaining - canned_consumed;
 
         if food_to_consume > 0 {
             report.food_consumed.push((nation.id, food_to_consume));
         }
 
-        // Starvation: workers die if not enough food
+        // Starvation: workers die if not enough food (raw + canned)
         if total_food < food_needed {
             let deficit = food_needed - total_food;
-            let workers_lost = deficit.min(2); // cap at 2 per turn
+            let workers_lost = deficit.min(game.game_data.game_config.starvation_cap);
 
             let mut actual_lost = 0;
             for _ in 0..workers_lost {
@@ -1533,9 +1636,9 @@ fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
 
         // Generate bankruptcy headline if treasury went negative
         if nation.is_bankrupt() {
-            report.newspaper_headlines.push(format!(
-                "FINANCIAL CRISIS: {} faces bankruptcy!",
-                nation.name
+            report.newspaper_headlines.push((
+                format!("FINANCIAL CRISIS: {} faces bankruptcy!", nation.name),
+                HeadlineCategory::Crisis,
             ));
         }
     }
@@ -1814,9 +1917,12 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 report
                     .settlement_upgrades
                     .push((province_id, "Village".to_string()));
-                report.newspaper_headlines.push(format!(
-                    "{} immediately industrializes under new management!",
-                    province.name
+                report.newspaper_headlines.push((
+                    format!(
+                        "{} immediately industrializes under new management!",
+                        province.name
+                    ),
+                    HeadlineCategory::Growth,
                 ));
             }
 
@@ -1863,9 +1969,12 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                             atk_colony_name
                         ),
                     ));
-                    report.newspaper_headlines.push(format!(
-                        "{} receives free Clipper ships for establishing its first colony!",
-                        atk_colony_name
+                    report.newspaper_headlines.push((
+                        format!(
+                            "{} receives free Clipper ships for establishing its first colony!",
+                            atk_colony_name
+                        ),
+                        HeadlineCategory::Trade,
                     ));
                 }
             }
@@ -1890,9 +1999,12 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 .get_province(province_id)
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
-            report.newspaper_headlines.push(format!(
-                "BREAKING: {} conquers {} from {}!",
-                atk_name, prov_name, def_name_conquest
+            report.newspaper_headlines.push((
+                format!(
+                    "BREAKING: {} conquers {} from {}!",
+                    atk_name, prov_name, def_name_conquest
+                ),
+                HeadlineCategory::War,
             ));
 
             // Record history event
@@ -1909,9 +2021,10 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 .get_nation(defender_id)
                 .is_some_and(|n| n.is_great_power() && n.province_ids.is_empty());
             if defender_eliminated {
-                report
-                    .newspaper_headlines
-                    .push(format!("{} has been eliminated!", def_name_conquest));
+                report.newspaper_headlines.push((
+                    format!("{} has been eliminated!", def_name_conquest),
+                    HeadlineCategory::War,
+                ));
             }
         } else {
             let def_name = game
@@ -1922,9 +2035,10 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 .get_province(province_id)
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
-            report
-                .newspaper_headlines
-                .push(format!("{} repels attack on {}!", def_name, prov_name));
+            report.newspaper_headlines.push((
+                format!("{} repels attack on {}!", def_name, prov_name),
+                HeadlineCategory::Battle,
+            ));
         }
 
         report.battles.push(result);
@@ -2078,9 +2192,9 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 .get_province(target_province_id)
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
-            report.newspaper_headlines.push(format!(
-                "{} counter-attacks and recaptures {}!",
-                ca_name, prov_name
+            report.newspaper_headlines.push((
+                format!("{} counter-attacks and recaptures {}!", ca_name, prov_name),
+                HeadlineCategory::War,
             ));
         } else {
             let occ_name = game
@@ -2091,9 +2205,9 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 .get_province(target_province_id)
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
-            report.newspaper_headlines.push(format!(
-                "{} repels counter-attack on {}!",
-                occ_name, prov_name
+            report.newspaper_headlines.push((
+                format!("{} repels counter-attack on {}!", occ_name, prov_name),
+                HeadlineCategory::Battle,
             ));
         }
 
@@ -2167,9 +2281,12 @@ fn trigger_pact_defense(
 
     for (gp_id, gp_name) in &pact_holders {
         // Notify about the pact being triggered
-        report.newspaper_headlines.push(format!(
-            "{} requests {}'s aid against {}!",
-            defender_name, gp_name, attacker_name
+        report.newspaper_headlines.push((
+            format!(
+                "{} requests {}'s aid against {}!",
+                defender_name, gp_name, attacker_name
+            ),
+            HeadlineCategory::Diplomacy,
         ));
 
         // AI GPs automatically declare war on the attacker
@@ -2178,9 +2295,12 @@ fn trigger_pact_defense(
             .is_some_and(|n| n.ai_personality.is_some());
         if is_ai {
             game.diplomacy.declare_war(*gp_id, attacker_nation_id);
-            report.newspaper_headlines.push(format!(
-                "{} honors its pact with {} and declares war on {}!",
-                gp_name, defender_name, attacker_name
+            report.newspaper_headlines.push((
+                format!(
+                    "{} honors its pact with {} and declares war on {}!",
+                    gp_name, defender_name, attacker_name
+                ),
+                HeadlineCategory::War,
             ));
             game.history.push((
                 game.turn,
@@ -2261,18 +2381,24 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
 
         // Add headline
         if result.attacker_won {
-            report.newspaper_headlines.push(format!(
-                "NAVAL VICTORY: {} defeats {} fleet! ({} ships sunk)",
-                atk_name,
-                def_name,
-                result.defender_ships_lost.len()
+            report.newspaper_headlines.push((
+                format!(
+                    "NAVAL VICTORY: {} defeats {} fleet! ({} ships sunk)",
+                    atk_name,
+                    def_name,
+                    result.defender_ships_lost.len()
+                ),
+                HeadlineCategory::Battle,
             ));
         } else {
-            report.newspaper_headlines.push(format!(
-                "NAVAL VICTORY: {} defeats {} fleet! ({} ships sunk)",
-                def_name,
-                atk_name,
-                result.attacker_ships_lost.len()
+            report.newspaper_headlines.push((
+                format!(
+                    "NAVAL VICTORY: {} defeats {} fleet! ({} ships sunk)",
+                    def_name,
+                    atk_name,
+                    result.attacker_ships_lost.len()
+                ),
+                HeadlineCategory::Battle,
             ));
         }
 
@@ -2326,9 +2452,12 @@ fn apply_blockade_effects(game: &GameState, report: &mut TurnReport) {
             let blocked = cargo - effective_cargo;
             if blocked > 0 {
                 let nation_name = &nation.name;
-                report.newspaper_headlines.push(format!(
-                    "BLOCKADE: {} merchant fleet loses {} cargo capacity to enemy warships",
-                    nation_name, blocked
+                report.newspaper_headlines.push((
+                    format!(
+                        "BLOCKADE: {} merchant fleet loses {} cargo capacity to enemy warships",
+                        nation_name, blocked
+                    ),
+                    HeadlineCategory::Battle,
                 ));
             }
         }
@@ -2387,6 +2516,82 @@ fn resolve_technology(game: &mut GameState, report: &mut TurnReport) {
 /// buildup, war declarations), trade activity, and adds period-appropriate
 /// flavor headlines that rotate based on the turn number.
 /// Check for alliance obligations when nations are at war.
+/// Resolve pending diplomatic proposals from the turn.
+///
+/// - Mutual peace proposals (both sides proposed): auto-accept.
+/// - AI-targeted proposals: evaluate using assessment logic.
+/// - Human-targeted proposals: keep pending for UI.
+///
+/// Most AI-to-AI proposals are already resolved inline during `ai_propose_peace`
+/// and `ai_manage_diplomacy`. This function handles edge cases like mutual proposals
+/// and expires stale proposals.
+fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
+    let proposals = game.diplomacy.drain_proposals();
+    if proposals.is_empty() {
+        return;
+    }
+
+    // Detect mutual peace proposals (both sides proposed peace)
+    let mut mutual_peace: Vec<(NationId, NationId)> = Vec::new();
+    for (i, p1) in proposals.iter().enumerate() {
+        if p1.proposal_type != TreatyType::PeaceTreaty {
+            continue;
+        }
+        for p2 in &proposals[i + 1..] {
+            if p2.proposal_type == TreatyType::PeaceTreaty && p1.from == p2.to && p1.to == p2.from {
+                mutual_peace.push((p1.from, p1.to));
+            }
+        }
+    }
+
+    // Apply mutual peace immediately
+    for &(a, b) in &mutual_peace {
+        if game.diplomacy.is_at_war(a, b) {
+            game.diplomacy.make_peace(a, b);
+            let name_a = game
+                .get_nation(a)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            let name_b = game
+                .get_nation(b)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            report
+                .events
+                .push(DomainEvent::TreatyAccepted(crate::events::TreatyAccepted {
+                    from: a,
+                    to: b,
+                    treaty_type: TreatyType::PeaceTreaty,
+                }));
+            let turn = game.turn;
+            game.history.push((
+                turn,
+                format!("{} and {} agreed to mutual peace", name_a, name_b),
+            ));
+        }
+    }
+
+    // Re-add proposals that target the human player (for UI handling)
+    for proposal in proposals {
+        // Skip proposals that were part of mutual peace
+        let was_mutual = mutual_peace.iter().any(|&(a, b)| {
+            (proposal.from == a && proposal.to == b) || (proposal.from == b && proposal.to == a)
+        });
+        if was_mutual {
+            continue;
+        }
+
+        if proposal.to == game.human_player_nation {
+            // Human-targeted: keep pending for UI
+            game.diplomacy.pending_proposals.push(proposal);
+        }
+        // AI-targeted proposals were already evaluated inline during AI turns
+    }
+
+    // Expire proposals older than 4 turns
+    game.diplomacy.expire_proposals(game.turn, 4);
+}
+
 ///
 /// When a nation is at war, check if the defender has allies (Alliance treaty).
 /// AI allies automatically join the war by declaring war on the attacker.
@@ -2451,9 +2656,12 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
                 .unwrap_or_default();
 
             new_wars.push((*ally, *attacker, ally_name.clone(), attacker_name.clone()));
-            report.newspaper_headlines.push(format!(
-                "{} honors its alliance with {} and declares war on {}!",
-                ally_name, defender_name, attacker_name
+            report.newspaper_headlines.push((
+                format!(
+                    "{} honors its alliance with {} and declares war on {}!",
+                    ally_name, defender_name, attacker_name
+                ),
+                HeadlineCategory::War,
             ));
         }
 
@@ -2497,9 +2705,12 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
                 .unwrap_or_default();
 
             new_wars.push((*ally, *defender, ally_name.clone(), defender_name.clone()));
-            report.newspaper_headlines.push(format!(
-                "{} honors its alliance with {} and declares war on {}!",
-                ally_name, attacker_name, defender_name
+            report.newspaper_headlines.push((
+                format!(
+                    "{} honors its alliance with {} and declares war on {}!",
+                    ally_name, attacker_name, defender_name
+                ),
+                HeadlineCategory::War,
             ));
         }
     }
@@ -2635,9 +2846,12 @@ fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnRepor
                             gp_colony_name
                         ),
                     ));
-                    report.newspaper_headlines.push(format!(
-                        "{} receives free Clipper ships for establishing its first colony!",
-                        gp_colony_name
+                    report.newspaper_headlines.push((
+                        format!(
+                            "{} receives free Clipper ships for establishing its first colony!",
+                            gp_colony_name
+                        ),
+                        HeadlineCategory::Trade,
                     ));
                 }
             }
@@ -2786,9 +3000,10 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                 report
                     .rewards_earned
                     .push((*nation_id, format!("{} has earned a General!", nation_name)));
-                report
-                    .newspaper_headlines
-                    .push(format!("{} has earned a General!", nation_name));
+                report.newspaper_headlines.push((
+                    format!("{} has earned a General!", nation_name),
+                    HeadlineCategory::Military,
+                ));
             }
         }
     }
@@ -2842,9 +3057,10 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                     *nation_id,
                     format!("{} has earned an Admiral!", nation_name),
                 ));
-                report
-                    .newspaper_headlines
-                    .push(format!("{} has earned an Admiral!", nation_name));
+                report.newspaper_headlines.push((
+                    format!("{} has earned an Admiral!", nation_name),
+                    HeadlineCategory::Military,
+                ));
             }
         }
     }
@@ -2877,9 +3093,9 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                     attacker_name
                 ),
             ));
-            report.newspaper_headlines.push(format!(
-                "{}'s capitol building has expanded!",
-                attacker_name
+            report.newspaper_headlines.push((
+                format!("{}'s capitol building has expanded!", attacker_name),
+                HeadlineCategory::Growth,
             ));
         }
     }
@@ -2922,9 +3138,12 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                         nation_name
                     ),
                 ));
-                report.newspaper_headlines.push(format!(
-                    "{}'s expert workforce drives capitol expansion!",
-                    nation_name
+                report.newspaper_headlines.push((
+                    format!(
+                        "{}'s expert workforce drives capitol expansion!",
+                        nation_name
+                    ),
+                    HeadlineCategory::Growth,
                 ));
             }
         }
@@ -2935,13 +3154,16 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
     let year = game.turn.year();
     let quarter = game.turn.quarter();
 
-    report
-        .newspaper_headlines
-        .push(format!("The Imperial Times - {year} Q{quarter}"));
+    report.newspaper_headlines.push((
+        format!("The Imperial Times - {year} Q{quarter}"),
+        HeadlineCategory::Default,
+    ));
 
     // AI actions (tech research, military buildup, war declarations)
     for action in &report.ai_actions {
-        report.newspaper_headlines.push(action.clone());
+        report
+            .newspaper_headlines
+            .push((action.clone(), HeadlineCategory::Default));
     }
 
     // Voluntary incorporations — major headline
@@ -2954,19 +3176,25 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
             .get_nation(*gp_id)
             .map(|n| n.name.clone())
             .unwrap_or_else(|| "Unknown".to_string());
-        report.newspaper_headlines.push(format!(
-            "BREAKING: {} has voluntarily joined the {} empire!",
-            minor_name, gp_name
+        report.newspaper_headlines.push((
+            format!(
+                "BREAKING: {} has voluntarily joined the {} empire!",
+                minor_name, gp_name
+            ),
+            HeadlineCategory::Politics,
         ));
     }
 
     // Unit upgrades — brief mention
     if !report.unit_upgrades.is_empty() {
         let upgrade_count = report.unit_upgrades.len();
-        report.newspaper_headlines.push(format!(
-            "Military modernization: {} unit{} upgraded across the nations",
-            upgrade_count,
-            if upgrade_count == 1 { "" } else { "s" }
+        report.newspaper_headlines.push((
+            format!(
+                "Military modernization: {} unit{} upgraded across the nations",
+                upgrade_count,
+                if upgrade_count == 1 { "" } else { "s" }
+            ),
+            HeadlineCategory::Military,
         ));
     }
 
@@ -2979,23 +3207,28 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
             .iter()
             .any(|txn| txn.buyer == game.human_player_nation);
         if human_traded {
-            report.newspaper_headlines.push(format!(
-                "Trade flourishes between {} and its partners",
-                human_nation.name
+            report.newspaper_headlines.push((
+                format!(
+                    "Trade flourishes between {} and its partners",
+                    human_nation.name
+                ),
+                HeadlineCategory::Trade,
             ));
         }
     }
 
     if let Some(human_nation) = game.get_nation(game.human_player_nation) {
-        report
-            .newspaper_headlines
-            .push(format!("The {} empire grows stronger", human_nation.name));
+        report.newspaper_headlines.push((
+            format!("The {} empire grows stronger", human_nation.name),
+            HeadlineCategory::Default,
+        ));
     }
 
     if game.turn.is_decade_election() {
-        report
-            .newspaper_headlines
-            .push("Council of Governors to convene!".to_string());
+        report.newspaper_headlines.push((
+            "Council of Governors to convene!".to_string(),
+            HeadlineCategory::Politics,
+        ));
     }
 
     // Period-appropriate flavor headlines that rotate based on turn number
@@ -3010,9 +3243,10 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
         "Great exhibitions showcase industrial might",
     ];
     let flavor_index = (game.turn.0 as usize) % flavor_headlines.len();
-    report
-        .newspaper_headlines
-        .push(flavor_headlines[flavor_index].to_string());
+    report.newspaper_headlines.push((
+        flavor_headlines[flavor_index].to_string(),
+        HeadlineCategory::Default,
+    ));
 }
 
 /// Calculate scores for all Great Powers and store them in the report.
@@ -3040,22 +3274,28 @@ fn check_council_vote(game: &GameState, report: &mut TurnReport) {
 
     if let Some(winner_id) = result.winner {
         if let Some(winner) = game.get_nation(winner_id) {
-            report.newspaper_headlines.push(format!(
-                "BREAKING: {} wins the Council of Governors with {} of {} votes!",
-                winner.name,
-                result
-                    .votes
-                    .iter()
-                    .find(|(id, _)| *id == winner_id)
-                    .map(|(_, v)| *v)
-                    .unwrap_or(0),
-                result.total_governors
+            report.newspaper_headlines.push((
+                format!(
+                    "BREAKING: {} wins the Council of Governors with {} of {} votes!",
+                    winner.name,
+                    result
+                        .votes
+                        .iter()
+                        .find(|(id, _)| *id == winner_id)
+                        .map(|(_, v)| *v)
+                        .unwrap_or(0),
+                    result.total_governors
+                ),
+                HeadlineCategory::Politics,
             ));
         }
     } else {
-        report.newspaper_headlines.push(format!(
-            "Council of Governors: No nation achieves the required {} vote majority.",
-            result.majority_threshold
+        report.newspaper_headlines.push((
+            format!(
+                "Council of Governors: No nation achieves the required {} vote majority.",
+                result.majority_threshold
+            ),
+            HeadlineCategory::Politics,
         ));
     }
 
@@ -3110,6 +3350,7 @@ mod tests {
     use crate::data::GameData;
     use crate::diplomacy::DiplomacyState;
     use crate::economy::buildings::Building;
+    use crate::economy::labor::LaborPool;
     use crate::hex::HexCoord;
     use crate::map::tile::Tile;
     use crate::map::{HexMap, Province};
@@ -3163,6 +3404,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         }
     }
 
@@ -3211,6 +3453,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         }
     }
 
@@ -3311,9 +3554,13 @@ mod tests {
         let report = process_turn(&mut game);
 
         assert!(!report.newspaper_headlines.is_empty());
-        assert!(report.newspaper_headlines[0].contains("The Imperial Times"));
-        assert!(report.newspaper_headlines[0].contains("1815"));
-        assert!(report.newspaper_headlines[0].contains("Q1"));
+        assert!(
+            report.newspaper_headlines[0]
+                .0
+                .contains("The Imperial Times")
+        );
+        assert!(report.newspaper_headlines[0].0.contains("1815"));
+        assert!(report.newspaper_headlines[0].0.contains("Q1"));
     }
 
     #[test]
@@ -3325,7 +3572,7 @@ mod tests {
         let has_empire_headline = report
             .newspaper_headlines
             .iter()
-            .any(|h| h.contains("Testlandia"));
+            .any(|(h, _)| h.contains("Testlandia"));
         assert!(has_empire_headline);
     }
 
@@ -3340,7 +3587,7 @@ mod tests {
         let has_election = report
             .newspaper_headlines
             .iter()
-            .any(|h| h.contains("Council of Governors"));
+            .any(|(h, _)| h.contains("Council of Governors"));
         assert!(has_election);
     }
 
@@ -3428,6 +3675,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         let report = process_turn(&mut game);
@@ -3485,6 +3733,9 @@ mod tests {
         );
         nation.treasury = Money::dollars(5000);
 
+        // Give enough workers for full production (expert=4 labor each)
+        nation.labor.expert = 5; // 20 labor — enough for all mills + factories
+
         // Add mills and factories
         nation
             .buildings
@@ -3520,6 +3771,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         }
     }
 
@@ -3851,6 +4103,7 @@ mod tests {
     fn food_consumption_uses_fruit_and_livestock() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.labor = LaborPool::new();
         nation.labor.untrained = 5; // 5 workers need 5 food
         nation.add_resource(ResourceType::Grain, 2);
         nation.add_resource(ResourceType::Fruit, 2);
@@ -3893,6 +4146,7 @@ mod tests {
     fn food_consumption_starvation_kills_workers() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.labor = LaborPool::new();
         nation.labor.untrained = 5; // 5 workers need 5 food
         nation.add_resource(ResourceType::Grain, 2); // only 2 food available
 
@@ -3915,6 +4169,7 @@ mod tests {
     fn food_consumption_starvation_capped_at_two() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.labor = LaborPool::new();
         nation.labor.untrained = 10; // 10 workers need 10 food
         // No food at all -> deficit 10, but cap at 2
 
@@ -3936,6 +4191,7 @@ mod tests {
     fn food_processing_converts_raw_food_to_canned() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.labor = LaborPool::new();
         // Need workers for food processing to trigger
         nation.labor.untrained = 1;
         // Add a FoodProcessing building with capacity 3
@@ -4008,6 +4264,8 @@ mod tests {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
         nation.add_resource(ResourceType::Timber, 20);
+        // Feed the workers so they survive 3 turns (5 experts eat 5 food/turn)
+        nation.add_resource(ResourceType::Grain, 20);
 
         // Run 3 turns
         for _ in 0..3 {
@@ -4084,8 +4342,8 @@ mod tests {
     }
 
     #[test]
-    fn transport_overflow_when_capacity_insufficient() {
-        // Build a game state with many tiles producing resources
+    fn capital_province_resources_delivered_without_transport() {
+        // Capital province resources are delivered for free (no freight cars needed).
         let mut hex_map = HexMap::new(10, 10);
         let mut tiles = Vec::new();
         for i in 0..6 {
@@ -4097,7 +4355,7 @@ mod tests {
 
         let province = Province::new(
             ProvinceId(1),
-            "BigProvince".to_string(),
+            "CapitalFarms".to_string(),
             NationId(1),
             HexCoord::new(0, 0),
             tiles,
@@ -4112,8 +4370,8 @@ mod tests {
             ProvinceId(1),
         );
         nation.treasury = Money::dollars(5000);
-        // Give only 3 freight cars, but 6 farms produce 6 Grain
-        nation.transport.build_freight_cars(3);
+        // Zero freight cars — capital province resources should still arrive
+        nation.labor = LaborPool::new();
 
         let mut game = GameState {
             turn: TurnNumber::new(1),
@@ -4130,22 +4388,23 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         let report = process_turn(&mut game);
 
-        // 6 grain produced, capacity 3 -> 3 overflow
+        // 6 farms in capital province → all delivered for free, no overflow
         let total_overflow: u32 = report
             .transport_overflow
             .iter()
             .filter(|(nid, _, _)| *nid == NationId(1))
             .map(|(_, _, q)| *q)
             .sum();
-        assert_eq!(total_overflow, 3);
+        assert_eq!(total_overflow, 0, "Capital province has no transport overflow");
 
-        // Should have 3 grain remaining
+        // All 6 grain should be in warehouse
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.resource_amount(ResourceType::Grain), 3);
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 6);
     }
 
     #[test]
@@ -4386,6 +4645,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         // Process 7 turns: 1 turn to start countdown (set to 6), then 6 turns to count down
@@ -4451,6 +4711,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         for _ in 0..10 {
@@ -4580,6 +4841,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         }
     }
 
@@ -4679,6 +4941,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         let report = process_turn(&mut game);
@@ -4847,6 +5110,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         // Process 12 turns to count down the town_countdown
@@ -4915,6 +5179,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         // Process only 11 turns — not enough
@@ -4984,6 +5249,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         // 7 turns: Hamlet → Village (1 to start countdown + 6 to count down)
@@ -5103,6 +5369,7 @@ mod tests {
     fn starvation_insufficient_food_kills_workers() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.labor = LaborPool::new();
         nation.labor.untrained = 8;
         // Give only 3 food, need 8, deficit = 5, capped at 2 deaths
         nation.add_resource(ResourceType::Grain, 3);
@@ -5297,6 +5564,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         }
     }
 
@@ -5426,7 +5694,7 @@ mod tests {
 
     #[test]
     fn unit_upgrade_when_tech_is_researched() {
-        use crate::ai::basic::AiPersonality;
+        use crate::ai::AiPersonality;
         use crate::map::UnitId;
         use crate::military::units::ArmyUnit;
 
@@ -5496,7 +5764,7 @@ mod tests {
 
     #[test]
     fn unit_upgrade_preserves_medals() {
-        use crate::ai::basic::AiPersonality;
+        use crate::ai::AiPersonality;
         use crate::map::UnitId;
         use crate::military::units::ArmyUnit;
 
@@ -5609,7 +5877,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        attacker.ai_personality = Some(crate::ai::basic::AiPersonality::Aggressive);
+        attacker.ai_personality = Some(crate::ai::AiPersonality::Aggressive);
         attacker.treasury = Money::dollars(10000);
 
         let minor = Nation::new(
@@ -5627,7 +5895,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(3),
         );
-        pact_holder.ai_personality = Some(crate::ai::basic::AiPersonality::Balanced);
+        pact_holder.ai_personality = Some(crate::ai::AiPersonality::Balanced);
         pact_holder.treasury = Money::dollars(10000);
 
         let mut diplomacy = DiplomacyState::new();
@@ -5651,6 +5919,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         // Verify pact exists
@@ -5710,7 +5979,7 @@ mod tests {
             report
                 .newspaper_headlines
                 .iter()
-                .any(|h| h.contains("requests") && h.contains("aid")),
+                .any(|(h, _)| h.contains("requests") && h.contains("aid")),
             "Should generate 'requests aid' headline: {:?}",
             report.newspaper_headlines
         );
@@ -5718,7 +5987,7 @@ mod tests {
             report
                 .newspaper_headlines
                 .iter()
-                .any(|h| h.contains("honors its pact")),
+                .any(|(h, _)| h.contains("honors its pact")),
             "Should generate 'honors pact' headline: {:?}",
             report.newspaper_headlines
         );
@@ -5754,7 +6023,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation2.ai_personality = Some(crate::ai::basic::AiPersonality::Balanced);
+        nation2.ai_personality = Some(crate::ai::AiPersonality::Balanced);
         nation2.treasury = Money::dollars(10000);
 
         let mut game = GameState {
@@ -5772,6 +6041,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         let mut report = TurnReport {
@@ -5935,6 +6205,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         let report = process_turn(&mut game);
@@ -6041,6 +6312,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         let report = process_turn(&mut game);
@@ -6281,6 +6553,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         }
     }
 
@@ -6318,7 +6591,7 @@ mod tests {
         let has_counter_attack_headline = report
             .newspaper_headlines
             .iter()
-            .any(|h| h.contains("counter-attack") || h.contains("repels counter-attack"));
+            .any(|(h, _)| h.contains("counter-attack") || h.contains("repels counter-attack"));
         assert!(
             has_counter_attack_headline,
             "Should have counter-attack headline; headlines: {:?}",
@@ -6349,7 +6622,7 @@ mod tests {
         let has_counter_attack_headline = report
             .newspaper_headlines
             .iter()
-            .any(|h| h.contains("counter-attack"));
+            .any(|(h, _)| h.contains("counter-attack"));
         assert!(
             !has_counter_attack_headline,
             "Should not have counter-attack headline"
@@ -6529,6 +6802,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         let mut game = game_state;
@@ -6659,6 +6933,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         let connected = connected_provinces(&game, NationId(1));
@@ -6705,7 +6980,7 @@ mod tests {
         let has_crisis_headline = report
             .newspaper_headlines
             .iter()
-            .any(|h| h.contains("FINANCIAL CRISIS"));
+            .any(|(h, _)| h.contains("FINANCIAL CRISIS"));
         assert!(
             !has_crisis_headline,
             "Should NOT have FINANCIAL CRISIS headline when floor is $0"
@@ -6866,6 +7141,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         // Process several turns
@@ -6958,6 +7234,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         process_turn(&mut game);
@@ -7063,6 +7340,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         process_turn(&mut game);
@@ -7225,6 +7503,7 @@ mod tests {
             pending_moves: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            ai_debug: false,
         };
 
         process_turn(&mut game);

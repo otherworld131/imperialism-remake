@@ -3,6 +3,15 @@ use crate::types::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// A diplomatic proposal awaiting evaluation by the target nation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiplomaticProposal {
+    pub from: NationId,
+    pub to: NationId,
+    pub proposal_type: TreatyType,
+    pub turn_proposed: TurnNumber,
+}
+
 /// Tracks the diplomatic relationship between two nations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiplomaticRelation {
@@ -67,6 +76,9 @@ pub struct DiplomacyState {
     relations: HashMap<(NationId, NationId), DiplomaticRelation>,
     /// Per-nation diplomatic standing (global reputation).
     pub standing: HashMap<NationId, i32>,
+    /// Proposals awaiting evaluation by the target nation.
+    #[serde(default)]
+    pub pending_proposals: Vec<DiplomaticProposal>,
 }
 
 /// Serialize HashMap<(NationId, NationId), DiplomaticRelation> as a Vec of pairs
@@ -104,6 +116,7 @@ impl DiplomacyState {
         Self {
             relations: HashMap::new(),
             standing: HashMap::new(),
+            pending_proposals: Vec::new(),
         }
     }
 
@@ -288,6 +301,72 @@ impl DiplomacyState {
     pub fn reduce_standing(&mut self, nation: NationId, amount: i32) {
         let standing = self.standing.entry(nation).or_insert(100);
         *standing -= amount;
+    }
+
+    /// Propose peace between two nations at war. Creates a pending proposal.
+    pub fn propose_peace(
+        &mut self,
+        from: NationId,
+        to: NationId,
+        turn: TurnNumber,
+    ) -> Result<(), String> {
+        if !self.is_at_war(from, to) {
+            return Err("Not at war".to_string());
+        }
+        // No duplicate pending peace proposals between these two nations
+        let already_pending = self.pending_proposals.iter().any(|p| {
+            p.proposal_type == TreatyType::PeaceTreaty
+                && ((p.from == from && p.to == to) || (p.from == to && p.to == from))
+        });
+        if already_pending {
+            return Err("Peace proposal already pending".to_string());
+        }
+        self.pending_proposals.push(DiplomaticProposal {
+            from,
+            to,
+            proposal_type: TreatyType::PeaceTreaty,
+            turn_proposed: turn,
+        });
+        Ok(())
+    }
+
+    /// Create a general treaty proposal (NAP, Alliance, etc.). Creates a pending proposal.
+    pub fn propose_treaty(
+        &mut self,
+        from: NationId,
+        to: NationId,
+        treaty_type: TreatyType,
+        turn: TurnNumber,
+    ) -> Result<(), String> {
+        if self.is_at_war(from, to) {
+            return Err("Cannot propose treaty while at war".to_string());
+        }
+        // No duplicate pending proposals of same type
+        let already_pending = self.pending_proposals.iter().any(|p| {
+            p.proposal_type == treaty_type
+                && ((p.from == from && p.to == to) || (p.from == to && p.to == from))
+        });
+        if already_pending {
+            return Err("Proposal already pending".to_string());
+        }
+        self.pending_proposals.push(DiplomaticProposal {
+            from,
+            to,
+            proposal_type: treaty_type,
+            turn_proposed: turn,
+        });
+        Ok(())
+    }
+
+    /// Drain all pending proposals for evaluation. Returns ownership.
+    pub fn drain_proposals(&mut self) -> Vec<DiplomaticProposal> {
+        std::mem::take(&mut self.pending_proposals)
+    }
+
+    /// Remove proposals older than `max_age` turns.
+    pub fn expire_proposals(&mut self, current_turn: TurnNumber, max_age: u32) {
+        self.pending_proposals
+            .retain(|p| current_turn.0.saturating_sub(p.turn_proposed.0) <= max_age);
     }
 
     /// Get all relations involving a specific nation.

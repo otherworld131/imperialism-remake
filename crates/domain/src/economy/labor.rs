@@ -27,9 +27,14 @@ impl LaborPool {
         self.untrained + self.trained + self.expert
     }
 
-    /// Total labor units available. Each worker provides 1 labor unit.
+    /// Total labor units available using default multipliers (untrained=1, trained=2, expert=4).
     pub fn total_labor_units(&self) -> u32 {
-        self.total_workers()
+        self.untrained + self.trained * 2 + self.expert * 4
+    }
+
+    /// Total labor units with custom multipliers from game config.
+    pub fn total_labor_units_with(&self, untrained_mult: u32, trained_mult: u32, expert_mult: u32) -> u32 {
+        self.untrained * untrained_mult + self.trained * trained_mult + self.expert * expert_mult
     }
 
     /// Train one untrained worker, converting them to trained.
@@ -126,14 +131,28 @@ mod tests {
     }
 
     #[test]
-    fn total_labor_units_equals_total_workers() {
+    fn total_labor_units_uses_training_multipliers() {
         let pool = LaborPool {
             untrained: 5,
             trained: 3,
             expert: 2,
         };
-        assert_eq!(pool.total_labor_units(), 10);
-        assert_eq!(pool.total_labor_units(), pool.total_workers());
+        // 5*1 + 3*2 + 2*4 = 5 + 6 + 8 = 19
+        assert_eq!(pool.total_labor_units(), 19);
+        assert_eq!(pool.total_workers(), 10);
+    }
+
+    #[test]
+    fn total_labor_units_with_custom_multipliers() {
+        let pool = LaborPool {
+            untrained: 4,
+            trained: 2,
+            expert: 1,
+        };
+        // Custom: 4*1 + 2*3 + 1*5 = 4 + 6 + 5 = 15
+        assert_eq!(pool.total_labor_units_with(1, 3, 5), 15);
+        // Default: 4*1 + 2*2 + 1*4 = 4 + 4 + 4 = 12
+        assert_eq!(pool.total_labor_units(), 12);
     }
 
     // ── recruit_immigrant ─────────────────────────────────────────

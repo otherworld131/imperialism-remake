@@ -6,6 +6,23 @@ use crate::types::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TechId(pub u32);
 
+// ── Headline categories ─────────────────────────────────────────
+
+/// Category for newspaper headlines, used for color-coded display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HeadlineCategory {
+    War,
+    Battle,
+    Diplomacy,
+    Growth,
+    Trade,
+    Crisis,
+    Politics,
+    Military,
+    Default,
+}
+
 // ── Treaty & Victory enums ─────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]

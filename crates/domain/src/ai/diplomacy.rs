@@ -6,6 +6,7 @@ use super::common::{AiPersonality, get_personality};
 
 /// AI builds trade consulates with Minor Nations, prioritizing those with
 /// the most tradeable resources (since trade increases relation scores).
+#[cfg(test)]
 pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
     let personality = get_personality(game, nation_id);
     let cost = Money::dollars(500);
@@ -352,8 +353,75 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
                     continue;
                 }
 
-                if game.diplomacy.propose_alliance(nation_id, gp_id).is_ok() {
-                    alliances_formed += 1;
+                // Evaluate whether the target would accept the alliance
+                let target_is_ai = game
+                    .get_nation(gp_id)
+                    .is_some_and(|n| n.ai_personality.is_some());
+
+                if target_is_ai {
+                    // AI-to-AI: evaluate inline
+                    let receiver_personality = super::common::get_personality(game, gp_id);
+
+                    #[cfg(feature = "lua")]
+                    let receiver_lua_cfg =
+                        game.game_data.lua_engine.as_ref().and_then(|e| {
+                            super::lua_bridge::lua_get_config(e, receiver_personality)
+                        });
+
+                    let accepted = super::assessment::evaluate_alliance_proposal(
+                        game,
+                        nation_id,
+                        gp_id,
+                        receiver_personality,
+                        #[cfg(feature = "lua")]
+                        receiver_lua_cfg.as_ref(),
+                    );
+
+                    if accepted {
+                        if game.diplomacy.propose_alliance(nation_id, gp_id).is_ok() {
+                            alliances_formed += 1;
+                            let nation_name = game
+                                .get_nation(nation_id)
+                                .map(|n| n.name.clone())
+                                .unwrap_or_default();
+                            let gp_name = game
+                                .get_nation(gp_id)
+                                .map(|n| n.name.clone())
+                                .unwrap_or_default();
+                            let alliance_text =
+                                format!("{} and {} have formed an alliance!", nation_name, gp_name);
+                            actions.push(alliance_text.clone());
+                            let turn = game.turn;
+                            if !game
+                                .history
+                                .iter()
+                                .any(|(t, text)| *t == turn && text == &alliance_text)
+                            {
+                                game.history.push((turn, alliance_text));
+                            }
+                        }
+                    } else if game.ai_debug {
+                        let nation_name = game
+                            .get_nation(nation_id)
+                            .map(|n| n.name.as_str())
+                            .unwrap_or("?");
+                        let gp_name = game
+                            .get_nation(gp_id)
+                            .map(|n| n.name.as_str())
+                            .unwrap_or("?");
+                        eprintln!(
+                            "[AI:{}:diplomacy] {} rejected alliance proposal",
+                            nation_name, gp_name,
+                        );
+                    }
+                } else {
+                    // AI-to-human: create pending proposal
+                    let _ = game.diplomacy.propose_treaty(
+                        nation_id,
+                        gp_id,
+                        crate::events::TreatyType::Alliance,
+                        game.turn,
+                    );
                     let nation_name = game
                         .get_nation(nation_id)
                         .map(|n| n.name.clone())
@@ -362,17 +430,10 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
                         .get_nation(gp_id)
                         .map(|n| n.name.clone())
                         .unwrap_or_default();
-                    let alliance_text =
-                        format!("{} and {} have formed an alliance!", nation_name, gp_name);
-                    actions.push(alliance_text.clone());
-                    let turn = game.turn;
-                    if !game
-                        .history
-                        .iter()
-                        .any(|(t, text)| *t == turn && text == &alliance_text)
-                    {
-                        game.history.push((turn, alliance_text));
-                    }
+                    actions.push(format!(
+                        "{} proposes an alliance with {}",
+                        nation_name, gp_name
+                    ));
                 }
             }
         } // end else (existing_alliances < 2)
@@ -946,7 +1007,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(2),
         );
-        gp3.ai_personality = Some(AiPersonality::Balanced);
+        gp3.ai_personality = Some(AiPersonality::Diplomatic); // Diplomatic bias +0.4 makes acceptance likely
         gp3.treasury = Money::dollars(10000);
         game.nations.push(gp3);
 
@@ -959,6 +1020,11 @@ mod tests {
             .collect();
         game.diplomacy.initialize_great_powers(&gp_ids);
 
+        // Give positive relationship so the alliance evaluation passes
+        game.diplomacy
+            .ensure_relation(ai_id, NationId(4))
+            .improve_score(30);
+
         // Advance turn to 10+ so alliance proposals are allowed
         game.turn = TurnNumber(10);
 
@@ -966,6 +1032,7 @@ mod tests {
         ai_manage_diplomacy(&mut game, ai_id, &mut actions);
 
         // Diplomatic AI should propose alliance with ThirdPower (not human player)
+        // The receiver (Diplomatic personality, score +0.4 bias + 0.3*0.4 relationship) accepts
         assert!(
             game.diplomacy
                 .has_treaty(ai_id, NationId(4), crate::events::TreatyType::Alliance),

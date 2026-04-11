@@ -27,6 +27,11 @@ export interface TileData {
   map_width: number;
 }
 
+export interface Headline {
+  text: string;
+  category: 'war' | 'battle' | 'diplomacy' | 'growth' | 'trade' | 'crisis' | 'politics' | 'military' | 'default';
+}
+
 export function newGame(mapKey: string, difficulty: number, nationIndex: number): string {
   return wasm_new_game(mapKey, difficulty, nationIndex);
 }

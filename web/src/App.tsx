@@ -1,6 +1,18 @@
 import { useState, useEffect } from 'react';
 import { initWasm, newGame, processTurn, getMapData, getAvailableTechs, researchTech } from './wasm';
-import type { TileData } from './wasm';
+import type { TileData, Headline } from './wasm';
+
+const CATEGORY_COLORS: Record<string, string> = {
+  war:       '#e63946',
+  battle:    '#e76f51',
+  diplomacy: '#457b9d',
+  growth:    '#2a9d8f',
+  trade:     '#daa520',
+  crisis:    '#9d0208',
+  politics:  '#b380e6',
+  military:  '#8a9aaf',
+  default:   '#e0d8c0',
+};
 import HexMap from './components/HexMap';
 
 function App() {
@@ -10,7 +22,7 @@ function App() {
   const [gameState, setGameState] = useState<any>(null);
   const [selectedTile, setSelectedTile] = useState<TileData | null>(null);
   const [hoveredTile, setHoveredTile] = useState<TileData | null>(null);
-  const [headlines, setHeadlines] = useState<string[]>([]);
+  const [headlines, setHeadlines] = useState<Headline[]>([]);
   const [showNewspaper, setShowNewspaper] = useState(false);
   const [techs, setTechs] = useState<any[]>([]);
   const [showTech, setShowTech] = useState(false);
@@ -107,7 +119,7 @@ function App() {
         <div style={styles.modal} onClick={() => setShowNewspaper(false)}>
           <div style={styles.modalContent} onClick={e => e.stopPropagation()}>
             <h2 style={styles.newspaperTitle}>The Imperial Times</h2>
-            {headlines.map((h, i) => <p key={i} style={styles.headline}>{h}</p>)}
+            {headlines.map((h, i) => <p key={i} style={{...styles.headline, color: CATEGORY_COLORS[h.category] || '#e0d8c0'}}>{h.text}</p>)}
             <button onClick={() => setShowNewspaper(false)} style={styles.btn}>Continue</button>
           </div>
         </div>

@@ -41,10 +41,16 @@ impl Building {
     }
 
     /// Start expanding this building by the given amount.
-    /// Sets pending_capacity and a 2-turn delay before it takes effect.
+    /// Uses the default 2-turn delay before it takes effect.
     pub fn start_expansion(&mut self, amount: u32) {
         self.pending_capacity = amount;
         self.turns_until_upgrade = 2;
+    }
+
+    /// Start expanding with a custom delay (from game config).
+    pub fn start_expansion_with_delay(&mut self, amount: u32, delay: u8) {
+        self.pending_capacity = amount;
+        self.turns_until_upgrade = delay;
     }
 
     /// Returns the next capacity level following the progression:
@@ -63,12 +69,20 @@ impl Building {
 
     /// Start expanding this building to its next capacity tier.
     /// Uses the capacity progression (2 -> 4 -> 8 -> 12 -> 16 -> 20 -> ...).
-    /// Sets pending_capacity and a 2-turn delay before it takes effect.
+    /// Uses the default 2-turn delay before it takes effect.
     pub fn start_expansion_to_next_tier(&mut self) {
         let next = self.next_capacity();
         let increase = next - self.capacity;
         self.pending_capacity = increase;
         self.turns_until_upgrade = 2;
+    }
+
+    /// Start expanding to next tier with a custom delay (from game config).
+    pub fn start_expansion_to_next_tier_with_delay(&mut self, delay: u8) {
+        let next = self.next_capacity();
+        let increase = next - self.capacity;
+        self.pending_capacity = increase;
+        self.turns_until_upgrade = delay;
     }
 
     /// Advance the building by one turn. When the upgrade countdown reaches 0,

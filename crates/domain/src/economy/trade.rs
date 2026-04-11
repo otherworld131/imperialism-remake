@@ -55,9 +55,8 @@ pub fn base_price(resource: ResourceType) -> Money {
         ResourceType::Oil => Money::dollars(100),
         ResourceType::Gold => Money::dollars(500),
         ResourceType::Gems => Money::dollars(1000),
-        // Non-tradeable
-        ResourceType::Grain => Money::dollars(0),
-        ResourceType::Horses => Money::dollars(0),
+        ResourceType::Grain => Money::dollars(40),
+        ResourceType::Horses => Money::dollars(60),
     }
 }
 
@@ -396,9 +395,9 @@ mod tests {
     }
 
     #[test]
-    fn non_tradeable_resources_have_zero_price() {
-        assert_eq!(base_price(ResourceType::Grain), Money::dollars(0));
-        assert_eq!(base_price(ResourceType::Horses), Money::dollars(0));
+    fn all_resources_have_positive_price() {
+        assert_eq!(base_price(ResourceType::Grain), Money::dollars(40));
+        assert_eq!(base_price(ResourceType::Horses), Money::dollars(60));
     }
 
     // ── resolve_trades ──────────────────────────────────────────
@@ -680,7 +679,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_minor_nation_offers_skips_non_tradeable_grain() {
+    fn generate_minor_nation_offers_includes_grain() {
         let coord = HexCoord::new(0, 0);
 
         let mut hex_map = HexMap::new(10, 10);
@@ -711,8 +710,8 @@ mod tests {
 
         let offers = generate_minor_nation_offers(&nations, &provinces, &hex_map);
         assert!(
-            offers.is_empty(),
-            "Grain is not tradeable and should not appear in offers"
+            !offers.is_empty(),
+            "Grain is tradeable and should appear in offers"
         );
     }
 

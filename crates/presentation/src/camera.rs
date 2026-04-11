@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::hex_renderer::{hex_to_pixel, GameStateResource};
+use crate::hex_renderer::{GameStateResource, hex_to_pixel};
 
 /// Marker component for the main game camera.
 #[derive(Component)]

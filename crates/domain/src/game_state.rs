@@ -189,6 +189,7 @@ pub fn new_game_with_seed(
     let ai_count = generated.great_power_nations.len() - 1; // minus human
     let personalities = random_personalities(personality_seed, ai_count);
 
+    let game_data = GameData::default();
     let mut nations = Vec::new();
     let mut ai_personality_idx = 0;
 
@@ -287,20 +288,27 @@ pub fn new_game_with_seed(
             }
         }
 
-        // Starting workers based on difficulty
+        // Starting workers based on difficulty (original game: 4 untrained, 2 trained, 1 expert)
         match difficulty {
             Difficulty::Introductory | Difficulty::Easy => {
-                nation.labor.untrained = 5;
-                nation.labor.trained = 3;
+                nation.labor.untrained = 4;
+                nation.labor.trained = 2;
+                nation.labor.expert = 1;
             }
             Difficulty::Normal => {
+                nation.labor.untrained = 4;
+                nation.labor.trained = 2;
+                nation.labor.expert = 1;
+            }
+            Difficulty::Hard | Difficulty::NighOnImpossible => {
                 nation.labor.untrained = 3;
                 nation.labor.trained = 1;
             }
-            Difficulty::Hard | Difficulty::NighOnImpossible => {
-                nation.labor.untrained = 2;
-            }
         }
+
+        // Starting freight cars (from game config)
+        let starting_cars = game_data.game_config.starting_freight_cars;
+        nation.transport.build_freight_cars(starting_cars);
 
         // Starting civilians: 1 Farmer + 1 Forester for each Great Power
         let farmer = Civilian::new(next_civilian_id(), CivilianType::Farmer, setup.nation_id);
@@ -380,7 +388,7 @@ pub fn new_game_with_seed(
         nations,
         human_player_nation: human_nation_id,
         events: Vec::new(),
-        game_data: GameData::default(),
+        game_data,
         diplomacy,
         pending_attacks: Vec::new(),
         pending_moves: Vec::new(),
@@ -549,12 +557,12 @@ mod tests {
 
             // 5 untrained + 3 trained workers
             assert_eq!(
-                nation.labor.untrained, 5,
+                nation.labor.untrained, 4,
                 "{} should have 5 untrained workers on Introductory",
                 nation.name
             );
             assert_eq!(
-                nation.labor.trained, 3,
+                nation.labor.trained, 2,
                 "{} should have 3 trained workers on Introductory",
                 nation.name
             );
@@ -627,9 +635,10 @@ mod tests {
                 nation.name
             );
 
-            // 5 untrained + 3 trained workers
-            assert_eq!(nation.labor.untrained, 5);
-            assert_eq!(nation.labor.trained, 3);
+            // 4 untrained + 2 trained + 1 expert workers
+            assert_eq!(nation.labor.untrained, 4);
+            assert_eq!(nation.labor.trained, 2);
+            assert_eq!(nation.labor.expert, 1);
         }
     }
 
@@ -667,9 +676,10 @@ mod tests {
                 nation.name
             );
 
-            // 3 untrained + 1 trained workers
-            assert_eq!(nation.labor.untrained, 3);
-            assert_eq!(nation.labor.trained, 1);
+            // 4 untrained + 2 trained + 1 expert workers
+            assert_eq!(nation.labor.untrained, 4);
+            assert_eq!(nation.labor.trained, 2);
+            assert_eq!(nation.labor.expert, 1);
         }
     }
 
@@ -702,9 +712,9 @@ mod tests {
                 nation.name
             );
 
-            // Only 2 untrained workers, 0 trained
-            assert_eq!(nation.labor.untrained, 2);
-            assert_eq!(nation.labor.trained, 0);
+            // 3 untrained + 1 trained workers (harder start)
+            assert_eq!(nation.labor.untrained, 3);
+            assert_eq!(nation.labor.trained, 1);
         }
     }
 
@@ -730,15 +740,15 @@ mod tests {
                 );
             }
 
-            // Only 2 untrained workers
+            // 3 untrained + 1 trained workers (harder start)
             assert_eq!(
-                nation.labor.untrained, 2,
-                "{} should have only 2 untrained workers on NOI",
+                nation.labor.untrained, 3,
+                "{} should have 3 untrained workers on NOI",
                 nation.name
             );
             assert_eq!(
-                nation.labor.trained, 0,
-                "{} should have 0 trained workers on NOI",
+                nation.labor.trained, 1,
+                "{} should have 1 trained worker on NOI",
                 nation.name
             );
 
