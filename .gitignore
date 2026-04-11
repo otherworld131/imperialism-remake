@@ -13,3 +13,18 @@ web/node_modules/
 web/dist/
 crates/wasm-bridge/pkg/
 crates/wasm-bridge/target/
+
+# Debug/batch logs
+*.log
+batch_*.json
+test_report.html
+
+# Screenshots
+*.png
+*.png:Zone.Identifier
+
+# Test game output
+test_games/output/
+
+# Claude Code local settings
+.claude/
