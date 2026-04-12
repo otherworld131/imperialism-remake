@@ -136,6 +136,11 @@ pub struct UnitUpgraded {
     pub to_type: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct NationEnteredAnarchy {
+    pub nation: NationId,
+}
+
 // ── Wrapper enum ───────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
@@ -155,6 +160,7 @@ pub enum DomainEvent {
     VictoryAchieved(VictoryAchieved),
     NationIncorporated(NationIncorporated),
     UnitUpgraded(UnitUpgraded),
+    NationEnteredAnarchy(NationEnteredAnarchy),
 }
 
 #[cfg(test)]

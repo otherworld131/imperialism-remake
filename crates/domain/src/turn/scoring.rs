@@ -57,6 +57,9 @@ pub struct CouncilVoteResult {
 /// - **Diplomatic**: placeholder — currently 50
 /// - **Province**: number of provinces * 100
 pub fn calculate_score(nation: &Nation) -> NationScore {
+    if nation.is_in_anarchy {
+        return NationScore::default();
+    }
     let military_score = nation
         .army
         .iter()
@@ -146,10 +149,10 @@ pub fn run_council_vote(
     // 2/3 majority — rounding up so the threshold is strict.
     let majority_threshold = (total_governors * 2).div_ceil(3);
 
-    // Collect Great Power IDs.
+    // Collect Great Power IDs (exclude anarchic nations).
     let great_power_ids: Vec<NationId> = nations
         .iter()
-        .filter(|n| n.is_great_power())
+        .filter(|n| n.is_great_power() && !n.is_in_anarchy)
         .map(|n| n.id)
         .collect();
 
@@ -169,9 +172,13 @@ pub fn run_council_vote(
     let mut governor_details: Vec<GovernorVoteDetail> = Vec::new();
 
     for province in provinces {
-        // Determine which nation the governor of this province supports.
+        // Anarchic nation provinces have no functioning governance — governors abstain.
         let owner_nation = nations.iter().find(|n| n.id == province.owner);
+        if owner_nation.is_some_and(|n| n.is_in_anarchy) {
+            continue;
+        }
 
+        // Determine which nation the governor of this province supports.
         let (owner_type, supported_gp, reason) = match owner_nation {
             Some(n) if n.is_great_power() => {
                 (NationType::GreatPower, n.id, "own nation".to_string())

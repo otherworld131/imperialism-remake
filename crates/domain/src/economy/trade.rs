@@ -243,7 +243,7 @@ pub fn generate_minor_nation_offers(
     let mut offers = Vec::new();
 
     for nation in nations {
-        if nation.is_great_power() {
+        if nation.is_great_power() || nation.is_in_anarchy {
             continue;
         }
 

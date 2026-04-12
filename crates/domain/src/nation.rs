@@ -107,6 +107,10 @@ pub struct Nation {
     /// Number of expert worker rewards already earned (tracks reward thresholds at 10 and 30 experts).
     #[serde(default)]
     pub expert_rewards_earned: u8,
+    /// Whether this nation has fallen into anarchy (lost its capital province).
+    /// An anarchic nation has no economy, diplomacy, or offensive military capability.
+    #[serde(default)]
+    pub is_in_anarchy: bool,
 }
 
 impl Nation {
@@ -147,6 +151,7 @@ impl Nation {
             admirals_earned: 0,
             has_colony: false,
             expert_rewards_earned: 0,
+            is_in_anarchy: false,
         }
     }
 
@@ -302,6 +307,11 @@ impl Nation {
     /// Returns true if the nation's treasury is negative (in debt).
     pub fn is_bankrupt(&self) -> bool {
         self.treasury < Money::ZERO
+    }
+
+    /// Whether this nation is in anarchy (lost its capital).
+    pub fn is_in_anarchy(&self) -> bool {
+        self.is_in_anarchy
     }
 }
 

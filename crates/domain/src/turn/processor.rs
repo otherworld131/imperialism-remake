@@ -334,6 +334,13 @@ fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
     let mut disconnected_data: Vec<(NationId, ResourceType, u32)> = Vec::new();
 
     for province in &game.provinces {
+        // Anarchic nations produce no resources
+        if game
+            .get_nation(province.owner)
+            .is_some_and(|n| n.is_in_anarchy)
+        {
+            continue;
+        }
         // Check if this province is connected for its owner
         let is_connected = connected_map
             .iter()
@@ -439,6 +446,9 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
             Some(n) => n,
             None => continue,
         };
+        if nation.is_in_anarchy {
+            continue;
+        }
 
         let freight_capacity = nation.transport.total_capacity();
 
@@ -539,8 +549,8 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
             None => continue,
         };
 
-        // Only Great Powers get immigration
-        if !nation.is_great_power() {
+        // Only Great Powers get immigration; skip anarchic nations
+        if !nation.is_great_power() || nation.is_in_anarchy {
             continue;
         }
 
@@ -650,7 +660,7 @@ fn update_province_connectivity(game: &mut GameState) {
     let nation_capitals: Vec<(NationId, ProvinceId, crate::hex::HexCoord)> = game
         .nations
         .iter()
-        .filter(|n| n.is_great_power())
+        .filter(|n| n.is_great_power() && !n.is_in_anarchy)
         .map(|n| {
             let cap_tile = game
                 .provinces
@@ -728,10 +738,11 @@ fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
 
         let owner_nation = game.nations.iter().find(|n| n.id == *owner_id);
 
-        // Skip settlement progression for Minor Nation provinces —
-        // Minor Nation capitals should never industrialize beyond Hamlet.
-        let is_minor_nation = owner_nation.map(|n| !n.is_great_power()).unwrap_or(false);
-        if is_minor_nation {
+        // Skip settlement progression for Minor Nation provinces or anarchic nations
+        let skip = owner_nation
+            .map(|n| !n.is_great_power() || n.is_in_anarchy)
+            .unwrap_or(false);
+        if skip {
             continue;
         }
 
@@ -846,6 +857,9 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
     let mut completed: Vec<CompletedWork> = Vec::new();
 
     for nation in &mut game.nations {
+        if nation.is_in_anarchy {
+            continue;
+        }
         for civilian in &mut nation.civilians {
             if !civilian.working {
                 continue;
@@ -907,6 +921,9 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
 /// Gems: each unit = $1,000
 fn convert_monetary_resources(game: &mut GameState, report: &mut TurnReport) {
     for nation in &mut game.nations {
+        if nation.is_in_anarchy {
+            continue;
+        }
         let gold_amount = nation.resource_amount(ResourceType::Gold);
         let gems_amount = nation.resource_amount(ResourceType::Gems);
 
@@ -949,6 +966,9 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
             Some(n) => n,
             None => continue,
         };
+        if nation.is_in_anarchy {
+            continue;
+        }
 
         // Gather current resource inventory as slices
         let resources: Vec<(ResourceType, u32)> =
@@ -1177,6 +1197,13 @@ fn resolve_town_production(game: &mut GameState, report: &mut TurnReport) {
         if !province.can_produce() {
             continue;
         }
+        // Anarchic nations have no town production
+        if game
+            .get_nation(province.owner)
+            .is_some_and(|n| n.is_in_anarchy)
+        {
+            continue;
+        }
 
         let rate_multiplier: u32 = if province.settlement_level == SettlementLevel::Town {
             2
@@ -1387,6 +1414,9 @@ fn process_food(game: &mut GameState, report: &mut TurnReport) {
 fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
     let ai_debug = game.ai_debug;
     for nation in &mut game.nations {
+        if nation.is_in_anarchy {
+            continue;
+        }
         let population = nation.labor.total_workers();
         if population == 0 {
             continue;
@@ -1463,11 +1493,11 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
 /// (respecting consulate requirements and cargo capacity), resolve trades, and apply
 /// the resulting transactions.
 fn resolve_trade_session(game: &mut GameState, report: &mut TurnReport) {
-    // 0. Deduct subsidy costs from Great Powers
+    // 0. Deduct subsidy costs from Great Powers (skip anarchic nations)
     let gp_ids: Vec<NationId> = game
         .nations
         .iter()
-        .filter(|n| n.is_great_power())
+        .filter(|n| n.is_great_power() && !n.is_in_anarchy)
         .map(|n| n.id)
         .collect();
 
@@ -1620,6 +1650,9 @@ const BANKRUPTCY_FLOOR: Money = Money::ZERO;
 
 fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
     for nation in &mut game.nations {
+        if nation.is_in_anarchy {
+            continue;
+        }
         let total_cost: Money = nation
             .army
             .iter()
@@ -1656,6 +1689,14 @@ fn resolve_military_movement(game: &mut GameState, report: &mut TurnReport) {
         game.pending_moves.drain(..).collect();
 
     for (nation_id, unit_id, dest_province_id) in moves {
+        // Anarchic nations' armies don't move
+        if game
+            .get_nation(nation_id)
+            .is_some_and(|n| n.is_in_anarchy)
+        {
+            continue;
+        }
+
         // Look up the destination province owner
         let dest_owner = match game.get_province(dest_province_id) {
             Some(p) => p.owner,
@@ -1678,12 +1719,15 @@ fn resolve_military_movement(game: &mut GameState, report: &mut TurnReport) {
                     .push((nation_id, format!("{} moved to {}", unit_type, dest_name)));
             }
         } else {
-            // Check if at war with the destination owner
+            // Check if at war with the destination owner, or if target is anarchic
             let at_war = game
                 .diplomacy
                 .get_relation(nation_id, dest_owner)
                 .is_some_and(|r| r.at_war);
-            if at_war {
+            let target_is_anarchic = game
+                .get_nation(dest_owner)
+                .is_some_and(|n| n.is_in_anarchy);
+            if at_war || target_is_anarchic {
                 // Convert to pending attack
                 game.pending_attacks.push((nation_id, dest_province_id));
                 report.unit_movements.push((
@@ -1705,7 +1749,16 @@ fn resolve_military_movement(game: &mut GameState, report: &mut TurnReport) {
 /// 4. If attacker wins: change province owner, record ProvinceConquered event, add headline
 /// 5. Clear pending_attacks after processing
 fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
-    let attacks: Vec<(NationId, ProvinceId)> = game.pending_attacks.drain(..).collect();
+    let all_attacks: Vec<(NationId, ProvinceId)> = game.pending_attacks.drain(..).collect();
+    // Filter out attacks from anarchic nations (their armies only defend)
+    let attacks: Vec<(NationId, ProvinceId)> = all_attacks
+        .into_iter()
+        .filter(|(attacker_id, _)| {
+            !game
+                .get_nation(*attacker_id)
+                .is_some_and(|n| n.is_in_anarchy)
+        })
+        .collect();
 
     // Track provinces that have already changed hands this turn to prevent
     // ping-pong (Province A going X → Y → Z in one turn).
@@ -1802,6 +1855,10 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 defender_nation
                     .province_ids
                     .retain(|&pid| pid != province_id);
+                // Destroy any defender units in the conquered province
+                defender_nation
+                    .army
+                    .retain(|u| u.position != province_id);
             }
             if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
                 attacker_nation.add_province(province_id);
@@ -1829,6 +1886,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                     attacker_name, prov_name, defender_name
                 ),
             ));
+            check_and_apply_anarchy(game, defender_id, report);
             continue;
         }
 
@@ -1861,9 +1919,28 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
             battle_fort_level,
         );
 
-        // Update attacker's surviving army
-        if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
-            attacker_nation.army = result.attacker_survivors.clone();
+        // Update attacker's army: remove units that fought, add back survivors
+        {
+            let battle_ids: HashSet<crate::map::UnitId> =
+                attacker_force.units.iter().map(|u| u.id).collect();
+            if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
+                attacker_nation.army.retain(|u| !battle_ids.contains(&u.id));
+                attacker_nation
+                    .army
+                    .extend(result.attacker_survivors.iter().cloned());
+            }
+        }
+
+        // Update defender's army: remove units that fought, add back survivors
+        {
+            let battle_ids: HashSet<crate::map::UnitId> =
+                defender_force.units.iter().map(|u| u.id).collect();
+            if let Some(defender_nation) = game.get_nation_mut(defender_id) {
+                defender_nation.army.retain(|u| !battle_ids.contains(&u.id));
+                defender_nation
+                    .army
+                    .extend(result.defender_survivors.iter().cloned());
+            }
         }
 
         if result.attacker_won {
@@ -1894,6 +1971,10 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 defender_nation
                     .province_ids
                     .retain(|pid| *pid != province_id);
+                // Destroy any remaining defender units in the conquered province
+                defender_nation
+                    .army
+                    .retain(|u| u.position != province_id);
             }
             if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
                 attacker_nation.add_province(province_id);
@@ -2016,6 +2097,9 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 ),
             ));
 
+            // Check if the defender lost its capital -> anarchy
+            check_and_apply_anarchy(game, defender_id, report);
+
             // Check if the defender has been eliminated (lost all provinces)
             let defender_eliminated = game
                 .get_nation(defender_id)
@@ -2055,7 +2139,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
         .map(|b| (b.attacker, b.province, b.defender))
         .collect();
 
-    let mut counter_attacks: Vec<(NationId, ProvinceId)> = Vec::new();
+    let mut counter_attacks: Vec<(NationId, ProvinceId, Vec<ProvinceId>)> = Vec::new();
 
     for (_new_owner, conquered_prov_id, original_defender) in &conquered_provinces {
         // Collect tiles that belong to the conquered province
@@ -2093,22 +2177,30 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
         if has_adjacent_units
             && !counter_attacks
                 .iter()
-                .any(|(_, p)| *p == *conquered_prov_id)
+                .any(|(_, p, _)| *p == *conquered_prov_id)
         {
-            counter_attacks.push((*original_defender, *conquered_prov_id));
+            counter_attacks.push((*original_defender, *conquered_prov_id, adjacent_province_ids));
         }
     }
 
     // Resolve counter-attacks (second pass — no further counter-attacks after this)
-    for (counter_attacker_id, target_province_id) in counter_attacks {
+    for (counter_attacker_id, target_province_id, adjacent_province_ids) in counter_attacks {
         let new_owner_id = match game.get_province(target_province_id) {
             Some(p) => p.owner,
             None => continue,
         };
 
-        // The counter-attacker uses their army units from adjacent provinces
+        // The counter-attacker uses army units from adjacent provinces they still own
         let counter_units: Vec<ArmyUnit> = match game.get_nation(counter_attacker_id) {
-            Some(n) => n.army.clone(),
+            Some(n) => n
+                .army
+                .iter()
+                .filter(|u| {
+                    adjacent_province_ids.contains(&u.position)
+                        && n.province_ids.contains(&u.position)
+                })
+                .cloned()
+                .collect(),
             None => continue,
         };
 
@@ -2121,9 +2213,14 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
             units: counter_units,
         };
 
-        // Defender of counter-attack is the new occupier — use surviving attacker army
+        // Defender of counter-attack is the new occupier — use units in the target province
         let occupier_units: Vec<ArmyUnit> = match game.get_nation(new_owner_id) {
-            Some(n) => n.army.clone(),
+            Some(n) => n
+                .army
+                .iter()
+                .filter(|u| u.position == target_province_id)
+                .cloned()
+                .collect(),
             None => continue,
         };
 
@@ -2155,14 +2252,28 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
             battle_fort_level,
         );
 
-        // Update counter-attacker's surviving army
-        if let Some(ca_nation) = game.get_nation_mut(counter_attacker_id) {
-            ca_nation.army = result.attacker_survivors.clone();
+        // Update counter-attacker's army: remove participants, add survivors
+        {
+            let battle_ids: HashSet<crate::map::UnitId> =
+                counter_force.units.iter().map(|u| u.id).collect();
+            if let Some(ca_nation) = game.get_nation_mut(counter_attacker_id) {
+                ca_nation.army.retain(|u| !battle_ids.contains(&u.id));
+                ca_nation
+                    .army
+                    .extend(result.attacker_survivors.iter().cloned());
+            }
         }
 
-        // Update occupier's surviving army
-        if let Some(occ_nation) = game.get_nation_mut(new_owner_id) {
-            occ_nation.army = result.defender_survivors.clone();
+        // Update occupier's army: remove participants, add survivors
+        {
+            let battle_ids: HashSet<crate::map::UnitId> =
+                defender_force.units.iter().map(|u| u.id).collect();
+            if let Some(occ_nation) = game.get_nation_mut(new_owner_id) {
+                occ_nation.army.retain(|u| !battle_ids.contains(&u.id));
+                occ_nation
+                    .army
+                    .extend(result.defender_survivors.iter().cloned());
+            }
         }
 
         if result.attacker_won {
@@ -2174,6 +2285,10 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 occ_nation
                     .province_ids
                     .retain(|pid| *pid != target_province_id);
+                // Destroy any occupier units in the re-conquered province
+                occ_nation
+                    .army
+                    .retain(|u| u.position != target_province_id);
             }
             if let Some(ca_nation) = game.get_nation_mut(counter_attacker_id) {
                 ca_nation.add_province(target_province_id);
@@ -2196,6 +2311,8 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 format!("{} counter-attacks and recaptures {}!", ca_name, prov_name),
                 HeadlineCategory::War,
             ));
+            // The occupier may have lost their capital in this counter-attack
+            check_and_apply_anarchy(game, new_owner_id, report);
         } else {
             let occ_name = game
                 .get_nation(new_owner_id)
@@ -2213,6 +2330,46 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
 
         report.battles.push(result);
     }
+}
+
+/// Check if a nation just lost its capital province and should enter anarchy.
+/// Returns true if anarchy was triggered.
+fn check_and_apply_anarchy(
+    game: &mut GameState,
+    nation_id: NationId,
+    report: &mut TurnReport,
+) -> bool {
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return false,
+    };
+    if nation.is_in_anarchy {
+        return false; // already in anarchy
+    }
+    // Check if the nation still owns its capital province
+    if nation.province_ids.contains(&nation.capital_province_id) {
+        return false;
+    }
+    // Enter anarchy
+    let name = nation.name.clone();
+    if let Some(n) = game.get_nation_mut(nation_id) {
+        n.is_in_anarchy = true;
+    }
+    report
+        .events
+        .push(DomainEvent::NationEnteredAnarchy(NationEnteredAnarchy {
+            nation: nation_id,
+        }));
+    report.newspaper_headlines.push((
+        format!(
+            "ANARCHY: {} collapses into chaos after losing its capital!",
+            name
+        ),
+        HeadlineCategory::War,
+    ));
+    game.history
+        .push((game.turn, format!("{} fell into anarchy", name)));
+    true
 }
 
 /// Trigger pact defense: when a Minor Nation with a Non-Aggression Pact is attacked,
@@ -2467,8 +2624,8 @@ fn apply_blockade_effects(game: &GameState, report: &mut TurnReport) {
 /// Report which technologies are available for research by the human player.
 fn report_available_techs(game: &GameState, report: &mut TurnReport) {
     let nation = match game.get_nation(game.human_player_nation) {
-        Some(n) => n,
-        None => return,
+        Some(n) if !n.is_in_anarchy => n,
+        _ => return,
     };
     let available = game
         .game_data
@@ -2526,7 +2683,15 @@ fn resolve_technology(game: &mut GameState, report: &mut TurnReport) {
 /// and `ai_manage_diplomacy`. This function handles edge cases like mutual proposals
 /// and expires stale proposals.
 fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
-    let proposals = game.diplomacy.drain_proposals();
+    let proposals: Vec<_> = game
+        .diplomacy
+        .drain_proposals()
+        .into_iter()
+        .filter(|p| {
+            !game.get_nation(p.from).is_some_and(|n| n.is_in_anarchy)
+                && !game.get_nation(p.to).is_some_and(|n| n.is_in_anarchy)
+        })
+        .collect();
     if proposals.is_empty() {
         return;
     }
@@ -2614,10 +2779,21 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
     // For each war, check if either side has allies that are not yet at war with the other side
     let mut new_wars: Vec<(NationId, NationId, String, String)> = Vec::new();
     for (attacker, defender) in &wars {
+        // Skip alliance obligations for anarchic defenders
+        if game
+            .get_nation(*defender)
+            .is_some_and(|n| n.is_in_anarchy)
+        {
+            continue;
+        }
         // Check defender's allies
         let defender_allies = game.diplomacy.get_allies(*defender);
         for ally in &defender_allies {
             if *ally == *attacker {
+                continue;
+            }
+            // Skip anarchic allies
+            if game.get_nation(*ally).is_some_and(|n| n.is_in_anarchy) {
                 continue;
             }
             // Skip joining wars against nations that have 0 provinces (already defeated)
@@ -2669,6 +2845,10 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
         let attacker_allies = game.diplomacy.get_allies(*attacker);
         for ally in &attacker_allies {
             if *ally == *defender {
+                continue;
+            }
+            // Skip anarchic allies
+            if game.get_nation(*ally).is_some_and(|n| n.is_in_anarchy) {
                 continue;
             }
             // Skip joining wars against nations that have 0 provinces (already defeated)
@@ -2753,10 +2933,10 @@ fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnRepor
     let threshold = 75;
 
     for minor_id in &minor_ids {
-        // Skip minor nations that have already been incorporated (no provinces left)
+        // Skip minor nations that have already been incorporated or are in anarchy
         if game
             .get_nation(*minor_id)
-            .is_some_and(|n| n.province_ids.is_empty())
+            .is_some_and(|n| n.province_ids.is_empty() || n.is_in_anarchy)
         {
             continue;
         }
@@ -2879,7 +3059,7 @@ fn resolve_unit_upgrades(game: &mut GameState, report: &mut TurnReport) {
     let ai_nation_ids: Vec<NationId> = game
         .nations
         .iter()
-        .filter(|n| n.ai_personality.is_some())
+        .filter(|n| n.ai_personality.is_some() && !n.is_in_anarchy)
         .map(|n| n.id)
         .collect();
 
@@ -3228,6 +3408,27 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
         report.newspaper_headlines.push((
             "Council of Governors to convene!".to_string(),
             HeadlineCategory::Politics,
+        ));
+    }
+
+    // Report nations currently in anarchy
+    for nation in &game.nations {
+        if nation.is_in_anarchy && !nation.province_ids.is_empty() {
+            report.newspaper_headlines.push((
+                format!("{} remains mired in anarchy", nation.name),
+                HeadlineCategory::Crisis,
+            ));
+        }
+    }
+
+    // Human player anarchy game-over notice
+    if game
+        .get_nation(game.human_player_nation)
+        .is_some_and(|n| n.is_in_anarchy)
+    {
+        report.newspaper_headlines.push((
+            "Your nation has fallen into anarchy! All governance has ceased.".to_string(),
+            HeadlineCategory::Crisis,
         ));
     }
 
@@ -7247,6 +7448,12 @@ mod tests {
                 province.settlement_level,
                 SettlementLevel::Village,
                 "Captured GP capital should be immediately industrialized to Village"
+            );
+            // Defender should be in anarchy after losing capital
+            let defender = game.get_nation(NationId(2)).unwrap();
+            assert!(
+                defender.is_in_anarchy(),
+                "Nation that lost its capital should be in anarchy"
             );
         }
     }

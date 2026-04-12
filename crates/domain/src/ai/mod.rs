@@ -32,7 +32,7 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<String> {
     let ai_nation_ids: Vec<NationId> = game
         .nations
         .iter()
-        .filter(|n| n.id != human_id && n.is_great_power())
+        .filter(|n| n.id != human_id && n.is_great_power() && !n.is_in_anarchy)
         .map(|n| n.id)
         .collect();
 

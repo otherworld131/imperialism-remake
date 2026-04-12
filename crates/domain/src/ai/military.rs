@@ -462,6 +462,13 @@ pub(crate) fn ai_declare_wars(
             if target_provinces == 0 {
                 continue;
             }
+            // Skip anarchic nations (already free to invade, no war declaration needed)
+            if game
+                .get_nation(target_id)
+                .is_some_and(|n| n.is_in_anarchy)
+            {
+                continue;
+            }
             // Anti-dogpile: skip if another AI targeted this nation this round
             if targeted_this_round.contains(&target_id) {
                 continue;
@@ -685,16 +692,18 @@ pub(crate) fn ai_military_strategy(
 
     let army_size = nation.army.len();
 
-    // Find nations we are at war with
+    // Find nations we are at war with, plus anarchic nations (free to invade)
     let enemies: Vec<NationId> = game
         .nations
         .iter()
         .filter(|n| n.id != nation_id)
         .filter(|n| {
-            game.diplomacy
-                .get_relation(nation_id, n.id)
-                .map(|r| r.at_war)
-                .unwrap_or(false)
+            n.is_in_anarchy
+                || game
+                    .diplomacy
+                    .get_relation(nation_id, n.id)
+                    .map(|r| r.at_war)
+                    .unwrap_or(false)
         })
         .map(|n| n.id)
         .collect();
