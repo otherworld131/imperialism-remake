@@ -1,5 +1,6 @@
 import init, {
   wasm_new_game,
+  wasm_new_scenario_game,
   wasm_process_turn,
   wasm_get_map_data,
   wasm_get_available_techs,
@@ -55,4 +56,8 @@ export function researchTech(gameJson: string, techName: string): string {
 
 export function getScenarios(): any[] {
   return JSON.parse(wasm_get_scenarios());
+}
+
+export function newScenarioGame(scenarioId: string, difficulty: number, nationIndex: number): string {
+  return wasm_new_scenario_game(scenarioId, difficulty, nationIndex);
 }

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Comp 3: Game Setup Screen</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: Georgia, serif; background: #1a1a2e; color: #e0d8c0; height: 100vh; display: flex; justify-content: center; align-items: center; }
+
+  .setup-container {
+    width: 700px; background: #161625; border: 2px solid #3a3520; border-radius: 4px;
+    overflow: hidden;
+  }
+  .setup-header {
+    background: #0f0f23; padding: 20px 30px; border-bottom: 2px solid #3a3520;
+    text-align: center;
+  }
+  .setup-header h1 { font-size: 28px; color: #daa520; margin-bottom: 4px; font-weight: normal; }
+  .setup-header p { font-size: 13px; color: #9a9a9a; }
+  .setup-body { padding: 24px 30px; }
+
+  .form-group { margin-bottom: 20px; }
+  .form-label { display: block; font-size: 13px; color: #daa520; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  /* Scenario cards */
+  .scenario-cards { display: flex; gap: 12px; }
+  .scenario-card {
+    flex: 1; padding: 14px; background: #1a1a2e; border: 1px solid #3a3520;
+    border-radius: 4px; cursor: pointer; transition: all 0.15s;
+    text-align: center;
+  }
+  .scenario-card:hover { border-color: #5a5030; background: #1e1e35; }
+  .scenario-card.selected { border-color: #daa520; background: rgba(218,165,32,0.08); }
+  .scenario-card .icon { font-size: 28px; margin-bottom: 6px; }
+  .scenario-card .name { font-size: 14px; font-weight: bold; }
+  .scenario-card .desc { font-size: 11px; color: #9a9a9a; margin-top: 4px; }
+
+  /* Difficulty */
+  .difficulty-row { display: flex; gap: 8px; }
+  .diff-btn {
+    flex: 1; padding: 8px; background: #1a1a2e; border: 1px solid #3a3520;
+    color: #e0d8c0; font-family: Georgia, serif; font-size: 12px;
+    cursor: pointer; border-radius: 3px; text-align: center; transition: all 0.15s;
+  }
+  .diff-btn:hover { border-color: #5a5030; }
+  .diff-btn.selected { border-color: #daa520; background: rgba(218,165,32,0.08); color: #daa520; }
+
+  /* Nation picker */
+  .nation-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .nation-pick {
+    padding: 10px 8px; background: #1a1a2e; border: 1px solid #3a3520;
+    border-radius: 4px; cursor: pointer; text-align: center; transition: all 0.15s;
+  }
+  .nation-pick:hover { border-color: #5a5030; }
+  .nation-pick.selected { border-color: #daa520; background: rgba(218,165,32,0.08); }
+  .nation-pick .swatch {
+    width: 20px; height: 20px; border-radius: 50%; margin: 0 auto 6px;
+    border: 1px solid rgba(255,255,255,0.2);
+  }
+  .nation-pick .name { font-size: 12px; }
+
+  /* Map key */
+  .map-key-row { display: flex; gap: 10px; align-items: center; }
+  .map-key-input {
+    flex: 1; padding: 6px 10px; background: #1a1a2e; border: 1px solid #3a3520;
+    color: #e0d8c0; font-family: 'Courier New', monospace; font-size: 13px;
+    border-radius: 3px;
+  }
+  .map-key-input:focus { outline: 2px solid #daa520; outline-offset: 1px; border-color: #daa520; }
+  .map-key-input::placeholder { color: #555; }
+  .btn-small {
+    padding: 6px 14px; background: #3a3520; color: #e0d8c0;
+    border: 1px solid #5a5030; cursor: pointer; font-family: Georgia, serif;
+    font-size: 12px; border-radius: 3px;
+  }
+
+  /* Start button */
+  .setup-footer {
+    padding: 16px 30px; background: #0f0f23; border-top: 2px solid #3a3520;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .btn-start {
+    padding: 10px 40px; background: #8b4513; color: #fff; border: 1px solid #a0522d;
+    font-family: Georgia, serif; font-size: 16px; font-weight: bold;
+    cursor: pointer; border-radius: 3px; letter-spacing: 0.5px;
+  }
+  .btn-start:hover { background: #a0522d; }
+  .btn-start:focus-visible { outline: 2px solid #daa520; outline-offset: 2px; }
+  .back-link { color: #9a9a9a; font-size: 13px; cursor: pointer; text-decoration: underline; }
+  .back-link:hover { color: #e0d8c0; }
+
+  .annotation { position: fixed; z-index: 999; font-family: 'Helvetica Neue', sans-serif; pointer-events: none; }
+  .callout { background: #22c55e; color: white; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+</style>
+</head>
+<body>
+  <div class="annotation" style="top:20px;left:50%;transform:translateX(-50%)">
+    <div class="callout">#4 Game Setup — scenario, difficulty, nation selection</div>
+  </div>
+
+  <div class="setup-container">
+    <div class="setup-header">
+      <h1>Imperialism</h1>
+      <p>A game of diplomacy, trade, and conquest in the age of empire</p>
+    </div>
+
+    <div class="setup-body">
+      <div class="form-group">
+        <label class="form-label">Scenario</label>
+        <div class="scenario-cards">
+          <div class="scenario-card selected">
+            <div class="icon">&#127758;</div>
+            <div class="name">Random Map</div>
+            <div class="desc">Procedurally generated world</div>
+          </div>
+          <div class="scenario-card">
+            <div class="icon">&#128214;</div>
+            <div class="name">Tutorial</div>
+            <div class="desc">Learn the basics</div>
+          </div>
+          <div class="scenario-card">
+            <div class="icon">&#9876;</div>
+            <div class="name">Europe 1815</div>
+            <div class="desc">Post-Napoleonic balance</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Difficulty</label>
+        <div class="difficulty-row">
+          <div class="diff-btn">Introductory</div>
+          <div class="diff-btn selected">Easy</div>
+          <div class="diff-btn">Normal</div>
+          <div class="diff-btn">Hard</div>
+          <div class="diff-btn">NOI</div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Choose Your Empire</label>
+        <div class="nation-grid">
+          <div class="nation-pick selected">
+            <div class="swatch" style="background:#ffd900"></div>
+            <div class="name">Deneb</div>
+          </div>
+          <div class="nation-pick">
+            <div class="swatch" style="background:#ff8c00"></div>
+            <div class="name">Devron</div>
+          </div>
+          <div class="nation-pick">
+            <div class="swatch" style="background:#66b3ff"></div>
+            <div class="name">Haxaco</div>
+          </div>
+          <div class="nation-pick">
+            <div class="swatch" style="background:#e62626"></div>
+            <div class="name">Kem</div>
+          </div>
+          <div class="nation-pick">
+            <div class="swatch" style="background:#1abf1a"></div>
+            <div class="name">Ordune</div>
+          </div>
+          <div class="nation-pick">
+            <div class="swatch" style="background:#a633d9"></div>
+            <div class="name">Patagon</div>
+          </div>
+          <div class="nation-pick">
+            <div class="swatch" style="background:#3359e6"></div>
+            <div class="name">Zimm</div>
+          </div>
+          <div class="nation-pick" style="opacity:0.3; pointer-events:none;">
+            <div class="swatch" style="background:#555"></div>
+            <div class="name" style="color:#555;">Random</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Map Key (optional)</label>
+        <div class="map-key-row">
+          <input class="map-key-input" placeholder="Leave blank for random..." maxlength="32">
+          <button class="btn-small">Regenerate</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="setup-footer">
+      <span class="back-link">&larr; Back to Menu</span>
+      <button class="btn-start">Begin Campaign</button>
+    </div>
+  </div>
+</body>
+</html>

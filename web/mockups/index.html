@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Imperialism Remake — UI Mockups</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: Georgia, serif; background: #1a1a2e; color: #e0d8c0; min-height: 100vh; padding: 40px; }
+  h1 { color: #daa520; font-size: 28px; margin-bottom: 8px; }
+  .subtitle { color: #9a9a9a; margin-bottom: 32px; font-size: 14px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+  .card {
+    background: #161625; border: 1px solid #3a3520; border-radius: 6px;
+    padding: 20px; cursor: pointer; transition: all 0.15s;
+    text-decoration: none; color: #e0d8c0; display: block;
+  }
+  .card:hover { border-color: #daa520; background: #1e1e35; transform: translateY(-2px); }
+  .card h2 { font-size: 16px; color: #daa520; margin-bottom: 6px; }
+  .card p { font-size: 13px; color: #9a9a9a; line-height: 1.5; }
+  .card .issues { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .tag {
+    font-size: 10px; padding: 2px 8px; border-radius: 10px;
+    background: rgba(218,165,32,0.15); color: #daa520; font-family: sans-serif;
+  }
+  .footer { margin-top: 40px; font-size: 12px; color: #555; }
+</style>
+</head>
+<body>
+  <h1>UI Mockups &mdash; Imperialism Remake</h1>
+  <p class="subtitle">Design comps for evaluation items #1&ndash;#12. Click a card to view the mockup.</p>
+
+  <div class="grid">
+    <a class="card" href="01-fixed-layout.html">
+      <h2>1. Fixed Main Layout</h2>
+      <p>Map fills full viewport height, no dead space. Tile info distinguishes click vs hover. Contrast and focus style fixes.</p>
+      <div class="issues">
+        <span class="tag">#1 Map fill</span>
+        <span class="tag">#8 Click vs hover</span>
+        <span class="tag">#9 Contrast</span>
+        <span class="tag">#12 Focus styles</span>
+      </div>
+    </a>
+
+    <a class="card" href="02-responsive-mobile.html">
+      <h2>2. Responsive Mobile</h2>
+      <p>Sidebar moves below map as a tabbed bottom panel. Top bar collapses to compact form. Works at 375px.</p>
+      <div class="issues">
+        <span class="tag">#2 Responsive layout</span>
+      </div>
+    </a>
+
+    <a class="card" href="03-game-setup.html">
+      <h2>3. Game Setup Screen</h2>
+      <p>Scenario selection, difficulty picker, nation chooser, and map key input. Replaces the current hardcoded game start.</p>
+      <div class="issues">
+        <span class="tag">#4 No setup screen</span>
+      </div>
+    </a>
+
+    <a class="card" href="04-player-actions.html">
+      <h2>4. Player Action Screens</h2>
+      <p>Five-tab navigation (Map / Transport / Industry / Trade / Diplomacy) with context-sensitive side panel showing buildings, workers, and warehouse.</p>
+      <div class="issues">
+        <span class="tag">#5 No player actions</span>
+      </div>
+    </a>
+
+    <a class="card" href="05-newspaper.html">
+      <h2>5. Improved Newspaper</h2>
+      <p>Headlines grouped by player vs world news, nation tags, category color bars, proper masthead with date.</p>
+      <div class="issues">
+        <span class="tag">#6 Flat headlines</span>
+      </div>
+    </a>
+  </div>
+
+  <div class="footer">
+    <p>Items not shown (code-level, no visual comp needed):</p>
+    <p>#3 O(n) hover perf &rarr; replace with pixel-to-hex math &bull;
+       #7 Keyboard shortcuts &rarr; add event listeners &bull;
+       #10 &lt;main&gt; landmark &rarr; wrap in &lt;main&gt; tag &bull;
+       #11 Canvas aria-label &rarr; add aria-label attribute</p>
+  </div>
+</body>
+</html>

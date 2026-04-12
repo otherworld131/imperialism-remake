@@ -142,10 +142,23 @@ imperialism-remake/
 └── Cargo.toml                 # Workspace root
 ```
 
+## Running Games
+
+```bash
+# Run N AI-only batch games (headless, no UI) — redirect JSON report to file
+cargo run --release --bin imperialism -- --batch N > report.json
+
+# Single interactive game
+cargo run --release --bin imperialism -- [map_key] [nation_index]
+```
+
+After implementing any plan that touches game logic, **always run a few batch games** (e.g. `--batch 3`) to verify the full game loop works end-to-end, not just unit tests.
+
 ## Conventions
 
 - `cargo build` must succeed with zero warnings at all times
 - `cargo test` must pass before any task is considered complete
+- After implementing a plan, run a few batch games (`--batch 3`) to smoke-test the full game loop
 - `cargo clippy` — zero lints allowed
 - `cargo fmt --check` — enforced formatting
 - Domain crate depends only on `std` + `mlua` (Lua VM) — nothing else
@@ -177,14 +190,15 @@ All implementation checklists live in `plan/`:
 | 15 | [Turn Engine & Game Loop](./plan/15-turn-engine.md) | Domain |
 | 16 | [AI Players](./plan/16-ai.md) | Domain |
 | 17 | [Victory & Scoring](./plan/17-victory-scoring.md) | Domain |
-| 18 | [UI — Main Screens](./plan/18-ui-screens.md) | Presentation |
+| 18 | ~~UI — Main Screens~~ → merged into 29 | Presentation |
 | 19 | [UI — Tactical Battle](./plan/19-ui-battle.md) | Presentation |
 | 20 | [Audio & Music](./plan/20-audio.md) | Presentation |
 | 21 | [Save / Load & Serialization](./plan/21-persistence.md) | Infrastructure |
 | 22 | [Multiplayer & Networking](./plan/22-multiplayer.md) | Infrastructure |
 | 23 | [Modding & Data-Driven Design](./plan/23-modding.md) | Infrastructure |
 | 24 | [Testing Strategy](./plan/24-testing.md) | Quality |
-| 25 | [Accessibility & Localization](./plan/25-accessibility.md) | Quality |
+| 25 | ~~Accessibility & Localization~~ → merged into 29 | Quality |
 | 26 | [Performance & Optimization](./plan/26-performance.md) | Quality |
 | 27 | [Build, CI/CD & Release](./plan/27-build-release.md) | Delivery |
 | 28 | [Documentation](./plan/28-documentation.md) | Delivery |
+| 29 | [Web Frontend: UI, Accessibility & Localization](./plan/29-web-frontend.md) | Presentation |

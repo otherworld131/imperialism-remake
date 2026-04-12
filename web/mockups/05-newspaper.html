@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Comp 5: Improved Newspaper Modal</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: Georgia, serif; background: rgba(0,0,0,0.7); color: #e0d8c0; height: 100vh; display: flex; justify-content: center; align-items: center; }
+
+  .modal {
+    background: #1a1a2e; border: 2px solid #daa520; width: 540px;
+    max-height: 80vh; overflow-y: auto; box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+  }
+
+  /* ── Masthead ── */
+  .masthead {
+    padding: 20px 24px 16px; text-align: center;
+    border-bottom: 3px double #daa520;
+    background: linear-gradient(180deg, #1e1e35 0%, #1a1a2e 100%);
+  }
+  .masthead h2 {
+    font-family: 'Times New Roman', serif; font-size: 30px;
+    color: #daa520; letter-spacing: 2px;
+  }
+  .masthead .date { font-size: 13px; color: #9a9a9a; margin-top: 4px; }
+  .masthead .rule {
+    width: 60%; height: 1px; background: linear-gradient(90deg, transparent, #3a3520, transparent);
+    margin: 8px auto 0;
+  }
+
+  /* ── Content ── */
+  .news-body { padding: 16px 24px 20px; }
+
+  /* ── Player section (highlighted) ── */
+  .news-section { margin-bottom: 16px; }
+  .section-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    padding: 4px 0; margin-bottom: 8px; border-bottom: 1px solid #3a3520;
+  }
+  .section-player .section-label { color: #daa520; border-bottom-color: #5a4a20; }
+  .section-other .section-label { color: #666; }
+
+  .headline {
+    padding: 5px 0 5px 12px; margin: 3px 0; font-size: 13px;
+    border-left: 3px solid transparent; line-height: 1.4;
+  }
+  .headline .nation-tag {
+    font-size: 10px; font-weight: bold; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-right: 6px; opacity: 0.7;
+  }
+
+  /* Category colors */
+  .cat-growth { color: #2a9d8f; border-left-color: #2a9d8f; }
+  .cat-military { color: #8a9aaf; border-left-color: #8a9aaf; }
+  .cat-trade { color: #daa520; border-left-color: #daa520; }
+  .cat-war { color: #e63946; border-left-color: #e63946; }
+  .cat-diplomacy { color: #457b9d; border-left-color: #457b9d; }
+  .cat-politics { color: #b380e6; border-left-color: #b380e6; }
+  .cat-default { color: #e0d8c0; border-left-color: #3a3520; }
+
+  /* ── Footer ── */
+  .news-footer {
+    padding: 12px 24px; border-top: 1px solid #3a3520;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .btn {
+    padding: 6px 20px; background: #3a3520; color: #e0d8c0;
+    border: 1px solid #5a5030; cursor: pointer; font-family: Georgia, serif;
+    font-size: 13px; border-radius: 2px;
+  }
+  .btn:hover { background: #4a4530; }
+  .btn:focus-visible { outline: 2px solid #daa520; outline-offset: 2px; }
+  .btn-primary { background: #8b4513; color: #fff; border-color: #a0522d; }
+  .page-indicator { font-size: 11px; color: #666; }
+
+  .annotation { position: fixed; z-index: 999; font-family: 'Helvetica Neue', sans-serif; pointer-events: none; }
+  .callout { background: #22c55e; color: white; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+</style>
+</head>
+<body>
+  <div class="annotation" style="top:20px;left:50%;transform:translateX(-50%)">
+    <div class="callout">#6 Headlines grouped: player first, then by nation, with category color bars</div>
+  </div>
+
+  <div class="modal">
+    <div class="masthead">
+      <h2>The Imperial Times</h2>
+      <div class="date">1815 Q1 &mdash; Turn 1</div>
+      <div class="rule"></div>
+    </div>
+
+    <div class="news-body">
+      <!-- Player's news first, highlighted -->
+      <div class="news-section section-player">
+        <div class="section-label">Your Empire &mdash; Deneb</div>
+        <div class="headline cat-growth">The Deneb empire grows stronger</div>
+        <div class="headline cat-default">Industrial production reaches new heights</div>
+        <div class="headline cat-trade">New trade routes established with Minor Nations</div>
+      </div>
+
+      <!-- Other nations grouped -->
+      <div class="news-section section-other">
+        <div class="section-label">World News</div>
+
+        <div class="headline cat-politics">
+          <span class="nation-tag">Patagon</span>
+          Scientists have discovered High Pressure Steam Engine!
+        </div>
+        <div class="headline cat-military">
+          <span class="nation-tag">Patagon</span>
+          Has been expanding its military forces
+        </div>
+
+        <div class="headline cat-politics">
+          <span class="nation-tag">Ordune</span>
+          Scientists have discovered Seed Drill!
+        </div>
+        <div class="headline cat-military">
+          <span class="nation-tag">Ordune</span>
+          Has been expanding its military forces
+        </div>
+
+        <div class="headline cat-politics">
+          <span class="nation-tag">Zimm</span>
+          Scientists have discovered Seed Drill!
+        </div>
+
+        <div class="headline cat-war">
+          <span class="nation-tag">Kem</span>
+          Declares war on Haxaco!
+        </div>
+        <div class="headline cat-diplomacy">
+          <span class="nation-tag">Devron</span>
+          Signs trade pact with Ordune
+        </div>
+      </div>
+    </div>
+
+    <div class="news-footer">
+      <span class="page-indicator">Esc to dismiss</span>
+      <button class="btn btn-primary">Continue</button>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Imperialism Remake — a faithful remake of the 1997 grand strategy game">
+<title>Comp 1: Fixed Main Layout</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: Georgia, serif; background: #1a1a2e; color: #e0d8c0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* ── Top Bar ── */
+  .top-bar {
+    display: flex; align-items: center; gap: 20px;
+    padding: 8px 16px; background: #0f0f23; border-bottom: 2px solid #3a3520;
+    flex-shrink: 0;
+  }
+  .top-bar .title { font-weight: bold; font-size: 18px; color: #daa520; }
+  .btn {
+    padding: 4px 12px; background: #3a3520; color: #e0d8c0;
+    border: 1px solid #5a5030; cursor: pointer; font-family: Georgia, serif;
+    border-radius: 2px; transition: outline 0.1s;
+  }
+  .btn:focus-visible {
+    outline: 2px solid #daa520; outline-offset: 2px;
+  }
+  .btn:hover { background: #4a4530; }
+  .btn-end {
+    padding: 6px 20px; background: #8b4513; color: #fff;
+    border: 1px solid #a0522d; cursor: pointer; font-weight: bold; font-family: Georgia, serif;
+    border-radius: 2px; transition: outline 0.1s;
+  }
+  .btn-end:focus-visible {
+    outline: 2px solid #daa520; outline-offset: 2px;
+  }
+  .btn-end:hover { background: #a0522d; }
+
+  /* ── Main Area ── */
+  .main-area { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+
+  /* ── Map fills all available space ── */
+  .map-container {
+    flex: 1; background: #0a0a1a; position: relative; min-height: 0;
+  }
+  .map-canvas {
+    width: 100%; height: 100%; display: block;
+    background: linear-gradient(135deg, #6fa8d6 0%, #5a94be 30%, #7aba3a 30%, #5a9a4a 50%, #8db35a 70%, #6fa8d6 100%);
+  }
+  .map-label {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    font-size: 14px; color: rgba(255,255,255,0.5); pointer-events: none;
+    text-align: center; line-height: 1.8;
+  }
+  .zoom-toggle {
+    position: absolute; bottom: 12px; right: 12px;
+  }
+
+  /* ── Side Panel ── */
+  .side-panel {
+    width: 260px; padding: 12px; background: #161625;
+    border-left: 2px solid #3a3520; overflow-y: auto; flex-shrink: 0;
+  }
+  .panel-title {
+    margin: 12px 0 6px; color: #daa520;
+    border-bottom: 1px solid #3a3520; padding-bottom: 4px; font-size: 16px;
+  }
+
+  /* ── FIXED: Tile info with click vs hover distinction ── */
+  .tile-info { font-size: 13px; }
+  .tile-info p { margin: 2px 0; }
+  .tile-selected {
+    background: rgba(218,165,32,0.1); border: 1px solid rgba(218,165,32,0.3);
+    border-radius: 4px; padding: 8px; margin-bottom: 8px;
+  }
+  .tile-selected .label { font-size: 11px; color: #daa520; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .tile-hovered {
+    padding: 8px; margin-bottom: 8px; opacity: 0.8;
+  }
+  .tile-hovered .label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+
+  /* ── FIXED: Contrast — was #666, now #9a9a9a for 4.5:1 ratio ── */
+  .hint { color: #9a9a9a; font-style: italic; }
+
+  .nation-list { font-size: 13px; }
+  .nation-item { display: flex; justify-content: space-between; padding: 3px 0; }
+  .nation-item:hover { background: rgba(218,165,32,0.05); }
+
+  main { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+  /* ── Annotations ── */
+  .annotation {
+    position: fixed; z-index: 999; font-family: 'Helvetica Neue', sans-serif;
+    pointer-events: none;
+  }
+  .callout {
+    background: #ff4444; color: white; padding: 4px 10px; border-radius: 12px;
+    font-size: 11px; font-weight: 600; white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }
+  .callout-green {
+    background: #22c55e;
+  }
+</style>
+</head>
+<body>
+  <!-- Annotations -->
+  <div class="annotation" style="top:50%;right:275px;transform:translateY(-50%)">
+    <div class="callout callout-green">#1 Map fills full height — no dead space</div>
+  </div>
+  <div class="annotation" style="top:130px;right:30px;">
+    <div class="callout callout-green">#8 Click vs Hover distinction</div>
+  </div>
+  <div class="annotation" style="top:230px;right:30px;">
+    <div class="callout callout-green">#9 Contrast fixed: #9a9a9a (5.1:1)</div>
+  </div>
+  <div class="annotation" style="bottom:50px;left:50%;transform:translateX(-50%)">
+    <div class="callout callout-green">#12 Focus ring: 2px solid #daa520</div>
+  </div>
+
+  <main>
+    <div class="top-bar">
+      <span class="title">Empire of Deneb</span>
+      <span>Turn 1 (1815 Q1)</span>
+      <span>Treasury: $0</span>
+      <span>Provinces: 8</span>
+      <button class="btn" tabindex="0">Tech</button>
+      <button class="btn-end" tabindex="0">End Turn</button>
+    </div>
+
+    <div class="main-area">
+      <div class="map-container">
+        <div class="map-canvas"></div>
+        <div class="map-label">
+          [Canvas hex map]<br>
+          fills 100% of available height<br>
+          no empty space below
+        </div>
+        <button class="btn zoom-toggle" tabindex="0">Terrain View</button>
+      </div>
+
+      <div class="side-panel">
+        <h3 class="panel-title">Tile Info</h3>
+
+        <!-- Selected tile (persists until new click) -->
+        <div class="tile-selected">
+          <div class="label">Selected</div>
+          <div class="tile-info">
+            <p><b>Farm</b></p>
+            <p>Province: Sindel</p>
+            <p>Owner: Deneb</p>
+            <p>Level: 2</p>
+            <p>Railroad</p>
+          </div>
+        </div>
+
+        <!-- Hovered tile (ephemeral) -->
+        <div class="tile-hovered">
+          <div class="label">Hovering</div>
+          <div class="tile-info">
+            <p><b>Hardwood Forest</b></p>
+            <p>Province: Hurshen</p>
+            <p>Owner: Haxaco</p>
+            <p>Level: 0</p>
+          </div>
+        </div>
+
+        <p class="hint">Click to pin, hover to preview</p>
+
+        <h3 class="panel-title">Nations</h3>
+        <div class="nation-list">
+          <div class="nation-item"><span>Deneb</span><span>8 prov</span></div>
+          <div class="nation-item"><span>Devron</span><span>8 prov</span></div>
+          <div class="nation-item"><span>Haxaco</span><span>8 prov</span></div>
+          <div class="nation-item"><span>Kem</span><span>8 prov</span></div>
+          <div class="nation-item"><span>Ordune</span><span>8 prov</span></div>
+          <div class="nation-item"><span>Patagon</span><span>8 prov</span></div>
+          <div class="nation-item"><span>Zimm</span><span>8 prov</span></div>
+        </div>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Comp 4: Player Action Screens (5-tab layout)</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: Georgia, serif; background: #1a1a2e; color: #e0d8c0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  .top-bar {
+    display: flex; align-items: center; gap: 20px;
+    padding: 8px 16px; background: #0f0f23; border-bottom: 2px solid #3a3520; flex-shrink: 0;
+  }
+  .title { font-weight: bold; font-size: 18px; color: #daa520; }
+  .btn { padding: 4px 12px; background: #3a3520; color: #e0d8c0; border: 1px solid #5a5030; cursor: pointer; font-family: Georgia, serif; border-radius: 2px; }
+  .btn:focus-visible { outline: 2px solid #daa520; outline-offset: 2px; }
+  .btn-end { padding: 6px 20px; background: #8b4513; color: #fff; border: 1px solid #a0522d; cursor: pointer; font-weight: bold; font-family: Georgia, serif; border-radius: 2px; }
+
+  /* ── Screen Tabs ── */
+  .screen-tabs {
+    display: flex; background: #0f0f23; border-bottom: 2px solid #3a3520; flex-shrink: 0;
+  }
+  .screen-tab {
+    flex: 1; padding: 10px 8px; text-align: center; font-size: 13px;
+    color: #9a9a9a; background: none; border: none; cursor: pointer;
+    font-family: Georgia, serif; border-bottom: 3px solid transparent;
+    transition: all 0.15s;
+  }
+  .screen-tab:hover { color: #e0d8c0; background: rgba(218,165,32,0.03); }
+  .screen-tab.active { color: #daa520; border-bottom-color: #daa520; background: rgba(218,165,32,0.05); }
+  .screen-tab .hotkey { font-size: 10px; color: #555; display: block; margin-top: 2px; }
+  .screen-tab.active .hotkey { color: #8a7530; }
+
+  .main-area { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+
+  .map-container { flex: 1; background: #0a0a1a; position: relative; }
+  .map-canvas {
+    width: 100%; height: 100%; display: block;
+    background: linear-gradient(135deg, #6fa8d6 0%, #5a94be 30%, #7aba3a 30%, #5a9a4a 50%, #8db35a 70%, #6fa8d6 100%);
+  }
+  .map-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 14px; color: rgba(255,255,255,0.4); pointer-events: none; text-align: center; }
+
+  /* ── Side Panel — now context-sensitive to active screen ── */
+  .side-panel { width: 300px; background: #161625; border-left: 2px solid #3a3520; overflow-y: auto; flex-shrink: 0; display: flex; flex-direction: column; }
+  .panel-header { padding: 12px 14px; background: #0f0f23; border-bottom: 1px solid #3a3520; }
+  .panel-header h3 { color: #daa520; font-size: 15px; }
+  .panel-body { flex: 1; padding: 12px 14px; overflow-y: auto; }
+  .panel-title { color: #daa520; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin: 12px 0 6px; border-bottom: 1px solid #3a3520; padding-bottom: 3px; }
+  .panel-title:first-child { margin-top: 0; }
+
+  /* Industry screen content */
+  .building-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid rgba(58,53,32,0.4); }
+  .building-icon { width: 32px; height: 32px; background: #2a2a40; border: 1px solid #3a3520; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+  .building-info { flex: 1; }
+  .building-name { font-size: 13px; font-weight: bold; }
+  .building-detail { font-size: 11px; color: #9a9a9a; }
+  .building-action { font-size: 11px; }
+
+  .worker-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; }
+  .worker-count { color: #daa520; font-weight: bold; min-width: 20px; }
+  .worker-bar { flex: 1; height: 6px; background: #2a2a40; border-radius: 3px; overflow: hidden; }
+  .worker-bar-fill { height: 100%; border-radius: 3px; }
+
+  .resource-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+  .resource-item { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 6px; background: rgba(42,42,64,0.4); border-radius: 2px; }
+  .resource-qty { color: #daa520; font-weight: bold; }
+
+  .btn-panel { padding: 5px 10px; background: #3a3520; color: #e0d8c0; border: 1px solid #5a5030; cursor: pointer; font-family: Georgia, serif; font-size: 11px; border-radius: 2px; }
+
+  .annotation { position: fixed; z-index: 999; font-family: 'Helvetica Neue', sans-serif; pointer-events: none; }
+  .callout { background: #22c55e; color: white; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+</style>
+</head>
+<body>
+  <div class="annotation" style="top:38px;left:50%;transform:translateX(-50%)">
+    <div class="callout">#5 Five-screen navigation with hotkeys (Map / Transport / Industry / Trade / Diplomacy)</div>
+  </div>
+  <div class="annotation" style="top:100px;right:20px;">
+    <div class="callout">#5 Context-sensitive side panel: Industry view shown</div>
+  </div>
+
+  <main>
+    <div class="top-bar">
+      <span class="title">Empire of Deneb</span>
+      <span>Turn 3 (1815 Q3)</span>
+      <span>Treasury: $1,250</span>
+      <span>Provinces: 8</span>
+      <button class="btn">Tech</button>
+      <button class="btn-end">End Turn</button>
+    </div>
+
+    <div class="screen-tabs">
+      <button class="screen-tab">Map<span class="hotkey">F1</span></button>
+      <button class="screen-tab">Transport<span class="hotkey">F2</span></button>
+      <button class="screen-tab active">Industry<span class="hotkey">F3</span></button>
+      <button class="screen-tab">Trade<span class="hotkey">F4</span></button>
+      <button class="screen-tab">Diplomacy<span class="hotkey">F5</span></button>
+    </div>
+
+    <div class="main-area">
+      <div class="map-container">
+        <div class="map-canvas"></div>
+        <div class="map-label">[Capital city view / hex map]</div>
+      </div>
+
+      <div class="side-panel">
+        <div class="panel-header">
+          <h3>Industry &mdash; Capital City</h3>
+        </div>
+        <div class="panel-body">
+
+          <div class="panel-title">Buildings</div>
+          <div class="building-row">
+            <div class="building-icon">&#9881;</div>
+            <div class="building-info">
+              <div class="building-name">Lumber Mill</div>
+              <div class="building-detail">2/3 workers &bull; Producing Lumber</div>
+            </div>
+            <button class="btn-panel">Assign</button>
+          </div>
+          <div class="building-row">
+            <div class="building-icon">&#9878;</div>
+            <div class="building-info">
+              <div class="building-name">Steel Mill</div>
+              <div class="building-detail">1/2 workers &bull; Producing Steel</div>
+            </div>
+            <button class="btn-panel">Assign</button>
+          </div>
+          <div class="building-row">
+            <div class="building-icon">&#127981;</div>
+            <div class="building-info">
+              <div class="building-name">Arms Factory</div>
+              <div class="building-detail">0/2 workers &bull; Idle</div>
+            </div>
+            <button class="btn-panel">Assign</button>
+          </div>
+          <div class="building-row">
+            <div class="building-icon">&#128295;</div>
+            <div class="building-info">
+              <div class="building-name">Shipyard</div>
+              <div class="building-detail">1/1 workers &bull; Building Frigate</div>
+            </div>
+            <button class="btn-panel">Queue</button>
+          </div>
+
+          <div class="panel-title">Workforce</div>
+          <div class="worker-row">
+            <span class="worker-count">12</span>
+            <span>Untrained</span>
+            <div class="worker-bar"><div class="worker-bar-fill" style="width:60%;background:#9a9a9a"></div></div>
+          </div>
+          <div class="worker-row">
+            <span class="worker-count">6</span>
+            <span>Trained</span>
+            <div class="worker-bar"><div class="worker-bar-fill" style="width:30%;background:#daa520"></div></div>
+          </div>
+          <div class="worker-row">
+            <span class="worker-count">2</span>
+            <span>Expert</span>
+            <div class="worker-bar"><div class="worker-bar-fill" style="width:10%;background:#22c55e"></div></div>
+          </div>
+
+          <div class="panel-title">Warehouse</div>
+          <div class="resource-grid">
+            <div class="resource-item"><span>Timber</span><span class="resource-qty">14</span></div>
+            <div class="resource-item"><span>Ore</span><span class="resource-qty">8</span></div>
+            <div class="resource-item"><span>Lumber</span><span class="resource-qty">6</span></div>
+            <div class="resource-item"><span>Steel</span><span class="resource-qty">3</span></div>
+            <div class="resource-item"><span>Wool</span><span class="resource-qty">5</span></div>
+            <div class="resource-item"><span>Cloth</span><span class="resource-qty">2</span></div>
+            <div class="resource-item"><span>Food</span><span class="resource-qty">20</span></div>
+            <div class="resource-item"><span>Arms</span><span class="resource-qty">0</span></div>
+          </div>
+
+          <div style="margin-top:12px;display:flex;gap:6px;">
+            <button class="btn-panel" style="flex:1;">Recruit Workers</button>
+            <button class="btn-panel" style="flex:1;">Expand Building</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

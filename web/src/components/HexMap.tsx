@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import type { TileData } from '../wasm';
 
 const HEX_SIZE = 18;
@@ -33,6 +33,29 @@ const NATION_COLORS: Record<string, string> = {
   Indigo: '#4d0080',
 };
 
+// Returns a resource icon only if the tile is actively producing
+function getResourceIcon(tile: TileData): string | null {
+  switch (tile.terrain) {
+    // Always produce when owned
+    case 'Farm':           return '🌾';  // Grain
+    case 'HardwoodForest': return '🪵';  // Timber
+    case 'ScrubForest':    return '🌿';  // Timber
+    case 'FertileHills':   return '🐑';  // Wool
+    case 'DryPlains':      return '🌽';  // Grain
+    case 'OpenRange':      return '🐄';  // Livestock
+    case 'HorseRanch':     return '🐴';  // Horses
+    case 'Orchard':        return '🍎';  // Fruit
+    case 'Plantation':     return '🌱';  // Cotton
+    // Require prospecting/development (improvement_level > 0)
+    case 'BarrenHills':    return tile.improvement_level > 0 ? '⛏️' : null;
+    case 'Mountain':       return tile.improvement_level > 0 ? '⛏️' : null;
+    case 'Swamp':          return tile.improvement_level > 0 ? '🛢️' : null;
+    case 'Desert':         return tile.improvement_level > 0 ? '🛢️' : null;
+    case 'Tundra':         return tile.improvement_level > 0 ? '🛢️' : null;
+    default:               return null;
+  }
+}
+
 function politicalFill(nationHex: string): string {
   const c = parseInt(nationHex.slice(1), 16);
   const r = (c >> 16) & 0xff, g = (c >> 8) & 0xff, b = c & 0xff;
@@ -45,6 +68,28 @@ const POLITICAL_THRESHOLD = 1.1;
 
 function hexToPixel(q: number, r: number): [number, number] {
   return [HEX_SIZE * (SQRT3 * q + SQRT3 / 2 * r), HEX_SIZE * (3 / 2 * r)];
+}
+
+function axialRound(q: number, r: number): [number, number] {
+  const s = -q - r;
+  let rq = Math.round(q);
+  let rr = Math.round(r);
+  const rs = Math.round(s);
+  const dq = Math.abs(rq - q);
+  const dr = Math.abs(rr - r);
+  const ds = Math.abs(rs - s);
+  if (dq > dr && dq > ds) {
+    rq = -rr - rs;
+  } else if (dr > ds) {
+    rr = -rq - rs;
+  }
+  return [rq, rr];
+}
+
+function pixelToHex(px: number, py: number): [number, number] {
+  const r = py / (HEX_SIZE * 1.5);
+  const q = px / (HEX_SIZE * SQRT3) - r / 2;
+  return axialRound(q, r);
 }
 
 function drawHexagon(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number) {
@@ -102,6 +147,14 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
 
   const isPolitical = scale < POLITICAL_THRESHOLD;
 
+  const tileMap = useMemo(() => {
+    const m = new Map<string, TileData>();
+    for (const tile of tiles) {
+      m.set(`${tile.q},${tile.r}`, tile);
+    }
+    return m;
+  }, [tiles]);
+
   const render = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -111,11 +164,6 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
     canvas.width = canvas.clientWidth;
     canvas.height = canvas.clientHeight;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    const tileMap = new Map<string, TileData>();
-    for (const tile of tiles) {
-      tileMap.set(`${tile.q},${tile.r}`, tile);
-    }
 
     const verts = hexVertices(HEX_SIZE);
 
@@ -255,7 +303,25 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
       }
     }
 
-    // ── Pass 4: Infrastructure icons ──
+    // ── Pass 4: Resource icons on producing tiles (terrain view only) ──
+    if (scale > 0.6 && !isPolitical) {
+      const rSize = Math.max(10, HEX_SIZE * 0.7);
+      ctx.font = `${rSize}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const tile of tiles) {
+        if (tile.terrain === 'Sea' || !tile.owner) continue;
+        if (tile.is_capital || tile.is_country_capital) continue;
+        const icon = getResourceIcon(tile);
+        if (!icon) continue;
+        const [px, py] = hexToPixel(tile.q, tile.r);
+        ctx.globalAlpha = 0.75;
+        ctx.fillText(icon, px, py);
+      }
+      ctx.globalAlpha = 1.0;
+    }
+
+    // ── Pass 5: Infrastructure icons ──
     if (scale > 0.8) {
       const iconSize = Math.max(8, HEX_SIZE * 0.5);
       for (const tile of tiles) {
@@ -308,7 +374,7 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
       }
     }
 
-    // ── Pass 5: Nation name labels (political mode, per-landmass) ──
+    // ── Pass 6: Nation name labels (political mode, per-landmass) ──
     if (isPolitical) {
       // Group land tiles by nation
       const nationTiles = new Map<string, Set<string>>();
@@ -377,6 +443,15 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
 
   useEffect(() => { render(); }, [render]);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === '+' || e.key === '=') { setScale(s => Math.min(4, s + 0.2)); }
+      if (e.key === '-') { setScale(s => Math.max(0.3, s - 0.2)); }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const handleMouseDown = (e: React.MouseEvent) => {
     setDragging(true);
     setDragStart({ x: e.clientX - offset.x, y: e.clientY - offset.y });
@@ -389,14 +464,8 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
       const rect = canvasRef.current.getBoundingClientRect();
       const mx = (e.clientX - rect.left - offset.x) / scale;
       const my = (e.clientY - rect.top - offset.y) / scale;
-      let closest: TileData | null = null;
-      let minDist = Infinity;
-      for (const tile of tiles) {
-        const [px, py] = hexToPixel(tile.q, tile.r);
-        const d = Math.hypot(mx - px, my - py);
-        if (d < HEX_SIZE && d < minDist) { minDist = d; closest = tile; }
-      }
-      onTileHover(closest);
+      const [hq, hr] = pixelToHex(mx, my);
+      onTileHover(tileMap.get(`${hq},${hr}`) || null);
     }
   };
   const handleMouseUp = () => setDragging(false);
@@ -415,22 +484,25 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
       const rect = canvasRef.current.getBoundingClientRect();
       const mx = (e.clientX - rect.left - offset.x) / scale;
       const my = (e.clientY - rect.top - offset.y) / scale;
-      let closest: TileData | null = null;
-      let minDist = Infinity;
-      for (const tile of tiles) {
-        const [px, py] = hexToPixel(tile.q, tile.r);
-        const d = Math.hypot(mx - px, my - py);
-        if (d < HEX_SIZE && d < minDist) { minDist = d; closest = tile; }
-      }
-      if (closest) onTileClick(closest);
+      const [hq, hr] = pixelToHex(mx, my);
+      const tile = tileMap.get(`${hq},${hr}`);
+      if (tile) onTileClick(tile);
     }
+  };
+
+  const controlBtn: React.CSSProperties = {
+    padding: '6px 10px', background: '#3a3520', color: '#e0d8c0',
+    border: '1px solid #5a5030', borderRadius: 4, cursor: 'pointer',
+    fontSize: 16, fontFamily: 'Georgia, serif', lineHeight: 1,
   };
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <canvas
         ref={canvasRef}
-        style={{ width: '100%', height: '100%', cursor: dragging ? 'grabbing' : 'grab' }}
+        role="img"
+        aria-label="Game map"
+        style={{ width: '100%', height: '100%', display: 'block', cursor: dragging ? 'grabbing' : 'grab' }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -438,17 +510,22 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
         onWheel={handleWheel}
         onClick={handleClick}
       />
-      <button
-        onClick={toggleZoom}
-        style={{
-          position: 'absolute', bottom: 12, right: 12,
-          padding: '6px 14px', background: '#3a3520', color: '#e0d8c0',
-          border: '1px solid #5a5030', borderRadius: 4, cursor: 'pointer',
-          fontSize: 13, fontFamily: 'Georgia, serif',
-        }}
-      >
-        {isPolitical ? '🔍 Terrain View' : '🗺️ Political View'}
-      </button>
+      {/* Map controls */}
+      <div style={{ position: 'absolute', bottom: 12, right: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
+        <button
+          onClick={() => setScale(s => Math.max(0.3, s - 0.2))}
+          style={controlBtn}
+          aria-label="Zoom out"
+        >−</button>
+        <button
+          onClick={() => setScale(s => Math.min(4, s + 0.2))}
+          style={controlBtn}
+          aria-label="Zoom in"
+        >+</button>
+        <button onClick={toggleZoom} style={{ ...controlBtn, padding: '6px 14px' }}>
+          {isPolitical ? 'Terrain View' : 'Political View'}
+        </button>
+      </div>
     </div>
   );
 }
