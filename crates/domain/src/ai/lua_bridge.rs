@@ -44,7 +44,9 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         immigration_clothing: table.get("immigration_clothing").unwrap_or(1),
         immigration_furniture: table.get("immigration_furniture").unwrap_or(1),
         provinces_per_immigrant: table.get("provinces_per_immigrant").unwrap_or(4),
-        provinces_per_immigrant_upgraded: table.get("provinces_per_immigrant_upgraded").unwrap_or(3),
+        provinces_per_immigrant_upgraded: table
+            .get("provinces_per_immigrant_upgraded")
+            .unwrap_or(3),
         gold_value: table.get("gold_value").unwrap_or(500),
         gems_value: table.get("gems_value").unwrap_or(1000),
         expansion_delay_turns: table.get::<u32>("expansion_delay_turns").unwrap_or(2) as u8,

@@ -108,14 +108,34 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
     // Step 1: Create land mask via continent generation
     let land_mask = generate_land_mass(&mut rng);
 
-    // Step 2: Place nation regions and carve provinces
-    let total_nations = NUM_GREAT_POWERS + NUM_MINOR_NATIONS;
-    let nation_centers = place_nation_centers(&mut rng, &land_mask, total_nations);
+    // Step 2: Build hex map and assign terrain to ALL land tiles (no provinces yet)
+    let mut hex_map = HexMap::new(MAP_WIDTH, MAP_HEIGHT);
+    for q in 0..MAP_WIDTH {
+        for r in 0..MAP_HEIGHT {
+            let coord = HexCoord::new(q, r);
+            hex_map.set_tile(coord, super::tile::Tile::new(TerrainType::Sea));
+        }
+    }
+    // Sort land tiles for deterministic RNG consumption (HashSet order is arbitrary)
+    let mut land_tiles_sorted: Vec<HexCoord> = land_mask.iter().copied().collect();
+    land_tiles_sorted.sort_by_key(|c| (c.q, c.r));
+    for &coord in &land_tiles_sorted {
+        let terrain = random_land_terrain(&mut rng);
+        hex_map.set_tile(coord, super::tile::Tile::new(terrain));
+    }
 
-    // Step 3: Assign land tiles to nations (Voronoi-like)
+    // Step 3: Cluster food terrain and enforce minimum food (before nations/provinces)
+    cluster_food_terrain(&mut hex_map, &land_mask, &mut rng, 15);
+    enforce_minimum_food_tiles(&mut hex_map, &land_mask, &mut rng, 20);
+
+    // Step 4: Place nation centers (terrain-aware — prefers food-rich, coastal tiles)
+    let total_nations = NUM_GREAT_POWERS + NUM_MINOR_NATIONS;
+    let nation_centers = place_nation_centers(&mut rng, &land_mask, total_nations, &hex_map);
+
+    // Step 5: Assign land tiles to nations (Voronoi-like)
     let nation_tiles = assign_tiles_to_nations(&land_mask, &nation_centers);
 
-    // Step 4: Subdivide each nation's territory into provinces
+    // Step 6: Subdivide each nation's territory into provinces
     let mut province_id_counter: u32 = 0;
     let mut all_province_data: Vec<ProvinceData> = Vec::new();
     let mut nation_province_map: Vec<Vec<u32>> = Vec::with_capacity(total_nations);
@@ -156,7 +176,6 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
             let pid = province_id_counter;
             province_id_counter += 1;
             province_ids.push(pid);
-            // Give it at least 1 tile from the nation's tiles to avoid empty provinces
             let fallback_tile = tiles.first().copied();
             if let Some(tile) = fallback_tile {
                 all_province_data.push(ProvinceData {
@@ -165,7 +184,6 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
                     tiles: vec![tile],
                 });
             } else {
-                // Extremely unlikely: nation has no tiles at all — create a dummy
                 all_province_data.push(ProvinceData {
                     id: pid,
                     nation_idx,
@@ -177,41 +195,24 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
         nation_province_map.push(province_ids);
     }
 
-    // Step 5: Build the hex map with terrain
-    let mut hex_map = HexMap::new(MAP_WIDTH, MAP_HEIGHT);
-
-    // Place sea tiles for all coordinates
-    for q in 0..MAP_WIDTH {
-        for r in 0..MAP_HEIGHT {
-            let coord = HexCoord::new(q, r);
-            hex_map.set_tile(coord, super::tile::Tile::new(TerrainType::Sea));
-        }
-    }
-
-    // Assign terrain and province to land tiles
+    // Step 7: Stamp province IDs onto existing terrain tiles
     for pdata in &all_province_data {
         let pid = ProvinceId(pdata.id);
-        for (i, &coord) in pdata.tiles.iter().enumerate() {
-            let terrain = random_land_terrain(&mut rng);
-            let mut tile = super::tile::Tile::with_province(terrain, pid);
-            if i == 0 {
-                tile.is_capital = true;
+        for &coord in &pdata.tiles {
+            if let Some(tile) = hex_map.get_tile_mut(coord) {
+                tile.province_id = Some(pid);
             }
-            hex_map.set_tile(coord, tile);
         }
     }
 
-    // Cluster food terrain: spread food tiles to neighbors for natural farm belts
-    cluster_food_terrain(&mut hex_map, &all_province_data, &mut rng, 15);
+    // Step 8: Select country capitals (best tile across ALL nation tiles)
+    // This also reorders nation_province_map so capital province is first.
+    select_country_capitals(&mut hex_map, &all_province_data, &mut nation_province_map);
 
-    // Guarantee minimum food tiles across the map
-    let min_food_percent: usize = 20;
-    enforce_minimum_food_tiles(&mut hex_map, &all_province_data, &mut rng, min_food_percent);
+    // Step 9: Select province capitals for remaining (non-capital) provinces
+    select_province_capitals(&mut hex_map, &all_province_data);
 
-    // Relocate Great Power capitals to best tile (coastal + food-rich)
-    relocate_capitals(&mut hex_map, &all_province_data, &nation_province_map);
-
-    // Place hidden mineral deposits on prospectable terrain
+    // Step 10: Place hidden mineral deposits on prospectable terrain
     for q in 0..MAP_WIDTH {
         for r in 0..MAP_HEIGHT {
             let coord = HexCoord::new(q, r);
@@ -222,15 +223,12 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
                 if roll < 40 {
                     let deposit = random_mineral_deposit(&mut rng, tile.terrain());
                     tile.reveal_deposit(deposit);
-                    // In a real game these would start hidden; for generation
-                    // we set them so the data exists. The game would reset
-                    // visibility.
                 }
             }
         }
     }
 
-    // Step 6: Build Province structs
+    // Step 11: Build Province structs
     let mut provinces: Vec<Province> = Vec::new();
 
     for pdata in &all_province_data {
@@ -243,7 +241,6 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
 
         let nation_id = NationId(nation_idx as u32);
         let pid = ProvinceId(pdata.id);
-        // Find the tile marked as capital (may have been relocated)
         let capital_tile = pdata
             .tiles
             .iter()
@@ -258,7 +255,7 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
 
         let garrison = if nation_idx < NUM_GREAT_POWERS { 4 } else { 3 };
 
-        // First province of a nation is the capital province
+        // Capital province is first in nation_province_map (set by select_country_capitals)
         let province_indices_for_nation = &nation_province_map[nation_idx];
         let is_capital_province = province_indices_for_nation
             .first()
@@ -280,7 +277,7 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
         ));
     }
 
-    // Step 7: Build NationSetup structs
+    // Step 12: Build NationSetup structs
     let mut great_power_nations = Vec::new();
     let mut minor_nations_out = Vec::new();
 
@@ -477,8 +474,13 @@ fn generate_land_mass(rng: &mut Rng) -> HashSet<HexCoord> {
     land
 }
 
-/// Place nation centers spread across the land mass.
-fn place_nation_centers(rng: &mut Rng, land: &HashSet<HexCoord>, count: usize) -> Vec<HexCoord> {
+/// Place nation centers spread across the land mass, preferring terrain-rich locations.
+fn place_nation_centers(
+    rng: &mut Rng,
+    land: &HashSet<HexCoord>,
+    count: usize,
+    hex_map: &HexMap,
+) -> Vec<HexCoord> {
     let mut land_tiles: Vec<HexCoord> = land.iter().copied().collect();
     // Sort to ensure deterministic iteration regardless of HashSet ordering.
     land_tiles.sort_by_key(|c| (c.q, c.r));
@@ -493,23 +495,32 @@ fn place_nation_centers(rng: &mut Rng, land: &HashSet<HexCoord>, count: usize) -
             .collect();
     }
 
+    // Score all land tiles by terrain quality, then sort best-first
+    let mut scored_tiles: Vec<(HexCoord, u32)> = land_tiles
+        .iter()
+        .map(|&coord| (coord, score_nation_center(coord, hex_map)))
+        .collect();
+    scored_tiles.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then(a.0.q.cmp(&b.0.q))
+            .then(a.0.r.cmp(&b.0.r))
+    });
+
     let mut centers: Vec<HexCoord> = Vec::new();
-    let min_distance = 6; // Minimum distance between nation centers
+    let min_distance = 6;
 
-    let mut attempts = 0;
-    while centers.len() < count && attempts < 5000 {
-        attempts += 1;
-        let candidate = land_tiles[rng.next_u32() as usize % land_tiles.len()];
-
-        // Check minimum distance from existing centers
+    // Pick top-scoring tiles that satisfy min distance
+    for &(candidate, _) in &scored_tiles {
+        if centers.len() >= count {
+            break;
+        }
         let too_close = centers.iter().any(|c| c.distance(candidate) < min_distance);
-
         if !too_close {
             centers.push(candidate);
         }
     }
 
-    // If we couldn't place enough, reduce min distance and try again
+    // Fallback with reduced distance if needed
     while centers.len() < count {
         let candidate = land_tiles[rng.next_u32() as usize % land_tiles.len()];
         let too_close = centers.iter().any(|c| c.distance(candidate) < 3);
@@ -518,9 +529,9 @@ fn place_nation_centers(rng: &mut Rng, land: &HashSet<HexCoord>, count: usize) -
         }
         // Ultimate fallback: just pick any land tile
         if centers.len() < count {
-            attempts += 1;
-            if attempts > 10000 {
-                centers.push(land_tiles[rng.next_u32() as usize % land_tiles.len()]);
+            let candidate2 = land_tiles[rng.next_u32() as usize % land_tiles.len()];
+            if !centers.contains(&candidate2) {
+                centers.push(candidate2);
             }
         }
     }
@@ -669,17 +680,16 @@ fn is_replaceable_for_food(terrain: TerrainType) -> bool {
 
 /// Ensure at least `min_percent`% of land tiles produce food.
 /// Replaces barren/desert/mountain tiles with random food terrain if needed.
+/// Called before provinces exist — works on raw land tiles.
 fn enforce_minimum_food_tiles(
     hex_map: &mut super::hex_map::HexMap,
-    province_data: &[ProvinceData],
+    land_mask: &HashSet<HexCoord>,
     rng: &mut Rng,
     min_percent: usize,
 ) {
-    // Collect all land tile coordinates with their province
-    let all_land: Vec<HexCoord> = province_data
-        .iter()
-        .flat_map(|p| p.tiles.iter().copied())
-        .collect();
+    // Sort for deterministic RNG consumption
+    let mut all_land: Vec<HexCoord> = land_mask.iter().copied().collect();
+    all_land.sort_by_key(|c| (c.q, c.r));
 
     if all_land.is_empty() {
         return;
@@ -703,13 +713,13 @@ fn enforce_minimum_food_tiles(
 
     let needed = min_food - food_count;
 
-    // Collect replaceable non-food tiles (not capital tiles)
+    // Collect replaceable non-food tiles (no capital check needed — none exist yet)
     let mut replaceable: Vec<HexCoord> = all_land
         .iter()
         .filter(|&&coord| {
             hex_map
                 .get_tile(coord)
-                .map(|t| !t.is_capital && is_replaceable_for_food(t.terrain()))
+                .map(|t| is_replaceable_for_food(t.terrain()))
                 .unwrap_or(false)
         })
         .copied()
@@ -722,18 +732,12 @@ fn enforce_minimum_food_tiles(
     }
 
     for &coord in replaceable.iter().take(needed) {
-        let pid = hex_map
-            .get_tile(coord)
-            .and_then(|t| t.province_id)
-            .unwrap_or(ProvinceId(0));
         let food_terrain = match rng.range(0, 3) as u32 {
             0 => TerrainType::Farm,
             1 => TerrainType::Orchard,
             _ => TerrainType::OpenRange,
         };
-        let mut tile = super::tile::Tile::with_province(food_terrain, pid);
-        tile.is_capital = false;
-        hex_map.set_tile(coord, tile);
+        hex_map.set_tile(coord, super::tile::Tile::new(food_terrain));
     }
 }
 
@@ -741,9 +745,10 @@ fn enforce_minimum_food_tiles(
 
 /// Spread food terrain to adjacent tiles to create natural clusters (farm belts, pasture regions).
 /// Each food tile has `chance_percent`% chance to convert each replaceable neighbor to the same type.
+/// Called before provinces exist — works on raw land tiles (no province_id, no capitals).
 fn cluster_food_terrain(
     hex_map: &mut super::hex_map::HexMap,
-    _province_data: &[ProvinceData],
+    _land_mask: &HashSet<HexCoord>,
     rng: &mut Rng,
     chance_percent: i32,
 ) {
@@ -768,21 +773,58 @@ fn cluster_food_terrain(
             }
             // Only replace truly barren terrain for clustering (not forests — they produce timber)
             if let Some(tile) = hex_map.get_tile(neighbor)
-                && tile.province_id.is_some()
-                && !tile.is_capital
                 && matches!(
                     tile.terrain(),
                     TerrainType::Desert | TerrainType::Tundra | TerrainType::Swamp
                 )
             {
-                let pid = tile.province_id.unwrap();
-                hex_map.set_tile(neighbor, super::tile::Tile::with_province(*terrain, pid));
+                hex_map.set_tile(neighbor, super::tile::Tile::new(*terrain));
             }
         }
     }
 }
 
-// ── Capital relocation ──────────────────────────────────────────
+// ── Nation center & capital scoring ─────────────────────────────
+
+/// Score a tile as a potential nation center.
+/// Prefers food-rich, coastal tiles; penalizes barren terrain.
+fn score_nation_center(coord: HexCoord, hex_map: &HexMap) -> u32 {
+    let mut score: u32 = 0;
+
+    if let Some(tile) = hex_map.get_tile(coord) {
+        if is_food_terrain(tile.terrain()) {
+            score += 10;
+        }
+        if matches!(
+            tile.terrain(),
+            TerrainType::Desert | TerrainType::Tundra | TerrainType::Mountain | TerrainType::Swamp
+        ) {
+            return 0;
+        }
+    }
+
+    // Coastal bonus
+    let is_coastal = coord.neighbors().iter().any(|n| {
+        hex_map
+            .get_tile(*n)
+            .map(|t| t.terrain() == TerrainType::Sea)
+            .unwrap_or(false)
+    });
+    if is_coastal {
+        score += 15;
+    }
+
+    // Food tiles within 2 hexes
+    for nearby in coord.range(2) {
+        if let Some(tile) = hex_map.get_tile(nearby)
+            && is_food_terrain(tile.terrain())
+        {
+            score += 3;
+        }
+    }
+
+    score
+}
 
 /// Score a tile as a potential capital location.
 /// Prefers coastal tiles with nearby food.
@@ -813,10 +855,7 @@ fn score_capital_candidate(coord: HexCoord, hex_map: &super::hex_map::HexMap) ->
     if let Some(tile) = hex_map.get_tile(coord)
         && matches!(
             tile.terrain(),
-            TerrainType::Desert
-                | TerrainType::Tundra
-                | TerrainType::Swamp
-                | TerrainType::Mountain
+            TerrainType::Desert | TerrainType::Tundra | TerrainType::Swamp | TerrainType::Mountain
         )
     {
         score = score.saturating_sub(15);
@@ -825,47 +864,85 @@ fn score_capital_candidate(coord: HexCoord, hex_map: &super::hex_map::HexMap) ->
     score
 }
 
-/// Relocate each Great Power's capital to the best-scoring tile in their capital province.
-fn relocate_capitals(
+/// Select country capitals for all nations.
+///
+/// For each nation, scores ALL tiles across ALL its provinces and picks the
+/// best one as the national capital. The province containing that tile is
+/// reordered to be first in `nation_province_map` (making it the capital province).
+fn select_country_capitals(
     hex_map: &mut super::hex_map::HexMap,
     province_data: &[ProvinceData],
-    nation_province_map: &[Vec<u32>],
+    nation_province_map: &mut [Vec<u32>],
 ) {
-    for nation_idx in 0..NUM_GREAT_POWERS {
+    let total_nations = NUM_GREAT_POWERS + NUM_MINOR_NATIONS;
+    for nation_idx in 0..total_nations {
         if nation_idx >= nation_province_map.len() {
             continue;
         }
-        let capital_province_id = match nation_province_map[nation_idx].first() {
-            Some(&id) => id,
-            None => continue,
-        };
-        let pdata = match province_data.iter().find(|p| p.id == capital_province_id) {
-            Some(p) => p,
-            None => continue,
-        };
+        let nation_pids = nation_province_map[nation_idx].clone();
 
-        // Score all tiles in the capital province
+        let mut best_coord: Option<HexCoord> = None;
+        let mut best_score: u32 = 0;
+        let mut best_province_id: u32 = nation_pids[0];
+
+        // Score ALL tiles across ALL provinces of this nation
+        for &pid in &nation_pids {
+            if let Some(pdata) = province_data.iter().find(|p| p.id == pid) {
+                for &coord in &pdata.tiles {
+                    let s = score_capital_candidate(coord, hex_map);
+                    if s > best_score || best_coord.is_none() {
+                        best_score = s;
+                        best_coord = Some(coord);
+                        best_province_id = pid;
+                    }
+                }
+            }
+        }
+
+        if let Some(capital) = best_coord
+            && let Some(tile) = hex_map.get_tile_mut(capital)
+        {
+            tile.is_capital = true;
+        }
+
+        // Reorder so capital province is first
+        let pids = &mut nation_province_map[nation_idx];
+        if let Some(pos) = pids.iter().position(|&id| id == best_province_id) {
+            pids.swap(0, pos);
+        }
+    }
+}
+
+/// Select province capitals for provinces that don't already have one.
+///
+/// Called after `select_country_capitals` — the capital province already has
+/// its capital tile set, so this only handles the remaining provinces.
+fn select_province_capitals(hex_map: &mut super::hex_map::HexMap, province_data: &[ProvinceData]) {
+    for pdata in province_data {
+        // Skip if this province already has a capital (set by country capital selection)
+        let has_capital = pdata.tiles.iter().any(|&coord| {
+            hex_map
+                .get_tile(coord)
+                .map(|t| t.is_capital)
+                .unwrap_or(false)
+        });
+        if has_capital {
+            continue;
+        }
+
         let mut best_coord: Option<HexCoord> = None;
         let mut best_score: u32 = 0;
         for &coord in &pdata.tiles {
             let s = score_capital_candidate(coord, hex_map);
-            if s > best_score {
+            if s > best_score || best_coord.is_none() {
                 best_score = s;
                 best_coord = Some(coord);
             }
         }
-
-        if let Some(new_capital) = best_coord {
-            // Clear old capital flag
-            for &coord in &pdata.tiles {
-                if let Some(tile) = hex_map.get_tile_mut(coord) {
-                    tile.is_capital = false;
-                }
-            }
-            // Set new capital
-            if let Some(tile) = hex_map.get_tile_mut(new_capital) {
-                tile.is_capital = true;
-            }
+        if let Some(capital) = best_coord
+            && let Some(tile) = hex_map.get_tile_mut(capital)
+        {
+            tile.is_capital = true;
         }
     }
 }

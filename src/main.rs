@@ -4598,8 +4598,10 @@ fn take_snapshot(game: &GameState) -> std::collections::HashMap<String, NationSn
         let mills = mill_buildings.len();
         let total_mill_capacity: u32 = mill_buildings.iter().map(|b| b.effective_capacity()).sum();
         let factories = factory_buildings.len();
-        let total_factory_capacity: u32 =
-            factory_buildings.iter().map(|b| b.effective_capacity()).sum();
+        let total_factory_capacity: u32 = factory_buildings
+            .iter()
+            .map(|b| b.effective_capacity())
+            .sum();
         let other_buildings = nation.buildings.len() - mills - factories;
 
         let mut alliances = 0usize;

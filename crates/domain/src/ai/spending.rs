@@ -15,7 +15,7 @@ use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::types::*;
 
 use super::common::{AiPersonality, get_personality, next_unit_id};
-use super::economy::{get_railroad_network, find_cheapest_path, score_province};
+use super::economy::{find_cheapest_path, get_railroad_network, score_province};
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -134,7 +134,11 @@ pub(crate) fn ai_scored_spending(
         }
 
         // Pick highest-scoring action above threshold
-        options.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        options.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         match options.first() {
             Some(best) if best.score > weights.min_threshold => {
@@ -341,8 +345,8 @@ fn score_consulate(
         return None;
     }
 
-    let raw = available as f64 * 5.0 + trade_potential as f64 / 10.0
-        - existing_consulates as f64 * 2.0;
+    let raw =
+        available as f64 * 5.0 + trade_potential as f64 / 10.0 - existing_consulates as f64 * 2.0;
     let score = raw.max(0.0) * weights.diplomacy_weight;
 
     Some(ScoredAction {
@@ -411,7 +415,8 @@ fn score_civilian(
             for &coord in &province.tiles {
                 if let Some(tile) = game.hex_map.get_tile(coord) {
                     let terrain = tile.terrain();
-                    if terrain.is_improvable() && tile.improvement_level() < terrain.max_improvement_level()
+                    if terrain.is_improvable()
+                        && tile.improvement_level() < terrain.max_improvement_level()
                     {
                         improvable_tiles += 1;
                     }
@@ -487,15 +492,27 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
     // Pick unit type based on army composition and variety
     let unit_type = if army_count < 3 {
         // Early game: mostly regulars
-        let options = [ArmyUnitType::Regulars, ArmyUnitType::Regulars, ArmyUnitType::Grenadiers];
+        let options = [
+            ArmyUnitType::Regulars,
+            ArmyUnitType::Regulars,
+            ArmyUnitType::Grenadiers,
+        ];
         options[variety_seed % options.len()]
     } else if army_count < 8 {
         // Mid game: mix
-        let options = [ArmyUnitType::Grenadiers, ArmyUnitType::LightArtillery, ArmyUnitType::Grenadiers];
+        let options = [
+            ArmyUnitType::Grenadiers,
+            ArmyUnitType::LightArtillery,
+            ArmyUnitType::Grenadiers,
+        ];
         options[variety_seed % options.len()]
     } else {
         // Late game: artillery focus
-        let options = [ArmyUnitType::LightArtillery, ArmyUnitType::Grenadiers, ArmyUnitType::LightArtillery];
+        let options = [
+            ArmyUnitType::LightArtillery,
+            ArmyUnitType::Grenadiers,
+            ArmyUnitType::LightArtillery,
+        ];
         options[variety_seed % options.len()]
     };
 

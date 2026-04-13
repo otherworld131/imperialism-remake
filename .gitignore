@@ -24,7 +24,7 @@ test_report.html
 *.png:Zone.Identifier
 
 # Test game output
-test_games/output/
+test_games/
 
 # Claude Code local settings
 .claude/

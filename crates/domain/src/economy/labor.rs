@@ -33,7 +33,12 @@ impl LaborPool {
     }
 
     /// Total labor units with custom multipliers from game config.
-    pub fn total_labor_units_with(&self, untrained_mult: u32, trained_mult: u32, expert_mult: u32) -> u32 {
+    pub fn total_labor_units_with(
+        &self,
+        untrained_mult: u32,
+        trained_mult: u32,
+        expert_mult: u32,
+    ) -> u32 {
         self.untrained * untrained_mult + self.trained * trained_mult + self.expert * expert_mult
     }
 

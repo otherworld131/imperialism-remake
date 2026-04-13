@@ -400,7 +400,11 @@ fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
 
     // Debug: log food collected per Great Power this turn
     if game.ai_debug {
-        let food_types = [ResourceType::Grain, ResourceType::Fruit, ResourceType::Livestock];
+        let food_types = [
+            ResourceType::Grain,
+            ResourceType::Fruit,
+            ResourceType::Livestock,
+        ];
         for nation in game.nations.iter().filter(|n| n.is_great_power()) {
             let collected: u32 = production_data
                 .iter()
@@ -463,10 +467,8 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
 
         // Also include tiles from adjacent provinces (they deliver without transport)
         let adjacent_tiles: std::collections::HashSet<crate::hex::HexCoord> = {
-            let cap_neighbors: std::collections::HashSet<crate::hex::HexCoord> = capital_tiles
-                .iter()
-                .flat_map(|t| t.neighbors())
-                .collect();
+            let cap_neighbors: std::collections::HashSet<crate::hex::HexCoord> =
+                capital_tiles.iter().flat_map(|t| t.neighbors()).collect();
             game.provinces
                 .iter()
                 .filter(|p| p.owner == nation_id && p.id != capital_province_id)
@@ -930,13 +932,15 @@ fn convert_monetary_resources(game: &mut GameState, report: &mut TurnReport) {
         let mut income = Money::ZERO;
 
         if gold_amount > 0 {
-            let gold_value = Money::dollars(gold_amount as i64 * game.game_data.game_config.gold_value);
+            let gold_value =
+                Money::dollars(gold_amount as i64 * game.game_data.game_config.gold_value);
             income += gold_value;
             nation.remove_resource(ResourceType::Gold, gold_amount);
         }
 
         if gems_amount > 0 {
-            let gems_value = Money::dollars(gems_amount as i64 * game.game_data.game_config.gems_value);
+            let gems_value =
+                Money::dollars(gems_amount as i64 * game.game_data.game_config.gems_value);
             income += gems_value;
             nation.remove_resource(ResourceType::Gems, gems_amount);
         }
@@ -976,7 +980,9 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
 
         // Labor is a shared pool across all production this turn
         let mut remaining_labor =
-            nation.labor.total_labor_units_with(untrained_mult, trained_mult, expert_mult);
+            nation
+                .labor
+                .total_labor_units_with(untrained_mult, trained_mult, expert_mult);
 
         // ── Mills: resources → materials (consume labor first) ──
 
@@ -1431,7 +1437,13 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
         if ai_debug && nation.is_great_power() {
             eprintln!(
                 "[FOOD:{}] workers={}, grain={}, fruit={}, livestock={}, canned={}, total={}, deficit={}",
-                nation.name, population, grain, fruit, livestock, canned, total_food,
+                nation.name,
+                population,
+                grain,
+                fruit,
+                livestock,
+                canned,
+                total_food,
                 population.saturating_sub(total_food)
             );
         }
@@ -1690,10 +1702,7 @@ fn resolve_military_movement(game: &mut GameState, report: &mut TurnReport) {
 
     for (nation_id, unit_id, dest_province_id) in moves {
         // Anarchic nations' armies don't move
-        if game
-            .get_nation(nation_id)
-            .is_some_and(|n| n.is_in_anarchy)
-        {
+        if game.get_nation(nation_id).is_some_and(|n| n.is_in_anarchy) {
             continue;
         }
 
@@ -1724,9 +1733,7 @@ fn resolve_military_movement(game: &mut GameState, report: &mut TurnReport) {
                 .diplomacy
                 .get_relation(nation_id, dest_owner)
                 .is_some_and(|r| r.at_war);
-            let target_is_anarchic = game
-                .get_nation(dest_owner)
-                .is_some_and(|n| n.is_in_anarchy);
+            let target_is_anarchic = game.get_nation(dest_owner).is_some_and(|n| n.is_in_anarchy);
             if at_war || target_is_anarchic {
                 // Convert to pending attack
                 game.pending_attacks.push((nation_id, dest_province_id));
@@ -1856,9 +1863,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                     .province_ids
                     .retain(|&pid| pid != province_id);
                 // Destroy any defender units in the conquered province
-                defender_nation
-                    .army
-                    .retain(|u| u.position != province_id);
+                defender_nation.army.retain(|u| u.position != province_id);
             }
             if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
                 attacker_nation.add_province(province_id);
@@ -1972,9 +1977,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                     .province_ids
                     .retain(|pid| *pid != province_id);
                 // Destroy any remaining defender units in the conquered province
-                defender_nation
-                    .army
-                    .retain(|u| u.position != province_id);
+                defender_nation.army.retain(|u| u.position != province_id);
             }
             if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
                 attacker_nation.add_province(province_id);
@@ -2179,7 +2182,11 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 .iter()
                 .any(|(_, p, _)| *p == *conquered_prov_id)
         {
-            counter_attacks.push((*original_defender, *conquered_prov_id, adjacent_province_ids));
+            counter_attacks.push((
+                *original_defender,
+                *conquered_prov_id,
+                adjacent_province_ids,
+            ));
         }
     }
 
@@ -2286,9 +2293,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                     .province_ids
                     .retain(|pid| *pid != target_province_id);
                 // Destroy any occupier units in the re-conquered province
-                occ_nation
-                    .army
-                    .retain(|u| u.position != target_province_id);
+                occ_nation.army.retain(|u| u.position != target_province_id);
             }
             if let Some(ca_nation) = game.get_nation_mut(counter_attacker_id) {
                 ca_nation.add_province(target_province_id);
@@ -2780,10 +2785,7 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
     let mut new_wars: Vec<(NationId, NationId, String, String)> = Vec::new();
     for (attacker, defender) in &wars {
         // Skip alliance obligations for anarchic defenders
-        if game
-            .get_nation(*defender)
-            .is_some_and(|n| n.is_in_anarchy)
-        {
+        if game.get_nation(*defender).is_some_and(|n| n.is_in_anarchy) {
             continue;
         }
         // Check defender's allies
@@ -4601,7 +4603,10 @@ mod tests {
             .filter(|(nid, _, _)| *nid == NationId(1))
             .map(|(_, _, q)| *q)
             .sum();
-        assert_eq!(total_overflow, 0, "Capital province has no transport overflow");
+        assert_eq!(
+            total_overflow, 0,
+            "Capital province has no transport overflow"
+        );
 
         // All 6 grain should be in warehouse
         let nation = game.get_nation(NationId(1)).unwrap();

@@ -273,7 +273,10 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
     // Scale budget with treasury: spend more aggressively when cash-rich
     let scale_threshold: i64 = 'val: {
         #[cfg(feature = "lua")]
-        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.infra_budget_scale_threshold) {
+        if let Some(v) = lua_cfg
+            .as_ref()
+            .and_then(|c| c.infra_budget_scale_threshold)
+        {
             break 'val v;
         }
         20_000
@@ -598,15 +601,9 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
         .iter()
         .filter_map(|b| {
             let input_materials = match b.building_type {
-                BuildingType::FurnitureFactory => {
-                    nation.material_amount(MaterialType::Lumber)
-                }
-                BuildingType::HardwareFactory => {
-                    nation.material_amount(MaterialType::Steel)
-                }
-                BuildingType::ClothingFactory => {
-                    nation.material_amount(MaterialType::Fabric)
-                }
+                BuildingType::FurnitureFactory => nation.material_amount(MaterialType::Lumber),
+                BuildingType::HardwareFactory => nation.material_amount(MaterialType::Steel),
+                BuildingType::ClothingFactory => nation.material_amount(MaterialType::Fabric),
                 _ => return None,
             };
             // Factories consume 2 materials per unit, so check against capacity * 2 * threshold
@@ -663,7 +660,12 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
             .map(|b| b.pending_capacity == 0)
             .unwrap_or(false)
     {
-        expand_building(game, nation_id, BuildingType::FoodProcessing, use_tier_expansion);
+        expand_building(
+            game,
+            nation_id,
+            BuildingType::FoodProcessing,
+            use_tier_expansion,
+        );
     }
 
     // When treasury is very high, expand existing mills and factories even without
@@ -694,15 +696,9 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
                         nation.resource_amount(ResourceType::Cotton)
                             + nation.resource_amount(ResourceType::Wool)
                     }
-                    BuildingType::FurnitureFactory => {
-                        nation.material_amount(MaterialType::Lumber)
-                    }
-                    BuildingType::HardwareFactory => {
-                        nation.material_amount(MaterialType::Steel)
-                    }
-                    BuildingType::ClothingFactory => {
-                        nation.material_amount(MaterialType::Fabric)
-                    }
+                    BuildingType::FurnitureFactory => nation.material_amount(MaterialType::Lumber),
+                    BuildingType::HardwareFactory => nation.material_amount(MaterialType::Steel),
+                    BuildingType::ClothingFactory => nation.material_amount(MaterialType::Fabric),
                     _ => return false,
                 };
                 // Only speculative-expand if capacity <= 2x current input (room to grow into)
@@ -720,12 +716,7 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
 /// Expand a building, paying the correct material cost.
 /// When `use_tier` is true, uses tier progression (2→4→8→12...) with proportional cost.
 /// When false, expands by +1 capacity for 1 lumber + 1 steel (legacy behavior).
-fn expand_building(
-    game: &mut GameState,
-    nation_id: NationId,
-    bt: BuildingType,
-    use_tier: bool,
-) {
+fn expand_building(game: &mut GameState, nation_id: NationId, bt: BuildingType, use_tier: bool) {
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,
         None => return,

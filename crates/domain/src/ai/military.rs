@@ -1,13 +1,13 @@
 #![allow(unused_labels)]
 use crate::game_state::GameState;
-use crate::military::units::ArmyUnitType;
 #[cfg(test)]
 use crate::military::units::ArmyUnit;
+use crate::military::units::ArmyUnitType;
 use crate::types::*;
 
-use super::common::{AiPersonality, get_personality};
 #[cfg(test)]
 use super::common::next_unit_id;
+use super::common::{AiPersonality, get_personality};
 
 /// Build military units when the nation has sufficient treasury.
 /// Personality affects thresholds and unit preferences:
@@ -463,10 +463,7 @@ pub(crate) fn ai_declare_wars(
                 continue;
             }
             // Skip anarchic nations (already free to invade, no war declaration needed)
-            if game
-                .get_nation(target_id)
-                .is_some_and(|n| n.is_in_anarchy)
-            {
+            if game.get_nation(target_id).is_some_and(|n| n.is_in_anarchy) {
                 continue;
             }
             // Anti-dogpile: skip if another AI targeted this nation this round
