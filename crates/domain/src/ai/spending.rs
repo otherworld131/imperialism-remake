@@ -414,10 +414,11 @@ fn score_civilian(
         if let Some(province) = game.get_province(pid) {
             for &coord in &province.tiles {
                 if let Some(tile) = game.hex_map.get_tile(coord) {
-                    let terrain = tile.terrain();
-                    if terrain.is_improvable()
-                        && tile.improvement_level() < terrain.max_improvement_level()
-                    {
+                    let max_level = tile
+                        .resource_deposit()
+                        .map(|r| r.max_improvement_level())
+                        .unwrap_or(0);
+                    if max_level > 0 && tile.improvement_level() < max_level {
                         improvable_tiles += 1;
                     }
                 }
@@ -755,6 +756,7 @@ fn execute_civilian(game: &mut GameState, nation_id: NationId) {
 
 // ── Config loading ───────────────────────────────────────────────
 
+#[allow(unused_mut, unused_variables)] // mut + game used only with cfg(feature = "lua")
 fn load_weights(game: &GameState, personality: AiPersonality) -> SpendingWeights {
     let mut w = SpendingWeights::from_personality(personality);
 

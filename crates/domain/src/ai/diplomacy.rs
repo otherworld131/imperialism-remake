@@ -687,10 +687,11 @@ mod tests {
     use crate::map::Province;
     use crate::nation::{Nation, NationColor};
 
-    /// Set a tile with tradeable terrain (ScrubForest → Timber) at the given coord,
+    /// Set a tile with tradeable resource (Forest + Timber) at the given coord,
     /// assigned to the given province. Required so ai_build_consulates sees trade potential.
     fn set_tradeable_tile(game: &mut GameState, coord: HexCoord, province_id: ProvinceId) {
-        let tile = crate::map::tile::Tile::with_province(TerrainType::ScrubForest, province_id);
+        let mut tile = crate::map::tile::Tile::with_province(TerrainType::Forest, province_id);
+        tile.set_resource(ResourceType::Timber);
         game.hex_map.set_tile(coord, tile);
     }
 

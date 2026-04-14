@@ -8,18 +8,10 @@ use std::collections::{HashSet, VecDeque};
 /// Returns `None` for terrain where railroads cannot be built (Sea).
 pub fn railroad_cost(terrain: TerrainType) -> Option<Money> {
     match terrain {
-        TerrainType::Farm
-        | TerrainType::DryPlains
-        | TerrainType::HardwoodForest
-        | TerrainType::ScrubForest
-        | TerrainType::OpenRange
-        | TerrainType::HorseRanch
-        | TerrainType::Plantation
-        | TerrainType::Orchard
-        | TerrainType::FertileHills => Some(Money::dollars(100)),
+        TerrainType::Grassland | TerrainType::Forest => Some(Money::dollars(100)),
         TerrainType::Desert | TerrainType::Tundra => Some(Money::dollars(150)),
         TerrainType::Swamp => Some(Money::dollars(300)),
-        TerrainType::BarrenHills => Some(Money::dollars(200)),
+        TerrainType::Hills => Some(Money::dollars(200)),
         TerrainType::Mountain => Some(Money::dollars(500)),
         TerrainType::Sea => None,
     }
@@ -173,17 +165,7 @@ mod tests {
 
     #[test]
     fn railroad_cost_standard_land() {
-        let standard_terrains = [
-            TerrainType::Farm,
-            TerrainType::DryPlains,
-            TerrainType::HardwoodForest,
-            TerrainType::ScrubForest,
-            TerrainType::OpenRange,
-            TerrainType::HorseRanch,
-            TerrainType::Plantation,
-            TerrainType::Orchard,
-            TerrainType::FertileHills,
-        ];
+        let standard_terrains = [TerrainType::Grassland, TerrainType::Forest];
         for terrain in standard_terrains {
             assert_eq!(
                 railroad_cost(terrain),
@@ -212,11 +194,8 @@ mod tests {
     }
 
     #[test]
-    fn railroad_cost_barren_hills() {
-        assert_eq!(
-            railroad_cost(TerrainType::BarrenHills),
-            Some(Money::dollars(200))
-        );
+    fn railroad_cost_hills() {
+        assert_eq!(railroad_cost(TerrainType::Hills), Some(Money::dollars(200)));
     }
 
     #[test]
@@ -238,7 +217,7 @@ mod tests {
     fn build_railroad_on_valid_tile() {
         let mut map = HexMap::new(10, 10);
         let coord = HexCoord::new(0, 0);
-        map.set_tile(coord, Tile::new(TerrainType::Farm));
+        map.set_tile(coord, Tile::new(TerrainType::Grassland));
 
         let result = build_railroad(&mut map, coord);
         assert!(result.is_ok());
@@ -250,7 +229,7 @@ mod tests {
     fn build_railroad_already_exists() {
         let mut map = HexMap::new(10, 10);
         let coord = HexCoord::new(0, 0);
-        map.set_tile(coord, Tile::new(TerrainType::Farm));
+        map.set_tile(coord, Tile::new(TerrainType::Grassland));
 
         build_railroad(&mut map, coord).unwrap();
         let result = build_railroad(&mut map, coord);
@@ -283,7 +262,7 @@ mod tests {
     fn build_depot_on_valid_tile() {
         let mut map = HexMap::new(10, 10);
         let coord = HexCoord::new(0, 0);
-        map.set_tile(coord, Tile::new(TerrainType::Farm));
+        map.set_tile(coord, Tile::new(TerrainType::Grassland));
 
         let result = build_depot(&mut map, coord);
         assert!(result.is_ok());
@@ -295,7 +274,7 @@ mod tests {
     fn build_depot_already_exists() {
         let mut map = HexMap::new(10, 10);
         let coord = HexCoord::new(0, 0);
-        map.set_tile(coord, Tile::new(TerrainType::Farm));
+        map.set_tile(coord, Tile::new(TerrainType::Grassland));
 
         build_depot(&mut map, coord).unwrap();
         let result = build_depot(&mut map, coord);
@@ -321,7 +300,7 @@ mod tests {
         let mut map = HexMap::new(10, 10);
         let land = HexCoord::new(1, 0);
         let sea = HexCoord::new(2, 0);
-        map.set_tile(land, Tile::new(TerrainType::Farm));
+        map.set_tile(land, Tile::new(TerrainType::Grassland));
         map.set_tile(sea, Tile::new(TerrainType::Sea));
 
         let result = build_port(&mut map, land);
@@ -334,7 +313,7 @@ mod tests {
     fn build_port_on_non_coastal_tile() {
         let mut map = HexMap::new(10, 10);
         let coord = HexCoord::new(5, 5);
-        map.set_tile(coord, Tile::new(TerrainType::Farm));
+        map.set_tile(coord, Tile::new(TerrainType::Grassland));
         // No sea neighbors placed
 
         let result = build_port(&mut map, coord);
@@ -358,7 +337,7 @@ mod tests {
         let mut map = HexMap::new(10, 10);
         let land = HexCoord::new(1, 0);
         let sea = HexCoord::new(2, 0);
-        map.set_tile(land, Tile::new(TerrainType::Farm));
+        map.set_tile(land, Tile::new(TerrainType::Grassland));
         map.set_tile(sea, Tile::new(TerrainType::Sea));
 
         build_port(&mut map, land).unwrap();
@@ -380,17 +359,17 @@ mod tests {
         let target_pid = ProvinceId(2);
 
         // Capital tile (province 1)
-        let mut capital_tile = Tile::with_province(TerrainType::Farm, capital_pid);
+        let mut capital_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
         capital_tile.is_capital = true;
         map.set_tile(capital_coord, capital_tile);
 
         // Middle tile with railroad (province 1)
-        let mut mid_tile = Tile::with_province(TerrainType::Farm, capital_pid);
+        let mut mid_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
         mid_tile.infrastructure.has_railroad = true;
         map.set_tile(mid_coord, mid_tile);
 
         // Target tile with depot (province 2)
-        let mut target_tile = Tile::with_province(TerrainType::Farm, target_pid);
+        let mut target_tile = Tile::with_province(TerrainType::Grassland, target_pid);
         target_tile.infrastructure.has_depot = true;
         map.set_tile(target_coord, target_tile);
 
@@ -430,11 +409,11 @@ mod tests {
         let capital_pid = ProvinceId(1);
         let target_pid = ProvinceId(2);
 
-        let mut capital_tile = Tile::with_province(TerrainType::Farm, capital_pid);
+        let mut capital_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
         capital_tile.is_capital = true;
         map.set_tile(capital_coord, capital_tile);
 
-        let mut target_tile = Tile::with_province(TerrainType::Farm, target_pid);
+        let mut target_tile = Tile::with_province(TerrainType::Grassland, target_pid);
         target_tile.infrastructure.has_depot = true;
         map.set_tile(target_coord, target_tile);
 
@@ -477,7 +456,7 @@ mod tests {
         let target_pid = ProvinceId(2);
 
         // Capital tile with port
-        let mut capital_tile = Tile::with_province(TerrainType::Farm, capital_pid);
+        let mut capital_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
         capital_tile.is_capital = true;
         capital_tile.infrastructure.has_port = true;
         map.set_tile(capital_coord, capital_tile);
@@ -486,7 +465,7 @@ mod tests {
         map.set_tile(sea_near_capital, Tile::new(TerrainType::Sea));
 
         // Target tile with port
-        let mut target_tile = Tile::with_province(TerrainType::Farm, target_pid);
+        let mut target_tile = Tile::with_province(TerrainType::Grassland, target_pid);
         target_tile.infrastructure.has_port = true;
         map.set_tile(target_coord, target_tile);
 
@@ -530,14 +509,14 @@ mod tests {
         let capital_pid = ProvinceId(1);
         let target_pid = ProvinceId(2);
 
-        let mut capital_tile = Tile::with_province(TerrainType::Farm, capital_pid);
+        let mut capital_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
         capital_tile.is_capital = true;
         capital_tile.infrastructure.has_port = true;
         map.set_tile(capital_coord, capital_tile);
         map.set_tile(sea_near_capital, Tile::new(TerrainType::Sea));
 
         // Target tile without port
-        let target_tile = Tile::with_province(TerrainType::Farm, target_pid);
+        let target_tile = Tile::with_province(TerrainType::Grassland, target_pid);
         map.set_tile(target_coord, target_tile);
 
         let provinces = vec![
@@ -581,7 +560,7 @@ mod tests {
     fn build_fort_level_1() {
         let mut map = HexMap::new(10, 10);
         let coord = HexCoord::new(0, 0);
-        map.set_tile(coord, Tile::new(TerrainType::Farm));
+        map.set_tile(coord, Tile::new(TerrainType::Grassland));
 
         let result = build_fort(&mut map, coord);
         assert!(result.is_ok());
@@ -596,7 +575,7 @@ mod tests {
     fn build_fort_upgrades_to_level_2() {
         let mut map = HexMap::new(10, 10);
         let coord = HexCoord::new(0, 0);
-        map.set_tile(coord, Tile::new(TerrainType::Farm));
+        map.set_tile(coord, Tile::new(TerrainType::Grassland));
 
         build_fort(&mut map, coord).unwrap();
         let (level, cost) = build_fort(&mut map, coord).unwrap();
@@ -608,7 +587,7 @@ mod tests {
     fn build_fort_max_level_3() {
         let mut map = HexMap::new(10, 10);
         let coord = HexCoord::new(0, 0);
-        map.set_tile(coord, Tile::new(TerrainType::Farm));
+        map.set_tile(coord, Tile::new(TerrainType::Grassland));
 
         build_fort(&mut map, coord).unwrap(); // L1
         build_fort(&mut map, coord).unwrap(); // L2
@@ -641,16 +620,16 @@ mod tests {
         let capital_pid = ProvinceId(1);
         let target_pid = ProvinceId(2);
 
-        let mut capital_tile = Tile::with_province(TerrainType::Farm, capital_pid);
+        let mut capital_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
         capital_tile.is_capital = true;
         map.set_tile(capital_coord, capital_tile);
 
         // Gap tile: no railroad, no depot
-        let gap_tile = Tile::with_province(TerrainType::Farm, capital_pid);
+        let gap_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
         map.set_tile(gap_coord, gap_tile);
 
         // Target tile has depot but is not reachable
-        let mut target_tile = Tile::with_province(TerrainType::Farm, target_pid);
+        let mut target_tile = Tile::with_province(TerrainType::Grassland, target_pid);
         target_tile.infrastructure.has_depot = true;
         map.set_tile(target_coord, target_tile);
 
@@ -700,23 +679,23 @@ mod tests {
         let port_pid = ProvinceId(3);
 
         // Capital tile with a port (connected to sea)
-        let mut capital_tile = Tile::with_province(TerrainType::Farm, capital_pid);
+        let mut capital_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
         capital_tile.is_capital = true;
         capital_tile.infrastructure.has_port = true;
         map.set_tile(capital_coord, capital_tile);
         map.set_tile(sea_near_capital, Tile::new(TerrainType::Sea));
 
         // Railroad chain from capital to province 2 (railroad pathway)
-        let mut rr_tile = Tile::with_province(TerrainType::Farm, capital_pid);
+        let mut rr_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
         rr_tile.infrastructure.has_railroad = true;
         map.set_tile(railroad_coord, rr_tile);
 
-        let mut depot_tile = Tile::with_province(TerrainType::Farm, railroad_pid);
+        let mut depot_tile = Tile::with_province(TerrainType::Grassland, railroad_pid);
         depot_tile.infrastructure.has_depot = true;
         map.set_tile(depot_coord, depot_tile);
 
         // Port province (connected via sea to capital's port)
-        let mut port_tile = Tile::with_province(TerrainType::Farm, port_pid);
+        let mut port_tile = Tile::with_province(TerrainType::Grassland, port_pid);
         port_tile.infrastructure.has_port = true;
         map.set_tile(port_province_coord, port_tile);
         map.set_tile(sea_near_port, Tile::new(TerrainType::Sea));

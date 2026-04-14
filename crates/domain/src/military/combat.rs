@@ -19,8 +19,8 @@ pub enum TargetingPriority {
 pub fn terrain_defense_bonus(terrain: TerrainType) -> f64 {
     match terrain {
         TerrainType::Mountain => 0.50,
-        TerrainType::FertileHills | TerrainType::BarrenHills => 0.30,
-        TerrainType::HardwoodForest | TerrainType::ScrubForest => 0.20,
+        TerrainType::Hills => 0.30,
+        TerrainType::Forest => 0.20,
         TerrainType::Swamp => 0.15,
         _ => 0.0,
     }
@@ -765,13 +765,11 @@ mod tests {
         use super::terrain_defense_bonus;
 
         assert!((terrain_defense_bonus(TerrainType::Mountain) - 0.50).abs() < f64::EPSILON);
-        assert!((terrain_defense_bonus(TerrainType::FertileHills) - 0.30).abs() < f64::EPSILON);
-        assert!((terrain_defense_bonus(TerrainType::BarrenHills) - 0.30).abs() < f64::EPSILON);
-        assert!((terrain_defense_bonus(TerrainType::HardwoodForest) - 0.20).abs() < f64::EPSILON);
-        assert!((terrain_defense_bonus(TerrainType::ScrubForest) - 0.20).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Hills) - 0.30).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Forest) - 0.20).abs() < f64::EPSILON);
         assert!((terrain_defense_bonus(TerrainType::Swamp) - 0.15).abs() < f64::EPSILON);
-        assert!((terrain_defense_bonus(TerrainType::Farm) - 0.0).abs() < f64::EPSILON);
-        assert!((terrain_defense_bonus(TerrainType::DryPlains) - 0.0).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Grassland) - 0.0).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Desert) - 0.0).abs() < f64::EPSILON);
         assert!((terrain_defense_bonus(TerrainType::Sea) - 0.0).abs() < f64::EPSILON);
     }
 
@@ -1387,10 +1385,10 @@ mod tests {
         let terrain_bonus = terrain_defense_bonus(TerrainType::Mountain);
         assert!((terrain_bonus - 0.50).abs() < f64::EPSILON);
 
-        let terrain_bonus_hills = terrain_defense_bonus(TerrainType::FertileHills);
+        let terrain_bonus_hills = terrain_defense_bonus(TerrainType::Hills);
         assert!((terrain_bonus_hills - 0.30).abs() < f64::EPSILON);
 
-        let terrain_bonus_forest = terrain_defense_bonus(TerrainType::HardwoodForest);
+        let terrain_bonus_forest = terrain_defense_bonus(TerrainType::Forest);
         assert!((terrain_bonus_forest - 0.20).abs() < f64::EPSILON);
 
         // Fort defense bonus

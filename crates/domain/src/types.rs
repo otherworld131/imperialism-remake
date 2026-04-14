@@ -196,6 +196,32 @@ impl ResourceType {
     pub const fn is_monetary(self) -> bool {
         matches!(self, Self::Gold | Self::Gems)
     }
+
+    /// Whether this resource is hidden until revealed by prospecting.
+    pub const fn requires_prospecting(self) -> bool {
+        matches!(
+            self,
+            Self::Coal | Self::Iron | Self::Gold | Self::Gems | Self::Oil
+        )
+    }
+
+    /// Whether this resource is a food type.
+    pub const fn is_food(self) -> bool {
+        matches!(
+            self,
+            Self::Grain | Self::Fruit | Self::Livestock | Self::Horses
+        )
+    }
+
+    /// Maximum improvement level for this resource.
+    pub const fn max_improvement_level(self) -> u8 {
+        match self {
+            // Gold/Gems/Oil require level 1+ to produce, can reach level 3
+            Self::Gold | Self::Gems | Self::Oil => 3,
+            // All other resources: improvable to level 3
+            _ => 3,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -217,69 +243,35 @@ pub enum GoodsType {
 
 // ── Terrain ─────────────────────────────────────────────────────
 
+/// Landscape terrain types. Resources are a separate overlay on tiles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TerrainType {
-    DryPlains,
-    OpenRange,
-    HorseRanch,
-    Plantation,
-    Farm,
-    Orchard,
-    FertileHills,
-    BarrenHills,
+    Grassland,
+    Hills,
+    Forest,
     Mountain,
-    HardwoodForest,
-    ScrubForest,
-    Swamp,
     Desert,
+    Swamp,
     Tundra,
     Sea,
 }
 
 impl TerrainType {
-    /// The base resource produced by this terrain at level 0 (unimproved).
-    pub const fn base_resource(self) -> Option<ResourceType> {
-        match self {
-            Self::DryPlains => Some(ResourceType::Grain),
-            Self::OpenRange => Some(ResourceType::Livestock),
-            Self::HorseRanch => Some(ResourceType::Horses),
-            Self::Plantation => Some(ResourceType::Cotton),
-            Self::Farm => Some(ResourceType::Grain),
-            Self::Orchard => Some(ResourceType::Fruit),
-            Self::FertileHills => Some(ResourceType::Wool),
-            Self::HardwoodForest | Self::ScrubForest => Some(ResourceType::Timber),
-            // BarrenHills, Mountain, Swamp, Desert, Tundra: hidden until prospected
-            _ => None,
-        }
-    }
-
-    /// Whether this terrain requires prospecting to reveal its resource.
-    pub const fn requires_prospecting(self) -> bool {
+    /// Whether this terrain can host hidden (prospectable) resource deposits.
+    pub const fn can_have_deposits(self) -> bool {
         matches!(
             self,
-            Self::BarrenHills | Self::Mountain | Self::Swamp | Self::Desert | Self::Tundra
+            Self::Hills | Self::Mountain | Self::Desert | Self::Swamp | Self::Tundra
         )
     }
 
-    /// Whether this terrain can be improved beyond its base yield.
-    pub const fn is_improvable(self) -> bool {
-        !matches!(
-            self,
-            Self::DryPlains | Self::OpenRange | Self::HorseRanch | Self::ScrubForest | Self::Sea
-        )
-    }
-
-    /// Maximum improvement level (0 = no improvement possible).
-    pub const fn max_improvement_level(self) -> u8 {
+    /// Defense bonus for combat on this terrain.
+    pub const fn defense_bonus(self) -> u8 {
         match self {
-            Self::Farm
-            | Self::Orchard
-            | Self::Plantation
-            | Self::FertileHills
-            | Self::HardwoodForest
-            | Self::BarrenHills
-            | Self::Mountain => 3,
-            Self::Swamp | Self::Desert | Self::Tundra => 3, // oil levels
+            Self::Mountain => 50,
+            Self::Hills => 30,
+            Self::Forest => 20,
+            Self::Swamp => 15,
             _ => 0,
         }
     }
@@ -489,28 +481,18 @@ mod tests {
     // ── TerrainType ─────────────────────────────────────────────
 
     #[test]
-    fn farm_produces_grain() {
-        assert_eq!(TerrainType::Farm.base_resource(), Some(ResourceType::Grain));
+    fn hills_can_have_deposits() {
+        assert!(TerrainType::Hills.can_have_deposits());
     }
 
     #[test]
-    fn mountain_requires_prospecting() {
-        assert!(TerrainType::Mountain.requires_prospecting());
+    fn mountain_can_have_deposits() {
+        assert!(TerrainType::Mountain.can_have_deposits());
     }
 
     #[test]
-    fn farm_does_not_require_prospecting() {
-        assert!(!TerrainType::Farm.requires_prospecting());
-    }
-
-    #[test]
-    fn scrub_forest_not_improvable() {
-        assert!(!TerrainType::ScrubForest.is_improvable());
-    }
-
-    #[test]
-    fn hardwood_forest_max_level_3() {
-        assert_eq!(TerrainType::HardwoodForest.max_improvement_level(), 3);
+    fn grassland_cannot_have_deposits() {
+        assert!(!TerrainType::Grassland.can_have_deposits());
     }
 
     #[test]
@@ -519,8 +501,8 @@ mod tests {
     }
 
     #[test]
-    fn farm_is_land() {
-        assert!(TerrainType::Farm.is_land());
+    fn grassland_is_land() {
+        assert!(TerrainType::Grassland.is_land());
     }
 
     // ── IDs ─────────────────────────────────────────────────────

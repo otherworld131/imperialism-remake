@@ -138,10 +138,10 @@ mod tests {
     fn set_and_get_tile() {
         let mut map = HexMap::new(10, 10);
         let coord = HexCoord::new(3, 5);
-        map.set_tile(coord, Tile::new(TerrainType::Farm));
+        map.set_tile(coord, Tile::new(TerrainType::Grassland));
 
         let tile = map.get_tile(coord).unwrap();
-        assert_eq!(tile.terrain(), TerrainType::Farm);
+        assert_eq!(tile.terrain(), TerrainType::Grassland);
     }
 
     #[test]
@@ -154,7 +154,7 @@ mod tests {
     fn get_tile_mut_can_modify() {
         let mut map = HexMap::new(10, 10);
         let coord = HexCoord::new(1, 1);
-        map.set_tile(coord, Tile::new(TerrainType::Farm));
+        map.set_tile(coord, Tile::new(TerrainType::Grassland));
 
         let tile = map.get_tile_mut(coord).unwrap();
         tile.is_capital = true;
@@ -166,7 +166,7 @@ mod tests {
     fn set_tile_overwrites() {
         let mut map = HexMap::new(10, 10);
         let coord = HexCoord::new(2, 2);
-        map.set_tile(coord, Tile::new(TerrainType::Farm));
+        map.set_tile(coord, Tile::new(TerrainType::Grassland));
         map.set_tile(coord, Tile::new(TerrainType::Mountain));
 
         assert_eq!(
@@ -182,15 +182,15 @@ mod tests {
         let pid = ProvinceId(1);
         map.set_tile(
             HexCoord::new(0, 0),
-            Tile::with_province(TerrainType::Farm, pid),
+            Tile::with_province(TerrainType::Grassland, pid),
         );
         map.set_tile(
             HexCoord::new(1, 0),
-            Tile::with_province(TerrainType::Farm, pid),
+            Tile::with_province(TerrainType::Grassland, pid),
         );
         map.set_tile(
             HexCoord::new(2, 0),
-            Tile::with_province(TerrainType::Farm, ProvinceId(2)),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
         );
         map.set_tile(HexCoord::new(3, 0), Tile::new(TerrainType::Sea));
 
@@ -202,7 +202,7 @@ mod tests {
     fn adjacent_tiles_returns_only_existing() {
         let mut map = HexMap::new(10, 10);
         let center = HexCoord::new(5, 5);
-        map.set_tile(center, Tile::new(TerrainType::Farm));
+        map.set_tile(center, Tile::new(TerrainType::Grassland));
 
         // Place tiles at only 3 of the 6 neighbors
         let neighbors = center.neighbors();
@@ -229,11 +229,11 @@ mod tests {
     fn tiles_in_range_radius_1_returns_up_to_6() {
         let mut map = HexMap::new(20, 20);
         let center = HexCoord::new(5, 5);
-        map.set_tile(center, Tile::new(TerrainType::Farm));
+        map.set_tile(center, Tile::new(TerrainType::Grassland));
 
         // Place all 6 neighbors
         for n in center.neighbors() {
-            map.set_tile(n, Tile::new(TerrainType::Farm));
+            map.set_tile(n, Tile::new(TerrainType::Grassland));
         }
 
         let in_range = map.tiles_in_range(center, 1);
@@ -247,9 +247,9 @@ mod tests {
     fn tiles_in_range_radius_0_returns_empty() {
         let mut map = HexMap::new(10, 10);
         let center = HexCoord::new(3, 3);
-        map.set_tile(center, Tile::new(TerrainType::Farm));
+        map.set_tile(center, Tile::new(TerrainType::Grassland));
         for n in center.neighbors() {
-            map.set_tile(n, Tile::new(TerrainType::Farm));
+            map.set_tile(n, Tile::new(TerrainType::Grassland));
         }
 
         // Radius 0: HexCoord::range(0) returns empty, so nothing is returned
@@ -261,7 +261,7 @@ mod tests {
     fn tiles_in_range_only_returns_existing_tiles() {
         let mut map = HexMap::new(20, 20);
         let center = HexCoord::new(10, 10);
-        map.set_tile(center, Tile::new(TerrainType::Farm));
+        map.set_tile(center, Tile::new(TerrainType::Grassland));
 
         // Place only 3 of the 6 neighbors
         let neighbors = center.neighbors();
@@ -278,11 +278,11 @@ mod tests {
     fn tiles_in_range_radius_2_includes_ring_1_and_ring_2() {
         let mut map = HexMap::new(30, 30);
         let center = HexCoord::new(15, 15);
-        map.set_tile(center, Tile::new(TerrainType::Farm));
+        map.set_tile(center, Tile::new(TerrainType::Grassland));
 
         // Fill all tiles within radius 2
         for coord in center.range(2) {
-            map.set_tile(coord, Tile::new(TerrainType::Farm));
+            map.set_tile(coord, Tile::new(TerrainType::Grassland));
         }
 
         let in_range = map.tiles_in_range(center, 2);
@@ -299,9 +299,9 @@ mod tests {
     fn tile_count_tracks_insertions() {
         let mut map = HexMap::new(10, 10);
         assert_eq!(map.tile_count(), 0);
-        map.set_tile(HexCoord::new(0, 0), Tile::new(TerrainType::Farm));
+        map.set_tile(HexCoord::new(0, 0), Tile::new(TerrainType::Grassland));
         assert_eq!(map.tile_count(), 1);
-        map.set_tile(HexCoord::new(1, 0), Tile::new(TerrainType::Farm));
+        map.set_tile(HexCoord::new(1, 0), Tile::new(TerrainType::Grassland));
         assert_eq!(map.tile_count(), 2);
     }
 }

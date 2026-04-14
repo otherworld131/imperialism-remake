@@ -47,6 +47,7 @@ function App() {
   const [showTech, setShowTech] = useState(false);
   const [activeScreen, setActiveScreen] = useState<ScreenTab>('map');
   const [gameStarted, setGameStarted] = useState(false);
+  const [showHiddenResources, setShowHiddenResources] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -144,7 +145,7 @@ function App() {
       {/* Main area */}
       <div style={styles.mainArea} className="main-area-responsive">
         <div style={styles.mapContainer}>
-          <HexMap tiles={tiles} onTileClick={setSelectedTile} onTileHover={setHoveredTile} />
+          <HexMap tiles={tiles} onTileClick={setSelectedTile} onTileHover={setHoveredTile} showHiddenResources={showHiddenResources} />
         </div>
 
         {/* Side panel — context-sensitive */}
@@ -156,10 +157,10 @@ function App() {
                 <div style={styles.tileSelected}>
                   <div style={styles.tileLabel}>Selected</div>
                   <div style={styles.tileInfo}>
-                    <p><b>{selectedTile.terrain}</b></p>
+                    <p><b>{selectedTile.terrain}{selectedTile.resource && (!selectedTile.resource_hidden || showHiddenResources) ? ` — ${selectedTile.resource}` : ''}</b></p>
                     <p>Province: {selectedTile.province || 'None'}</p>
                     <p>Owner: {selectedTile.owner || 'None'}</p>
-                    <p>Level: {selectedTile.improvement_level}</p>
+                    {selectedTile.resource && (!selectedTile.resource_hidden || showHiddenResources) && <p>Level: {selectedTile.improvement_level}</p>}
                     {selectedTile.is_capital && <p>{'\u2605'} Capital</p>}
                     {selectedTile.has_railroad && <p>Railroad</p>}
                     {selectedTile.has_fort && <p>Fort L{selectedTile.fort_level}</p>}
@@ -170,10 +171,10 @@ function App() {
                 <div style={styles.tileHovered}>
                   <div style={styles.tileLabelDim}>Hovering</div>
                   <div style={styles.tileInfo}>
-                    <p><b>{hoveredTile.terrain}</b></p>
+                    <p><b>{hoveredTile.terrain}{hoveredTile.resource && (!hoveredTile.resource_hidden || showHiddenResources) ? ` — ${hoveredTile.resource}` : ''}</b></p>
                     <p>Province: {hoveredTile.province || 'None'}</p>
                     <p>Owner: {hoveredTile.owner || 'None'}</p>
-                    <p>Level: {hoveredTile.improvement_level}</p>
+                    {hoveredTile.resource && (!hoveredTile.resource_hidden || showHiddenResources) && <p>Level: {hoveredTile.improvement_level}</p>}
                     {hoveredTile.is_capital && <p>{'\u2605'} Capital</p>}
                     {hoveredTile.has_railroad && <p>Railroad</p>}
                     {hoveredTile.has_fort && <p>Fort L{hoveredTile.fort_level}</p>}
@@ -183,6 +184,13 @@ function App() {
               {!selectedTile && !hoveredTile && (
                 <p style={styles.hint}>Click to pin, hover to preview</p>
               )}
+
+              <div style={{ padding: '4px 0', fontSize: '12px' }}>
+                <label>
+                  <input type="checkbox" checked={showHiddenResources} onChange={e => setShowHiddenResources(e.target.checked)} />
+                  {' '}Show hidden resources (debug)
+                </label>
+              </div>
 
               <h3 style={styles.panelTitle}>Nations</h3>
               <div style={styles.nationList}>

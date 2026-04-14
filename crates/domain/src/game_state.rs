@@ -420,10 +420,15 @@ pub fn new_game_with_seed(
                     // The generator sets resource_deposit on ~40% of prospectable tiles,
                     // so the tile may already have a deposit. We mark it as "prospected"
                     // by bumping improvement_level if it has a deposit.
-                    if tile.terrain().requires_prospecting() && tile.resource_deposit().is_some() {
-                        // Already revealed by generator — ensure it stays visible.
-                        // The deposit is already set, so it's effectively auto-prospected.
-                        // We bump improvement to 1 to signal it's been prospected.
+                    // Only auto-reveal hidden deposits (Coal/Iron/Gold/Gems/Oil),
+                    // not surface resources like Wool on Hills.
+                    if tile.terrain().can_have_deposits()
+                        && tile
+                            .resource_deposit()
+                            .is_some_and(|r| r.requires_prospecting())
+                    {
+                        // Mark as prospected so it becomes visible
+                        tile.reveal_deposit(tile.resource_deposit().unwrap());
                         if tile.improvement_level() == 0 {
                             tile.improve();
                         }
@@ -1128,7 +1133,7 @@ mod tests {
         // have improvement_level >= 1 (meaning they were auto-prospected).
         for tile_coord in &province.tiles {
             if let Some(tile) = gs.hex_map.get_tile(*tile_coord)
-                && tile.terrain().requires_prospecting()
+                && tile.terrain().can_have_deposits()
                 && tile.resource_deposit().is_some()
             {
                 assert!(
@@ -1152,7 +1157,7 @@ mod tests {
         // (improvement_level should still be 0 for prospectable terrain).
         for tile_coord in &province.tiles {
             if let Some(tile) = gs.hex_map.get_tile(*tile_coord)
-                && tile.terrain().requires_prospecting()
+                && tile.terrain().can_have_deposits()
             {
                 assert_eq!(
                     tile.improvement_level(),

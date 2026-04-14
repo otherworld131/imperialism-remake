@@ -122,6 +122,7 @@ impl GameData {
             .and_then(|s| loader::load_ship_stats(s).ok())
             .unwrap_or_else(default_ship_stats);
 
+        #[allow(unused_mut)] // mut needed only with cfg(feature = "lua")
         let mut game_config = GameConfig::default();
 
         #[cfg(feature = "lua")]
@@ -147,6 +148,7 @@ impl GameData {
 
 impl Default for GameData {
     fn default() -> Self {
+        #[allow(unused_mut)] // mut needed only with cfg(feature = "lua")
         let mut game_config = GameConfig::default();
 
         #[cfg(feature = "lua")]

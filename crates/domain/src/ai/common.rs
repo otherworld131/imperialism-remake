@@ -256,25 +256,25 @@ pub(crate) mod test_helpers {
         let ai_tile2 = HexCoord::new(1, 0);
         hex_map.set_tile(
             ai_tile1,
-            crate::map::tile::Tile::with_province(TerrainType::Farm, ProvinceId(2)),
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
         );
         hex_map.set_tile(
             ai_tile2,
-            crate::map::tile::Tile::with_province(TerrainType::Farm, ProvinceId(2)),
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
         );
 
         // Enemy province tile: (2,0) — adjacent to (1,0)
         let enemy_tile = HexCoord::new(2, 0);
         hex_map.set_tile(
             enemy_tile,
-            crate::map::tile::Tile::with_province(TerrainType::Farm, ProvinceId(3)),
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(3)),
         );
 
         // Human province tile
         let human_tile = HexCoord::new(5, 5);
         hex_map.set_tile(
             human_tile,
-            crate::map::tile::Tile::with_province(TerrainType::Farm, ProvinceId(1)),
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
         );
 
         let province1 = Province::new(

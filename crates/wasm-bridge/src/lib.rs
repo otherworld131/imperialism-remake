@@ -143,6 +143,8 @@ pub fn wasm_get_map_data(game_json: &str) -> String {
                 "q": coord.q,
                 "r": coord.r,
                 "terrain": format!("{:?}", tile.terrain()),
+                "resource": tile.resource_deposit().map(|r| format!("{:?}", r)),
+                "resource_hidden": tile.resource_deposit().is_some() && !tile.has_visible_resource(),
                 "is_capital": tile.is_capital,
                 "is_country_capital": is_country_capital,
                 "improvement_level": tile.improvement_level(),

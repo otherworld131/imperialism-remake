@@ -45,21 +45,24 @@ impl Default for Infrastructure {
 
 /// A single hex tile on the game map.
 ///
-/// The terrain is immutable after creation. Resource deposits may be hidden
-/// until revealed by prospecting. Improvement levels range from 0 (unimproved)
-/// through 3 (fully developed).
+/// Terrain describes the landscape (Grassland, Hills, Forest, etc.).
+/// Resources are an optional overlay — most tiles have no resource.
+/// Hidden resources (Coal, Iron, Gold, Gems, Oil) require prospecting to reveal.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Tile {
-    /// The terrain type (immutable after creation).
+    /// The landscape terrain type (immutable after creation).
     terrain: TerrainType,
 
-    /// Hidden mineral deposit, revealed by prospecting.
-    /// For terrains that `requires_prospecting()`, this starts as `None` until
-    /// a prospector reveals it. For terrains that produce a base resource,
-    /// this field is unused.
+    /// Resource on this tile (if any). For surface resources (Grain, Timber, etc.)
+    /// this is set at map generation. For hidden resources (Coal, Iron, etc.)
+    /// this starts as `None` until a prospector reveals it.
     resource_deposit: Option<ResourceType>,
 
-    /// Improvement level: 0 (unimproved) through `terrain.max_improvement_level()`.
+    /// Whether this tile has been prospected (only meaningful for deposit-capable terrain).
+    #[serde(default)]
+    prospected: bool,
+
+    /// Improvement level: 0 (unimproved) through 3 (fully developed).
     improvement_level: u8,
 
     /// Infrastructure built on this tile.
@@ -76,16 +79,25 @@ pub struct Tile {
 }
 
 impl Tile {
-    /// Create a new tile with the given terrain type. Starts unimproved with no infrastructure.
+    /// Create a new tile with the given terrain type. Starts with no resource.
     pub fn new(terrain: TerrainType) -> Self {
         Self {
             terrain,
             resource_deposit: None,
+            prospected: false,
             improvement_level: 0,
             infrastructure: Infrastructure::NONE,
             assigned_civilian: None,
             province_id: None,
             is_capital: false,
+        }
+    }
+
+    /// Create a new tile with terrain and a visible resource.
+    pub fn with_resource(terrain: TerrainType, resource: ResourceType) -> Self {
+        Self {
+            resource_deposit: Some(resource),
+            ..Self::new(terrain)
         }
     }
 
@@ -99,13 +111,12 @@ impl Tile {
 
     // ── Getters ────────────────────────────────────────────────
 
-    /// The immutable terrain type of this tile.
+    /// The landscape terrain type of this tile.
     pub fn terrain(&self) -> TerrainType {
         self.terrain
     }
 
-    /// The hidden resource deposit (if any). `None` means either no deposit
-    /// exists or it has not yet been revealed by prospecting.
+    /// The resource on this tile (if any).
     pub fn resource_deposit(&self) -> Option<ResourceType> {
         self.resource_deposit
     }
@@ -115,56 +126,59 @@ impl Tile {
         self.improvement_level
     }
 
-    // ── Resource deposit ───────────────────────────────────────
+    // ── Resource management ───────────────────────────────────
 
-    /// Reveal a hidden mineral deposit via prospecting.
-    ///
-    /// Only valid for terrains that require prospecting. Panics if the terrain
-    /// does not support prospecting.
-    pub fn reveal_deposit(&mut self, resource: ResourceType) {
-        assert!(
-            self.terrain.requires_prospecting(),
-            "Cannot reveal deposit on {:?} — terrain does not require prospecting",
-            self.terrain
-        );
+    /// Place a visible resource on this tile (used during map generation).
+    pub fn set_resource(&mut self, resource: ResourceType) {
         self.resource_deposit = Some(resource);
     }
 
-    /// Set the deposit to `None` (e.g., prospecting found nothing).
-    ///
-    /// Only valid for terrains that require prospecting.
-    pub fn reveal_no_deposit(&mut self) {
-        assert!(
-            self.terrain.requires_prospecting(),
-            "Cannot clear deposit on {:?} — terrain does not require prospecting",
-            self.terrain
-        );
-        self.resource_deposit = None;
+    /// Reveal a hidden deposit via prospecting.
+    pub fn reveal_deposit(&mut self, resource: ResourceType) {
+        self.resource_deposit = Some(resource);
+        self.prospected = true;
     }
 
-    /// Whether this tile has been prospected (deposit revealed or confirmed empty).
-    /// For non-prospecting terrains, always returns `true` (nothing to prospect).
+    /// Prospecting found nothing.
+    pub fn reveal_no_deposit(&mut self) {
+        self.resource_deposit = None;
+        self.prospected = true;
+    }
+
+    /// Whether this tile has been prospected.
     pub fn is_prospected(&self) -> bool {
-        if self.terrain.requires_prospecting() {
-            // A prospected tile either has a revealed deposit or has been
-            // explicitly checked. We track "prospected" by improvement_level > 0
-            // or deposit being Some. However, for simplicity the caller should
-            // track prospecting state externally. Here we only report whether
-            // a deposit is known.
-            self.resource_deposit.is_some()
+        if self.terrain.can_have_deposits() {
+            self.prospected
         } else {
             true
+        }
+    }
+
+    /// Whether this tile has a resource visible to the player.
+    /// Surface resources (Grain, Timber, etc.) are always visible.
+    /// Hidden resources (Coal, Iron, etc.) are visible only after prospecting.
+    pub fn has_visible_resource(&self) -> bool {
+        match self.resource_deposit {
+            None => false,
+            Some(r) => {
+                if r.requires_prospecting() {
+                    self.prospected
+                } else {
+                    true
+                }
+            }
         }
     }
 
     // ── Improvement ────────────────────────────────────────────
 
     /// Attempt to improve this tile by one level.
-    ///
-    /// Returns `true` if the improvement succeeded, `false` if already at max level
-    /// or the terrain cannot be improved.
+    /// Returns `true` if improvement succeeded.
     pub fn improve(&mut self) -> bool {
-        let max = self.terrain.max_improvement_level();
+        let max = self
+            .resource_deposit
+            .map(|r| r.max_improvement_level())
+            .unwrap_or(0);
         if self.improvement_level < max {
             self.improvement_level += 1;
             true
@@ -173,115 +187,62 @@ impl Tile {
         }
     }
 
-    /// Set the improvement level directly. Clamps to the terrain's maximum.
+    /// Set the improvement level directly. Clamps to the resource's maximum.
     pub fn set_improvement_level(&mut self, level: u8) {
-        self.improvement_level = level.min(self.terrain.max_improvement_level());
+        let max = self
+            .resource_deposit
+            .map(|r| r.max_improvement_level())
+            .unwrap_or(0);
+        self.improvement_level = level.min(max);
     }
 
     // ── Yield calculation ──────────────────────────────────────
 
-    /// Calculate the resource yield of this tile based on terrain, improvement level,
-    /// and any revealed resource deposit.
+    /// Calculate the resource yield of this tile based on resource and improvement level.
     ///
-    /// Returns `None` if the tile produces nothing (e.g., unprospected mountain,
-    /// sea tile, desert with no deposit).
+    /// Returns `None` if the tile has no resource or the resource isn't yet productive.
     ///
     /// ## Yield Rules
     ///
-    /// - **ScrubForest**: always 1 timber, cannot be improved.
-    /// - **DryPlains**: always 1 grain, cannot be improved.
-    /// - **HorseRanch**: always 1 horse.
-    /// - **OpenRange**: always 1 livestock.
-    /// - **Farm, Orchard, Plantation, FertileHills, HardwoodForest**: base resource,
-    ///   +1 per improvement level (so level 0 = 1, level 3 = 4).
-    /// - **BarrenHills / Mountain with Coal or Iron**: +2 per improvement level
-    ///   (level 0 = 1, level 1 = 3, level 2 = 5, level 3 = 7). Double rate for mines.
-    /// - **Mountain with Gold or Gems**: 1 at level 1, 2 at level 2. Requires prospecting.
-    /// - **Swamp / Desert / Tundra with Oil**: +1 per improvement level (level 1 = 1, etc.).
-    ///   Oil requires at least level 1 to produce anything.
+    /// - **Surface resources** (Grain, Fruit, Cotton, Wool, Timber, Livestock, Horses):
+    ///   base 1, +1 per improvement level (level 0 = 1, level 3 = 4).
+    /// - **Coal / Iron**: double rate — 1 + 2×level (level 0 = 1, level 3 = 7).
+    /// - **Gold / Gems**: requires level 1+ to produce; yield = level.
+    /// - **Oil**: requires level 1+ to produce; yield = level.
     pub fn calculate_yield(&self) -> Option<ResourceAmount> {
-        match self.terrain {
-            // Fixed-output terrains (no improvement possible)
-            TerrainType::ScrubForest => Some(ResourceAmount::new(ResourceType::Timber, 1)),
-            TerrainType::DryPlains => Some(ResourceAmount::new(ResourceType::Grain, 1)),
-            TerrainType::HorseRanch => Some(ResourceAmount::new(ResourceType::Horses, 1)),
-            TerrainType::OpenRange => Some(ResourceAmount::new(ResourceType::Livestock, 1)),
+        let resource = self.resource_deposit?;
 
-            // Improvable agricultural/forestry terrains: base 1, +1 per level
-            TerrainType::Farm => {
-                let qty = 1 + self.improvement_level as u32;
-                Some(ResourceAmount::new(ResourceType::Grain, qty))
-            }
-            TerrainType::Orchard => {
-                let qty = 1 + self.improvement_level as u32;
-                Some(ResourceAmount::new(ResourceType::Fruit, qty))
-            }
-            TerrainType::Plantation => {
-                let qty = 1 + self.improvement_level as u32;
-                Some(ResourceAmount::new(ResourceType::Cotton, qty))
-            }
-            TerrainType::FertileHills => {
-                let qty = 1 + self.improvement_level as u32;
-                Some(ResourceAmount::new(ResourceType::Wool, qty))
-            }
-            TerrainType::HardwoodForest => {
-                let qty = 1 + self.improvement_level as u32;
-                Some(ResourceAmount::new(ResourceType::Timber, qty))
-            }
-
-            // Mining terrains: require prospecting
-            TerrainType::BarrenHills | TerrainType::Mountain => self.calculate_mining_yield(),
-
-            // Oil terrains: require prospecting + improvement
-            TerrainType::Swamp | TerrainType::Desert | TerrainType::Tundra => {
-                self.calculate_oil_yield()
-            }
-
-            // Sea produces nothing
-            TerrainType::Sea => None,
-        }
-    }
-
-    /// Calculate yield for BarrenHills / Mountain with a revealed deposit.
-    fn calculate_mining_yield(&self) -> Option<ResourceAmount> {
-        let deposit = self.resource_deposit?;
-
-        match deposit {
-            // Coal and Iron: double rate (+2 per improvement level)
+        match resource {
+            // Coal and Iron: double rate
             ResourceType::Coal | ResourceType::Iron => {
                 let qty = 1 + 2 * self.improvement_level as u32;
-                Some(ResourceAmount::new(deposit, qty))
+                Some(ResourceAmount::new(resource, qty))
             }
 
-            // Gold and Gems: special scaling (1 at level 1, 2 at level 2)
+            // Gold and Gems: require level 1+
             ResourceType::Gold | ResourceType::Gems => {
                 if self.improvement_level == 0 {
                     None
                 } else {
-                    let qty = self.improvement_level as u32;
-                    Some(ResourceAmount::new(deposit, qty))
+                    Some(ResourceAmount::new(resource, self.improvement_level as u32))
                 }
             }
 
-            // Other deposit types on mountains/hills are unexpected but handled gracefully
+            // Oil: requires level 1+
+            ResourceType::Oil => {
+                if self.improvement_level == 0 {
+                    None
+                } else {
+                    Some(ResourceAmount::new(resource, self.improvement_level as u32))
+                }
+            }
+
+            // Surface resources: base 1, +1 per improvement level
             _ => {
                 let qty = 1 + self.improvement_level as u32;
-                Some(ResourceAmount::new(deposit, qty))
+                Some(ResourceAmount::new(resource, qty))
             }
         }
-    }
-
-    /// Calculate yield for Swamp / Desert / Tundra with oil deposit.
-    fn calculate_oil_yield(&self) -> Option<ResourceAmount> {
-        let deposit = self.resource_deposit?;
-
-        // Oil requires at least level 1 to produce
-        if self.improvement_level == 0 {
-            return None;
-        }
-
-        let qty = self.improvement_level as u32;
-        Some(ResourceAmount::new(deposit, qty))
     }
 }
 
@@ -295,8 +256,8 @@ mod tests {
 
     #[test]
     fn new_tile_is_unimproved() {
-        let tile = Tile::new(TerrainType::Farm);
-        assert_eq!(tile.terrain(), TerrainType::Farm);
+        let tile = Tile::new(TerrainType::Grassland);
+        assert_eq!(tile.terrain(), TerrainType::Grassland);
         assert_eq!(tile.improvement_level(), 0);
         assert_eq!(tile.resource_deposit(), None);
         assert!(!tile.is_capital);
@@ -313,7 +274,7 @@ mod tests {
 
     #[test]
     fn new_tile_has_no_infrastructure() {
-        let tile = Tile::new(TerrainType::Farm);
+        let tile = Tile::new(TerrainType::Grassland);
         assert!(!tile.infrastructure.has_railroad);
         assert!(!tile.infrastructure.has_depot);
         assert!(!tile.infrastructure.has_port);
@@ -353,7 +314,7 @@ mod tests {
 
     #[test]
     fn infrastructure_can_be_set() {
-        let mut tile = Tile::new(TerrainType::Farm);
+        let mut tile = Tile::new(TerrainType::Grassland);
         tile.infrastructure.has_railroad = true;
         tile.infrastructure.has_depot = true;
         assert!(tile.infrastructure.has_railroad);
@@ -362,7 +323,7 @@ mod tests {
 
     #[test]
     fn infrastructure_fort_with_level() {
-        let mut tile = Tile::new(TerrainType::FertileHills);
+        let mut tile = Tile::new(TerrainType::Hills);
         tile.infrastructure.has_fort = true;
         tile.infrastructure.fort_level = 2;
         assert!(tile.infrastructure.has_fort);
@@ -372,8 +333,8 @@ mod tests {
     // ── Improvement ────────────────────────────────────────────
 
     #[test]
-    fn improve_farm_increases_level() {
-        let mut tile = Tile::new(TerrainType::Farm);
+    fn improve_tile_with_resource_increases_level() {
+        let mut tile = Tile::with_resource(TerrainType::Grassland, ResourceType::Grain);
         assert!(tile.improve());
         assert_eq!(tile.improvement_level(), 1);
         assert!(tile.improve());
@@ -386,27 +347,15 @@ mod tests {
     }
 
     #[test]
-    fn improve_scrub_forest_fails() {
-        let mut tile = Tile::new(TerrainType::ScrubForest);
+    fn improve_tile_without_resource_fails() {
+        let mut tile = Tile::new(TerrainType::Forest);
         assert!(!tile.improve());
         assert_eq!(tile.improvement_level(), 0);
     }
 
     #[test]
-    fn improve_dry_plains_fails() {
-        let mut tile = Tile::new(TerrainType::DryPlains);
-        assert!(!tile.improve());
-    }
-
-    #[test]
-    fn improve_open_range_fails() {
-        let mut tile = Tile::new(TerrainType::OpenRange);
-        assert!(!tile.improve());
-    }
-
-    #[test]
-    fn improve_horse_ranch_fails() {
-        let mut tile = Tile::new(TerrainType::HorseRanch);
+    fn improve_grassland_without_resource_fails() {
+        let mut tile = Tile::new(TerrainType::Grassland);
         assert!(!tile.improve());
     }
 
@@ -418,16 +367,16 @@ mod tests {
 
     #[test]
     fn set_improvement_level_clamps_to_max() {
-        let mut tile = Tile::new(TerrainType::Farm);
+        let mut tile = Tile::with_resource(TerrainType::Grassland, ResourceType::Grain);
         tile.set_improvement_level(10);
-        assert_eq!(tile.improvement_level(), 3); // Farm max is 3
+        assert_eq!(tile.improvement_level(), 3); // Grain max is 3
     }
 
     #[test]
-    fn set_improvement_level_on_non_improvable() {
-        let mut tile = Tile::new(TerrainType::ScrubForest);
+    fn set_improvement_level_on_tile_without_resource() {
+        let mut tile = Tile::new(TerrainType::Forest);
         tile.set_improvement_level(5);
-        assert_eq!(tile.improvement_level(), 0); // max is 0
+        assert_eq!(tile.improvement_level(), 0); // no resource means max is 0
     }
 
     // ── Prospecting ────────────────────────────────────────────
@@ -442,8 +391,8 @@ mod tests {
     }
 
     #[test]
-    fn reveal_deposit_on_barren_hills() {
-        let mut tile = Tile::new(TerrainType::BarrenHills);
+    fn reveal_deposit_on_hills() {
+        let mut tile = Tile::new(TerrainType::Hills);
         tile.reveal_deposit(ResourceType::Coal);
         assert_eq!(tile.resource_deposit(), Some(ResourceType::Coal));
     }
@@ -452,42 +401,75 @@ mod tests {
     fn reveal_no_deposit() {
         let mut tile = Tile::new(TerrainType::Desert);
         tile.reveal_no_deposit();
-        assert!(!tile.is_prospected());
+        // After prospecting, tile is marked as prospected even if nothing found
+        assert!(tile.is_prospected());
         assert_eq!(tile.resource_deposit(), None);
     }
 
     #[test]
     fn non_prospecting_terrain_is_always_prospected() {
-        let tile = Tile::new(TerrainType::Farm);
+        let tile = Tile::new(TerrainType::Grassland);
         assert!(tile.is_prospected());
     }
 
     #[test]
-    #[should_panic(expected = "does not require prospecting")]
-    fn reveal_deposit_on_farm_panics() {
-        let mut tile = Tile::new(TerrainType::Farm);
-        tile.reveal_deposit(ResourceType::Coal);
+    fn grassland_set_resource_works() {
+        let mut tile = Tile::new(TerrainType::Grassland);
+        tile.set_resource(ResourceType::Grain);
+        assert_eq!(tile.resource_deposit(), Some(ResourceType::Grain));
+    }
+
+    // ── Hidden resource visibility ──────────────────────────────
+
+    #[test]
+    fn hidden_deposit_via_set_resource_is_not_visible() {
+        let mut tile = Tile::new(TerrainType::Hills);
+        tile.set_resource(ResourceType::Coal);
+        // Placed by map generator — not yet prospected
+        assert!(!tile.is_prospected());
+        assert!(!tile.has_visible_resource());
+        assert_eq!(tile.resource_deposit(), Some(ResourceType::Coal));
     }
 
     #[test]
-    #[should_panic(expected = "does not require prospecting")]
-    fn reveal_no_deposit_on_farm_panics() {
-        let mut tile = Tile::new(TerrainType::Farm);
+    fn hidden_deposit_becomes_visible_after_reveal() {
+        let mut tile = Tile::new(TerrainType::Mountain);
+        tile.set_resource(ResourceType::Gold); // generator places hidden
+        assert!(!tile.has_visible_resource());
+        tile.reveal_deposit(ResourceType::Gold); // prospector reveals
+        assert!(tile.is_prospected());
+        assert!(tile.has_visible_resource());
+    }
+
+    #[test]
+    fn reveal_no_deposit_marks_prospected_no_resource() {
+        let mut tile = Tile::new(TerrainType::Swamp);
+        assert!(!tile.is_prospected());
         tile.reveal_no_deposit();
+        assert!(tile.is_prospected());
+        assert!(!tile.has_visible_resource());
+        assert_eq!(tile.resource_deposit(), None);
+    }
+
+    #[test]
+    fn surface_resource_always_visible() {
+        let tile = Tile::with_resource(TerrainType::Grassland, ResourceType::Grain);
+        assert!(tile.has_visible_resource());
+        assert!(tile.is_prospected()); // grassland can't have deposits
     }
 
     // ── Assigned civilian ──────────────────────────────────────
 
     #[test]
     fn assign_civilian() {
-        let mut tile = Tile::new(TerrainType::Farm);
+        let mut tile = Tile::new(TerrainType::Grassland);
         tile.assigned_civilian = Some(UnitId(7));
         assert_eq!(tile.assigned_civilian, Some(UnitId(7)));
     }
 
     #[test]
     fn clear_civilian() {
-        let mut tile = Tile::new(TerrainType::Farm);
+        let mut tile = Tile::new(TerrainType::Grassland);
         tile.assigned_civilian = Some(UnitId(7));
         tile.assigned_civilian = None;
         assert_eq!(tile.assigned_civilian, None);
@@ -497,50 +479,42 @@ mod tests {
 
     #[test]
     fn set_capital() {
-        let mut tile = Tile::new(TerrainType::Farm);
+        let mut tile = Tile::new(TerrainType::Grassland);
         tile.is_capital = true;
         assert!(tile.is_capital);
     }
 
-    // ── Yield: Fixed-output terrains ───────────────────────────
+    // ── Yield: Tiles with resources at level 0 ──────────────────
 
     #[test]
-    fn scrub_forest_always_1_timber() {
-        let tile = Tile::new(TerrainType::ScrubForest);
+    fn timber_tile_yields_1_timber() {
+        let tile = Tile::with_resource(TerrainType::Forest, ResourceType::Timber);
         let y = tile.calculate_yield().unwrap();
         assert_eq!(y.resource, ResourceType::Timber);
         assert_eq!(y.quantity, 1);
     }
 
     #[test]
-    fn dry_plains_always_1_grain() {
-        let tile = Tile::new(TerrainType::DryPlains);
+    fn grain_tile_yields_1_grain() {
+        let tile = Tile::with_resource(TerrainType::Grassland, ResourceType::Grain);
         let y = tile.calculate_yield().unwrap();
         assert_eq!(y.resource, ResourceType::Grain);
         assert_eq!(y.quantity, 1);
     }
 
     #[test]
-    fn horse_ranch_always_1_horse() {
-        let tile = Tile::new(TerrainType::HorseRanch);
-        let y = tile.calculate_yield().unwrap();
-        assert_eq!(y.resource, ResourceType::Horses);
-        assert_eq!(y.quantity, 1);
-    }
-
-    #[test]
-    fn open_range_always_1_livestock() {
-        let tile = Tile::new(TerrainType::OpenRange);
+    fn livestock_tile_yields_1_livestock() {
+        let tile = Tile::with_resource(TerrainType::Grassland, ResourceType::Livestock);
         let y = tile.calculate_yield().unwrap();
         assert_eq!(y.resource, ResourceType::Livestock);
         assert_eq!(y.quantity, 1);
     }
 
-    // ── Yield: Improvable agricultural terrains ────────────────
+    // ── Yield: Improvable resource tiles ──────────────────────
 
     #[test]
-    fn farm_yield_scales_with_level() {
-        let mut tile = Tile::new(TerrainType::Farm);
+    fn grain_yield_scales_with_level() {
+        let mut tile = Tile::with_resource(TerrainType::Grassland, ResourceType::Grain);
         for expected_level in 0..=3u8 {
             let y = tile.calculate_yield().unwrap();
             assert_eq!(y.resource, ResourceType::Grain);
@@ -552,8 +526,8 @@ mod tests {
     }
 
     #[test]
-    fn orchard_yield_scales_with_level() {
-        let mut tile = Tile::new(TerrainType::Orchard);
+    fn fruit_yield_scales_with_level() {
+        let mut tile = Tile::with_resource(TerrainType::Grassland, ResourceType::Fruit);
         assert_eq!(
             tile.calculate_yield().unwrap(),
             ResourceAmount::new(ResourceType::Fruit, 1)
@@ -576,8 +550,8 @@ mod tests {
     }
 
     #[test]
-    fn plantation_yield_scales_with_level() {
-        let mut tile = Tile::new(TerrainType::Plantation);
+    fn cotton_yield_scales_with_level() {
+        let mut tile = Tile::with_resource(TerrainType::Grassland, ResourceType::Cotton);
         assert_eq!(
             tile.calculate_yield().unwrap(),
             ResourceAmount::new(ResourceType::Cotton, 1)
@@ -590,8 +564,8 @@ mod tests {
     }
 
     #[test]
-    fn fertile_hills_yield_scales_with_level() {
-        let mut tile = Tile::new(TerrainType::FertileHills);
+    fn wool_yield_scales_with_level() {
+        let mut tile = Tile::with_resource(TerrainType::Hills, ResourceType::Wool);
         assert_eq!(
             tile.calculate_yield().unwrap(),
             ResourceAmount::new(ResourceType::Wool, 1)
@@ -604,8 +578,8 @@ mod tests {
     }
 
     #[test]
-    fn hardwood_forest_yield_scales_with_level() {
-        let mut tile = Tile::new(TerrainType::HardwoodForest);
+    fn timber_yield_scales_with_level() {
+        let mut tile = Tile::with_resource(TerrainType::Forest, ResourceType::Timber);
         assert_eq!(
             tile.calculate_yield().unwrap(),
             ResourceAmount::new(ResourceType::Timber, 1)
@@ -658,8 +632,8 @@ mod tests {
     }
 
     #[test]
-    fn barren_hills_with_iron_double_rate() {
-        let mut tile = Tile::new(TerrainType::BarrenHills);
+    fn hills_with_iron_double_rate() {
+        let mut tile = Tile::new(TerrainType::Hills);
         tile.reveal_deposit(ResourceType::Iron);
 
         assert_eq!(
@@ -752,8 +726,8 @@ mod tests {
     }
 
     #[test]
-    fn barren_hills_without_deposit_yields_nothing() {
-        let tile = Tile::new(TerrainType::BarrenHills);
+    fn hills_without_deposit_yields_nothing() {
+        let tile = Tile::new(TerrainType::Hills);
         assert_eq!(tile.calculate_yield(), None);
     }
 
@@ -846,29 +820,29 @@ mod tests {
     // ── Comprehensive yield table test ─────────────────────────
 
     #[test]
-    fn all_improvable_terrains_at_all_levels() {
-        // Verify that all improvable terrains follow +1 per level rule
+    fn all_improvable_resources_at_all_levels() {
+        // Verify that all improvable resource tiles follow +1 per level rule
         let cases: &[(TerrainType, ResourceType)] = &[
-            (TerrainType::Farm, ResourceType::Grain),
-            (TerrainType::Orchard, ResourceType::Fruit),
-            (TerrainType::Plantation, ResourceType::Cotton),
-            (TerrainType::FertileHills, ResourceType::Wool),
-            (TerrainType::HardwoodForest, ResourceType::Timber),
+            (TerrainType::Grassland, ResourceType::Grain),
+            (TerrainType::Grassland, ResourceType::Fruit),
+            (TerrainType::Grassland, ResourceType::Cotton),
+            (TerrainType::Hills, ResourceType::Wool),
+            (TerrainType::Forest, ResourceType::Timber),
         ];
 
         for &(terrain, resource) in cases {
-            let mut tile = Tile::new(terrain);
+            let mut tile = Tile::with_resource(terrain, resource);
             for level in 0..=3u8 {
                 tile.set_improvement_level(level);
                 let y = tile.calculate_yield().unwrap();
                 assert_eq!(
                     y.resource, resource,
-                    "{terrain:?} at level {level} should produce {resource:?}"
+                    "{terrain:?} with {resource:?} at level {level} should produce {resource:?}"
                 );
                 assert_eq!(
                     y.quantity,
                     1 + level as u32,
-                    "{terrain:?} at level {level} should produce {} but got {}",
+                    "{terrain:?} with {resource:?} at level {level} should produce {} but got {}",
                     1 + level as u32,
                     y.quantity
                 );
@@ -879,7 +853,7 @@ mod tests {
     #[test]
     fn coal_and_iron_double_rate_all_levels() {
         let deposits = [ResourceType::Coal, ResourceType::Iron];
-        let terrains = [TerrainType::BarrenHills, TerrainType::Mountain];
+        let terrains = [TerrainType::Hills, TerrainType::Mountain];
 
         for terrain in terrains {
             for deposit in deposits {
@@ -935,22 +909,21 @@ mod tests {
     }
 
     #[test]
-    fn fixed_output_terrains_unaffected_by_level_attempt() {
-        // These terrains cannot be improved, so their output is constant
-        let cases = [
-            (TerrainType::ScrubForest, ResourceType::Timber, 1),
-            (TerrainType::DryPlains, ResourceType::Grain, 1),
-            (TerrainType::HorseRanch, ResourceType::Horses, 1),
-            (TerrainType::OpenRange, ResourceType::Livestock, 1),
+    fn tile_without_resource_yields_nothing() {
+        // Tiles without resources produce nothing regardless of terrain
+        let terrains = [
+            TerrainType::Grassland,
+            TerrainType::Forest,
+            TerrainType::Hills,
         ];
 
-        for (terrain, resource, qty) in cases {
-            let mut tile = Tile::new(terrain);
-            // Attempt to improve (should fail)
-            tile.improve();
-            let y = tile.calculate_yield().unwrap();
-            assert_eq!(y.resource, resource);
-            assert_eq!(y.quantity, qty);
+        for terrain in terrains {
+            let tile = Tile::new(terrain);
+            assert_eq!(
+                tile.calculate_yield(),
+                None,
+                "{terrain:?} without resource should yield nothing"
+            );
         }
     }
 }

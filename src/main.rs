@@ -2244,16 +2244,30 @@ fn cmd_deploy_civilian(game: &mut GameState, args: &str) {
 
         let prov_name = province.name.clone();
 
-        // Find the first improvable tile in the province for this civilian type
+        // Find the first workable tile in the province for this civilian type
         let mut target_coord = None;
         for tile_coord in &province.tiles {
             if let Some(tile) = game.hex_map.get_tile(*tile_coord)
-                && civ_type.can_improve(tile.terrain())
-                && tile.improvement_level() < tile.terrain().max_improvement_level()
+                && civ_type.can_improve(tile.terrain(), tile.resource_deposit())
                 && tile.assigned_civilian.is_none()
             {
-                target_coord = Some(*tile_coord);
-                break;
+                // Prospectors target tiles with no resource yet (unprospected)
+                // Engineers target any land tile (infrastructure)
+                // Other civilians need a resource that can still be improved
+                let eligible = match civ_type {
+                    domain::economy::civilians::CivilianType::Prospector => {
+                        tile.terrain().can_have_deposits() && tile.resource_deposit().is_none()
+                    }
+                    domain::economy::civilians::CivilianType::Engineer => true,
+                    _ => tile
+                        .resource_deposit()
+                        .map(|r| tile.improvement_level() < r.max_improvement_level())
+                        .unwrap_or(false),
+                };
+                if eligible {
+                    target_coord = Some(*tile_coord);
+                    break;
+                }
             }
         }
 
@@ -2547,9 +2561,8 @@ fn cmd_saveinfo(filename: &str) {
 }
 
 fn print_legend() {
-    println!("  Legend: F=Farm f=Forest H=Hills M=Mountain ~=Sea .=Plains");
-    println!("         P=Plantation R=Range h=HorseRanch O=Orchard");
-    println!("         S=Swamp D=Desert T=Tundra s=Scrub  ★=Capital");
+    println!("  Terrain: G=Grassland F=Forest H=Hills M=Mountain ~=Sea");
+    println!("           D=Desert S=Swamp T=Tundra  ★=Capital");
 }
 
 fn print_scores(game: &GameState) {
@@ -2590,21 +2603,14 @@ fn print_scores(game: &GameState) {
 
 fn terrain_char(terrain: TerrainType) -> char {
     match terrain {
-        TerrainType::Farm => 'F',
-        TerrainType::HardwoodForest => 'f',
-        TerrainType::ScrubForest => 's',
-        TerrainType::FertileHills => 'H',
-        TerrainType::BarrenHills => 'h',
+        TerrainType::Grassland => 'G',
+        TerrainType::Hills => 'H',
+        TerrainType::Forest => 'F',
         TerrainType::Mountain => 'M',
-        TerrainType::Sea => '~',
-        TerrainType::DryPlains => '.',
-        TerrainType::Plantation => 'P',
-        TerrainType::OpenRange => 'R',
-        TerrainType::HorseRanch => 'r',
-        TerrainType::Orchard => 'O',
-        TerrainType::Swamp => 'S',
         TerrainType::Desert => 'D',
+        TerrainType::Swamp => 'S',
         TerrainType::Tundra => 'T',
+        TerrainType::Sea => '~',
     }
 }
 

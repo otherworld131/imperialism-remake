@@ -19,7 +19,8 @@ export async function initWasm() {
 
 export interface TileData {
   q: number; r: number;
-  terrain: string; is_capital: boolean;
+  terrain: string; resource: string | null; resource_hidden: boolean;
+  is_capital: boolean;
   is_country_capital: boolean;
   improvement_level: number;
   owner: string; owner_color: string; province: string;

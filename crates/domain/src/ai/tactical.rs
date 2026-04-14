@@ -640,7 +640,7 @@ mod tests {
         let safe_tile = HexCoord::new(0, 5);
         game.hex_map.set_tile(
             safe_tile,
-            crate::map::tile::Tile::with_province(TerrainType::Farm, ProvinceId(4)),
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(4)),
         );
         let safe_province = Province::new(
             ProvinceId(4),

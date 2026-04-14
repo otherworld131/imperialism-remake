@@ -48,33 +48,22 @@ impl CivilianType {
         }
     }
 
-    /// Whether this civilian type can improve the given terrain.
-    pub fn can_improve(self, terrain: TerrainType) -> bool {
+    /// Whether this civilian type can improve the given terrain/resource combination.
+    pub fn can_improve(self, terrain: TerrainType, resource: Option<ResourceType>) -> bool {
         match self {
-            CivilianType::Farmer => matches!(
-                terrain,
-                TerrainType::Farm | TerrainType::Orchard | TerrainType::Plantation
+            Self::Farmer => matches!(
+                resource,
+                Some(ResourceType::Grain | ResourceType::Fruit | ResourceType::Cotton)
             ),
-            CivilianType::Rancher => {
-                matches!(terrain, TerrainType::FertileHills | TerrainType::OpenRange)
-            }
-            CivilianType::Forester => matches!(terrain, TerrainType::HardwoodForest),
-            CivilianType::Miner => {
-                matches!(terrain, TerrainType::BarrenHills | TerrainType::Mountain)
-            }
-            CivilianType::Driller => matches!(
-                terrain,
-                TerrainType::Desert | TerrainType::Swamp | TerrainType::Tundra
+            Self::Rancher => matches!(
+                resource,
+                Some(ResourceType::Wool | ResourceType::Livestock | ResourceType::Horses)
             ),
-            CivilianType::Prospector => matches!(
-                terrain,
-                TerrainType::BarrenHills
-                    | TerrainType::Mountain
-                    | TerrainType::Swamp
-                    | TerrainType::Desert
-                    | TerrainType::Tundra
-            ),
-            CivilianType::Engineer => terrain.is_land(),
+            Self::Forester => matches!(resource, Some(ResourceType::Timber)),
+            Self::Miner => matches!(resource, Some(ResourceType::Coal | ResourceType::Iron)),
+            Self::Driller => matches!(resource, Some(ResourceType::Oil)),
+            Self::Prospector => terrain.can_have_deposits(),
+            Self::Engineer => terrain.is_land(),
         }
     }
 
@@ -213,59 +202,80 @@ mod tests {
     // ── Terrain matching ──────────────────────────────────────
 
     #[test]
-    fn farmer_can_improve_agricultural_terrains() {
-        assert!(CivilianType::Farmer.can_improve(TerrainType::Farm));
-        assert!(CivilianType::Farmer.can_improve(TerrainType::Orchard));
-        assert!(CivilianType::Farmer.can_improve(TerrainType::Plantation));
-        assert!(!CivilianType::Farmer.can_improve(TerrainType::Mountain));
-        assert!(!CivilianType::Farmer.can_improve(TerrainType::Sea));
+    fn farmer_can_improve_agricultural_resources() {
+        assert!(
+            CivilianType::Farmer.can_improve(TerrainType::Grassland, Some(ResourceType::Grain))
+        );
+        assert!(
+            CivilianType::Farmer.can_improve(TerrainType::Grassland, Some(ResourceType::Fruit))
+        );
+        assert!(
+            CivilianType::Farmer.can_improve(TerrainType::Grassland, Some(ResourceType::Cotton))
+        );
+        assert!(!CivilianType::Farmer.can_improve(TerrainType::Mountain, Some(ResourceType::Coal)));
+        assert!(!CivilianType::Farmer.can_improve(TerrainType::Sea, None));
     }
 
     #[test]
-    fn rancher_can_improve_ranching_terrains() {
-        assert!(CivilianType::Rancher.can_improve(TerrainType::FertileHills));
-        assert!(CivilianType::Rancher.can_improve(TerrainType::OpenRange));
-        assert!(!CivilianType::Rancher.can_improve(TerrainType::Farm));
+    fn rancher_can_improve_ranching_resources() {
+        assert!(CivilianType::Rancher.can_improve(TerrainType::Hills, Some(ResourceType::Wool)));
+        assert!(
+            CivilianType::Rancher
+                .can_improve(TerrainType::Grassland, Some(ResourceType::Livestock))
+        );
+        assert!(
+            !CivilianType::Rancher.can_improve(TerrainType::Grassland, Some(ResourceType::Grain))
+        );
+        assert!(
+            CivilianType::Rancher
+                .can_improve(TerrainType::Grassland, Some(ResourceType::Horses))
+        );
     }
 
     #[test]
-    fn forester_can_improve_hardwood_forest() {
-        assert!(CivilianType::Forester.can_improve(TerrainType::HardwoodForest));
-        assert!(!CivilianType::Forester.can_improve(TerrainType::ScrubForest));
-        assert!(!CivilianType::Forester.can_improve(TerrainType::Farm));
+    fn forester_can_improve_timber() {
+        assert!(
+            CivilianType::Forester.can_improve(TerrainType::Forest, Some(ResourceType::Timber))
+        );
+        assert!(!CivilianType::Forester.can_improve(TerrainType::Forest, None));
+        assert!(
+            !CivilianType::Forester.can_improve(TerrainType::Grassland, Some(ResourceType::Grain))
+        );
     }
 
     #[test]
-    fn miner_can_improve_mining_terrains() {
-        assert!(CivilianType::Miner.can_improve(TerrainType::BarrenHills));
-        assert!(CivilianType::Miner.can_improve(TerrainType::Mountain));
-        assert!(!CivilianType::Miner.can_improve(TerrainType::Desert));
+    fn miner_can_improve_mining_resources() {
+        assert!(CivilianType::Miner.can_improve(TerrainType::Hills, Some(ResourceType::Coal)));
+        assert!(CivilianType::Miner.can_improve(TerrainType::Mountain, Some(ResourceType::Iron)));
+        assert!(!CivilianType::Miner.can_improve(TerrainType::Desert, Some(ResourceType::Oil)));
     }
 
     #[test]
-    fn driller_can_improve_oil_terrains() {
-        assert!(CivilianType::Driller.can_improve(TerrainType::Desert));
-        assert!(CivilianType::Driller.can_improve(TerrainType::Swamp));
-        assert!(CivilianType::Driller.can_improve(TerrainType::Tundra));
-        assert!(!CivilianType::Driller.can_improve(TerrainType::Mountain));
+    fn driller_can_improve_oil_resources() {
+        assert!(CivilianType::Driller.can_improve(TerrainType::Desert, Some(ResourceType::Oil)));
+        assert!(CivilianType::Driller.can_improve(TerrainType::Swamp, Some(ResourceType::Oil)));
+        assert!(CivilianType::Driller.can_improve(TerrainType::Tundra, Some(ResourceType::Oil)));
+        assert!(
+            !CivilianType::Driller.can_improve(TerrainType::Mountain, Some(ResourceType::Coal))
+        );
     }
 
     #[test]
-    fn prospector_can_prospect_hidden_terrains() {
-        assert!(CivilianType::Prospector.can_improve(TerrainType::BarrenHills));
-        assert!(CivilianType::Prospector.can_improve(TerrainType::Mountain));
-        assert!(CivilianType::Prospector.can_improve(TerrainType::Swamp));
-        assert!(CivilianType::Prospector.can_improve(TerrainType::Desert));
-        assert!(CivilianType::Prospector.can_improve(TerrainType::Tundra));
-        assert!(!CivilianType::Prospector.can_improve(TerrainType::Farm));
+    fn prospector_can_prospect_deposit_terrains() {
+        assert!(CivilianType::Prospector.can_improve(TerrainType::Hills, None));
+        assert!(CivilianType::Prospector.can_improve(TerrainType::Mountain, None));
+        assert!(CivilianType::Prospector.can_improve(TerrainType::Swamp, None));
+        assert!(CivilianType::Prospector.can_improve(TerrainType::Desert, None));
+        assert!(CivilianType::Prospector.can_improve(TerrainType::Tundra, None));
+        assert!(!CivilianType::Prospector.can_improve(TerrainType::Grassland, None));
     }
 
     #[test]
     fn engineer_can_work_on_any_land() {
-        assert!(CivilianType::Engineer.can_improve(TerrainType::Farm));
-        assert!(CivilianType::Engineer.can_improve(TerrainType::Mountain));
-        assert!(CivilianType::Engineer.can_improve(TerrainType::Desert));
-        assert!(!CivilianType::Engineer.can_improve(TerrainType::Sea));
+        assert!(CivilianType::Engineer.can_improve(TerrainType::Grassland, None));
+        assert!(CivilianType::Engineer.can_improve(TerrainType::Mountain, None));
+        assert!(CivilianType::Engineer.can_improve(TerrainType::Desert, None));
+        assert!(!CivilianType::Engineer.can_improve(TerrainType::Sea, None));
     }
 
     // ── Improvement costs ─────────────────────────────────────

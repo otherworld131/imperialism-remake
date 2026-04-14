@@ -8,8 +8,8 @@ use super::province::Province;
 
 // ── Constants ──────────────────────────────────────────────────
 
-const MAP_WIDTH: i32 = 60;
-const MAP_HEIGHT: i32 = 40;
+const MAP_WIDTH: i32 = 80;
+const MAP_HEIGHT: i32 = 50;
 
 const NUM_GREAT_POWERS: usize = 7;
 const PROVINCES_PER_GREAT_POWER: usize = 8;
@@ -120,9 +120,20 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
     let mut land_tiles_sorted: Vec<HexCoord> = land_mask.iter().copied().collect();
     land_tiles_sorted.sort_by_key(|c| (c.q, c.r));
     for &coord in &land_tiles_sorted {
-        let terrain = random_land_terrain(&mut rng);
-        hex_map.set_tile(coord, super::tile::Tile::new(terrain));
+        let (terrain, resource) = random_land_terrain_with_resource(&mut rng);
+        if let Some(res) = resource {
+            hex_map.set_tile(coord, super::tile::Tile::with_resource(terrain, res));
+        } else {
+            hex_map.set_tile(coord, super::tile::Tile::new(terrain));
+        }
     }
+
+    // Step 2b: Cluster terrain for spatial coherence (forests→patches, mountains→chains, etc.)
+    cluster_terrain(&mut hex_map, &land_mask, &mut rng, TerrainType::Forest, 25);
+    cluster_terrain(&mut hex_map, &land_mask, &mut rng, TerrainType::Hills, 20);
+    cluster_terrain(&mut hex_map, &land_mask, &mut rng, TerrainType::Mountain, 12);
+    cluster_terrain(&mut hex_map, &land_mask, &mut rng, TerrainType::Desert, 15);
+    cluster_terrain(&mut hex_map, &land_mask, &mut rng, TerrainType::Swamp, 10);
 
     // Step 3: Cluster food terrain and enforce minimum food (before nations/provinces)
     cluster_food_terrain(&mut hex_map, &land_mask, &mut rng, 15);
@@ -132,8 +143,9 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
     let total_nations = NUM_GREAT_POWERS + NUM_MINOR_NATIONS;
     let nation_centers = place_nation_centers(&mut rng, &land_mask, total_nations, &hex_map);
 
-    // Step 5: Assign land tiles to nations (Voronoi-like)
-    let nation_tiles = assign_tiles_to_nations(&land_mask, &nation_centers);
+    // Step 5: Assign land tiles to nations (weighted Voronoi + normalization)
+    let mut nation_tiles = assign_tiles_to_nations(&land_mask, &nation_centers);
+    normalize_territory_sizes(&mut nation_tiles, &nation_centers, total_nations);
 
     // Step 6: Subdivide each nation's territory into provinces
     let mut province_id_counter: u32 = 0;
@@ -217,12 +229,13 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
         for r in 0..MAP_HEIGHT {
             let coord = HexCoord::new(q, r);
             if let Some(tile) = hex_map.get_tile_mut(coord)
-                && tile.terrain().requires_prospecting()
+                && tile.terrain().can_have_deposits()
+                && tile.resource_deposit().is_none()
             {
                 let roll = rng.range(0, 99);
                 if roll < 40 {
                     let deposit = random_mineral_deposit(&mut rng, tile.terrain());
-                    tile.reveal_deposit(deposit);
+                    tile.set_resource(deposit); // set_resource, NOT reveal — keeps prospected=false
                 }
             }
         }
@@ -416,7 +429,7 @@ fn generate_land_mass(rng: &mut Rng) -> HashSet<HexCoord> {
     // Grow each continent from its seed
     for seed in &seeds {
         // Target size: 150-350 tiles per continent
-        let target_size = rng.range(150, 350) as usize;
+        let target_size = rng.range(200, 500) as usize;
         let mut frontier: Vec<HexCoord> = vec![*seed];
         let mut continent: HashSet<HexCoord> = HashSet::new();
         continent.insert(*seed);
@@ -507,7 +520,7 @@ fn place_nation_centers(
     });
 
     let mut centers: Vec<HexCoord> = Vec::new();
-    let min_distance = 6;
+    let min_distance = 8;
 
     // Pick top-scoring tiles that satisfy min distance
     for &(candidate, _) in &scored_tiles {
@@ -523,7 +536,7 @@ fn place_nation_centers(
     // Fallback with reduced distance if needed
     while centers.len() < count {
         let candidate = land_tiles[rng.next_u32() as usize % land_tiles.len()];
-        let too_close = centers.iter().any(|c| c.distance(candidate) < 3);
+        let too_close = centers.iter().any(|c| c.distance(candidate) < 4);
         if !too_close {
             centers.push(candidate);
         }
@@ -539,7 +552,8 @@ fn place_nation_centers(
     centers
 }
 
-/// Assign land tiles to nations using a Voronoi-like partition (nearest center).
+/// Assign land tiles to nations using a weighted Voronoi partition.
+/// Minor nation distances are scaled by √2 so great powers claim ~2× territory.
 fn assign_tiles_to_nations(
     land: &HashSet<HexCoord>,
     centers: &[HexCoord],
@@ -548,12 +562,18 @@ fn assign_tiles_to_nations(
 
     for &coord in land {
         let mut best_nation = 0;
-        let mut best_dist = i32::MAX;
+        let mut best_dist = f64::MAX;
 
         for (idx, &center) in centers.iter().enumerate() {
-            let dist = coord.distance(center);
-            if dist < best_dist {
-                best_dist = dist;
+            let raw_dist = coord.distance(center) as f64;
+            // Minor nations have inflated distance → claim less territory
+            let effective_dist = if idx >= NUM_GREAT_POWERS {
+                raw_dist * std::f64::consts::SQRT_2
+            } else {
+                raw_dist
+            };
+            if effective_dist < best_dist {
+                best_dist = effective_dist;
                 best_nation = idx;
             }
         }
@@ -562,6 +582,86 @@ fn assign_tiles_to_nations(
     }
 
     assignments
+}
+
+/// Normalize territory sizes so GPs have ~2x the tiles of MNs.
+///
+/// After the weighted Voronoi, some nations may be too large or too small due to
+/// coastlines and center placement. This iteratively reassigns border tiles from
+/// oversized nations to undersized adjacent nations until the 2:1 ratio is met.
+fn normalize_territory_sizes(
+    assignments: &mut HashMap<HexCoord, usize>,
+    _centers: &[HexCoord],
+    total_nations: usize,
+) {
+    let total_land = assignments.len();
+    // Target: GP gets 2 shares, MN gets 1 share
+    // Total shares = 7*2 + 16*1 = 30
+    let total_shares = NUM_GREAT_POWERS * 2 + (total_nations - NUM_GREAT_POWERS);
+    let share_size = total_land as f64 / total_shares as f64;
+
+    let target_size = |nation_idx: usize| -> usize {
+        if nation_idx < NUM_GREAT_POWERS {
+            (share_size * 2.0) as usize
+        } else {
+            share_size as usize
+        }
+    };
+
+    // Run normalization passes
+    for _ in 0..20 {
+        // Count current sizes
+        let mut sizes = vec![0usize; total_nations];
+        for &nation in assignments.values() {
+            sizes[nation] += 1;
+        }
+
+        // Find oversized nations (>120% of target) and their border tiles
+        let mut changed = false;
+        let mut border_tiles: Vec<(HexCoord, usize, usize)> = Vec::new(); // (coord, from, to)
+
+        // Collect all tiles sorted for determinism
+        let mut all_tiles: Vec<(HexCoord, usize)> = assignments.iter().map(|(&c, &n)| (c, n)).collect();
+        all_tiles.sort_by_key(|(c, _)| (c.q, c.r));
+
+        for &(coord, nation) in &all_tiles {
+            let target = target_size(nation);
+            if sizes[nation] <= target {
+                continue; // not oversized
+            }
+
+            // Check if this tile borders a different, undersized nation
+            for neighbor in coord.neighbors() {
+                if let Some(&neighbor_nation) = assignments.get(&neighbor) {
+                    if neighbor_nation != nation {
+                        let neighbor_target = target_size(neighbor_nation);
+                        if sizes[neighbor_nation] < neighbor_target {
+                            // Don't reassign if it would make the source too small
+                            if sizes[nation] > target {
+                                border_tiles.push((coord, nation, neighbor_nation));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for (coord, from, to) in &border_tiles {
+            let from_target = target_size(*from);
+            let to_target = target_size(*to);
+            if sizes[*from] > from_target && sizes[*to] < to_target {
+                assignments.insert(*coord, *to);
+                sizes[*from] -= 1;
+                sizes[*to] += 1;
+                changed = true;
+            }
+        }
+
+        if !changed {
+            break;
+        }
+    }
 }
 
 /// Subdivide a nation's tiles into approximately `num_provinces` contiguous groups.
@@ -658,23 +758,23 @@ fn subdivide_into_provinces(
 
 // ── Food tile guarantee ───────────────────────────────────────
 
-fn is_food_terrain(terrain: TerrainType) -> bool {
+fn is_food_terrain(tile: &super::tile::Tile) -> bool {
     matches!(
-        terrain,
-        TerrainType::Farm | TerrainType::Orchard | TerrainType::DryPlains | TerrainType::OpenRange
+        tile.resource_deposit(),
+        Some(ResourceType::Grain | ResourceType::Fruit | ResourceType::Livestock)
     )
 }
 
-/// Preferred terrain types to replace when adding food tiles (least valuable first).
+/// Whether this tile's terrain is replaceable when adding food tiles (least valuable first).
 fn is_replaceable_for_food(terrain: TerrainType) -> bool {
     matches!(
         terrain,
         TerrainType::Desert
             | TerrainType::Tundra
             | TerrainType::Swamp
-            | TerrainType::BarrenHills
+            | TerrainType::Hills
             | TerrainType::Mountain
-            | TerrainType::ScrubForest
+            | TerrainType::Grassland
     )
 }
 
@@ -700,7 +800,7 @@ fn enforce_minimum_food_tiles(
         .filter(|&&coord| {
             hex_map
                 .get_tile(coord)
-                .map(|t| is_food_terrain(t.terrain()))
+                .map(is_food_terrain)
                 .unwrap_or(false)
         })
         .count();
@@ -732,18 +832,62 @@ fn enforce_minimum_food_tiles(
     }
 
     for &coord in replaceable.iter().take(needed) {
-        let food_terrain = match rng.range(0, 3) as u32 {
-            0 => TerrainType::Farm,
-            1 => TerrainType::Orchard,
-            _ => TerrainType::OpenRange,
+        let (food_terrain, food_resource) = match rng.range(0, 3) as u32 {
+            0 => (TerrainType::Grassland, ResourceType::Grain),
+            1 => (TerrainType::Grassland, ResourceType::Fruit),
+            _ => (TerrainType::Grassland, ResourceType::Livestock),
         };
-        hex_map.set_tile(coord, super::tile::Tile::new(food_terrain));
+        hex_map.set_tile(
+            coord,
+            super::tile::Tile::with_resource(food_terrain, food_resource),
+        );
     }
 }
 
 // ── Food clustering ──────────────────────────────────────────
 
-/// Spread food terrain to adjacent tiles to create natural clusters (farm belts, pasture regions).
+/// Spread food tiles to adjacent tiles to create natural clusters (farm belts, pasture regions).
+/// Cluster a terrain type by spreading it to adjacent bare Grassland tiles.
+/// Each tile of `target_terrain` has `chance_percent`% chance to convert each
+/// bare Grassland neighbor to the same terrain (no resource).
+/// Called before provinces exist.
+fn cluster_terrain(
+    hex_map: &mut super::hex_map::HexMap,
+    _land_mask: &HashSet<HexCoord>,
+    rng: &mut Rng,
+    target_terrain: TerrainType,
+    chance_percent: i32,
+) {
+    // Snapshot all tiles of the target terrain
+    let mut source_tiles: Vec<HexCoord> = Vec::new();
+    for q in 0..MAP_WIDTH {
+        for r in 0..MAP_HEIGHT {
+            let coord = HexCoord::new(q, r);
+            if let Some(tile) = hex_map.get_tile(coord)
+                && tile.terrain() == target_terrain
+            {
+                source_tiles.push(coord);
+            }
+        }
+    }
+
+    // For each source tile, chance to spread to bare Grassland neighbors
+    for coord in &source_tiles {
+        for neighbor in coord.neighbors() {
+            if rng.range(0, 100) >= chance_percent {
+                continue;
+            }
+            // Only convert bare Grassland (no resource) to preserve resource distribution
+            if let Some(tile) = hex_map.get_tile(neighbor)
+                && tile.terrain() == TerrainType::Grassland
+                && tile.resource_deposit().is_none()
+            {
+                hex_map.set_tile(neighbor, super::tile::Tile::new(target_terrain));
+            }
+        }
+    }
+}
+
 /// Each food tile has `chance_percent`% chance to convert each replaceable neighbor to the same type.
 /// Called before provinces exist — works on raw land tiles (no province_id, no capitals).
 fn cluster_food_terrain(
@@ -753,20 +897,20 @@ fn cluster_food_terrain(
     chance_percent: i32,
 ) {
     // Collect all current food tiles (snapshot before mutation)
-    let mut food_tiles: Vec<(HexCoord, TerrainType)> = Vec::new();
+    let mut food_tiles: Vec<(HexCoord, TerrainType, Option<ResourceType>)> = Vec::new();
     for q in 0..MAP_WIDTH {
         for r in 0..MAP_HEIGHT {
             let coord = HexCoord::new(q, r);
             if let Some(tile) = hex_map.get_tile(coord)
-                && is_food_terrain(tile.terrain())
+                && is_food_terrain(tile)
             {
-                food_tiles.push((coord, tile.terrain()));
+                food_tiles.push((coord, tile.terrain(), tile.resource_deposit()));
             }
         }
     }
 
     // For each food tile, chance to spread to replaceable neighbors
-    for (coord, terrain) in &food_tiles {
+    for (coord, terrain, resource) in &food_tiles {
         for neighbor in coord.neighbors() {
             if rng.range(0, 100) >= chance_percent {
                 continue;
@@ -775,10 +919,17 @@ fn cluster_food_terrain(
             if let Some(tile) = hex_map.get_tile(neighbor)
                 && matches!(
                     tile.terrain(),
-                    TerrainType::Desert | TerrainType::Tundra | TerrainType::Swamp
+                    TerrainType::Desert
+                        | TerrainType::Tundra
+                        | TerrainType::Swamp
+                        | TerrainType::Grassland
                 )
             {
-                hex_map.set_tile(neighbor, super::tile::Tile::new(*terrain));
+                let mut new_tile = super::tile::Tile::new(*terrain);
+                if let Some(res) = resource {
+                    new_tile.set_resource(*res);
+                }
+                hex_map.set_tile(neighbor, new_tile);
             }
         }
     }
@@ -792,13 +943,14 @@ fn score_nation_center(coord: HexCoord, hex_map: &HexMap) -> u32 {
     let mut score: u32 = 0;
 
     if let Some(tile) = hex_map.get_tile(coord) {
-        if is_food_terrain(tile.terrain()) {
+        if is_food_terrain(tile) {
             score += 10;
         }
         if matches!(
             tile.terrain(),
             TerrainType::Desert | TerrainType::Tundra | TerrainType::Mountain | TerrainType::Swamp
-        ) {
+        ) && tile.resource_deposit().is_none()
+        {
             return 0;
         }
     }
@@ -817,7 +969,7 @@ fn score_nation_center(coord: HexCoord, hex_map: &HexMap) -> u32 {
     // Food tiles within 2 hexes
     for nearby in coord.range(2) {
         if let Some(tile) = hex_map.get_tile(nearby)
-            && is_food_terrain(tile.terrain())
+            && is_food_terrain(tile)
         {
             score += 3;
         }
@@ -845,18 +997,19 @@ fn score_capital_candidate(coord: HexCoord, hex_map: &super::hex_map::HexMap) ->
     // Food tiles within 2 hexes
     for nearby in coord.range(2) {
         if let Some(tile) = hex_map.get_tile(nearby)
-            && is_food_terrain(tile.terrain())
+            && is_food_terrain(tile)
         {
             score += 5;
         }
     }
 
-    // Penalty for being on undesirable terrain
+    // Penalty for being on undesirable terrain without resources
     if let Some(tile) = hex_map.get_tile(coord)
         && matches!(
             tile.terrain(),
             TerrainType::Desert | TerrainType::Tundra | TerrainType::Swamp | TerrainType::Mountain
         )
+        && tile.resource_deposit().is_none()
     {
         score = score.saturating_sub(15);
     }
@@ -949,39 +1102,46 @@ fn select_province_capitals(hex_map: &mut super::hex_map::HexMap, province_data:
 
 // ── Terrain generation ─────────────────────────────────────────
 
-/// Pick a random land terrain type with roughly game-appropriate distribution.
-fn random_land_terrain(rng: &mut Rng) -> TerrainType {
+/// Pick a random land terrain type and optional resource with game-appropriate distribution.
+/// Returns (terrain, optional resource).
+/// Pick a random terrain + optional resource. ~60% of tiles have no resource.
+fn random_land_terrain_with_resource(rng: &mut Rng) -> (TerrainType, Option<ResourceType>) {
     let roll = rng.range(0, 99);
     match roll {
-        // Forests ~25%
-        0..=12 => TerrainType::HardwoodForest,
-        13..=24 => TerrainType::ScrubForest,
-        // Farms/orchards/plains ~25%
-        25..=34 => TerrainType::Farm,
-        35..=40 => TerrainType::Orchard,
-        41..=49 => TerrainType::DryPlains,
-        // Hills ~15%
-        50..=58 => TerrainType::FertileHills,
-        59..=64 => TerrainType::BarrenHills,
-        // Mountains ~5%
-        65..=69 => TerrainType::Mountain,
-        // Desert/swamp/tundra ~10%
-        70..=73 => TerrainType::Desert,
-        74..=77 => TerrainType::Swamp,
-        78..=79 => TerrainType::Tundra,
-        // Open range/horse ranch/plantation ~10%
-        80..=85 => TerrainType::OpenRange,
-        86..=90 => TerrainType::HorseRanch,
-        91..=96 => TerrainType::Plantation,
-        // Remaining: variety
-        _ => TerrainType::Farm,
+        // ── No resource (~60%) ────────────────────────────────
+        // Bare grassland ~30%
+        0..=29 => (TerrainType::Grassland, None),
+        // Bare forest ~10%
+        30..=39 => (TerrainType::Forest, None),
+        // Bare hills ~8%
+        40..=47 => (TerrainType::Hills, None),
+        // Mountains ~5% (deposits placed separately via prospecting)
+        48..=52 => (TerrainType::Mountain, None),
+        // Desert/swamp/tundra ~7% (oil deposits placed separately)
+        53..=55 => (TerrainType::Desert, None),
+        56..=58 => (TerrainType::Swamp, None),
+        59 => (TerrainType::Tundra, None),
+
+        // ── With resource (~40%) ──────────────────────────────
+        // Grassland + food/cash crops
+        60..=65 => (TerrainType::Grassland, Some(ResourceType::Grain)),
+        66..=69 => (TerrainType::Grassland, Some(ResourceType::Fruit)),
+        70..=74 => (TerrainType::Grassland, Some(ResourceType::Cotton)),
+        75..=78 => (TerrainType::Grassland, Some(ResourceType::Livestock)),
+        79..=81 => (TerrainType::Grassland, Some(ResourceType::Horses)),
+        // Hills + wool
+        82..=86 => (TerrainType::Hills, Some(ResourceType::Wool)),
+        // Forest + timber
+        87..=96 => (TerrainType::Forest, Some(ResourceType::Timber)),
+        // Remaining: grain
+        _ => (TerrainType::Grassland, Some(ResourceType::Grain)),
     }
 }
 
 /// Pick a mineral deposit type appropriate for the given terrain.
 fn random_mineral_deposit(rng: &mut Rng, terrain: TerrainType) -> ResourceType {
     match terrain {
-        TerrainType::BarrenHills | TerrainType::Mountain => {
+        TerrainType::Hills | TerrainType::Mountain => {
             let roll = rng.range(0, 99);
             match roll {
                 0..=34 => ResourceType::Coal,

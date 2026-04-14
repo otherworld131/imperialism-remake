@@ -3,6 +3,7 @@
 //! Provides functions to evaluate relative strength between warring coalitions,
 //! assess whether continuing a war is worthwhile, and evaluate incoming treaty
 //! proposals (peace, NAP, alliance).
+#![allow(unused_labels)] // labeled blocks used only with cfg(feature = "lua")
 
 use crate::ai::common::AiPersonality;
 use crate::game_state::GameState;

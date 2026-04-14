@@ -772,7 +772,7 @@ pub(crate) fn ai_military_strategy(
                     if let Some(terrain) = capital_terrain {
                         match terrain {
                             TerrainType::Mountain => score += 5,
-                            TerrainType::FertileHills | TerrainType::BarrenHills => score += 2,
+                            TerrainType::Hills => score += 2,
                             _ => {}
                         }
                     }

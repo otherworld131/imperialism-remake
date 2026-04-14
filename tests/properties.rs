@@ -342,29 +342,27 @@ fn turn_number_sequential_advancement() {
 
 // ── Terrain yields never negative ───────────────────────────────
 
-/// Test that all terrain types produce valid yields (quantity > 0 when they yield).
+/// Test that tiles with resources produce valid yields (quantity > 0 when they yield).
 #[test]
 fn terrain_yields_never_negative() {
-    let terrains = [
-        TerrainType::Farm,
-        TerrainType::HardwoodForest,
-        TerrainType::ScrubForest,
-        TerrainType::DryPlains,
-        TerrainType::OpenRange,
-        TerrainType::FertileHills,
-        TerrainType::Plantation,
-        TerrainType::Orchard,
-        TerrainType::HorseRanch,
+    let terrain_resource_pairs = [
+        (TerrainType::Grassland, ResourceType::Grain),
+        (TerrainType::Grassland, ResourceType::Fruit),
+        (TerrainType::Grassland, ResourceType::Cotton),
+        (TerrainType::Grassland, ResourceType::Livestock),
+        (TerrainType::Hills, ResourceType::Wool),
+        (TerrainType::Forest, ResourceType::Timber),
     ];
-    for terrain in &terrains {
+    for (terrain, resource) in &terrain_resource_pairs {
         for level in 0..=3 {
-            let mut tile = Tile::new(*terrain);
+            let mut tile = Tile::with_resource(*terrain, *resource);
             tile.set_improvement_level(level);
             if let Some(yield_amt) = tile.calculate_yield() {
                 assert!(
                     yield_amt.quantity > 0,
-                    "Terrain {:?} at level {} produced 0 yield",
+                    "Terrain {:?} with {:?} at level {} produced 0 yield",
                     terrain,
+                    resource,
                     level
                 );
             }
@@ -375,7 +373,7 @@ fn terrain_yields_never_negative() {
 /// Test that mining terrains with deposits always produce positive yields at appropriate levels.
 #[test]
 fn mining_yields_positive_when_improved() {
-    let mining_terrains = [TerrainType::BarrenHills, TerrainType::Mountain];
+    let mining_terrains = [TerrainType::Hills, TerrainType::Mountain];
     let deposits = [
         ResourceType::Coal,
         ResourceType::Iron,
@@ -412,38 +410,43 @@ fn mining_yields_positive_when_improved() {
     }
 }
 
-/// Test that improvement levels are always clamped to the terrain's max.
+/// Test that improvement levels are always clamped to the resource's max.
 #[test]
 fn improvement_level_clamped_to_max() {
     let all_terrains = [
-        TerrainType::DryPlains,
-        TerrainType::OpenRange,
-        TerrainType::HorseRanch,
-        TerrainType::Plantation,
-        TerrainType::Farm,
-        TerrainType::Orchard,
-        TerrainType::FertileHills,
-        TerrainType::BarrenHills,
+        TerrainType::Grassland,
+        TerrainType::Hills,
+        TerrainType::Forest,
         TerrainType::Mountain,
-        TerrainType::HardwoodForest,
-        TerrainType::ScrubForest,
-        TerrainType::Swamp,
         TerrainType::Desert,
+        TerrainType::Swamp,
         TerrainType::Tundra,
         TerrainType::Sea,
     ];
 
     for terrain in &all_terrains {
+        // Tile without resource: improvement should stay at 0
         let mut tile = Tile::new(*terrain);
-        // Attempt to set improvement far above max.
         tile.set_improvement_level(255);
-        assert!(
-            tile.improvement_level() <= terrain.max_improvement_level(),
-            "Terrain {:?}: improvement level {} exceeds max {}",
-            terrain,
+        assert_eq!(
             tile.improvement_level(),
-            terrain.max_improvement_level()
+            0,
+            "Terrain {:?} without resource: improvement should be clamped to 0",
+            terrain
         );
+
+        // Tile with resource: improvement should be clamped to resource max
+        if terrain.is_land() {
+            let mut tile = Tile::with_resource(*terrain, ResourceType::Grain);
+            tile.set_improvement_level(255);
+            assert!(
+                tile.improvement_level() <= ResourceType::Grain.max_improvement_level(),
+                "Terrain {:?} with Grain: improvement level {} exceeds max {}",
+                terrain,
+                tile.improvement_level(),
+                ResourceType::Grain.max_improvement_level()
+            );
+        }
     }
 }
 
@@ -527,7 +530,7 @@ fn map_invariants_hold_for_50_random_seeds() {
 
 // ── Starting condition viability ──────────────────────────────
 
-/// Test that each Great Power starts with food resources (grain or fruit tiles).
+/// Test that each Great Power starts with food resources (grain, fruit, or cotton tiles).
 #[test]
 fn each_great_power_has_food_tiles() {
     let seeds = ["food_check_a", "food_check_b", "food_check_c"];
@@ -539,16 +542,14 @@ fn each_great_power_has_food_tiles() {
                 let province = map.provinces.iter().find(|p| p.id == *pid).unwrap();
                 for &tile_coord in &province.tiles {
                     if let Some(tile) = map.hex_map.get_tile(tile_coord) {
-                        let terrain = tile.terrain();
-                        if matches!(
-                            terrain,
-                            TerrainType::Farm
-                                | TerrainType::Orchard
-                                | TerrainType::DryPlains
-                                | TerrainType::Plantation
-                        ) {
-                            has_food = true;
-                            break;
+                        if let Some(resource) = tile.resource_deposit() {
+                            if matches!(
+                                resource,
+                                ResourceType::Grain | ResourceType::Fruit | ResourceType::Livestock
+                            ) {
+                                has_food = true;
+                                break;
+                            }
                         }
                     }
                 }
@@ -565,7 +566,7 @@ fn each_great_power_has_food_tiles() {
     }
 }
 
-/// Test that each Great Power starts with timber (forest tiles).
+/// Test that each Great Power starts with timber (forest tiles with timber resource).
 #[test]
 fn each_great_power_has_timber_tiles() {
     let seeds = ["timber_check_a", "timber_check_b", "timber_check_c"];
@@ -577,11 +578,7 @@ fn each_great_power_has_timber_tiles() {
                 let province = map.provinces.iter().find(|p| p.id == *pid).unwrap();
                 for &tile_coord in &province.tiles {
                     if let Some(tile) = map.hex_map.get_tile(tile_coord) {
-                        let terrain = tile.terrain();
-                        if matches!(
-                            terrain,
-                            TerrainType::HardwoodForest | TerrainType::ScrubForest
-                        ) {
+                        if tile.resource_deposit() == Some(ResourceType::Timber) {
                             has_timber = true;
                             break;
                         }
@@ -613,12 +610,7 @@ fn each_great_power_has_mineral_potential() {
                 for &tile_coord in &province.tiles {
                     if let Some(tile) = map.hex_map.get_tile(tile_coord) {
                         let terrain = tile.terrain();
-                        if matches!(
-                            terrain,
-                            TerrainType::BarrenHills
-                                | TerrainType::Mountain
-                                | TerrainType::FertileHills
-                        ) {
+                        if matches!(terrain, TerrainType::Hills | TerrainType::Mountain) {
                             has_minerals = true;
                             break;
                         }

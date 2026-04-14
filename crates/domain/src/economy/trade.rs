@@ -579,14 +579,12 @@ mod tests {
         let coord_plantation = HexCoord::new(1, 0);
 
         let mut hex_map = HexMap::new(10, 10);
-        hex_map.set_tile(
-            coord_forest,
-            Tile::with_province(TerrainType::ScrubForest, ProvinceId(20)),
-        );
-        hex_map.set_tile(
-            coord_plantation,
-            Tile::with_province(TerrainType::Plantation, ProvinceId(20)),
-        );
+        let mut forest_tile = Tile::with_province(TerrainType::Forest, ProvinceId(20));
+        forest_tile.set_resource(ResourceType::Timber);
+        hex_map.set_tile(coord_forest, forest_tile);
+        let mut cotton_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(20));
+        cotton_tile.set_resource(ResourceType::Cotton);
+        hex_map.set_tile(coord_plantation, cotton_tile);
 
         let province = Province::new(
             ProvinceId(20),
@@ -646,10 +644,9 @@ mod tests {
         let coord = HexCoord::new(0, 0);
 
         let mut hex_map = HexMap::new(10, 10);
-        hex_map.set_tile(
-            coord,
-            Tile::with_province(TerrainType::ScrubForest, ProvinceId(1)),
-        );
+        let mut tile = Tile::with_province(TerrainType::Forest, ProvinceId(1));
+        tile.set_resource(ResourceType::Timber);
+        hex_map.set_tile(coord, tile);
 
         let province = Province::new(
             ProvinceId(1),
@@ -683,10 +680,9 @@ mod tests {
         let coord = HexCoord::new(0, 0);
 
         let mut hex_map = HexMap::new(10, 10);
-        hex_map.set_tile(
-            coord,
-            Tile::with_province(TerrainType::Farm, ProvinceId(20)),
-        );
+        let mut tile = Tile::with_province(TerrainType::Grassland, ProvinceId(20));
+        tile.set_resource(ResourceType::Grain);
+        hex_map.set_tile(coord, tile);
 
         let province = Province::new(
             ProvinceId(20),

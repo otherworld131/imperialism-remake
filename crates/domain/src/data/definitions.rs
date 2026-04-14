@@ -122,6 +122,7 @@ pub struct TerrainDefsFile {
 pub struct TerrainDef {
     pub name: String,
     pub defense_bonus: f64,
+    #[serde(default)]
     pub resources: Vec<String>,
     #[serde(default)]
     pub base_resource: Option<String>,

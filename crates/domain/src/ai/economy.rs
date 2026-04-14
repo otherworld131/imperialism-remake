@@ -405,6 +405,7 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
 }
 
 /// The AI keeps a reserve of each good (Lua-configurable) and sells excess when treasury is low.
+#[allow(unused_variables)] // personality used only with cfg(feature = "lua")
 pub fn ai_manage_resources(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
     let personality = get_personality(game, nation_id);
 
@@ -762,6 +763,7 @@ fn expand_building(game: &mut GameState, nation_id: NationId, bt: BuildingType, 
 /// Sell excess tradeable resources on the market for cash.
 ///
 /// Reserve amount and treasury cap are Lua-configurable per personality.
+#[allow(unused_variables)] // personality used only with cfg(feature = "lua")
 pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
     let personality = get_personality(game, nation_id);
 

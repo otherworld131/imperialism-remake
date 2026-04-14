@@ -5,21 +5,14 @@ const HEX_SIZE = 18;
 const SQRT3 = Math.sqrt(3);
 
 const TERRAIN_COLORS: Record<string, string> = {
-  Farm:           '#7aba3a',
-  HardwoodForest: '#2d7a2d',
-  ScrubForest:    '#5a9a4a',
-  FertileHills:   '#8db35a',
-  BarrenHills:    '#9e8a6a',
-  Mountain:       '#8a7d70',
-  Sea:            '#6fa8d6',
-  DryPlains:      '#d4c98a',
-  Plantation:     '#5aad3e',
-  OpenRange:      '#c2cc7a',
-  HorseRanch:     '#b8a85a',
-  Orchard:        '#9acc4a',
-  Swamp:          '#5a7a5a',
-  Desert:         '#ddd0a0',
-  Tundra:         '#c5d0db',
+  Grassland: '#a8b860',
+  Hills:     '#9a8a68',
+  Forest:    '#3a7a3a',
+  Mountain:  '#7a7068',
+  Desert:    '#d8c888',
+  Swamp:     '#5a7a5a',
+  Tundra:    '#b8c8d0',
+  Sea:       '#4a88b8',
 };
 
 const NATION_COLORS: Record<string, string> = {
@@ -33,26 +26,23 @@ const NATION_COLORS: Record<string, string> = {
   Indigo: '#4d0080',
 };
 
-// Returns a resource icon only if the tile is actively producing
+// Returns a resource icon based on the resource overlay (separate from terrain)
 function getResourceIcon(tile: TileData): string | null {
-  switch (tile.terrain) {
-    // Always produce when owned
-    case 'Farm':           return '🌾';  // Grain
-    case 'HardwoodForest': return '🪵';  // Timber
-    case 'ScrubForest':    return '🌿';  // Timber
-    case 'FertileHills':   return '🐑';  // Wool
-    case 'DryPlains':      return '🌽';  // Grain
-    case 'OpenRange':      return '🐄';  // Livestock
-    case 'HorseRanch':     return '🐴';  // Horses
-    case 'Orchard':        return '🍎';  // Fruit
-    case 'Plantation':     return '🌱';  // Cotton
-    // Require prospecting/development (improvement_level > 0)
-    case 'BarrenHills':    return tile.improvement_level > 0 ? '⛏️' : null;
-    case 'Mountain':       return tile.improvement_level > 0 ? '⛏️' : null;
-    case 'Swamp':          return tile.improvement_level > 0 ? '🛢️' : null;
-    case 'Desert':         return tile.improvement_level > 0 ? '🛢️' : null;
-    case 'Tundra':         return tile.improvement_level > 0 ? '🛢️' : null;
-    default:               return null;
+  if (!tile.resource) return null;
+  switch (tile.resource) {
+    case 'Grain':     return '🌾';
+    case 'Fruit':     return '🍎';
+    case 'Cotton':    return '🌱';
+    case 'Wool':      return '🐑';
+    case 'Timber':    return '🪵';
+    case 'Livestock': return '🐄';
+    case 'Horses':    return '🐴';
+    case 'Coal':      return '⛏️';
+    case 'Iron':      return '⚒️';
+    case 'Gold':      return '💰';
+    case 'Gems':      return '💎';
+    case 'Oil':       return '🛢️';
+    default:          return null;
   }
 }
 
@@ -136,9 +126,10 @@ interface Props {
   tiles: TileData[];
   onTileClick?: (tile: TileData) => void;
   onTileHover?: (tile: TileData | null) => void;
+  showHiddenResources?: boolean;
 }
 
-export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
+export default function HexMap({ tiles, onTileClick, onTileHover, showHiddenResources = false }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [offset, setOffset] = useState({ x: -200, y: -100 });
   const [dragging, setDragging] = useState(false);
@@ -312,10 +303,12 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
       for (const tile of tiles) {
         if (tile.terrain === 'Sea' || !tile.owner) continue;
         if (tile.is_capital || tile.is_country_capital) continue;
+        // Skip hidden resources unless debug toggle is on
+        if (tile.resource_hidden && !showHiddenResources) continue;
         const icon = getResourceIcon(tile);
         if (!icon) continue;
         const [px, py] = hexToPixel(tile.q, tile.r);
-        ctx.globalAlpha = 0.75;
+        ctx.globalAlpha = tile.resource_hidden ? 0.4 : 0.75;
         ctx.fillText(icon, px, py);
       }
       ctx.globalAlpha = 1.0;
@@ -439,7 +432,7 @@ export default function HexMap({ tiles, onTileClick, onTileHover }: Props) {
     }
 
     ctx.restore();
-  }, [tiles, offset, scale, isPolitical]);
+  }, [tiles, offset, scale, isPolitical, showHiddenResources]);
 
   useEffect(() => { render(); }, [render]);
 

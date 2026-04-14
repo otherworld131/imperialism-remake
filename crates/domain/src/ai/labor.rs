@@ -177,17 +177,26 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
     };
 
     // Find all improvable tiles across the nation's provinces.
-    // Each entry: (coord, terrain, improvement_level, max_level, has_civilian_assigned)
-    let mut improvable_tiles: Vec<(crate::hex::HexCoord, TerrainType, u8, u8, bool)> = Vec::new();
+    // Each entry: (coord, terrain, resource, improvement_level, max_level, has_civilian_assigned)
+    let mut improvable_tiles: Vec<(
+        crate::hex::HexCoord,
+        TerrainType,
+        Option<ResourceType>,
+        u8,
+        u8,
+        bool,
+    )> = Vec::new();
     for &pid in &province_ids {
         for (coord, tile) in game.hex_map.tiles_in_province(pid) {
             let terrain = tile.terrain();
-            let max_level = terrain.max_improvement_level();
-            if terrain.is_improvable() && tile.improvement_level() < max_level {
+            let resource = tile.resource_deposit();
+            let max_level = resource.map(|r| r.max_improvement_level()).unwrap_or(0);
+            if max_level > 0 && tile.improvement_level() < max_level {
                 let has_assigned = tile.assigned_civilian.is_some();
                 improvable_tiles.push((
                     coord,
                     terrain,
+                    resource,
                     tile.improvement_level(),
                     max_level,
                     has_assigned,
@@ -210,18 +219,18 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
 
     // For each idle civilian, try to find a matching tile
     for (civ_idx, civ_type) in idle_civilians {
-        // Find the best tile: matching terrain, not already assigned, lowest improvement level first
+        // Find the best tile: matching terrain/resource, not already assigned, lowest improvement level first
         let best_tile = improvable_tiles
             .iter()
             .enumerate()
-            .filter(|(_, (_, terrain, _, _, has_assigned))| {
-                !has_assigned && civ_type.can_improve(*terrain)
+            .filter(|(_, (_, terrain, resource, _, _, has_assigned))| {
+                !has_assigned && civ_type.can_improve(*terrain, *resource)
             })
-            .min_by_key(|(_, (_, _, improvement, _, _))| *improvement);
+            .min_by_key(|(_, (_, _, _, improvement, _, _))| *improvement);
 
-        if let Some((tile_idx, &(coord, _, _, _, _))) = best_tile {
+        if let Some((tile_idx, &(coord, _, _, _, _, _))) = best_tile {
             // Mark the tile as assigned in our working list
-            improvable_tiles[tile_idx].4 = true;
+            improvable_tiles[tile_idx].5 = true;
 
             // Deploy the civilian and start work
             let nation = game.get_nation_mut(nation_id).unwrap();
@@ -242,6 +251,7 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
 /// Thresholds are Lua-configurable per personality:
 /// - `worker_train_threshold`: train when untrained > threshold (default 1)
 /// - `worker_promote_threshold`: promote when trained > threshold (default 2)
+#[allow(unused_labels, unused_variables)] // labeled blocks + personality used only with cfg(feature = "lua")
 pub(crate) fn ai_train_and_promote_workers(game: &mut GameState, nation_id: NationId) {
     let personality = super::common::get_personality(game, nation_id);
 
@@ -477,9 +487,10 @@ mod tests {
     fn ai_deploys_idle_civilian_to_improvable_tile() {
         let mut game = test_game_with_ai();
 
-        // Set up a Farm tile in AI's province
+        // Set up a Grassland tile with Grain in AI's province
         let farm_coord = HexCoord::new(3, 3);
-        let tile = crate::map::tile::Tile::with_province(TerrainType::Farm, ProvinceId(2));
+        let mut tile = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        tile.set_resource(ResourceType::Grain);
         game.hex_map.set_tile(farm_coord, tile);
 
         // Give AI a Farmer civilian (idle), clear pre-populated ones
@@ -516,10 +527,11 @@ mod tests {
     fn ai_does_not_deploy_civilian_to_maxed_tile() {
         let mut game = test_game_with_ai();
 
-        // Set up a Farm tile at max improvement
+        // Set up a Grassland tile with Grain at max improvement
         let farm_coord = HexCoord::new(3, 3);
-        let mut tile = crate::map::tile::Tile::with_province(TerrainType::Farm, ProvinceId(2));
-        tile.set_improvement_level(3); // max for Farm
+        let mut tile = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        tile.set_resource(ResourceType::Grain);
+        tile.set_improvement_level(3); // max for Grain
         game.hex_map.set_tile(farm_coord, tile);
 
         // Give AI a Farmer civilian (idle), clear pre-populated ones

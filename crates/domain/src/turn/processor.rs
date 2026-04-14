@@ -894,16 +894,29 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
                     tile.improve();
                 }
                 CivilianType::Prospector => {
-                    // Reveal a resource deposit based on terrain
-                    if tile.terrain().requires_prospecting() && tile.resource_deposit().is_none() {
-                        let deposit = match tile.terrain() {
-                            TerrainType::BarrenHills | TerrainType::Mountain => ResourceType::Coal,
-                            TerrainType::Swamp | TerrainType::Desert | TerrainType::Tundra => {
-                                ResourceType::Oil
-                            }
-                            _ => ResourceType::Coal,
-                        };
-                        tile.reveal_deposit(deposit);
+                    // Reveal a resource deposit based on terrain, using coordinate-based
+                    // deterministic distribution matching the map generator's probabilities.
+                    if tile.terrain().can_have_deposits() && tile.resource_deposit().is_none() {
+                        // ~60% chance of finding something (40% find nothing)
+                        let hash = (work.position.q.wrapping_mul(73) ^ work.position.r.wrapping_mul(179)) as u32;
+                        let roll = hash % 100;
+                        if roll < 40 {
+                            let deposit = match tile.terrain() {
+                                TerrainType::Hills | TerrainType::Mountain => {
+                                    let mineral_roll = (hash / 100) % 100;
+                                    match mineral_roll {
+                                        0..=34 => ResourceType::Coal,
+                                        35..=64 => ResourceType::Iron,
+                                        65..=84 => ResourceType::Gold,
+                                        _ => ResourceType::Gems,
+                                    }
+                                }
+                                _ => ResourceType::Oil,
+                            };
+                            tile.reveal_deposit(deposit);
+                        } else {
+                            tile.reveal_no_deposit();
+                        }
                     }
                 }
                 CivilianType::Engineer => {
@@ -3566,12 +3579,14 @@ mod tests {
 
         let mut hex_map = HexMap::new(10, 10);
 
-        // A farm tile (produces 1 Grain at level 0)
-        let farm_tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        // A grain tile (produces 1 Grain at level 0)
+        let mut farm_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        farm_tile.set_resource(ResourceType::Grain);
         hex_map.set_tile(coord_farm, farm_tile);
 
-        // A scrub forest tile (produces 1 Timber always)
-        let forest_tile = Tile::with_province(TerrainType::ScrubForest, ProvinceId(1));
+        // A forest tile with timber (produces 1 Timber)
+        let mut forest_tile = Tile::with_province(TerrainType::Forest, ProvinceId(1));
+        forest_tile.set_resource(ResourceType::Timber);
         hex_map.set_tile(coord_forest, forest_tile);
 
         let province1 = Province::new(
@@ -4551,7 +4566,8 @@ mod tests {
         let mut tiles = Vec::new();
         for i in 0..6 {
             let coord = HexCoord::new(i, 0);
-            let tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+            let mut tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+            tile.set_resource(ResourceType::Grain);
             hex_map.set_tile(coord, tile);
             tiles.push(coord);
         }
@@ -4980,19 +4996,24 @@ mod tests {
     // ── Town production ────────────────────────────────────────
 
     /// Helper: build a game state with a Village province containing timber tiles.
-    fn test_game_state_with_village(terrain_types: &[TerrainType]) -> GameState {
+    fn test_game_state_with_village(
+        terrain_resource_pairs: &[(TerrainType, Option<ResourceType>)],
+    ) -> GameState {
         let mut hex_map = HexMap::new(20, 20);
         let mut tiles = Vec::new();
         let capital_coord = HexCoord::new(0, 0);
 
-        // Capital province (just a simple farm)
-        let cap_tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        // Capital province (just a simple grassland)
+        let cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
         hex_map.set_tile(capital_coord, cap_tile);
 
-        // Village province with given terrain types
-        for (i, terrain) in terrain_types.iter().enumerate() {
+        // Village province with given terrain/resource pairs
+        for (i, (terrain, resource)) in terrain_resource_pairs.iter().enumerate() {
             let coord = HexCoord::new(5 + i as i32, 0);
-            let tile = Tile::with_province(*terrain, ProvinceId(2));
+            let mut tile = Tile::with_province(*terrain, ProvinceId(2));
+            if let Some(res) = resource {
+                tile.set_resource(*res);
+            }
             hex_map.set_tile(coord, tile);
             tiles.push(coord);
         }
@@ -5056,7 +5077,8 @@ mod tests {
         // Village with 4 ScrubForest tiles: each yields 1 Timber = 4 total
         // 4 timber / 2 = 2 lumber
         // 2 lumber / 2 = 1 furniture
-        let mut game = test_game_state_with_village(&[TerrainType::ScrubForest; 4]);
+        let mut game =
+            test_game_state_with_village(&[(TerrainType::Forest, Some(ResourceType::Timber)); 4]);
 
         let report = process_turn(&mut game);
 
@@ -5087,13 +5109,13 @@ mod tests {
         // Create a village with prospected BarrenHills tiles containing coal and iron
         let mut hex_map = HexMap::new(20, 20);
         let capital_coord = HexCoord::new(0, 0);
-        let cap_tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        let cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
         hex_map.set_tile(capital_coord, cap_tile);
 
         // 2 Coal tiles and 2 Iron tiles (BarrenHills with revealed deposits)
         let coords: Vec<HexCoord> = (0..4).map(|i| HexCoord::new(5 + i, 0)).collect();
         for (i, &coord) in coords.iter().enumerate() {
-            let mut tile = Tile::with_province(TerrainType::BarrenHills, ProvinceId(2));
+            let mut tile = Tile::with_province(TerrainType::Hills, ProvinceId(2));
             if i < 2 {
                 tile.reveal_deposit(ResourceType::Coal);
             } else {
@@ -5181,7 +5203,9 @@ mod tests {
         // Village with 4 Plantation tiles (Cotton): each yields 1 cotton = 4 total
         // 4 cotton / 2 = 2 fabric
         // 2 fabric / 2 = 1 clothing
-        let mut game = test_game_state_with_village(&[TerrainType::Plantation; 4]);
+        let mut game = test_game_state_with_village(
+            &[(TerrainType::Grassland, Some(ResourceType::Cotton)); 4],
+        );
 
         let report = process_turn(&mut game);
 
@@ -5209,7 +5233,8 @@ mod tests {
     #[test]
     fn town_production_hamlet_does_not_produce() {
         // Same setup but settlement is Hamlet, not Village
-        let mut game = test_game_state_with_village(&[TerrainType::ScrubForest; 4]);
+        let mut game =
+            test_game_state_with_village(&[(TerrainType::Forest, Some(ResourceType::Timber)); 4]);
         // Override to Hamlet
         game.provinces
             .iter_mut()
@@ -5231,7 +5256,8 @@ mod tests {
         // Town with 4 ScrubForest tiles
         // Village rate: 4 timber → 2 lumber → 1 furniture
         // Town rate: 4*2=8 timber → 4 lumber → 2 furniture
-        let mut game = test_game_state_with_village(&[TerrainType::ScrubForest; 4]);
+        let mut game =
+            test_game_state_with_village(&[(TerrainType::Forest, Some(ResourceType::Timber)); 4]);
         // Upgrade to Town
         game.provinces
             .iter_mut()
@@ -5670,7 +5696,8 @@ mod tests {
         // Village with 4 FertileHills tiles (Wool): each yields 1 wool = 4 total
         // 4 wool / 2 = 2 fabric
         // 2 fabric / 2 = 1 clothing
-        let mut game = test_game_state_with_village(&[TerrainType::FertileHills; 4]);
+        let mut game =
+            test_game_state_with_village(&[(TerrainType::Hills, Some(ResourceType::Wool)); 4]);
 
         let _report = process_turn(&mut game);
 
@@ -5692,10 +5719,10 @@ mod tests {
         // Village with 2 Plantation (Cotton) + 2 FertileHills (Wool) tiles
         // total cotton+wool = 4 → 2 fabric → 1 clothing
         let mut game = test_game_state_with_village(&[
-            TerrainType::Plantation,
-            TerrainType::Plantation,
-            TerrainType::FertileHills,
-            TerrainType::FertileHills,
+            (TerrainType::Grassland, Some(ResourceType::Cotton)),
+            (TerrainType::Grassland, Some(ResourceType::Cotton)),
+            (TerrainType::Hills, Some(ResourceType::Wool)),
+            (TerrainType::Hills, Some(ResourceType::Wool)),
         ]);
 
         let _report = process_turn(&mut game);
@@ -6335,14 +6362,12 @@ mod tests {
         let coord_plantation = HexCoord::new(1, 0);
 
         let mut hex_map = HexMap::new(10, 10);
-        hex_map.set_tile(
-            coord_forest,
-            Tile::with_province(TerrainType::ScrubForest, ProvinceId(20)),
-        );
-        hex_map.set_tile(
-            coord_plantation,
-            Tile::with_province(TerrainType::Plantation, ProvinceId(20)),
-        );
+        let mut forest_tile = Tile::with_province(TerrainType::Forest, ProvinceId(20));
+        forest_tile.set_resource(ResourceType::Timber);
+        hex_map.set_tile(coord_forest, forest_tile);
+        let mut cotton_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(20));
+        cotton_tile.set_resource(ResourceType::Cotton);
+        hex_map.set_tile(coord_plantation, cotton_tile);
 
         let mn_province = Province::new(
             ProvinceId(20),
@@ -6449,14 +6474,12 @@ mod tests {
         let coord_plantation = HexCoord::new(1, 0);
 
         let mut hex_map = HexMap::new(10, 10);
-        hex_map.set_tile(
-            coord_forest,
-            Tile::with_province(TerrainType::ScrubForest, ProvinceId(20)),
-        );
-        hex_map.set_tile(
-            coord_plantation,
-            Tile::with_province(TerrainType::Plantation, ProvinceId(20)),
-        );
+        let mut forest_tile = Tile::with_province(TerrainType::Forest, ProvinceId(20));
+        forest_tile.set_resource(ResourceType::Timber);
+        hex_map.set_tile(coord_forest, forest_tile);
+        let mut cotton_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(20));
+        cotton_tile.set_resource(ResourceType::Cotton);
+        hex_map.set_tile(coord_plantation, cotton_tile);
 
         let mn_province = Province::new(
             ProvinceId(20),
@@ -6551,7 +6574,8 @@ mod tests {
     fn town_production_output_added_to_warehouse() {
         // Create a Village province with ScrubForest tiles (produces timber)
         // Village: 4 timber → 2 lumber, 2 lumber → 1 furniture
-        let mut game = test_game_state_with_village(&[TerrainType::ScrubForest; 4]);
+        let mut game =
+            test_game_state_with_village(&[(TerrainType::Forest, Some(ResourceType::Timber)); 4]);
 
         // Ensure nation warehouse starts empty
         let nation = game.get_nation(NationId(1)).unwrap();
@@ -6685,9 +6709,9 @@ mod tests {
         let coord3 = HexCoord::new(2, 0);
 
         let mut hex_map = HexMap::new(10, 10);
-        let tile1 = Tile::with_province(TerrainType::Farm, ProvinceId(1));
-        let tile2 = Tile::with_province(TerrainType::DryPlains, ProvinceId(2));
-        let tile3 = Tile::with_province(TerrainType::DryPlains, ProvinceId(3));
+        let tile1 = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        let tile2 = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        let tile3 = Tile::with_province(TerrainType::Grassland, ProvinceId(3));
         hex_map.set_tile(coord1, tile1);
         hex_map.set_tile(coord2, tile2);
         hex_map.set_tile(coord3, tile3);
@@ -6957,13 +6981,16 @@ mod tests {
         let coord_distant = HexCoord::new(8, 8);
 
         let mut hex_map = HexMap::new(20, 20);
-        let farm_tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        let mut farm_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        farm_tile.set_resource(ResourceType::Grain);
         hex_map.set_tile(coord_farm, farm_tile);
-        let forest_tile = Tile::with_province(TerrainType::ScrubForest, ProvinceId(1));
+        let mut forest_tile = Tile::with_province(TerrainType::Forest, ProvinceId(1));
+        forest_tile.set_resource(ResourceType::Timber);
         hex_map.set_tile(coord_forest, forest_tile);
 
         // Distant province tile (disconnected - no railroad/depot/port)
-        let distant_tile = Tile::with_province(TerrainType::Farm, ProvinceId(2));
+        let mut distant_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        distant_tile.set_resource(ResourceType::Grain);
         hex_map.set_tile(coord_distant, distant_tile);
 
         let province1 = Province::new(
@@ -7093,9 +7120,9 @@ mod tests {
         let coord_distant = HexCoord::new(8, 8);
 
         let mut hex_map = HexMap::new(20, 20);
-        let farm_tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        let farm_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
         hex_map.set_tile(coord_farm, farm_tile);
-        let distant_tile = Tile::with_province(TerrainType::Farm, ProvinceId(2));
+        let distant_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
         hex_map.set_tile(coord_distant, distant_tile);
 
         let province1 = Province::new(
@@ -7287,12 +7314,12 @@ mod tests {
         let coord_mn = HexCoord::new(3, 3);
 
         let mut hex_map = HexMap::new(10, 10);
-        let mn_tile = Tile::with_province(TerrainType::Farm, ProvinceId(2));
+        let mn_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
         hex_map.set_tile(coord_mn, mn_tile);
 
         // Also add the GP capital tile
         let coord_gp = HexCoord::new(0, 0);
-        let gp_tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        let gp_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
         hex_map.set_tile(coord_gp, gp_tile);
 
         let province_gp = Province::new(
@@ -7372,9 +7399,9 @@ mod tests {
         let coord_def = HexCoord::new(1, 0);
 
         let mut hex_map = HexMap::new(10, 10);
-        let atk_tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        let atk_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
         hex_map.set_tile(coord_atk, atk_tile);
-        let def_tile = Tile::with_province(TerrainType::Farm, ProvinceId(2));
+        let def_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
         hex_map.set_tile(coord_def, def_tile);
 
         let province_atk = Province::new(
@@ -7471,9 +7498,9 @@ mod tests {
         let coord_def = HexCoord::new(1, 0);
 
         let mut hex_map = HexMap::new(10, 10);
-        let atk_tile = Tile::with_province(TerrainType::Farm, ProvinceId(1));
+        let atk_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
         hex_map.set_tile(coord_atk, atk_tile);
-        let mut def_tile = Tile::with_province(TerrainType::Farm, ProvinceId(2));
+        let mut def_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
         // Set up a fort on the defender's tile
         def_tile.infrastructure.has_fort = true;
         def_tile.infrastructure.fort_level = 2;
@@ -7635,9 +7662,9 @@ mod tests {
         let coord3 = HexCoord::new(2, 0);
 
         let mut hex_map = HexMap::new(10, 10);
-        let tile1 = Tile::with_province(TerrainType::Farm, ProvinceId(1));
-        let tile2 = Tile::with_province(TerrainType::DryPlains, ProvinceId(2));
-        let tile3 = Tile::with_province(TerrainType::DryPlains, ProvinceId(3));
+        let tile1 = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        let tile2 = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        let tile3 = Tile::with_province(TerrainType::Grassland, ProvinceId(3));
         hex_map.set_tile(coord1, tile1);
         hex_map.set_tile(coord2, tile2);
         hex_map.set_tile(coord3, tile3);
