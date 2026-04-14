@@ -632,15 +632,15 @@ fn normalize_territory_sizes(
 
             // Check if this tile borders a different, undersized nation
             for neighbor in coord.neighbors() {
-                if let Some(&neighbor_nation) = assignments.get(&neighbor) {
-                    if neighbor_nation != nation {
-                        let neighbor_target = target_size(neighbor_nation);
-                        if sizes[neighbor_nation] < neighbor_target {
-                            // Don't reassign if it would make the source too small
-                            if sizes[nation] > target {
-                                border_tiles.push((coord, nation, neighbor_nation));
-                                break;
-                            }
+                if let Some(&neighbor_nation) = assignments.get(&neighbor)
+                    && neighbor_nation != nation
+                {
+                    let neighbor_target = target_size(neighbor_nation);
+                    if sizes[neighbor_nation] < neighbor_target {
+                        // Don't reassign if it would make the source too small
+                        if sizes[nation] > target {
+                            border_tiles.push((coord, nation, neighbor_nation));
+                            break;
                         }
                     }
                 }

@@ -76,7 +76,7 @@ pub fn random_personalities(seed: u64, count: usize) -> Vec<AiPersonality> {
 static AI_UNIT_ID_COUNTER: AtomicU32 = AtomicU32::new(2_000_000);
 
 /// Generate a unique UnitId for an AI-built unit.
-pub(crate) fn next_unit_id() -> UnitId {
+pub fn next_unit_id() -> UnitId {
     UnitId(AI_UNIT_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
 }
 

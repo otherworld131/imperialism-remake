@@ -1,6 +1,16 @@
-import { useState, useEffect, useCallback } from 'react';
-import { initWasm, processTurn, getMapData, getAvailableTechs, researchTech } from './wasm';
-import type { TileData, Headline } from './wasm';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  initWasm, processTurn, getMapData, getAvailableTechs, researchTech,
+  getDiplomacyOverlay, getMilitaryOverlay,
+  getUnitsInProvince, getCivilians, getShips, getValidMoveTargets, getBuildableUnits,
+  queueUnitMove, cancelUnitMove, deployCivilian, recallCivilian,
+  recruitArmyUnit, hireCivilian, buildShip,
+} from './wasm';
+import type {
+  TileData, Headline, MapMode, DiplomacyOverlay, DiplomacyOverlayRelation, MilitaryOverlayEntry,
+  ArmyUnitDetail, ProvinceUnits, CiviliansData, CivilianDetail, ShipsData,
+  ValidMoveTargets, BuildableUnits, PendingMove,
+} from './wasm';
 
 const CATEGORY_COLORS: Record<string, string> = {
   war:       '#e63946',
@@ -33,6 +43,9 @@ function extractNationTag(text: string, nations?: any[]): string | null {
 
 import HexMap from './components/HexMap';
 import GameSetup from './components/GameSetup';
+import UnitPanel from './components/UnitPanel';
+import CivilianPanel from './components/CivilianPanel';
+import NavalPanel from './components/NavalPanel';
 
 function App() {
   const [loading, setLoading] = useState(true);
@@ -48,6 +61,23 @@ function App() {
   const [activeScreen, setActiveScreen] = useState<ScreenTab>('map');
   const [gameStarted, setGameStarted] = useState(false);
   const [showHiddenResources, setShowHiddenResources] = useState(false);
+  const [mapMode, setMapMode] = useState<MapMode>('terrain');
+  const [selectedNation, setSelectedNation] = useState<string>('');
+  const [statusMessage, setStatusMessage] = useState<string>('');
+  const [diplomacyOverlay, setDiplomacyOverlay] = useState<DiplomacyOverlay | null>(null);
+  const [militaryOverlay, setMilitaryOverlay] = useState<MilitaryOverlayEntry[] | null>(null);
+
+  // Unit interaction state
+  const [provinceUnits, setProvinceUnits] = useState<ProvinceUnits | null>(null);
+  const [civilians, setCivilians] = useState<CiviliansData | null>(null);
+  const [shipsData, setShipsData] = useState<ShipsData | null>(null);
+  const [buildable, setBuildable] = useState<BuildableUnits | null>(null);
+  const [selectedUnit, setSelectedUnit] = useState<ArmyUnitDetail | null>(null);
+  const [isMovementMode, setIsMovementMode] = useState(false);
+  const [validMoveTargets, setValidMoveTargets] = useState<ValidMoveTargets | null>(null);
+  const [isDeployMode, setIsDeployMode] = useState(false);
+  const [deployingCivilian, setDeployingCivilian] = useState<CivilianDetail | null>(null);
+  const [deployableTiles, setDeployableTiles] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     (async () => {
@@ -56,26 +86,47 @@ function App() {
     })();
   }, []);
 
-  const handleGameStart = (json: string) => {
+  const showError = useCallback((msg: string) => {
+    setStatusMessage(msg);
+    setTimeout(() => setStatusMessage(''), 4000);
+  }, []);
+
+  // Helper to update all derived state from a new game JSON
+  const applyGameJson = useCallback((json: string) => {
     setGameJson(json);
     const state = JSON.parse(json);
     setGameState(state);
     setTiles(getMapData(json));
     setTechs(getAvailableTechs(json));
+    const nid = state.human_player_nation;
+    setCivilians(getCivilians(json, nid));
+    setShipsData(getShips(json, nid));
+    setBuildable(getBuildableUnits(json, nid));
+  }, []);
+
+  const handleGameStart = (json: string) => {
+    applyGameJson(json);
     setGameStarted(true);
+    const state = JSON.parse(json);
+    const p = state?.nations?.find((n: any) => n.id === state.human_player_nation);
+    if (p) setSelectedNation(p.name);
   };
 
   const handleEndTurn = useCallback(() => {
     const result = processTurn(gameJson);
     if (result.error) { alert(result.error); return; }
     const newJson = JSON.stringify(result.game);
-    setGameJson(newJson);
-    setGameState(result.game);
-    setTiles(getMapData(newJson));
-    setTechs(getAvailableTechs(newJson));
+    applyGameJson(newJson);
     setHeadlines(result.report?.headlines || []);
     setShowNewspaper(true);
-  }, [gameJson]);
+    // Clear interaction state
+    setProvinceUnits(null);
+    setSelectedUnit(null);
+    setIsMovementMode(false);
+    setValidMoveTargets(null);
+    setIsDeployMode(false);
+    setDeployingCivilian(null);
+  }, [gameJson, applyGameJson]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -84,7 +135,9 @@ function App() {
         handleEndTurn();
       }
       if (e.code === 'Escape') {
-        if (showNewspaper) setShowNewspaper(false);
+        if (isMovementMode) { setIsMovementMode(false); setValidMoveTargets(null); setSelectedUnit(null); }
+        else if (isDeployMode) { setIsDeployMode(false); setDeployingCivilian(null); setDeployableTiles(new Set()); }
+        else if (showNewspaper) setShowNewspaper(false);
         else if (showTech) setShowTech(false);
       }
       if (e.code === 'F1') { e.preventDefault(); setActiveScreen('map'); }
@@ -95,15 +148,224 @@ function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showNewspaper, showTech, handleEndTurn]);
+  }, [showNewspaper, showTech, handleEndTurn, isMovementMode, isDeployMode]);
+
+  // Fetch overlay data when map mode or selected nation changes
+  useEffect(() => {
+    if (!gameJson || !gameState) return;
+    if (mapMode === 'diplomatic' || mapMode === 'relationship') {
+      const nation = gameState.nations?.find((n: any) => n.name === selectedNation);
+      if (nation) {
+        setDiplomacyOverlay(getDiplomacyOverlay(gameJson, nation.id));
+      } else {
+        setDiplomacyOverlay(null);
+      }
+    } else {
+      setDiplomacyOverlay(null);
+    }
+    if (mapMode === 'military' || mapMode === 'naval') {
+      setMilitaryOverlay(getMilitaryOverlay(gameJson));
+    } else {
+      setMilitaryOverlay(null);
+    }
+  }, [mapMode, selectedNation, gameJson, gameState]);
+
+  const playerNationId = gameState?.human_player_nation ?? 0;
+
+  const handleTileClick = useCallback((tile: TileData) => {
+    // Movement mode: clicking a tile executes the move
+    if (isMovementMode && selectedUnit && tile.province_id != null) {
+      // F-002: Validate target is in valid move targets
+      const isValidTarget = validMoveTargets && (
+        validMoveTargets.friendly.some(t => t.province_id === tile.province_id) ||
+        validMoveTargets.hostile.some(t => t.province_id === tile.province_id)
+      );
+      if (!isValidTarget) return; // Ignore click on invalid province, keep mode active
+
+      const cmd = queueUnitMove(gameJson, playerNationId, selectedUnit.id, tile.province_id);
+      if (cmd.ok && cmd.gameJson) {
+        applyGameJson(cmd.gameJson);
+        if (provinceUnits) {
+          setProvinceUnits(getUnitsInProvince(cmd.gameJson, tile.province_id));
+        }
+        setIsMovementMode(false);
+        setValidMoveTargets(null);
+        setSelectedUnit(null);
+      } else if (cmd.error) {
+        showError(`Move failed: ${cmd.error}`);
+      }
+      return;
+    }
+
+    // Deploy mode: clicking a tile deploys the civilian
+    if (isDeployMode && deployingCivilian) {
+      // F-004: Only allow clicking highlighted deployable tiles
+      const tileKey = `${tile.q},${tile.r}`;
+      if (!deployableTiles.has(tileKey)) return; // Ignore click on invalid tile, keep mode active
+
+      const cmd = deployCivilian(gameJson, deployingCivilian.id, tile.q, tile.r);
+      if (cmd.ok && cmd.gameJson) {
+        applyGameJson(cmd.gameJson);
+        setIsDeployMode(false);
+        setDeployingCivilian(null);
+        setDeployableTiles(new Set());
+      } else if (cmd.error) {
+        showError(`Deploy failed: ${cmd.error}`);
+      }
+      return;
+    }
+
+    setSelectedTile(tile);
+    if (tile.owner && (mapMode === 'diplomatic' || mapMode === 'relationship')) {
+      setSelectedNation(tile.owner);
+    }
+
+    // Load province units when clicking a capital tile
+    if (tile.is_capital && tile.province_id != null) {
+      setProvinceUnits(getUnitsInProvince(gameJson, tile.province_id));
+    } else {
+      setProvinceUnits(null);
+    }
+  }, [mapMode, gameJson, playerNationId, isMovementMode, selectedUnit, isDeployMode, deployingCivilian, applyGameJson, provinceUnits]);
+
+  // Compute pending moves for arrows
+  const pendingMoveArrows = useMemo(() => {
+    if (!gameState?.pending_moves) return [];
+    const playerMoves = gameState.pending_moves.filter((m: any) => {
+      const nid = typeof m[0] === 'number' ? m[0] : m[0]?.[0] ?? 0;
+      return nid === playerNationId;
+    });
+    return playerMoves.map((m: any) => {
+      const unitId = typeof m[1] === 'number' ? m[1] : m[1]?.[0] ?? 0;
+      const destId = typeof m[2] === 'number' ? m[2] : m[2]?.[0] ?? 0;
+      // Find source province for this unit
+      let sourceId = 0;
+      for (const n of (gameState?.nations || [])) {
+        const unit = n.army?.find((u: any) => {
+          const uid = typeof u.id === 'number' ? u.id : u.id?.[0] ?? 0;
+          return uid === unitId;
+        });
+        if (unit) {
+          sourceId = typeof unit.position === 'number' ? unit.position : unit.position?.[0] ?? 0;
+          break;
+        }
+      }
+      return { unit_id: unitId, source_province_id: sourceId, dest_province_id: destId };
+    });
+  }, [gameState, playerNationId]);
+
+  // Pending moves for the side panel display
+  const pendingMovesDisplay: PendingMove[] = useMemo(() => {
+    if (!gameState?.pending_moves) return [];
+    return gameState.pending_moves
+      .filter((m: any) => {
+        const nid = typeof m[0] === 'number' ? m[0] : m[0]?.[0] ?? 0;
+        return nid === playerNationId;
+      })
+      .map((m: any) => {
+        const unitId = typeof m[1] === 'number' ? m[1] : m[1]?.[0] ?? 0;
+        const destId = typeof m[2] === 'number' ? m[2] : m[2]?.[0] ?? 0;
+        const prov = gameState.provinces?.find((p: any) => {
+          const pid = typeof p.id === 'number' ? p.id : p.id?.[0] ?? 0;
+          return pid === destId;
+        });
+        return { unit_id: unitId, destination_province_id: destId, destination_name: prov?.name || '?' };
+      });
+  }, [gameState, playerNationId]);
+
+  // Determine if selected tile is player's
+  const isPlayerProvince = selectedTile?.nation_id === playerNationId && playerNationId > 0;
+  const isPlayerCapital = isPlayerProvince && selectedTile?.is_country_capital === true;
+
+  // Unit interaction handlers
+  const handleMoveUnit = useCallback((unitId: number) => {
+    const targets = getValidMoveTargets(gameJson, playerNationId, unitId);
+    setValidMoveTargets(targets);
+    const unit = provinceUnits?.army_units.find(u => u.id === unitId);
+    setSelectedUnit(unit || null);
+    setIsMovementMode(true);
+  }, [gameJson, playerNationId, provinceUnits]);
+
+  const handleCancelMove = useCallback((unitId: number) => {
+    const cmd = cancelUnitMove(gameJson, unitId);
+    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    else if (cmd.error) showError(`Cancel failed: ${cmd.error}`);
+  }, [gameJson, applyGameJson, showError]);
+
+  const handleRecruit = useCallback((unitType: string) => {
+    const cmd = recruitArmyUnit(gameJson, playerNationId, unitType);
+    if (cmd.ok && cmd.gameJson) {
+      applyGameJson(cmd.gameJson);
+      if (selectedTile?.province_id != null) {
+        setProvinceUnits(getUnitsInProvince(cmd.gameJson, selectedTile.province_id));
+      }
+    } else if (cmd.error) {
+      showError(`Recruit failed: ${cmd.error}`);
+    }
+  }, [gameJson, playerNationId, applyGameJson, selectedTile, showError]);
+
+  const handleDeployCivilian = useCallback((civ: CivilianDetail) => {
+    setDeployingCivilian(civ);
+    setIsDeployMode(true);
+    // Compute deployable tiles — tiles owned by player where civilian type can work
+    const validTiles = new Set<string>();
+    for (const t of tiles) {
+      if (t.nation_id !== playerNationId || t.terrain === 'Sea' || t.civilian_on_tile) continue;
+      // Approximate CivilianType::can_improve logic from domain
+      // F-012: Only use visible resources (not hidden deposits)
+      const res = (t.resource && !t.resource_hidden) ? t.resource : null;
+      const ter = t.terrain;
+      let canWork = false;
+      switch (civ.type) {
+        case 'Farmer': canWork = res === 'Grain' || res === 'Fruit' || res === 'Cotton'; break;
+        case 'Rancher': canWork = res === 'Wool' || res === 'Livestock' || res === 'Horses'; break;
+        case 'Forester': canWork = res === 'Timber'; break;
+        case 'Miner': canWork = res === 'Coal' || res === 'Iron'; break;
+        case 'Driller': canWork = res === 'Oil'; break;
+        case 'Prospector': canWork = ter === 'Hills' || ter === 'Mountain' || ter === 'Swamp' || ter === 'Desert' || ter === 'Tundra'; break;
+        case 'Engineer': canWork = true; break; // any land tile
+      }
+      if (canWork) validTiles.add(`${t.q},${t.r}`);
+    }
+    setDeployableTiles(validTiles);
+  }, [tiles, playerNationId]);
+
+  const handleRecallCivilian = useCallback((civilianId: number) => {
+    const cmd = recallCivilian(gameJson, civilianId);
+    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    else if (cmd.error) showError(`Recall failed: ${cmd.error}`);
+  }, [gameJson, applyGameJson, showError]);
+
+  const handleHireCivilian = useCallback((civType: string) => {
+    const cmd = hireCivilian(gameJson, playerNationId, civType);
+    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    else if (cmd.error) showError(`Hire failed: ${cmd.error}`);
+  }, [gameJson, playerNationId, applyGameJson, showError]);
+
+  const handleBuildShip = useCallback((shipType: string) => {
+    const cmd = buildShip(gameJson, playerNationId, shipType);
+    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    else if (cmd.error) showError(`Build failed: ${cmd.error}`);
+  }, [gameJson, playerNationId, applyGameJson, showError]);
+
+  // Look up diplomacy info for a given tile's owner
+  const getDiploInfoForTile = useCallback((tile: TileData | null): DiplomacyOverlayRelation | null => {
+    if (!tile || !tile.owner || !diplomacyOverlay) return null;
+    if (tile.owner === diplomacyOverlay.selected_nation) return null; // self
+    return diplomacyOverlay.relations.find(r => r.nation_name === tile.owner) || null;
+  }, [diplomacyOverlay]);
+
+  // Look up military info for a given tile's owner
+  const getMilitaryInfoForTile = useCallback((tile: TileData | null): MilitaryOverlayEntry | null => {
+    if (!tile || !tile.owner || !militaryOverlay) return null;
+    return militaryOverlay.find(m => m.nation_name === tile.owner) || null;
+  }, [militaryOverlay]);
 
   const handleResearch = (techName: string) => {
     const result = researchTech(gameJson, techName);
     const parsed = JSON.parse(result);
     if (parsed.error) { alert(parsed.error); return; }
-    setGameJson(result);
-    setGameState(parsed);
-    setTechs(getAvailableTechs(result));
+    applyGameJson(result);
     setShowTech(false);
   };
 
@@ -145,7 +407,22 @@ function App() {
       {/* Main area */}
       <div style={styles.mainArea} className="main-area-responsive">
         <div style={styles.mapContainer}>
-          <HexMap tiles={tiles} onTileClick={setSelectedTile} onTileHover={setHoveredTile} showHiddenResources={showHiddenResources} />
+          <HexMap
+            tiles={tiles}
+            mapMode={mapMode}
+            diplomacyOverlay={diplomacyOverlay}
+            militaryOverlay={militaryOverlay}
+            onMapModeChange={setMapMode}
+            onTileClick={handleTileClick}
+            onTileHover={setHoveredTile}
+            showHiddenResources={showHiddenResources}
+            selectedUnit={selectedUnit}
+            pendingMoves={pendingMoveArrows}
+            validMoveTargets={validMoveTargets}
+            isMovementMode={isMovementMode}
+            isDeployMode={isDeployMode}
+            deployableTiles={deployableTiles}
+          />
         </div>
 
         {/* Side panel — context-sensitive */}
@@ -183,6 +460,165 @@ function App() {
               )}
               {!selectedTile && !hoveredTile && (
                 <p style={styles.hint}>Click to pin, hover to preview</p>
+              )}
+
+              {/* Mode-specific hover info */}
+              {(mapMode === 'diplomatic' || mapMode === 'relationship') && (() => {
+                const activeTile = hoveredTile || selectedTile;
+                const diploInfo = getDiploInfoForTile(activeTile);
+                const isSelf = activeTile?.owner === selectedNation;
+                return (
+                  <div style={{ fontSize: 13, padding: '6px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
+                    <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
+                      {mapMode === 'diplomatic' ? 'Diplomatic' : 'Relationship'} view — {selectedNation}
+                    </div>
+                    {isSelf && activeTile?.owner && <div style={{ color: '#ffd900' }}>Your nation</div>}
+                    {diploInfo && (
+                      <div>
+                        <div><b>{diploInfo.nation_name}</b>: {diploInfo.status} (score: {diploInfo.score >= 0 ? '+' : ''}{diploInfo.score})</div>
+                        {diploInfo.treaties.length > 0 && <div style={{ fontSize: 11, color: '#999' }}>Treaties: {diploInfo.treaties.join(', ')}</div>}
+                        {diploInfo.has_embassy && <div style={{ fontSize: 11, color: '#999' }}>Embassy established</div>}
+                        {diploInfo.has_consulate && !diploInfo.has_embassy && <div style={{ fontSize: 11, color: '#999' }}>Consulate established</div>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+              {(mapMode === 'military' || mapMode === 'naval') && (() => {
+                const activeTile = hoveredTile || selectedTile;
+                const milInfo = getMilitaryInfoForTile(activeTile);
+                return (
+                  <div style={{ fontSize: 13, padding: '6px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
+                    <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
+                      {mapMode === 'military' ? 'Military' : 'Naval'} strength
+                    </div>
+                    {activeTile?.is_capital && activeTile.army_unit_count > 0 && (
+                      <div>Army: {activeTile.army_unit_count} units, {activeTile.army_firepower.toFixed(1)} FP</div>
+                    )}
+                    {activeTile?.is_country_capital && activeTile.naval_ship_count > 0 && (
+                      <div>Navy: {activeTile.naval_ship_count} warships, {activeTile.naval_firepower} FP</div>
+                    )}
+                    {milInfo && (
+                      <div style={{ marginTop: 4, fontSize: 12, color: '#bbb' }}>
+                        {mapMode === 'military'
+                          ? <span>{milInfo.nation_name}: {milInfo.army_unit_count} total units, {milInfo.total_army_fp.toFixed(1)} total FP</span>
+                          : <span>{milInfo.nation_name}: {milInfo.warship_count} warships, {milInfo.total_naval_fp} total FP</span>
+                        }
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Map mode legend */}
+              {mapMode === 'diplomatic' && (
+                <div style={{ fontSize: 11, padding: '8px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
+                  <div style={{ color: '#888', marginBottom: 4 }}>Legend</div>
+                  {[
+                    { color: '#ffd900', label: 'Self' },
+                    { color: '#2ecc40', label: 'Alliance' },
+                    { color: '#7fdbff', label: 'NAP' },
+                    { color: '#ff4136', label: 'At War' },
+                    { color: '#aaaaaa', label: 'Neutral' },
+                  ].map(item => (
+                    <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                      <span style={{ display: 'inline-block', width: 12, height: 12, background: item.color, border: '1px solid rgba(255,255,255,0.2)' }} />
+                      <span>{item.label}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {mapMode === 'relationship' && (
+                <div style={{ fontSize: 11, padding: '8px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
+                  <div style={{ color: '#888', marginBottom: 4 }}>Relationship Score</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span>-100</span>
+                    <div style={{ flex: 1, height: 12, background: 'linear-gradient(to right, rgb(220,40,40), rgb(160,160,160) 50%, rgb(40,200,40))', borderRadius: 2 }} />
+                    <span>+100</span>
+                  </div>
+                </div>
+              )}
+              {mapMode === 'military' && (
+                <div style={{ fontSize: 11, padding: '8px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
+                  <div style={{ color: '#888', marginBottom: 4 }}>Army Strength</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span>Low</span>
+                    <div style={{ flex: 1, height: 12, background: 'linear-gradient(to right, rgba(180,40,40,0.15), rgba(180,40,40,0.65))', borderRadius: 2 }} />
+                    <span>High</span>
+                  </div>
+                </div>
+              )}
+              {mapMode === 'naval' && (
+                <div style={{ fontSize: 11, padding: '8px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
+                  <div style={{ color: '#888', marginBottom: 4 }}>Naval Strength</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span>Low</span>
+                    <div style={{ flex: 1, height: 12, background: 'linear-gradient(to right, rgba(30,80,200,0.15), rgba(30,80,200,0.65))', borderRadius: 2 }} />
+                    <span>High</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Status message (errors, confirmations) */}
+              {statusMessage && (
+                <div style={{ background: 'rgba(200,50,50,0.2)', border: '1px solid rgba(200,50,50,0.5)', borderRadius: 4, padding: 8, marginBottom: 8, fontSize: 12, color: '#f88' }}>
+                  {statusMessage}
+                </div>
+              )}
+
+              {/* Movement/Deploy mode indicator */}
+              {isMovementMode && (
+                <div style={{ background: 'rgba(255,200,0,0.15)', border: '1px solid rgba(255,200,0,0.4)', borderRadius: 4, padding: 8, marginBottom: 8, fontSize: 12 }}>
+                  <b>Movement Mode</b> — click a highlighted province to move the unit, or press Escape to cancel.
+                </div>
+              )}
+              {isDeployMode && deployingCivilian && (
+                <div style={{ background: 'rgba(46,204,64,0.15)', border: '1px solid rgba(46,204,64,0.4)', borderRadius: 4, padding: 8, marginBottom: 8, fontSize: 12 }}>
+                  <b>Deploy {deployingCivilian.type}</b> — click a highlighted tile, or press Escape to cancel.
+                </div>
+              )}
+
+              {/* Unit Panel — shown when a capital with units is selected */}
+              {provinceUnits && (
+                <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 6 }}>
+                  <UnitPanel
+                    provinceUnits={provinceUnits}
+                    buildableArmy={buildable?.army || []}
+                    treasury={buildable?.treasury || 0}
+                    arms={buildable?.arms || 0}
+                    pendingMoves={pendingMovesDisplay}
+                    isPlayerCapital={isPlayerCapital}
+                    isPlayerProvince={isPlayerProvince}
+                    onMoveUnit={handleMoveUnit}
+                    onCancelMove={handleCancelMove}
+                    onRecruit={handleRecruit}
+                  />
+                </div>
+              )}
+
+              {/* Civilian Panel — always shown for player */}
+              {civilians && isPlayerProvince && (
+                <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 6 }}>
+                  <CivilianPanel
+                    civilians={civilians}
+                    buildableCivilians={buildable?.civilians || []}
+                    treasury={buildable?.treasury || 0}
+                    onDeploy={handleDeployCivilian}
+                    onRecall={handleRecallCivilian}
+                    onHire={handleHireCivilian}
+                  />
+                </div>
+              )}
+
+              {/* Naval Panel — shown at country capital */}
+              {shipsData && isPlayerCapital && (
+                <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 6 }}>
+                  <NavalPanel
+                    ships={shipsData}
+                    buildableShips={buildable?.ships || []}
+                    onBuildShip={handleBuildShip}
+                  />
+                </div>
               )}
 
               <div style={{ padding: '4px 0', fontSize: '12px' }}>

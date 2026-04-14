@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
-import type { TileData } from '../wasm';
+import type { TileData, MapMode, DiplomacyOverlay, MilitaryOverlayEntry, ArmyUnitDetail, ValidMoveTargets } from '../wasm';
 
 const HEX_SIZE = 18;
 const SQRT3 = Math.sqrt(3);
@@ -26,22 +26,38 @@ const NATION_COLORS: Record<string, string> = {
   Indigo: '#4d0080',
 };
 
+const DIPLO_STATUS_COLORS: Record<string, string> = {
+  'Alliance': '#2ecc40',
+  'NAP': '#7fdbff',
+  'At War': '#ff4136',
+  'Neutral': '#aaaaaa',
+};
+
+const MAP_MODE_LABELS: Record<MapMode, string> = {
+  terrain: 'Terrain',
+  political: 'Political',
+  diplomatic: 'Diplomatic',
+  relationship: 'Relationship',
+  military: 'Military',
+  naval: 'Naval',
+};
+
 // Returns a resource icon based on the resource overlay (separate from terrain)
 function getResourceIcon(tile: TileData): string | null {
   if (!tile.resource) return null;
   switch (tile.resource) {
-    case 'Grain':     return '🌾';
-    case 'Fruit':     return '🍎';
-    case 'Cotton':    return '🌱';
-    case 'Wool':      return '🐑';
-    case 'Timber':    return '🪵';
-    case 'Livestock': return '🐄';
-    case 'Horses':    return '🐴';
-    case 'Coal':      return '⛏️';
-    case 'Iron':      return '⚒️';
-    case 'Gold':      return '💰';
-    case 'Gems':      return '💎';
-    case 'Oil':       return '🛢️';
+    case 'Grain':     return '\u{1F33E}';
+    case 'Fruit':     return '\u{1F34E}';
+    case 'Cotton':    return '\u{1F331}';
+    case 'Wool':      return '\u{1F411}';
+    case 'Timber':    return '\u{1FAB5}';
+    case 'Livestock': return '\u{1F404}';
+    case 'Horses':    return '\u{1F434}';
+    case 'Coal':      return '\u26CF\uFE0F';
+    case 'Iron':      return '\u2692\uFE0F';
+    case 'Gold':      return '\u{1F4B0}';
+    case 'Gems':      return '\u{1F48E}';
+    case 'Oil':       return '\u{1F6E2}\uFE0F';
     default:          return null;
   }
 }
@@ -51,10 +67,6 @@ function politicalFill(nationHex: string): string {
   const r = (c >> 16) & 0xff, g = (c >> 8) & 0xff, b = c & 0xff;
   return `rgb(${Math.min(255, r + Math.round((255 - r) * 0.45))},${Math.min(255, g + Math.round((255 - g) * 0.45))},${Math.min(255, b + Math.round((255 - b) * 0.45))})`;
 }
-
-const ZOOM_CLOSE = 2.0;
-const ZOOM_FAR = 0.7;
-const POLITICAL_THRESHOLD = 1.1;
 
 function hexToPixel(q: number, r: number): [number, number] {
   return [HEX_SIZE * (SQRT3 * q + SQRT3 / 2 * r), HEX_SIZE * (3 / 2 * r)];
@@ -122,21 +134,83 @@ function tintColor(terrainHex: string, nationHex: string, amount: number): strin
   return `rgb(${Math.round(tr * (1 - amount) + nr * amount)},${Math.round(tg * (1 - amount) + ng * amount)},${Math.round(tb * (1 - amount) + nb * amount)})`;
 }
 
+/** Interpolate a relationship score (-100..+100) to a color: red → gray → green */
+function scoreToColor(score: number): string {
+  const t = (score + 100) / 200; // 0..1
+  let r: number, g: number, b: number;
+  if (t < 0.5) {
+    // red to gray
+    const s = t / 0.5;
+    r = Math.round(220 + (160 - 220) * s);
+    g = Math.round(40 + (160 - 40) * s);
+    b = Math.round(40 + (160 - 40) * s);
+  } else {
+    // gray to green
+    const s = (t - 0.5) / 0.5;
+    r = Math.round(160 + (40 - 160) * s);
+    g = Math.round(160 + (200 - 160) * s);
+    b = Math.round(160 + (40 - 160) * s);
+  }
+  return `rgb(${r},${g},${b})`;
+}
+
+/** Blend a base hex color with an overlay rgba */
+function blendWithOverlay(baseHex: string, overlayR: number, overlayG: number, overlayB: number, alpha: number): string {
+  const c = parseInt(baseHex.slice(1), 16);
+  const br = (c >> 16) & 0xff, bg = (c >> 8) & 0xff, bb = c & 0xff;
+  const r = Math.round(br * (1 - alpha) + overlayR * alpha);
+  const g = Math.round(bg * (1 - alpha) + overlayG * alpha);
+  const b = Math.round(bb * (1 - alpha) + overlayB * alpha);
+  return `rgb(${r},${g},${b})`;
+}
+
+interface PendingMoveArrow {
+  unit_id: number;
+  source_province_id: number;
+  dest_province_id: number;
+}
+
 interface Props {
   tiles: TileData[];
+  mapMode: MapMode;
+  diplomacyOverlay: DiplomacyOverlay | null;
+  militaryOverlay: MilitaryOverlayEntry[] | null;
+  onMapModeChange: (mode: MapMode) => void;
   onTileClick?: (tile: TileData) => void;
   onTileHover?: (tile: TileData | null) => void;
   showHiddenResources?: boolean;
+  selectedUnit?: ArmyUnitDetail | null;
+  pendingMoves?: PendingMoveArrow[];
+  validMoveTargets?: ValidMoveTargets | null;
+  isMovementMode?: boolean;
+  isDeployMode?: boolean;
+  deployableTiles?: Set<string>;
 }
 
-export default function HexMap({ tiles, onTileClick, onTileHover, showHiddenResources = false }: Props) {
+const CIVILIAN_EMOJI: Record<string, string> = {
+  Farmer: '\u{1F33E}',       // 🌾
+  Miner: '\u26CF\uFE0F',     // ⛏️
+  Engineer: '\u{1F527}',     // 🔧
+  Forester: '\u{1FAA3}',     // 🪓
+  Rancher: '\u{1F920}',      // 🤠
+  Driller: '\u{1F6E2}\uFE0F', // 🛢️
+  Prospector: '\u{1F50D}',   // 🔍
+};
+
+export default function HexMap({
+  tiles, mapMode, diplomacyOverlay, militaryOverlay,
+  onMapModeChange, onTileClick, onTileHover, showHiddenResources = false,
+  selectedUnit, pendingMoves = [], validMoveTargets, isMovementMode = false,
+  isDeployMode = false, deployableTiles,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [offset, setOffset] = useState({ x: -200, y: -100 });
   const [dragging, setDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [scale, setScale] = useState(ZOOM_FAR);
+  const [scale, setScale] = useState(0.7);
+  const [dropupOpen, setDropupOpen] = useState(false);
 
-  const isPolitical = scale < POLITICAL_THRESHOLD;
+  const showPoliticalColors = mapMode !== 'terrain';
 
   const tileMap = useMemo(() => {
     const m = new Map<string, TileData>();
@@ -145,6 +219,45 @@ export default function HexMap({ tiles, onTileClick, onTileHover, showHiddenReso
     }
     return m;
   }, [tiles]);
+
+  // Build nation → overlay fill color map for diplomatic/relationship/military/naval modes
+  const nationFillMap = useMemo(() => {
+    const m = new Map<string, string>();
+    if (mapMode === 'diplomatic' && diplomacyOverlay) {
+      m.set(diplomacyOverlay.selected_nation, '#ffd900');
+      for (const rel of diplomacyOverlay.relations) {
+        m.set(rel.nation_name, DIPLO_STATUS_COLORS[rel.status] || '#666666');
+      }
+    } else if (mapMode === 'relationship' && diplomacyOverlay) {
+      m.set(diplomacyOverlay.selected_nation, '#ffd900');
+      for (const rel of diplomacyOverlay.relations) {
+        m.set(rel.nation_name, scoreToColor(rel.score));
+      }
+    } else if (mapMode === 'military' && militaryOverlay) {
+      const maxFP = Math.max(1, ...militaryOverlay.map(e => e.total_army_fp));
+      for (const entry of militaryOverlay) {
+        const intensity = entry.total_army_fp / maxFP;
+        const nc = NATION_COLORS[entry.nation_color];
+        if (nc) {
+          const base = politicalFill(nc);
+          const alpha = 0.12 + intensity * 0.43;
+          m.set(entry.nation_name, blendWithOverlay(base, 180, 40, 40, alpha));
+        }
+      }
+    } else if (mapMode === 'naval' && militaryOverlay) {
+      const maxFP = Math.max(1, ...militaryOverlay.map(e => e.total_naval_fp));
+      for (const entry of militaryOverlay) {
+        const intensity = entry.total_naval_fp / maxFP;
+        const nc = NATION_COLORS[entry.nation_color];
+        if (nc) {
+          const base = politicalFill(nc);
+          const alpha = 0.12 + intensity * 0.43;
+          m.set(entry.nation_name, blendWithOverlay(base, 30, 80, 200, alpha));
+        }
+      }
+    }
+    return m;
+  }, [mapMode, diplomacyOverlay, militaryOverlay]);
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;
@@ -169,14 +282,42 @@ export default function HexMap({ tiles, onTileClick, onTileHover, showHiddenReso
 
       if (tile.terrain === 'Sea') {
         color = TERRAIN_COLORS.Sea;
-      } else if (isPolitical && tile.owner_color) {
-        const nc = NATION_COLORS[tile.owner_color];
-        color = nc ? politicalFill(nc) : (TERRAIN_COLORS[tile.terrain] || '#666');
-      } else {
+      } else if (mapMode === 'terrain') {
+        // Terrain mode: base terrain + subtle nation tint
         color = TERRAIN_COLORS[tile.terrain] || '#666';
         if (tile.owner_color) {
           const nc = NATION_COLORS[tile.owner_color];
           if (nc) color = tintColor(color, nc, 0.15);
+        }
+      } else if (mapMode === 'diplomatic' || mapMode === 'relationship') {
+        // Overlay modes: use nationFillMap colors, fall back to political fill
+        const overlayColor = tile.owner ? nationFillMap.get(tile.owner) : null;
+        if (overlayColor) {
+          color = overlayColor;
+        } else if (tile.owner_color) {
+          const nc = NATION_COLORS[tile.owner_color];
+          color = nc ? politicalFill(nc) : (TERRAIN_COLORS[tile.terrain] || '#666');
+        } else {
+          color = TERRAIN_COLORS[tile.terrain] || '#666';
+        }
+      } else if (mapMode === 'military' || mapMode === 'naval') {
+        // Military/Naval: political base with strength tint from nationFillMap
+        const overlayColor = tile.owner ? nationFillMap.get(tile.owner) : null;
+        if (overlayColor) {
+          color = overlayColor;
+        } else if (tile.owner_color) {
+          const nc = NATION_COLORS[tile.owner_color];
+          color = nc ? politicalFill(nc) : (TERRAIN_COLORS[tile.terrain] || '#666');
+        } else {
+          color = TERRAIN_COLORS[tile.terrain] || '#666';
+        }
+      } else {
+        // Political mode
+        if (tile.owner_color) {
+          const nc = NATION_COLORS[tile.owner_color];
+          color = nc ? politicalFill(nc) : (TERRAIN_COLORS[tile.terrain] || '#666');
+        } else {
+          color = TERRAIN_COLORS[tile.terrain] || '#666';
         }
       }
 
@@ -295,7 +436,7 @@ export default function HexMap({ tiles, onTileClick, onTileHover, showHiddenReso
     }
 
     // ── Pass 4: Resource icons on producing tiles (terrain view only) ──
-    if (scale > 0.6 && !isPolitical) {
+    if (scale > 0.6 && mapMode === 'terrain') {
       const rSize = Math.max(10, HEX_SIZE * 0.7);
       ctx.font = `${rSize}px sans-serif`;
       ctx.textAlign = 'center';
@@ -367,8 +508,8 @@ export default function HexMap({ tiles, onTileClick, onTileHover, showHiddenReso
       }
     }
 
-    // ── Pass 6: Nation name labels (political mode, per-landmass) ──
-    if (isPolitical) {
+    // ── Pass 6: Nation name labels (all non-terrain modes) ──
+    if (showPoliticalColors) {
       // Group land tiles by nation
       const nationTiles = new Map<string, Set<string>>();
       for (const tile of tiles) {
@@ -431,8 +572,173 @@ export default function HexMap({ tiles, onTileClick, onTileHover, showHiddenReso
       }
     }
 
+    // ── Pass 7: Strength indicator bars at capitals (all modes) ──
+    if (scale > 0.8) {
+      // Find max values for scaling
+      let maxArmyFP = 0;
+      let maxNavalFP = 0;
+      for (const tile of tiles) {
+        if (tile.is_capital && tile.army_firepower > maxArmyFP) maxArmyFP = tile.army_firepower;
+        if (tile.is_country_capital && tile.naval_firepower > maxNavalFP) maxNavalFP = tile.naval_firepower;
+      }
+      if (maxArmyFP < 1) maxArmyFP = 1;
+      if (maxNavalFP < 1) maxNavalFP = 1;
+
+      const maxBarWidth = HEX_SIZE * 0.8;
+
+      for (const tile of tiles) {
+        if (tile.terrain === 'Sea') continue;
+        if (!tile.is_capital) continue;
+        const [px, py] = hexToPixel(tile.q, tile.r);
+
+        // Army strength bar
+        if (tile.army_unit_count > 0) {
+          const barWidth = Math.max(3, (tile.army_firepower / maxArmyFP) * maxBarWidth);
+          const barX = px - barWidth / 2;
+          const barY = py + HEX_SIZE * 0.45;
+
+          ctx.fillStyle = '#8b0000';
+          ctx.fillRect(barX, barY, barWidth, 2.5);
+          ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(barX, barY, barWidth, 2.5);
+
+          ctx.font = '7px sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = 'rgba(255,255,255,0.9)';
+          ctx.fillText(`x${tile.army_unit_count}`, barX + barWidth + 2, barY + 1.5);
+        }
+
+        // Naval strength bar (country capital only)
+        if (tile.is_country_capital && tile.naval_ship_count > 0) {
+          const barWidth = Math.max(3, (tile.naval_firepower / maxNavalFP) * maxBarWidth);
+          const barX = px - barWidth / 2;
+          const barY = py + HEX_SIZE * 0.6;
+
+          ctx.fillStyle = '#000080';
+          ctx.fillRect(barX, barY, barWidth, 2.5);
+          ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(barX, barY, barWidth, 2.5);
+
+          ctx.font = '7px sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = 'rgba(255,255,255,0.9)';
+          ctx.fillText(`x${tile.naval_ship_count}`, barX + barWidth + 2, barY + 1.5);
+        }
+      }
+    }
+
+    // ── Pass 8: Civilian emoji icons on hex tiles ──────────────
+    if (scale > 0.7) {
+      const civFontSize = Math.max(6, HEX_SIZE * 0.55);
+      ctx.font = `${civFontSize}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      for (const tile of tiles) {
+        if (!tile.civilian_on_tile) continue;
+        const [px, py] = hexToPixel(tile.q, tile.r);
+        const emoji = CIVILIAN_EMOJI[tile.civilian_on_tile.type] || '\u{1F464}';
+
+        // Position in lower-left of hex to avoid resource icons (center)
+        const cx = px - HEX_SIZE * 0.3;
+        const cy = py + HEX_SIZE * 0.35;
+
+        ctx.fillText(emoji, cx, cy);
+
+        // Turns remaining badge
+        if (tile.civilian_on_tile.working && tile.civilian_on_tile.turns_remaining > 0) {
+          const badgeX = cx + civFontSize * 0.5;
+          const badgeY = cy - civFontSize * 0.4;
+          ctx.fillStyle = 'rgba(0,0,0,0.7)';
+          ctx.beginPath();
+          ctx.arc(badgeX, badgeY, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.font = '5px sans-serif';
+          ctx.fillStyle = '#fff';
+          ctx.fillText(`${tile.civilian_on_tile.turns_remaining}`, badgeX, badgeY);
+          ctx.font = `${civFontSize}px sans-serif`;
+        }
+      }
+    }
+
+    // ── Pass 9: Movement range highlighting ───────────────────
+    if (isMovementMode && validMoveTargets) {
+      const provinceIdSet = new Map<number, 'friendly' | 'hostile'>();
+      for (const t of validMoveTargets.friendly) provinceIdSet.set(t.province_id, 'friendly');
+      for (const t of validMoveTargets.hostile) provinceIdSet.set(t.province_id, 'hostile');
+
+      for (const tile of tiles) {
+        if (tile.province_id == null) continue;
+        const kind = provinceIdSet.get(tile.province_id);
+        if (!kind) continue;
+
+        const [px, py] = hexToPixel(tile.q, tile.r);
+        drawHexagon(ctx, px, py, HEX_SIZE - 0.5);
+        ctx.fillStyle = kind === 'friendly'
+          ? 'rgba(46, 204, 64, 0.25)'
+          : 'rgba(255, 65, 54, 0.25)';
+        ctx.fill();
+      }
+    }
+
+    // ── Pass 9b: Deploy mode tile highlighting ────────────────
+    if (isDeployMode && deployableTiles && deployableTiles.size > 0) {
+      for (const tile of tiles) {
+        const key = `${tile.q},${tile.r}`;
+        if (!deployableTiles.has(key)) continue;
+
+        const [px, py] = hexToPixel(tile.q, tile.r);
+        drawHexagon(ctx, px, py, HEX_SIZE - 0.5);
+        ctx.fillStyle = 'rgba(46, 204, 64, 0.3)';
+        ctx.fill();
+      }
+    }
+
+    // ── Pass 10: Movement arrows for pending moves ────────────
+    if (pendingMoves.length > 0) {
+      // Build province_id → capital tile pixel position lookup
+      const capitalPositions = new Map<number, [number, number]>();
+      for (const tile of tiles) {
+        if (tile.is_capital && tile.province_id != null) {
+          capitalPositions.set(tile.province_id, hexToPixel(tile.q, tile.r));
+        }
+      }
+
+      ctx.setLineDash([4, 3]);
+      ctx.lineWidth = 1.5;
+      for (const move of pendingMoves) {
+        const from = capitalPositions.get(move.source_province_id);
+        const to = capitalPositions.get(move.dest_province_id);
+        if (!from || !to) continue;
+
+        ctx.strokeStyle = 'rgba(255, 200, 0, 0.8)';
+        ctx.beginPath();
+        ctx.moveTo(from[0], from[1]);
+        ctx.lineTo(to[0], to[1]);
+        ctx.stroke();
+
+        // Arrowhead
+        const angle = Math.atan2(to[1] - from[1], to[0] - from[0]);
+        const arrowLen = 5;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(to[0], to[1]);
+        ctx.lineTo(to[0] - arrowLen * Math.cos(angle - 0.4), to[1] - arrowLen * Math.sin(angle - 0.4));
+        ctx.moveTo(to[0], to[1]);
+        ctx.lineTo(to[0] - arrowLen * Math.cos(angle + 0.4), to[1] - arrowLen * Math.sin(angle + 0.4));
+        ctx.stroke();
+        ctx.setLineDash([4, 3]);
+      }
+      ctx.setLineDash([]);
+    }
+
     ctx.restore();
-  }, [tiles, offset, scale, isPolitical, showHiddenResources]);
+  }, [tiles, offset, scale, showPoliticalColors, showHiddenResources, mapMode, nationFillMap,
+      isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves]);
 
   useEffect(() => { render(); }, [render]);
 
@@ -444,6 +750,14 @@ export default function HexMap({ tiles, onTileClick, onTileHover, showHiddenReso
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
+
+  // Close dropup when clicking outside
+  useEffect(() => {
+    if (!dropupOpen) return;
+    const handleClick = () => setDropupOpen(false);
+    window.addEventListener('click', handleClick);
+    return () => window.removeEventListener('click', handleClick);
+  }, [dropupOpen]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     setDragging(true);
@@ -466,10 +780,6 @@ export default function HexMap({ tiles, onTileClick, onTileHover, showHiddenReso
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     setScale(s => Math.max(0.3, Math.min(4, s - e.deltaY * 0.001)));
-  };
-
-  const toggleZoom = () => {
-    setScale(s => s < POLITICAL_THRESHOLD ? ZOOM_CLOSE : ZOOM_FAR);
   };
 
   const handleClick = (e: React.MouseEvent) => {
@@ -504,20 +814,69 @@ export default function HexMap({ tiles, onTileClick, onTileHover, showHiddenReso
         onClick={handleClick}
       />
       {/* Map controls */}
-      <div style={{ position: 'absolute', bottom: 12, right: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
+      <div style={{ position: 'absolute', bottom: 12, right: 12, display: 'flex', gap: 6, alignItems: 'flex-end' }}>
         <button
           onClick={() => setScale(s => Math.max(0.3, s - 0.2))}
           style={controlBtn}
           aria-label="Zoom out"
-        >−</button>
+        >{'\u2212'}</button>
         <button
           onClick={() => setScale(s => Math.min(4, s + 0.2))}
           style={controlBtn}
           aria-label="Zoom in"
         >+</button>
-        <button onClick={toggleZoom} style={{ ...controlBtn, padding: '6px 14px' }}>
-          {isPolitical ? 'Terrain View' : 'Political View'}
-        </button>
+
+        {/* Map mode dropup */}
+        <div style={{ position: 'relative' }}>
+          {dropupOpen && (
+            <div
+              style={{
+                position: 'absolute', bottom: '100%', right: 0, marginBottom: 4,
+                background: '#2a2518', border: '1px solid #5a5030', borderRadius: 4,
+                minWidth: 140, overflow: 'hidden', zIndex: 10,
+              }}
+              onClick={e => e.stopPropagation()}
+            >
+              {(['terrain', 'political'] as MapMode[]).map(mode => (
+                <button
+                  key={mode}
+                  onClick={() => { onMapModeChange(mode); setDropupOpen(false); }}
+                  style={{
+                    display: 'block', width: '100%', textAlign: 'left',
+                    padding: '7px 12px', border: 'none', cursor: 'pointer',
+                    fontFamily: 'Georgia, serif', fontSize: 13,
+                    background: mapMode === mode ? 'rgba(218,165,32,0.15)' : 'transparent',
+                    color: mapMode === mode ? '#daa520' : '#e0d8c0',
+                  }}
+                >
+                  {MAP_MODE_LABELS[mode]}
+                </button>
+              ))}
+              <div style={{ height: 1, background: '#5a5030', margin: '2px 0' }} />
+              {(['diplomatic', 'relationship', 'military', 'naval'] as MapMode[]).map(mode => (
+                <button
+                  key={mode}
+                  onClick={() => { onMapModeChange(mode); setDropupOpen(false); }}
+                  style={{
+                    display: 'block', width: '100%', textAlign: 'left',
+                    padding: '7px 12px', border: 'none', cursor: 'pointer',
+                    fontFamily: 'Georgia, serif', fontSize: 13,
+                    background: mapMode === mode ? 'rgba(218,165,32,0.15)' : 'transparent',
+                    color: mapMode === mode ? '#daa520' : '#e0d8c0',
+                  }}
+                >
+                  {MAP_MODE_LABELS[mode]}
+                </button>
+              ))}
+            </div>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); setDropupOpen(o => !o); }}
+            style={{ ...controlBtn, padding: '6px 14px', minWidth: 110, textAlign: 'left' }}
+          >
+            {MAP_MODE_LABELS[mapMode]} {'\u25B4'}
+          </button>
+        </div>
       </div>
     </div>
   );
