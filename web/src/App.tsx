@@ -274,7 +274,7 @@ function App() {
   }, [gameState, playerNationId]);
 
   // Determine if selected tile is player's
-  const isPlayerProvince = selectedTile?.nation_id === playerNationId && playerNationId > 0;
+  const isPlayerProvince = selectedTile?.nation_id === playerNationId && playerNationId != null;
   const isPlayerCapital = isPlayerProvince && selectedTile?.is_country_capital === true;
 
   // Unit interaction handlers
