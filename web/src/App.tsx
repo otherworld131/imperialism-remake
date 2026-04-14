@@ -540,21 +540,21 @@ function App() {
               )}
               {mapMode === 'military' && (
                 <div style={{ fontSize: 11, padding: '8px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
-                  <div style={{ color: '#888', marginBottom: 4 }}>Army Strength</div>
+                  <div style={{ color: '#888', marginBottom: 4 }}>Army Strength (vs average)</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span>Low</span>
-                    <div style={{ flex: 1, height: 12, background: 'linear-gradient(to right, rgba(180,40,40,0.15), rgba(180,40,40,0.65))', borderRadius: 2 }} />
-                    <span>High</span>
+                    <span>Weak</span>
+                    <div style={{ flex: 1, height: 12, background: 'linear-gradient(to right, rgb(220,40,40), rgb(200,200,40) 50%, rgb(40,200,40))', borderRadius: 2 }} />
+                    <span>Strong</span>
                   </div>
                 </div>
               )}
               {mapMode === 'naval' && (
                 <div style={{ fontSize: 11, padding: '8px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
-                  <div style={{ color: '#888', marginBottom: 4 }}>Naval Strength</div>
+                  <div style={{ color: '#888', marginBottom: 4 }}>Naval Strength (vs average)</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span>Low</span>
-                    <div style={{ flex: 1, height: 12, background: 'linear-gradient(to right, rgba(30,80,200,0.15), rgba(30,80,200,0.65))', borderRadius: 2 }} />
-                    <span>High</span>
+                    <span>Weak</span>
+                    <div style={{ flex: 1, height: 12, background: 'linear-gradient(to right, rgb(220,40,40), rgb(200,200,40) 50%, rgb(40,200,40))', borderRadius: 2 }} />
+                    <span>Strong</span>
                   </div>
                 </div>
               )}

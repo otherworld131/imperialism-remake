@@ -154,6 +154,26 @@ function scoreToColor(score: number): string {
   return `rgb(${r},${g},${b})`;
 }
 
+/** Interpolate a strength score (-100..+100) to a color: red → yellow → green */
+function strengthToColor(score: number): string {
+  const t = (score + 100) / 200; // 0..1
+  let r: number, g: number, b: number;
+  if (t < 0.5) {
+    // red to yellow
+    const s = t / 0.5;
+    r = Math.round(220 + (200 - 220) * s);
+    g = Math.round(40 + (200 - 40) * s);
+    b = Math.round(40 + (40 - 40) * s);
+  } else {
+    // yellow to green
+    const s = (t - 0.5) / 0.5;
+    r = Math.round(200 + (40 - 200) * s);
+    g = Math.round(200 + (200 - 200) * s);
+    b = Math.round(40 + (40 - 40) * s);
+  }
+  return `rgb(${r},${g},${b})`;
+}
+
 /** Blend a base hex color with an overlay rgba */
 function blendWithOverlay(baseHex: string, overlayR: number, overlayG: number, overlayB: number, alpha: number): string {
   const c = parseInt(baseHex.slice(1), 16);
@@ -234,26 +254,21 @@ export default function HexMap({
         m.set(rel.nation_name, scoreToColor(rel.score));
       }
     } else if (mapMode === 'military' && militaryOverlay) {
-      const maxFP = Math.max(1, ...militaryOverlay.map(e => e.total_army_fp));
+      const values = militaryOverlay.map(e => e.total_army_fp);
+      const avg = values.reduce((a, b) => a + b, 0) / Math.max(1, values.length);
+      const maxDev = Math.max(1, ...values.map(v => Math.abs(v - avg)));
       for (const entry of militaryOverlay) {
-        const intensity = entry.total_army_fp / maxFP;
-        const nc = NATION_COLORS[entry.nation_color];
-        if (nc) {
-          const base = politicalFill(nc);
-          const alpha = 0.12 + intensity * 0.43;
-          m.set(entry.nation_name, blendWithOverlay(base, 180, 40, 40, alpha));
-        }
+        // Score: -100 (weakest) → 0 (average) → +100 (strongest)
+        const score = Math.round(((entry.total_army_fp - avg) / maxDev) * 100);
+        m.set(entry.nation_name, strengthToColor(score));
       }
     } else if (mapMode === 'naval' && militaryOverlay) {
-      const maxFP = Math.max(1, ...militaryOverlay.map(e => e.total_naval_fp));
+      const values = militaryOverlay.map(e => e.total_naval_fp);
+      const avg = values.reduce((a, b) => a + b, 0) / Math.max(1, values.length);
+      const maxDev = Math.max(1, ...values.map(v => Math.abs(v - avg)));
       for (const entry of militaryOverlay) {
-        const intensity = entry.total_naval_fp / maxFP;
-        const nc = NATION_COLORS[entry.nation_color];
-        if (nc) {
-          const base = politicalFill(nc);
-          const alpha = 0.12 + intensity * 0.43;
-          m.set(entry.nation_name, blendWithOverlay(base, 30, 80, 200, alpha));
-        }
+        const score = Math.round(((entry.total_naval_fp - avg) / maxDev) * 100);
+        m.set(entry.nation_name, strengthToColor(score));
       }
     }
     return m;

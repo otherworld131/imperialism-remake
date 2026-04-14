@@ -332,6 +332,22 @@ pub fn new_game_with_seed(
         );
         nation.warships.push(frigate);
 
+        // Starting army: 4 Regulars + 1 Light Artillery at capital
+        for j in 0..4u32 {
+            nation.army.push(crate::military::units::ArmyUnit::new(
+                UnitId(1_000_000 + i as u32 * 10 + j),
+                crate::military::units::ArmyUnitType::Regulars,
+                setup.nation_id,
+                setup.capital_province,
+            ));
+        }
+        nation.army.push(crate::military::units::ArmyUnit::new(
+            UnitId(1_000_000 + i as u32 * 10 + 4),
+            crate::military::units::ArmyUnitType::LightArtillery,
+            setup.nation_id,
+            setup.capital_province,
+        ));
+
         // Assign AI personality for non-human Great Powers
         if i != human_idx {
             nation.ai_personality = Some(personalities[ai_personality_idx]);
@@ -364,6 +380,23 @@ pub fn new_game_with_seed(
         for pid in &setup.province_ids {
             nation.add_province(*pid);
         }
+
+        // Starting army: 4 Regulars + 1 Light Artillery at capital
+        for j in 0..4u32 {
+            nation.army.push(crate::military::units::ArmyUnit::new(
+                UnitId(1_100_000 + i as u32 * 10 + j),
+                crate::military::units::ArmyUnitType::Regulars,
+                setup.nation_id,
+                setup.capital_province,
+            ));
+        }
+        nation.army.push(crate::military::units::ArmyUnit::new(
+            UnitId(1_100_000 + i as u32 * 10 + 4),
+            crate::military::units::ArmyUnitType::LightArtillery,
+            setup.nation_id,
+            setup.capital_province,
+        ));
+
         nations.push(nation);
     }
 
