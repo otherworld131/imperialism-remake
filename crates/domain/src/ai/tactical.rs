@@ -90,7 +90,9 @@ fn ai_build_forts(
         return;
     }
 
-    let nation = game.get_nation(nation_id).unwrap();
+    let Some(nation) = game.get_nation(nation_id) else {
+        return;
+    };
     let capital_province_id = nation.capital_province_id;
     let nation_name = nation.name.clone();
     let owned_provinces: Vec<ProvinceId> = nation.province_ids.clone();
@@ -193,7 +195,9 @@ fn ai_build_forts(
     }
 
     if build_fort(&mut game.hex_map, fort_coord).is_ok() {
-        let nation = game.get_nation_mut(nation_id).unwrap();
+        let Some(nation) = game.get_nation_mut(nation_id) else {
+            return;
+        };
         nation.treasury -= cost;
         actions.push(format!("{} has fortified its borders", nation_name));
     }
@@ -236,7 +240,9 @@ fn ai_move_units_to_threatened(game: &mut GameState, nation_id: NationId) {
         .collect();
 
     // Find threatened provinces: border enemy, have no units stationed
-    let nation = game.get_nation(nation_id).unwrap();
+    let Some(nation) = game.get_nation(nation_id) else {
+        return;
+    };
     let mut threatened: Vec<ProvinceId> = Vec::new();
 
     for &pid in &owned_provinces {

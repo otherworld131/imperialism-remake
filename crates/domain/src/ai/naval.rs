@@ -65,7 +65,9 @@ pub(crate) fn ai_build_warships(game: &mut GameState, nation_id: NationId) {
     if fabric_have >= 2 && lumber_have >= 5 && arms_have < 2 && steel_have > 0 {
         let arms_needed = 2 - arms_have;
         let arms_to_produce = arms_needed.min(steel_have);
-        let nation = game.get_nation_mut(nation_id).unwrap();
+        let Some(nation) = game.get_nation_mut(nation_id) else {
+            return;
+        };
         nation.consume_material(MaterialType::Steel, arms_to_produce);
         nation.add_material(MaterialType::Arms, arms_to_produce);
     }
@@ -83,7 +85,9 @@ pub(crate) fn ai_build_warships(game: &mut GameState, nation_id: NationId) {
     if fabric_have >= 2 && lumber_have >= 5 && arms_have >= 2 {
         let uid = next_unit_id();
         let ship = Ship::new(uid, ShipType::Frigate, nation_id);
-        let nation = game.get_nation_mut(nation_id).unwrap();
+        let Some(nation) = game.get_nation_mut(nation_id) else {
+            return;
+        };
         nation.consume_material(MaterialType::Fabric, 2);
         nation.consume_material(MaterialType::Lumber, 5);
         nation.consume_material(MaterialType::Arms, 2);
@@ -145,7 +149,9 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
     if fabric_have >= 2 && lumber_have >= 4 {
         let uid = next_unit_id();
         let ship = Ship::new(uid, ShipType::Trader, nation_id);
-        let nation = game.get_nation_mut(nation_id).unwrap();
+        let Some(nation) = game.get_nation_mut(nation_id) else {
+            return;
+        };
         nation.consume_material(MaterialType::Fabric, 2);
         nation.consume_material(MaterialType::Lumber, 4);
         nation.merchant_fleet.push(ship);
@@ -220,7 +226,9 @@ pub fn ai_naval_strategy(game: &mut GameState, nation_id: NationId, actions: &mu
         if fabric_have >= 2 && lumber_have >= 5 && arms_have < 2 && steel_have > 0 {
             let arms_needed = 2 - arms_have;
             let arms_to_produce = arms_needed.min(steel_have);
-            let nation = game.get_nation_mut(nation_id).unwrap();
+            let Some(nation) = game.get_nation_mut(nation_id) else {
+                return;
+            };
             nation.consume_material(MaterialType::Steel, arms_to_produce);
             nation.add_material(MaterialType::Arms, arms_to_produce);
         }
@@ -237,7 +245,9 @@ pub fn ai_naval_strategy(game: &mut GameState, nation_id: NationId, actions: &mu
         if fabric_have >= 2 && lumber_have >= 5 && arms_have >= 2 {
             let uid = next_unit_id();
             let ship = Ship::new(uid, ShipType::Frigate, nation_id);
-            let nation = game.get_nation_mut(nation_id).unwrap();
+            let Some(nation) = game.get_nation_mut(nation_id) else {
+                return;
+            };
             nation.consume_material(MaterialType::Fabric, 2);
             nation.consume_material(MaterialType::Lumber, 5);
             nation.consume_material(MaterialType::Arms, 2);

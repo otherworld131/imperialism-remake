@@ -95,7 +95,6 @@ fn ai_process_food(game: &mut GameState, nation_id: NationId) {
     let fruit_used = fruit.min(remaining);
     remaining -= fruit_used;
     let livestock_used = livestock.min(remaining);
-    let _ = remaining - livestock_used;
 
     if grain_used > 0 {
         nation.remove_resource(ResourceType::Grain, grain_used);
@@ -233,7 +232,9 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
             improvable_tiles[tile_idx].5 = true;
 
             // Deploy the civilian and start work
-            let nation = game.get_nation_mut(nation_id).unwrap();
+            let Some(nation) = game.get_nation_mut(nation_id) else {
+                return;
+            };
             let civilian_id = nation.civilians[civ_idx].id;
             nation.civilians[civ_idx].deploy(coord);
             nation.civilians[civ_idx].start_work(2);
@@ -288,7 +289,9 @@ pub(crate) fn ai_train_and_promote_workers(game: &mut GameState, nation_id: Nati
 
     // Train one untrained worker if above threshold
     if untrained > train_threshold {
-        let nation = game.get_nation_mut(nation_id).unwrap();
+        let Some(nation) = game.get_nation_mut(nation_id) else {
+            return;
+        };
         // Consume paper if available (training requires paper)
         if has_paper {
             nation.consume_material(MaterialType::Paper, 1);
@@ -304,7 +307,9 @@ pub(crate) fn ai_train_and_promote_workers(game: &mut GameState, nation_id: Nati
 
     // Promote one trained worker to expert if above threshold
     if nation.labor.trained > promote_threshold {
-        let nation = game.get_nation_mut(nation_id).unwrap();
+        let Some(nation) = game.get_nation_mut(nation_id) else {
+            return;
+        };
         nation.labor.promote_worker();
     }
 }

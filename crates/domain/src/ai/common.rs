@@ -29,13 +29,13 @@ impl std::fmt::Display for AiPersonality {
 
 /// Returns the default AI personality for a Great Power based on nation index.
 ///
-/// - Index 0 (Deneb): Balanced (usually human-controlled)
-/// - Index 1 (Devron): Aggressive
-/// - Index 2 (Haxaco): Economic
-/// - Index 3 (Kem): Aggressive
-/// - Index 4 (Ordune): Diplomatic
-/// - Index 5 (Patagon): Economic
-/// - Index 6 (Zimm): Balanced
+/// - Index 0: Balanced (usually human-controlled)
+/// - Index 1: Aggressive
+/// - Index 2: Economic
+/// - Index 3: Balanced
+/// - Index 4: Diplomatic
+/// - Index 5: Aggressive
+/// - Index 6: Balanced
 pub fn personality_for_nation_index(index: usize) -> AiPersonality {
     match index {
         0 => AiPersonality::Balanced,

@@ -48,7 +48,7 @@ pub fn wasm_new_scenario_game(scenario_id: &str, difficulty: u8, nation_index: u
 pub fn wasm_process_turn(game_json: &str) -> String {
     let mut game: GameState = match serde_json::from_str(game_json) {
         Ok(g) => g,
-        Err(e) => return format!("{{\"error\":\"deserialize: {}\"}}", e),
+        Err(e) => return serde_json::json!({"error": format!("deserialize: {e}")}).to_string(),
     };
 
     // Reconstruct tech tree (skipped in serialization)
@@ -58,7 +58,10 @@ pub fn wasm_process_turn(game_json: &str) -> String {
 
     // Build response with game state + report summary
     let response = serde_json::json!({
-        "game": serde_json::to_value(&game).unwrap_or_default(),
+        "game": match serde_json::to_value(&game) {
+            Ok(v) => v,
+            Err(e) => return serde_json::json!({"error": format!("serialize game: {e}")}).to_string(),
+        },
         "report": {
             "turn": format!("{}", report.turn),
             "year": report.year,
@@ -291,7 +294,10 @@ pub fn wasm_research_tech(game_json: &str, tech_name: &str) -> String {
         Some(t) => {
             let cost = t.cost;
             let tech_id = t.id;
-            let nation = game.get_nation_mut(game.human_player_nation).unwrap();
+            let nation = match game.get_nation_mut(game.human_player_nation) {
+                Some(n) => n,
+                None => return "{\"error\":\"player nation not found\"}".to_string(),
+            };
             if nation.treasury.checked_sub(cost).is_none() {
                 return "{\"error\":\"insufficient funds\"}".to_string();
             }
@@ -470,13 +476,14 @@ fn parse_ship_type(name: &str) -> Option<ShipType> {
 
 fn deserialize_game(game_json: &str) -> Result<GameState, String> {
     let mut game: GameState = serde_json::from_str(game_json)
-        .map_err(|e| format!("{{\"error\":\"deserialize: {}\"}}", e))?;
+        .map_err(|e| serde_json::json!({"error": format!("deserialize: {e}")}).to_string())?;
     game.game_data = domain::data::GameData::default();
     Ok(game)
 }
 
 fn serialize_game(game: &GameState) -> String {
-    serde_json::to_string(game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+    serde_json::to_string(game)
+        .unwrap_or_else(|e| serde_json::json!({"error": format!("serialize: {e}")}).to_string())
 }
 
 /// Check if a nation has researched a tech by its display name.
@@ -1094,8 +1101,14 @@ pub fn wasm_recall_civilian(game_json: &str, civilian_id: u32) -> String {
     }
 
     // Now mutate the civilian
-    let nation = game.get_nation_mut(human_nid).unwrap();
-    let civ = nation.civilians.iter_mut().find(|c| c.id == cid).unwrap();
+    let nation = match game.get_nation_mut(human_nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
+    let civ = match nation.civilians.iter_mut().find(|c| c.id == cid) {
+        Some(c) => c,
+        None => return "{\"error\":\"civilian not found\"}".to_string(),
+    };
     civ.position = None;
     civ.working = false;
     civ.turns_remaining = 0;
@@ -1145,7 +1158,10 @@ pub fn wasm_recruit_army_unit(game_json: &str, nation_id: u32, unit_type_str: &s
     }
 
     // Deduct costs and create unit
-    let nation = game.get_nation_mut(nid).unwrap();
+    let nation = match game.get_nation_mut(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
     nation.treasury -= stats.cost;
     nation.consume_material(MaterialType::Arms, stats.arms_required);
     let capital = nation.capital_province_id;
@@ -1244,7 +1260,10 @@ pub fn wasm_build_ship(game_json: &str, nation_id: u32, ship_type_str: &str) -> 
     }
 
     // Deduct resources and create ship
-    let nation = game.get_nation_mut(nid).unwrap();
+    let nation = match game.get_nation_mut(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
     nation.consume_material(MaterialType::Fabric, stats.fabric_cost);
     nation.consume_material(MaterialType::Lumber, stats.lumber_cost);
     nation.consume_material(MaterialType::Arms, stats.arms_cost);

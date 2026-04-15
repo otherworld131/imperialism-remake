@@ -131,7 +131,13 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
     // Step 2b: Cluster terrain for spatial coherence (forests→patches, mountains→chains, etc.)
     cluster_terrain(&mut hex_map, &land_mask, &mut rng, TerrainType::Forest, 25);
     cluster_terrain(&mut hex_map, &land_mask, &mut rng, TerrainType::Hills, 20);
-    cluster_terrain(&mut hex_map, &land_mask, &mut rng, TerrainType::Mountain, 12);
+    cluster_terrain(
+        &mut hex_map,
+        &land_mask,
+        &mut rng,
+        TerrainType::Mountain,
+        12,
+    );
     cluster_terrain(&mut hex_map, &land_mask, &mut rng, TerrainType::Desert, 15);
     cluster_terrain(&mut hex_map, &land_mask, &mut rng, TerrainType::Swamp, 10);
 
@@ -628,7 +634,8 @@ fn normalize_territory_sizes(
         let mut border_tiles: Vec<(HexCoord, usize, usize)> = Vec::new(); // (coord, from, to)
 
         // Collect all tiles sorted for determinism
-        let mut all_tiles: Vec<(HexCoord, usize)> = assignments.iter().map(|(&c, &n)| (c, n)).collect();
+        let mut all_tiles: Vec<(HexCoord, usize)> =
+            assignments.iter().map(|(&c, &n)| (c, n)).collect();
         all_tiles.sort_by_key(|(c, _)| (c.q, c.r));
 
         for &(coord, nation) in &all_tiles {

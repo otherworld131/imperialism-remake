@@ -78,11 +78,19 @@ function App() {
   const [isDeployMode, setIsDeployMode] = useState(false);
   const [deployingCivilian, setDeployingCivilian] = useState<CivilianDetail | null>(null);
   const [deployableTiles, setDeployableTiles] = useState<Set<string>>(new Set());
+  const [wasmError, setWasmError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
-      await initWasm();
-      setLoading(false);
+      try {
+        await initWasm();
+        setLoading(false);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('WASM initialization failed:', msg);
+        setWasmError(`Failed to initialize game engine: ${msg}`);
+        setLoading(false);
+      }
     })();
   }, []);
 
@@ -91,10 +99,22 @@ function App() {
     setTimeout(() => setStatusMessage(''), 4000);
   }, []);
 
-  // Helper to update all derived state from a new game JSON
-  const applyGameJson = useCallback((json: string) => {
+  // Helper to update all derived state from a new game JSON.
+  // Returns true on success, false on error (state unchanged on failure).
+  const applyGameJson = useCallback((json: string): boolean => {
+    let state;
+    try {
+      state = JSON.parse(json);
+    } catch (err) {
+      console.error('Failed to parse game state JSON:', err);
+      showError('Failed to parse game state');
+      return false;
+    }
+    if (state.error) {
+      showError(state.error);
+      return false;
+    }
     setGameJson(json);
-    const state = JSON.parse(json);
     setGameState(state);
     setTiles(getMapData(json));
     setTechs(getAvailableTechs(json));
@@ -102,21 +122,26 @@ function App() {
     setCivilians(getCivilians(json, nid));
     setShipsData(getShips(json, nid));
     setBuildable(getBuildableUnits(json, nid));
-  }, []);
+    return true;
+  }, [showError]);
 
   const handleGameStart = (json: string) => {
-    applyGameJson(json);
+    if (!applyGameJson(json)) return;
     setGameStarted(true);
-    const state = JSON.parse(json);
-    const p = state?.nations?.find((n: any) => n.id === state.human_player_nation);
-    if (p) setSelectedNation(p.name);
+    try {
+      const state = JSON.parse(json);
+      const p = state?.nations?.find((n: any) => n.id === state.human_player_nation);
+      if (p) setSelectedNation(p.name);
+    } catch {
+      // applyGameJson already succeeded, so game state is valid — this parse is for the nation name only
+    }
   };
 
   const handleEndTurn = useCallback(() => {
     const result = processTurn(gameJson);
     if (result.error) { alert(result.error); return; }
     const newJson = JSON.stringify(result.game);
-    applyGameJson(newJson);
+    if (!applyGameJson(newJson)) return;
     setHeadlines(result.report?.headlines || []);
     setShowNewspaper(true);
     // Clear interaction state
@@ -183,8 +208,7 @@ function App() {
       if (!isValidTarget) return; // Ignore click on invalid province, keep mode active
 
       const cmd = queueUnitMove(gameJson, playerNationId, selectedUnit.id, tile.province_id);
-      if (cmd.ok && cmd.gameJson) {
-        applyGameJson(cmd.gameJson);
+      if (cmd.ok && cmd.gameJson && applyGameJson(cmd.gameJson)) {
         if (provinceUnits) {
           setProvinceUnits(getUnitsInProvince(cmd.gameJson, tile.province_id));
         }
@@ -204,8 +228,7 @@ function App() {
       if (!deployableTiles.has(tileKey)) return; // Ignore click on invalid tile, keep mode active
 
       const cmd = deployCivilian(gameJson, deployingCivilian.id, tile.q, tile.r);
-      if (cmd.ok && cmd.gameJson) {
-        applyGameJson(cmd.gameJson);
+      if (cmd.ok && cmd.gameJson && applyGameJson(cmd.gameJson)) {
         setIsDeployMode(false);
         setDeployingCivilian(null);
         setDeployableTiles(new Set());
@@ -226,7 +249,7 @@ function App() {
     } else {
       setProvinceUnits(null);
     }
-  }, [mapMode, gameJson, playerNationId, isMovementMode, selectedUnit, isDeployMode, deployingCivilian, applyGameJson, provinceUnits]);
+  }, [mapMode, gameJson, playerNationId, isMovementMode, selectedUnit, validMoveTargets, isDeployMode, deployingCivilian, deployableTiles, applyGameJson, provinceUnits, showError]);
 
   // Compute pending moves for arrows
   const pendingMoveArrows = useMemo(() => {
@@ -294,8 +317,7 @@ function App() {
 
   const handleRecruit = useCallback((unitType: string) => {
     const cmd = recruitArmyUnit(gameJson, playerNationId, unitType);
-    if (cmd.ok && cmd.gameJson) {
-      applyGameJson(cmd.gameJson);
+    if (cmd.ok && cmd.gameJson && applyGameJson(cmd.gameJson)) {
       if (selectedTile?.province_id != null) {
         setProvinceUnits(getUnitsInProvince(cmd.gameJson, selectedTile.province_id));
       }
@@ -363,13 +385,22 @@ function App() {
 
   const handleResearch = (techName: string) => {
     const result = researchTech(gameJson, techName);
-    const parsed = JSON.parse(result);
-    if (parsed.error) { alert(parsed.error); return; }
-    applyGameJson(result);
+    try {
+      const parsed = JSON.parse(result);
+      if (parsed.error) { alert(parsed.error); return; }
+    } catch { /* applyGameJson will handle parse errors */ }
+    if (!applyGameJson(result)) return;
     setShowTech(false);
   };
 
   if (loading) return <div style={styles.loading}>Loading Imperialism...</div>;
+  if (wasmError) return (
+    <div style={{color: '#e63946', padding: '2rem', fontFamily: 'Georgia, serif'}}>
+      <h2>Initialization Error</h2>
+      <p>{wasmError}</p>
+      <p>Try refreshing the page. If the problem persists, check that WebAssembly is enabled in your browser.</p>
+    </div>
+  );
   if (!gameStarted) return <GameSetup onStartGame={handleGameStart} />;
 
   const player = gameState?.nations?.find((n: any) => n.id === gameState.human_player_nation);

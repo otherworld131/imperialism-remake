@@ -467,7 +467,9 @@ pub fn ai_manage_resources(game: &mut GameState, nation_id: NationId, actions: &
         let excess = amount - goods_reserve;
         let revenue = Money::dollars(*price_per_unit) * excess as i64;
 
-        let nation = game.get_nation_mut(nation_id).unwrap();
+        let Some(nation) = game.get_nation_mut(nation_id) else {
+            return;
+        };
         nation.consume_goods(*goods_type, excess);
         nation.treasury += revenue;
         total_revenue += revenue;
@@ -740,7 +742,9 @@ fn expand_building(game: &mut GameState, nation_id: NationId, bt: BuildingType, 
 
     if has_lumber && has_steel {
         let ai_debug = game.ai_debug;
-        let nation = game.get_nation_mut(nation_id).unwrap();
+        let Some(nation) = game.get_nation_mut(nation_id) else {
+            return;
+        };
         nation.consume_material(MaterialType::Lumber, lumber_cost);
         nation.consume_material(MaterialType::Steel, steel_cost);
         if let Some(building) = nation.get_building_mut(bt) {
@@ -889,7 +893,9 @@ pub(crate) fn ai_build_transport_proactive(game: &mut GameState, nation_id: Nati
     let affordable = cars_to_build.min(lumber_available).min(steel_available);
 
     if affordable > 0 {
-        let nation = game.get_nation_mut(nation_id).unwrap();
+        let Some(nation) = game.get_nation_mut(nation_id) else {
+            return;
+        };
         nation.consume_material(MaterialType::Lumber, affordable);
         nation.consume_material(MaterialType::Steel, affordable);
         nation.transport.build_freight_cars(affordable);

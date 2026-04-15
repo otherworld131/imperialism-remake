@@ -129,7 +129,9 @@ impl GameData {
         let lua_engine = {
             let engine = LuaEngine::new().ok();
             if let Some(ref e) = engine {
-                let _ = crate::ai::lua_bridge::load_scripts(e);
+                if let Err(err) = crate::ai::lua_bridge::load_scripts(e) {
+                    eprintln!("[GameData] Warning: Lua script loading failed: {}", err);
+                }
                 game_config = crate::ai::lua_bridge::load_game_config(e);
             }
             engine
@@ -155,7 +157,9 @@ impl Default for GameData {
         let lua_engine = {
             let engine = LuaEngine::new().ok();
             if let Some(ref e) = engine {
-                let _ = crate::ai::lua_bridge::load_scripts(e);
+                if let Err(err) = crate::ai::lua_bridge::load_scripts(e) {
+                    eprintln!("[GameData] Warning: Lua script loading failed: {}", err);
+                }
                 game_config = crate::ai::lua_bridge::load_game_config(e);
             }
             engine

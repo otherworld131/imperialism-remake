@@ -37,6 +37,9 @@ pub fn load_ship_stats(ron_str: &str) -> Result<HashMap<ShipType, ShipStats>, St
 
     let mut map = HashMap::new();
     for def in defs.ships {
+        if def.hull == 0 {
+            return Err(format!("Ship '{}' has zero hull", def.name));
+        }
         let ship_type = match def.name.as_str() {
             "Trader" => ShipType::Trader,
             "Indiaman" => ShipType::Indiaman,
@@ -87,6 +90,18 @@ pub fn load_unit_stats(ron_str: &str) -> Result<HashMap<ArmyUnitType, UnitStats>
 
     let mut map = HashMap::new();
     for def in defs.units {
+        if def.cost < 0 {
+            return Err(format!(
+                "Unit '{}' has negative cost: {}",
+                def.name, def.cost
+            ));
+        }
+        if def.maintenance_per_turn < 0 {
+            return Err(format!(
+                "Unit '{}' has negative maintenance: {}",
+                def.name, def.maintenance_per_turn
+            ));
+        }
         let unit_type = match def.name.as_str() {
             "Militia" => ArmyUnitType::Militia,
             "Regulars" => ArmyUnitType::Regulars,
@@ -311,6 +326,30 @@ mod tests {
                 ship_type
             );
         }
+    }
+
+    #[test]
+    fn load_unit_stats_rejects_negative_cost() {
+        let ron = r#"(units: [(name: "Militia", category: "Garrison", firepower: 1, movement: 0, range: 1, cost: -100, arms_required: 1, maintenance_per_turn: 25, prerequisite_tech: None)])"#;
+        let result = load_unit_stats(ron);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("negative cost"));
+    }
+
+    #[test]
+    fn load_unit_stats_rejects_negative_maintenance() {
+        let ron = r#"(units: [(name: "Militia", category: "Garrison", firepower: 1, movement: 0, range: 1, cost: 50, arms_required: 1, maintenance_per_turn: -10, prerequisite_tech: None)])"#;
+        let result = load_unit_stats(ron);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("negative maintenance"));
+    }
+
+    #[test]
+    fn load_ship_stats_rejects_zero_hull() {
+        let ron = r#"(ships: [(name: "Frigate", category: "Warship", firepower: 3, range: 2, armor: 2, hull: 0, speed: 3, cargo: 0, fabric_cost: 2, lumber_cost: 5, arms_cost: 3, steel_cost: 0, coal_cost: 0, prerequisite_tech: None)])"#;
+        let result = load_ship_stats(ron);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("zero hull"));
     }
 
     #[test]

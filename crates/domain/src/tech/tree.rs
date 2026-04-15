@@ -395,10 +395,24 @@ impl TechTree {
     }
 
     /// Validates the tech tree structure:
+    /// - No duplicate tech IDs
     /// - All prerequisite IDs refer to technologies that exist in the tree
+    /// - No year inversions (earliest_year <= latest_year)
+    /// - No unreachable techs (all techs reachable from root techs via prerequisites)
     /// - There are no cycles in the prerequisite graph
     pub fn validate(&self) -> Result<(), String> {
-        let ids: HashSet<TechId> = self.technologies.iter().map(|t| t.id).collect();
+        // Check for duplicate tech IDs
+        let mut seen_ids: HashSet<TechId> = HashSet::new();
+        for tech in &self.technologies {
+            if !seen_ids.insert(tech.id) {
+                return Err(format!(
+                    "Duplicate technology ID {} (name: '{}')",
+                    tech.id.0, tech.name
+                ));
+            }
+        }
+
+        let ids: &HashSet<TechId> = &seen_ids;
 
         // Check all prerequisite IDs exist
         for tech in &self.technologies {
@@ -409,6 +423,16 @@ impl TechTree {
                         tech.name, tech.id.0, prereq.0
                     ));
                 }
+            }
+        }
+
+        // Check for year inversions
+        for tech in &self.technologies {
+            if tech.earliest_year > tech.latest_year {
+                return Err(format!(
+                    "Technology '{}' (ID {}) has earliest_year {} > latest_year {}",
+                    tech.name, tech.id.0, tech.earliest_year, tech.latest_year
+                ));
             }
         }
 
@@ -450,6 +474,80 @@ impl TechTree {
 
         if visited != self.technologies.len() {
             return Err("Cycle detected in tech tree prerequisites".to_string());
+        }
+
+        // Check reachability via transitive timeline analysis.
+        // Compute the effective earliest-reachable-year for each tech by propagating
+        // through the prerequisite graph in topological order. A tech's effective
+        // earliest year is max(its own earliest_year, max(prereq effective years)).
+        // If effective_earliest > latest_year, the tech is unreachable.
+        let tech_map: std::collections::HashMap<TechId, &Technology> =
+            self.technologies.iter().map(|t| (t.id, t)).collect();
+
+        let mut effective_earliest: std::collections::HashMap<TechId, u32> =
+            std::collections::HashMap::new();
+
+        // Re-run topological sort to get processing order
+        let mut in_deg2: std::collections::HashMap<TechId, usize> =
+            std::collections::HashMap::new();
+        let mut deps2: std::collections::HashMap<TechId, Vec<TechId>> =
+            std::collections::HashMap::new();
+
+        for tech in &self.technologies {
+            in_deg2.entry(tech.id).or_insert(0);
+            for prereq in &tech.prerequisites {
+                *in_deg2.entry(tech.id).or_insert(0) += 1;
+                deps2.entry(*prereq).or_default().push(tech.id);
+            }
+        }
+
+        let mut topo_queue: Vec<TechId> = in_deg2
+            .iter()
+            .filter(|(_, deg)| **deg == 0)
+            .map(|(&id, _)| id)
+            .collect();
+
+        // Root techs: effective earliest = their own earliest_year
+        for &root_id in &topo_queue {
+            if let Some(tech) = tech_map.get(&root_id) {
+                effective_earliest.insert(root_id, tech.earliest_year);
+            }
+        }
+
+        while let Some(id) = topo_queue.pop() {
+            let eff = effective_earliest[&id];
+
+            if let Some(tech) = tech_map.get(&id)
+                && eff > tech.latest_year
+            {
+                return Err(format!(
+                    "Technology '{}' (ID {}) is unreachable: effective earliest year {} \
+                     (from transitive prerequisites) exceeds latest_year {}",
+                    tech.name, tech.id.0, eff, tech.latest_year
+                ));
+            }
+
+            if let Some(dep_ids) = deps2.get(&id) {
+                for &dep in dep_ids {
+                    // Propagate: dependent's effective earliest is at least as late
+                    // as the max of all its prerequisites' effective earliest years
+                    let dep_tech = tech_map[&dep];
+                    let new_eff = eff.max(dep_tech.earliest_year);
+                    let current = effective_earliest
+                        .entry(dep)
+                        .or_insert(dep_tech.earliest_year);
+                    if new_eff > *current {
+                        *current = new_eff;
+                    }
+
+                    if let Some(deg) = in_deg2.get_mut(&dep) {
+                        *deg -= 1;
+                        if *deg == 0 {
+                            topo_queue.push(dep);
+                        }
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -701,5 +799,150 @@ mod tests {
             techs_1882 > techs_1848,
             "1882 should have more techs than 1848"
         );
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_ids() {
+        let techs = vec![
+            Technology {
+                id: TechId(1),
+                name: "Tech A".to_string(),
+                cost: Money::dollars(100),
+                earliest_year: 1800,
+                latest_year: 1850,
+                prerequisites: vec![],
+                effects: vec![],
+            },
+            Technology {
+                id: TechId(1), // duplicate
+                name: "Tech B".to_string(),
+                cost: Money::dollars(200),
+                earliest_year: 1800,
+                latest_year: 1850,
+                prerequisites: vec![],
+                effects: vec![],
+            },
+        ];
+        let tree = TechTree::from_technologies(techs);
+        let result = tree.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Duplicate technology ID"));
+    }
+
+    #[test]
+    fn validate_rejects_year_inversion() {
+        let techs = vec![Technology {
+            id: TechId(1),
+            name: "Inverted".to_string(),
+            cost: Money::dollars(100),
+            earliest_year: 1850,
+            latest_year: 1800, // inverted
+            prerequisites: vec![],
+            effects: vec![],
+        }];
+        let tree = TechTree::from_technologies(techs);
+        let result = tree.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("earliest_year"));
+    }
+
+    #[test]
+    fn validate_rejects_unreachable_tech() {
+        let techs = vec![
+            Technology {
+                id: TechId(1),
+                name: "Root".to_string(),
+                cost: Money::dollars(0),
+                earliest_year: 1800,
+                latest_year: 1810,
+                prerequisites: vec![],
+                effects: vec![],
+            },
+            Technology {
+                id: TechId(2),
+                name: "Unreachable".to_string(),
+                cost: Money::dollars(100),
+                earliest_year: 1800,
+                latest_year: 1805, // latest_year < Root's earliest_year is fine, but
+                // prereq Root earliest=1800, this latest=1805 — Root CAN be done by 1805
+                prerequisites: vec![TechId(1)],
+                effects: vec![],
+            },
+        ];
+        // This should pass since Root (1800-1810) overlaps with Unreachable (1800-1805)
+        let tree = TechTree::from_technologies(techs);
+        assert!(tree.validate().is_ok());
+
+        // Now make it truly unreachable: prereq only available AFTER dependent expires
+        let techs2 = vec![
+            Technology {
+                id: TechId(1),
+                name: "Late Root".to_string(),
+                cost: Money::dollars(0),
+                earliest_year: 1850,
+                latest_year: 1900,
+                prerequisites: vec![],
+                effects: vec![],
+            },
+            Technology {
+                id: TechId(2),
+                name: "Unreachable".to_string(),
+                cost: Money::dollars(100),
+                earliest_year: 1800,
+                latest_year: 1840, // expires before prereq is available
+                prerequisites: vec![TechId(1)],
+                effects: vec![],
+            },
+        ];
+        let tree2 = TechTree::from_technologies(techs2);
+        let result = tree2.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unreachable"));
+    }
+
+    #[test]
+    fn validate_rejects_transitive_unreachable() {
+        // A -> B -> C where A is late, B passes pairwise with A,
+        // but C's latest_year is before A's earliest_year (transitive failure)
+        let techs = vec![
+            Technology {
+                id: TechId(1),
+                name: "Late Root".to_string(),
+                cost: Money::dollars(0),
+                earliest_year: 1850,
+                latest_year: 1900,
+                prerequisites: vec![],
+                effects: vec![],
+            },
+            Technology {
+                id: TechId(2),
+                name: "Middle".to_string(),
+                cost: Money::dollars(100),
+                earliest_year: 1840,
+                latest_year: 1900, // passes pairwise: Root earliest(1850) <= Middle latest(1900)
+                prerequisites: vec![TechId(1)],
+                effects: vec![],
+            },
+            Technology {
+                id: TechId(3),
+                name: "End".to_string(),
+                cost: Money::dollars(200),
+                earliest_year: 1840,
+                latest_year: 1845, // passes pairwise with Middle (1840 <= 1845)
+                // but transitively: effective earliest from Root = 1850 > 1845
+                prerequisites: vec![TechId(2)],
+                effects: vec![],
+            },
+        ];
+        let tree = TechTree::from_technologies(techs);
+        let result = tree.validate();
+        assert!(result.is_err(), "Should catch transitive unreachable tech");
+        assert!(result.unwrap_err().contains("unreachable"));
+    }
+
+    #[test]
+    fn validate_default_tree_passes() {
+        let tree = TechTree::new();
+        assert!(tree.validate().is_ok(), "Default tech tree should be valid");
     }
 }

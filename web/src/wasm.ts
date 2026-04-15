@@ -265,8 +265,12 @@ export interface CommandResult {
 
 function executeCommand(result: string): CommandResult {
   if (result.startsWith('{"error"')) {
-    const parsed = JSON.parse(result);
-    return { ok: false, error: parsed.error || 'Unknown error' };
+    try {
+      const parsed = JSON.parse(result);
+      return { ok: false, error: parsed.error || 'Unknown error' };
+    } catch {
+      return { ok: false, error: result };
+    }
   }
   return { ok: true, gameJson: result };
 }

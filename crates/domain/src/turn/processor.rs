@@ -127,11 +127,7 @@ fn format_number_with_commas(n: i64) -> String {
 ///
 /// Called when a GP either conquers a Minor Nation province or receives one
 /// through voluntary incorporation. Awards 2 Clippers and sets the `has_colony` flag.
-fn award_first_colony_clippers(
-    game: &mut GameState,
-    nation_id: NationId,
-    report: &mut TurnReport,
-) {
+fn award_first_colony_clippers(game: &mut GameState, nation_id: NationId, report: &mut TurnReport) {
     let already_has_colony = game.get_nation(nation_id).is_some_and(|n| n.has_colony);
     if already_has_colony {
         return;
@@ -944,7 +940,9 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
                     // deterministic distribution matching the map generator's probabilities.
                     if tile.terrain().can_have_deposits() && tile.resource_deposit().is_none() {
                         // ~60% chance of finding something (40% find nothing)
-                        let hash = (work.position.q.wrapping_mul(73) ^ work.position.r.wrapping_mul(179)) as u32;
+                        let hash = (work.position.q.wrapping_mul(73)
+                            ^ work.position.r.wrapping_mul(179))
+                            as u32;
                         let roll = hash % 100;
                         if roll < 40 {
                             let deposit = match tile.terrain() {
@@ -2634,9 +2632,7 @@ fn compute_blockade_capacity(game: &GameState) -> std::collections::HashMap<Nati
                 .diplomacy
                 .get_relation(nation_id, other_id)
                 .is_some_and(|r| r.at_war);
-            if at_war
-                && let Some(other) = game.get_nation(other_id)
-            {
+            if at_war && let Some(other) = game.get_nation(other_id) {
                 enemy_warship_count += other.warship_count() as u32;
             }
         }
@@ -7874,8 +7870,8 @@ mod tests {
 
     #[test]
     fn blockade_reduces_effective_cargo_capacity() {
-        use crate::military::ships::{Ship, ShipType};
         use crate::map::UnitId;
+        use crate::military::ships::{Ship, ShipType};
 
         let mut game = test_game_state();
 
@@ -7942,8 +7938,8 @@ mod tests {
 
     #[test]
     fn blockade_excludes_anarchic_nations() {
-        use crate::military::ships::{Ship, ShipType};
         use crate::map::UnitId;
+        use crate::military::ships::{Ship, ShipType};
 
         let mut game = test_game_state();
 
@@ -8025,13 +8021,20 @@ mod tests {
         nation.treasury = Money::dollars(25_000); // treasury_score = min(250, 500) = 250
         nation.researched_techs.push(crate::events::TechId(1)); // tech_score = 1 * 30 = 30
         nation.researched_techs.push(crate::events::TechId(2)); // tech_score = 2 * 30 = 60
-        nation.buildings.push(Building::new(BuildingType::LumberMill, 1)); // building_score = 1 * 10 = 10
-        nation.buildings.push(Building::new(BuildingType::SteelMill, 1)); // building_score = 2 * 10 = 20
+        nation
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 1)); // building_score = 1 * 10 = 10
+        nation
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 1)); // building_score = 2 * 10 = 20
 
         let score = calculate_score(&nation);
 
         assert_eq!(score.tech_score, 60, "2 techs * 30 = 60");
-        assert_eq!(score.treasury_score, 250, "$25,000 / 100 = 250, capped at 500");
+        assert_eq!(
+            score.treasury_score, 250,
+            "$25,000 / 100 = 250, capped at 500"
+        );
         assert_eq!(score.building_score, 20, "2 buildings * 10 = 20");
 
         // Verify total includes all components
@@ -8044,6 +8047,9 @@ mod tests {
             + score.tech_score
             + score.treasury_score
             + score.building_score;
-        assert_eq!(score.total, expected_total, "Total should equal sum of all components");
+        assert_eq!(
+            score.total, expected_total,
+            "Total should equal sum of all components"
+        );
     }
 }

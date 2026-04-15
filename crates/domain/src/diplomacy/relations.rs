@@ -48,10 +48,29 @@ impl DiplomaticRelation {
         self.score = (self.score - amount).clamp(-100, 100);
     }
 
-    /// Add a treaty to this relation.
+    /// Add a treaty to this relation, enforcing mutual exclusion:
+    /// - Alliance supersedes NonAggressionPact (NAP is auto-removed)
+    /// - NAP cannot be added if Alliance is already active
     pub fn add_treaty(&mut self, treaty_type: TreatyType) {
-        if !self.active_treaties.contains(&treaty_type) {
-            self.active_treaties.push(treaty_type);
+        if self.active_treaties.contains(&treaty_type) {
+            return;
+        }
+        match treaty_type {
+            TreatyType::Alliance => {
+                // Alliance supersedes NAP
+                self.active_treaties
+                    .retain(|t| *t != TreatyType::NonAggressionPact);
+                self.active_treaties.push(TreatyType::Alliance);
+            }
+            TreatyType::NonAggressionPact => {
+                // NAP cannot coexist with Alliance
+                if !self.active_treaties.contains(&TreatyType::Alliance) {
+                    self.active_treaties.push(TreatyType::NonAggressionPact);
+                }
+            }
+            other => {
+                self.active_treaties.push(other);
+            }
         }
     }
 
@@ -201,6 +220,9 @@ impl DiplomacyState {
         if rel.has_treaty(TreatyType::NonAggressionPact) {
             return Err("Non-aggression pact already active".to_string());
         }
+        if rel.has_treaty(TreatyType::Alliance) {
+            return Err("Alliance already active — NAP is redundant".to_string());
+        }
         rel.add_treaty(TreatyType::NonAggressionPact);
         rel.improve_score(10);
         Ok(())
@@ -298,9 +320,10 @@ impl DiplomacyState {
     }
 
     /// Reduce a nation's standing by the given amount (e.g., for breaking alliances).
+    /// Standing is clamped to a minimum of -100.
     pub fn reduce_standing(&mut self, nation: NationId, amount: i32) {
         let standing = self.standing.entry(nation).or_insert(100);
-        *standing -= amount;
+        *standing = (*standing - amount).max(-100);
     }
 
     /// Propose peace between two nations at war. Creates a pending proposal.
@@ -874,5 +897,58 @@ mod tests {
             score_before + 10,
             "$1000 grant should give +10 diplomatic score"
         );
+    }
+
+    // ── Treaty mutual exclusion ─────────────────────────────────
+
+    #[test]
+    fn alliance_supersedes_nap() {
+        let mut rel = DiplomaticRelation::new(NationId(1), NationId(2));
+        rel.add_treaty(TreatyType::NonAggressionPact);
+        assert!(rel.has_treaty(TreatyType::NonAggressionPact));
+
+        // Adding Alliance should auto-remove NAP
+        rel.add_treaty(TreatyType::Alliance);
+        assert!(rel.has_treaty(TreatyType::Alliance));
+        assert!(!rel.has_treaty(TreatyType::NonAggressionPact));
+        assert_eq!(rel.active_treaties.len(), 1);
+    }
+
+    #[test]
+    fn nap_rejected_when_alliance_active() {
+        let mut rel = DiplomaticRelation::new(NationId(1), NationId(2));
+        rel.add_treaty(TreatyType::Alliance);
+
+        // Adding NAP while Alliance is active should be a no-op
+        rel.add_treaty(TreatyType::NonAggressionPact);
+        assert!(rel.has_treaty(TreatyType::Alliance));
+        assert!(!rel.has_treaty(TreatyType::NonAggressionPact));
+        assert_eq!(rel.active_treaties.len(), 1);
+    }
+
+    #[test]
+    fn propose_pact_rejected_when_alliance_active() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2)];
+        state.initialize_great_powers(&gps);
+        state.propose_alliance(NationId(1), NationId(2)).unwrap();
+
+        let result = state.propose_pact(NationId(1), NationId(2));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Alliance already active"));
+    }
+
+    // ── Standing floor ──────────────────────────────────────────
+
+    #[test]
+    fn standing_floors_at_negative_100() {
+        let mut state = DiplomacyState::new();
+        // Starting standing is 100, reduce by 250
+        state.reduce_standing(NationId(1), 250);
+        assert_eq!(state.get_standing(NationId(1)), -100);
+
+        // Further reduction should not go below -100
+        state.reduce_standing(NationId(1), 50);
+        assert_eq!(state.get_standing(NationId(1)), -100);
     }
 }

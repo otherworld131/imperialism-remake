@@ -239,8 +239,7 @@ mod tests {
             !CivilianType::Rancher.can_improve(TerrainType::Grassland, Some(ResourceType::Grain))
         );
         assert!(
-            CivilianType::Rancher
-                .can_improve(TerrainType::Grassland, Some(ResourceType::Horses))
+            CivilianType::Rancher.can_improve(TerrainType::Grassland, Some(ResourceType::Horses))
         );
     }
 

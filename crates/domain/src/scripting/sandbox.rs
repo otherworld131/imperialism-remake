@@ -131,4 +131,31 @@ mod tests {
         let result: mlua::Result<mlua::Value> = lua.load("return loadfile('/etc/passwd')").eval();
         assert!(result.is_err(), "loadfile should be blocked");
     }
+
+    #[test]
+    fn sandbox_blocks_load() {
+        let lua = Lua::new();
+        sandbox(&lua).unwrap();
+        let result: mlua::Result<mlua::Value> = lua.load("return load('return 42')()").eval();
+        assert!(result.is_err(), "load should be blocked after sandboxing");
+        // Also verify `load` is nil
+        let is_nil: mlua::Result<mlua::Value> = lua.globals().get("load");
+        assert!(
+            matches!(is_nil, Ok(mlua::Value::Nil)),
+            "load should be nil after sandboxing"
+        );
+    }
+
+    #[test]
+    fn sandbox_blocks_loadstring() {
+        let lua = Lua::new();
+        sandbox(&lua).unwrap();
+        // In Lua 5.4, `loadstring` is unified with `load`. Since we remove
+        // `load`, any attempt to call `loadstring` should also fail.
+        let result: mlua::Result<mlua::Value> = lua.load("return loadstring('return 42')()").eval();
+        assert!(
+            result.is_err(),
+            "loadstring should be blocked (unified with load in Lua 5.4)"
+        );
+    }
 }

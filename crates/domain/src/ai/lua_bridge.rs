@@ -28,7 +28,7 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         Ok(t) => t,
         Err(_) => return GameConfig::default(),
     };
-    GameConfig {
+    let cfg = GameConfig {
         untrained_labor: table.get("untrained_labor").unwrap_or(1),
         trained_labor: table.get("trained_labor").unwrap_or(2),
         expert_labor: table.get("expert_labor").unwrap_or(4),
@@ -49,13 +49,39 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
             .unwrap_or(3),
         gold_value: table.get("gold_value").unwrap_or(500),
         gems_value: table.get("gems_value").unwrap_or(1000),
-        expansion_delay_turns: table.get::<u32>("expansion_delay_turns").unwrap_or(2) as u8,
+        expansion_delay_turns: table
+            .get::<u32>("expansion_delay_turns")
+            .unwrap_or(2)
+            .min(255) as u8,
         use_tier_expansion: table.get("use_tier_expansion").unwrap_or(true),
         consulate_cost: table.get("consulate_cost").unwrap_or(500),
         embassy_cost: table.get("embassy_cost").unwrap_or(5000),
         starting_freight_cars: table.get("starting_freight_cars").unwrap_or(5),
         min_food_tile_percent: table.get("min_food_tile_percent").unwrap_or(20),
         food_cluster_chance: table.get("food_cluster_chance").unwrap_or(40),
+    };
+    // Sanitize: ensure no zero-or-negative values for fields used as divisors/multipliers
+    GameConfig {
+        untrained_labor: cfg.untrained_labor.max(1),
+        trained_labor: cfg.trained_labor.max(1),
+        expert_labor: cfg.expert_labor.max(1),
+        labor_per_production: cfg.labor_per_production.max(1),
+        resources_per_material: cfg.resources_per_material.max(1),
+        materials_per_good: cfg.materials_per_good.max(1),
+        coal_iron_ratio: cfg.coal_iron_ratio.max(1),
+        food_per_worker: cfg.food_per_worker.max(1),
+        starvation_cap: cfg.starvation_cap.max(1),
+        canned_food_ratio: cfg.canned_food_ratio.max(1),
+        provinces_per_immigrant: cfg.provinces_per_immigrant.max(1),
+        provinces_per_immigrant_upgraded: cfg.provinces_per_immigrant_upgraded.max(1),
+        gold_value: cfg.gold_value.clamp(0, 1_000_000),
+        gems_value: cfg.gems_value.clamp(0, 1_000_000),
+        consulate_cost: cfg.consulate_cost.clamp(0, 1_000_000),
+        embassy_cost: cfg.embassy_cost.clamp(0, 1_000_000),
+        starting_freight_cars: cfg.starting_freight_cars,
+        min_food_tile_percent: cfg.min_food_tile_percent.clamp(0, 100),
+        food_cluster_chance: cfg.food_cluster_chance.clamp(0, 100),
+        ..cfg
     }
 }
 
@@ -179,6 +205,171 @@ pub struct LuaAiConfig {
     pub treaty_personality_bias: Option<f64>,
 }
 
+/// Clamp an f64 to a finite range, replacing NaN/inf with the default.
+fn sanitize_f64(val: f64, min: f64, max: f64, default: f64) -> f64 {
+    if val.is_finite() {
+        val.clamp(min, max)
+    } else {
+        default
+    }
+}
+
+/// Sanitize an optional f64, returning None for NaN/inf, clamped otherwise.
+fn sanitize_opt_f64(val: Option<f64>, min: f64, max: f64) -> Option<f64> {
+    val.and_then(|v| {
+        if v.is_finite() {
+            Some(v.clamp(min, max))
+        } else {
+            None
+        }
+    })
+}
+
+/// Sanitize an optional i64, clamping to [min, max].
+fn sanitize_opt_i64(val: Option<i64>, min: i64, max: i64) -> Option<i64> {
+    val.map(|v| v.clamp(min, max))
+}
+
+/// Sanitize an optional u32, clamping to [min, max].
+fn sanitize_opt_u32(val: Option<u32>, min: u32, max: u32) -> Option<u32> {
+    val.map(|v| v.clamp(min, max))
+}
+
+/// Sanitize an optional usize, clamping to [min, max].
+fn sanitize_opt_usize(val: Option<usize>, min: usize, max: usize) -> Option<usize> {
+    val.map(|v| v.clamp(min, max))
+}
+
+/// Sanitize an optional string, returning None if not in the allowed set.
+fn sanitize_opt_string(val: Option<String>, allowed: &[&str]) -> Option<String> {
+    val.filter(|v| allowed.iter().any(|a| a == v))
+}
+
+impl LuaAiConfig {
+    /// Validate and clamp all fields to sane ranges, replacing NaN/inf with None.
+    fn sanitize(mut self) -> Self {
+        // Core f64 fields
+        self.trade_priority = sanitize_f64(self.trade_priority, 0.0, 1.0, 0.5);
+        self.alliance_preference = sanitize_f64(self.alliance_preference, 0.0, 1.0, 0.5);
+
+        // Core u32 fields
+        self.min_army_size = self.min_army_size.clamp(0, 100);
+        self.max_army_size = self.max_army_size.clamp(1, 100);
+        self.worker_threshold = self.worker_threshold.clamp(0, 100);
+
+        // Core i64 field
+        self.infrastructure_budget = self.infrastructure_budget.clamp(0, 10_000_000);
+
+        // Core string field
+        if !["cheapest", "expensive", "military", "economic", "balanced"]
+            .contains(&self.research_strategy.as_str())
+        {
+            self.research_strategy = "cheapest".to_string();
+        }
+
+        // War
+        self.war_cooldown = sanitize_opt_u32(self.war_cooldown, 0, 100);
+        self.war_threshold = sanitize_opt_f64(self.war_threshold, 0.0, 1.0);
+        self.army_min_for_war = sanitize_opt_usize(self.army_min_for_war, 0, 100);
+        self.opportunism_weight = sanitize_opt_f64(self.opportunism_weight, 0.0, 10.0);
+
+        // Army tiers (usize)
+        self.tier1_army_max = sanitize_opt_usize(self.tier1_army_max, 0, 100);
+        self.tier2_army_max = sanitize_opt_usize(self.tier2_army_max, 0, 100);
+        self.tier3_army_max = sanitize_opt_usize(self.tier3_army_max, 0, 100);
+
+        // Diplomacy
+        self.consulate_max_per_turn = sanitize_opt_u32(self.consulate_max_per_turn, 0, 20);
+        self.grant_amount = sanitize_opt_i64(self.grant_amount, 0, 100_000);
+        self.grant_interval = sanitize_opt_u32(self.grant_interval, 1, 100);
+        self.embassy_treasury_threshold =
+            sanitize_opt_i64(self.embassy_treasury_threshold, 0, 1_000_000);
+        self.max_alliances = sanitize_opt_usize(self.max_alliances, 0, 10);
+
+        // Naval
+        self.max_warships_low_treasury = sanitize_opt_usize(self.max_warships_low_treasury, 0, 50);
+        self.max_warships_high_treasury =
+            sanitize_opt_usize(self.max_warships_high_treasury, 0, 50);
+        self.max_merchant_ships = sanitize_opt_usize(self.max_merchant_ships, 0, 50);
+
+        // Economy
+        self.expansion_threshold_multiplier =
+            sanitize_opt_u32(self.expansion_threshold_multiplier, 1, 20);
+        self.trade_resource_reserve = sanitize_opt_u32(self.trade_resource_reserve, 0, 100);
+        self.goods_reserve = sanitize_opt_u32(self.goods_reserve, 0, 100);
+        self.food_processing_expansion_threshold =
+            sanitize_opt_u32(self.food_processing_expansion_threshold, 0, 1000);
+
+        // Treasury thresholds
+        self.tier1_treasury = sanitize_opt_i64(self.tier1_treasury, 0, 10_000_000);
+        self.tier2_treasury = sanitize_opt_i64(self.tier2_treasury, 0, 10_000_000);
+        self.tier3_treasury = sanitize_opt_i64(self.tier3_treasury, 0, 10_000_000);
+        self.tier4_treasury = sanitize_opt_i64(self.tier4_treasury, 0, 10_000_000);
+        self.treasury_reserve = sanitize_opt_i64(self.treasury_reserve, 0, 10_000_000);
+        self.high_treasury_expansion_threshold =
+            sanitize_opt_i64(self.high_treasury_expansion_threshold, 0, 10_000_000);
+        self.trade_treasury_cap = sanitize_opt_i64(self.trade_treasury_cap, 0, 10_000_000);
+        self.goods_sell_treasury_threshold =
+            sanitize_opt_i64(self.goods_sell_treasury_threshold, 0, 10_000_000);
+        self.infra_budget_scale_threshold =
+            sanitize_opt_i64(self.infra_budget_scale_threshold, 0, 10_000_000);
+
+        // Spending weights (f64)
+        self.spending_military_weight = sanitize_opt_f64(self.spending_military_weight, 0.0, 10.0);
+        self.spending_economy_weight = sanitize_opt_f64(self.spending_economy_weight, 0.0, 10.0);
+        self.spending_diplomacy_weight =
+            sanitize_opt_f64(self.spending_diplomacy_weight, 0.0, 10.0);
+        self.min_score_threshold = sanitize_opt_f64(self.min_score_threshold, 0.0, 100.0);
+
+        // Coalition assessment weights
+        self.coalition_mil_weight = sanitize_opt_f64(self.coalition_mil_weight, 0.0, 10.0);
+        self.coalition_prov_weight = sanitize_opt_f64(self.coalition_prov_weight, 0.0, 10.0);
+        self.coalition_econ_weight = sanitize_opt_f64(self.coalition_econ_weight, 0.0, 10.0);
+        self.coalition_momentum_weight =
+            sanitize_opt_f64(self.coalition_momentum_weight, 0.0, 10.0);
+        self.coalition_naval_weight = sanitize_opt_f64(self.coalition_naval_weight, 0.0, 10.0);
+        self.coalition_sigmoid_steepness =
+            sanitize_opt_f64(self.coalition_sigmoid_steepness, 0.1, 20.0);
+
+        // Tactical
+        self.peace_war_duration_threshold =
+            sanitize_opt_u32(self.peace_war_duration_threshold, 0, 200);
+        self.fort_strategy = sanitize_opt_string(
+            self.fort_strategy,
+            &["capital", "border", "offensive", "none"],
+        );
+
+        // Worker training
+        self.worker_train_threshold = sanitize_opt_u32(self.worker_train_threshold, 0, 100);
+        self.worker_promote_threshold = sanitize_opt_u32(self.worker_promote_threshold, 0, 100);
+
+        // Peace/war thresholds (f64 in [0, 1])
+        self.peace_accept_threshold = sanitize_opt_f64(self.peace_accept_threshold, 0.0, 1.0);
+        self.peace_reject_threshold = sanitize_opt_f64(self.peace_reject_threshold, 0.0, 1.0);
+        self.peace_province_loss_ratio = sanitize_opt_f64(self.peace_province_loss_ratio, 0.0, 1.0);
+        self.peace_stalemate_duration = sanitize_opt_u32(self.peace_stalemate_duration, 0, 200);
+        self.won_enough_captures = sanitize_opt_usize(self.won_enough_captures, 0, 50);
+        self.won_enough_marginal = sanitize_opt_f64(self.won_enough_marginal, 0.0, 10.0);
+        self.lost_enough_losses = sanitize_opt_usize(self.lost_enough_losses, 0, 50);
+        self.lost_enough_likelihood = sanitize_opt_f64(self.lost_enough_likelihood, 0.0, 1.0);
+
+        // Cross-field invariants
+        if self.min_army_size > self.max_army_size {
+            self.min_army_size = self.max_army_size;
+        }
+
+        // Treaty thresholds
+        self.nap_accept_threshold = sanitize_opt_f64(self.nap_accept_threshold, 0.0, 1.0);
+        self.alliance_accept_threshold = sanitize_opt_f64(self.alliance_accept_threshold, 0.0, 1.0);
+        self.alliance_rival_penalty = sanitize_opt_f64(self.alliance_rival_penalty, 0.0, 10.0);
+        self.alliance_overcommit_penalty =
+            sanitize_opt_f64(self.alliance_overcommit_penalty, 0.0, 10.0);
+        self.treaty_personality_bias = sanitize_opt_f64(self.treaty_personality_bias, -5.0, 5.0);
+
+        self
+    }
+}
+
 fn personality_table_name(personality: AiPersonality) -> &'static str {
     match personality {
         AiPersonality::Aggressive => "aggressive",
@@ -194,88 +385,93 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
     let table_name = personality_table_name(personality);
     let table: mlua::Table = lua.globals().get(table_name).ok()?;
 
-    Some(LuaAiConfig {
-        // Core
-        trade_priority: table.get("trade_priority").unwrap_or(0.5),
-        alliance_preference: table.get("alliance_preference").unwrap_or(0.5),
-        min_army_size: table.get("min_army_size").unwrap_or(3),
-        max_army_size: table.get("max_army_size").unwrap_or(7),
-        infrastructure_budget: table.get("infrastructure_budget").unwrap_or(2000),
-        research_strategy: table
-            .get::<String>("research_strategy")
-            .unwrap_or_else(|_| "cheapest".to_string()),
-        worker_threshold: table.get("worker_threshold").unwrap_or(5),
-        // War
-        war_cooldown: table.get("war_cooldown").ok(),
-        war_threshold: table.get("war_threshold").ok(),
-        army_min_for_war: table.get::<usize>("army_min_for_war").ok(),
-        opportunism_weight: table.get("opportunism_weight").ok(),
-        // Army tiers
-        tier1_army_max: table.get::<usize>("tier1_army_max").ok(),
-        tier2_army_max: table.get::<usize>("tier2_army_max").ok(),
-        tier3_army_max: table.get::<usize>("tier3_army_max").ok(),
-        tier1_treasury: table.get("tier1_treasury").ok(),
-        tier2_treasury: table.get("tier2_treasury").ok(),
-        tier3_treasury: table.get("tier3_treasury").ok(),
-        tier4_treasury: table.get("tier4_treasury").ok(),
-        // Diplomacy
-        consulate_max_per_turn: table.get("consulate_max_per_turn").ok(),
-        propose_pacts: table.get("propose_pacts").ok(),
-        propose_alliances: table.get("propose_alliances").ok(),
-        grant_amount: table.get("grant_amount").ok(),
-        grant_interval: table.get("grant_interval").ok(),
-        embassy_treasury_threshold: table.get("embassy_treasury_threshold").ok(),
-        max_alliances: table.get::<usize>("max_alliances").ok(),
-        // Naval
-        max_warships_low_treasury: table.get::<usize>("max_warships_low_treasury").ok(),
-        max_warships_high_treasury: table.get::<usize>("max_warships_high_treasury").ok(),
-        max_merchant_ships: table.get::<usize>("max_merchant_ships").ok(),
-        // Economy
-        expansion_threshold_multiplier: table.get("expansion_threshold_multiplier").ok(),
-        use_tier_expansion: table.get("use_tier_expansion").ok(),
-        high_treasury_expansion_threshold: table.get("high_treasury_expansion_threshold").ok(),
-        trade_resource_reserve: table.get("trade_resource_reserve").ok(),
-        trade_treasury_cap: table.get("trade_treasury_cap").ok(),
-        goods_sell_treasury_threshold: table.get("goods_sell_treasury_threshold").ok(),
-        goods_reserve: table.get("goods_reserve").ok(),
-        food_processing_expansion_threshold: table.get("food_processing_expansion_threshold").ok(),
-        infra_budget_scale_threshold: table.get("infra_budget_scale_threshold").ok(),
-        // Spending weights
-        spending_military_weight: table.get("spending_military_weight").ok(),
-        spending_economy_weight: table.get("spending_economy_weight").ok(),
-        spending_diplomacy_weight: table.get("spending_diplomacy_weight").ok(),
-        treasury_reserve: table.get("treasury_reserve").ok(),
-        min_score_threshold: table.get("min_score_threshold").ok(),
-        // Worker training
-        worker_train_threshold: table.get("worker_train_threshold").ok(),
-        worker_promote_threshold: table.get("worker_promote_threshold").ok(),
-        // Tactical
-        peace_war_duration_threshold: table.get("peace_war_duration_threshold").ok(),
-        peace_province_loss_ratio: table.get("peace_province_loss_ratio").ok(),
-        fort_strategy: table.get::<String>("fort_strategy").ok(),
-        // Coalition assessment weights
-        coalition_mil_weight: table.get("coalition_mil_weight").ok(),
-        coalition_prov_weight: table.get("coalition_prov_weight").ok(),
-        coalition_econ_weight: table.get("coalition_econ_weight").ok(),
-        coalition_momentum_weight: table.get("coalition_momentum_weight").ok(),
-        coalition_naval_weight: table.get("coalition_naval_weight").ok(),
-        coalition_sigmoid_steepness: table.get("coalition_sigmoid_steepness").ok(),
-        // Peace proposal thresholds
-        peace_accept_threshold: table.get("peace_accept_threshold").ok(),
-        peace_reject_threshold: table.get("peace_reject_threshold").ok(),
-        peace_stalemate_duration: table.get("peace_stalemate_duration").ok(),
-        // War worthiness thresholds
-        won_enough_captures: table.get::<usize>("won_enough_captures").ok(),
-        won_enough_marginal: table.get("won_enough_marginal").ok(),
-        lost_enough_losses: table.get::<usize>("lost_enough_losses").ok(),
-        lost_enough_likelihood: table.get("lost_enough_likelihood").ok(),
-        // Treaty evaluation thresholds
-        nap_accept_threshold: table.get("nap_accept_threshold").ok(),
-        alliance_accept_threshold: table.get("alliance_accept_threshold").ok(),
-        alliance_rival_penalty: table.get("alliance_rival_penalty").ok(),
-        alliance_overcommit_penalty: table.get("alliance_overcommit_penalty").ok(),
-        treaty_personality_bias: table.get("treaty_personality_bias").ok(),
-    })
+    Some(
+        LuaAiConfig {
+            // Core
+            trade_priority: table.get("trade_priority").unwrap_or(0.5),
+            alliance_preference: table.get("alliance_preference").unwrap_or(0.5),
+            min_army_size: table.get("min_army_size").unwrap_or(3),
+            max_army_size: table.get("max_army_size").unwrap_or(7),
+            infrastructure_budget: table.get("infrastructure_budget").unwrap_or(2000),
+            research_strategy: table
+                .get::<String>("research_strategy")
+                .unwrap_or_else(|_| "cheapest".to_string()),
+            worker_threshold: table.get("worker_threshold").unwrap_or(5),
+            // War
+            war_cooldown: table.get("war_cooldown").ok(),
+            war_threshold: table.get("war_threshold").ok(),
+            army_min_for_war: table.get::<usize>("army_min_for_war").ok(),
+            opportunism_weight: table.get("opportunism_weight").ok(),
+            // Army tiers
+            tier1_army_max: table.get::<usize>("tier1_army_max").ok(),
+            tier2_army_max: table.get::<usize>("tier2_army_max").ok(),
+            tier3_army_max: table.get::<usize>("tier3_army_max").ok(),
+            tier1_treasury: table.get("tier1_treasury").ok(),
+            tier2_treasury: table.get("tier2_treasury").ok(),
+            tier3_treasury: table.get("tier3_treasury").ok(),
+            tier4_treasury: table.get("tier4_treasury").ok(),
+            // Diplomacy
+            consulate_max_per_turn: table.get("consulate_max_per_turn").ok(),
+            propose_pacts: table.get("propose_pacts").ok(),
+            propose_alliances: table.get("propose_alliances").ok(),
+            grant_amount: table.get("grant_amount").ok(),
+            grant_interval: table.get("grant_interval").ok(),
+            embassy_treasury_threshold: table.get("embassy_treasury_threshold").ok(),
+            max_alliances: table.get::<usize>("max_alliances").ok(),
+            // Naval
+            max_warships_low_treasury: table.get::<usize>("max_warships_low_treasury").ok(),
+            max_warships_high_treasury: table.get::<usize>("max_warships_high_treasury").ok(),
+            max_merchant_ships: table.get::<usize>("max_merchant_ships").ok(),
+            // Economy
+            expansion_threshold_multiplier: table.get("expansion_threshold_multiplier").ok(),
+            use_tier_expansion: table.get("use_tier_expansion").ok(),
+            high_treasury_expansion_threshold: table.get("high_treasury_expansion_threshold").ok(),
+            trade_resource_reserve: table.get("trade_resource_reserve").ok(),
+            trade_treasury_cap: table.get("trade_treasury_cap").ok(),
+            goods_sell_treasury_threshold: table.get("goods_sell_treasury_threshold").ok(),
+            goods_reserve: table.get("goods_reserve").ok(),
+            food_processing_expansion_threshold: table
+                .get("food_processing_expansion_threshold")
+                .ok(),
+            infra_budget_scale_threshold: table.get("infra_budget_scale_threshold").ok(),
+            // Spending weights
+            spending_military_weight: table.get("spending_military_weight").ok(),
+            spending_economy_weight: table.get("spending_economy_weight").ok(),
+            spending_diplomacy_weight: table.get("spending_diplomacy_weight").ok(),
+            treasury_reserve: table.get("treasury_reserve").ok(),
+            min_score_threshold: table.get("min_score_threshold").ok(),
+            // Worker training
+            worker_train_threshold: table.get("worker_train_threshold").ok(),
+            worker_promote_threshold: table.get("worker_promote_threshold").ok(),
+            // Tactical
+            peace_war_duration_threshold: table.get("peace_war_duration_threshold").ok(),
+            peace_province_loss_ratio: table.get("peace_province_loss_ratio").ok(),
+            fort_strategy: table.get::<String>("fort_strategy").ok(),
+            // Coalition assessment weights
+            coalition_mil_weight: table.get("coalition_mil_weight").ok(),
+            coalition_prov_weight: table.get("coalition_prov_weight").ok(),
+            coalition_econ_weight: table.get("coalition_econ_weight").ok(),
+            coalition_momentum_weight: table.get("coalition_momentum_weight").ok(),
+            coalition_naval_weight: table.get("coalition_naval_weight").ok(),
+            coalition_sigmoid_steepness: table.get("coalition_sigmoid_steepness").ok(),
+            // Peace proposal thresholds
+            peace_accept_threshold: table.get("peace_accept_threshold").ok(),
+            peace_reject_threshold: table.get("peace_reject_threshold").ok(),
+            peace_stalemate_duration: table.get("peace_stalemate_duration").ok(),
+            // War worthiness thresholds
+            won_enough_captures: table.get::<usize>("won_enough_captures").ok(),
+            won_enough_marginal: table.get("won_enough_marginal").ok(),
+            lost_enough_losses: table.get::<usize>("lost_enough_losses").ok(),
+            lost_enough_likelihood: table.get("lost_enough_likelihood").ok(),
+            // Treaty evaluation thresholds
+            nap_accept_threshold: table.get("nap_accept_threshold").ok(),
+            alliance_accept_threshold: table.get("alliance_accept_threshold").ok(),
+            alliance_rival_penalty: table.get("alliance_rival_penalty").ok(),
+            alliance_overcommit_penalty: table.get("alliance_overcommit_penalty").ok(),
+            treaty_personality_bias: table.get("treaty_personality_bias").ok(),
+        }
+        .sanitize(),
+    )
 }
 
 fn serialize_tech_effect(effect: &TechEffect) -> (String, String) {
@@ -580,5 +776,295 @@ mod tests {
         let result: mlua::Table = func.call(techs).unwrap();
         let picked_id: u32 = result.get("id").unwrap();
         assert_eq!(picked_id, 2, "Economic should pick most expensive tech");
+    }
+
+    #[test]
+    fn sanitize_clamps_nan_and_inf() {
+        let cfg = LuaAiConfig {
+            trade_priority: f64::NAN,
+            alliance_preference: f64::INFINITY,
+            min_army_size: 3,
+            max_army_size: 7,
+            infrastructure_budget: 2000,
+            research_strategy: "cheapest".to_string(),
+            worker_threshold: 5,
+            war_cooldown: None,
+            war_threshold: Some(f64::NAN),
+            army_min_for_war: None,
+            opportunism_weight: Some(f64::NEG_INFINITY),
+            tier1_army_max: None,
+            tier2_army_max: None,
+            tier3_army_max: None,
+            tier1_treasury: None,
+            tier2_treasury: None,
+            tier3_treasury: None,
+            tier4_treasury: None,
+            consulate_max_per_turn: None,
+            propose_pacts: None,
+            propose_alliances: None,
+            grant_amount: Some(-500),
+            grant_interval: None,
+            embassy_treasury_threshold: None,
+            max_alliances: None,
+            max_warships_low_treasury: None,
+            max_warships_high_treasury: None,
+            max_merchant_ships: None,
+            expansion_threshold_multiplier: None,
+            use_tier_expansion: None,
+            high_treasury_expansion_threshold: None,
+            trade_resource_reserve: None,
+            trade_treasury_cap: None,
+            goods_sell_treasury_threshold: None,
+            goods_reserve: None,
+            food_processing_expansion_threshold: None,
+            infra_budget_scale_threshold: None,
+            spending_military_weight: Some(f64::INFINITY),
+            spending_economy_weight: None,
+            spending_diplomacy_weight: None,
+            treasury_reserve: None,
+            min_score_threshold: None,
+            worker_train_threshold: None,
+            worker_promote_threshold: None,
+            peace_war_duration_threshold: None,
+            peace_province_loss_ratio: None,
+            fort_strategy: None,
+            coalition_mil_weight: None,
+            coalition_prov_weight: None,
+            coalition_econ_weight: None,
+            coalition_momentum_weight: None,
+            coalition_naval_weight: None,
+            coalition_sigmoid_steepness: Some(f64::NAN),
+            peace_accept_threshold: None,
+            peace_reject_threshold: None,
+            peace_stalemate_duration: None,
+            won_enough_captures: None,
+            won_enough_marginal: None,
+            lost_enough_losses: None,
+            lost_enough_likelihood: None,
+            nap_accept_threshold: None,
+            alliance_accept_threshold: None,
+            alliance_rival_penalty: None,
+            alliance_overcommit_penalty: None,
+            treaty_personality_bias: None,
+        };
+
+        let sanitized = cfg.sanitize();
+
+        // NaN/inf core fields fall back to defaults
+        assert_eq!(sanitized.trade_priority, 0.5);
+        assert_eq!(sanitized.alliance_preference, 0.5);
+
+        // NaN/inf optional fields become None
+        assert!(sanitized.war_threshold.is_none());
+        assert!(sanitized.opportunism_weight.is_none());
+        assert!(sanitized.spending_military_weight.is_none());
+        assert!(sanitized.coalition_sigmoid_steepness.is_none());
+
+        // Negative i64 gets clamped to 0
+        assert_eq!(sanitized.grant_amount, Some(0));
+    }
+
+    #[test]
+    fn sanitize_clamps_out_of_range() {
+        let cfg = LuaAiConfig {
+            trade_priority: 5.0,       // should clamp to 1.0
+            alliance_preference: -1.0, // should clamp to 0.0
+            min_army_size: 3,
+            max_army_size: 7,
+            infrastructure_budget: 2000,
+            research_strategy: "cheapest".to_string(),
+            worker_threshold: 5,
+            war_cooldown: None,
+            war_threshold: Some(2.0), // should clamp to 1.0
+            army_min_for_war: None,
+            opportunism_weight: Some(50.0), // should clamp to 10.0
+            tier1_army_max: None,
+            tier2_army_max: None,
+            tier3_army_max: None,
+            tier1_treasury: None,
+            tier2_treasury: None,
+            tier3_treasury: None,
+            tier4_treasury: None,
+            consulate_max_per_turn: None,
+            propose_pacts: None,
+            propose_alliances: None,
+            grant_amount: Some(500_000), // should clamp to 100_000
+            grant_interval: None,
+            embassy_treasury_threshold: None,
+            max_alliances: None,
+            max_warships_low_treasury: None,
+            max_warships_high_treasury: None,
+            max_merchant_ships: None,
+            expansion_threshold_multiplier: None,
+            use_tier_expansion: None,
+            high_treasury_expansion_threshold: None,
+            trade_resource_reserve: None,
+            trade_treasury_cap: None,
+            goods_sell_treasury_threshold: None,
+            goods_reserve: None,
+            food_processing_expansion_threshold: None,
+            infra_budget_scale_threshold: None,
+            spending_military_weight: None,
+            spending_economy_weight: None,
+            spending_diplomacy_weight: None,
+            treasury_reserve: None,
+            min_score_threshold: None,
+            worker_train_threshold: None,
+            worker_promote_threshold: None,
+            peace_war_duration_threshold: None,
+            peace_province_loss_ratio: None,
+            fort_strategy: None,
+            coalition_mil_weight: None,
+            coalition_prov_weight: None,
+            coalition_econ_weight: None,
+            coalition_momentum_weight: None,
+            coalition_naval_weight: None,
+            coalition_sigmoid_steepness: None,
+            peace_accept_threshold: None,
+            peace_reject_threshold: None,
+            peace_stalemate_duration: None,
+            won_enough_captures: None,
+            won_enough_marginal: None,
+            lost_enough_losses: None,
+            lost_enough_likelihood: None,
+            nap_accept_threshold: None,
+            alliance_accept_threshold: None,
+            alliance_rival_penalty: None,
+            alliance_overcommit_penalty: None,
+            treaty_personality_bias: None,
+        };
+
+        let sanitized = cfg.sanitize();
+        assert_eq!(sanitized.trade_priority, 1.0);
+        assert_eq!(sanitized.alliance_preference, 0.0);
+        assert_eq!(sanitized.war_threshold, Some(1.0));
+        assert_eq!(sanitized.opportunism_weight, Some(10.0));
+        assert_eq!(sanitized.grant_amount, Some(100_000));
+    }
+
+    #[test]
+    fn game_config_sanitizes_extreme_lua_values() {
+        let engine = LuaEngine::new().unwrap();
+        // Set extreme game_config values via Lua
+        engine
+            .exec(
+                r#"
+                game_config = {
+                    gold_value = 999999999,
+                    gems_value = -500,
+                    consulate_cost = 999999999,
+                    embassy_cost = -1,
+                    expansion_delay_turns = 300,
+                    untrained_labor = 0,
+                    food_per_worker = -5,
+                    provinces_per_immigrant = 0,
+                    min_food_tile_percent = 200,
+                    food_cluster_chance = -10,
+                }
+                "#,
+            )
+            .unwrap();
+
+        let cfg = load_game_config(&engine);
+
+        // Upper bounds clamped
+        assert_eq!(cfg.gold_value, 1_000_000);
+        assert_eq!(cfg.consulate_cost, 1_000_000);
+
+        // Negative values clamped to 0
+        assert_eq!(cfg.gems_value, 0);
+        assert_eq!(cfg.embassy_cost, 0);
+
+        // u32→u8 saturation: 300 -> 255
+        assert_eq!(cfg.expansion_delay_turns, 255);
+
+        // Min-1 enforcement for divisor fields
+        assert_eq!(cfg.untrained_labor, 1);
+        assert_eq!(cfg.food_per_worker, 1);
+        assert_eq!(cfg.provinces_per_immigrant, 1);
+
+        // Percent clamping
+        assert_eq!(cfg.min_food_tile_percent, 100);
+        // Negative Lua value for u32 field falls back to default (40), then clamped to [0,100]
+        assert_eq!(cfg.food_cluster_chance, 40);
+    }
+
+    #[test]
+    fn sanitize_enforces_cross_field_invariants() {
+        let cfg = LuaAiConfig {
+            trade_priority: 0.5,
+            alliance_preference: 0.5,
+            min_army_size: 10, // > max_army_size
+            max_army_size: 5,
+            infrastructure_budget: 2000,
+            research_strategy: "cheapest".to_string(),
+            worker_threshold: 5,
+            war_cooldown: None,
+            war_threshold: None,
+            army_min_for_war: None,
+            opportunism_weight: None,
+            tier1_army_max: None,
+            tier2_army_max: None,
+            tier3_army_max: None,
+            tier1_treasury: None,
+            tier2_treasury: None,
+            tier3_treasury: None,
+            tier4_treasury: None,
+            consulate_max_per_turn: None,
+            propose_pacts: None,
+            propose_alliances: None,
+            grant_amount: None,
+            grant_interval: None,
+            embassy_treasury_threshold: None,
+            max_alliances: None,
+            max_warships_low_treasury: None,
+            max_warships_high_treasury: None,
+            max_merchant_ships: None,
+            expansion_threshold_multiplier: None,
+            use_tier_expansion: None,
+            high_treasury_expansion_threshold: None,
+            trade_resource_reserve: None,
+            trade_treasury_cap: None,
+            goods_sell_treasury_threshold: None,
+            goods_reserve: None,
+            food_processing_expansion_threshold: None,
+            infra_budget_scale_threshold: None,
+            spending_military_weight: None,
+            spending_economy_weight: None,
+            spending_diplomacy_weight: None,
+            treasury_reserve: None,
+            min_score_threshold: None,
+            worker_train_threshold: None,
+            worker_promote_threshold: None,
+            peace_war_duration_threshold: None,
+            peace_province_loss_ratio: None,
+            fort_strategy: None,
+            coalition_mil_weight: None,
+            coalition_prov_weight: None,
+            coalition_econ_weight: None,
+            coalition_momentum_weight: None,
+            coalition_naval_weight: None,
+            coalition_sigmoid_steepness: None,
+            peace_accept_threshold: None,
+            peace_reject_threshold: None,
+            peace_stalemate_duration: None,
+            won_enough_captures: None,
+            won_enough_marginal: None,
+            lost_enough_losses: None,
+            lost_enough_likelihood: None,
+            nap_accept_threshold: None,
+            alliance_accept_threshold: None,
+            alliance_rival_penalty: None,
+            alliance_overcommit_penalty: None,
+            treaty_personality_bias: None,
+        };
+
+        let sanitized = cfg.sanitize();
+        assert!(
+            sanitized.min_army_size <= sanitized.max_army_size,
+            "min_army_size ({}) should be <= max_army_size ({})",
+            sanitized.min_army_size,
+            sanitized.max_army_size
+        );
     }
 }

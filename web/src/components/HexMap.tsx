@@ -274,6 +274,57 @@ export default function HexMap({
     return m;
   }, [mapMode, diplomacyOverlay, militaryOverlay]);
 
+  // Memoize nation label BFS — only recompute when tiles change, not on pan/zoom
+  const nationLabels = useMemo(() => {
+    const labels: { name: string; cx: number; cy: number; size: number }[] = [];
+    const nationTiles = new Map<string, Set<string>>();
+    for (const tile of tiles) {
+      if (tile.terrain === 'Sea' || !tile.owner) continue;
+      const key = `${tile.q},${tile.r}`;
+      let s = nationTiles.get(tile.owner);
+      if (!s) { s = new Set(); nationTiles.set(tile.owner, s); }
+      s.add(key);
+    }
+
+    for (const [name, tileKeys] of nationTiles) {
+      const visited = new Set<string>();
+      for (const startKey of tileKeys) {
+        if (visited.has(startKey)) continue;
+        const component: string[] = [];
+        const queue: string[] = [startKey];
+        let head = 0;
+        visited.add(startKey);
+        while (head < queue.length) {
+          const cur = queue[head++];
+          component.push(cur);
+          const [cq, cr] = cur.split(',').map(Number);
+          const nbrs = hexNeighbors(cq, cr);
+          for (const [nq, nr] of nbrs) {
+            const nk = `${nq},${nr}`;
+            if (!visited.has(nk) && tileKeys.has(nk)) {
+              visited.add(nk);
+              queue.push(nk);
+            }
+          }
+        }
+        if (component.length < 3) continue;
+        let sx = 0, sy = 0;
+        for (const k of component) {
+          const [cq, cr] = k.split(',').map(Number);
+          const [px, py] = hexToPixel(cq, cr);
+          sx += px; sy += py;
+        }
+        labels.push({
+          name,
+          cx: sx / component.length,
+          cy: sy / component.length,
+          size: component.length,
+        });
+      }
+    }
+    return labels;
+  }, [tiles]);
+
   const render = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -525,65 +576,16 @@ export default function HexMap({
 
     // ── Pass 6: Nation name labels (all non-terrain modes) ──
     if (showPoliticalColors) {
-      // Group land tiles by nation
-      const nationTiles = new Map<string, Set<string>>();
-      for (const tile of tiles) {
-        if (tile.terrain === 'Sea' || !tile.owner) continue;
-        const key = `${tile.q},${tile.r}`;
-        let s = nationTiles.get(tile.owner);
-        if (!s) { s = new Set(); nationTiles.set(tile.owner, s); }
-        s.add(key);
-      }
-
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-
-      // For each nation, find connected components via BFS
-      for (const [name, tileKeys] of nationTiles) {
-        const visited = new Set<string>();
-
-        for (const startKey of tileKeys) {
-          if (visited.has(startKey)) continue;
-
-          // BFS to find connected component
-          const component: string[] = [];
-          const queue = [startKey];
-          visited.add(startKey);
-
-          while (queue.length > 0) {
-            const cur = queue.shift()!;
-            component.push(cur);
-            const [cq, cr] = cur.split(',').map(Number);
-            const nbrs = hexNeighbors(cq, cr);
-            for (const [nq, nr] of nbrs) {
-              const nk = `${nq},${nr}`;
-              if (!visited.has(nk) && tileKeys.has(nk)) {
-                visited.add(nk);
-                queue.push(nk);
-              }
-            }
-          }
-
-          // Only label landmasses with >= 3 hexes
-          if (component.length < 3) continue;
-
-          // Compute centroid
-          let sx = 0, sy = 0;
-          for (const k of component) {
-            const [cq, cr] = k.split(',').map(Number);
-            const [px, py] = hexToPixel(cq, cr);
-            sx += px; sy += py;
-          }
-          const cx = sx / component.length;
-          const cy = sy / component.length;
-          const fontSize = Math.max(12, Math.min(28, Math.sqrt(component.length) * 3));
-          ctx.font = `bold ${fontSize}px Georgia, serif`;
-          ctx.lineWidth = 3;
-          ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-          ctx.strokeText(name.toUpperCase(), cx, cy);
-          ctx.fillStyle = 'rgba(255,255,255,0.9)';
-          ctx.fillText(name.toUpperCase(), cx, cy);
-        }
+      for (const label of nationLabels) {
+        const fontSize = Math.max(12, Math.min(28, Math.sqrt(label.size) * 3));
+        ctx.font = `bold ${fontSize}px Georgia, serif`;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+        ctx.strokeText(label.name.toUpperCase(), label.cx, label.cy);
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.fillText(label.name.toUpperCase(), label.cx, label.cy);
       }
     }
 
@@ -753,7 +755,7 @@ export default function HexMap({
 
     ctx.restore();
   }, [tiles, offset, scale, showPoliticalColors, showHiddenResources, mapMode, nationFillMap,
-      isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves]);
+      isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves, nationLabels]);
 
   useEffect(() => { render(); }, [render]);
 

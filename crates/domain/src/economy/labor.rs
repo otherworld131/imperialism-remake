@@ -89,7 +89,6 @@ impl LaborPool {
             false
         }
     }
-
 }
 
 impl Default for LaborPool {

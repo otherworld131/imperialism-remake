@@ -160,6 +160,16 @@ pub fn new_scenario_game(
         human_nation_index,
     );
 
+    // Verify great power count matches scenario expectations
+    let game_gp_count = game.great_powers().len();
+    let scenario_gp_count = scenario.great_powers.len();
+    if game_gp_count != scenario_gp_count {
+        return Err(format!(
+            "Scenario '{}' expects {} great powers but map generated {}",
+            scenario_id, scenario_gp_count, game_gp_count
+        ));
+    }
+
     // Set the start year
     game.turn = TurnNumber::from_year_quarter(scenario.year, 1);
 

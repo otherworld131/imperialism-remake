@@ -314,8 +314,7 @@ pub fn resolve_battle_with_targeting(
             // Track damage dealt by each attacker unit (proportional to their firepower)
             if atk_fp > 0.0 {
                 for unit in atk_units.iter() {
-                    *atk_damage_dealt.entry(unit.id).or_insert(0.0) +=
-                        unit.effective_firepower();
+                    *atk_damage_dealt.entry(unit.id).or_insert(0.0) += unit.effective_firepower();
                 }
             }
         }
@@ -346,8 +345,7 @@ pub fn resolve_battle_with_targeting(
             // Track damage dealt by each defender unit (proportional to their firepower)
             if def_fp > 0.0 {
                 for unit in def_units.iter() {
-                    *def_damage_dealt.entry(unit.id).or_insert(0.0) +=
-                        unit.effective_firepower();
+                    *def_damage_dealt.entry(unit.id).or_insert(0.0) += unit.effective_firepower();
                 }
             }
         }
