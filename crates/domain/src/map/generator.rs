@@ -152,6 +152,7 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
     let mut all_province_data: Vec<ProvinceData> = Vec::new();
     let mut nation_province_map: Vec<Vec<u32>> = Vec::with_capacity(total_nations);
 
+    #[allow(clippy::needless_range_loop)]
     for nation_idx in 0..total_nations {
         let num_provinces = if nation_idx < NUM_GREAT_POWERS {
             PROVINCES_PER_GREAT_POWER
@@ -196,10 +197,11 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
                     tiles: vec![tile],
                 });
             } else {
+                // Use nation center as fallback instead of (0,0) which is always Sea
                 all_province_data.push(ProvinceData {
                     id: pid,
                     nation_idx,
-                    tiles: vec![HexCoord::new(0, 0)],
+                    tiles: vec![nation_centers[nation_idx]],
                 });
             }
         }
@@ -533,15 +535,20 @@ fn place_nation_centers(
         }
     }
 
-    // Fallback with reduced distance if needed
-    while centers.len() < count {
+    // Fallback with reduced distance if needed (iteration-limited to prevent infinite loop)
+    let mut fallback_attempts = 0;
+    while centers.len() < count && fallback_attempts < 2000 {
+        fallback_attempts += 1;
         let candidate = land_tiles[rng.next_u32() as usize % land_tiles.len()];
         let too_close = centers.iter().any(|c| c.distance(candidate) < 4);
         if !too_close {
             centers.push(candidate);
         }
-        // Ultimate fallback: just pick any land tile
-        if centers.len() < count {
+        // Ultimate fallback: just pick any land tile (allow duplicates after many attempts)
+        if centers.len() < count && fallback_attempts > 1000 {
+            let candidate2 = land_tiles[rng.next_u32() as usize % land_tiles.len()];
+            centers.push(candidate2);
+        } else if centers.len() < count {
             let candidate2 = land_tiles[rng.next_u32() as usize % land_tiles.len()];
             if !centers.contains(&candidate2) {
                 centers.push(candidate2);
@@ -825,9 +832,9 @@ fn enforce_minimum_food_tiles(
         .copied()
         .collect();
 
-    // Shuffle for even distribution
+    // Fisher-Yates shuffle for even distribution (range is inclusive, so use i not i+1)
     for i in (1..replaceable.len()).rev() {
-        let j = rng.range(0, i as i32 + 1) as usize;
+        let j = rng.range(0, i as i32) as usize;
         replaceable.swap(i, j);
     }
 
@@ -915,8 +922,9 @@ fn cluster_food_terrain(
             if rng.range(0, 100) >= chance_percent {
                 continue;
             }
-            // Only replace truly barren terrain for clustering (not forests — they produce timber)
+            // Only replace truly barren terrain without existing resources
             if let Some(tile) = hex_map.get_tile(neighbor)
+                && tile.resource_deposit().is_none()
                 && matches!(
                     tile.terrain(),
                     TerrainType::Desert

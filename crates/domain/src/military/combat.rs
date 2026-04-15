@@ -84,7 +84,11 @@ pub struct BattleResult {
 /// If the force contains a General, all friendly units get a 5% firepower
 /// boost per General medal. Returns 1.0 if no General is present.
 fn general_bonus(units: &[ArmyUnit]) -> f64 {
-    if let Some(general) = units.iter().find(|u| u.unit_type == ArmyUnitType::General) {
+    if let Some(general) = units
+        .iter()
+        .filter(|u| u.unit_type == ArmyUnitType::General)
+        .max_by_key(|u| u.medals)
+    {
         1.0 + general.medals as f64 * 0.05
     } else {
         1.0
@@ -266,9 +270,11 @@ pub fn resolve_battle_with_targeting(
 
     // Combat rounds (up to 10)
     let mut retreated = false;
-    // Track damage dealt by each unit (by index in survivors) for medal eligibility
-    let mut atk_damage_dealt: Vec<f64> = vec![0.0; atk_units.len()];
-    let mut def_damage_dealt: Vec<f64> = vec![0.0; def_units.len()];
+    // Track damage dealt by each unit (keyed by UnitId) for medal eligibility
+    let mut atk_damage_dealt: std::collections::HashMap<crate::map::UnitId, f64> =
+        std::collections::HashMap::new();
+    let mut def_damage_dealt: std::collections::HashMap<crate::map::UnitId, f64> =
+        std::collections::HashMap::new();
 
     for _ in 0..10 {
         if atk_units.is_empty() || def_units.is_empty() {
@@ -291,14 +297,14 @@ pub fn resolve_battle_with_targeting(
                     def_units.sort_by(|a, b| {
                         a.effective_firepower()
                             .partial_cmp(&b.effective_firepower())
-                            .unwrap()
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     });
                 }
                 TargetingPriority::StrongestFirst => {
                     def_units.sort_by(|a, b| {
                         b.effective_firepower()
                             .partial_cmp(&a.effective_firepower())
-                            .unwrap()
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     });
                 }
             }
@@ -307,10 +313,9 @@ pub fn resolve_battle_with_targeting(
             }
             // Track damage dealt by each attacker unit (proportional to their firepower)
             if atk_fp > 0.0 {
-                for (idx, unit) in atk_units.iter().enumerate() {
-                    if idx < atk_damage_dealt.len() {
-                        atk_damage_dealt[idx] += unit.effective_firepower();
-                    }
+                for unit in atk_units.iter() {
+                    *atk_damage_dealt.entry(unit.id).or_insert(0.0) +=
+                        unit.effective_firepower();
                 }
             }
         }
@@ -324,14 +329,14 @@ pub fn resolve_battle_with_targeting(
                     atk_units.sort_by(|a, b| {
                         a.effective_firepower()
                             .partial_cmp(&b.effective_firepower())
-                            .unwrap()
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     });
                 }
                 TargetingPriority::StrongestFirst => {
                     atk_units.sort_by(|a, b| {
                         b.effective_firepower()
                             .partial_cmp(&a.effective_firepower())
-                            .unwrap()
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     });
                 }
             }
@@ -340,40 +345,23 @@ pub fn resolve_battle_with_targeting(
             }
             // Track damage dealt by each defender unit (proportional to their firepower)
             if def_fp > 0.0 {
-                for (idx, unit) in def_units.iter().enumerate() {
-                    if idx < def_damage_dealt.len() {
-                        def_damage_dealt[idx] += unit.effective_firepower();
-                    }
+                for unit in def_units.iter() {
+                    *def_damage_dealt.entry(unit.id).or_insert(0.0) +=
+                        unit.effective_firepower();
                 }
             }
         }
 
         // Remove destroyed units and record casualties
-        let mut i = 0;
-        while i < def_units.len() {
-            if !def_units[i].is_alive() {
-                defender_casualties.push(def_units[i].unit_type);
-                def_units.remove(i);
-                if i < def_damage_dealt.len() {
-                    def_damage_dealt.remove(i);
-                }
-            } else {
-                i += 1;
-            }
+        for unit in def_units.iter().filter(|u| !u.is_alive()) {
+            defender_casualties.push(unit.unit_type);
         }
+        def_units.retain(|u| u.is_alive());
 
-        let mut i = 0;
-        while i < atk_units.len() {
-            if !atk_units[i].is_alive() {
-                attacker_casualties.push(atk_units[i].unit_type);
-                atk_units.remove(i);
-                if i < atk_damage_dealt.len() {
-                    atk_damage_dealt.remove(i);
-                }
-            } else {
-                i += 1;
-            }
+        for unit in atk_units.iter().filter(|u| !u.is_alive()) {
+            attacker_casualties.push(unit.unit_type);
         }
+        atk_units.retain(|u| u.is_alive());
 
         // Check for retreat: if attacker has lost >60% of initial firepower
         if attacker_initial_fp > 0.0 && !atk_units.is_empty() {
@@ -384,25 +372,15 @@ pub fn resolve_battle_with_targeting(
                 // Retreating units suffer 10% additional damage on remaining health
                 for unit in &mut atk_units {
                     let retreat_damage = (unit.health as f64 * 0.10) as u8;
-                    // Round to nearest 5% increment for consistency
-                    let rounded = (retreat_damage / 5) * 5;
-                    if rounded > 0 {
-                        unit.take_damage(rounded);
+                    if retreat_damage > 0 {
+                        unit.take_damage(retreat_damage);
                     }
                 }
                 // Remove any units killed by retreat damage
-                let mut i = 0;
-                while i < atk_units.len() {
-                    if !atk_units[i].is_alive() {
-                        attacker_casualties.push(atk_units[i].unit_type);
-                        atk_units.remove(i);
-                        if i < atk_damage_dealt.len() {
-                            atk_damage_dealt.remove(i);
-                        }
-                    } else {
-                        i += 1;
-                    }
+                for unit in atk_units.iter().filter(|u| !u.is_alive()) {
+                    attacker_casualties.push(unit.unit_type);
                 }
+                atk_units.retain(|u| u.is_alive());
                 break;
             }
         }
@@ -430,16 +408,16 @@ pub fn resolve_battle_with_targeting(
     // Losers keep their medals (don't lose them).
     let mut medal_awards: Vec<(ArmyUnitType, u8)> = Vec::new();
     if attacker_won {
-        for (idx, unit) in atk_units.iter_mut().enumerate() {
-            let dealt = atk_damage_dealt.get(idx).copied().unwrap_or(0.0);
+        for unit in atk_units.iter_mut() {
+            let dealt = atk_damage_dealt.get(&unit.id).copied().unwrap_or(0.0);
             if unit.medals == 0 || dealt > 0.0 {
                 unit.award_medal();
                 medal_awards.push((unit.unit_type, unit.medals));
             }
         }
     } else {
-        for (idx, unit) in def_units.iter_mut().enumerate() {
-            let dealt = def_damage_dealt.get(idx).copied().unwrap_or(0.0);
+        for unit in def_units.iter_mut() {
+            let dealt = def_damage_dealt.get(&unit.id).copied().unwrap_or(0.0);
             if unit.medals == 0 || dealt > 0.0 {
                 unit.award_medal();
                 medal_awards.push((unit.unit_type, unit.medals));

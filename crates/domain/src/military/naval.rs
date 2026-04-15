@@ -172,10 +172,14 @@ pub fn resolve_naval_battle(
             .sum();
 
         // Attacker deals damage to defender ships (weakest hull first)
+        // Distribute remainder to first N ships to avoid truncation loss
         def_ships.sort_by_key(|s| s.hull_remaining);
         if !def_ships.is_empty() {
-            let damage_per_ship = atk_fp / def_ships.len() as u32;
-            for ship in &mut def_ships {
+            let n = def_ships.len() as u32;
+            let base_damage = atk_fp / n;
+            let remainder = atk_fp % n;
+            for (i, ship) in def_ships.iter_mut().enumerate() {
+                let damage_per_ship = base_damage + if (i as u32) < remainder { 1 } else { 0 };
                 let armor = ship.ship_type.stats().armor;
                 let effective_damage = damage_per_ship.saturating_sub(armor / 5);
                 // Always deal at least 1 damage if there is any firepower
@@ -191,8 +195,11 @@ pub fn resolve_naval_battle(
         // Defender deals damage to attacker ships (weakest hull first)
         atk_ships.sort_by_key(|s| s.hull_remaining);
         if !atk_ships.is_empty() {
-            let damage_per_ship = def_fp / atk_ships.len() as u32;
-            for ship in &mut atk_ships {
+            let n = atk_ships.len() as u32;
+            let base_damage = def_fp / n;
+            let remainder = def_fp % n;
+            for (i, ship) in atk_ships.iter_mut().enumerate() {
+                let damage_per_ship = base_damage + if (i as u32) < remainder { 1 } else { 0 };
                 let armor = ship.ship_type.stats().armor;
                 let effective_damage = damage_per_ship.saturating_sub(armor / 5);
                 let actual_damage = if def_fp > 0 && effective_damage == 0 {

@@ -90,10 +90,6 @@ impl LaborPool {
         }
     }
 
-    /// Workers available for production. For now, equals total workers.
-    pub fn available_for_production(&self) -> u32 {
-        self.total_workers()
-    }
 }
 
 impl Default for LaborPool {
@@ -240,19 +236,6 @@ mod tests {
         let result = pool.promote_worker();
         assert!(!result);
         assert_eq!(pool.expert, 2); // unchanged
-    }
-
-    // ── available_for_production ───────────────────────────────────
-
-    #[test]
-    fn available_for_production_equals_total() {
-        let pool = LaborPool {
-            untrained: 4,
-            trained: 3,
-            expert: 2,
-        };
-        assert_eq!(pool.available_for_production(), 9);
-        assert_eq!(pool.available_for_production(), pool.total_workers());
     }
 
     // ── Full lifecycle ────────────────────────────────────────────

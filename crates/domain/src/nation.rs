@@ -40,7 +40,7 @@ pub enum NationColor {
 
 /// A nation in the game — either a Great Power (player-controlled or AI)
 /// or a Minor Nation (AI-only, can be annexed or allied).
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Nation {
     pub id: NationId,
     pub name: String,

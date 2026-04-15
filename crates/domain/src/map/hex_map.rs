@@ -27,7 +27,8 @@ where
     S: serde::Serializer,
 {
     use serde::Serialize;
-    let entries: Vec<(&HexCoord, &Tile)> = tiles.iter().collect();
+    let mut entries: Vec<(&HexCoord, &Tile)> = tiles.iter().collect();
+    entries.sort_by_key(|(coord, _)| (coord.q, coord.r));
     entries.serialize(serializer)
 }
 

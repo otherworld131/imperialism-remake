@@ -12,7 +12,6 @@ macro_rules! define_id {
     };
 }
 
-define_id!(PlayerId);
 define_id!(NationId);
 define_id!(ProvinceId);
 
@@ -205,12 +204,10 @@ impl ResourceType {
         )
     }
 
-    /// Whether this resource is a food type.
+    /// Whether this resource is a food type (consumed by workers).
+    /// Horses are a military resource, not food.
     pub const fn is_food(self) -> bool {
-        matches!(
-            self,
-            Self::Grain | Self::Fruit | Self::Livestock | Self::Horses
-        )
+        matches!(self, Self::Grain | Self::Fruit | Self::Livestock)
     }
 
     /// Maximum improvement level for this resource.

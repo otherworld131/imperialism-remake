@@ -423,19 +423,26 @@ impl ArmyUnit {
         }
     }
 
-    /// Calculate effective firepower with medal modifier.
+    /// Calculate effective firepower with medal modifier, scaled by health.
     /// Medal modifier: (1.0 + medals * 0.25), so 4 medals = 2.0x.
+    /// Health scaling: firepower degrades linearly with damage.
     pub fn effective_firepower(&self) -> f64 {
         let base_fp = self.unit_type.stats().firepower as f64;
         let medal_modifier = 1.0 + self.medals as f64 * 0.25;
-        base_fp * medal_modifier
+        let health_scale = self.health as f64 / 100.0;
+        base_fp * medal_modifier * health_scale
     }
 
-    /// Reduce health by the given amount in 5% increments, minimum 0.
+    /// Reduce health by the given amount in 5% increments (round-to-nearest),
+    /// with a minimum of 5 damage when amount > 0 to prevent immortal units.
     pub fn take_damage(&mut self, amount: u8) {
-        // Round to nearest 5% increment
-        let rounded = (amount / 5) * 5;
-        self.health = self.health.saturating_sub(rounded);
+        let effective = if amount == 0 {
+            0
+        } else {
+            // Round to nearest 5% increment, minimum 5
+            ((amount as u16 + 2) / 5 * 5).max(5) as u8
+        };
+        self.health = self.health.saturating_sub(effective);
     }
 
     /// Heal the unit by the given amount. Medal holders heal faster:
@@ -603,13 +610,13 @@ mod tests {
         );
         assert_eq!(unit.health, 100);
 
-        // 7 damage rounds down to 5
+        // 7 damage rounds to nearest 5 = 5
         unit.take_damage(7);
         assert_eq!(unit.health, 95);
 
-        // 13 damage rounds down to 10
+        // 13 damage rounds to nearest 5 = 15
         unit.take_damage(13);
-        assert_eq!(unit.health, 85);
+        assert_eq!(unit.health, 80);
     }
 
     #[test]
@@ -638,15 +645,20 @@ mod tests {
     }
 
     #[test]
-    fn take_damage_less_than_5_rounds_to_zero_damage() {
+    fn take_damage_less_than_5_applies_minimum() {
         let mut unit = ArmyUnit::new(
             UnitId(1),
             ArmyUnitType::Regulars,
             NationId(1),
             ProvinceId(1),
         );
-        unit.take_damage(4); // rounds to 0
-        assert_eq!(unit.health, 100);
+        // Any non-zero damage applies at least 5 (minimum floor)
+        unit.take_damage(4);
+        assert_eq!(unit.health, 95);
+
+        // Zero damage does nothing
+        unit.take_damage(0);
+        assert_eq!(unit.health, 95);
     }
 
     // ── Healing ─────────────────────────────────────────────────

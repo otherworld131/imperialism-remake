@@ -42,15 +42,25 @@ impl Building {
 
     /// Start expanding this building by the given amount.
     /// Uses the default 2-turn delay before it takes effect.
-    pub fn start_expansion(&mut self, amount: u32) {
+    /// Returns `false` if an expansion is already in progress.
+    pub fn start_expansion(&mut self, amount: u32) -> bool {
+        if self.turns_until_upgrade > 0 {
+            return false; // already expanding
+        }
         self.pending_capacity = amount;
         self.turns_until_upgrade = 2;
+        true
     }
 
     /// Start expanding with a custom delay (from game config).
-    pub fn start_expansion_with_delay(&mut self, amount: u32, delay: u8) {
+    /// Returns `false` if an expansion is already in progress.
+    pub fn start_expansion_with_delay(&mut self, amount: u32, delay: u8) -> bool {
+        if self.turns_until_upgrade > 0 {
+            return false;
+        }
         self.pending_capacity = amount;
         self.turns_until_upgrade = delay;
+        true
     }
 
     /// Returns the next capacity level following the progression:

@@ -123,6 +123,49 @@ fn format_number_with_commas(n: i64) -> String {
     result.chars().rev().collect()
 }
 
+/// Award free Clipper ships when a Great Power establishes its first colony.
+///
+/// Called when a GP either conquers a Minor Nation province or receives one
+/// through voluntary incorporation. Awards 2 Clippers and sets the `has_colony` flag.
+fn award_first_colony_clippers(
+    game: &mut GameState,
+    nation_id: NationId,
+    report: &mut TurnReport,
+) {
+    let already_has_colony = game.get_nation(nation_id).is_some_and(|n| n.has_colony);
+    if already_has_colony {
+        return;
+    }
+    let Some(nation) = game.get_nation_mut(nation_id) else {
+        return;
+    };
+    use crate::map::UnitId;
+    use crate::military::ships::{Ship, ShipType};
+    nation.has_colony = true;
+    let base_id = 5_000_000 + nation.id.0 * 100;
+    nation
+        .merchant_fleet
+        .push(Ship::new(UnitId(base_id + 1), ShipType::Clipper, nation_id));
+    nation
+        .merchant_fleet
+        .push(Ship::new(UnitId(base_id + 2), ShipType::Clipper, nation_id));
+    let name = nation.name.clone();
+    report.rewards_earned.push((
+        nation_id,
+        format!(
+            "{} receives free Clipper ships for establishing its first colony!",
+            name
+        ),
+    ));
+    report.newspaper_headlines.push((
+        format!(
+            "{} receives free Clipper ships for establishing its first colony!",
+            name
+        ),
+        HeadlineCategory::Trade,
+    ));
+}
+
 /// Process one turn of the game.
 pub fn process_turn(game: &mut GameState) -> TurnReport {
     let turn = game.turn;
@@ -195,8 +238,11 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 3a. Town production: Villages and Towns produce materials and goods autonomously
     resolve_town_production(game, &mut report);
 
+    // 3b. Pre-trade blockade: compute effective cargo capacity reduced by enemy warships
+    let blockade_capacity = compute_blockade_capacity(game);
+
     // 3b. Trade session: Minor Nations sell resources to Great Powers
-    resolve_trade_session(game, &mut report);
+    resolve_trade_session(game, &mut report, &blockade_capacity);
 
     // 3c. Warehouse capacity caps: prevent infinite resource accumulation
     apply_warehouse_caps(game);
@@ -581,7 +627,7 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
             prov_per_imm
         };
         let province_count = nation.province_count() as u32;
-        let max_immigrants = if province_count == 0 {
+        let max_immigrants = if province_count == 0 || provinces_per_immigrant == 0 {
             0
         } else {
             province_count / provinces_per_immigrant
@@ -1153,7 +1199,7 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
                 clothing_cap,
                 remaining_labor,
             );
-            let _ = remaining_labor - result.labor_used; // track for future use
+            remaining_labor -= result.labor_used;
             Some(result)
         } else {
             None
@@ -1417,7 +1463,6 @@ fn process_food(game: &mut GameState, report: &mut TurnReport) {
         }
 
         nation.add_material(MaterialType::CannedFood, units_to_produce);
-        let _ = remaining_to_consume;
 
         report
             .production_output
@@ -1490,7 +1535,6 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
         if canned_consumed > 0 {
             nation.consume_material(MaterialType::CannedFood, canned_consumed);
         }
-        let _ = remaining - canned_consumed;
 
         if food_to_consume > 0 {
             report.food_consumed.push((nation.id, food_to_consume));
@@ -1517,7 +1561,11 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
 /// Resolve a trade session: generate offers from Minor Nations, use smart bids
 /// (respecting consulate requirements and cargo capacity), resolve trades, and apply
 /// the resulting transactions.
-fn resolve_trade_session(game: &mut GameState, report: &mut TurnReport) {
+fn resolve_trade_session(
+    game: &mut GameState,
+    report: &mut TurnReport,
+    blockade_capacity: &std::collections::HashMap<NationId, u32>,
+) {
     // 0. Deduct subsidy costs from Great Powers (skip anarchic nations)
     let gp_ids: Vec<NationId> = game
         .nations
@@ -1553,7 +1601,11 @@ fn resolve_trade_session(game: &mut GameState, report: &mut TurnReport) {
 
     for gp_id in &gp_ids {
         if let Some(nation) = game.get_nation(*gp_id) {
-            let cargo_capacity = nation.total_cargo_capacity();
+            // Use blockade-adjusted cargo capacity instead of raw capacity
+            let cargo_capacity = blockade_capacity
+                .get(gp_id)
+                .copied()
+                .unwrap_or_else(|| nation.total_cargo_capacity());
             let bids = trade::generate_smart_bids(nation, &offers, &game.diplomacy, cargo_capacity);
             all_bids.extend(bids);
         }
@@ -2040,40 +2092,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
 
             // Free Clippers: first colony established (first MN province conquered)
             if defender_type == NationType::MinorNation {
-                let already_has_colony = game.get_nation(attacker_id).is_some_and(|n| n.has_colony);
-                if !already_has_colony
-                    && let Some(attacker_nation) = game.get_nation_mut(attacker_id)
-                {
-                    use crate::map::UnitId;
-                    use crate::military::ships::{Ship, ShipType};
-                    attacker_nation.has_colony = true;
-                    let base_id = 5_000_000 + attacker_nation.id.0 * 100;
-                    attacker_nation.merchant_fleet.push(Ship::new(
-                        UnitId(base_id + 1),
-                        ShipType::Clipper,
-                        attacker_id,
-                    ));
-                    attacker_nation.merchant_fleet.push(Ship::new(
-                        UnitId(base_id + 2),
-                        ShipType::Clipper,
-                        attacker_id,
-                    ));
-                    let atk_colony_name = attacker_nation.name.clone();
-                    report.rewards_earned.push((
-                        attacker_id,
-                        format!(
-                            "{} receives free Clipper ships for establishing its first colony!",
-                            atk_colony_name
-                        ),
-                    ));
-                    report.newspaper_headlines.push((
-                        format!(
-                            "{} receives free Clipper ships for establishing its first colony!",
-                            atk_colony_name
-                        ),
-                        HeadlineCategory::Trade,
-                    ));
-                }
+                award_first_colony_clippers(game, attacker_id, report);
             }
 
             // Record event
@@ -2081,6 +2100,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 .events
                 .push(DomainEvent::ProvinceConquered(ProvinceConquered {
                     province: province_id,
+                    old_owner: defender_id,
                     new_owner: attacker_id,
                 }));
 
@@ -2581,6 +2601,57 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
     }
 }
 
+/// Compute blockade-adjusted cargo capacity for all Great Powers.
+///
+/// For each GP at war with an enemy that has warships, reduce their effective
+/// cargo capacity using `calculate_blockade_effect`. This map is passed to the
+/// trade session so blockades actually reduce trade volume.
+fn compute_blockade_capacity(game: &GameState) -> std::collections::HashMap<NationId, u32> {
+    // Only consider active Great Powers (not anarchic, not eliminated)
+    let active_gp_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power() && !n.is_in_anarchy && !n.province_ids.is_empty())
+        .map(|n| n.id)
+        .collect();
+
+    let mut capacity_map = std::collections::HashMap::new();
+
+    for &nation_id in &active_gp_ids {
+        let nation = match game.get_nation(nation_id) {
+            Some(n) => n,
+            None => continue,
+        };
+        let raw_cargo = nation.total_cargo_capacity();
+
+        // Only count warships from active enemy nations
+        let mut enemy_warship_count: u32 = 0;
+        for &other_id in &active_gp_ids {
+            if other_id == nation_id {
+                continue;
+            }
+            let at_war = game
+                .diplomacy
+                .get_relation(nation_id, other_id)
+                .is_some_and(|r| r.at_war);
+            if at_war
+                && let Some(other) = game.get_nation(other_id)
+            {
+                enemy_warship_count += other.warship_count() as u32;
+            }
+        }
+
+        let effective = if enemy_warship_count > 0 {
+            calculate_blockade_effect(raw_cargo, enemy_warship_count)
+        } else {
+            raw_cargo
+        };
+        capacity_map.insert(nation_id, effective);
+    }
+
+    capacity_map
+}
+
 /// Apply blockade effects: reduce effective trade cargo capacity for nations
 /// whose enemies have warships.
 ///
@@ -3016,40 +3087,7 @@ fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnRepor
             report.incorporations.push((*minor_id, gp_id));
 
             // Free Clippers: first colony established (MN voluntarily incorporated)
-            {
-                let already_has_colony = game.get_nation(gp_id).is_some_and(|n| n.has_colony);
-                if !already_has_colony && let Some(gp) = game.get_nation_mut(gp_id) {
-                    use crate::map::UnitId;
-                    use crate::military::ships::{Ship, ShipType};
-                    gp.has_colony = true;
-                    let base_id = 5_000_000 + gp.id.0 * 100;
-                    gp.merchant_fleet.push(Ship::new(
-                        UnitId(base_id + 1),
-                        ShipType::Clipper,
-                        gp_id,
-                    ));
-                    gp.merchant_fleet.push(Ship::new(
-                        UnitId(base_id + 2),
-                        ShipType::Clipper,
-                        gp_id,
-                    ));
-                    let gp_colony_name = gp.name.clone();
-                    report.rewards_earned.push((
-                        gp_id,
-                        format!(
-                            "{} receives free Clipper ships for establishing its first colony!",
-                            gp_colony_name
-                        ),
-                    ));
-                    report.newspaper_headlines.push((
-                        format!(
-                            "{} receives free Clipper ships for establishing its first colony!",
-                            gp_colony_name
-                        ),
-                        HeadlineCategory::Trade,
-                    ));
-                }
-            }
+            award_first_colony_clippers(game, gp_id, report);
 
             // Record in history
             game.history.push((
@@ -7830,5 +7868,182 @@ mod tests {
         apply_warehouse_caps(&mut game);
         // Should remain unchanged since 30 < 50
         assert_eq!(game.nations[0].resource_amount(ResourceType::Iron), 30);
+    }
+
+    // ── Blockade capacity tests ──────────────────────────────────
+
+    #[test]
+    fn blockade_reduces_effective_cargo_capacity() {
+        use crate::military::ships::{Ship, ShipType};
+        use crate::map::UnitId;
+
+        let mut game = test_game_state();
+
+        // Add a second Great Power
+        let mut nation2 = Nation::new(
+            NationId(2),
+            "EnemyNation".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(200),
+        );
+        nation2.treasury = Money::dollars(5000);
+
+        // Give enemy warships
+        for i in 0..3 {
+            nation2.warships.push(Ship::new(
+                UnitId(9000 + i),
+                ShipType::ShipOfTheLine,
+                NationId(2),
+            ));
+        }
+
+        // Give the player merchant fleet (cargo capacity)
+        let nation1 = game.get_nation_mut(NationId(1)).unwrap();
+        for i in 0..4 {
+            nation1.merchant_fleet.push(Ship::new(
+                UnitId(8000 + i),
+                ShipType::Clipper,
+                NationId(1),
+            ));
+        }
+
+        // Add enemy province so they're not eliminated
+        let coord2 = HexCoord::new(5, 5);
+        let province2 = Province::new(
+            ProvinceId(200),
+            "EnemyLand".to_string(),
+            NationId(2),
+            coord2,
+            vec![coord2],
+            4,
+        );
+        game.provinces.push(province2);
+        game.nations.push(nation2);
+
+        // Declare war
+        game.diplomacy.declare_war(NationId(1), NationId(2));
+
+        // Compute blockade capacity
+        let capacity = compute_blockade_capacity(&game);
+
+        // Without blockade: raw cargo = 4 * clipper_capacity
+        let raw_cargo = game.get_nation(NationId(1)).unwrap().total_cargo_capacity();
+        let effective = capacity.get(&NationId(1)).copied().unwrap_or(raw_cargo);
+
+        // Blockade should reduce capacity when enemy has warships
+        assert!(
+            effective < raw_cargo,
+            "Blockade should reduce cargo: effective={}, raw={}",
+            effective,
+            raw_cargo
+        );
+    }
+
+    #[test]
+    fn blockade_excludes_anarchic_nations() {
+        use crate::military::ships::{Ship, ShipType};
+        use crate::map::UnitId;
+
+        let mut game = test_game_state();
+
+        // Add an anarchic enemy with warships
+        let mut nation2 = Nation::new(
+            NationId(2),
+            "FallenEmpire".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(200),
+        );
+        nation2.treasury = Money::dollars(0);
+        nation2.is_in_anarchy = true;
+        for i in 0..5 {
+            nation2.warships.push(Ship::new(
+                UnitId(9000 + i),
+                ShipType::ShipOfTheLine,
+                NationId(2),
+            ));
+        }
+
+        let nation1 = game.get_nation_mut(NationId(1)).unwrap();
+        for i in 0..4 {
+            nation1.merchant_fleet.push(Ship::new(
+                UnitId(8000 + i),
+                ShipType::Clipper,
+                NationId(1),
+            ));
+        }
+
+        game.nations.push(nation2);
+        game.diplomacy.declare_war(NationId(1), NationId(2));
+
+        let capacity = compute_blockade_capacity(&game);
+        let raw_cargo = game.get_nation(NationId(1)).unwrap().total_cargo_capacity();
+        let effective = capacity.get(&NationId(1)).copied().unwrap_or(raw_cargo);
+
+        // Anarchic nation's warships should NOT reduce trade
+        assert_eq!(
+            effective, raw_cargo,
+            "Anarchic enemy warships should not cause blockade"
+        );
+    }
+
+    // ── Immigration zero-config guard ───────────────────────────
+
+    #[test]
+    fn immigration_no_panic_with_zero_provinces_per_immigrant() {
+        let mut game = test_game_state();
+        // Set provinces_per_immigrant to 0 (bad config — should not panic)
+        game.game_data.game_config.provinces_per_immigrant = 0;
+        game.game_data.game_config.provinces_per_immigrant_upgraded = 0;
+
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.labor.untrained = 2;
+        nation.add_resource(ResourceType::Grain, 20);
+        nation.add_material(MaterialType::CannedFood, 5);
+        nation.add_goods(GoodsType::Clothing, 5);
+        nation.add_goods(GoodsType::Furniture, 5);
+
+        // Should not panic
+        let _report = process_turn(&mut game);
+    }
+
+    // ── NationScore field tests ──────────────────────────────────
+
+    #[test]
+    fn score_includes_tech_treasury_building_components() {
+        use crate::economy::buildings::{Building, BuildingType};
+        use crate::turn::scoring::calculate_score;
+
+        let mut nation = Nation::new(
+            NationId(1),
+            "ScoreTest".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation.treasury = Money::dollars(25_000); // treasury_score = min(250, 500) = 250
+        nation.researched_techs.push(crate::events::TechId(1)); // tech_score = 1 * 30 = 30
+        nation.researched_techs.push(crate::events::TechId(2)); // tech_score = 2 * 30 = 60
+        nation.buildings.push(Building::new(BuildingType::LumberMill, 1)); // building_score = 1 * 10 = 10
+        nation.buildings.push(Building::new(BuildingType::SteelMill, 1)); // building_score = 2 * 10 = 20
+
+        let score = calculate_score(&nation);
+
+        assert_eq!(score.tech_score, 60, "2 techs * 30 = 60");
+        assert_eq!(score.treasury_score, 250, "$25,000 / 100 = 250, capped at 500");
+        assert_eq!(score.building_score, 20, "2 buildings * 10 = 20");
+
+        // Verify total includes all components
+        let expected_total = score.military_score
+            + score.labor_score
+            + score.transport_score
+            + score.merchant_marine_score
+            + score.diplomatic_score
+            + score.province_score
+            + score.tech_score
+            + score.treasury_score
+            + score.building_score;
+        assert_eq!(score.total, expected_total, "Total should equal sum of all components");
     }
 }

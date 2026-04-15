@@ -89,6 +89,7 @@ pub struct TreatyRejected {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProvinceConquered {
     pub province: ProvinceId,
+    pub old_owner: NationId,
     pub new_owner: NationId,
 }
 
@@ -251,10 +252,12 @@ mod tests {
     fn province_conquered_event() {
         let event = ProvinceConquered {
             province: ProvinceId(10),
+            old_owner: NationId(1),
             new_owner: NationId(3),
         };
         let wrapped = DomainEvent::ProvinceConquered(event.clone());
         assert_eq!(event.province, ProvinceId(10));
+        assert_eq!(event.old_owner, NationId(1));
         assert_eq!(event.new_owner, NationId(3));
         assert_eq!(wrapped, DomainEvent::ProvinceConquered(event));
     }
@@ -379,6 +382,7 @@ mod tests {
             }),
             DomainEvent::ProvinceConquered(ProvinceConquered {
                 province: ProvinceId(1),
+                old_owner: NationId(2),
                 new_owner: NationId(1),
             }),
         ];

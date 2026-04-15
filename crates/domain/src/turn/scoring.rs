@@ -12,6 +12,9 @@ pub struct NationScore {
     pub merchant_marine_score: u32,
     pub diplomatic_score: u32,
     pub province_score: u32,
+    pub tech_score: u32,
+    pub treasury_score: u32,
+    pub building_score: u32,
     pub total: u32,
 }
 
@@ -93,6 +96,9 @@ pub fn calculate_score(nation: &Nation) -> NationScore {
         merchant_marine_score,
         diplomatic_score,
         province_score,
+        tech_score,
+        treasury_score,
+        building_score,
         total,
     }
 }
@@ -329,7 +335,10 @@ mod tests {
         assert_eq!(score.merchant_marine_score, 0); // placeholder
         assert_eq!(score.diplomatic_score, 50); // placeholder
         assert_eq!(score.province_score, 375); // 5 provinces * 75
-        assert_eq!(score.total, 475); // 0 + 50 + 0 + 0 + 50 + 375
+        assert_eq!(score.tech_score, 0); // no techs researched
+        assert_eq!(score.treasury_score, 0); // treasury is $0
+        assert_eq!(score.building_score, 0); // no buildings
+        assert_eq!(score.total, 475); // 0 + 50 + 0 + 0 + 50 + 375 + 0 + 0 + 0
     }
 
     #[test]

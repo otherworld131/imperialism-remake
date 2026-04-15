@@ -60,7 +60,15 @@ impl CivilianType {
                 Some(ResourceType::Wool | ResourceType::Livestock | ResourceType::Horses)
             ),
             Self::Forester => matches!(resource, Some(ResourceType::Timber)),
-            Self::Miner => matches!(resource, Some(ResourceType::Coal | ResourceType::Iron)),
+            Self::Miner => matches!(
+                resource,
+                Some(
+                    ResourceType::Coal
+                        | ResourceType::Iron
+                        | ResourceType::Gold
+                        | ResourceType::Gems
+                )
+            ),
             Self::Driller => matches!(resource, Some(ResourceType::Oil)),
             Self::Prospector => terrain.can_have_deposits(),
             Self::Engineer => terrain.is_land(),
@@ -129,7 +137,11 @@ impl Civilian {
     }
 
     /// Begin working on an improvement that takes `turns` turns to complete.
+    /// Does nothing if `turns` is 0 (prevents deadlock where tick() never completes).
     pub fn start_work(&mut self, turns: u8) {
+        if turns == 0 {
+            return;
+        }
         self.working = true;
         self.turns_remaining = turns;
     }
