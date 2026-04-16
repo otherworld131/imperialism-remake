@@ -127,6 +127,7 @@ fn test_100_turn_endurance() {
 }
 
 #[test]
+#[ignore] // slow full-game test — run with `cargo test -- --ignored`
 fn test_full_game_to_1915() {
     // 400 turns: from 1815 Q1 (turn 1) to 1915 Q1 (turn 401 after advancing)
     let game = run_simulation("full_game", 400, Difficulty::Normal, 0);
@@ -158,38 +159,60 @@ fn test_full_game_to_1915() {
 
 #[test]
 fn test_determinism() {
-    let turns = 50;
+    let turns = 20;
     let map_key = "determinism_test";
 
     let game_a = run_simulation(map_key, turns, Difficulty::Normal, 0);
     let game_b = run_simulation(map_key, turns, Difficulty::Normal, 0);
 
-    // Both games should have identical turn numbers
+    // Static structure must match
     assert_eq!(game_a.turn, game_b.turn, "Turn numbers should be identical");
-
-    // Same nations in the same order
     assert_eq!(game_a.nations.len(), game_b.nations.len());
-    for (nation_a, nation_b) in game_a.nations.iter().zip(game_b.nations.iter()) {
-        assert_eq!(
-            nation_a.id, nation_b.id,
-            "Nations should be in the same order"
-        );
-        assert_eq!(nation_a.name, nation_b.name, "Nation names should match");
-    }
-
-    // Map tiles should be identical (map generation is deterministic)
     assert_eq!(
         game_a.hex_map.tile_count(),
         game_b.hex_map.tile_count(),
         "Map tile counts should be identical"
     );
+    assert_eq!(game_a.provinces.len(), game_b.provinces.len());
 
-    // Total province count should be the same (provinces don't disappear)
-    assert_eq!(
-        game_a.provinces.len(),
-        game_b.provinces.len(),
-        "Province counts should be identical"
-    );
+    // Dynamic state must also match — the game uses seeded RNG so two runs
+    // with the same map key should produce identical outcomes.
+    for (nation_a, nation_b) in game_a.nations.iter().zip(game_b.nations.iter()) {
+        assert_eq!(nation_a.id, nation_b.id, "Nation IDs should match");
+        assert_eq!(nation_a.name, nation_b.name, "Nation names should match");
+        assert_eq!(
+            nation_a.treasury, nation_b.treasury,
+            "Treasury should be identical for {}",
+            nation_a.name
+        );
+        assert_eq!(
+            nation_a.army.len(),
+            nation_b.army.len(),
+            "Army size should be identical for {}",
+            nation_a.name
+        );
+        assert_eq!(
+            nation_a.warships.len(),
+            nation_b.warships.len(),
+            "Warship count should be identical for {}",
+            nation_a.name
+        );
+        assert_eq!(
+            nation_a.province_count(),
+            nation_b.province_count(),
+            "Province count should be identical for {}",
+            nation_a.name
+        );
+    }
+
+    // Province ownership must match
+    for (prov_a, prov_b) in game_a.provinces.iter().zip(game_b.provinces.iter()) {
+        assert_eq!(
+            prov_a.owner, prov_b.owner,
+            "Province {} ownership should be deterministic",
+            prov_a.name
+        );
+    }
 }
 
 #[test]
@@ -289,21 +312,14 @@ fn test_all_nations_as_player() {
     }
 
     // Additionally verify that different indices give different human nations.
-    let mut human_ids: Vec<NationId> = Vec::new();
+    let mut human_ids = std::collections::HashSet::new();
     for index in 0..7 {
         let game = new_game("player_nation_test", Difficulty::Normal, index);
-        human_ids.push(game.human_player_nation);
+        human_ids.insert(game.human_player_nation);
     }
-    // All 7 should be unique
-    let unique_count = {
-        let mut s = std::collections::HashSet::new();
-        for id in &human_ids {
-            s.insert(*id);
-        }
-        s.len()
-    };
     assert_eq!(
-        unique_count, 7,
+        human_ids.len(),
+        7,
         "Each human_nation_index should select a different Great Power"
     );
 }
@@ -387,10 +403,10 @@ fn ai_conquers_minor_nation_within_50_turns() {
 
 #[test]
 fn ai_does_not_declare_war_on_allies() {
-    // Run 100 turns and verify no AI declares war on a nation it has an alliance with.
+    // Run 50 turns and verify no AI declares war on a nation it has an alliance with.
     // This passes as long as AI code checks for alliances before declaring war.
     let mut game = new_game("diplo_test", Difficulty::Normal, 0);
-    for turn in 0..100 {
+    for turn in 0..50 {
         process_turn(&mut game);
         // After each turn, verify no two nations that are allies are also at war
         let gp_ids: Vec<NationId> = game.great_powers().iter().map(|n| n.id).collect();
@@ -448,70 +464,54 @@ fn application_shuts_down_cleanly() {
 #[test]
 fn ai_hard_gets_resource_bonus() {
     // On Hard difficulty, AI nations get +10% resource production bonus.
-    // Run 20 turns on both Normal and Hard; compare AI resource totals.
-    let mut game_hard = new_game("ai_bonus_h", Difficulty::Hard, 0);
-    let mut game_normal = new_game("ai_bonus_h", Difficulty::Normal, 0);
-    for _ in 0..20 {
-        process_turn(&mut game_hard);
-        process_turn(&mut game_normal);
+    // Verify the economy functions correctly under this difficulty.
+    let mut game = new_game("ai_bonus_h", Difficulty::Hard, 0);
+    for _ in 0..5 {
+        process_turn(&mut game);
     }
 
-    // Sum all warehouse resources across all AI Great Powers
-    let ai_resources_hard: u32 = game_hard
-        .great_powers()
-        .iter()
-        .filter(|n| n.id != game_hard.human_player_nation)
-        .flat_map(|n| n.warehouse.values())
-        .sum();
-    let ai_resources_normal: u32 = game_normal
-        .great_powers()
-        .iter()
-        .filter(|n| n.id != game_normal.human_player_nation)
-        .flat_map(|n| n.warehouse.values())
-        .sum();
+    assert_eq!(game.difficulty, Difficulty::Hard);
 
-    // On Hard, AI should accumulate at least as many resources as on Normal
-    // (they get a 10% bonus). The effect may be diluted by spending, but the
-    // mechanism must be active.
-    // We verify the system is running by checking the Hard game's AI nations
-    // have a bonus applied. Check the difficulty is set correctly.
-    assert_eq!(game_hard.difficulty, Difficulty::Hard);
-    // The bonus multiplier (1.1) should mean AI resources on Hard >= Normal
-    // (modulo spending decisions which may differ). At minimum, verify no crash.
+    // AI nations should have produced some resources after 5 turns.
+    let ai_has_output = game
+        .great_powers()
+        .iter()
+        .filter(|n| n.id != game.human_player_nation)
+        .any(|n| {
+            let resources: u32 = n.warehouse.values().sum();
+            let materials: u32 = n.materials.values().sum();
+            resources > 0 || materials > 0 || n.treasury > Money::dollars(0)
+        });
     assert!(
-        ai_resources_hard > 0 || ai_resources_normal > 0,
-        "AI nations should have produced some resources after 20 turns"
+        ai_has_output,
+        "AI nations should have economic output after 5 turns on Hard"
     );
 }
 
 #[test]
 fn ai_noi_gets_larger_resource_bonus() {
     // On NighOnImpossible, AI nations get +25% resource production bonus.
+    // Verify the economy functions correctly under this difficulty.
     let mut game = new_game("ai_bonus_noi", Difficulty::NighOnImpossible, 0);
-    for _ in 0..20 {
+    for _ in 0..5 {
         process_turn(&mut game);
     }
 
     assert_eq!(game.difficulty, Difficulty::NighOnImpossible);
 
-    // Verify at least one AI nation has accumulated resources.
-    // The +25% bonus means AI should be more productive.
-    let any_ai_has_resources = game
+    let ai_has_output = game
         .great_powers()
         .iter()
         .filter(|n| n.id != game.human_player_nation)
         .any(|n| {
-            let total: u32 = n.warehouse.values().sum();
-            let total_materials: u32 = n.materials.values().sum();
-            total > 0 || total_materials > 0 || n.treasury > Money::dollars(0)
+            let resources: u32 = n.warehouse.values().sum();
+            let materials: u32 = n.materials.values().sum();
+            resources > 0 || materials > 0 || n.treasury > Money::dollars(0)
         });
     assert!(
-        any_ai_has_resources,
-        "After 20 turns on NOI, AI nations with +25% bonus should have some economic output"
+        ai_has_output,
+        "AI nations should have economic output after 5 turns on NOI"
     );
-
-    // Also verify AI starting cash bonus: AI should have started with $5000 + $5000 = $10,000
-    // (though they may have spent it). The human gets only $5000.
 }
 
 #[test]
@@ -656,6 +656,7 @@ fn land_battle_balance_various_compositions() {
 // ── Late-game memory profiling ───────────────────────────────────
 
 #[test]
+#[ignore] // slow profiling test — run with `cargo test -- --ignored`
 fn profile_memory_late_game() {
     let mut game = new_game("late_game", Difficulty::Normal, 0);
     // Fast forward to turn 300

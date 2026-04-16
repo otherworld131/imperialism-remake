@@ -195,6 +195,16 @@ Requires PyMuPDF (`pip install pymupdf`).
 - Every checklist item in `plan/` has a verification strategy runnable from the command line
 - **No backward compatibility**: Old saves are not supported. Do not write migration code, save-version fallback paths, or compatibility shims. If you encounter existing backward-compat code, remove it.
 
+## Known Bugs
+
+- **Non-determinism in turn processing**: Two games with the same map key produce different
+  treasury values after ~20 turns (e.g., "Devron" gets $357,500 in one run vs $482,500 in another).
+  Likely caused by HashMap iteration order in the turn processor or AI decision logic.
+  The `test_determinism` test in `tests/simulation.rs` now checks dynamic state (treasury,
+  army size, province ownership) and will fail until this is fixed. Root cause is in
+  `crates/domain/src/turn/processor.rs` — look for HashMap iteration that feeds into
+  order-dependent logic (resource distribution, AI decisions, combat resolution).
+
 ## Plan Index
 
 All implementation checklists live in `plan/`:

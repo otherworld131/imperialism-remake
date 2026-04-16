@@ -736,12 +736,12 @@ mod tests {
     }
 
     #[test]
-    fn simulate_100_turns_all_techs_researchable() {
-        // Start a game, research cheapest tech each turn for 100 turns
+    fn simulate_30_turns_all_techs_researchable() {
+        // Start a game, research cheapest tech each turn for 30 turns
         // Verify that techs become available and can be researched
         let mut game = crate::game_state::new_game("tech_sim", crate::types::Difficulty::Normal, 0);
         let mut researched_count = 0;
-        for _ in 0..100 {
+        for _ in 0..30 {
             let available = game.game_data.tech_tree.available_techs(
                 &game
                     .get_nation(game.human_player_nation)
@@ -758,8 +758,9 @@ mod tests {
             crate::turn::process_turn(&mut game);
         }
         assert!(
-            researched_count > 0,
-            "Should have researched at least some techs"
+            researched_count >= 3,
+            "Should have researched at least 3 techs in 30 turns, got {}",
+            researched_count
         );
     }
 

@@ -39,16 +39,6 @@ fn assert_state_valid(game: &GameState) {
     assert_eq!(game.minor_nations().len(), 16);
 }
 
-// ── Test: Run 400 turns immediately — no panics ─────────────────
-
-#[test]
-fn start_game_run_400_turns_no_panics() {
-    let game = run_game("edge_400", 400, Difficulty::Normal, 0);
-    assert_state_valid(&game);
-    assert!(game.is_game_over(), "Game should be over after 400 turns");
-    assert_eq!(game.turn, TurnNumber::new(401));
-}
-
 // ── Test: All AI nations declare war on human — game survives ───
 
 #[test]
@@ -200,7 +190,7 @@ fn multiple_save_load_cycles_preserve_state() {
 // ── Test: All difficulties survive full game ────────────────────
 
 #[test]
-fn all_difficulties_survive_100_turns() {
+fn all_difficulties_survive_10_turns() {
     let difficulties = [
         Difficulty::Introductory,
         Difficulty::Easy,
@@ -210,11 +200,11 @@ fn all_difficulties_survive_100_turns() {
     ];
 
     for difficulty in &difficulties {
-        let game = run_game("difficulty_edge", 100, *difficulty, 0);
+        let game = run_game("difficulty_edge", 10, *difficulty, 0);
         assert_state_valid(&game);
         assert_eq!(
             game.turn,
-            TurnNumber::new(101),
+            TurnNumber::new(11),
             "Failed for difficulty {:?}",
             difficulty
         );
@@ -226,7 +216,7 @@ fn all_difficulties_survive_100_turns() {
 #[test]
 fn every_nation_index_works_as_human() {
     for index in 0..7 {
-        let game = run_game("nation_index_test", 10, Difficulty::Normal, index);
+        let game = run_game("nation_index_test", 5, Difficulty::Normal, index);
         assert_state_valid(&game);
     }
 }

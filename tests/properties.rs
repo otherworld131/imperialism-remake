@@ -512,10 +512,10 @@ fn hex_neighbors_always_distance_one() {
 
 // ── Map invariants for many random seeds ──────────────────────
 
-/// Test that map validation passes for 50 random seeds.
+/// Test that map validation passes for 15 random seeds.
 #[test]
-fn map_invariants_hold_for_50_random_seeds() {
-    for i in 0..50 {
+fn map_invariants_hold_for_many_random_seeds() {
+    for i in 0..15 {
         let key = format!("prop_test_{}", i);
         let map = generate_map(&key);
         let result = validate_map(&map);

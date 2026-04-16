@@ -7,6 +7,7 @@ use domain::turn::process_turn;
 use domain::types::{Difficulty, NationId, ResourceType};
 
 #[test]
+#[ignore] // slow benchmark — run with `cargo test -- --ignored`
 fn benchmark_turn_resolution() {
     let mut game = new_game("bench", Difficulty::Normal, 0);
     // Warm up
@@ -36,6 +37,7 @@ fn benchmark_turn_resolution() {
 }
 
 #[test]
+#[ignore] // slow benchmark — run with `cargo test -- --ignored`
 fn benchmark_map_generation() {
     let start = Instant::now();
     let maps = 10;
@@ -58,6 +60,7 @@ fn benchmark_map_generation() {
 }
 
 #[test]
+#[ignore] // slow benchmark — run with `cargo test -- --ignored`
 fn benchmark_ai_processing() {
     let mut game = new_game("ai_bench", Difficulty::Normal, 0);
     for _ in 0..20 {
@@ -81,6 +84,7 @@ fn benchmark_ai_processing() {
 }
 
 #[test]
+#[ignore] // slow benchmark — run with `cargo test -- --ignored`
 fn benchmark_save_load() {
     use infrastructure::persistence::{load_game, save_game};
     use std::path::Path;
@@ -108,6 +112,7 @@ fn benchmark_save_load() {
 }
 
 #[test]
+#[ignore] // slow benchmark — run with `cargo test -- --ignored`
 fn benchmark_full_game_to_1915() {
     let start = Instant::now();
     let mut game = new_game("full_bench", Difficulty::Normal, 0);
@@ -129,6 +134,7 @@ fn benchmark_full_game_to_1915() {
 }
 
 #[test]
+#[ignore] // slow benchmark — run with `cargo test -- --ignored`
 fn benchmark_memory_usage() {
     let game = new_game("mem_bench", Difficulty::Normal, 0);
     let size = std::mem::size_of_val(&game);
@@ -138,6 +144,7 @@ fn benchmark_memory_usage() {
 }
 
 #[test]
+#[ignore] // slow benchmark — run with `cargo test -- --ignored`
 fn memory_test_400_turn_game() {
     let mut game = new_game("mem_400", Difficulty::Normal, 0);
     for _ in 0..400 {
@@ -176,6 +183,7 @@ fn memory_test_400_turn_game() {
 }
 
 #[test]
+#[ignore] // slow benchmark — run with `cargo test -- --ignored`
 fn stress_test_all_nations_at_war() {
     let mut game = new_game("stress", Difficulty::Normal, 0);
 
@@ -221,6 +229,7 @@ fn stress_test_all_nations_at_war() {
 }
 
 #[test]
+#[ignore] // slow benchmark — run with `cargo test -- --ignored`
 fn profile_turn_resolution_steps() {
     let mut game = new_game("profile", Difficulty::Normal, 0);
     // Warm up
@@ -245,6 +254,7 @@ fn profile_turn_resolution_steps() {
 }
 
 #[test]
+#[ignore] // slow benchmark — run with `cargo test -- --ignored`
 fn performance_regression_baseline() {
     // Establish baseline timings for regression detection
     let mut game = new_game("regression", Difficulty::Normal, 0);

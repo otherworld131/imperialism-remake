@@ -13,6 +13,9 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 
+[profile.test]
+opt-level = 1
+
 [package]
 name = "imperialism-remake"
 version.workspace = true
