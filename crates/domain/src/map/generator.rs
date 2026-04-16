@@ -288,14 +288,16 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
             format!("{} Province {}", nation_name, pdata.id)
         };
 
-        provinces.push(Province::new(
+        let mut prov = Province::new(
             pid,
             name,
             nation_id,
             capital_tile,
             pdata.tiles.clone(),
             garrison,
-        ));
+        );
+        prov.coastal = super::province::compute_coastal(&hex_map, &prov);
+        provinces.push(prov);
     }
 
     // Step 12: Build NationSetup structs

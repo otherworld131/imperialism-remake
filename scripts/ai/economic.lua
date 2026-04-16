@@ -50,6 +50,7 @@ economic = {
     max_warships_low_treasury = 2,
     max_warships_high_treasury = 4,
     max_merchant_ships = 3,
+    min_army_naval_invasion = 6,  -- moderately cautious about overseas ops
 
     -- Economy
     expansion_threshold_multiplier = 1,

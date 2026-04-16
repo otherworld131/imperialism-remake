@@ -50,6 +50,7 @@ aggressive = {
     max_warships_low_treasury = 4,
     max_warships_high_treasury = 6,
     max_merchant_ships = 1,
+    min_army_naval_invasion = 4,  -- attack overseas targets with 4+ units
 
     -- Economy
     expansion_threshold_multiplier = 2,

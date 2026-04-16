@@ -166,6 +166,18 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
 /// - Estimate enemy strength (provinces × 4 for garrison + known army size)
 /// - Prefer coastal attack targets when AI has naval superiority
 pub fn ai_naval_strategy(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
+    let personality = get_personality(game, nation_id);
+
+    // ── Read Lua config (feature-gated) ──────────────────────
+    #[cfg(feature = "lua")]
+    let lua_cfg = game
+        .game_data
+        .lua_engine
+        .as_ref()
+        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+    #[cfg(not(feature = "lua"))]
+    let _lua_cfg: Option<()> = None;
+
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,
         None => return,
@@ -260,39 +272,80 @@ pub fn ai_naval_strategy(game: &mut GameState, nation_id: NationId, actions: &mu
         return; // Focus on shipbuilding when outmatched
     }
 
-    // If AI has naval superiority, announce blockade capability
+    // If AI has naval superiority, consider beachhead operations
     if our_naval_fp > 0 && our_naval_fp > max_enemy_naval_fp {
         // Blockade is applied automatically by the game engine.
-        // AI reconnaissance: estimate enemy forces
+        // Check if we should establish naval landing sites for enemies
+        // we can't reach by land.
+
+        // Load min army size for naval invasion from Lua config
+        #[cfg(feature = "lua")]
+        let min_army_for_invasion: usize = lua_cfg
+            .as_ref()
+            .and_then(|c| c.min_army_naval_invasion)
+            .unwrap_or(4);
+        #[cfg(not(feature = "lua"))]
+        let min_army_for_invasion: usize = 4;
+
+        let our_army_size = game
+            .get_nation(nation_id)
+            .map(|n| n.army.len())
+            .unwrap_or(0);
+        let our_province_ids: Vec<ProvinceId> = game
+            .get_nation(nation_id)
+            .map(|n| n.province_ids.clone())
+            .unwrap_or_default();
+
+        // Sea-zone adjacency: must own at least one coastal province to embark
+        let we_have_coast = our_province_ids
+            .iter()
+            .any(|&pid| game.get_province(pid).is_some_and(|p| p.coastal));
+
         for &enemy_id in &enemies {
-            let enemy_provinces = game
-                .provinces
-                .iter()
-                .filter(|p| p.owner == enemy_id)
-                .count();
-            let enemy_army_size = game.get_nation(enemy_id).map(|n| n.army.len()).unwrap_or(0);
-            let estimated_enemy_strength = enemy_provinces * 4 + enemy_army_size;
+            if our_army_size < min_army_for_invasion || !we_have_coast {
+                continue;
+            }
 
-            // If AI has army superiority and naval superiority, prefer coastal targets
-            let our_army_size = game
-                .get_nation(nation_id)
-                .map(|n| n.army.len())
-                .unwrap_or(0);
+            // Check if we have any land-adjacent enemy provinces
+            let has_land_adjacent_target = game.provinces.iter().any(|enemy_prov| {
+                enemy_prov.owner == enemy_id
+                    && our_province_ids.iter().any(|&our_pid| {
+                        game.get_province(our_pid).is_some_and(|our_prov| {
+                            crate::map::provinces_are_adjacent(&game.hex_map, our_prov, enemy_prov)
+                        })
+                    })
+            });
 
-            if our_army_size >= 4 && our_army_size > estimated_enemy_strength / 2 {
-                // Look for coastal enemy provinces to prioritize in attacks
-                // (The actual attack queueing happens in ai_military_strategy;
-                // this just adds a headline for the report)
-                let enemy_has_coastal = game
+            // If we can't reach the enemy by land, use naval invasion
+            if !has_land_adjacent_target {
+                // Find coastal enemy province to target
+                let coastal_target = game
                     .provinces
                     .iter()
-                    .any(|p| p.owner == enemy_id && p.is_coastal());
+                    .find(|p| p.owner == enemy_id && p.coastal);
 
-                if enemy_has_coastal {
+                if let Some(target_prov) = coastal_target {
+                    // Assign warships to beachhead operation targeting the specific province
+                    let target_pid = target_prov.id;
+                    let target_prov_name = target_prov.name.clone();
+                    if let Some(nation) = game.get_nation_mut(nation_id) {
+                        for ship in &mut nation.warships {
+                            ship.operation = Some(
+                                crate::military::naval::NavalOperation::Beachhead(target_pid),
+                            );
+                        }
+                    }
                     actions.push(format!(
-                        "{} is preparing amphibious operations against the enemy coast",
-                        nation_name
+                        "{} launches amphibious invasion targeting {}",
+                        nation_name, target_prov_name
                     ));
+
+                    if game.ai_debug {
+                        eprintln!(
+                            "[AI:{}:naval] Assigning warships to beachhead against {} (no land-adjacent targets)",
+                            nation_name, enemy_id.0
+                        );
+                    }
                 }
             }
         }

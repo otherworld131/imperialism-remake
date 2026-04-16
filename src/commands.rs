@@ -1487,13 +1487,30 @@ pub(crate) fn cmd_attack(game: &mut GameState, query: &str) {
         return;
     }
 
-    // Find first province owned by target
-    let target_province = game.provinces.iter().find(|p| p.owner == target_id);
+    // Find first adjacent (or landing-accessible) province owned by target
+    let player_province_ids: Vec<domain::types::ProvinceId> = game
+        .get_nation(player_id)
+        .map(|n| n.province_ids.clone())
+        .unwrap_or_default();
+    let target_province = game.provinces.iter().find(|p| {
+        p.owner == target_id
+            && (player_province_ids.iter().any(|&our_pid| {
+                game.get_province(our_pid).is_some_and(|our_prov| {
+                    domain::map::provinces_are_adjacent(&game.hex_map, our_prov, p)
+                })
+            }) || game
+                .pending_landings
+                .iter()
+                .any(|(nid, pid, _)| *nid == player_id && *pid == p.id))
+    });
 
     let province_id = match target_province {
         Some(p) => p.id,
         None => {
-            println!("  {} has no provinces to attack.", target_name);
+            println!(
+                "  {} has no reachable provinces to attack. You need an adjacent province or a naval landing site.",
+                target_name
+            );
             return;
         }
     };
@@ -1511,6 +1528,89 @@ pub(crate) fn cmd_attack(game: &mut GameState, query: &str) {
     println!(
         "  {} pending attack(s) queued. End turn to resolve.",
         game.pending_attacks.len()
+    );
+}
+
+/// Assign warships to establish a beachhead (naval landing site) against a target nation.
+pub(crate) fn cmd_beachhead(game: &mut GameState, query: &str) {
+    let player_id = game.human_player_nation;
+
+    let target = match game.find_nation_by_name(query) {
+        Some(n) => n,
+        None => {
+            println!("  Nation '{}' not found.", query);
+            return;
+        }
+    };
+    let target_id = target.id;
+    let target_name = target.name.clone();
+
+    if target_id == player_id {
+        println!("  You cannot target yourself.");
+        return;
+    }
+
+    // Must be at war
+    let at_war = game
+        .diplomacy
+        .get_relation(player_id, target_id)
+        .map(|r| r.at_war)
+        .unwrap_or(false);
+    let target_anarchic = game.get_nation(target_id).is_some_and(|n| n.is_in_anarchy);
+    if !at_war && !target_anarchic {
+        println!("  You are not at war with {}.", target_name);
+        return;
+    }
+
+    // Must have warships
+    let player = game.get_nation(player_id).unwrap();
+    if player.warships.is_empty() {
+        println!("  You have no warships! Build warships first.");
+        return;
+    }
+
+    // Sea-zone adjacency: must own a coastal province to embark from
+    let has_coast = player
+        .province_ids
+        .iter()
+        .any(|&pid| game.get_province(pid).is_some_and(|p| p.coastal));
+    if !has_coast {
+        println!("  You have no coastal provinces to embark from!");
+        return;
+    }
+
+    // Find first coastal province of the target
+    let coastal_province = game
+        .provinces
+        .iter()
+        .find(|p| p.owner == target_id && p.coastal);
+    let coastal_pid = match coastal_province {
+        Some(p) => p.id,
+        None => {
+            println!("  {} has no coastal provinces to target.", target_name);
+            return;
+        }
+    };
+    let coastal_name = game
+        .get_province(coastal_pid)
+        .map(|p| p.name.clone())
+        .unwrap_or_default();
+
+    // Assign all warships to beachhead targeting the specific province
+    if let Some(nation) = game.get_nation_mut(player_id) {
+        for ship in &mut nation.warships {
+            ship.operation = Some(domain::military::naval::NavalOperation::Beachhead(
+                coastal_pid,
+            ));
+        }
+    }
+
+    println!(
+        "  Fleet assigned to establish a beachhead at {} ({})!",
+        coastal_name, target_name
+    );
+    println!(
+        "  Landing site will be established at end of turn. Attack the coastal province next turn."
     );
 }
 

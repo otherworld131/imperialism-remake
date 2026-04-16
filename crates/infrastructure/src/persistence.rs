@@ -142,12 +142,7 @@ pub fn load_game(path: &Path) -> Result<GameState, String> {
         return Ok(game);
     }
 
-    // Fall back to loading unversioned saves for backwards compatibility.
-    let mut game: GameState =
-        serde_json::from_str(&json).map_err(|e| format!("Deserialization error: {}", e))?;
-    // Reconstruct non-serialized fields
-    game.game_data = GameData::default();
-    Ok(game)
+    Err("Unrecognized save format".to_string())
 }
 
 /// Read save file metadata without loading the full game state.

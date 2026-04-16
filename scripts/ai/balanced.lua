@@ -50,6 +50,7 @@ balanced = {
     max_warships_low_treasury = 2,
     max_warships_high_treasury = 4,
     max_merchant_ships = 3,
+    min_army_naval_invasion = 5,  -- needs 5+ units for overseas attack
 
     -- Economy
     expansion_threshold_multiplier = 2,

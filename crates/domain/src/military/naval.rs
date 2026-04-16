@@ -26,9 +26,10 @@ pub enum NavalOperation {
     Escort,
     /// Warship participates in a blockade against a target nation.
     Blockade(NationId),
-    /// Warships establish a landing zone (beachhead) on hostile coastline.
+    /// Warships establish a landing zone (beachhead) on a specific hostile coastal province.
     /// Landing force size = total arms cost of all ships in the beachhead fleet.
-    Beachhead(NationId),
+    /// The province must be coastal and owned by a nation the attacker is at war with.
+    Beachhead(ProvinceId),
     /// Warship performs reconnaissance on an enemy nation: estimates ground forces.
     Reconnaissance(NationId),
 }

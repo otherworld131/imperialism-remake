@@ -160,6 +160,27 @@ After implementing any plan that touches game logic, **always run a few batch ga
 
 After any changes to Rust code that affect the web frontend, use `./web/restart-web-server.sh` to rebuild the WASM bridge and restart the dev server.
 
+## Reference: Original Game Manual
+
+The original Imperialism 1 manual PDF is at `docs/imperialism-1-manual.pdf` (120 pages).
+Extract text with the provided utility:
+
+```bash
+# Single page
+python3 tools/pdf_extract.py 17
+
+# Page range
+python3 tools/pdf_extract.py 15-20
+
+# Search all pages for keyword
+python3 tools/pdf_extract.py --search "naval landing"
+
+# Search within a page range
+python3 tools/pdf_extract.py --search "capital city" 10-30
+```
+
+Requires PyMuPDF (`pip install pymupdf`).
+
 ## Conventions
 
 - `cargo build` must succeed with zero warnings at all times
@@ -172,6 +193,7 @@ After any changes to Rust code that affect the web frontend, use `./web/restart-
 - Frontend and infrastructure never leak into domain
 - Lua scripts are sandboxed — no file I/O, no network, no OS calls from Lua
 - Every checklist item in `plan/` has a verification strategy runnable from the command line
+- **No backward compatibility**: Old saves are not supported. Do not write migration code, save-version fallback paths, or compatibility shims. If you encounter existing backward-compat code, remove it.
 
 ## Plan Index
 

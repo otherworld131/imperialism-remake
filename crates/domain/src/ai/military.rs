@@ -711,6 +711,10 @@ pub(crate) fn ai_military_strategy(
     if !enemies.is_empty() && army_size >= 4 {
         // Score each enemy province — lower score = better target
         let mut candidates: Vec<(ProvinceId, i32)> = Vec::new();
+        let attacker_province_ids: Vec<ProvinceId> = game
+            .get_nation(nation_id)
+            .map(|n| n.province_ids.clone())
+            .unwrap_or_default();
         for &enemy_id in &enemies {
             let enemy_is_gp = game
                 .get_nation(enemy_id)
@@ -731,8 +735,28 @@ pub(crate) fn ai_military_strategy(
                 counts
             };
 
+            // Pre-compute which of our provinces are adjacent to enemy territory
+            let our_provinces: Vec<&crate::map::Province> = game
+                .provinces
+                .iter()
+                .filter(|p| attacker_province_ids.contains(&p.id))
+                .collect();
+
             for prov in &game.provinces {
                 if prov.owner == enemy_id {
+                    // Adjacency check: only attack provinces reachable by land
+                    // (adjacent to one of our provinces) or via a naval landing site.
+                    let is_adjacent = our_provinces
+                        .iter()
+                        .any(|ours| crate::map::provinces_are_adjacent(&game.hex_map, ours, prov));
+                    let has_landing = game
+                        .pending_landings
+                        .iter()
+                        .any(|(nid, pid, _)| *nid == nation_id && *pid == prov.id);
+                    if !is_adjacent && !has_landing {
+                        continue;
+                    }
+
                     let tile_count = prov.tiles.len();
                     // Use actual garrison count from the province
                     let garrison_size = prov.garrison_count as usize;
@@ -1223,28 +1247,119 @@ mod tests {
     fn ai_targets_weaker_provinces() {
         use crate::hex::HexCoord;
         use crate::map::Province;
+        use crate::map::tile::Tile;
 
-        let mut game = test_game_with_ai_and_minor();
+        // Build a game with adjacent provinces so the adjacency check passes.
+        // AI province at (0,0), minor provinces adjacent at (1,0) and (2,0).
+        let mut hex_map = crate::map::HexMap::new(20, 20);
+        // AI tile
+        hex_map.set_tile(
+            HexCoord::new(0, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+        // Minor province 1 tile (adjacent to AI at (0,0))
+        hex_map.set_tile(
+            HexCoord::new(1, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(3)),
+        );
+        // Minor province 2 tiles (adjacent to minor province 1 and farther from AI)
+        for coord in [
+            HexCoord::new(2, 0),
+            HexCoord::new(3, 0),
+            HexCoord::new(2, 1),
+            HexCoord::new(3, 1),
+            HexCoord::new(4, 0),
+        ] {
+            hex_map.set_tile(
+                coord,
+                Tile::with_province(TerrainType::Grassland, ProvinceId(4)),
+            );
+        }
 
-        // Add a second minor province with more tiles (stronger garrison estimate)
+        let province2 = Province::new(
+            ProvinceId(2),
+            "AI Land".to_string(),
+            NationId(2),
+            HexCoord::new(0, 0),
+            vec![HexCoord::new(0, 0)],
+            4,
+        );
+        let province3 = Province::new(
+            ProvinceId(3),
+            "Small Minor".to_string(),
+            NationId(3),
+            HexCoord::new(1, 0),
+            vec![HexCoord::new(1, 0)],
+            3,
+        );
         let province4 = Province::new(
             ProvinceId(4),
-            "Big Minor Province".to_string(),
+            "Big Minor".to_string(),
             NationId(3),
-            HexCoord::new(6, 6),
+            HexCoord::new(2, 0),
             vec![
-                HexCoord::new(6, 6),
-                HexCoord::new(7, 6),
-                HexCoord::new(6, 7),
-                HexCoord::new(7, 7),
-                HexCoord::new(8, 6),
+                HexCoord::new(2, 0),
+                HexCoord::new(3, 0),
+                HexCoord::new(2, 1),
+                HexCoord::new(3, 1),
+                HexCoord::new(4, 0),
             ],
             3,
         );
-        game.provinces.push(province4);
-        game.get_nation_mut(NationId(3))
-            .unwrap()
-            .add_province(ProvinceId(4));
+
+        let mut ai_nation = crate::nation::Nation::new(
+            NationId(2),
+            "AINation".to_string(),
+            crate::nation::NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(2),
+        );
+        ai_nation.treasury = Money::dollars(10000);
+        for i in 0..4 {
+            ai_nation
+                .civilians
+                .push(crate::economy::civilians::Civilian::new(
+                    UnitId(10000 + i),
+                    crate::economy::civilians::CivilianType::Farmer,
+                    NationId(2),
+                ));
+        }
+
+        let mut minor_nation = crate::nation::Nation::new(
+            NationId(3),
+            "MinorLand".to_string(),
+            crate::nation::NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(3),
+        );
+        minor_nation.add_province(ProvinceId(4));
+
+        let human_nation = crate::nation::Nation::new(
+            NationId(1),
+            "HumanNation".to_string(),
+            crate::nation::NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![province2, province3, province4],
+            nations: vec![human_nation, ai_nation, minor_nation],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: crate::data::GameData::default(),
+            diplomacy: crate::diplomacy::DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            ai_debug: false,
+        };
 
         // Put AI at war with minor
         game.diplomacy.declare_war(NationId(2), NationId(3));

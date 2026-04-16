@@ -1,4 +1,5 @@
 use crate::hex::HexCoord;
+use crate::map::hex_map::HexMap;
 use crate::types::*;
 
 /// The level of industrialization of a province's settlement.
@@ -44,6 +45,11 @@ pub struct Province {
     /// `None` means not yet a Village or already a Town.
     #[serde(default)]
     pub town_countdown: Option<u8>,
+    /// Whether this province has at least one tile adjacent to a Sea tile.
+    /// Computed at map generation time. Coastal provinces can be targeted
+    /// by naval landings (beachhead operations).
+    #[serde(default)]
+    pub coastal: bool,
 }
 
 impl Province {
@@ -75,6 +81,7 @@ impl Province {
             connected_to_capital: false,
             industrialization_turns_remaining: None,
             town_countdown: None,
+            coastal: false,
         }
     }
 
@@ -96,17 +103,46 @@ impl Province {
         )
     }
 
-    /// Whether this province contains any coastal tile.
+    /// Whether this province contains any coastal tile (adjacent to Sea).
     ///
-    /// Stub — always returns `false` until sea-adjacency data is available.
+    /// Computed at map generation time and stored in the `coastal` field.
     pub fn is_coastal(&self) -> bool {
-        false
+        self.coastal
     }
 
     /// The number of tiles in this province.
     pub fn tile_count(&self) -> usize {
         self.tiles.len()
     }
+}
+
+/// Returns true if two provinces share at least one hex edge
+/// (a tile in `prov_a` has a neighbor tile that belongs to `prov_b`).
+pub fn provinces_are_adjacent(hex_map: &HexMap, prov_a: &Province, prov_b: &Province) -> bool {
+    for tile_coord in &prov_a.tiles {
+        for neighbor in tile_coord.neighbors() {
+            if let Some(tile) = hex_map.get_tile(neighbor)
+                && tile.province_id == Some(prov_b.id)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Compute whether a province has any tile adjacent to a Sea tile on the given map.
+pub fn compute_coastal(hex_map: &HexMap, province: &Province) -> bool {
+    for tile_coord in &province.tiles {
+        for neighbor in tile_coord.neighbors() {
+            if let Some(tile) = hex_map.get_tile(neighbor)
+                && tile.terrain() == TerrainType::Sea
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -177,9 +213,16 @@ mod tests {
     // ── is_coastal ─────────────────────────────────────────────
 
     #[test]
-    fn is_coastal_stub_returns_false() {
+    fn is_coastal_defaults_to_false() {
         let p = sample_province();
         assert!(!p.is_coastal());
+    }
+
+    #[test]
+    fn is_coastal_returns_true_when_set() {
+        let mut p = sample_province();
+        p.coastal = true;
+        assert!(p.is_coastal());
     }
 
     // ── capital_city_name ──────────────────────────────────────
@@ -305,5 +348,127 @@ mod tests {
         // After reaching 0, set to None (industrialized)
         p.industrialization_turns_remaining = None;
         assert_eq!(p.industrialization_turns_remaining, None);
+    }
+
+    // ── provinces_are_adjacent ──────────────────────────────────
+
+    #[test]
+    fn adjacent_provinces_detected() {
+        use crate::map::tile::Tile;
+
+        let mut hex_map = crate::map::HexMap::new(10, 10);
+        hex_map.set_tile(
+            HexCoord::new(0, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        hex_map.set_tile(
+            HexCoord::new(1, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+
+        let prov_a = Province::new(
+            ProvinceId(1),
+            "A".into(),
+            NationId(1),
+            HexCoord::new(0, 0),
+            vec![HexCoord::new(0, 0)],
+            4,
+        );
+        let prov_b = Province::new(
+            ProvinceId(2),
+            "B".into(),
+            NationId(2),
+            HexCoord::new(1, 0),
+            vec![HexCoord::new(1, 0)],
+            3,
+        );
+
+        assert!(provinces_are_adjacent(&hex_map, &prov_a, &prov_b));
+        assert!(provinces_are_adjacent(&hex_map, &prov_b, &prov_a));
+    }
+
+    #[test]
+    fn non_adjacent_provinces_not_detected() {
+        use crate::map::tile::Tile;
+
+        let mut hex_map = crate::map::HexMap::new(10, 10);
+        hex_map.set_tile(
+            HexCoord::new(0, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        hex_map.set_tile(
+            HexCoord::new(5, 5),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+
+        let prov_a = Province::new(
+            ProvinceId(1),
+            "A".into(),
+            NationId(1),
+            HexCoord::new(0, 0),
+            vec![HexCoord::new(0, 0)],
+            4,
+        );
+        let prov_b = Province::new(
+            ProvinceId(2),
+            "B".into(),
+            NationId(2),
+            HexCoord::new(5, 5),
+            vec![HexCoord::new(5, 5)],
+            3,
+        );
+
+        assert!(!provinces_are_adjacent(&hex_map, &prov_a, &prov_b));
+    }
+
+    // ── compute_coastal ─────────────────────────────────────────
+
+    #[test]
+    fn compute_coastal_true_when_sea_neighbor() {
+        use crate::map::tile::Tile;
+
+        let mut hex_map = crate::map::HexMap::new(10, 10);
+        hex_map.set_tile(
+            HexCoord::new(0, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        hex_map.set_tile(HexCoord::new(1, 0), Tile::new(TerrainType::Sea));
+
+        let prov = Province::new(
+            ProvinceId(1),
+            "Coastal".into(),
+            NationId(1),
+            HexCoord::new(0, 0),
+            vec![HexCoord::new(0, 0)],
+            4,
+        );
+
+        assert!(compute_coastal(&hex_map, &prov));
+    }
+
+    #[test]
+    fn compute_coastal_false_when_no_sea_neighbor() {
+        use crate::map::tile::Tile;
+
+        let mut hex_map = crate::map::HexMap::new(10, 10);
+        hex_map.set_tile(
+            HexCoord::new(0, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        hex_map.set_tile(
+            HexCoord::new(1, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+
+        let prov = Province::new(
+            ProvinceId(1),
+            "Inland".into(),
+            NationId(1),
+            HexCoord::new(0, 0),
+            vec![HexCoord::new(0, 0)],
+            4,
+        );
+
+        assert!(!compute_coastal(&hex_map, &prov));
     }
 }

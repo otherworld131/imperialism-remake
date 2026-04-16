@@ -709,6 +709,20 @@ pub fn wasm_get_valid_move_targets(game_json: &str, nation_id: u32, unit_id: u32
             let at_war = game.diplomacy.is_at_war(nid, prov.owner);
             let target_anarchic = game.get_nation(prov.owner).is_some_and(|n| n.is_in_anarchy);
             if at_war || target_anarchic {
+                // Adjacency check: nation must own a province adjacent to
+                // the target, or have an active landing site (matching backend logic).
+                let nation_adjacent = nation.province_ids.iter().any(|&our_pid| {
+                    game.get_province(our_pid).is_some_and(|our_prov| {
+                        domain::map::provinces_are_adjacent(&game.hex_map, our_prov, prov)
+                    })
+                });
+                let has_landing = game.pending_landings.iter().any(|(lid, pid, established)| {
+                    *lid == nid && *pid == prov.id && *established < game.turn
+                });
+                if !nation_adjacent && !has_landing {
+                    continue;
+                }
+
                 let owner_name = game
                     .get_nation(prov.owner)
                     .map(|n| n.name.as_str())
@@ -1275,6 +1289,59 @@ pub fn wasm_build_ship(game_json: &str, nation_id: u32, ship_type_str: &str) -> 
     match ship_type.category() {
         ShipCategory::Merchant => nation.merchant_fleet.push(new_ship),
         ShipCategory::Warship => nation.warships.push(new_ship),
+    }
+
+    serialize_game(&game)
+}
+
+// ── Mutation: Assign Beachhead ──────────────────────────────────────
+
+/// Assign a nation's warships to establish a beachhead on a specific coastal enemy province.
+/// Returns updated game state JSON.
+#[wasm_bindgen]
+pub fn wasm_assign_beachhead(game_json: &str, nation_id: u32, target_province_id: u32) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let target_pid = ProvinceId(target_province_id);
+
+    // Validate the target province is coastal and owned by an enemy at war
+    let valid = game.get_province(target_pid).is_some_and(|p| {
+        p.coastal && {
+            let at_war = game.diplomacy.is_at_war(nid, p.owner);
+            let target_anarchic = game.get_nation(p.owner).is_some_and(|n| n.is_in_anarchy);
+            at_war || target_anarchic
+        }
+    });
+    if !valid {
+        return "{\"error\":\"target province is not a valid coastal enemy province\"}".to_string();
+    }
+
+    // Must have warships
+    let has_warships = game.get_nation(nid).is_some_and(|n| !n.warships.is_empty());
+    if !has_warships {
+        return "{\"error\":\"no warships available\"}".to_string();
+    }
+
+    // Sea-zone adjacency: attacker must own at least one coastal province (embarkation point)
+    let has_coast = game.get_nation(nid).is_some_and(|n| {
+        n.province_ids
+            .iter()
+            .any(|&pid| game.get_province(pid).is_some_and(|p| p.coastal))
+    });
+    if !has_coast {
+        return "{\"error\":\"you have no coastal provinces to embark from\"}".to_string();
+    }
+
+    // Assign all warships to beachhead targeting the specific province
+    if let Some(nation) = game.get_nation_mut(nid) {
+        for ship in &mut nation.warships {
+            ship.operation = Some(domain::military::naval::NavalOperation::Beachhead(
+                target_pid,
+            ));
+        }
     }
 
     serialize_game(&game)

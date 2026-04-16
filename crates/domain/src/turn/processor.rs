@@ -258,7 +258,10 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 6. Maintenance costs (placeholder)
     apply_maintenance(game, &mut report);
 
-    // 6b. Resolve military unit movement (pending moves)
+    // 6b. Resolve beachhead operations (establish naval landing sites)
+    resolve_beachheads(game, &mut report);
+
+    // 6c. Resolve military unit movement (pending moves)
     resolve_military_movement(game, &mut report);
 
     // 7. Resolve combat (pending attacks)
@@ -1752,6 +1755,181 @@ fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
     }
 }
 
+/// Resolve beachhead (naval landing) operations.
+///
+/// For each nation with warships assigned to `Beachhead(target_province)`:
+/// 1. Validate the target province is coastal and owned by an enemy
+/// 2. Add it to `pending_landings` with the current turn number
+/// 3. Remove stale landings from nations that no longer have warships assigned
+///
+/// Landing sites are only usable for attacks on turns AFTER establishment
+/// (enforced in `can_attack_province`).
+fn resolve_beachheads(game: &mut GameState, report: &mut TurnReport) {
+    use crate::military::naval::NavalOperation;
+
+    let current_turn = game.turn;
+
+    // Remove landings where the nation no longer has warships assigned to that target
+    let active_assignments: Vec<(NationId, ProvinceId)> = game
+        .nations
+        .iter()
+        .flat_map(|nation| {
+            nation.warships.iter().filter_map(move |ship| {
+                if let Some(NavalOperation::Beachhead(target_pid)) = ship.operation {
+                    Some((nation.id, target_pid))
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
+
+    // Keep existing landings that still have ships assigned AND remain diplomatically valid.
+    // Pre-compute valid landing IDs to avoid borrow conflict with retain.
+    let valid_landings: Vec<(NationId, ProvinceId)> = game
+        .pending_landings
+        .iter()
+        .filter(|(nid, pid, _)| {
+            let has_ships = active_assignments
+                .iter()
+                .any(|(n, p)| *n == *nid && *p == *pid);
+            if !has_ships {
+                return false;
+            }
+            // Revalidate: target must still be coastal, owned by enemy, and at war
+            let target_valid = game.get_province(*pid).is_some_and(|p| {
+                p.coastal && {
+                    let at_war = game
+                        .diplomacy
+                        .get_relation(*nid, p.owner)
+                        .is_some_and(|r| r.at_war);
+                    let target_anarchic = game.get_nation(p.owner).is_some_and(|n| n.is_in_anarchy);
+                    at_war || target_anarchic
+                }
+            });
+            // Revalidate embarkation: attacker must still own a coastal province
+            let attacker_has_coast = game.get_nation(*nid).is_some_and(|n| {
+                n.province_ids
+                    .iter()
+                    .any(|&pid| game.get_province(pid).is_some_and(|p| p.coastal))
+            });
+            target_valid && attacker_has_coast
+        })
+        .map(|(nid, pid, _)| (*nid, *pid))
+        .collect();
+    game.pending_landings
+        .retain(|(nid, pid, _)| valid_landings.iter().any(|(n, p)| *n == *nid && *p == *pid));
+
+    // Collect new beachhead assignments: (nation_id, target_province_id)
+    let mut new_requests: Vec<(NationId, ProvinceId)> = Vec::new();
+    for nation in &game.nations {
+        for ship in &nation.warships {
+            if let Some(NavalOperation::Beachhead(target_pid)) = ship.operation
+                && !new_requests
+                    .iter()
+                    .any(|(nid, pid)| *nid == nation.id && *pid == target_pid)
+                // Don't re-add if already in pending_landings
+                && !game
+                    .pending_landings
+                    .iter()
+                    .any(|(nid, pid, _)| *nid == nation.id && *pid == target_pid)
+            {
+                new_requests.push((nation.id, target_pid));
+            }
+        }
+    }
+
+    for (attacker_id, target_pid) in new_requests {
+        // Sea-zone adjacency: attacker must own at least one coastal province
+        // (embarkation point). Without a port, ships cannot depart.
+        let attacker_has_coast = game
+            .get_nation(attacker_id)
+            .map(|n| {
+                n.province_ids
+                    .iter()
+                    .any(|&pid| game.get_province(pid).is_some_and(|p| p.coastal))
+            })
+            .unwrap_or(false);
+        if !attacker_has_coast {
+            continue;
+        }
+
+        // Validate the target province is coastal and owned by an enemy
+        let valid = game.get_province(target_pid).is_some_and(|p| {
+            p.coastal && {
+                let at_war = game
+                    .diplomacy
+                    .get_relation(attacker_id, p.owner)
+                    .is_some_and(|r| r.at_war);
+                let target_anarchic = game.get_nation(p.owner).is_some_and(|n| n.is_in_anarchy);
+                at_war || target_anarchic
+            }
+        });
+
+        if valid {
+            game.pending_landings
+                .push((attacker_id, target_pid, current_turn));
+            let attacker_name = game
+                .get_nation(attacker_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            let target_name = game
+                .get_province(target_pid)
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+            report.newspaper_headlines.push((
+                format!(
+                    "{} establishes a naval landing site at {}",
+                    attacker_name, target_name
+                ),
+                HeadlineCategory::Military,
+            ));
+        }
+    }
+}
+
+/// Check whether a nation can attack a target province.
+///
+/// An attack is valid if:
+/// 1. The attacker owns a province that is **land-adjacent** to the target, OR
+/// 2. The attacker has an active **naval landing site** on the target province
+///    that was established on a **previous** turn (not this turn).
+fn can_attack_province(
+    game: &GameState,
+    attacker_id: NationId,
+    target_province_id: ProvinceId,
+) -> bool {
+    // Check for active landing site established on a previous turn
+    let current_turn = game.turn;
+    if game.pending_landings.iter().any(|(nid, pid, established)| {
+        *nid == attacker_id && *pid == target_province_id && *established < current_turn
+    }) {
+        return true;
+    }
+
+    // Check for land adjacency: attacker must own a province sharing a hex edge
+    // with the target province.
+    let target_prov = match game.get_province(target_province_id) {
+        Some(p) => p,
+        None => return false,
+    };
+
+    let attacker_province_ids: Vec<ProvinceId> = match game.get_nation(attacker_id) {
+        Some(n) => n.province_ids.clone(),
+        None => return false,
+    };
+
+    for &owned_pid in &attacker_province_ids {
+        if let Some(owned_prov) = game.get_province(owned_pid)
+            && crate::map::provinces_are_adjacent(&game.hex_map, owned_prov, target_prov)
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Resolve military unit movement from pending_moves.
 ///
 /// For each pending move:
@@ -1798,12 +1976,24 @@ fn resolve_military_movement(game: &mut GameState, report: &mut TurnReport) {
                 .is_some_and(|r| r.at_war);
             let target_is_anarchic = game.get_nation(dest_owner).is_some_and(|n| n.is_in_anarchy);
             if at_war || target_is_anarchic {
-                // Convert to pending attack
-                game.pending_attacks.push((nation_id, dest_province_id));
-                report.unit_movements.push((
-                    nation_id,
-                    format!("Attack ordered on {} (enemy territory)", dest_name),
-                ));
+                // Validate adjacency: attacker must own an adjacent province
+                // or have an active landing site on the target.
+                if can_attack_province(game, nation_id, dest_province_id) {
+                    game.pending_attacks.push((nation_id, dest_province_id));
+                    report.unit_movements.push((
+                        nation_id,
+                        format!("Attack ordered on {} (enemy territory)", dest_name),
+                    ));
+                } else {
+                    // Province is not adjacent and no active landing site
+                    report.unit_movements.push((
+                        nation_id,
+                        format!(
+                            "Cannot attack {} — not adjacent and no naval landing site",
+                            dest_name
+                        ),
+                    ));
+                }
             }
             // Otherwise ignore the invalid move
         }
@@ -1852,6 +2042,11 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
         if lost_province.contains(&attacker_id) {
             continue;
         }
+        // Validate adjacency: attacker must own an adjacent province
+        // or have an active landing site on the target.
+        if !can_attack_province(game, attacker_id, province_id) {
+            continue;
+        }
         // Look up province owner
         let defender_id = match game.get_province(province_id) {
             Some(p) => p.owner,
@@ -1860,6 +2055,18 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
 
         // Skip self-conquest (attacker already owns the province)
         if attacker_id == defender_id {
+            continue;
+        }
+
+        // Re-check diplomatic legality: skip if peace was made earlier this turn
+        let still_at_war = game
+            .diplomacy
+            .get_relation(attacker_id, defender_id)
+            .is_some_and(|r| r.at_war);
+        let defender_anarchic = game
+            .get_nation(defender_id)
+            .is_some_and(|n| n.is_in_anarchy);
+        if !still_at_war && !defender_anarchic {
             continue;
         }
 
@@ -1873,14 +2080,59 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
         // that GP declares war on the attacker.
         trigger_pact_defense(game, defender_id, attacker_id, report);
 
-        // Create attacker force from nation's army
-        let attacker_units: Vec<_> = match game.get_nation(attacker_id) {
+        // Create attacker force from nation's army.
+        // If attacking via naval landing (beachhead), cap the force by the
+        // beachhead capacity (total arms cost of all warships assigned).
+        let is_naval_attack = !{
+            // Check if there's a land-adjacent route
+            let attacker_pids: Vec<ProvinceId> = game
+                .get_nation(attacker_id)
+                .map(|n| n.province_ids.clone())
+                .unwrap_or_default();
+            let target_prov = game.get_province(province_id);
+            target_prov.is_some_and(|tp| {
+                attacker_pids.iter().any(|&our_pid| {
+                    game.get_province(our_pid).is_some_and(|our_prov| {
+                        crate::map::provinces_are_adjacent(&game.hex_map, our_prov, tp)
+                    })
+                })
+            })
+        };
+
+        let mut attacker_units: Vec<_> = match game.get_nation(attacker_id) {
             Some(n) => n.army.clone(),
             None => continue,
         };
 
         if attacker_units.is_empty() {
             continue;
+        }
+
+        // Cap force for naval invasions: only send units up to the beachhead capacity
+        // Capacity is computed from warships assigned to Beachhead(target province) specifically.
+        if is_naval_attack {
+            let beachhead_cap = game
+                .get_nation(attacker_id)
+                .map(|n| {
+                    use crate::military::naval::NavalOperation;
+                    let assigned_ships: Vec<_> = n
+                        .warships
+                        .iter()
+                        .filter(|s| s.operation == Some(NavalOperation::Beachhead(province_id)))
+                        .cloned()
+                        .collect();
+                    crate::military::naval::beachhead_force_size(&assigned_ships)
+                })
+                .unwrap_or(0) as usize;
+            if beachhead_cap > 0 && attacker_units.len() > beachhead_cap {
+                // Sort by firepower descending and take the best units up to the cap
+                attacker_units.sort_by(|a, b| {
+                    b.effective_firepower()
+                        .partial_cmp(&a.effective_firepower())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                attacker_units.truncate(beachhead_cap);
+            }
         }
 
         let attacker_force = CombatForce {
@@ -3654,6 +3906,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -3703,6 +3956,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -3925,6 +4179,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -4021,6 +4276,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -4639,6 +4895,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -4899,6 +5156,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -4965,6 +5223,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -5100,6 +5359,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -5201,6 +5461,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -5374,6 +5635,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -5443,6 +5705,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -5513,6 +5776,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -5829,6 +6093,7 @@ mod tests {
             diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -6184,6 +6449,7 @@ mod tests {
             diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -6306,6 +6572,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -6468,6 +6735,7 @@ mod tests {
             diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -6573,6 +6841,7 @@ mod tests {
             diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -6815,6 +7084,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -7067,6 +7337,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -7198,6 +7469,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -7406,6 +7678,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -7499,6 +7772,7 @@ mod tests {
             diplomacy,
             pending_attacks: vec![(NationId(1), ProvinceId(2))],
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -7611,6 +7885,7 @@ mod tests {
             diplomacy,
             pending_attacks: vec![(NationId(1), ProvinceId(2))],
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -7774,6 +8049,7 @@ mod tests {
             diplomacy,
             pending_attacks: vec![(NationId(1), ProvinceId(2))],
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
@@ -8050,6 +8326,277 @@ mod tests {
         assert_eq!(
             score.total, expected_total,
             "Total should equal sum of all components"
+        );
+    }
+
+    // ── Province adjacency & naval landing tests ────────────────
+
+    #[test]
+    fn can_attack_adjacent_province() {
+        let mut hex_map = HexMap::new(10, 10);
+        hex_map.set_tile(
+            HexCoord::new(0, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        hex_map.set_tile(
+            HexCoord::new(1, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+
+        let prov1 = Province::new(
+            ProvinceId(1),
+            "Ours".into(),
+            NationId(1),
+            HexCoord::new(0, 0),
+            vec![HexCoord::new(0, 0)],
+            4,
+        );
+        let prov2 = Province::new(
+            ProvinceId(2),
+            "Theirs".into(),
+            NationId(2),
+            HexCoord::new(1, 0),
+            vec![HexCoord::new(1, 0)],
+            3,
+        );
+
+        let mut n1 = Nation::new(
+            NationId(1),
+            "A".into(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        n1.treasury = Money::dollars(10000);
+        let n2 = Nation::new(
+            NationId(2),
+            "B".into(),
+            NationColor::Red,
+            NationType::MinorNation,
+            ProvinceId(2),
+        );
+
+        let mut diplomacy = DiplomacyState::new();
+        diplomacy.declare_war(NationId(1), NationId(2));
+
+        let game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".into(),
+            hex_map,
+            provinces: vec![prov1, prov2],
+            nations: vec![n1, n2],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy,
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            ai_debug: false,
+        };
+
+        assert!(
+            can_attack_province(&game, NationId(1), ProvinceId(2)),
+            "Should be able to attack adjacent province"
+        );
+    }
+
+    #[test]
+    fn cannot_attack_non_adjacent_province() {
+        let mut hex_map = HexMap::new(10, 10);
+        hex_map.set_tile(
+            HexCoord::new(0, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        hex_map.set_tile(
+            HexCoord::new(5, 5),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+
+        let prov1 = Province::new(
+            ProvinceId(1),
+            "Ours".into(),
+            NationId(1),
+            HexCoord::new(0, 0),
+            vec![HexCoord::new(0, 0)],
+            4,
+        );
+        let prov2 = Province::new(
+            ProvinceId(2),
+            "Theirs".into(),
+            NationId(2),
+            HexCoord::new(5, 5),
+            vec![HexCoord::new(5, 5)],
+            3,
+        );
+
+        let mut n1 = Nation::new(
+            NationId(1),
+            "A".into(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        n1.treasury = Money::dollars(10000);
+        let n2 = Nation::new(
+            NationId(2),
+            "B".into(),
+            NationColor::Red,
+            NationType::MinorNation,
+            ProvinceId(2),
+        );
+
+        let game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".into(),
+            hex_map,
+            provinces: vec![prov1, prov2],
+            nations: vec![n1, n2],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            ai_debug: false,
+        };
+
+        assert!(
+            !can_attack_province(&game, NationId(1), ProvinceId(2)),
+            "Should NOT be able to attack non-adjacent province"
+        );
+    }
+
+    #[test]
+    fn can_attack_via_landing_from_previous_turn() {
+        let hex_map = HexMap::new(10, 10);
+
+        let prov1 = Province::new(
+            ProvinceId(1),
+            "Ours".into(),
+            NationId(1),
+            HexCoord::new(0, 0),
+            vec![HexCoord::new(0, 0)],
+            4,
+        );
+        let prov2 = Province::new(
+            ProvinceId(2),
+            "Theirs".into(),
+            NationId(2),
+            HexCoord::new(5, 5),
+            vec![HexCoord::new(5, 5)],
+            3,
+        );
+
+        let mut n1 = Nation::new(
+            NationId(1),
+            "A".into(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        n1.treasury = Money::dollars(10000);
+        let n2 = Nation::new(
+            NationId(2),
+            "B".into(),
+            NationColor::Red,
+            NationType::MinorNation,
+            ProvinceId(2),
+        );
+
+        let game = GameState {
+            turn: TurnNumber::new(2),
+            difficulty: Difficulty::Normal,
+            map_key: "test".into(),
+            hex_map,
+            provinces: vec![prov1, prov2],
+            nations: vec![n1, n2],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            // Landing established on turn 1, current turn is 2
+            pending_landings: vec![(NationId(1), ProvinceId(2), TurnNumber::new(1))],
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            ai_debug: false,
+        };
+
+        assert!(
+            can_attack_province(&game, NationId(1), ProvinceId(2)),
+            "Should be able to attack via landing from previous turn"
+        );
+    }
+
+    #[test]
+    fn cannot_attack_via_landing_from_same_turn() {
+        let hex_map = HexMap::new(10, 10);
+
+        let prov1 = Province::new(
+            ProvinceId(1),
+            "Ours".into(),
+            NationId(1),
+            HexCoord::new(0, 0),
+            vec![HexCoord::new(0, 0)],
+            4,
+        );
+        let prov2 = Province::new(
+            ProvinceId(2),
+            "Theirs".into(),
+            NationId(2),
+            HexCoord::new(5, 5),
+            vec![HexCoord::new(5, 5)],
+            3,
+        );
+
+        let mut n1 = Nation::new(
+            NationId(1),
+            "A".into(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        n1.treasury = Money::dollars(10000);
+        let n2 = Nation::new(
+            NationId(2),
+            "B".into(),
+            NationColor::Red,
+            NationType::MinorNation,
+            ProvinceId(2),
+        );
+
+        let game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".into(),
+            hex_map,
+            provinces: vec![prov1, prov2],
+            nations: vec![n1, n2],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            // Landing established on turn 1, current turn is also 1
+            pending_landings: vec![(NationId(1), ProvinceId(2), TurnNumber::new(1))],
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            ai_debug: false,
+        };
+
+        assert!(
+            !can_attack_province(&game, NationId(1), ProvinceId(2)),
+            "Should NOT be able to attack via landing from same turn"
         );
     }
 }

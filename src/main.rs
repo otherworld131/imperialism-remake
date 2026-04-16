@@ -342,6 +342,14 @@ fn main() {
                 let nation_query = input.trim()[7..].trim();
                 commands::cmd_attack(&mut game, nation_query);
             }
+            _ if cmd.starts_with("beachhead ") || cmd.starts_with("landing ") => {
+                let nation_query = input
+                    .trim()
+                    .split_once(' ')
+                    .map(|(_, q)| q.trim())
+                    .unwrap_or("");
+                commands::cmd_beachhead(&mut game, nation_query);
+            }
             "transport" | "freight" => {
                 println!();
                 display::print_transport(&game);

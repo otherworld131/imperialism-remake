@@ -150,6 +150,8 @@ pub struct LuaAiConfig {
     pub max_warships_low_treasury: Option<usize>,
     pub max_warships_high_treasury: Option<usize>,
     pub max_merchant_ships: Option<usize>,
+    /// Minimum army size before attempting a naval invasion.
+    pub min_army_naval_invasion: Option<usize>,
 
     // Economy
     pub expansion_threshold_multiplier: Option<u32>,
@@ -291,6 +293,7 @@ impl LuaAiConfig {
         self.max_warships_high_treasury =
             sanitize_opt_usize(self.max_warships_high_treasury, 0, 50);
         self.max_merchant_ships = sanitize_opt_usize(self.max_merchant_ships, 0, 50);
+        self.min_army_naval_invasion = sanitize_opt_usize(self.min_army_naval_invasion, 1, 20);
 
         // Economy
         self.expansion_threshold_multiplier =
@@ -422,6 +425,7 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             max_warships_low_treasury: table.get::<usize>("max_warships_low_treasury").ok(),
             max_warships_high_treasury: table.get::<usize>("max_warships_high_treasury").ok(),
             max_merchant_ships: table.get::<usize>("max_merchant_ships").ok(),
+            min_army_naval_invasion: table.get::<usize>("min_army_naval_invasion").ok(),
             // Economy
             expansion_threshold_multiplier: table.get("expansion_threshold_multiplier").ok(),
             use_tier_expansion: table.get("use_tier_expansion").ok(),
@@ -809,6 +813,7 @@ mod tests {
             max_warships_low_treasury: None,
             max_warships_high_treasury: None,
             max_merchant_ships: None,
+            min_army_naval_invasion: None,
             expansion_threshold_multiplier: None,
             use_tier_expansion: None,
             high_treasury_expansion_threshold: None,
@@ -895,6 +900,7 @@ mod tests {
             max_warships_low_treasury: None,
             max_warships_high_treasury: None,
             max_merchant_ships: None,
+            min_army_naval_invasion: None,
             expansion_threshold_multiplier: None,
             use_tier_expansion: None,
             high_treasury_expansion_threshold: None,
@@ -1020,6 +1026,7 @@ mod tests {
             max_warships_low_treasury: None,
             max_warships_high_treasury: None,
             max_merchant_ships: None,
+            min_army_naval_invasion: None,
             expansion_threshold_multiplier: None,
             use_tier_expansion: None,
             high_treasury_expansion_threshold: None,

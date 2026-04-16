@@ -51,6 +51,9 @@ pub struct Ship {
     pub owner: NationId,
     pub hull_remaining: u32,
     pub sea_zone: Option<u32>,
+    /// Current naval operation assignment (Patrol, Blockade, Beachhead, etc.).
+    #[serde(default)]
+    pub operation: Option<crate::military::naval::NavalOperation>,
 }
 
 impl ShipType {
@@ -323,6 +326,7 @@ impl Ship {
             owner,
             hull_remaining: stats.hull,
             sea_zone: None,
+            operation: None,
         }
     }
 

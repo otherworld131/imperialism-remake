@@ -50,6 +50,7 @@ diplomatic = {
     max_warships_low_treasury = 2,
     max_warships_high_treasury = 4,
     max_merchant_ships = 5,
+    min_army_naval_invasion = 8,  -- cautious: needs 8+ units for overseas
 
     -- Economy
     expansion_threshold_multiplier = 2,

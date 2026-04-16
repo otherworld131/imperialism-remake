@@ -41,6 +41,12 @@ pub struct GameState {
     /// Pending unit movements to resolve this turn: (nation, unit_id, destination province).
     #[serde(default)]
     pub pending_moves: Vec<(NationId, crate::map::UnitId, ProvinceId)>,
+    /// Active naval landing sites: (attacking_nation, target_province, turn_established).
+    /// Established by assigning warships to Beachhead operation.
+    /// Troops can attack the target province on **subsequent** turns only
+    /// (not the same turn the landing was established).
+    #[serde(default)]
+    pub pending_landings: Vec<(NationId, ProvinceId, TurnNumber)>,
     /// History of major game events: (turn_number, description).
     #[serde(default)]
     pub history: Vec<(TurnNumber, String)>,
@@ -425,6 +431,7 @@ pub fn new_game_with_seed(
         diplomacy,
         pending_attacks: Vec::new(),
         pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
         history: Vec::new(),
         high_scores: Vec::new(),
         ai_debug: false,
@@ -531,6 +538,7 @@ mod tests {
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
             ai_debug: false,
