@@ -20,6 +20,30 @@ import init, {
   wasm_recruit_army_unit,
   wasm_hire_civilian,
   wasm_build_ship,
+  // Transport
+  wasm_get_transport_data,
+  wasm_build_freight_car,
+  wasm_set_transport_allocation,
+  // Industry
+  wasm_get_industry_data,
+  wasm_expand_building,
+  // Trade
+  wasm_get_trade_data,
+  wasm_set_trade_subsidy,
+  // Diplomacy
+  wasm_get_diplomacy_screen_data,
+  wasm_diplomacy_build_consulate,
+  wasm_diplomacy_build_embassy,
+  wasm_diplomacy_propose_nap,
+  wasm_diplomacy_propose_alliance,
+  wasm_diplomacy_declare_war,
+  wasm_diplomacy_send_grant,
+  wasm_diplomacy_break_treaty,
+  wasm_diplomacy_propose_peace,
+  // Proposals
+  wasm_get_pending_proposals,
+  wasm_accept_proposal,
+  wasm_reject_proposal,
 } from '../../crates/wasm-bridge/pkg/wasm_bridge.js';
 
 let initialized = false;
@@ -301,4 +325,253 @@ export function hireCivilian(gameJson: string, nationId: number, civilianType: s
 
 export function buildShip(gameJson: string, nationId: number, shipType: string): CommandResult {
   return executeCommand(wasm_build_ship(gameJson, nationId, shipType));
+}
+
+// ── Transport types & functions ─────────────────────────────────────
+
+export interface TransportAllocation {
+  resource: string;
+  percentage: number;
+}
+
+export interface TransportDelivery {
+  resource: string;
+  available: number;
+  delivered: number;
+}
+
+export interface TransportData {
+  freight_cars: number;
+  total_capacity: number;
+  military_transport_capacity: number;
+  allocations: TransportAllocation[];
+  build_cost: { labor: number; lumber: number; steel: number };
+  can_build: boolean;
+  available_lumber: number;
+  available_steel: number;
+  available_labor: number;
+  deliveries: TransportDelivery[];
+}
+
+export function getTransportData(gameJson: string, nationId: number): TransportData | null {
+  const parsed = JSON.parse(wasm_get_transport_data(gameJson, nationId));
+  if (parsed.error) return null;
+  return parsed;
+}
+
+export function buildFreightCar(gameJson: string, nationId: number): CommandResult {
+  return executeCommand(wasm_build_freight_car(gameJson, nationId));
+}
+
+export function setTransportAllocation(gameJson: string, nationId: number, resource: string, percentage: number): CommandResult {
+  return executeCommand(wasm_set_transport_allocation(gameJson, nationId, resource, percentage));
+}
+
+// ── Industry types & functions ──────────────────────────────────────
+
+export interface BuildingInfo {
+  type: string;
+  display_name: string;
+  capacity: number;
+  next_capacity: number;
+  is_expanding: boolean;
+  turns_remaining: number;
+  pending_capacity: number;
+  expansion_cost: { lumber: number; steel: number };
+}
+
+export interface ProductionForecast {
+  mill_output: number;
+  factory_output: number;
+  mill_labor: number;
+  factory_labor: number;
+}
+
+export interface IndustryData {
+  buildings: BuildingInfo[];
+  warehouse: {
+    resources: Record<string, number>;
+    materials: Record<string, number>;
+    goods: Record<string, number>;
+  };
+  labor: {
+    untrained: number;
+    trained: number;
+    expert: number;
+    total_workers: number;
+    total_labor_units: number;
+  };
+  production_forecast: {
+    timber_chain: ProductionForecast;
+    metal_chain: ProductionForecast;
+    textile_chain: ProductionForecast;
+  };
+  can_expand: Record<string, boolean>;
+}
+
+export function getIndustryData(gameJson: string, nationId: number): IndustryData | null {
+  const parsed = JSON.parse(wasm_get_industry_data(gameJson, nationId));
+  if (parsed.error) return null;
+  return parsed;
+}
+
+export function expandBuilding(gameJson: string, nationId: number, buildingType: string): CommandResult {
+  return executeCommand(wasm_expand_building(gameJson, nationId, buildingType));
+}
+
+// ── Trade types & functions ─────────────────────────────────────────
+
+export interface MarketPrice {
+  resource: string;
+  base_price: number;
+  stock: number;
+}
+
+export interface TradeHistoryItem {
+  turn: number;
+  partner_name: string;
+  partner_id: number;
+  resource: string;
+  quantity: number;
+  total_cost: number;
+}
+
+export interface TradeSubsidy {
+  nation_id: number;
+  nation_name: string;
+  amount: number;
+  has_consulate: boolean;
+}
+
+export interface MinorNationTrade {
+  nation_id: number;
+  name: string;
+  has_consulate: boolean;
+  has_embassy: boolean;
+  resources: string[];
+}
+
+export interface TradeData {
+  market_prices: MarketPrice[];
+  trade_history: TradeHistoryItem[];
+  subsidies: TradeSubsidy[];
+  trade_balance: { total_bought: number; total_sold: number; net: number };
+  total_cargo: number;
+  minor_nations: MinorNationTrade[];
+  treasury: number;
+}
+
+export function getTradeData(gameJson: string, nationId: number): TradeData | null {
+  const parsed = JSON.parse(wasm_get_trade_data(gameJson, nationId));
+  if (parsed.error) return null;
+  return parsed;
+}
+
+export function setTradeSubsidy(gameJson: string, nationId: number, targetNationId: number, amount: number): CommandResult {
+  return executeCommand(wasm_set_trade_subsidy(gameJson, nationId, targetNationId, amount));
+}
+
+// ── Diplomacy Screen types & functions ──────────────────────────────
+
+export interface DiplomacyRelationActions {
+  can_build_consulate: boolean;
+  consulate_cost: number;
+  can_build_embassy: boolean;
+  embassy_cost: number;
+  can_propose_nap: boolean;
+  can_propose_alliance: boolean;
+  can_declare_war: boolean;
+  can_send_grant: boolean;
+  can_break_treaty: boolean;
+  breakable_treaties: string[];
+  can_propose_peace: boolean;
+}
+
+export interface DiplomacyScreenRelation {
+  nation_id: number;
+  nation_name: string;
+  nation_color: string;
+  nation_type: string;
+  score: number;
+  at_war: boolean;
+  status: string;
+  treaties: string[];
+  has_consulate: boolean;
+  has_embassy: boolean;
+  actions: DiplomacyRelationActions;
+}
+
+export interface DiplomacyScreenData {
+  player_standing: number;
+  treasury: number;
+  relations: DiplomacyScreenRelation[];
+}
+
+export function getDiplomacyScreenData(gameJson: string, nationId: number): DiplomacyScreenData | null {
+  const parsed = JSON.parse(wasm_get_diplomacy_screen_data(gameJson, nationId));
+  if (parsed.error) return null;
+  return parsed;
+}
+
+export function diplomacyBuildConsulate(gameJson: string, nationId: number, targetId: number): CommandResult {
+  return executeCommand(wasm_diplomacy_build_consulate(gameJson, nationId, targetId));
+}
+
+export function diplomacyBuildEmbassy(gameJson: string, nationId: number, targetId: number): CommandResult {
+  return executeCommand(wasm_diplomacy_build_embassy(gameJson, nationId, targetId));
+}
+
+export function diplomacyProposeNap(gameJson: string, nationId: number, targetId: number): CommandResult {
+  return executeCommand(wasm_diplomacy_propose_nap(gameJson, nationId, targetId));
+}
+
+export function diplomacyProposeAlliance(gameJson: string, nationId: number, targetId: number): CommandResult {
+  return executeCommand(wasm_diplomacy_propose_alliance(gameJson, nationId, targetId));
+}
+
+export function diplomacyDeclareWar(gameJson: string, nationId: number, targetId: number): CommandResult {
+  return executeCommand(wasm_diplomacy_declare_war(gameJson, nationId, targetId));
+}
+
+export function diplomacySendGrant(gameJson: string, nationId: number, targetId: number, amount: number): CommandResult {
+  return executeCommand(wasm_diplomacy_send_grant(gameJson, nationId, targetId, amount));
+}
+
+export function diplomacyBreakTreaty(gameJson: string, nationId: number, targetId: number, treatyType: string): CommandResult {
+  return executeCommand(wasm_diplomacy_break_treaty(gameJson, nationId, targetId, treatyType));
+}
+
+export function diplomacyProposePeace(gameJson: string, nationId: number, targetId: number): CommandResult {
+  return executeCommand(wasm_diplomacy_propose_peace(gameJson, nationId, targetId));
+}
+
+// ── Proposal Modal types & functions ────────────────────────────────
+
+export interface PendingProposal {
+  index: number;
+  from_nation_id: number;
+  from_nation_name: string;
+  from_nation_color: string;
+  proposal_type: string;
+  display_text: string;
+  turn_proposed: number;
+  turns_until_expiry: number;
+}
+
+export interface ProposalData {
+  proposals: PendingProposal[];
+}
+
+export function getPendingProposals(gameJson: string, nationId: number): ProposalData | null {
+  const parsed = JSON.parse(wasm_get_pending_proposals(gameJson, nationId));
+  if (parsed.error) return null;
+  return parsed;
+}
+
+export function acceptProposal(gameJson: string, nationId: number, proposalIndex: number): CommandResult {
+  return executeCommand(wasm_accept_proposal(gameJson, nationId, proposalIndex));
+}
+
+export function rejectProposal(gameJson: string, nationId: number, proposalIndex: number): CommandResult {
+  return executeCommand(wasm_reject_proposal(gameJson, nationId, proposalIndex));
 }

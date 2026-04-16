@@ -1,7 +1,12 @@
 use wasm_bindgen::prelude::*;
 
 use domain::ai::common::next_unit_id;
+use domain::economy::buildings::BuildingType;
 use domain::economy::civilians::{CivilianType, next_civilian_id, parse_civilian_type};
+use domain::economy::production::{calculate_factory_production, calculate_mill_production, ProductionChain};
+use domain::economy::trade::base_price;
+use domain::economy::transport::TransportSystem;
+use domain::events::TreatyType;
 use domain::game_state::{GameState, new_game};
 use domain::hex::HexCoord;
 use domain::military::ships::{Ship, ShipCategory, ShipType};
@@ -1344,6 +1349,1206 @@ pub fn wasm_assign_beachhead(game_json: &str, nation_id: u32, target_province_id
         }
     }
 
+    serialize_game(&game)
+}
+
+// ── Parser helpers ──────────────────────────────────────────────────
+
+fn parse_resource_type(name: &str) -> Option<ResourceType> {
+    match name {
+        "Timber" => Some(ResourceType::Timber),
+        "Coal" => Some(ResourceType::Coal),
+        "Iron" => Some(ResourceType::Iron),
+        "Cotton" => Some(ResourceType::Cotton),
+        "Wool" => Some(ResourceType::Wool),
+        "Grain" => Some(ResourceType::Grain),
+        "Fruit" => Some(ResourceType::Fruit),
+        "Livestock" => Some(ResourceType::Livestock),
+        "Horses" => Some(ResourceType::Horses),
+        "Oil" => Some(ResourceType::Oil),
+        "Gold" => Some(ResourceType::Gold),
+        "Gems" => Some(ResourceType::Gems),
+        _ => None,
+    }
+}
+
+fn parse_building_type(name: &str) -> Option<BuildingType> {
+    match name {
+        "Armory" => Some(BuildingType::Armory),
+        "Capitol" => Some(BuildingType::Capitol),
+        "FoodProcessing" => Some(BuildingType::FoodProcessing),
+        "Railyard" => Some(BuildingType::Railyard),
+        "Shipyard" => Some(BuildingType::Shipyard),
+        "TradeSchool" => Some(BuildingType::TradeSchool),
+        "University" => Some(BuildingType::University),
+        "Warehouse" => Some(BuildingType::Warehouse),
+        "LumberMill" => Some(BuildingType::LumberMill),
+        "SteelMill" => Some(BuildingType::SteelMill),
+        "TextileMill" => Some(BuildingType::TextileMill),
+        "FurnitureFactory" => Some(BuildingType::FurnitureFactory),
+        "HardwareFactory" => Some(BuildingType::HardwareFactory),
+        "ClothingFactory" => Some(BuildingType::ClothingFactory),
+        "OilRefinery" => Some(BuildingType::OilRefinery),
+        "PowerPlant" => Some(BuildingType::PowerPlant),
+        _ => None,
+    }
+}
+
+fn parse_treaty_type(name: &str) -> Option<TreatyType> {
+    match name {
+        "Alliance" => Some(TreatyType::Alliance),
+        "NonAggressionPact" => Some(TreatyType::NonAggressionPact),
+        "PeaceTreaty" => Some(TreatyType::PeaceTreaty),
+        "RequestToJoinEmpire" => Some(TreatyType::RequestToJoinEmpire),
+        "WarDeclaration" => Some(TreatyType::WarDeclaration),
+        _ => None,
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// FEATURE 1: Transport Screen
+// ══════════════════════════════════════════════════════════════════════
+
+/// Query transport data for a nation.
+#[wasm_bindgen]
+pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
+    let game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let nation = match game.get_nation(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
+
+    let transport = &nation.transport;
+    let (labor_cost, lumber_cost, steel_cost) = TransportSystem::build_freight_car_cost();
+    let available_lumber = nation.material_amount(MaterialType::Lumber);
+    let available_steel = nation.material_amount(MaterialType::Steel);
+    let available_labor = nation.labor.total_labor_units();
+
+    let can_build = available_lumber >= lumber_cost
+        && available_steel >= steel_cost
+        && available_labor >= labor_cost;
+
+    // Build available resources from warehouse for delivery calculation
+    let all_resources = [
+        ResourceType::Timber,
+        ResourceType::Coal,
+        ResourceType::Iron,
+        ResourceType::Cotton,
+        ResourceType::Wool,
+        ResourceType::Grain,
+        ResourceType::Fruit,
+        ResourceType::Livestock,
+        ResourceType::Horses,
+        ResourceType::Oil,
+        ResourceType::Gold,
+        ResourceType::Gems,
+    ];
+
+    let available: Vec<(ResourceType, u32)> = all_resources
+        .iter()
+        .map(|&r| (r, nation.resource_amount(r)))
+        .filter(|(_, qty)| *qty > 0)
+        .collect();
+
+    let deliveries = transport.calculate_deliveries(&available);
+
+    let allocations_json: Vec<serde_json::Value> = transport
+        .allocations
+        .iter()
+        .map(|(r, pct)| {
+            serde_json::json!({
+                "resource": format!("{:?}", r),
+                "percentage": pct,
+            })
+        })
+        .collect();
+
+    let deliveries_json: Vec<serde_json::Value> = available
+        .iter()
+        .map(|(r, avail)| {
+            let delivered = deliveries
+                .iter()
+                .find(|(dr, _)| *dr == *r)
+                .map(|(_, qty)| *qty)
+                .unwrap_or(0);
+            serde_json::json!({
+                "resource": format!("{:?}", r),
+                "available": avail,
+                "delivered": delivered,
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "freight_cars": transport.freight_cars,
+        "total_capacity": transport.total_capacity(),
+        "military_transport_capacity": transport.military_transport_capacity(),
+        "allocations": allocations_json,
+        "build_cost": {
+            "labor": labor_cost,
+            "lumber": lumber_cost,
+            "steel": steel_cost,
+        },
+        "can_build": can_build,
+        "available_lumber": available_lumber,
+        "available_steel": available_steel,
+        "available_labor": available_labor,
+        "deliveries": deliveries_json,
+    })
+    .to_string()
+}
+
+/// Build one freight car. Deducts 1 lumber + 1 steel from warehouse.
+/// Labor is checked but not consumed (labor is used during turn resolution).
+#[wasm_bindgen]
+pub fn wasm_build_freight_car(game_json: &str, nation_id: u32) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let (labor_cost, lumber_cost, steel_cost) = TransportSystem::build_freight_car_cost();
+
+    let nation = match game.get_nation_mut(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
+
+    if nation.labor.total_labor_units() < labor_cost {
+        return "{\"error\":\"not enough labor\"}".to_string();
+    }
+    if nation.material_amount(MaterialType::Lumber) < lumber_cost {
+        return "{\"error\":\"not enough lumber\"}".to_string();
+    }
+    if nation.material_amount(MaterialType::Steel) < steel_cost {
+        return "{\"error\":\"not enough steel\"}".to_string();
+    }
+
+    nation.consume_material(MaterialType::Lumber, lumber_cost);
+    nation.consume_material(MaterialType::Steel, steel_cost);
+    nation.transport.build_freight_cars(1);
+
+    serialize_game(&game)
+}
+
+/// Set transport allocation for a resource type (percentage 0-100).
+#[wasm_bindgen]
+pub fn wasm_set_transport_allocation(
+    game_json: &str,
+    nation_id: u32,
+    resource: &str,
+    percentage: u32,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let res = match parse_resource_type(resource) {
+        Some(r) => r,
+        None => return "{\"error\":\"unknown resource type\"}".to_string(),
+    };
+
+    let nation = match game.get_nation_mut(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
+
+    nation.transport.set_allocation(res, percentage.min(100));
+    serialize_game(&game)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// FEATURE 2: Industry Screen
+// ══════════════════════════════════════════════════════════════════════
+
+/// Query industry/production data for a nation.
+#[wasm_bindgen]
+pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
+    let game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let nation = match game.get_nation(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
+
+    // Buildings
+    let buildings_json: Vec<serde_json::Value> = nation
+        .buildings
+        .iter()
+        .map(|b| {
+            let next_cap = b.next_capacity();
+            let (exp_lumber, exp_steel) = domain::economy::buildings::Building::expansion_cost(next_cap - b.capacity);
+            serde_json::json!({
+                "type": format!("{:?}", b.building_type),
+                "display_name": format!("{}", b.building_type),
+                "capacity": b.capacity,
+                "next_capacity": next_cap,
+                "is_expanding": b.turns_until_upgrade > 0,
+                "turns_remaining": b.turns_until_upgrade,
+                "pending_capacity": b.pending_capacity,
+                "expansion_cost": { "lumber": exp_lumber, "steel": exp_steel },
+            })
+        })
+        .collect();
+
+    // Warehouse
+    let resources_json: serde_json::Value = nation
+        .warehouse
+        .iter()
+        .map(|(r, qty)| (format!("{:?}", r), serde_json::json!(qty)))
+        .collect::<serde_json::Map<String, serde_json::Value>>()
+        .into();
+
+    let materials_json: serde_json::Value = nation
+        .materials
+        .iter()
+        .map(|(m, qty)| (format!("{:?}", m), serde_json::json!(qty)))
+        .collect::<serde_json::Map<String, serde_json::Value>>()
+        .into();
+
+    let goods_json: serde_json::Value = nation
+        .goods
+        .iter()
+        .map(|(g, qty)| (format!("{:?}", g), serde_json::json!(qty)))
+        .collect::<serde_json::Map<String, serde_json::Value>>()
+        .into();
+
+    // Labor
+    let labor = &nation.labor;
+
+    // Production forecast for each chain
+    let available_lumber_mat = nation.material_amount(MaterialType::Lumber);
+    let available_steel_mat = nation.material_amount(MaterialType::Steel);
+
+    // Can-expand map
+    let can_expand: serde_json::Value = nation
+        .buildings
+        .iter()
+        .map(|b| {
+            let next_cap = b.next_capacity();
+            let (exp_lumber, exp_steel) = domain::economy::buildings::Building::expansion_cost(next_cap - b.capacity);
+            let expandable = b.turns_until_upgrade == 0
+                && available_lumber_mat >= exp_lumber
+                && available_steel_mat >= exp_steel;
+            (format!("{:?}", b.building_type), serde_json::json!(expandable))
+        })
+        .collect::<serde_json::Map<String, serde_json::Value>>()
+        .into();
+
+    // Production forecasts
+    let labor_units = labor.total_labor_units();
+
+    // Build resource slices for production functions
+    let all_res: Vec<(ResourceType, u32)> = [
+        ResourceType::Timber,
+        ResourceType::Coal,
+        ResourceType::Iron,
+        ResourceType::Cotton,
+        ResourceType::Wool,
+    ]
+    .iter()
+    .map(|&r| (r, nation.resource_amount(r)))
+    .collect();
+
+    let lumber_mill_cap = nation
+        .buildings
+        .iter()
+        .find(|b| b.building_type == BuildingType::LumberMill)
+        .map(|b| b.capacity)
+        .unwrap_or(0);
+    let steel_mill_cap = nation
+        .buildings
+        .iter()
+        .find(|b| b.building_type == BuildingType::SteelMill)
+        .map(|b| b.capacity)
+        .unwrap_or(0);
+    let textile_mill_cap = nation
+        .buildings
+        .iter()
+        .find(|b| b.building_type == BuildingType::TextileMill)
+        .map(|b| b.capacity)
+        .unwrap_or(0);
+
+    let timber_mill = calculate_mill_production(
+        ProductionChain::Timber,
+        &all_res,
+        lumber_mill_cap,
+        labor_units,
+    );
+    let metal_mill = calculate_mill_production(
+        ProductionChain::Metal,
+        &all_res,
+        steel_mill_cap,
+        labor_units,
+    );
+    let textile_mill = calculate_mill_production(
+        ProductionChain::Textile,
+        &all_res,
+        textile_mill_cap,
+        labor_units,
+    );
+
+    // Build material slices for factory functions
+    let all_mats: Vec<(MaterialType, u32)> = [
+        MaterialType::Lumber,
+        MaterialType::Steel,
+        MaterialType::Fabric,
+    ]
+    .iter()
+    .map(|&m| (m, nation.material_amount(m)))
+    .collect();
+
+    let furniture_cap = nation
+        .buildings
+        .iter()
+        .find(|b| b.building_type == BuildingType::FurnitureFactory)
+        .map(|b| b.capacity)
+        .unwrap_or(0);
+    let hardware_cap = nation
+        .buildings
+        .iter()
+        .find(|b| b.building_type == BuildingType::HardwareFactory)
+        .map(|b| b.capacity)
+        .unwrap_or(0);
+    let clothing_cap = nation
+        .buildings
+        .iter()
+        .find(|b| b.building_type == BuildingType::ClothingFactory)
+        .map(|b| b.capacity)
+        .unwrap_or(0);
+
+    let furniture_prod = calculate_factory_production(
+        ProductionChain::Timber,
+        &all_mats,
+        furniture_cap,
+        labor_units,
+    );
+    let hardware_prod = calculate_factory_production(
+        ProductionChain::Metal,
+        &all_mats,
+        hardware_cap,
+        labor_units,
+    );
+    let clothing_prod = calculate_factory_production(
+        ProductionChain::Textile,
+        &all_mats,
+        clothing_cap,
+        labor_units,
+    );
+
+    serde_json::json!({
+        "buildings": buildings_json,
+        "warehouse": {
+            "resources": resources_json,
+            "materials": materials_json,
+            "goods": goods_json,
+        },
+        "labor": {
+            "untrained": labor.untrained,
+            "trained": labor.trained,
+            "expert": labor.expert,
+            "total_workers": labor.total_workers(),
+            "total_labor_units": labor.total_labor_units(),
+        },
+        "production_forecast": {
+            "timber_chain": {
+                "mill_output": timber_mill.materials_produced.first().map(|x| x.1).unwrap_or(0),
+                "factory_output": furniture_prod.goods_produced.first().map(|x| x.1).unwrap_or(0),
+                "mill_labor": timber_mill.labor_used,
+                "factory_labor": furniture_prod.labor_used,
+            },
+            "metal_chain": {
+                "mill_output": metal_mill.materials_produced.first().map(|x| x.1).unwrap_or(0),
+                "factory_output": hardware_prod.goods_produced.first().map(|x| x.1).unwrap_or(0),
+                "mill_labor": metal_mill.labor_used,
+                "factory_labor": hardware_prod.labor_used,
+            },
+            "textile_chain": {
+                "mill_output": textile_mill.materials_produced.first().map(|x| x.1).unwrap_or(0),
+                "factory_output": clothing_prod.goods_produced.first().map(|x| x.1).unwrap_or(0),
+                "mill_labor": textile_mill.labor_used,
+                "factory_labor": clothing_prod.labor_used,
+            },
+        },
+        "can_expand": can_expand,
+    })
+    .to_string()
+}
+
+/// Expand a building to its next capacity tier.
+#[wasm_bindgen]
+pub fn wasm_expand_building(game_json: &str, nation_id: u32, building_type: &str) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let bt = match parse_building_type(building_type) {
+        Some(b) => b,
+        None => return "{\"error\":\"unknown building type\"}".to_string(),
+    };
+
+    let nation = match game.get_nation_mut(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
+
+    let building = match nation.buildings.iter().find(|b| b.building_type == bt) {
+        Some(b) => b,
+        None => return "{\"error\":\"building not found\"}".to_string(),
+    };
+
+    if building.turns_until_upgrade > 0 {
+        return "{\"error\":\"building is already expanding\"}".to_string();
+    }
+
+    let next_cap = building.next_capacity();
+    let amount = next_cap - building.capacity;
+    let (exp_lumber, exp_steel) = domain::economy::buildings::Building::expansion_cost(amount);
+
+    if nation.material_amount(MaterialType::Lumber) < exp_lumber {
+        return "{\"error\":\"not enough lumber\"}".to_string();
+    }
+    if nation.material_amount(MaterialType::Steel) < exp_steel {
+        return "{\"error\":\"not enough steel\"}".to_string();
+    }
+
+    nation.consume_material(MaterialType::Lumber, exp_lumber);
+    nation.consume_material(MaterialType::Steel, exp_steel);
+
+    // Find the building again mutably and start expansion
+    if let Some(b) = nation.buildings.iter_mut().find(|b| b.building_type == bt) {
+        b.start_expansion(amount);
+    }
+
+    serialize_game(&game)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// FEATURE 3: Trade Screen
+// ══════════════════════════════════════════════════════════════════════
+
+/// Query trade data for a nation.
+#[wasm_bindgen]
+pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
+    let game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let nation = match game.get_nation(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
+
+    // Market prices
+    let all_resources = [
+        ResourceType::Timber,
+        ResourceType::Coal,
+        ResourceType::Iron,
+        ResourceType::Cotton,
+        ResourceType::Wool,
+        ResourceType::Grain,
+        ResourceType::Fruit,
+        ResourceType::Livestock,
+        ResourceType::Horses,
+        ResourceType::Oil,
+    ];
+    let market_prices: Vec<serde_json::Value> = all_resources
+        .iter()
+        .map(|&r| {
+            let bp = base_price(r);
+            let stock = nation.resource_amount(r);
+            serde_json::json!({
+                "resource": format!("{:?}", r),
+                "base_price": bp.as_dollars(),
+                "stock": stock,
+            })
+        })
+        .collect();
+
+    // Trade history (last 20)
+    let history: Vec<serde_json::Value> = nation
+        .trade_history
+        .iter()
+        .rev()
+        .take(20)
+        .map(|entry| {
+            let partner_name = game
+                .get_nation(entry.partner)
+                .map(|n| n.name.as_str())
+                .unwrap_or("Unknown");
+            serde_json::json!({
+                "turn": entry.turn,
+                "partner_name": partner_name,
+                "partner_id": entry.partner.0,
+                "resource": format!("{:?}", entry.resource),
+                "quantity": entry.quantity,
+                "total_cost": entry.total_cost.as_dollars(),
+            })
+        })
+        .collect();
+
+    // Subsidies
+    let subsidies: Vec<serde_json::Value> = nation
+        .trade_subsidies
+        .iter()
+        .map(|(&target_nid, &amount)| {
+            let target_name = game
+                .get_nation(target_nid)
+                .map(|n| n.name.as_str())
+                .unwrap_or("Unknown");
+            let has_consulate = game
+                .diplomacy
+                .get_relation(nid, target_nid)
+                .map(|r| r.has_consulate)
+                .unwrap_or(false);
+            serde_json::json!({
+                "nation_id": target_nid.0,
+                "nation_name": target_name,
+                "amount": amount.as_dollars(),
+                "has_consulate": has_consulate,
+            })
+        })
+        .collect();
+
+    // Trade balance from history
+    let mut total_bought: i64 = 0;
+    let mut total_sold: i64 = 0;
+    for entry in &nation.trade_history {
+        if entry.total_cost.as_dollars() > 0 {
+            total_bought += entry.total_cost.as_dollars();
+        } else {
+            total_sold += entry.total_cost.as_dollars().abs();
+        }
+    }
+
+    // Cargo capacity from merchant fleet
+    let total_cargo: u32 = nation
+        .merchant_fleet
+        .iter()
+        .map(|s| s.ship_type.stats().cargo)
+        .sum();
+
+    // Minor nations with consulates
+    let minor_nations: Vec<serde_json::Value> = game
+        .nations
+        .iter()
+        .filter(|n| n.nation_type == NationType::MinorNation && n.id != nid)
+        .map(|n| {
+            let rel = game.diplomacy.get_relation(nid, n.id);
+            let has_consulate = rel.map(|r| r.has_consulate).unwrap_or(false);
+            let has_embassy = rel.map(|r| r.has_embassy).unwrap_or(false);
+            // Collect resources available in minor nation's provinces
+            let mut mn_resources = Vec::new();
+            for &pid in &n.province_ids {
+                if let Some(prov) = game.get_province(pid) {
+                    for &coord in &prov.tiles {
+                        if let Some(tile) = game.hex_map.get_tile(coord)
+                            && tile.has_visible_resource()
+                                && let Some(r) = tile.resource_deposit() {
+                                    let rs = format!("{:?}", r);
+                                    if !mn_resources.contains(&rs) {
+                                        mn_resources.push(rs);
+                                    }
+                                }
+                    }
+                }
+            }
+            serde_json::json!({
+                "nation_id": n.id.0,
+                "name": n.name,
+                "has_consulate": has_consulate,
+                "has_embassy": has_embassy,
+                "resources": mn_resources,
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "market_prices": market_prices,
+        "trade_history": history,
+        "subsidies": subsidies,
+        "trade_balance": {
+            "total_bought": total_bought,
+            "total_sold": total_sold,
+            "net": total_sold - total_bought,
+        },
+        "total_cargo": total_cargo,
+        "minor_nations": minor_nations,
+        "treasury": nation.treasury.as_dollars(),
+    })
+    .to_string()
+}
+
+/// Set trade subsidy for a minor nation.
+#[wasm_bindgen]
+pub fn wasm_set_trade_subsidy(
+    game_json: &str,
+    nation_id: u32,
+    target_nation_id: u32,
+    amount: i64,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let target_nid = NationId(target_nation_id);
+
+    // Validate target nation exists
+    if game.get_nation(target_nid).is_none() {
+        return "{\"error\":\"target nation not found\"}".to_string();
+    }
+    if game.get_nation(target_nid).map(|n| n.nation_type != NationType::MinorNation).unwrap_or(true) {
+        return "{\"error\":\"subsidies can only be set for minor nations\"}".to_string();
+    }
+
+    let nation = match game.get_nation_mut(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
+
+    if amount <= 0 {
+        nation.trade_subsidies.remove(&target_nid);
+    } else {
+        nation
+            .trade_subsidies
+            .insert(target_nid, Money::dollars(amount));
+    }
+
+    serialize_game(&game)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// FEATURE 4: Diplomacy Screen
+// ══════════════════════════════════════════════════════════════════════
+
+/// Query diplomacy screen data for a nation.
+#[wasm_bindgen]
+pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String {
+    let game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let nation = match game.get_nation(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
+
+    let player_standing = game.diplomacy.standing.get(&nid).copied().unwrap_or(100);
+    let treasury = nation.treasury.as_dollars();
+    let player_is_gp = nation.nation_type == NationType::GreatPower;
+
+    let relations: Vec<serde_json::Value> = game
+        .nations
+        .iter()
+        .filter(|n| n.id != nid)
+        .map(|n| {
+            let rel = game.diplomacy.get_relation(nid, n.id);
+            let score = rel.map(|r| r.score).unwrap_or(0);
+            let at_war = rel.map(|r| r.at_war).unwrap_or(false);
+            let has_consulate = rel.map(|r| r.has_consulate).unwrap_or(false);
+            let has_embassy = rel.map(|r| r.has_embassy).unwrap_or(false);
+            let treaties: Vec<String> = rel
+                .map(|r| r.active_treaties.iter().map(|t| format!("{:?}", t)).collect())
+                .unwrap_or_default();
+            let has_nap = rel
+                .map(|r| r.has_treaty(TreatyType::NonAggressionPact))
+                .unwrap_or(false);
+            let has_alliance = rel
+                .map(|r| r.has_treaty(TreatyType::Alliance))
+                .unwrap_or(false);
+
+            let status = if at_war {
+                "At War"
+            } else if has_alliance {
+                "Alliance"
+            } else if has_nap {
+                "NAP"
+            } else {
+                "Neutral"
+            };
+
+            let target_is_gp = n.nation_type == NationType::GreatPower;
+
+            // Pre-compute available actions
+            let can_build_consulate = !has_consulate && treasury >= 500;
+            let can_build_embassy = has_consulate && !has_embassy && treasury >= 5000;
+            let can_propose_nap =
+                has_embassy && !at_war && !has_nap && !has_alliance && player_standing >= 30;
+            let can_propose_alliance = has_embassy
+                && !at_war
+                && !has_alliance
+                && player_standing >= 30
+                && player_is_gp
+                && target_is_gp;
+            let can_declare_war = !at_war;
+            let can_send_grant = !at_war && treasury > 0;
+            let can_break_treaty = !treaties.is_empty();
+            let can_propose_peace = at_war;
+
+            serde_json::json!({
+                "nation_id": n.id.0,
+                "nation_name": n.name,
+                "nation_color": format!("{:?}", n.color),
+                "nation_type": format!("{:?}", n.nation_type),
+                "score": score,
+                "at_war": at_war,
+                "status": status,
+                "treaties": treaties,
+                "has_consulate": has_consulate,
+                "has_embassy": has_embassy,
+                "actions": {
+                    "can_build_consulate": can_build_consulate,
+                    "consulate_cost": 500,
+                    "can_build_embassy": can_build_embassy,
+                    "embassy_cost": 5000,
+                    "can_propose_nap": can_propose_nap,
+                    "can_propose_alliance": can_propose_alliance,
+                    "can_declare_war": can_declare_war,
+                    "can_send_grant": can_send_grant,
+                    "can_break_treaty": can_break_treaty,
+                    "breakable_treaties": treaties,
+                    "can_propose_peace": can_propose_peace,
+                },
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "player_standing": player_standing,
+        "treasury": treasury,
+        "relations": relations,
+    })
+    .to_string()
+}
+
+/// Build a consulate with a target nation ($500).
+#[wasm_bindgen]
+pub fn wasm_diplomacy_build_consulate(
+    game_json: &str,
+    nation_id: u32,
+    target_nation_id: u32,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let target = NationId(target_nation_id);
+
+    if nid == target {
+        return "{\"error\":\"cannot target self\"}".to_string();
+    }
+    if game.get_nation(target).is_none() {
+        return "{\"error\":\"target nation not found\"}".to_string();
+    }
+
+    // Validate actor nation exists
+    if game.get_nation(nid).is_none() {
+        return "{\"error\":\"nation not found\"}".to_string();
+    }
+
+    // Validate treasury before committing
+    let consulate_cost = Money::dollars(500);
+    if game
+        .get_nation(nid)
+        .map(|n| n.treasury.as_dollars() < consulate_cost.as_dollars())
+        .unwrap_or(false)
+    {
+        return "{\"error\":\"not enough treasury\"}".to_string();
+    }
+
+    let cost = match game.diplomacy.build_consulate(nid, target) {
+        Ok(c) => c,
+        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    };
+
+    if let Some(nation) = game.get_nation_mut(nid) {
+        nation.treasury -= cost;
+    }
+
+    serialize_game(&game)
+}
+
+/// Build an embassy with a target nation ($5,000).
+#[wasm_bindgen]
+pub fn wasm_diplomacy_build_embassy(
+    game_json: &str,
+    nation_id: u32,
+    target_nation_id: u32,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let target = NationId(target_nation_id);
+
+    if nid == target {
+        return "{\"error\":\"cannot target self\"}".to_string();
+    }
+    if game.get_nation(target).is_none() {
+        return "{\"error\":\"target nation not found\"}".to_string();
+    }
+
+    // Validate actor nation exists
+    if game.get_nation(nid).is_none() {
+        return "{\"error\":\"nation not found\"}".to_string();
+    }
+
+    // Validate treasury before committing
+    let embassy_cost = Money::dollars(5000);
+    if game
+        .get_nation(nid)
+        .map(|n| n.treasury.as_dollars() < embassy_cost.as_dollars())
+        .unwrap_or(false)
+    {
+        return "{\"error\":\"not enough treasury\"}".to_string();
+    }
+
+    let cost = match game.diplomacy.build_embassy(nid, target) {
+        Ok(c) => c,
+        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    };
+
+    if let Some(nation) = game.get_nation_mut(nid) {
+        nation.treasury -= cost;
+    }
+
+    serialize_game(&game)
+}
+
+/// Propose a Non-Aggression Pact.
+#[wasm_bindgen]
+pub fn wasm_diplomacy_propose_nap(
+    game_json: &str,
+    nation_id: u32,
+    target_nation_id: u32,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let target = NationId(target_nation_id);
+
+    if nid == target {
+        return "{\"error\":\"cannot target self\"}".to_string();
+    }
+    if game.get_nation(target).is_none() {
+        return "{\"error\":\"target nation not found\"}".to_string();
+    }
+
+    match game.diplomacy.propose_pact(nid, target) {
+        Ok(()) => {}
+        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    }
+
+    serialize_game(&game)
+}
+
+/// Propose an Alliance.
+#[wasm_bindgen]
+pub fn wasm_diplomacy_propose_alliance(
+    game_json: &str,
+    nation_id: u32,
+    target_nation_id: u32,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let target = NationId(target_nation_id);
+
+    if nid == target {
+        return "{\"error\":\"cannot target self\"}".to_string();
+    }
+    if game.get_nation(target).is_none() {
+        return "{\"error\":\"target nation not found\"}".to_string();
+    }
+
+    match game.diplomacy.propose_alliance(nid, target) {
+        Ok(()) => {}
+        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    }
+
+    serialize_game(&game)
+}
+
+/// Declare war on a target nation.
+#[wasm_bindgen]
+pub fn wasm_diplomacy_declare_war(
+    game_json: &str,
+    nation_id: u32,
+    target_nation_id: u32,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let target = NationId(target_nation_id);
+
+    if nid == target {
+        return "{\"error\":\"cannot target self\"}".to_string();
+    }
+    if game.get_nation(target).is_none() {
+        return "{\"error\":\"target nation not found\"}".to_string();
+    }
+
+    if game.diplomacy.is_at_war(nid, target) {
+        return "{\"error\":\"already at war\"}".to_string();
+    }
+
+    game.diplomacy.declare_war(nid, target);
+    serialize_game(&game)
+}
+
+/// Send a monetary grant to a nation to improve relations.
+#[wasm_bindgen]
+pub fn wasm_diplomacy_send_grant(
+    game_json: &str,
+    nation_id: u32,
+    target_nation_id: u32,
+    amount: i64,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let target = NationId(target_nation_id);
+
+    if nid == target {
+        return "{\"error\":\"cannot target self\"}".to_string();
+    }
+    if amount <= 0 {
+        return "{\"error\":\"grant amount must be positive\"}".to_string();
+    }
+
+    let money = Money::dollars(amount);
+
+    // Validate target exists
+    if game.get_nation(target).is_none() {
+        return "{\"error\":\"target nation not found\"}".to_string();
+    }
+
+    // Check treasury
+    {
+        let nation = match game.get_nation(nid) {
+            Some(n) => n,
+            None => return "{\"error\":\"nation not found\"}".to_string(),
+        };
+        if nation.treasury.as_dollars() < amount {
+            return "{\"error\":\"not enough treasury\"}".to_string();
+        }
+    }
+
+    // Deduct from treasury
+    if let Some(nation) = game.get_nation_mut(nid) {
+        nation.treasury -= money;
+    }
+
+    game.diplomacy.send_grant(nid, target, money);
+    serialize_game(&game)
+}
+
+/// Break a treaty with a target nation.
+#[wasm_bindgen]
+pub fn wasm_diplomacy_break_treaty(
+    game_json: &str,
+    nation_id: u32,
+    target_nation_id: u32,
+    treaty_type: &str,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let target = NationId(target_nation_id);
+
+    if nid == target {
+        return "{\"error\":\"cannot target self\"}".to_string();
+    }
+    if game.get_nation(target).is_none() {
+        return "{\"error\":\"target nation not found\"}".to_string();
+    }
+
+    let tt = match parse_treaty_type(treaty_type) {
+        Some(t) => t,
+        None => return "{\"error\":\"unknown treaty type\"}".to_string(),
+    };
+
+    game.diplomacy.break_treaty(nid, target, tt);
+    serialize_game(&game)
+}
+
+/// Propose peace to a nation currently at war.
+#[wasm_bindgen]
+pub fn wasm_diplomacy_propose_peace(
+    game_json: &str,
+    nation_id: u32,
+    target_nation_id: u32,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let target = NationId(target_nation_id);
+
+    if nid == target {
+        return "{\"error\":\"cannot target self\"}".to_string();
+    }
+    if game.get_nation(target).is_none() {
+        return "{\"error\":\"target nation not found\"}".to_string();
+    }
+
+    let turn = game.turn;
+
+    match game.diplomacy.propose_peace(nid, target, turn) {
+        Ok(()) => {}
+        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    }
+
+    serialize_game(&game)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// FEATURE 6: Proposal Modal
+// ══════════════════════════════════════════════════════════════════════
+
+/// Get pending diplomatic proposals for a nation.
+#[wasm_bindgen]
+pub fn wasm_get_pending_proposals(game_json: &str, nation_id: u32) -> String {
+    let game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+
+    let proposals: Vec<serde_json::Value> = game
+        .diplomacy
+        .pending_proposals
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.to == nid)
+        .map(|(idx, p)| {
+            let from_name = game
+                .get_nation(p.from)
+                .map(|n| n.name.as_str())
+                .unwrap_or("Unknown");
+            let from_color = game
+                .get_nation(p.from)
+                .map(|n| format!("{:?}", n.color))
+                .unwrap_or_default();
+            let display_text = match p.proposal_type {
+                TreatyType::NonAggressionPact => {
+                    format!("{} proposes a Non-Aggression Pact", from_name)
+                }
+                TreatyType::Alliance => format!("{} proposes an Alliance", from_name),
+                TreatyType::PeaceTreaty => format!("{} proposes Peace", from_name),
+                TreatyType::RequestToJoinEmpire => {
+                    format!("{} requests to join your empire", from_name)
+                }
+                TreatyType::WarDeclaration => {
+                    format!("{} declares war", from_name)
+                }
+            };
+            let turns_until_expiry = 4_i32 - (game.turn.0 as i32 - p.turn_proposed.0 as i32);
+            serde_json::json!({
+                "index": idx,
+                "from_nation_id": p.from.0,
+                "from_nation_name": from_name,
+                "from_nation_color": from_color,
+                "proposal_type": format!("{:?}", p.proposal_type),
+                "display_text": display_text,
+                "turn_proposed": p.turn_proposed,
+                "turns_until_expiry": turns_until_expiry.max(0),
+            })
+        })
+        .collect();
+
+    serde_json::json!({ "proposals": proposals }).to_string()
+}
+
+/// Accept a diplomatic proposal by index.
+#[wasm_bindgen]
+pub fn wasm_accept_proposal(game_json: &str, nation_id: u32, proposal_index: u32) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let idx = proposal_index as usize;
+
+    if idx >= game.diplomacy.pending_proposals.len() {
+        return "{\"error\":\"proposal index out of range\"}".to_string();
+    }
+
+    let proposal = game.diplomacy.pending_proposals[idx].clone();
+    if proposal.to != nid {
+        return "{\"error\":\"proposal not addressed to you\"}".to_string();
+    }
+
+    // Execute the treaty action — propagate errors
+    match proposal.proposal_type {
+        TreatyType::NonAggressionPact => {
+            if let Err(e) = game.diplomacy.propose_pact(proposal.from, proposal.to) {
+                return format!("{{\"error\":\"{}\"}}", e);
+            }
+        }
+        TreatyType::Alliance => {
+            if let Err(e) = game.diplomacy.propose_alliance(proposal.from, proposal.to) {
+                return format!("{{\"error\":\"{}\"}}", e);
+            }
+        }
+        TreatyType::PeaceTreaty => {
+            game.diplomacy.make_peace(proposal.from, proposal.to);
+        }
+        _ => {
+            return "{\"error\":\"unsupported proposal type\"}".to_string();
+        }
+    }
+
+    // Remove the proposal
+    game.diplomacy.pending_proposals.remove(idx);
+
+    serialize_game(&game)
+}
+
+/// Reject a diplomatic proposal by index.
+#[wasm_bindgen]
+pub fn wasm_reject_proposal(game_json: &str, nation_id: u32, proposal_index: u32) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let idx = proposal_index as usize;
+
+    if idx >= game.diplomacy.pending_proposals.len() {
+        return "{\"error\":\"proposal index out of range\"}".to_string();
+    }
+
+    if game.diplomacy.pending_proposals[idx].to != nid {
+        return "{\"error\":\"proposal not addressed to you\"}".to_string();
+    }
+
+    game.diplomacy.pending_proposals.remove(idx);
     serialize_game(&game)
 }
 

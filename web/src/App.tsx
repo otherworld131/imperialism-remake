@@ -5,11 +5,21 @@ import {
   getUnitsInProvince, getCivilians, getShips, getValidMoveTargets, getBuildableUnits,
   queueUnitMove, cancelUnitMove, deployCivilian, recallCivilian,
   recruitArmyUnit, hireCivilian, buildShip,
+  // New screen queries
+  getTransportData, buildFreightCar, setTransportAllocation,
+  getIndustryData, expandBuilding,
+  getTradeData, setTradeSubsidy,
+  getDiplomacyScreenData,
+  diplomacyBuildConsulate, diplomacyBuildEmbassy, diplomacyProposeNap,
+  diplomacyProposeAlliance, diplomacyDeclareWar, diplomacySendGrant,
+  diplomacyBreakTreaty, diplomacyProposePeace,
+  getPendingProposals, acceptProposal, rejectProposal,
 } from './wasm';
 import type {
   TileData, Headline, MapMode, DiplomacyOverlay, DiplomacyOverlayRelation, MilitaryOverlayEntry,
   ArmyUnitDetail, ProvinceUnits, CiviliansData, CivilianDetail, ShipsData,
   ValidMoveTargets, BuildableUnits, PendingMove,
+  TransportData, IndustryData, TradeData, DiplomacyScreenData, ProposalData,
 } from './wasm';
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -46,6 +56,11 @@ import GameSetup from './components/GameSetup';
 import UnitPanel from './components/UnitPanel';
 import CivilianPanel from './components/CivilianPanel';
 import NavalPanel from './components/NavalPanel';
+import TransportPanel from './components/TransportPanel';
+import IndustryPanel from './components/IndustryPanel';
+import TradePanel from './components/TradePanel';
+import DiplomacyPanel from './components/DiplomacyPanel';
+import ProposalModal from './components/ProposalModal';
 
 function App() {
   const [loading, setLoading] = useState(true);
@@ -72,13 +87,21 @@ function App() {
   const [civilians, setCivilians] = useState<CiviliansData | null>(null);
   const [shipsData, setShipsData] = useState<ShipsData | null>(null);
   const [buildable, setBuildable] = useState<BuildableUnits | null>(null);
-  const [selectedUnit, setSelectedUnit] = useState<ArmyUnitDetail | null>(null);
+  const [selectedUnitIds, setSelectedUnitIds] = useState<number[]>([]);
   const [isMovementMode, setIsMovementMode] = useState(false);
   const [validMoveTargets, setValidMoveTargets] = useState<ValidMoveTargets | null>(null);
   const [isDeployMode, setIsDeployMode] = useState(false);
   const [deployingCivilian, setDeployingCivilian] = useState<CivilianDetail | null>(null);
   const [deployableTiles, setDeployableTiles] = useState<Set<string>>(new Set());
   const [wasmError, setWasmError] = useState<string | null>(null);
+
+  // New screen state
+  const [transportData, setTransportData] = useState<TransportData | null>(null);
+  const [industryData, setIndustryData] = useState<IndustryData | null>(null);
+  const [tradeData, setTradeData] = useState<TradeData | null>(null);
+  const [diplomacyScreenData, setDiplomacyScreenData] = useState<DiplomacyScreenData | null>(null);
+  const [proposalData, setProposalData] = useState<ProposalData | null>(null);
+  const [showProposals, setShowProposals] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -122,6 +145,10 @@ function App() {
     setCivilians(getCivilians(json, nid));
     setShipsData(getShips(json, nid));
     setBuildable(getBuildableUnits(json, nid));
+    setTransportData(getTransportData(json, nid));
+    setIndustryData(getIndustryData(json, nid));
+    setTradeData(getTradeData(json, nid));
+    setDiplomacyScreenData(getDiplomacyScreenData(json, nid));
     return true;
   }, [showError]);
 
@@ -144,9 +171,14 @@ function App() {
     if (!applyGameJson(newJson)) return;
     setHeadlines(result.report?.headlines || []);
     setShowNewspaper(true);
+    // Check for pending proposals
+    const newState = JSON.parse(newJson);
+    const nid = newState.human_player_nation;
+    const proposals = getPendingProposals(newJson, nid);
+    setProposalData(proposals);
     // Clear interaction state
     setProvinceUnits(null);
-    setSelectedUnit(null);
+    setSelectedUnitIds([]);
     setIsMovementMode(false);
     setValidMoveTargets(null);
     setIsDeployMode(false);
@@ -160,9 +192,10 @@ function App() {
         handleEndTurn();
       }
       if (e.code === 'Escape') {
-        if (isMovementMode) { setIsMovementMode(false); setValidMoveTargets(null); setSelectedUnit(null); }
+        if (isMovementMode) { setIsMovementMode(false); setValidMoveTargets(null); setSelectedUnitIds([]); }
         else if (isDeployMode) { setIsDeployMode(false); setDeployingCivilian(null); setDeployableTiles(new Set()); }
-        else if (showNewspaper) setShowNewspaper(false);
+        else if (showProposals) setShowProposals(false);
+        else if (showNewspaper) { setShowNewspaper(false); }
         else if (showTech) setShowTech(false);
       }
       if (e.code === 'F1') { e.preventDefault(); setActiveScreen('map'); }
@@ -173,7 +206,7 @@ function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showNewspaper, showTech, handleEndTurn, isMovementMode, isDeployMode]);
+  }, [showNewspaper, showTech, showProposals, handleEndTurn, isMovementMode, isDeployMode]);
 
   // Fetch overlay data when map mode or selected nation changes
   useEffect(() => {
@@ -198,26 +231,40 @@ function App() {
   const playerNationId = gameState?.human_player_nation ?? 0;
 
   const handleTileClick = useCallback((tile: TileData) => {
-    // Movement mode: clicking a tile executes the move
-    if (isMovementMode && selectedUnit && tile.province_id != null) {
+    // Movement mode: clicking a tile executes the move for all selected units
+    if (isMovementMode && selectedUnitIds.length > 0 && tile.province_id != null) {
       // F-002: Validate target is in valid move targets
       const isValidTarget = validMoveTargets && (
         validMoveTargets.friendly.some(t => t.province_id === tile.province_id) ||
         validMoveTargets.hostile.some(t => t.province_id === tile.province_id)
       );
-      if (!isValidTarget) return; // Ignore click on invalid province, keep mode active
+      if (!isValidTarget) return;
 
-      const cmd = queueUnitMove(gameJson, playerNationId, selectedUnit.id, tile.province_id);
-      if (cmd.ok && cmd.gameJson && applyGameJson(cmd.gameJson)) {
-        if (provinceUnits) {
-          setProvinceUnits(getUnitsInProvince(cmd.gameJson, tile.province_id));
+      // Move all selected units — prevalidate then apply all-or-nothing
+      let currentJson = gameJson;
+      const results: string[] = [];
+      for (const unitId of selectedUnitIds) {
+        const cmd = queueUnitMove(currentJson, playerNationId, unitId, tile.province_id);
+        if (cmd.ok && cmd.gameJson) {
+          currentJson = cmd.gameJson;
+          results.push(cmd.gameJson);
+        } else {
+          // Rollback: don't apply any partial state
+          showError(`Move failed: ${cmd.error}. No units moved.`);
+          currentJson = gameJson; // reset to original
+          results.length = 0;
+          break;
         }
-        setIsMovementMode(false);
-        setValidMoveTargets(null);
-        setSelectedUnit(null);
-      } else if (cmd.error) {
-        showError(`Move failed: ${cmd.error}`);
       }
+      if (results.length > 0) {
+        applyGameJson(currentJson);
+        if (provinceUnits) {
+          setProvinceUnits(getUnitsInProvince(currentJson, tile.province_id));
+        }
+      }
+      setIsMovementMode(false);
+      setValidMoveTargets(null);
+      setSelectedUnitIds([]);
       return;
     }
 
@@ -243,13 +290,15 @@ function App() {
       setSelectedNation(tile.owner);
     }
 
-    // Load province units when clicking a capital tile
+    // Load province units when clicking a capital tile; clear multi-selection on context switch
     if (tile.is_capital && tile.province_id != null) {
       setProvinceUnits(getUnitsInProvince(gameJson, tile.province_id));
+      setSelectedUnitIds([]);
     } else {
       setProvinceUnits(null);
+      setSelectedUnitIds([]);
     }
-  }, [mapMode, gameJson, playerNationId, isMovementMode, selectedUnit, validMoveTargets, isDeployMode, deployingCivilian, deployableTiles, applyGameJson, provinceUnits, showError]);
+  }, [mapMode, gameJson, playerNationId, isMovementMode, selectedUnitIds, validMoveTargets, isDeployMode, deployingCivilian, deployableTiles, applyGameJson, provinceUnits, showError]);
 
   // Compute pending moves for arrows
   const pendingMoveArrows = useMemo(() => {
@@ -304,10 +353,51 @@ function App() {
   const handleMoveUnit = useCallback((unitId: number) => {
     const targets = getValidMoveTargets(gameJson, playerNationId, unitId);
     setValidMoveTargets(targets);
-    const unit = provinceUnits?.army_units.find(u => u.id === unitId);
-    setSelectedUnit(unit || null);
+    setSelectedUnitIds([unitId]);
     setIsMovementMode(true);
-  }, [gameJson, playerNationId, provinceUnits]);
+  }, [gameJson, playerNationId]);
+
+  // Multi-unit selection handlers
+  const handleToggleUnit = useCallback((unitId: number, shiftKey: boolean) => {
+    setSelectedUnitIds(prev => {
+      if (shiftKey) {
+        // Toggle: add or remove
+        return prev.includes(unitId)
+          ? prev.filter(id => id !== unitId)
+          : [...prev, unitId];
+      }
+      // Non-shift: single select/deselect
+      return prev.includes(unitId) && prev.length === 1 ? [] : [unitId];
+    });
+  }, []);
+
+  const handleSelectAll = useCallback(() => {
+    if (!provinceUnits) return;
+    const movableIds = provinceUnits.army_units
+      .filter(u => u.category !== 'Garrison' && !pendingMovesDisplay.some(m => m.unit_id === u.id))
+      .map(u => u.id);
+    setSelectedUnitIds(prev =>
+      prev.length === movableIds.length ? [] : movableIds
+    );
+  }, [provinceUnits, pendingMovesDisplay]);
+
+  const handleMoveSelected = useCallback(() => {
+    if (selectedUnitIds.length === 0) return;
+    // Compute intersection of valid targets for all selected units
+    const allTargets = selectedUnitIds.map(id => getValidMoveTargets(gameJson, playerNationId, id));
+    if (allTargets.some(t => !t)) { showError('Could not compute move targets'); return; }
+
+    const firstTargets = allTargets[0]!;
+    const friendly = firstTargets.friendly.filter(t =>
+      allTargets.every(targets => targets!.friendly.some(f => f.province_id === t.province_id))
+    );
+    const hostile = firstTargets.hostile.filter(t =>
+      allTargets.every(targets => targets!.hostile.some(h => h.province_id === t.province_id))
+    );
+
+    setValidMoveTargets({ friendly, hostile });
+    setIsMovementMode(true);
+  }, [selectedUnitIds, gameJson, playerNationId, showError]);
 
   const handleCancelMove = useCallback((unitId: number) => {
     const cmd = cancelUnitMove(gameJson, unitId);
@@ -369,6 +459,87 @@ function App() {
     if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Build failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
+
+  // ── New screen handlers ──────────────────────────────────────────
+
+  const handleBuildFreightCar = useCallback(() => {
+    const cmd = buildFreightCar(gameJson, playerNationId);
+    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    else if (cmd.error) showError(`Build failed: ${cmd.error}`);
+  }, [gameJson, playerNationId, applyGameJson, showError]);
+
+  const handleSetAllocation = useCallback((resource: string, percentage: number) => {
+    const cmd = setTransportAllocation(gameJson, playerNationId, resource, percentage);
+    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    else if (cmd.error) showError(`Allocation failed: ${cmd.error}`);
+  }, [gameJson, playerNationId, applyGameJson, showError]);
+
+  const handleExpandBuilding = useCallback((buildingType: string) => {
+    const cmd = expandBuilding(gameJson, playerNationId, buildingType);
+    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    else if (cmd.error) showError(`Expand failed: ${cmd.error}`);
+  }, [gameJson, playerNationId, applyGameJson, showError]);
+
+  const handleSetSubsidy = useCallback((targetNationId: number, amount: number) => {
+    const cmd = setTradeSubsidy(gameJson, playerNationId, targetNationId, amount);
+    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    else if (cmd.error) showError(`Subsidy failed: ${cmd.error}`);
+  }, [gameJson, playerNationId, applyGameJson, showError]);
+
+  // Diplomacy screen handlers
+  const makeDiploHandler = useCallback((fn: (gj: string, nid: number, tid: number) => any, label: string) =>
+    (targetId: number) => {
+      const cmd = fn(gameJson, playerNationId, targetId);
+      if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`${label}: ${cmd.error}`);
+    }, [gameJson, playerNationId, applyGameJson, showError]);
+
+  const handleDiploBuildConsulate = useCallback((tid: number) => makeDiploHandler(diplomacyBuildConsulate, 'Consulate')(tid), [makeDiploHandler]);
+  const handleDiploBuildEmbassy = useCallback((tid: number) => makeDiploHandler(diplomacyBuildEmbassy, 'Embassy')(tid), [makeDiploHandler]);
+  const handleDiploProposeNap = useCallback((tid: number) => makeDiploHandler(diplomacyProposeNap, 'NAP')(tid), [makeDiploHandler]);
+  const handleDiploProposeAlliance = useCallback((tid: number) => makeDiploHandler(diplomacyProposeAlliance, 'Alliance')(tid), [makeDiploHandler]);
+  const handleDiploDeclareWar = useCallback((tid: number) => makeDiploHandler(diplomacyDeclareWar, 'Declare War')(tid), [makeDiploHandler]);
+  const handleDiploProposePeace = useCallback((tid: number) => makeDiploHandler(diplomacyProposePeace, 'Peace')(tid), [makeDiploHandler]);
+
+  const handleDiploSendGrant = useCallback((targetId: number, amount: number) => {
+    const cmd = diplomacySendGrant(gameJson, playerNationId, targetId, amount);
+    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    else if (cmd.error) showError(`Grant failed: ${cmd.error}`);
+  }, [gameJson, playerNationId, applyGameJson, showError]);
+
+  const handleDiploBreakTreaty = useCallback((targetId: number, treatyType: string) => {
+    const cmd = diplomacyBreakTreaty(gameJson, playerNationId, targetId, treatyType);
+    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    else if (cmd.error) showError(`Break treaty failed: ${cmd.error}`);
+  }, [gameJson, playerNationId, applyGameJson, showError]);
+
+  // Proposal modal handlers
+  const handleAcceptProposal = useCallback((index: number) => {
+    const cmd = acceptProposal(gameJson, playerNationId, index);
+    if (cmd.ok && cmd.gameJson) {
+      applyGameJson(cmd.gameJson);
+      const updated = getPendingProposals(cmd.gameJson, playerNationId);
+      setProposalData(updated);
+      if (!updated || updated.proposals.length === 0) setShowProposals(false);
+    } else if (cmd.error) showError(`Accept failed: ${cmd.error}`);
+  }, [gameJson, playerNationId, applyGameJson, showError]);
+
+  const handleRejectProposal = useCallback((index: number) => {
+    const cmd = rejectProposal(gameJson, playerNationId, index);
+    if (cmd.ok && cmd.gameJson) {
+      applyGameJson(cmd.gameJson);
+      const updated = getPendingProposals(cmd.gameJson, playerNationId);
+      setProposalData(updated);
+      if (!updated || updated.proposals.length === 0) setShowProposals(false);
+    } else if (cmd.error) showError(`Reject failed: ${cmd.error}`);
+  }, [gameJson, playerNationId, applyGameJson, showError]);
+
+  const dismissNewspaper = useCallback(() => {
+    setShowNewspaper(false);
+    if (proposalData && proposalData.proposals.length > 0) {
+      setShowProposals(true);
+    }
+  }, [proposalData]);
 
   // Look up diplomacy info for a given tile's owner
   const getDiploInfoForTile = useCallback((tile: TileData | null): DiplomacyOverlayRelation | null => {
@@ -447,7 +618,7 @@ function App() {
             onTileClick={handleTileClick}
             onTileHover={setHoveredTile}
             showHiddenResources={showHiddenResources}
-            selectedUnit={selectedUnit}
+            selectedUnit={null}
             pendingMoves={pendingMoveArrows}
             validMoveTargets={validMoveTargets}
             isMovementMode={isMovementMode}
@@ -600,7 +771,7 @@ function App() {
               {/* Movement/Deploy mode indicator */}
               {isMovementMode && (
                 <div style={{ background: 'rgba(255,200,0,0.15)', border: '1px solid rgba(255,200,0,0.4)', borderRadius: 4, padding: 8, marginBottom: 8, fontSize: 12 }}>
-                  <b>Movement Mode</b> — click a highlighted province to move the unit, or press Escape to cancel.
+                  <b>Movement Mode</b> — {selectedUnitIds.length > 1 ? `moving ${selectedUnitIds.length} units` : 'moving 1 unit'} — click a highlighted province, or press Escape to cancel.
                 </div>
               )}
               {isDeployMode && deployingCivilian && (
@@ -620,6 +791,10 @@ function App() {
                     pendingMoves={pendingMovesDisplay}
                     isPlayerCapital={isPlayerCapital}
                     isPlayerProvince={isPlayerProvince}
+                    selectedUnitIds={selectedUnitIds}
+                    onToggleUnit={handleToggleUnit}
+                    onSelectAll={handleSelectAll}
+                    onMoveSelected={handleMoveSelected}
                     onMoveUnit={handleMoveUnit}
                     onCancelMove={handleCancelMove}
                     onRecruit={handleRecruit}
@@ -671,38 +846,52 @@ function App() {
             </>
           )}
           {activeScreen === 'transport' && (
-            <>
-              <h3 style={styles.panelTitle}>Transport Network</h3>
-              <p style={styles.hint}>Rail routes and depots will appear here.</p>
-              <h3 style={styles.panelTitle}>Freight Cars</h3>
-              <p style={styles.hint}>Resource allocation will appear here.</p>
-            </>
+            transportData ? (
+              <TransportPanel
+                transport={transportData}
+                onBuildCar={handleBuildFreightCar}
+                onSetAllocation={handleSetAllocation}
+              />
+            ) : (
+              <p style={styles.hint}>Loading transport data...</p>
+            )
           )}
           {activeScreen === 'industry' && (
-            <>
-              <h3 style={styles.panelTitle}>Buildings</h3>
-              <p style={styles.hint}>Capital city buildings will appear here.</p>
-              <h3 style={styles.panelTitle}>Workforce</h3>
-              <p style={styles.hint}>Worker assignments will appear here.</p>
-              <h3 style={styles.panelTitle}>Warehouse</h3>
-              <p style={styles.hint}>Resource stockpiles will appear here.</p>
-            </>
+            industryData ? (
+              <IndustryPanel
+                industry={industryData}
+                onExpand={handleExpandBuilding}
+              />
+            ) : (
+              <p style={styles.hint}>Loading industry data...</p>
+            )
           )}
           {activeScreen === 'trade' && (
-            <>
-              <h3 style={styles.panelTitle}>Trade Partners</h3>
-              <p style={styles.hint}>Available trade deals will appear here.</p>
-              <h3 style={styles.panelTitle}>Market Prices</h3>
-              <p style={styles.hint}>Commodity prices will appear here.</p>
-            </>
+            tradeData ? (
+              <TradePanel
+                trade={tradeData}
+                onSetSubsidy={handleSetSubsidy}
+              />
+            ) : (
+              <p style={styles.hint}>Loading trade data...</p>
+            )
           )}
           {activeScreen === 'diplomacy' && (
-            <>
-              <h3 style={styles.panelTitle}>Relations</h3>
-              <p style={styles.hint}>Diplomatic relations will appear here.</p>
-              <h3 style={styles.panelTitle}>Treaties</h3>
-              <p style={styles.hint}>Active treaties will appear here.</p>
-            </>
+            diplomacyScreenData ? (
+              <DiplomacyPanel
+                diplomacy={diplomacyScreenData}
+                onBuildConsulate={handleDiploBuildConsulate}
+                onBuildEmbassy={handleDiploBuildEmbassy}
+                onProposeNap={handleDiploProposeNap}
+                onProposeAlliance={handleDiploProposeAlliance}
+                onDeclareWar={handleDiploDeclareWar}
+                onSendGrant={handleDiploSendGrant}
+                onBreakTreaty={handleDiploBreakTreaty}
+                onProposePeace={handleDiploProposePeace}
+              />
+            ) : (
+              <p style={styles.hint}>Loading diplomacy data...</p>
+            )
           )}
         </div>
       </div>
@@ -712,7 +901,7 @@ function App() {
         const playerNews = headlines.filter(h => h.text.includes(playerName));
         const worldNews = headlines.filter(h => !h.text.includes(playerName));
         return (
-          <div style={styles.modal} onClick={() => setShowNewspaper(false)}>
+          <div style={styles.modal} onClick={dismissNewspaper}>
             <div style={styles.newspaperModal} onClick={e => e.stopPropagation()}>
               <div style={styles.masthead}>
                 <h2 style={styles.newspaperTitle}>The Imperial Times</h2>
@@ -746,7 +935,7 @@ function App() {
               </div>
               <div style={styles.newsFooter}>
                 <span style={{ fontSize: 11, color: '#666' }}>Esc to dismiss</span>
-                <button onClick={() => setShowNewspaper(false)} style={styles.endTurnBtn}>Continue</button>
+                <button onClick={dismissNewspaper} style={styles.endTurnBtn}>Continue</button>
               </div>
             </div>
           </div>
@@ -769,6 +958,16 @@ function App() {
             <button onClick={() => setShowTech(false)} style={styles.btn}>Close</button>
           </div>
         </div>
+      )}
+
+      {/* Proposal Modal — appears after newspaper when there are pending proposals */}
+      {showProposals && proposalData && proposalData.proposals.length > 0 && (
+        <ProposalModal
+          proposals={proposalData.proposals}
+          onAccept={handleAcceptProposal}
+          onReject={handleRejectProposal}
+          onClose={() => setShowProposals(false)}
+        />
       )}
     </main>
   );

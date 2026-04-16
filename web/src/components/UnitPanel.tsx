@@ -16,6 +16,10 @@ interface Props {
   pendingMoves: PendingMove[];
   isPlayerCapital: boolean;
   isPlayerProvince: boolean;
+  selectedUnitIds: number[];
+  onToggleUnit: (unitId: number, shiftKey: boolean) => void;
+  onSelectAll: () => void;
+  onMoveSelected: () => void;
   onMoveUnit: (unitId: number) => void;
   onCancelMove: (unitId: number) => void;
   onRecruit: (unitType: string) => void;
@@ -24,9 +28,15 @@ interface Props {
 export default function UnitPanel({
   provinceUnits, buildableArmy, treasury, arms, pendingMoves,
   isPlayerCapital, isPlayerProvince,
+  selectedUnitIds, onToggleUnit, onSelectAll, onMoveSelected,
   onMoveUnit, onCancelMove, onRecruit,
 }: Props) {
   const { army_units, garrison_count, province_name } = provinceUnits;
+
+  const movableUnits = army_units.filter(
+    u => u.category !== 'Garrison' && !pendingMoves.some(m => m.unit_id === u.id)
+  );
+  const hasSelection = selectedUnitIds.length > 0;
 
   return (
     <div style={{ fontSize: 13 }}>
@@ -40,22 +50,61 @@ export default function UnitPanel({
 
       {army_units.length > 0 && (
         <>
-          <div style={{ color: '#ccc', fontWeight: 'bold', marginBottom: 4 }}>
-            Army Units ({army_units.length})
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+            <span style={{ color: '#ccc', fontWeight: 'bold' }}>
+              Army Units ({army_units.length})
+            </span>
+            {isPlayerProvince && movableUnits.length > 1 && (
+              <button onClick={onSelectAll} style={btnStyle('#456')}>
+                {selectedUnitIds.length === movableUnits.length ? 'Deselect' : 'Select All'}
+              </button>
+            )}
           </div>
+
+          {/* Move Selected button */}
+          {hasSelection && isPlayerProvince && (
+            <button
+              onClick={onMoveSelected}
+              style={{
+                ...btnStyle('#a85'),
+                width: '100%', marginBottom: 4, padding: '3px 6px',
+              }}
+            >
+              Move {selectedUnitIds.length} Unit{selectedUnitIds.length > 1 ? 's' : ''}
+            </button>
+          )}
+
           {army_units.map(unit => {
             const pending = pendingMoves.find(m => m.unit_id === unit.id);
             const icon = CATEGORY_ICONS[unit.category] || '';
             const stars = '\u2605'.repeat(unit.medals);
+            const isMovable = unit.category !== 'Garrison' && !pending;
+            const isSelected = selectedUnitIds.includes(unit.id);
             return (
               <div key={unit.id} style={{
-                background: 'rgba(255,255,255,0.05)',
+                background: isSelected ? 'rgba(218,165,32,0.15)' : 'rgba(255,255,255,0.05)',
                 borderRadius: 4,
                 padding: '4px 6px',
                 marginBottom: 3,
-              }}>
+                border: isSelected ? '1px solid rgba(218,165,32,0.4)' : '1px solid transparent',
+                cursor: isMovable && isPlayerProvince ? 'pointer' : 'default',
+              }}
+                onClick={(e) => {
+                  if (isMovable && isPlayerProvince) onToggleUnit(unit.id, e.shiftKey);
+                }}
+              >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span>
+                    {isMovable && isPlayerProvince && (
+                      <span style={{
+                        display: 'inline-block', width: 12, height: 12,
+                        border: '1px solid #888', borderRadius: 2, marginRight: 4,
+                        background: isSelected ? '#daa520' : 'transparent',
+                        verticalAlign: 'middle', fontSize: 9, textAlign: 'center', lineHeight: '12px',
+                      }}>
+                        {isSelected ? '\u2713' : ''}
+                      </span>
+                    )}
                     {icon} {unit.unit_type.replace(/([A-Z])/g, ' $1').trim()}
                     {stars && <span style={{ color: '#ffd700', marginLeft: 4 }}>{stars}</span>}
                   </span>
@@ -72,13 +121,13 @@ export default function UnitPanel({
                     <span style={{ color: '#ffd700' }}>
                       \u2192 {pending.destination_name}
                     </span>
-                    <button onClick={() => onCancelMove(unit.id)} style={btnStyle('#a33')}>
+                    <button onClick={(e) => { e.stopPropagation(); onCancelMove(unit.id); }} style={btnStyle('#a33')}>
                       Cancel
                     </button>
                   </div>
                 ) : (
-                  isPlayerProvince && unit.category !== 'Garrison' && (
-                    <button onClick={() => onMoveUnit(unit.id)} style={{ ...btnStyle('#456'), marginTop: 3 }}>
+                  !hasSelection && isPlayerProvince && unit.category !== 'Garrison' && (
+                    <button onClick={(e) => { e.stopPropagation(); onMoveUnit(unit.id); }} style={{ ...btnStyle('#456'), marginTop: 3 }}>
                       Move
                     </button>
                   )
