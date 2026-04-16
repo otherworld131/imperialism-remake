@@ -166,7 +166,7 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
 /// - Estimate enemy strength (provinces × 4 for garrison + known army size)
 /// - Prefer coastal attack targets when AI has naval superiority
 pub fn ai_naval_strategy(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
-    let personality = get_personality(game, nation_id);
+    let _personality = get_personality(game, nation_id);
 
     // ── Read Lua config (feature-gated) ──────────────────────
     #[cfg(feature = "lua")]
@@ -174,7 +174,7 @@ pub fn ai_naval_strategy(game: &mut GameState, nation_id: NationId, actions: &mu
         .game_data
         .lua_engine
         .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+        .and_then(|e| super::lua_bridge::lua_get_config(e, _personality));
     #[cfg(not(feature = "lua"))]
     let _lua_cfg: Option<()> = None;
 
