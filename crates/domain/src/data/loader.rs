@@ -245,12 +245,7 @@ mod tests {
             assert_eq!(r.earliest_year, h.earliest_year);
             assert_eq!(r.latest_year, h.latest_year);
             assert_eq!(r.prerequisites, h.prerequisites);
-            assert_eq!(
-                r.effects.len(),
-                h.effects.len(),
-                "Effects count mismatch for {}",
-                h.name
-            );
+            assert_eq!(r.effects, h.effects, "Effects mismatch for {}", h.name);
         }
     }
 

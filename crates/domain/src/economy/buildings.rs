@@ -21,6 +21,24 @@ pub enum BuildingType {
     PowerPlant,
 }
 
+impl std::fmt::Display for BuildingType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FoodProcessing => write!(f, "Food Processing"),
+            Self::TradeSchool => write!(f, "Trade School"),
+            Self::LumberMill => write!(f, "Lumber Mill"),
+            Self::SteelMill => write!(f, "Steel Mill"),
+            Self::TextileMill => write!(f, "Textile Mill"),
+            Self::FurnitureFactory => write!(f, "Furniture Factory"),
+            Self::HardwareFactory => write!(f, "Hardware Factory"),
+            Self::ClothingFactory => write!(f, "Clothing Factory"),
+            Self::OilRefinery => write!(f, "Oil Refinery"),
+            Self::PowerPlant => write!(f, "Power Plant"),
+            other => write!(f, "{:?}", other),
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Building {
     pub building_type: BuildingType,

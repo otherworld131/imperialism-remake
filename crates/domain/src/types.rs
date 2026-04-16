@@ -231,6 +231,15 @@ pub enum MaterialType {
     CannedFood,
 }
 
+impl std::fmt::Display for MaterialType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CannedFood => write!(f, "Canned Food"),
+            other => write!(f, "{:?}", other),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum GoodsType {
     Furniture,

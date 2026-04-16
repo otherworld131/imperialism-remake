@@ -139,7 +139,7 @@ impl TechTree {
                 earliest_year: 1826,
                 latest_year: 1830,
                 prerequisites: vec![],
-                effects: vec![TechEffect::UnlockShip("Paddle Steamer".to_string())],
+                effects: vec![TechEffect::UnlockShip("Paddlewheeler".to_string())],
             },
             Technology {
                 id: TechId(10),
@@ -181,8 +181,8 @@ impl TechTree {
                 latest_year: 1845,
                 prerequisites: vec![TechId(11)],
                 effects: vec![TechEffect::UpgradeUnit {
-                    from: "Militia".to_string(),
-                    to: "Infantry".to_string(),
+                    from: "Regulars".to_string(),
+                    to: "RifleInfantry".to_string(),
                 }],
             },
             Technology {
@@ -193,8 +193,8 @@ impl TechTree {
                 latest_year: 1844,
                 prerequisites: vec![],
                 effects: vec![TechEffect::UpgradeUnit {
-                    from: "Artillery".to_string(),
-                    to: "Rifled Artillery".to_string(),
+                    from: "LightArtillery".to_string(),
+                    to: "StandardArtillery".to_string(),
                 }],
             },
             Technology {
@@ -272,7 +272,7 @@ impl TechTree {
                 earliest_year: 1866,
                 latest_year: 1868,
                 prerequisites: vec![TechId(15)],
-                effects: vec![TechEffect::UnlockShip("Battleship".to_string())],
+                effects: vec![TechEffect::UnlockShip("Advanced Ironclad".to_string())],
             },
             Technology {
                 id: TechId(22),
@@ -281,7 +281,7 @@ impl TechTree {
                 earliest_year: 1872,
                 latest_year: 1886,
                 prerequisites: vec![TechId(14)],
-                effects: vec![TechEffect::UnlockUnit("Siege Artillery".to_string())],
+                effects: vec![TechEffect::UnlockUnit("SiegeArtillery".to_string())],
             },
             Technology {
                 id: TechId(23),
@@ -302,7 +302,7 @@ impl TechTree {
                 earliest_year: 1873,
                 latest_year: 1889,
                 prerequisites: vec![TechId(21)],
-                effects: vec![TechEffect::UnlockShip("Cruiser".to_string())],
+                effects: vec![TechEffect::UnlockShip("Armoured Cruiser".to_string())],
             },
             Technology {
                 id: TechId(25),
@@ -311,7 +311,7 @@ impl TechTree {
                 earliest_year: 1879,
                 latest_year: 1893,
                 prerequisites: vec![TechId(13)],
-                effects: vec![TechEffect::UnlockUnit("Machine Gun Corps".to_string())],
+                effects: vec![TechEffect::UnlockUnit("MachineGunners".to_string())],
             },
             Technology {
                 id: TechId(26),
@@ -338,7 +338,7 @@ impl TechTree {
                 earliest_year: 1884,
                 latest_year: 1898,
                 prerequisites: vec![TechId(26)],
-                effects: vec![TechEffect::UnlockUnit("Motorized Infantry".to_string())],
+                effects: vec![TechEffect::UnlockUnit("Mechanised".to_string())],
             },
         ];
 

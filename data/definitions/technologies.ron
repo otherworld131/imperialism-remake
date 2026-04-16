@@ -86,7 +86,7 @@
             earliest_year: 1826,
             latest_year: 1830,
             prerequisites: [],
-            effects: [UnlockShip("Paddle Steamer")],
+            effects: [UnlockShip("Paddlewheeler")],
         ),
         (
             id: 10,
@@ -122,7 +122,7 @@
             earliest_year: 1841,
             latest_year: 1845,
             prerequisites: [11],
-            effects: [UpgradeUnit(from: "Militia", to: "Infantry")],
+            effects: [UpgradeUnit(from: "Regulars", to: "RifleInfantry")],
         ),
         (
             id: 14,
@@ -131,7 +131,7 @@
             earliest_year: 1841,
             latest_year: 1844,
             prerequisites: [],
-            effects: [UpgradeUnit(from: "Artillery", to: "Rifled Artillery")],
+            effects: [UpgradeUnit(from: "LightArtillery", to: "StandardArtillery")],
         ),
         (
             id: 15,
@@ -194,7 +194,7 @@
             earliest_year: 1866,
             latest_year: 1868,
             prerequisites: [15],
-            effects: [UnlockShip("Battleship")],
+            effects: [UnlockShip("Advanced Ironclad")],
         ),
         (
             id: 22,
@@ -203,7 +203,7 @@
             earliest_year: 1872,
             latest_year: 1886,
             prerequisites: [14],
-            effects: [UnlockUnit("Siege Artillery")],
+            effects: [UnlockUnit("SiegeArtillery")],
         ),
         (
             id: 23,
@@ -221,7 +221,7 @@
             earliest_year: 1873,
             latest_year: 1889,
             prerequisites: [21],
-            effects: [UnlockShip("Cruiser")],
+            effects: [UnlockShip("Armoured Cruiser")],
         ),
         (
             id: 25,
@@ -230,7 +230,7 @@
             earliest_year: 1879,
             latest_year: 1893,
             prerequisites: [13],
-            effects: [UnlockUnit("Machine Gun Corps")],
+            effects: [UnlockUnit("MachineGunners")],
         ),
         (
             id: 26,
@@ -257,7 +257,7 @@
             earliest_year: 1884,
             latest_year: 1898,
             prerequisites: [26],
-            effects: [UnlockUnit("Motorized Infantry")],
+            effects: [UnlockUnit("Mechanised")],
         ),
     ],
 )

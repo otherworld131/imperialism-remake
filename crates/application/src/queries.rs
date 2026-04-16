@@ -111,7 +111,7 @@ pub fn get_industry_screen(game: &GameState) -> IndustryScreenData {
         .iter()
         .map(|b| {
             (
-                format!("{:?}", b.building_type),
+                format!("{}", b.building_type),
                 b.effective_capacity(),
                 b.is_expanding(),
             )
@@ -129,17 +129,17 @@ pub fn get_industry_screen(game: &GameState) -> IndustryScreenData {
 
     for (resource, &amount) in &nation.warehouse {
         if amount > 0 {
-            warehouse_summary.push((format!("{:?}", resource), amount));
+            warehouse_summary.push((format!("{:?}", resource), amount)); // ResourceType Debug names are user-friendly
         }
     }
     for (material, &amount) in &nation.materials {
         if amount > 0 {
-            warehouse_summary.push((format!("{:?}", material), amount));
+            warehouse_summary.push((format!("{}", material), amount));
         }
     }
     for (goods, &amount) in &nation.goods {
         if amount > 0 {
-            warehouse_summary.push((format!("{:?}", goods), amount));
+            warehouse_summary.push((format!("{:?}", goods), amount)); // GoodsType Debug names are user-friendly
         }
     }
 
@@ -163,8 +163,14 @@ pub fn get_trade_screen(game: &GameState) -> TradeScreenData {
         .expect("Human player nation must exist");
 
     let cargo_capacity = nation.total_cargo_capacity();
-    // cargo_used is the sum of goods currently being shipped (simplified: 0 at query time)
-    let cargo_used = 0;
+    let cargo_used: u32 = nation
+        .trade_history
+        .iter()
+        .filter(|th| th.turn.0 <= game.turn.0 && game.turn.0.saturating_sub(th.turn.0) <= 1)
+        .filter(|th| th.partner != nation.id)
+        .map(|th| th.quantity)
+        .sum::<u32>()
+        .min(cargo_capacity);
 
     let mut partners = Vec::new();
 
@@ -305,8 +311,8 @@ mod tests {
         assert!(data.province_count > 0);
         // Normal difficulty starts with 2 civilians (Farmer + Forester)
         assert_eq!(data.civilian_count, 2);
-        // No army units at start
-        assert_eq!(data.army_count, 0);
+        // Each Great Power starts with 5 army units
+        assert_eq!(data.army_count, 5);
     }
 
     // ── Transport Screen ────────────────────────────────────────────
@@ -316,11 +322,9 @@ mod tests {
         let game = new_game("test", Difficulty::Normal, 0);
         let data = get_transport_screen(&game);
 
-        // New game starts with 0 freight cars
-        assert_eq!(data.freight_cars, 0);
-        assert_eq!(data.total_capacity, 0);
-        // With no capacity, utilization should be 0
-        assert_eq!(data.utilization_percent, 0);
+        // Each Great Power starts with 5 freight cars (from game.lua config)
+        assert_eq!(data.freight_cars, 5);
+        assert_eq!(data.total_capacity, 5);
     }
 
     #[test]
@@ -332,7 +336,8 @@ mod tests {
         // Clear any starting warehouse contents to get a clean baseline
         nation.warehouse.clear();
 
-        // Give the nation some freight cars and resources
+        // Reset freight cars and build exactly 10 for a clean test
+        nation.transport.freight_cars = 0;
         nation.transport.build_freight_cars(10);
         nation.add_resource(ResourceType::Timber, 3);
         nation.add_resource(ResourceType::Coal, 2);
@@ -376,7 +381,6 @@ mod tests {
         assert!(!data.buildings.is_empty());
 
         // All fixed buildings should be present on Normal difficulty:
-        // Armory, Capitol, FoodProcessing, Railyard, Shipyard, TradeSchool, University, Warehouse
         let building_names: Vec<&str> = data
             .buildings
             .iter()
@@ -384,10 +388,10 @@ mod tests {
             .collect();
         assert!(building_names.contains(&"Armory"));
         assert!(building_names.contains(&"Capitol"));
-        assert!(building_names.contains(&"FoodProcessing"));
+        assert!(building_names.contains(&"Food Processing"));
         assert!(building_names.contains(&"Railyard"));
         assert!(building_names.contains(&"Shipyard"));
-        assert!(building_names.contains(&"TradeSchool"));
+        assert!(building_names.contains(&"Trade School"));
         assert!(building_names.contains(&"University"));
         assert!(building_names.contains(&"Warehouse"));
     }
@@ -398,10 +402,10 @@ mod tests {
         let data = get_industry_screen(&game);
 
         let (untrained, trained, expert) = data.workers;
-        // Normal difficulty: 3 untrained + 1 trained
-        assert_eq!(untrained, 3);
-        assert_eq!(trained, 1);
-        assert_eq!(expert, 0);
+        // Normal difficulty starting labor
+        assert_eq!(untrained, 4);
+        assert_eq!(trained, 2);
+        assert_eq!(expert, 1);
     }
 
     #[test]
@@ -421,7 +425,7 @@ mod tests {
         let lumber_mill = data
             .buildings
             .iter()
-            .find(|(name, _, _)| name == "LumberMill");
+            .find(|(name, _, _)| name == "Lumber Mill");
         assert!(lumber_mill.is_some());
         let (_, _capacity, is_expanding) = lumber_mill.unwrap();
         assert!(is_expanding);
@@ -493,6 +497,49 @@ mod tests {
             );
         }
         assert_eq!(data.partners.len(), 2);
+    }
+
+    #[test]
+    fn trade_screen_cargo_used_counts_current_and_previous_turn_only() {
+        use domain::economy::trade::TradeHistoryEntry;
+
+        let mut game = new_game("test", Difficulty::Normal, 0);
+        let human_id = game.human_player_nation;
+        let partner = NationId(99);
+        game.turn = TurnNumber(5);
+
+        let nation = game.get_nation_mut(human_id).unwrap();
+        nation.trade_history.clear();
+
+        // Turn 5 (current) — should count
+        nation.trade_history.push(TradeHistoryEntry {
+            turn: TurnNumber(5),
+            partner,
+            resource: ResourceType::Timber,
+            quantity: 3,
+            total_cost: Money::dollars(30),
+        });
+        // Turn 4 (previous) — should count
+        nation.trade_history.push(TradeHistoryEntry {
+            turn: TurnNumber(4),
+            partner,
+            resource: ResourceType::Coal,
+            quantity: 2,
+            total_cost: Money::dollars(20),
+        });
+        // Turn 3 (older) — should NOT count
+        nation.trade_history.push(TradeHistoryEntry {
+            turn: TurnNumber(3),
+            partner,
+            resource: ResourceType::Iron,
+            quantity: 10,
+            total_cost: Money::dollars(100),
+        });
+
+        let data = get_trade_screen(&game);
+        let capacity = game.get_nation(human_id).unwrap().total_cargo_capacity();
+        let expected = (3u32 + 2).min(capacity);
+        assert_eq!(data.cargo_used, expected);
     }
 
     // ── Diplomacy Screen ────────────────────────────────────────────

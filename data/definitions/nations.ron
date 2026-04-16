@@ -3,12 +3,12 @@
 
 (
     great_powers: [
-        (name: "Dorado",   color: "Yellow",    ai_personality: "Expansionist"),
+        (name: "Dorado",   color: "Yellow",    ai_personality: "Balanced"),
         (name: "Deneb",    color: "Orange",    ai_personality: "Balanced"),
         (name: "Vega",     color: "LightBlue", ai_personality: "Diplomatic"),
         (name: "Arcturus", color: "Red",       ai_personality: "Aggressive"),
         (name: "Capella",  color: "Green",     ai_personality: "Economic"),
-        (name: "Rigel",    color: "Purple",    ai_personality: "Defensive"),
+        (name: "Rigel",    color: "Purple",    ai_personality: "Diplomatic"),
         (name: "Sirius",   color: "Blue",      ai_personality: "Balanced"),
     ],
     minor_nations: [

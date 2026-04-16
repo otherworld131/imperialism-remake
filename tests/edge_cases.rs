@@ -307,6 +307,98 @@ fn war_peace_cycle_does_not_corrupt_state() {
     assert_state_valid(&game);
 }
 
+// ── Test: Save/load roundtrip with active wars and treaties ─────
+
+#[test]
+fn save_load_roundtrip_with_wars_and_treaties() {
+    use domain::events::TreatyType;
+    use infrastructure::persistence::{load_game, save_game};
+
+    let mut game = new_game("war_save", Difficulty::Normal, 0);
+    let gp_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+    let mn_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| !n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+
+    // Set up complex diplomatic state
+    game.diplomacy.declare_war(gp_ids[0], gp_ids[1]);
+    game.diplomacy
+        .propose_alliance(gp_ids[2], gp_ids[3])
+        .unwrap();
+    game.diplomacy
+        .build_consulate(gp_ids[0], mn_ids[0])
+        .unwrap();
+    game.diplomacy.build_embassy(gp_ids[0], mn_ids[0]).unwrap();
+    game.diplomacy.propose_pact(gp_ids[0], mn_ids[0]).unwrap();
+
+    // Run a few turns to build up economic/military state
+    for _ in 0..10 {
+        process_turn(&mut game);
+    }
+
+    let dir = std::env::temp_dir().join("imperialism_war_save_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("war_save.json");
+
+    save_game(&game, &path).unwrap();
+    let loaded = load_game(&path).unwrap();
+
+    // Verify diplomatic state roundtripped
+    assert!(loaded.diplomacy.is_at_war(gp_ids[0], gp_ids[1]));
+    assert!(
+        loaded
+            .diplomacy
+            .has_treaty(gp_ids[2], gp_ids[3], TreatyType::Alliance)
+    );
+    assert!(loaded.diplomacy.has_consulate(gp_ids[0], mn_ids[0]));
+    assert!(loaded.diplomacy.has_embassy(gp_ids[0], mn_ids[0]));
+    assert!(
+        loaded
+            .diplomacy
+            .has_treaty(gp_ids[0], mn_ids[0], TreatyType::NonAggressionPact)
+    );
+
+    // Verify military state roundtripped
+    for (orig, load) in game.nations.iter().zip(loaded.nations.iter()) {
+        assert_eq!(
+            orig.army.len(),
+            load.army.len(),
+            "Army mismatch for {}",
+            orig.name
+        );
+        assert_eq!(
+            orig.warships.len(),
+            load.warships.len(),
+            "Warship mismatch for {}",
+            orig.name
+        );
+        assert_eq!(
+            orig.treasury, load.treasury,
+            "Treasury mismatch for {}",
+            orig.name
+        );
+    }
+
+    // Verify the loaded game can continue without panics
+    let mut continued = loaded;
+    for _ in 0..5 {
+        process_turn(&mut continued);
+    }
+    assert_state_valid(&continued);
+
+    // Cleanup
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir(&dir);
+}
+
 // ── Test: Treasury can go negative without panics ───────────────
 
 #[test]
