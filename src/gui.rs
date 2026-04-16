@@ -1,35 +1,36 @@
 #![deny(warnings)]
 
+use clap::Parser;
 use domain::types::Difficulty;
 
+#[derive(Parser)]
+#[command(
+    name = "imperialism-gui",
+    about = "Imperialism Remake — graphical interface"
+)]
+struct GuiArgs {
+    /// Map key for world generation
+    map_key: Option<String>,
+
+    /// Nation index (0-based)
+    nation_index: Option<usize>,
+
+    /// Load a scenario by ID (not yet supported in GUI — use CLI instead)
+    #[arg(long)]
+    scenario: Option<String>,
+}
+
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let args = GuiArgs::parse();
 
-    // Parse arguments: imperialism-gui [map_key] [nation_index]
-    // Or: imperialism-gui --scenario <id> [nation_index]
-    let (map_key, difficulty, nation_index) = if args.iter().any(|a| a == "--scenario") {
-        let scenario_idx = args.iter().position(|a| a == "--scenario").unwrap();
-        let scenario_id = args
-            .get(scenario_idx + 1)
-            .map(|s| s.as_str())
-            .unwrap_or("1815");
-        let nation_idx: usize = args
-            .get(scenario_idx + 2)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        (
-            format!("scenario_{}", scenario_id),
-            Difficulty::Normal,
-            nation_idx,
-        )
-    } else {
-        let map_key = args
-            .get(1)
-            .cloned()
-            .unwrap_or_else(|| "imperialism".to_string());
-        let nation_idx: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-        (map_key, Difficulty::Normal, nation_idx)
-    };
+    if args.scenario.is_some() {
+        eprintln!("Error: --scenario is not yet supported in the GUI binary.");
+        eprintln!("Use the CLI binary instead: imperialism --scenario <id>");
+        std::process::exit(1);
+    }
 
-    presentation::run_game(&map_key, difficulty, nation_index);
+    let map_key = args.map_key.as_deref().unwrap_or("imperialism");
+    let nation_index = args.nation_index.unwrap_or(0);
+
+    presentation::run_game(map_key, Difficulty::Normal, nation_index);
 }
