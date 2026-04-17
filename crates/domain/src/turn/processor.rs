@@ -3188,7 +3188,9 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
         }
     }
 
-    // Re-add proposals that target the human player (for UI handling)
+    // Evaluate player→AI proposals using AI assessment logic,
+    // and re-add AI→human proposals for UI handling.
+    let human = game.human_player_nation;
     for proposal in proposals {
         // Skip proposals that were part of mutual peace
         let was_mutual = mutual_peace.iter().any(|&(a, b)| {
@@ -3198,8 +3200,137 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
             continue;
         }
 
-        if proposal.to == game.human_player_nation {
-            // Human-targeted: keep pending for UI
+        if proposal.from == human && proposal.to != human {
+            // Player→AI: evaluate using AI assessment
+            let target_id = proposal.to;
+            let personality = crate::ai::common::get_personality(game, target_id);
+
+            #[cfg(feature = "lua")]
+            let lua_cfg = game
+                .game_data
+                .lua_engine
+                .as_ref()
+                .and_then(|e| crate::ai::lua_bridge::lua_get_config(e, personality));
+
+            let accepted = match proposal.proposal_type {
+                TreatyType::NonAggressionPact => {
+                    crate::ai::assessment::evaluate_nap_proposal(
+                        game,
+                        human,
+                        target_id,
+                        personality,
+                        #[cfg(feature = "lua")]
+                        lua_cfg.as_ref(),
+                    )
+                }
+                TreatyType::Alliance => {
+                    crate::ai::assessment::evaluate_alliance_proposal(
+                        game,
+                        human,
+                        target_id,
+                        personality,
+                        #[cfg(feature = "lua")]
+                        lua_cfg.as_ref(),
+                    )
+                }
+                TreatyType::PeaceTreaty => {
+                    crate::ai::assessment::evaluate_peace_proposal(
+                        game,
+                        human,
+                        target_id,
+                        personality,
+                        #[cfg(feature = "lua")]
+                        lua_cfg.as_ref(),
+                    )
+                }
+                _ => false,
+            };
+
+            let from_name = game
+                .get_nation(human)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            let to_name = game
+                .get_nation(target_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            let treaty_label = match proposal.proposal_type {
+                TreatyType::NonAggressionPact => "Non-Aggression Pact",
+                TreatyType::Alliance => "Alliance",
+                TreatyType::PeaceTreaty => "Peace Treaty",
+                _ => "Treaty",
+            };
+
+            if accepted {
+                // Apply the treaty — check result in case state drifted
+                let applied = match proposal.proposal_type {
+                    TreatyType::NonAggressionPact => {
+                        game.diplomacy.propose_pact(human, target_id).is_ok()
+                    }
+                    TreatyType::Alliance => {
+                        game.diplomacy.propose_alliance(human, target_id).is_ok()
+                    }
+                    TreatyType::PeaceTreaty => {
+                        game.diplomacy.make_peace(human, target_id);
+                        true
+                    }
+                    _ => false,
+                };
+                if applied {
+                    report.events.push(DomainEvent::TreatyAccepted(
+                        crate::events::TreatyAccepted {
+                            from: human,
+                            to: target_id,
+                            treaty_type: proposal.proposal_type,
+                        },
+                    ));
+                    report.newspaper_headlines.push((
+                        format!(
+                            "{} accepts {}'s {} proposal",
+                            to_name, from_name, treaty_label
+                        ),
+                        HeadlineCategory::Diplomacy,
+                    ));
+                    let turn = game.turn;
+                    game.history.push((
+                        turn,
+                        format!(
+                            "{} accepted {}'s {} proposal",
+                            to_name, from_name, treaty_label
+                        ),
+                    ));
+                } else {
+                    // AI accepted but treaty could not be applied (state drift)
+                    report.events.push(DomainEvent::TreatyRejected(
+                        crate::events::TreatyRejected {
+                            from: human,
+                            to: target_id,
+                            treaty_type: proposal.proposal_type,
+                        },
+                    ));
+                    report.newspaper_headlines.push((
+                        format!(
+                            "{} proposal to {} could not be fulfilled",
+                            treaty_label, to_name
+                        ),
+                        HeadlineCategory::Diplomacy,
+                    ));
+                }
+            } else {
+                report.events.push(DomainEvent::TreatyRejected(
+                    crate::events::TreatyRejected {
+                        from: human,
+                        to: target_id,
+                        treaty_type: proposal.proposal_type,
+                    },
+                ));
+                report.newspaper_headlines.push((
+                    format!("{} rejects {}'s {} proposal", to_name, from_name, treaty_label),
+                    HeadlineCategory::Diplomacy,
+                ));
+            }
+        } else if proposal.to == human {
+            // AI→human: keep pending for UI
             game.diplomacy.pending_proposals.push(proposal);
         }
         // AI-targeted proposals were already evaluated inline during AI turns
@@ -8713,5 +8844,386 @@ mod tests {
             !can_attack_province(&game, NationId(1), ProvinceId(2)),
             "Should NOT be able to attack via landing from same turn"
         );
+    }
+
+    // ── Player→AI diplomatic proposal resolution ─────────────────
+
+    /// Build a two-GP game state with embassy established and positive relations
+    /// so that NAP/Alliance proposals can be queued and evaluated.
+    fn empty_report(turn: TurnNumber) -> TurnReport {
+        TurnReport {
+            turn,
+            year: turn.year(),
+            quarter: turn.quarter(),
+            events: Vec::new(),
+            resource_production: Vec::new(),
+            gold_income: Vec::new(),
+            maintenance_costs: Vec::new(),
+            production_output: Vec::new(),
+            food_consumed: Vec::new(),
+            starvation: Vec::new(),
+            newspaper_headlines: Vec::new(),
+            techs_available: Vec::new(),
+            council_vote: None,
+            trade_transactions: Vec::new(),
+            battles: Vec::new(),
+            naval_battles: Vec::new(),
+            scores: Vec::new(),
+            ai_actions: Vec::new(),
+            civilian_completions: Vec::new(),
+            transport_overflow: Vec::new(),
+            immigration: Vec::new(),
+            settlement_upgrades: Vec::new(),
+            trade_balance: Vec::new(),
+            town_production: Vec::new(),
+            unit_movements: Vec::new(),
+            incorporations: Vec::new(),
+            unit_upgrades: Vec::new(),
+            subsidy_costs: Vec::new(),
+            trade_diplomacy: Vec::new(),
+            disconnected_resources: Vec::new(),
+            rewards_earned: Vec::new(),
+        }
+    }
+
+    fn two_gp_diplo_game() -> GameState {
+        use crate::ai::AiPersonality;
+
+        let coord = HexCoord::new(0, 0);
+        let coord2 = HexCoord::new(5, 5);
+        let mut hex_map = HexMap::new(10, 10);
+        let mut t1 = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        t1.set_resource(ResourceType::Grain);
+        hex_map.set_tile(coord, t1);
+        let mut t2 = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        t2.set_resource(ResourceType::Grain);
+        hex_map.set_tile(coord2, t2);
+
+        let p1 = Province::new(
+            ProvinceId(1),
+            "Homeland".to_string(),
+            NationId(1),
+            coord,
+            vec![coord],
+            4,
+        );
+        let p2 = Province::new(
+            ProvinceId(2),
+            "Ailand".to_string(),
+            NationId(2),
+            coord2,
+            vec![coord2],
+            4,
+        );
+
+        let mut n1 = Nation::new(
+            NationId(1),
+            "Player".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        n1.treasury = Money::dollars(10_000);
+
+        let mut n2 = Nation::new(
+            NationId(2),
+            "AiNation".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(2),
+        );
+        n2.treasury = Money::dollars(10_000);
+        n2.ai_personality = Some(AiPersonality::Diplomatic);
+
+        let mut diplomacy = DiplomacyState::new();
+        diplomacy.initialize_great_powers(&[NationId(1), NationId(2)]);
+        // Boost relationship so AI is likely to accept
+        let rel = diplomacy.ensure_relation(NationId(1), NationId(2));
+        rel.improve_score(60);
+
+        GameState {
+            turn: TurnNumber::new(5),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![p1, p2],
+            nations: vec![n1, n2],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy,
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            ai_debug: false,
+        }
+    }
+
+    #[test]
+    fn player_nap_proposal_creates_pending_not_immediate() {
+        let mut game = two_gp_diplo_game();
+        let human = NationId(1);
+        let ai = NationId(2);
+
+        // Queue a NAP proposal (same as what WASM bridge now does)
+        game.diplomacy
+            .propose_treaty(human, ai, TreatyType::NonAggressionPact, game.turn)
+            .unwrap();
+
+        // Should be pending, not yet an active treaty
+        assert!(
+            !game
+                .diplomacy
+                .get_relation(human, ai)
+                .unwrap()
+                .has_treaty(TreatyType::NonAggressionPact),
+            "NAP should not be active yet — only pending"
+        );
+        assert_eq!(game.diplomacy.pending_proposals.len(), 1);
+        assert_eq!(
+            game.diplomacy.pending_proposals[0].proposal_type,
+            TreatyType::NonAggressionPact
+        );
+    }
+
+    #[test]
+    fn player_nap_proposal_accepted_with_good_relations() {
+        let mut game = two_gp_diplo_game();
+        let human = NationId(1);
+        let ai = NationId(2);
+
+        // Disable Lua engine so evaluation uses pure Rust logic deterministically
+        #[cfg(feature = "lua")]
+        {
+            game.game_data.lua_engine = None;
+        }
+
+        // Queue proposal (AI is Diplomatic personality with score +60 → should accept)
+        game.diplomacy
+            .propose_treaty(human, ai, TreatyType::NonAggressionPact, game.turn)
+            .unwrap();
+
+        let mut report = empty_report(game.turn);
+        resolve_diplomatic_proposals(&mut game, &mut report);
+
+        // Proposals should be drained
+        assert!(game.diplomacy.pending_proposals.is_empty());
+
+        // Treaty should be active
+        assert!(
+            game.diplomacy
+                .get_relation(human, ai)
+                .unwrap()
+                .has_treaty(TreatyType::NonAggressionPact),
+            "NAP should be active after acceptance"
+        );
+
+        // Should have TreatyAccepted event
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|e| matches!(e, DomainEvent::TreatyAccepted(a) if a.treaty_type == TreatyType::NonAggressionPact)),
+            "Should emit TreatyAccepted event"
+        );
+
+        // Headline should mention acceptance
+        let headline = &report.newspaper_headlines[0].0;
+        assert!(
+            headline.contains("accepts"),
+            "Headline should mention acceptance: {headline}"
+        );
+    }
+
+    #[test]
+    fn player_nap_proposal_rejected_with_bad_relations() {
+        use crate::ai::AiPersonality;
+
+        let mut game = two_gp_diplo_game();
+        let human = NationId(1);
+        let ai = NationId(2);
+
+        // Disable Lua engine so evaluation uses pure Rust logic deterministically
+        #[cfg(feature = "lua")]
+        {
+            game.game_data.lua_engine = None;
+        }
+
+        // Make AI aggressive and hostile
+        game.nations[1].ai_personality = Some(AiPersonality::Aggressive);
+        let rel = game.diplomacy.ensure_relation(human, ai);
+        rel.score = -50; // terrible relationship
+
+        game.diplomacy
+            .propose_treaty(human, ai, TreatyType::NonAggressionPact, game.turn)
+            .unwrap();
+
+        let mut report = empty_report(game.turn);
+        resolve_diplomatic_proposals(&mut game, &mut report);
+
+        // Treaty should NOT be active
+        assert!(
+            !game
+                .diplomacy
+                .get_relation(human, ai)
+                .unwrap()
+                .has_treaty(TreatyType::NonAggressionPact),
+            "NAP should not be active after rejection"
+        );
+
+        // Should have TreatyRejected event
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|e| matches!(e, DomainEvent::TreatyRejected(r) if r.treaty_type == TreatyType::NonAggressionPact)),
+            "Should emit TreatyRejected event"
+        );
+
+        // Headline should mention rejection
+        let headline = &report.newspaper_headlines[0].0;
+        assert!(
+            headline.contains("rejects"),
+            "Headline should mention rejection: {headline}"
+        );
+    }
+
+    #[test]
+    fn player_proposal_state_drift_emits_rejection() {
+        // Test the F-002 fix: AI accepts but treaty application fails due to state drift.
+        // Setup: favorable relations so AI accepts, but NAP already exists so propose_pact() fails.
+        let mut game = two_gp_diplo_game();
+        let human = NationId(1);
+        let ai = NationId(2);
+
+        #[cfg(feature = "lua")]
+        {
+            game.game_data.lua_engine = None;
+        }
+
+        // Pre-apply NAP so propose_pact() will fail with "already active"
+        game.diplomacy.propose_pact(human, ai).unwrap();
+        assert!(
+            game.diplomacy
+                .get_relation(human, ai)
+                .unwrap()
+                .has_treaty(TreatyType::NonAggressionPact)
+        );
+
+        // Manually insert a duplicate pending NAP proposal (bypassing validation)
+        game.diplomacy
+            .pending_proposals
+            .push(crate::diplomacy::DiplomaticProposal {
+                from: human,
+                to: ai,
+                proposal_type: TreatyType::NonAggressionPact,
+                turn_proposed: game.turn,
+            });
+
+        let mut report = empty_report(game.turn);
+        resolve_diplomatic_proposals(&mut game, &mut report);
+
+        // Headline should report "could not be fulfilled" (not "accepts")
+        assert!(!report.newspaper_headlines.is_empty());
+        let headline = &report.newspaper_headlines[0].0;
+        assert!(
+            headline.contains("could not be fulfilled"),
+            "Should report application failure: {headline}"
+        );
+    }
+
+    #[test]
+    fn player_alliance_proposal_accepted_with_good_relations() {
+        let mut game = two_gp_diplo_game();
+        let human = NationId(1);
+        let ai = NationId(2);
+
+        #[cfg(feature = "lua")]
+        {
+            game.game_data.lua_engine = None;
+        }
+
+        game.diplomacy
+            .propose_treaty(human, ai, TreatyType::Alliance, game.turn)
+            .unwrap();
+
+        let mut report = empty_report(game.turn);
+        resolve_diplomatic_proposals(&mut game, &mut report);
+
+        assert!(
+            game.diplomacy
+                .get_relation(human, ai)
+                .unwrap()
+                .has_treaty(TreatyType::Alliance),
+            "Alliance should be active after acceptance"
+        );
+        assert!(report
+            .events
+            .iter()
+            .any(|e| matches!(e, DomainEvent::TreatyAccepted(a) if a.treaty_type == TreatyType::Alliance)));
+    }
+
+    #[test]
+    fn player_alliance_proposal_rejected_with_bad_relations() {
+        use crate::ai::AiPersonality;
+
+        let mut game = two_gp_diplo_game();
+        let human = NationId(1);
+        let ai = NationId(2);
+
+        #[cfg(feature = "lua")]
+        {
+            game.game_data.lua_engine = None;
+        }
+
+        game.nations[1].ai_personality = Some(AiPersonality::Aggressive);
+        let rel = game.diplomacy.ensure_relation(human, ai);
+        rel.score = -50;
+
+        game.diplomacy
+            .propose_treaty(human, ai, TreatyType::Alliance, game.turn)
+            .unwrap();
+
+        let mut report = empty_report(game.turn);
+        resolve_diplomatic_proposals(&mut game, &mut report);
+
+        assert!(
+            !game
+                .diplomacy
+                .get_relation(human, ai)
+                .unwrap()
+                .has_treaty(TreatyType::Alliance),
+            "Alliance should not be active after rejection"
+        );
+        assert!(report
+            .events
+            .iter()
+            .any(|e| matches!(e, DomainEvent::TreatyRejected(r) if r.treaty_type == TreatyType::Alliance)));
+    }
+
+    #[test]
+    fn ai_proposal_to_human_persists_for_modal() {
+        let mut game = two_gp_diplo_game();
+        let human = NationId(1);
+        let ai = NationId(2);
+
+        // AI proposes alliance to human
+        game.diplomacy
+            .propose_treaty(ai, human, TreatyType::Alliance, game.turn)
+            .unwrap();
+
+        let mut report = empty_report(game.turn);
+        resolve_diplomatic_proposals(&mut game, &mut report);
+
+        // Should be re-added to pending (for UI modal)
+        assert_eq!(
+            game.diplomacy.pending_proposals.len(),
+            1,
+            "AI→human proposal should persist for modal"
+        );
+        assert_eq!(game.diplomacy.pending_proposals[0].from, ai);
+        assert_eq!(game.diplomacy.pending_proposals[0].to, human);
     }
 }

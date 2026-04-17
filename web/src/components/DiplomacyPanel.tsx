@@ -134,15 +134,24 @@ function NationRow({
         <span style={{ fontSize: 9, color: scoreColor, minWidth: 20 }}>{rel.score}</span>
       </div>
 
-      {/* Treaty badges */}
-      {rel.treaties.length > 0 && (
-        <div style={{ display: 'flex', gap: 3, marginTop: 3 }}>
+      {/* Treaty badges + pending proposal indicators */}
+      {(rel.treaties.length > 0 || rel.has_pending_nap || rel.has_pending_alliance || rel.has_pending_peace) && (
+        <div style={{ display: 'flex', gap: 3, marginTop: 3, flexWrap: 'wrap' }}>
           {rel.treaties.map(t => (
             <span key={t} style={{
               fontSize: 9, background: 'rgba(218,165,32,0.2)', color: '#daa520',
               borderRadius: 2, padding: '0 3px',
             }}>{t}</span>
           ))}
+          {rel.has_pending_nap && (
+            <span style={{ fontSize: 9, background: 'rgba(74,170,170,0.15)', color: '#4aa', borderRadius: 2, padding: '0 3px', fontStyle: 'italic' }}>NAP Proposed</span>
+          )}
+          {rel.has_pending_alliance && (
+            <span style={{ fontSize: 9, background: 'rgba(74,170,74,0.15)', color: '#4a4', borderRadius: 2, padding: '0 3px', fontStyle: 'italic' }}>Alliance Proposed</span>
+          )}
+          {rel.has_pending_peace && (
+            <span style={{ fontSize: 9, background: 'rgba(170,170,74,0.15)', color: '#aa4', borderRadius: 2, padding: '0 3px', fontStyle: 'italic' }}>Peace Proposed</span>
+          )}
         </div>
       )}
 

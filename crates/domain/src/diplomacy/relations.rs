@@ -354,6 +354,7 @@ impl DiplomacyState {
     }
 
     /// Create a general treaty proposal (NAP, Alliance, etc.). Creates a pending proposal.
+    /// Validates preconditions based on treaty type (embassy, standing, no duplicates).
     pub fn propose_treaty(
         &mut self,
         from: NationId,
@@ -361,9 +362,56 @@ impl DiplomacyState {
         treaty_type: TreatyType,
         turn: TurnNumber,
     ) -> Result<(), String> {
+        // Reject unsupported treaty types first (before any state checks)
+        match treaty_type {
+            TreatyType::NonAggressionPact | TreatyType::Alliance => {}
+            _ => {
+                return Err(format!(
+                    "{:?} cannot be proposed via propose_treaty — use the dedicated method",
+                    treaty_type
+                ));
+            }
+        }
+
         if self.is_at_war(from, to) {
             return Err("Cannot propose treaty while at war".to_string());
         }
+
+        // Treaty-type-specific preconditions
+        match treaty_type {
+            TreatyType::NonAggressionPact => {
+                if !self.would_accept_treaty(from) {
+                    return Err("Standing too low to propose treaties".to_string());
+                }
+                let rel = self.get_relation(from, to);
+                if !rel.map(|r| r.has_embassy).unwrap_or(false) {
+                    return Err(
+                        "Embassy required before proposing a non-aggression pact".to_string(),
+                    );
+                }
+                if rel.map(|r| r.has_treaty(TreatyType::NonAggressionPact)).unwrap_or(false) {
+                    return Err("Non-aggression pact already active".to_string());
+                }
+                if rel.map(|r| r.has_treaty(TreatyType::Alliance)).unwrap_or(false) {
+                    return Err("Alliance already active — NAP is redundant".to_string());
+                }
+            }
+            TreatyType::Alliance => {
+                if !self.would_accept_treaty(from) {
+                    return Err("Standing too low to propose treaties".to_string());
+                }
+                let rel = self.get_relation(from, to);
+                if !rel.map(|r| r.has_embassy).unwrap_or(false) {
+                    return Err("Embassy required before proposing an alliance".to_string());
+                }
+                if rel.map(|r| r.has_treaty(TreatyType::Alliance)).unwrap_or(false) {
+                    return Err("Alliance already active".to_string());
+                }
+            }
+            // Unreachable — unsupported types are rejected above
+            _ => unreachable!(),
+        }
+
         // No duplicate pending proposals of same type
         let already_pending = self.pending_proposals.iter().any(|p| {
             p.proposal_type == treaty_type
@@ -936,6 +984,104 @@ mod tests {
         let result = state.propose_pact(NationId(1), NationId(2));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Alliance already active"));
+    }
+
+    // ── propose_treaty validation ─────────────────────────────────
+
+    #[test]
+    fn propose_treaty_nap_requires_embassy() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2)];
+        state.initialize_great_powers(&gps);
+        // Drop embassy to test precondition
+        state.ensure_relation(NationId(1), NationId(2)).has_embassy = false;
+
+        let result = state.propose_treaty(
+            NationId(1),
+            NationId(2),
+            TreatyType::NonAggressionPact,
+            TurnNumber::new(1),
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Embassy required"));
+    }
+
+    #[test]
+    fn propose_treaty_nap_rejects_duplicate() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2)];
+        state.initialize_great_powers(&gps);
+
+        state
+            .propose_treaty(
+                NationId(1),
+                NationId(2),
+                TreatyType::NonAggressionPact,
+                TurnNumber::new(1),
+            )
+            .unwrap();
+        let result = state.propose_treaty(
+            NationId(1),
+            NationId(2),
+            TreatyType::NonAggressionPact,
+            TurnNumber::new(1),
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("already pending"));
+    }
+
+    #[test]
+    fn propose_treaty_queues_pending_proposal() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2)];
+        state.initialize_great_powers(&gps);
+
+        state
+            .propose_treaty(
+                NationId(1),
+                NationId(2),
+                TreatyType::Alliance,
+                TurnNumber::new(5),
+            )
+            .unwrap();
+        assert_eq!(state.pending_proposals.len(), 1);
+        assert_eq!(
+            state.pending_proposals[0].proposal_type,
+            TreatyType::Alliance
+        );
+        assert_eq!(state.pending_proposals[0].from, NationId(1));
+        assert_eq!(state.pending_proposals[0].to, NationId(2));
+    }
+
+    #[test]
+    fn propose_treaty_rejects_unsupported_types() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2)];
+        state.initialize_great_powers(&gps);
+
+        let result = state.propose_treaty(
+            NationId(1),
+            NationId(2),
+            TreatyType::PeaceTreaty,
+            TurnNumber::new(1),
+        );
+        assert!(result.is_err());
+
+        let result = state.propose_treaty(
+            NationId(1),
+            NationId(2),
+            TreatyType::WarDeclaration,
+            TurnNumber::new(1),
+        );
+        assert!(result.is_err());
+
+        let result = state.propose_treaty(
+            NationId(1),
+            NationId(2),
+            TreatyType::RequestToJoinEmpire,
+            TurnNumber::new(1),
+        );
+        assert!(result.is_err());
     }
 
     // ── Standing floor ──────────────────────────────────────────

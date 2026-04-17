@@ -543,6 +543,9 @@ export interface DiplomacyScreenRelation {
   treaties: string[];
   has_consulate: boolean;
   has_embassy: boolean;
+  has_pending_nap: boolean;
+  has_pending_alliance: boolean;
+  has_pending_peace: boolean;
   actions: DiplomacyRelationActions;
 }
 

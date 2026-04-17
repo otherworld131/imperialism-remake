@@ -2361,21 +2361,59 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
 
             let target_is_gp = n.nation_type == NationType::GreatPower;
 
+            // Outgoing pending proposals (for badge display)
+            let has_pending_nap = game.diplomacy.pending_proposals.iter().any(|p| {
+                p.proposal_type == TreatyType::NonAggressionPact
+                    && p.from == nid
+                    && p.to == n.id
+            });
+            let has_pending_alliance = game.diplomacy.pending_proposals.iter().any(|p| {
+                p.proposal_type == TreatyType::Alliance && p.from == nid && p.to == n.id
+            });
+            let has_pending_peace = game.diplomacy.pending_proposals.iter().any(|p| {
+                p.proposal_type == TreatyType::PeaceTreaty && p.from == nid && p.to == n.id
+            });
+
+            // Any pending proposal in either direction (for action gating, matches backend)
+            let any_pending_nap = has_pending_nap
+                || game.diplomacy.pending_proposals.iter().any(|p| {
+                    p.proposal_type == TreatyType::NonAggressionPact
+                        && p.from == n.id
+                        && p.to == nid
+                });
+            let any_pending_alliance = has_pending_alliance
+                || game.diplomacy.pending_proposals.iter().any(|p| {
+                    p.proposal_type == TreatyType::Alliance
+                        && p.from == n.id
+                        && p.to == nid
+                });
+            let any_pending_peace = has_pending_peace
+                || game.diplomacy.pending_proposals.iter().any(|p| {
+                    p.proposal_type == TreatyType::PeaceTreaty
+                        && p.from == n.id
+                        && p.to == nid
+                });
+
             // Pre-compute available actions
             let can_build_consulate = !has_consulate && treasury >= 500;
             let can_build_embassy = has_consulate && !has_embassy && treasury >= 5000;
-            let can_propose_nap =
-                has_embassy && !at_war && !has_nap && !has_alliance && player_standing >= 30;
+            let can_propose_nap = has_embassy
+                && !at_war
+                && !has_nap
+                && !has_alliance
+                && !any_pending_nap
+                && player_standing >= 30;
             let can_propose_alliance = has_embassy
                 && !at_war
                 && !has_alliance
+                && !any_pending_alliance
                 && player_standing >= 30
                 && player_is_gp
                 && target_is_gp;
             let can_declare_war = !at_war;
             let can_send_grant = !at_war && treasury > 0;
             let can_break_treaty = !treaties.is_empty();
-            let can_propose_peace = at_war;
+            let can_propose_peace = at_war && !any_pending_peace;
 
             serde_json::json!({
                 "nation_id": n.id.0,
@@ -2388,6 +2426,9 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
                 "treaties": treaties,
                 "has_consulate": has_consulate,
                 "has_embassy": has_embassy,
+                "has_pending_nap": has_pending_nap,
+                "has_pending_alliance": has_pending_alliance,
+                "has_pending_peace": has_pending_peace,
                 "actions": {
                     "can_build_consulate": can_build_consulate,
                     "consulate_cost": 500,
@@ -2526,11 +2567,18 @@ pub fn wasm_diplomacy_propose_nap(
     if nid == target {
         return "{\"error\":\"cannot target self\"}".to_string();
     }
+    if game.get_nation(nid).is_none() {
+        return "{\"error\":\"nation not found\"}".to_string();
+    }
     if game.get_nation(target).is_none() {
         return "{\"error\":\"target nation not found\"}".to_string();
     }
 
-    match game.diplomacy.propose_pact(nid, target) {
+    let turn = game.turn;
+    match game
+        .diplomacy
+        .propose_treaty(nid, target, TreatyType::NonAggressionPact, turn)
+    {
         Ok(()) => {}
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     }
@@ -2555,11 +2603,18 @@ pub fn wasm_diplomacy_propose_alliance(
     if nid == target {
         return "{\"error\":\"cannot target self\"}".to_string();
     }
+    if game.get_nation(nid).is_none() {
+        return "{\"error\":\"nation not found\"}".to_string();
+    }
     if game.get_nation(target).is_none() {
         return "{\"error\":\"target nation not found\"}".to_string();
     }
 
-    match game.diplomacy.propose_alliance(nid, target) {
+    let turn = game.turn;
+    match game
+        .diplomacy
+        .propose_treaty(nid, target, TreatyType::Alliance, turn)
+    {
         Ok(()) => {}
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     }
