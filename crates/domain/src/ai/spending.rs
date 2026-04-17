@@ -345,8 +345,16 @@ fn score_consulate(
         return None;
     }
 
-    let raw =
-        available as f64 * 5.0 + trade_potential as f64 / 10.0 - existing_consulates as f64 * 2.0;
+    let target = game.game_data.game_config.ai_consulate_target;
+
+    let cfg = &game.game_data.game_config;
+    let raw = if existing_consulates < target {
+        let deficit = target - existing_consulates;
+        deficit as f64 * cfg.ai_consulate_priority_score + trade_potential as f64 / 10.0
+    } else {
+        available as f64 * cfg.ai_consulate_beyond_target_score + trade_potential as f64 / 10.0
+            - (existing_consulates - target) as f64 * cfg.ai_consulate_beyond_target_decay
+    };
     let score = raw.max(0.0) * weights.diplomacy_weight;
 
     Some(ScoredAction {

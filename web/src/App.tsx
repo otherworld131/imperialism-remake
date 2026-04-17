@@ -8,7 +8,7 @@ import {
   // New screen queries
   getTransportData, buildFreightCar, setTransportAllocation,
   getIndustryData, expandBuilding,
-  getTradeData, setTradeSubsidy,
+  getTradeData, setTradeSubsidy, setPlayerSellOrder, setPlayerBuyOrder,
   getDiplomacyScreenData,
   diplomacyBuildConsulate, diplomacyBuildEmbassy, diplomacyProposeNap,
   diplomacyProposeAlliance, diplomacyDeclareWar, diplomacySendGrant,
@@ -486,6 +486,18 @@ function App() {
     else if (cmd.error) showError(`Subsidy failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
+  const handleSetSellOrder = useCallback((commodityType: string, commodityName: string, quantity: number) => {
+    const cmd = setPlayerSellOrder(gameJson, playerNationId, commodityType, commodityName, quantity);
+    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    else if (cmd.error) showError(`Sell order failed: ${cmd.error}`);
+  }, [gameJson, playerNationId, applyGameJson, showError]);
+
+  const handleSetBuyOrder = useCallback((resource: string, quantity: number, maxPrice: number) => {
+    const cmd = setPlayerBuyOrder(gameJson, playerNationId, resource, quantity, maxPrice);
+    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    else if (cmd.error) showError(`Buy order failed: ${cmd.error}`);
+  }, [gameJson, playerNationId, applyGameJson, showError]);
+
   // Diplomacy screen handlers
   const makeDiploHandler = useCallback((fn: (gj: string, nid: number, tid: number) => any, label: string) =>
     (targetId: number) => {
@@ -871,6 +883,8 @@ function App() {
               <TradePanel
                 trade={tradeData}
                 onSetSubsidy={handleSetSubsidy}
+                onSetSellOrder={handleSetSellOrder}
+                onSetBuyOrder={handleSetBuyOrder}
               />
             ) : (
               <p style={styles.hint}>Loading trade data...</p>

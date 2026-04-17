@@ -1559,14 +1559,16 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
     }
 }
 
-/// Resolve a trade session: generate offers from Minor Nations, use smart bids
-/// (respecting consulate requirements and cargo capacity), resolve trades, and apply
-/// the resulting transactions.
+/// Resolve a trade session: generate offers from Minor Nations, handle player
+/// sell/buy orders, use smart bids for AI GPs, resolve trades, and apply results.
 fn resolve_trade_session(
     game: &mut GameState,
     report: &mut TurnReport,
     blockade_capacity: &std::collections::HashMap<NationId, u32>,
 ) {
+    let human_id = game.human_player_nation;
+    let cfg = game.game_data.game_config.clone();
+
     // 0. Deduct subsidy costs from Great Powers (skip anarchic nations)
     let gp_ids: Vec<NationId> = game
         .nations
@@ -1591,16 +1593,101 @@ fn resolve_trade_session(
     }
 
     // 1. Generate offers from Minor Nations
-    let offers = trade::generate_minor_nation_offers(&game.nations, &game.provinces, &game.hex_map);
+    let mut offers =
+        trade::generate_minor_nation_offers(&game.nations, &game.provinces, &game.hex_map);
 
-    if offers.is_empty() {
-        return;
+    // 1b. Add human player's resource sell offers to the pool
+    if let Some(human) = game.get_nation(human_id) {
+        let sell_orders: Vec<trade::PlayerSellOrder> = human.player_sell_orders.clone();
+        for order in &sell_orders {
+            if let trade::Commodity::Resource(r) = order.commodity
+                && human.resource_amount(r) >= order.quantity
+                && order.quantity > 0
+            {
+                offers.push(trade::TradeOffer {
+                    seller: human_id,
+                    resource: r,
+                    quantity: order.quantity,
+                    price_per_unit: trade::base_price(r),
+                });
+            }
+        }
     }
 
-    // 2. Generate smart bids for all Great Powers
+    // 1c. Auto-sell player's material/goods sell orders (world market demand)
+    let current_turn = game.turn;
+    let mut player_goods_revenue = Money::ZERO;
+    if let Some(human) = game.get_nation(human_id) {
+        let sell_orders: Vec<trade::PlayerSellOrder> = human.player_sell_orders.clone();
+        let mut goods_sold: Vec<(trade::Commodity, u32, Money)> = Vec::new();
+
+        for order in &sell_orders {
+            match order.commodity {
+                trade::Commodity::Material(m) => {
+                    let stock = human.materials.get(&m).copied().unwrap_or(0);
+                    let qty = order.quantity.min(stock);
+                    if qty > 0 {
+                        let price = trade::material_price(m, &cfg);
+                        let revenue = Money::dollars(price.as_dollars() * qty as i64);
+                        player_goods_revenue += revenue;
+                        goods_sold.push((order.commodity, qty, revenue));
+                    }
+                }
+                trade::Commodity::Goods(g) => {
+                    let stock = human.goods.get(&g).copied().unwrap_or(0);
+                    let qty = order.quantity.min(stock);
+                    if qty > 0 {
+                        let price = trade::goods_price(g, &cfg);
+                        let revenue = Money::dollars(price.as_dollars() * qty as i64);
+                        player_goods_revenue += revenue;
+                        goods_sold.push((order.commodity, qty, revenue));
+                    }
+                }
+                trade::Commodity::Resource(_) => {} // handled in 1b via offer pool
+            }
+        }
+        // Apply material/goods sales
+        if let Some(human) = game.get_nation_mut(human_id) {
+            human.treasury += player_goods_revenue;
+            human.goods_sales_revenue_dollars += player_goods_revenue.as_dollars();
+            for (commodity, qty, _revenue) in &goods_sold {
+                match commodity {
+                    trade::Commodity::Material(m) => {
+                        if let Some(stock) = human.materials.get_mut(m) {
+                            *stock = stock.saturating_sub(*qty);
+                        }
+                    }
+                    trade::Commodity::Goods(g) => {
+                        if let Some(stock) = human.goods.get_mut(g) {
+                            *stock = stock.saturating_sub(*qty);
+                        }
+                    }
+                    trade::Commodity::Resource(_) => {}
+                }
+            }
+        }
+    }
+
+    // 2. Generate bids: AI GPs use smart bids, human player uses manual buy orders
     let mut all_bids = Vec::new();
 
     for gp_id in &gp_ids {
+        if *gp_id == human_id {
+            // Use player's manual buy orders instead of auto-generated bids
+            if let Some(human) = game.get_nation(*gp_id) {
+                for order in &human.player_buy_orders {
+                    if order.quantity > 0 {
+                        all_bids.push(trade::TradeBid {
+                            buyer: *gp_id,
+                            resource: order.resource,
+                            quantity: order.quantity,
+                            max_price_per_unit: order.max_price_per_unit,
+                        });
+                    }
+                }
+            }
+            continue;
+        }
         if let Some(nation) = game.get_nation(*gp_id) {
             // Use blockade-adjusted cargo capacity instead of raw capacity
             let cargo_capacity = blockade_capacity
@@ -1612,7 +1699,12 @@ fn resolve_trade_session(
         }
     }
 
-    if all_bids.is_empty() {
+    if offers.is_empty() && all_bids.is_empty() {
+        // Clear player orders and return
+        if let Some(human) = game.get_nation_mut(human_id) {
+            human.player_sell_orders.clear();
+            human.player_buy_orders.clear();
+        }
         return;
     }
 
@@ -1658,8 +1750,16 @@ fn resolve_trade_session(
         }
     }
 
-    // 5b. Record trade history for each nation involved
-    let current_turn = game.turn;
+    // 5b. Deduct sold resources from player (GP sellers lose warehouse stock)
+    for txn in &transactions {
+        if txn.seller == human_id
+            && let Some(seller) = game.get_nation_mut(human_id)
+        {
+            seller.remove_resource(txn.resource, txn.quantity);
+        }
+    }
+
+    // 5c. Record trade history for each nation involved
     for txn in &transactions {
         // Record for buyer (partner is seller)
         if let Some(buyer) = game.get_nation_mut(txn.buyer) {
@@ -1669,6 +1769,7 @@ fn resolve_trade_session(
                 resource: txn.resource,
                 quantity: txn.quantity,
                 total_cost: txn.total_cost,
+                bought: true,
             });
         }
         // Record for seller (partner is buyer)
@@ -1679,6 +1780,7 @@ fn resolve_trade_session(
                 resource: txn.resource,
                 quantity: txn.quantity,
                 total_cost: txn.total_cost,
+                bought: false,
             });
         }
     }
@@ -1695,10 +1797,13 @@ fn resolve_trade_session(
             .insert(txn.resource);
     }
     for ((buyer, seller), resources) in &trade_pairs {
-        let improvement = resources.len() as i32;
-        let rel = game.diplomacy.ensure_relation(*buyer, *seller);
-        rel.improve_score(improvement);
-        report.trade_diplomacy.push((*buyer, *seller, improvement));
+        // Only improve relations if a trade consulate exists between the nations
+        if game.diplomacy.has_consulate(*buyer, *seller) {
+            let improvement = resources.len() as i32;
+            let rel = game.diplomacy.ensure_relation(*buyer, *seller);
+            rel.improve_score(improvement);
+            report.trade_diplomacy.push((*buyer, *seller, improvement));
+        }
     }
 
     // 7. Record trade balance per nation
@@ -1707,6 +1812,10 @@ fn resolve_trade_session(
     for txn in &transactions {
         *spent.entry(txn.buyer).or_insert(Money::ZERO) += txn.total_cost;
         *earned.entry(txn.seller).or_insert(Money::ZERO) += txn.total_cost;
+    }
+    // Include player's auto-sold materials/goods revenue
+    if player_goods_revenue != Money::ZERO {
+        *earned.entry(human_id).or_insert(Money::ZERO) += player_goods_revenue;
     }
     let all_ids: std::collections::HashSet<NationId> =
         spent.keys().chain(earned.keys()).copied().collect();
@@ -1720,6 +1829,12 @@ fn resolve_trade_session(
 
     // 8. Record in report
     report.trade_transactions = transactions;
+
+    // 9. Clear player trade orders for next turn
+    if let Some(human) = game.get_nation_mut(human_id) {
+        human.player_sell_orders.clear();
+        human.player_buy_orders.clear();
+    }
 }
 
 /// Apply maintenance costs for army units.

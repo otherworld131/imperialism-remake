@@ -4,7 +4,7 @@ use domain::ai::common::next_unit_id;
 use domain::economy::buildings::BuildingType;
 use domain::economy::civilians::{CivilianType, next_civilian_id, parse_civilian_type};
 use domain::economy::production::{calculate_factory_production, calculate_mill_production, ProductionChain};
-use domain::economy::trade::base_price;
+use domain::economy::trade::{base_price, commodity_price, Commodity};
 use domain::economy::transport::TransportSystem;
 use domain::events::TreatyType;
 use domain::game_state::{GameState, new_game};
@@ -1372,6 +1372,37 @@ fn parse_resource_type(name: &str) -> Option<ResourceType> {
     }
 }
 
+fn parse_material_type(name: &str) -> Option<MaterialType> {
+    match name {
+        "Lumber" => Some(MaterialType::Lumber),
+        "Steel" => Some(MaterialType::Steel),
+        "Fabric" => Some(MaterialType::Fabric),
+        "Paper" => Some(MaterialType::Paper),
+        "Arms" => Some(MaterialType::Arms),
+        "CannedFood" | "Canned Food" => Some(MaterialType::CannedFood),
+        _ => None,
+    }
+}
+
+fn parse_goods_type(name: &str) -> Option<GoodsType> {
+    match name {
+        "Furniture" => Some(GoodsType::Furniture),
+        "Clothing" => Some(GoodsType::Clothing),
+        "Hardware" => Some(GoodsType::Hardware),
+        _ => None,
+    }
+}
+
+fn parse_commodity(commodity_type: &str, commodity_name: &str) -> Option<domain::economy::trade::Commodity> {
+    use domain::economy::trade::Commodity;
+    match commodity_type {
+        "resource" => parse_resource_type(commodity_name).map(Commodity::Resource),
+        "material" => parse_material_type(commodity_name).map(Commodity::Material),
+        "goods" => parse_goods_type(commodity_name).map(Commodity::Goods),
+        _ => None,
+    }
+}
+
 fn parse_building_type(name: &str) -> Option<BuildingType> {
     match name {
         "Armory" => Some(BuildingType::Armory),
@@ -1893,6 +1924,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
                 "resource": format!("{:?}", entry.resource),
                 "quantity": entry.quantity,
                 "total_cost": entry.total_cost.as_dollars(),
+                "bought": entry.bought,
             })
         })
         .collect();
@@ -1920,16 +1952,17 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         })
         .collect();
 
-    // Trade balance from history
+    // Trade balance from history + auto-sold goods revenue
     let mut total_bought: i64 = 0;
     let mut total_sold: i64 = 0;
     for entry in &nation.trade_history {
-        if entry.total_cost.as_dollars() > 0 {
+        if entry.bought {
             total_bought += entry.total_cost.as_dollars();
         } else {
-            total_sold += entry.total_cost.as_dollars().abs();
+            total_sold += entry.total_cost.as_dollars();
         }
     }
+    total_sold += nation.goods_sales_revenue_dollars;
 
     // Cargo capacity from merchant fleet
     let total_cargo: u32 = nation
@@ -1973,6 +2006,119 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         })
         .collect();
 
+    // Player sell orders
+    let cfg = &game.game_data.game_config;
+    let player_sell_orders: Vec<serde_json::Value> = nation
+        .player_sell_orders
+        .iter()
+        .map(|o| {
+            let (ctype, cname) = match o.commodity {
+                Commodity::Resource(r) => ("resource", format!("{:?}", r)),
+                Commodity::Material(m) => ("material", format!("{}", m)),
+                Commodity::Goods(g) => ("goods", format!("{:?}", g)),
+            };
+            serde_json::json!({
+                "commodity_type": ctype,
+                "commodity_name": cname,
+                "quantity": o.quantity,
+                "price": commodity_price(o.commodity, cfg).as_dollars(),
+            })
+        })
+        .collect();
+
+    // Player buy orders
+    let player_buy_orders: Vec<serde_json::Value> = nation
+        .player_buy_orders
+        .iter()
+        .map(|o| {
+            serde_json::json!({
+                "resource": format!("{:?}", o.resource),
+                "quantity": o.quantity,
+                "max_price": o.max_price_per_unit.as_dollars(),
+            })
+        })
+        .collect();
+
+    // Available offers from minor nations
+    let available_offers: Vec<serde_json::Value> = domain::economy::trade::generate_minor_nation_offers(
+        &game.nations, &game.provinces, &game.hex_map,
+    )
+    .iter()
+    .map(|o| {
+        let seller_name = game.get_nation(o.seller).map(|n| n.name.as_str()).unwrap_or("Unknown");
+        serde_json::json!({
+            "seller_id": o.seller.0,
+            "seller_name": seller_name,
+            "resource": format!("{:?}", o.resource),
+            "quantity": o.quantity,
+            "price": o.price_per_unit.as_dollars(),
+        })
+    })
+    .collect();
+
+    // Sellable items: resources, materials, goods with stock > 0
+    let sellable_resources: Vec<serde_json::Value> = all_resources
+        .iter()
+        .filter_map(|&r| {
+            let stock = nation.resource_amount(r);
+            if stock > 0 {
+                Some(serde_json::json!({
+                    "name": format!("{:?}", r),
+                    "stock": stock,
+                    "price": base_price(r).as_dollars(),
+                }))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let all_materials = [
+        MaterialType::Lumber, MaterialType::Steel, MaterialType::Fabric,
+        MaterialType::Paper, MaterialType::Arms, MaterialType::CannedFood,
+    ];
+    let sellable_materials: Vec<serde_json::Value> = all_materials
+        .iter()
+        .filter_map(|&m| {
+            let stock = nation.materials.get(&m).copied().unwrap_or(0);
+            if stock > 0 {
+                Some(serde_json::json!({
+                    "name": format!("{}", m),
+                    "stock": stock,
+                    "price": domain::economy::trade::material_price(m, cfg).as_dollars(),
+                }))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let all_goods = [GoodsType::Furniture, GoodsType::Clothing, GoodsType::Hardware];
+    let sellable_goods: Vec<serde_json::Value> = all_goods
+        .iter()
+        .filter_map(|&g| {
+            let stock = nation.goods.get(&g).copied().unwrap_or(0);
+            if stock > 0 {
+                Some(serde_json::json!({
+                    "name": format!("{:?}", g),
+                    "stock": stock,
+                    "price": domain::economy::trade::goods_price(g, cfg).as_dollars(),
+                }))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Remaining cargo after current orders
+    let orders_qty: u32 = nation
+        .player_sell_orders
+        .iter()
+        .map(|o| o.quantity)
+        .chain(nation.player_buy_orders.iter().map(|o| o.quantity))
+        .sum();
+    let remaining_cargo = total_cargo.saturating_sub(orders_qty);
+
     serde_json::json!({
         "market_prices": market_prices,
         "trade_history": history,
@@ -1983,8 +2129,15 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
             "net": total_sold - total_bought,
         },
         "total_cargo": total_cargo,
+        "remaining_cargo": remaining_cargo,
         "minor_nations": minor_nations,
         "treasury": nation.treasury.as_dollars(),
+        "player_sell_orders": player_sell_orders,
+        "player_buy_orders": player_buy_orders,
+        "available_offers": available_offers,
+        "sellable_resources": sellable_resources,
+        "sellable_materials": sellable_materials,
+        "sellable_goods": sellable_goods,
     })
     .to_string()
 }
@@ -2023,6 +2176,133 @@ pub fn wasm_set_trade_subsidy(
         nation
             .trade_subsidies
             .insert(target_nid, Money::dollars(amount));
+    }
+
+    serialize_game(&game)
+}
+
+/// Set a player sell order for a commodity.
+#[wasm_bindgen]
+pub fn wasm_set_player_sell_order(
+    game_json: &str,
+    nation_id: u32,
+    commodity_type: &str,
+    commodity_name: &str,
+    quantity: u32,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+
+    let commodity = match parse_commodity(commodity_type, commodity_name) {
+        Some(c) => c,
+        None => return r#"{"error":"invalid commodity"}"#.to_string(),
+    };
+
+    let nation = match game.get_nation_mut(nid) {
+        Some(n) => n,
+        None => return r#"{"error":"nation not found"}"#.to_string(),
+    };
+
+    // Validate stock
+    let available = match commodity {
+        Commodity::Resource(r) => nation.resource_amount(r),
+        Commodity::Material(m) => nation.materials.get(&m).copied().unwrap_or(0),
+        Commodity::Goods(g) => nation.goods.get(&g).copied().unwrap_or(0),
+    };
+    if quantity > available {
+        return r#"{"error":"insufficient stock"}"#.to_string();
+    }
+
+    // Validate cargo capacity
+    let total_cargo: u32 = nation.total_cargo_capacity();
+    let other_orders: u32 = nation
+        .player_sell_orders
+        .iter()
+        .filter(|o| o.commodity != commodity)
+        .map(|o| o.quantity)
+        .chain(nation.player_buy_orders.iter().map(|o| o.quantity))
+        .sum();
+    if other_orders + quantity > total_cargo {
+        return r#"{"error":"exceeds cargo capacity"}"#.to_string();
+    }
+
+    // Upsert: remove existing for this commodity, add new if qty > 0
+    nation.player_sell_orders.retain(|o| o.commodity != commodity);
+    if quantity > 0 {
+        nation
+            .player_sell_orders
+            .push(domain::economy::trade::PlayerSellOrder { commodity, quantity });
+    }
+
+    serialize_game(&game)
+}
+
+/// Set a player buy order for a resource from minor nations.
+#[wasm_bindgen]
+pub fn wasm_set_player_buy_order(
+    game_json: &str,
+    nation_id: u32,
+    resource: &str,
+    quantity: u32,
+    max_price: i64,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+
+    let resource_type = match parse_resource_type(resource) {
+        Some(r) => r,
+        None => return r#"{"error":"invalid resource type"}"#.to_string(),
+    };
+
+    let nation = match game.get_nation_mut(nid) {
+        Some(n) => n,
+        None => return r#"{"error":"nation not found"}"#.to_string(),
+    };
+
+    // Validate cargo capacity
+    let total_cargo: u32 = nation.total_cargo_capacity();
+    let other_orders: u32 = nation
+        .player_sell_orders
+        .iter()
+        .map(|o| o.quantity)
+        .chain(
+            nation
+                .player_buy_orders
+                .iter()
+                .filter(|o| o.resource != resource_type)
+                .map(|o| o.quantity),
+        )
+        .sum();
+    if other_orders + quantity > total_cargo {
+        return r#"{"error":"exceeds cargo capacity"}"#.to_string();
+    }
+
+    // Default max_price to 120% of base price if not specified
+    let max_price_per_unit = if max_price > 0 {
+        Money::dollars(max_price)
+    } else {
+        let bp = base_price(resource_type);
+        Money::dollars(bp.as_dollars() * 120 / 100)
+    };
+
+    // Upsert: remove existing for this resource, add new if qty > 0
+    nation
+        .player_buy_orders
+        .retain(|o| o.resource != resource_type);
+    if quantity > 0 {
+        nation
+            .player_buy_orders
+            .push(domain::economy::trade::PlayerBuyOrder {
+                resource: resource_type,
+                quantity,
+                max_price_per_unit,
+            });
     }
 
     serialize_game(&game)

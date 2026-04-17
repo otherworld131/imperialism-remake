@@ -51,6 +51,22 @@ pub struct GameConfig {
     pub embassy_cost: i64,
     // Starting conditions
     pub starting_freight_cars: u32,
+    // Trade prices — materials (first-level processed)
+    pub lumber_price: i64,
+    pub steel_price: i64,
+    pub fabric_price: i64,
+    pub paper_price: i64,
+    pub arms_price: i64,
+    pub canned_food_price: i64,
+    // Trade prices — finished goods (second-level processed)
+    pub furniture_price: i64,
+    pub clothing_price: i64,
+    pub hardware_price: i64,
+    // AI trade behaviour
+    pub ai_consulate_target: u32,
+    pub ai_consulate_priority_score: f64,
+    pub ai_consulate_beyond_target_score: f64,
+    pub ai_consulate_beyond_target_decay: f64,
     // Map generation
     pub min_food_tile_percent: u32,
     pub food_cluster_chance: u32,
@@ -82,6 +98,19 @@ impl Default for GameConfig {
             consulate_cost: 500,
             embassy_cost: 5000,
             starting_freight_cars: 5,
+            lumber_price: 150,
+            steel_price: 200,
+            fabric_price: 150,
+            paper_price: 100,
+            arms_price: 300,
+            canned_food_price: 100,
+            furniture_price: 400,
+            clothing_price: 400,
+            hardware_price: 500,
+            ai_consulate_target: 4,
+            ai_consulate_priority_score: 30.0,
+            ai_consulate_beyond_target_score: 3.0,
+            ai_consulate_beyond_target_decay: 4.0,
             min_food_tile_percent: 20,
             food_cluster_chance: 40,
         }

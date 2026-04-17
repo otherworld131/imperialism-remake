@@ -111,6 +111,15 @@ pub struct Nation {
     /// An anarchic nation has no economy, diplomacy, or offensive military capability.
     #[serde(default)]
     pub is_in_anarchy: bool,
+    /// Cumulative revenue from auto-sold materials/goods on world market (dollars).
+    #[serde(default)]
+    pub goods_sales_revenue_dollars: i64,
+    /// Player sell orders for this turn (cleared after turn resolution).
+    #[serde(default)]
+    pub player_sell_orders: Vec<crate::economy::trade::PlayerSellOrder>,
+    /// Player buy orders for this turn (cleared after turn resolution).
+    #[serde(default)]
+    pub player_buy_orders: Vec<crate::economy::trade::PlayerBuyOrder>,
 }
 
 impl Nation {
@@ -152,6 +161,9 @@ impl Nation {
             has_colony: false,
             expert_rewards_earned: 0,
             is_in_anarchy: false,
+            goods_sales_revenue_dollars: 0,
+            player_sell_orders: Vec::new(),
+            player_buy_orders: Vec::new(),
         }
     }
 
@@ -751,6 +763,7 @@ mod tests {
             resource: ResourceType::Timber,
             quantity: 5,
             total_cost: Money::dollars(250),
+            bought: true,
         });
         assert_eq!(n.trade_history.len(), 1);
         assert_eq!(n.trade_history[0].partner, NationId(10));
@@ -768,6 +781,7 @@ mod tests {
             resource: ResourceType::Iron,
             quantity: 3,
             total_cost: Money::dollars(225),
+            bought: true,
         });
 
         let json = serde_json::to_string(&n).unwrap();

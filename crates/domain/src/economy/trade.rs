@@ -40,6 +40,73 @@ pub struct TradeHistoryEntry {
     pub resource: ResourceType,
     pub quantity: u32,
     pub total_cost: Money,
+    /// Whether this nation was the buyer (true) or seller (false) in this transaction.
+    #[serde(default)]
+    pub bought: bool,
+}
+
+/// A unified commodity type covering resources, materials, and goods.
+/// Used for player trade orders where any commodity can be sold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum Commodity {
+    Resource(ResourceType),
+    Material(MaterialType),
+    Goods(GoodsType),
+}
+
+impl std::fmt::Display for Commodity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Commodity::Resource(r) => write!(f, "{r:?}"),
+            Commodity::Material(m) => write!(f, "{m}"),
+            Commodity::Goods(g) => write!(f, "{g:?}"),
+        }
+    }
+}
+
+/// Price for a material using Lua-configurable GameConfig values.
+pub fn material_price(material: MaterialType, cfg: &crate::data::GameConfig) -> Money {
+    match material {
+        MaterialType::Lumber => Money::dollars(cfg.lumber_price),
+        MaterialType::Steel => Money::dollars(cfg.steel_price),
+        MaterialType::Fabric => Money::dollars(cfg.fabric_price),
+        MaterialType::Paper => Money::dollars(cfg.paper_price),
+        MaterialType::Arms => Money::dollars(cfg.arms_price),
+        MaterialType::CannedFood => Money::dollars(cfg.canned_food_price),
+    }
+}
+
+/// Price for a finished good using Lua-configurable GameConfig values.
+pub fn goods_price(goods: GoodsType, cfg: &crate::data::GameConfig) -> Money {
+    match goods {
+        GoodsType::Furniture => Money::dollars(cfg.furniture_price),
+        GoodsType::Clothing => Money::dollars(cfg.clothing_price),
+        GoodsType::Hardware => Money::dollars(cfg.hardware_price),
+    }
+}
+
+/// Price for any commodity type using Lua-configurable GameConfig values.
+pub fn commodity_price(commodity: Commodity, cfg: &crate::data::GameConfig) -> Money {
+    match commodity {
+        Commodity::Resource(r) => base_price(r),
+        Commodity::Material(m) => material_price(m, cfg),
+        Commodity::Goods(g) => goods_price(g, cfg),
+    }
+}
+
+/// A player's order to sell a commodity on the world market.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PlayerSellOrder {
+    pub commodity: Commodity,
+    pub quantity: u32,
+}
+
+/// A player's order to buy a resource from minor nations.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PlayerBuyOrder {
+    pub resource: ResourceType,
+    pub quantity: u32,
+    pub max_price_per_unit: Money,
 }
 
 /// Base prices for tradeable commodities.
@@ -283,34 +350,27 @@ pub fn generate_minor_nation_offers(
     offers
 }
 
-/// Generate trade bids for a nation, respecting consulate requirements and cargo capacity.
+/// Generate trade bids for an AI nation based on available offers and cargo capacity.
 ///
 /// Rules:
-/// - Only buy from Minor Nations where the nation has a trade consulate (check diplomacy).
+/// - Buy from any nation except self (no consulate required).
 /// - Total quantity of all bids cannot exceed cargo capacity (merchant ships).
 /// - Prioritize buying resources the nation needs most (buy what they have least of).
 /// - Set max_price at 120% of base_price (willing to pay a bit more).
 pub fn generate_smart_bids(
     nation: &Nation,
     available_offers: &[TradeOffer],
-    diplomacy: &DiplomacyState,
+    _diplomacy: &DiplomacyState,
     max_cargo: u32,
 ) -> Vec<TradeBid> {
     if max_cargo == 0 {
         return Vec::new();
     }
 
-    // Filter offers to only those from nations where we have a consulate
+    // All offers from other nations are eligible (consulate not required for trade)
     let eligible_offers: Vec<&TradeOffer> = available_offers
         .iter()
-        .filter(|offer| {
-            // Check that a consulate exists between this nation and the seller
-            if let Some(rel) = diplomacy.get_relation(nation.id, offer.seller) {
-                rel.has_consulate
-            } else {
-                false
-            }
-        })
+        .filter(|offer| offer.seller != nation.id)
         .collect();
 
     if eligible_offers.is_empty() {
@@ -846,6 +906,7 @@ mod tests {
             resource: ResourceType::Timber,
             quantity: 3,
             total_cost: Money::dollars(150),
+            bought: true,
         };
         assert_eq!(entry.turn, TurnNumber(5));
         assert_eq!(entry.partner, NationId(10));
@@ -862,6 +923,7 @@ mod tests {
             resource: ResourceType::Coal,
             quantity: 7,
             total_cost: Money::dollars(525),
+            bought: true,
         };
         let json = serde_json::to_string(&entry).unwrap();
         let deserialized: TradeHistoryEntry = serde_json::from_str(&json).unwrap();

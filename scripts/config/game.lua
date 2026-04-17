@@ -45,9 +45,28 @@ game_config = {
     -- Starting conditions
     starting_freight_cars = 5,     -- freight cars each Great Power starts with
 
+    -- Trade prices: materials (first-level processed)
+    lumber_price = 150,
+    steel_price = 200,
+    fabric_price = 150,
+    paper_price = 100,
+    arms_price = 300,
+    canned_food_price = 100,
+
+    -- Trade prices: finished goods (second-level processed)
+    furniture_price = 400,
+    clothing_price = 400,
+    hardware_price = 500,
+
     -- Diplomacy costs
     consulate_cost = 500,
     embassy_cost = 5000,
+
+    -- AI trade behaviour
+    ai_consulate_target = 4,                  -- AI GPs aim for this many consulates in minor nations
+    ai_consulate_priority_score = 30.0,        -- scoring weight per missing consulate below target
+    ai_consulate_beyond_target_score = 3.0,    -- base scoring weight per available MN beyond target
+    ai_consulate_beyond_target_decay = 4.0,    -- penalty per extra consulate above target
 
     -- Map generation
     min_food_tile_percent = 20,  -- at least 20% of land tiles must produce food

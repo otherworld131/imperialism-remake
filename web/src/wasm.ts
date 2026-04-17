@@ -30,6 +30,8 @@ import init, {
   // Trade
   wasm_get_trade_data,
   wasm_set_trade_subsidy,
+  wasm_set_player_sell_order,
+  wasm_set_player_buy_order,
   // Diplomacy
   wasm_get_diplomacy_screen_data,
   wasm_diplomacy_build_consulate,
@@ -434,6 +436,7 @@ export interface TradeHistoryItem {
   resource: string;
   quantity: number;
   total_cost: number;
+  bought: boolean;
 }
 
 export interface TradeSubsidy {
@@ -451,14 +454,48 @@ export interface MinorNationTrade {
   resources: string[];
 }
 
+export interface PlayerSellOrder {
+  commodity_type: string;
+  commodity_name: string;
+  quantity: number;
+  price: number;
+}
+
+export interface PlayerBuyOrder {
+  resource: string;
+  quantity: number;
+  max_price: number;
+}
+
+export interface AvailableOffer {
+  seller_id: number;
+  seller_name: string;
+  resource: string;
+  quantity: number;
+  price: number;
+}
+
+export interface SellableItem {
+  name: string;
+  stock: number;
+  price: number;
+}
+
 export interface TradeData {
   market_prices: MarketPrice[];
   trade_history: TradeHistoryItem[];
   subsidies: TradeSubsidy[];
   trade_balance: { total_bought: number; total_sold: number; net: number };
   total_cargo: number;
+  remaining_cargo: number;
   minor_nations: MinorNationTrade[];
   treasury: number;
+  player_sell_orders: PlayerSellOrder[];
+  player_buy_orders: PlayerBuyOrder[];
+  available_offers: AvailableOffer[];
+  sellable_resources: SellableItem[];
+  sellable_materials: SellableItem[];
+  sellable_goods: SellableItem[];
 }
 
 export function getTradeData(gameJson: string, nationId: number): TradeData | null {
@@ -468,7 +505,15 @@ export function getTradeData(gameJson: string, nationId: number): TradeData | nu
 }
 
 export function setTradeSubsidy(gameJson: string, nationId: number, targetNationId: number, amount: number): CommandResult {
-  return executeCommand(wasm_set_trade_subsidy(gameJson, nationId, targetNationId, amount));
+  return executeCommand(wasm_set_trade_subsidy(gameJson, nationId, targetNationId, BigInt(amount)));
+}
+
+export function setPlayerSellOrder(gameJson: string, nationId: number, commodityType: string, commodityName: string, quantity: number): CommandResult {
+  return executeCommand(wasm_set_player_sell_order(gameJson, nationId, commodityType, commodityName, quantity));
+}
+
+export function setPlayerBuyOrder(gameJson: string, nationId: number, resource: string, quantity: number, maxPrice: number): CommandResult {
+  return executeCommand(wasm_set_player_buy_order(gameJson, nationId, resource, quantity, BigInt(maxPrice)));
 }
 
 // ── Diplomacy Screen types & functions ──────────────────────────────
@@ -534,7 +579,7 @@ export function diplomacyDeclareWar(gameJson: string, nationId: number, targetId
 }
 
 export function diplomacySendGrant(gameJson: string, nationId: number, targetId: number, amount: number): CommandResult {
-  return executeCommand(wasm_diplomacy_send_grant(gameJson, nationId, targetId, amount));
+  return executeCommand(wasm_diplomacy_send_grant(gameJson, nationId, targetId, BigInt(amount)));
 }
 
 export function diplomacyBreakTreaty(gameJson: string, nationId: number, targetId: number, treatyType: string): CommandResult {
