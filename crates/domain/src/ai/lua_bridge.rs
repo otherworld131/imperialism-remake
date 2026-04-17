@@ -153,6 +153,7 @@ pub struct LuaAiConfig {
     pub war_threshold: Option<f64>,
     pub army_min_for_war: Option<usize>,
     pub opportunism_weight: Option<f64>,
+    pub min_artillery_for_minor_war: Option<usize>,
 
     // Army building tiers
     pub tier1_army_max: Option<usize>,
@@ -300,6 +301,8 @@ impl LuaAiConfig {
         self.war_threshold = sanitize_opt_f64(self.war_threshold, 0.0, 1.0);
         self.army_min_for_war = sanitize_opt_usize(self.army_min_for_war, 0, 100);
         self.opportunism_weight = sanitize_opt_f64(self.opportunism_weight, 0.0, 10.0);
+        self.min_artillery_for_minor_war =
+            sanitize_opt_usize(self.min_artillery_for_minor_war, 0, 20);
 
         // Army tiers (usize)
         self.tier1_army_max = sanitize_opt_usize(self.tier1_army_max, 0, 100);
@@ -431,6 +434,7 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             war_threshold: table.get("war_threshold").ok(),
             army_min_for_war: table.get::<usize>("army_min_for_war").ok(),
             opportunism_weight: table.get("opportunism_weight").ok(),
+            min_artillery_for_minor_war: table.get::<usize>("min_artillery_for_minor_war").ok(),
             // Army tiers
             tier1_army_max: table.get::<usize>("tier1_army_max").ok(),
             tier2_army_max: table.get::<usize>("tier2_army_max").ok(),
@@ -822,6 +826,7 @@ mod tests {
             war_threshold: Some(f64::NAN),
             army_min_for_war: None,
             opportunism_weight: Some(f64::NEG_INFINITY),
+            min_artillery_for_minor_war: None,
             tier1_army_max: None,
             tier2_army_max: None,
             tier3_army_max: None,
@@ -909,6 +914,7 @@ mod tests {
             war_threshold: Some(2.0), // should clamp to 1.0
             army_min_for_war: None,
             opportunism_weight: Some(50.0), // should clamp to 10.0
+            min_artillery_for_minor_war: None,
             tier1_army_max: None,
             tier2_army_max: None,
             tier3_army_max: None,
@@ -1035,6 +1041,7 @@ mod tests {
             war_threshold: None,
             army_min_for_war: None,
             opportunism_weight: None,
+            min_artillery_for_minor_war: None,
             tier1_army_max: None,
             tier2_army_max: None,
             tier3_army_max: None,

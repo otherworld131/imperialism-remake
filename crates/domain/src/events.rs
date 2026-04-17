@@ -32,6 +32,7 @@ pub enum TreatyType {
     RequestToJoinEmpire,
     PeaceTreaty,
     WarDeclaration,
+    PactDefenseRequest,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]

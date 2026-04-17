@@ -27,6 +27,7 @@ economic = {
     war_threshold = 0.6,        -- moderate-high bar for war
     army_min_for_war = 5,       -- needs good army
     opportunism_weight = 0.4,   -- modest exploitation of weakness
+    min_artillery_for_minor_war = 3, -- need 3 artillery to breach minor defenses
 
     -- Army building tiers
     tier1_army_max = 3,

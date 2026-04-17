@@ -27,6 +27,7 @@ balanced = {
     war_threshold = 0.5,        -- moderate bar for declaring war
     army_min_for_war = 4,       -- needs decent army
     opportunism_weight = 0.5,   -- moderate exploitation of weakness
+    min_artillery_for_minor_war = 2, -- need 2 artillery to breach minor defenses
 
     -- Army building tiers
     tier1_army_max = 3,

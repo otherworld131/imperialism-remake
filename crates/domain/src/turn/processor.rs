@@ -2192,8 +2192,30 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
         };
 
         // Trigger pact defense: if defender (Minor Nation) has a NAP with any GP,
-        // that GP declares war on the attacker.
+        // a protector may intervene (declaring war and incorporating the minor).
         trigger_pact_defense(game, defender_id, attacker_id, report);
+
+        // If pact defense changed province ownership (minor was incorporated),
+        // abort this attack — the attacker is now at war with the protector instead.
+        let current_owner = game
+            .get_province(province_id)
+            .map(|p| p.owner)
+            .unwrap_or(defender_id);
+        if current_owner != defender_id {
+            report.newspaper_headlines.push((
+                format!(
+                    "{}'s attack on {} is thwarted by intervention!",
+                    game.get_nation(attacker_id)
+                        .map(|n| n.name.as_str())
+                        .unwrap_or("Unknown"),
+                    game.get_nation(defender_id)
+                        .map(|n| n.name.as_str())
+                        .unwrap_or("Unknown"),
+                ),
+                HeadlineCategory::War,
+            ));
+            continue;
+        }
 
         // Create attacker force from nation's army.
         // If attacking via naval landing (beachhead), cap the force by the
@@ -2775,11 +2797,10 @@ fn check_and_apply_anarchy(
     true
 }
 
-/// Trigger pact defense: when a Minor Nation with a Non-Aggression Pact is attacked,
-/// the Great Power that signed the pact declares war on the attacker.
-///
-/// For AI GPs: automatically declare war. For human GP: generates a newspaper headline
-/// notifying them of the attack (human makes their own decisions).
+/// Pact defense: when a minor nation with NAPs is attacked, eligible protectors
+/// are asked to intervene in priority order (highest relationship score first).
+/// AI protectors make a strategic evaluation; human players receive a proposal.
+/// Only one protector can accept — the minor joins their empire on acceptance.
 fn trigger_pact_defense(
     game: &mut GameState,
     defender_nation_id: NationId,
@@ -2794,83 +2815,262 @@ fn trigger_pact_defense(
         return;
     }
 
-    let defender_name = game
-        .get_nation(defender_nation_id)
-        .map(|n| n.name.clone())
-        .unwrap_or_default();
-
-    // Find all Great Powers that have a NonAggressionPact with this Minor Nation
-    let gp_ids: Vec<NationId> = game
+    // Collect eligible pact holders (GPs with NAP, not already at war with attacker)
+    let mut candidates: Vec<(NationId, i32)> = game
         .nations
         .iter()
         .filter(|n| n.is_great_power() && n.id != attacker_nation_id)
         .map(|n| n.id)
+        .filter(|&gp_id| {
+            game.diplomacy.has_treaty(
+                gp_id,
+                defender_nation_id,
+                crate::events::TreatyType::NonAggressionPact,
+            ) && !game
+                .diplomacy
+                .get_relation(gp_id, attacker_nation_id)
+                .is_some_and(|r| r.at_war)
+        })
+        .map(|gp_id| {
+            let score = game
+                .diplomacy
+                .get_relation(gp_id, defender_nation_id)
+                .map(|r| r.score)
+                .unwrap_or(0);
+            (gp_id, score)
+        })
         .collect();
 
-    let mut pact_holders: Vec<(NationId, String)> = Vec::new();
-    for gp_id in &gp_ids {
-        let has_pact = game.diplomacy.has_treaty(
-            *gp_id,
-            defender_nation_id,
-            crate::events::TreatyType::NonAggressionPact,
-        );
-        if !has_pact {
-            continue;
-        }
-
-        // Check if already at war with the attacker
-        let already_at_war = game
-            .diplomacy
-            .get_relation(*gp_id, attacker_nation_id)
-            .is_some_and(|r| r.at_war);
-        if already_at_war {
-            continue;
-        }
-
-        let gp_name = game
-            .get_nation(*gp_id)
-            .map(|n| n.name.clone())
-            .unwrap_or_default();
-        pact_holders.push((*gp_id, gp_name));
+    if candidates.is_empty() {
+        return;
     }
 
+    // Sort by relationship score with minor (highest first = most loved)
+    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let defender_name = game
+        .get_nation(defender_nation_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_default();
     let attacker_name = game
         .get_nation(attacker_nation_id)
         .map(|n| n.name.clone())
         .unwrap_or_default();
 
-    for (gp_id, gp_name) in &pact_holders {
-        // Notify about the pact being triggered
-        report.newspaper_headlines.push((
-            format!(
-                "{} requests {}'s aid against {}!",
-                defender_name, gp_name, attacker_name
-            ),
-            HeadlineCategory::Diplomacy,
-        ));
+    // Cascade through candidates in priority order
+    let candidate_ids: Vec<NationId> = candidates.iter().map(|(id, _)| *id).collect();
+    run_pact_defense_cascade(
+        game,
+        attacker_nation_id,
+        defender_nation_id,
+        &candidate_ids,
+        &defender_name,
+        &attacker_name,
+        report,
+    );
+}
 
-        // AI GPs automatically declare war on the attacker
+/// Run the pact defense cascade: evaluate each candidate in order,
+/// stop at first acceptance or when a human player is reached.
+fn run_pact_defense_cascade(
+    game: &mut GameState,
+    attacker_id: NationId,
+    minor_id: NationId,
+    candidates: &[NationId],
+    defender_name: &str,
+    attacker_name: &str,
+    report: &mut TurnReport,
+) {
+    for (i, &gp_id) in candidates.iter().enumerate() {
+        let gp_name = game
+            .get_nation(gp_id)
+            .map(|n| n.name.clone())
+            .unwrap_or_default();
+
         let is_ai = game
-            .get_nation(*gp_id)
+            .get_nation(gp_id)
             .is_some_and(|n| n.ai_personality.is_some());
+
         if is_ai {
-            game.diplomacy.declare_war(*gp_id, attacker_nation_id);
+            // AI makes a strategic decision
+            let personality = crate::ai::common::get_personality(game, gp_id);
+
+            #[cfg(feature = "lua")]
+            let lua_cfg = game
+                .game_data
+                .lua_engine
+                .as_ref()
+                .and_then(|e| crate::ai::lua_bridge::lua_get_config(e, personality));
+
+            let accepts = crate::ai::assessment::evaluate_pact_defense(
+                game,
+                gp_id,
+                attacker_id,
+                minor_id,
+                personality,
+                #[cfg(feature = "lua")]
+                lua_cfg.as_ref(),
+            );
+
+            if accepts {
+                // Protector accepts: declare war and incorporate the minor
+                game.diplomacy.declare_war(gp_id, attacker_id);
+                report.newspaper_headlines.push((
+                    format!(
+                        "{} intervenes to protect {} and declares war on {}!",
+                        gp_name, defender_name, attacker_name
+                    ),
+                    HeadlineCategory::War,
+                ));
+                game.history.push((
+                    game.turn,
+                    format!(
+                        "{} declared war on {} to protect {}",
+                        gp_name, attacker_name, defender_name
+                    ),
+                ));
+
+                incorporate_minor_into_empire(
+                    game,
+                    minor_id,
+                    gp_id,
+                    report,
+                    "joined the empire of",
+                );
+                return; // Stop cascade — one protector is enough
+            } else {
+                // AI declines
+                report.newspaper_headlines.push((
+                    format!(
+                        "{} declines to intervene on behalf of {}",
+                        gp_name, defender_name
+                    ),
+                    HeadlineCategory::Diplomacy,
+                ));
+            }
+        } else {
+            // Human player: create a PactDefenseRequest proposal and pause cascade
+            let remaining: Vec<NationId> = candidates[i + 1..].to_vec();
+            game.diplomacy
+                .pending_proposals
+                .push(crate::diplomacy::DiplomaticProposal {
+                    from: minor_id,
+                    to: gp_id,
+                    proposal_type: crate::events::TreatyType::PactDefenseRequest,
+                    turn_proposed: game.turn,
+                    attacker: Some(attacker_id),
+                    cascade_remaining: if remaining.is_empty() {
+                        None
+                    } else {
+                        Some(remaining)
+                    },
+                });
             report.newspaper_headlines.push((
                 format!(
-                    "{} honors its pact with {} and declares war on {}!",
-                    gp_name, defender_name, attacker_name
+                    "{} requests your protection against {}!",
+                    defender_name, attacker_name
                 ),
-                HeadlineCategory::War,
+                HeadlineCategory::Diplomacy,
             ));
-            game.history.push((
-                game.turn,
-                format!(
-                    "{} declared war on {} to honor pact with {}",
-                    gp_name, attacker_name, defender_name
-                ),
-            ));
+            return; // Pause cascade until human responds
         }
     }
+
+    // No one accepted
+    report.newspaper_headlines.push((
+        format!(
+            "No protector came to {}'s defense against {}",
+            defender_name, attacker_name
+        ),
+        HeadlineCategory::Diplomacy,
+    ));
+}
+
+/// Accept a pact defense request: protector declares war on attacker and
+/// incorporates the minor nation. Called by the WASM bridge when human
+/// player accepts a PactDefenseRequest proposal.
+pub fn accept_pact_defense(
+    game: &mut GameState,
+    protector_id: NationId,
+    attacker_id: NationId,
+    minor_id: NationId,
+    report: &mut TurnReport,
+) {
+    // Precondition: minor must still exist and have provinces
+    let minor_valid = game
+        .get_nation(minor_id)
+        .is_some_and(|n| !n.is_great_power() && !n.province_ids.is_empty());
+    if !minor_valid {
+        return; // Minor already conquered/incorporated — stale proposal
+    }
+
+    let protector_name = game
+        .get_nation(protector_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_default();
+    let attacker_name = game
+        .get_nation(attacker_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_default();
+    let minor_name = game
+        .get_nation(minor_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_default();
+
+    game.diplomacy.declare_war(protector_id, attacker_id);
+    report.newspaper_headlines.push((
+        format!(
+            "{} intervenes to protect {} and declares war on {}!",
+            protector_name, minor_name, attacker_name
+        ),
+        HeadlineCategory::War,
+    ));
+    game.history.push((
+        game.turn,
+        format!(
+            "{} declared war on {} to protect {}",
+            protector_name, attacker_name, minor_name
+        ),
+    ));
+
+    incorporate_minor_into_empire(game, minor_id, protector_id, report, "joined the empire of");
+}
+
+/// Continue the pact defense cascade after the human player rejects.
+/// Evaluates remaining AI candidates in order.
+pub fn continue_pact_defense_cascade(
+    game: &mut GameState,
+    attacker_id: NationId,
+    minor_id: NationId,
+    remaining: &[NationId],
+    report: &mut TurnReport,
+) {
+    // Precondition: minor must still exist and have provinces
+    let minor_valid = game
+        .get_nation(minor_id)
+        .is_some_and(|n| !n.is_great_power() && !n.province_ids.is_empty());
+    if !minor_valid {
+        return; // Minor already conquered/incorporated — stale cascade
+    }
+
+    let defender_name = game
+        .get_nation(minor_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_default();
+    let attacker_name = game
+        .get_nation(attacker_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_default();
+
+    run_pact_defense_cascade(
+        game,
+        attacker_id,
+        minor_id,
+        remaining,
+        &defender_name,
+        &attacker_name,
+        report,
+    );
 }
 
 /// Resolve naval combat between nations at war that both have warships.
@@ -3495,6 +3695,65 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
 /// For each Minor Nation, checks relationships with all Great Powers.
 /// If any relationship score >= 75, the Minor Nation joins the GP with the highest score.
 /// All of the Minor Nation's provinces are transferred to the Great Power.
+/// Transfer all provinces from a minor nation to a great power (incorporation).
+/// Used by voluntary incorporation, pact defense acceptance, and colonization.
+fn incorporate_minor_into_empire(
+    game: &mut GameState,
+    minor_id: NationId,
+    gp_id: NationId,
+    report: &mut TurnReport,
+    reason: &str,
+) {
+    let provinces_to_transfer: Vec<ProvinceId> = game
+        .get_nation(minor_id)
+        .map(|n| n.province_ids.clone())
+        .unwrap_or_default();
+
+    // Update province owners
+    for pid in &provinces_to_transfer {
+        if let Some(prov) = game.get_province_mut(*pid) {
+            prov.owner = gp_id;
+        }
+    }
+
+    // Remove provinces from minor nation
+    if let Some(minor) = game.get_nation_mut(minor_id) {
+        minor.province_ids.clear();
+    }
+
+    // Add provinces to great power
+    if let Some(gp) = game.get_nation_mut(gp_id) {
+        for pid in &provinces_to_transfer {
+            gp.add_province(*pid);
+        }
+    }
+
+    let minor_name = game
+        .get_nation(minor_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_else(|| "Unknown".to_string());
+    let gp_name = game
+        .get_nation(gp_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    report
+        .events
+        .push(DomainEvent::NationIncorporated(NationIncorporated {
+            minor_nation: minor_id,
+            great_power: gp_id,
+        }));
+
+    report.incorporations.push((minor_id, gp_id));
+
+    award_first_colony_clippers(game, gp_id, report);
+
+    game.history.push((
+        game.turn,
+        format!("{} {} {}", minor_name, reason, gp_name),
+    ));
+}
+
 fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnReport) {
     let minor_ids: Vec<NationId> = game
         .nations
@@ -3513,7 +3772,6 @@ fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnRepor
     let threshold = 75;
 
     for minor_id in &minor_ids {
-        // Skip minor nations that have already been incorporated or are in anarchy
         if game
             .get_nation(*minor_id)
             .is_some_and(|n| n.province_ids.is_empty() || n.is_in_anarchy)
@@ -3522,7 +3780,7 @@ fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnRepor
         }
 
         let mut best_gp: Option<NationId> = None;
-        let mut best_score: i32 = threshold - 1; // must be >= threshold
+        let mut best_score: i32 = threshold - 1;
 
         for gp_id in &gp_ids {
             if let Some(rel) = game.diplomacy.get_relation(*minor_id, *gp_id)
@@ -3535,61 +3793,13 @@ fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnRepor
         }
 
         if let Some(gp_id) = best_gp {
-            // Transfer all provinces from minor nation to great power
-            let provinces_to_transfer: Vec<ProvinceId> = game
-                .get_nation(*minor_id)
-                .map(|n| n.province_ids.clone())
-                .unwrap_or_default();
-
-            // Update province owners
-            for pid in &provinces_to_transfer {
-                if let Some(prov) = game.get_province_mut(*pid) {
-                    prov.owner = gp_id;
-                }
-            }
-
-            // Remove provinces from minor nation
-            if let Some(minor) = game.get_nation_mut(*minor_id) {
-                minor.province_ids.clear();
-            }
-
-            // Add provinces to great power
-            if let Some(gp) = game.get_nation_mut(gp_id) {
-                for pid in &provinces_to_transfer {
-                    gp.add_province(*pid);
-                }
-            }
-
-            // Get names for reporting
-            let minor_name = game
-                .get_nation(*minor_id)
-                .map(|n| n.name.clone())
-                .unwrap_or_else(|| "Unknown".to_string());
-            let gp_name = game
-                .get_nation(gp_id)
-                .map(|n| n.name.clone())
-                .unwrap_or_else(|| "Unknown".to_string());
-
-            // Record event
-            report
-                .events
-                .push(DomainEvent::NationIncorporated(NationIncorporated {
-                    minor_nation: *minor_id,
-                    great_power: gp_id,
-                }));
-
-            report.incorporations.push((*minor_id, gp_id));
-
-            // Free Clippers: first colony established (MN voluntarily incorporated)
-            award_first_colony_clippers(game, gp_id, report);
-
-            // Record in history
-            game.history.push((
-                game.turn,
-                format!("{} voluntarily joined the {} empire", minor_name, gp_name),
-            ));
-
-            // Newspaper headline added later via report.incorporations
+            incorporate_minor_into_empire(
+                game,
+                *minor_id,
+                gp_id,
+                report,
+                "voluntarily joined the empire of",
+            );
         }
     }
 }
@@ -6230,8 +6440,8 @@ mod tests {
         let mn_garrison = create_garrison(NationType::MinorNation);
         assert_eq!(
             mn_garrison.len(),
-            3,
-            "Minor Nation garrison should have 3 units"
+            4,
+            "Minor Nation garrison should have 4 units (3 Militia + 1 GarrisonArtillery)"
         );
     }
 
@@ -6673,13 +6883,26 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(3),
         );
-        pact_holder.ai_personality = Some(crate::ai::AiPersonality::Balanced);
+        pact_holder.ai_personality = Some(crate::ai::AiPersonality::Aggressive);
         pact_holder.treasury = Money::dollars(10000);
+        // Give the pact holder a strong army so it accepts the defense request
+        for i in 0..10 {
+            pact_holder.army.push(crate::military::units::ArmyUnit::new(
+                crate::map::UnitId(8000 + i),
+                crate::military::units::ArmyUnitType::Regulars,
+                NationId(4),
+                ProvinceId(3),
+            ));
+        }
 
         let mut diplomacy = DiplomacyState::new();
         // Establish consulate + embassy + pact between PactHolder and MinorDefender
+        // with high relation score so the protector cares enough to intervene
         diplomacy.build_consulate(NationId(4), NationId(3)).unwrap();
         diplomacy.build_embassy(NationId(4), NationId(3)).unwrap();
+        if let Some(rel) = diplomacy.get_relation_mut(NationId(4), NationId(3)) {
+            rel.improve_score(60);
+        }
         diplomacy.propose_pact(NationId(4), NationId(3)).unwrap();
 
         let mut game = GameState {
@@ -6745,29 +6968,31 @@ mod tests {
 
         trigger_pact_defense(&mut game, NationId(3), NationId(2), &mut report);
 
-        // PactHolder (AI) should now be at war with Attacker
+        // PactHolder (AI) should strategically accept and be at war with Attacker
         assert!(
             game.diplomacy
                 .get_relation(NationId(4), NationId(2))
                 .is_some_and(|r| r.at_war),
-            "PactHolder should declare war on attacker when pact Minor is attacked"
+            "PactHolder should declare war on attacker after strategic evaluation"
         );
 
-        // Should have generated headlines
-        assert!(
-            report
-                .newspaper_headlines
-                .iter()
-                .any(|(h, _)| h.contains("requests") && h.contains("aid")),
-            "Should generate 'requests aid' headline: {:?}",
-            report.newspaper_headlines
+        // Minor should be incorporated into PactHolder's empire
+        let minor_provinces = game
+            .get_nation(NationId(3))
+            .map(|n| n.province_ids.len())
+            .unwrap_or(0);
+        assert_eq!(
+            minor_provinces, 0,
+            "Minor should have 0 provinces after incorporation"
         );
+
+        // Should have generated intervention headline
         assert!(
             report
                 .newspaper_headlines
                 .iter()
-                .any(|(h, _)| h.contains("honors its pact")),
-            "Should generate 'honors pact' headline: {:?}",
+                .any(|(h, _)| h.contains("intervenes") && h.contains("protect")),
+            "Should generate intervention headline: {:?}",
             report.newspaper_headlines
         );
     }
@@ -9120,6 +9345,8 @@ mod tests {
                 to: ai,
                 proposal_type: TreatyType::NonAggressionPact,
                 turn_proposed: game.turn,
+                attacker: None,
+                cascade_remaining: None,
             });
 
         let mut report = empty_report(game.turn);

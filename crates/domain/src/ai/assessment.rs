@@ -149,6 +149,37 @@ pub fn collect_hypothetical_coalition(
     coalition
 }
 
+/// Collect the hypothetical defender coalition for a target being attacked.
+/// Includes the target's alliance partners AND, for minor nation targets,
+/// all nations with Non-Aggression Pacts (any pact holder may choose to
+/// intervene, so the AI treats them all as potential threats).
+pub fn collect_target_hypothetical_coalition(
+    game: &GameState,
+    attacker: NationId,
+    target: NationId,
+) -> Vec<NationId> {
+    let mut defenders = vec![target];
+    // Add Alliance partners
+    for ally_id in game.diplomacy.get_allies(target) {
+        if ally_id != attacker && !defenders.contains(&ally_id) {
+            defenders.push(ally_id);
+        }
+    }
+    // Add NAP pact-defense holders (only for minor nations — pact defense
+    // only triggers when a minor nation with a NAP is attacked)
+    let is_minor = game
+        .get_nation(target)
+        .is_some_and(|n| !n.is_great_power());
+    if is_minor {
+        for pact_id in game.diplomacy.get_pact_holders(target) {
+            if pact_id != attacker && !defenders.contains(&pact_id) {
+                defenders.push(pact_id);
+            }
+        }
+    }
+    defenders
+}
+
 fn sigmoid(x: f64, steepness: f64) -> f64 {
     1.0 / (1.0 + (-x * steepness).exp())
 }
@@ -289,7 +320,8 @@ pub fn evaluate_hypothetical_war(
     let w = AssessmentWeights::default();
 
     let our_side = collect_hypothetical_coalition(game, attacker, target);
-    let enemy_side = collect_hypothetical_coalition(game, target, attacker);
+    // Use target coalition that includes pact-defense partners for minor nations
+    let enemy_side = collect_target_hypothetical_coalition(game, attacker, target);
 
     let our_military: f64 = our_side
         .iter()
@@ -341,6 +373,65 @@ pub fn evaluate_hypothetical_war(
         power_ratio,
         win_likelihood,
     }
+}
+
+/// Evaluate whether an AI protector should intervene to defend a minor nation
+/// against an attacker. Uses relationship with the minor, military capability
+/// vs the attacker, and personality bias.
+pub fn evaluate_pact_defense(
+    game: &GameState,
+    protector_id: NationId,
+    attacker_id: NationId,
+    _minor_id: NationId,
+    personality: AiPersonality,
+    #[cfg(feature = "lua")] lua_cfg: Option<&LuaAiConfig>,
+) -> bool {
+    // Standing gate
+    let standing = game.diplomacy.get_standing(protector_id);
+    if standing < 30 {
+        return false;
+    }
+
+    // Already at war with attacker — already fighting, no need to re-declare
+    if game.diplomacy.is_at_war(protector_id, attacker_id) {
+        return false;
+    }
+
+    // Relationship factor: how much does the protector care about the minor?
+    let rel_score = game
+        .diplomacy
+        .get_relation(protector_id, _minor_id)
+        .map(|r| r.score)
+        .unwrap_or(0);
+    let relationship_factor = (rel_score as f64 / 100.0).clamp(0.0, 1.0) * 0.4;
+
+    // Military factor: can the protector beat the attacker?
+    #[cfg(feature = "lua")]
+    let assessment =
+        evaluate_hypothetical_war(game, protector_id, attacker_id, lua_cfg);
+    #[cfg(not(feature = "lua"))]
+    let assessment = evaluate_hypothetical_war(game, protector_id, attacker_id);
+    let military_factor = assessment.win_likelihood * 0.4;
+
+    // Personality bias
+    let personality_bias = match personality {
+        AiPersonality::Aggressive => 0.2,
+        AiPersonality::Diplomatic => 0.1,
+        AiPersonality::Balanced => 0.0,
+        AiPersonality::Economic => -0.15,
+    };
+
+    let combined = relationship_factor + military_factor + personality_bias;
+
+    // Personality-dependent threshold
+    let threshold = match personality {
+        AiPersonality::Aggressive => 0.2,
+        AiPersonality::Diplomatic => 0.3,
+        AiPersonality::Balanced => 0.35,
+        AiPersonality::Economic => 0.5,
+    };
+
+    combined >= threshold
 }
 
 /// Evaluate whether continuing a war is worthwhile.

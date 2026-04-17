@@ -447,18 +447,21 @@ pub fn resolve_battle_with_targeting(
 /// Creates the starting garrison for a province.
 ///
 /// - Great Power: 4 Militia units
-/// - Minor Nation: 3 Militia units
+/// - Minor Nation: 3 Militia + 1 GarrisonArtillery (defensive artillery behind fortifications)
+///
+/// In the original Imperialism, minor nations had strong defensive artillery
+/// that required 2-3 Light Artillery to overcome, creating a natural growth period.
 ///
 /// Each unit gets a unique UnitId from an atomic counter.
 pub fn create_garrison(nation_type: NationType) -> Vec<ArmyUnit> {
     use crate::map::UnitId;
 
-    let count = match nation_type {
+    let militia_count = match nation_type {
         NationType::GreatPower => 4,
         NationType::MinorNation => 3,
     };
 
-    (0..count)
+    let mut units: Vec<ArmyUnit> = (0..militia_count)
         .map(|_| {
             let id = GARRISON_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
             ArmyUnit::new(
@@ -468,7 +471,20 @@ pub fn create_garrison(nation_type: NationType) -> Vec<ArmyUnit> {
                 ProvinceId(0), // placeholder — caller should set position
             )
         })
-        .collect()
+        .collect();
+
+    // Minor nations get defensive garrison artillery
+    if nation_type == NationType::MinorNation {
+        let id = GARRISON_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+        units.push(ArmyUnit::new(
+            UnitId(id),
+            ArmyUnitType::GarrisonArtillery,
+            NationId(0),
+            ProvinceId(0),
+        ));
+    }
+
+    units
 }
 
 #[cfg(test)]
@@ -672,11 +688,20 @@ mod tests {
     }
 
     #[test]
-    fn garrison_minor_nation_creates_3_militia() {
+    fn garrison_minor_nation_creates_3_militia_and_1_garrison_artillery() {
         let garrison = create_garrison(NationType::MinorNation);
-        assert_eq!(garrison.len(), 3);
+        assert_eq!(garrison.len(), 4); // 3 Militia + 1 GarrisonArtillery
+        let militia_count = garrison
+            .iter()
+            .filter(|u| u.unit_type == ArmyUnitType::Militia)
+            .count();
+        let ga_count = garrison
+            .iter()
+            .filter(|u| u.unit_type == ArmyUnitType::GarrisonArtillery)
+            .count();
+        assert_eq!(militia_count, 3);
+        assert_eq!(ga_count, 1);
         for unit in &garrison {
-            assert_eq!(unit.unit_type, ArmyUnitType::Militia);
             assert_eq!(unit.health, 100);
         }
     }

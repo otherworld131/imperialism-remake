@@ -27,6 +27,7 @@ aggressive = {
     war_threshold = 0.3,        -- low bar for declaring war
     army_min_for_war = 3,       -- attacks with smaller armies
     opportunism_weight = 0.8,   -- strongly exploits weakness
+    min_artillery_for_minor_war = 2, -- need 2 artillery to breach minor defenses
 
     -- Army building tiers
     tier1_army_max = 4,

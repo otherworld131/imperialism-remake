@@ -27,6 +27,7 @@ diplomatic = {
     war_threshold = 0.9,        -- very high bar for declaring war
     army_min_for_war = 8,       -- needs overwhelming force
     opportunism_weight = 0.2,   -- barely exploits weakness
+    min_artillery_for_minor_war = 3, -- need 3 artillery to breach minor defenses
 
     -- Army building tiers
     tier1_army_max = 2,

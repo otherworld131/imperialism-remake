@@ -14,6 +14,7 @@ pub enum UnitCategory {
 pub enum ArmyUnitType {
     // Garrison
     Militia,
+    GarrisonArtillery, // Minor nation defensive artillery (immovable)
     // Infantry
     Regulars,
     Grenadiers,
@@ -79,6 +80,17 @@ impl ArmyUnitType {
                 requires_horse: false,
                 category: UnitCategory::Garrison,
                 maintenance_per_turn: Money::dollars(25),
+                prerequisite_tech: None,
+            },
+            ArmyUnitType::GarrisonArtillery => UnitStats {
+                firepower: 4,
+                movement: 0,
+                range: 3,
+                cost: Money::dollars(0),
+                arms_required: 0,
+                requires_horse: false,
+                category: UnitCategory::Garrison,
+                maintenance_per_turn: Money::dollars(0),
                 prerequisite_tech: None,
             },
 
@@ -328,15 +340,21 @@ impl ArmyUnitType {
         self.stats().category
     }
 
-    /// Returns whether this unit type can move. Militia (garrison) cannot.
+    /// Returns whether this unit type can move. Garrison units cannot.
     pub fn can_move(&self) -> bool {
-        !matches!(self, ArmyUnitType::Militia)
+        !matches!(
+            self,
+            ArmyUnitType::Militia | ArmyUnitType::GarrisonArtillery
+        )
     }
 
     /// Returns whether this unit type can be manually built by the player.
-    /// Generals cannot be built — they are earned as rewards.
+    /// Generals and GarrisonArtillery cannot be built.
     pub fn can_build(&self) -> bool {
-        !matches!(self, ArmyUnitType::General)
+        !matches!(
+            self,
+            ArmyUnitType::General | ArmyUnitType::GarrisonArtillery
+        )
     }
 
     /// Returns the tech tree name required to build/unlock this unit type, if any.
@@ -347,6 +365,7 @@ impl ArmyUnitType {
             // Base units — available from game start
             Self::Regulars => None,
             Self::Militia => None,
+            Self::GarrisonArtillery => None,
             Self::Cuirassiers => None,
             Self::Scouts => None,
             Self::LightArtillery => None,

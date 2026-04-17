@@ -435,6 +435,7 @@ pub fn wasm_get_military_overlay(game_json: &str) -> String {
 fn parse_army_unit_type(name: &str) -> Option<ArmyUnitType> {
     match name {
         "Militia" => Some(ArmyUnitType::Militia),
+        "GarrisonArtillery" => Some(ArmyUnitType::GarrisonArtillery),
         "Regulars" => Some(ArmyUnitType::Regulars),
         "Grenadiers" => Some(ArmyUnitType::Grenadiers),
         "RifleInfantry" => Some(ArmyUnitType::RifleInfantry),
@@ -2802,6 +2803,17 @@ pub fn wasm_get_pending_proposals(game_json: &str, nation_id: u32) -> String {
                 TreatyType::WarDeclaration => {
                     format!("{} declares war", from_name)
                 }
+                TreatyType::PactDefenseRequest => {
+                    let attacker_name = p
+                        .attacker
+                        .and_then(|a| game.get_nation(a))
+                        .map(|n| n.name.as_str())
+                        .unwrap_or("an aggressor");
+                    format!(
+                        "{} requests your protection against {}",
+                        from_name, attacker_name
+                    )
+                }
             };
             let turns_until_expiry = 4_i32 - (game.turn.0 as i32 - p.turn_proposed.0 as i32);
             serde_json::json!({
@@ -2854,6 +2866,20 @@ pub fn wasm_accept_proposal(game_json: &str, nation_id: u32, proposal_index: u32
         TreatyType::PeaceTreaty => {
             game.diplomacy.make_peace(proposal.from, proposal.to);
         }
+        TreatyType::PactDefenseRequest => {
+            if let Some(attacker_id) = proposal.attacker {
+                let mut report = domain::turn::TurnReport::default();
+                domain::turn::accept_pact_defense(
+                    &mut game,
+                    nid,
+                    attacker_id,
+                    proposal.from,
+                    &mut report,
+                );
+            } else {
+                return "{\"error\":\"missing attacker context\"}".to_string();
+            }
+        }
         _ => {
             return "{\"error\":\"unsupported proposal type\"}".to_string();
         }
@@ -2883,7 +2909,23 @@ pub fn wasm_reject_proposal(game_json: &str, nation_id: u32, proposal_index: u32
         return "{\"error\":\"proposal not addressed to you\"}".to_string();
     }
 
-    game.diplomacy.pending_proposals.remove(idx);
+    let proposal = game.diplomacy.pending_proposals.remove(idx);
+
+    // For PactDefenseRequest: continue the cascade with remaining candidates
+    if proposal.proposal_type == TreatyType::PactDefenseRequest {
+        if let Some(attacker_id) = proposal.attacker {
+            let remaining = proposal.cascade_remaining.unwrap_or_default();
+            let mut report = domain::turn::TurnReport::default();
+            domain::turn::continue_pact_defense_cascade(
+                &mut game,
+                attacker_id,
+                proposal.from,
+                &remaining,
+                &mut report,
+            );
+        }
+    }
+
     serialize_game(&game)
 }
 

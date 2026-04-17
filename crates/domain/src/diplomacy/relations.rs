@@ -10,6 +10,12 @@ pub struct DiplomaticProposal {
     pub to: NationId,
     pub proposal_type: TreatyType,
     pub turn_proposed: TurnNumber,
+    /// For PactDefenseRequest: the nation that attacked the minor.
+    #[serde(default)]
+    pub attacker: Option<NationId>,
+    /// For PactDefenseRequest: remaining candidate protectors if this one declines.
+    #[serde(default)]
+    pub cascade_remaining: Option<Vec<NationId>>,
 }
 
 /// Tracks the diplomatic relationship between two nations.
@@ -349,6 +355,8 @@ impl DiplomacyState {
             to,
             proposal_type: TreatyType::PeaceTreaty,
             turn_proposed: turn,
+            attacker: None,
+            cascade_remaining: None,
         });
         Ok(())
     }
@@ -425,6 +433,8 @@ impl DiplomacyState {
             to,
             proposal_type: treaty_type,
             turn_proposed: turn,
+            attacker: None,
+            cascade_remaining: None,
         });
         Ok(())
     }
@@ -456,6 +466,24 @@ impl DiplomacyState {
         self.relations
             .iter()
             .filter(|(_, rel)| rel.has_treaty(TreatyType::Alliance))
+            .filter_map(|((a, b), _)| {
+                if *a == nation {
+                    Some(*b)
+                } else if *b == nation {
+                    Some(*a)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Get all nations that have a Non-Aggression Pact with the given nation.
+    /// Used to identify potential protectors for minor nations (pact defense).
+    pub fn get_pact_holders(&self, nation: NationId) -> Vec<NationId> {
+        self.relations
+            .iter()
+            .filter(|(_, rel)| rel.has_treaty(TreatyType::NonAggressionPact))
             .filter_map(|((a, b), _)| {
                 if *a == nation {
                     Some(*b)

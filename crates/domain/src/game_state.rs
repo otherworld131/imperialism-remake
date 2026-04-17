@@ -437,6 +437,22 @@ pub fn new_game_with_seed(
         ai_debug: false,
     };
 
+    // Give minor nation capitals a level 1 fort (original Imperialism defensive mechanic).
+    // This makes minor nations harder to conquer early, requiring real military buildup.
+    for nation in &game_state.nations {
+        if nation.is_great_power() {
+            continue;
+        }
+        let cap_pid = nation.capital_province_id;
+        if let Some(province) = game_state.provinces.iter().find(|p| p.id == cap_pid) {
+            let cap_tile = province.capital_tile;
+            if let Some(tile) = game_state.hex_map.get_tile_mut(cap_tile) {
+                tile.infrastructure.has_fort = true;
+                tile.infrastructure.fort_level = 1;
+            }
+        }
+    }
+
     // On Easy/Introductory, auto-prospect tiles in the human player's capital province
     // to reveal any existing mineral deposits, giving the player a head start.
     if matches!(difficulty, Difficulty::Easy | Difficulty::Introductory) {
