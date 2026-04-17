@@ -4,12 +4,19 @@ A faithful remake of **Imperialism** (Frog City Software, 1997) — a turn-based
 
 Lead one of seven Great Powers competing for world dominance through economics, diplomacy, and military conquest. Research technologies, build infrastructure, trade with Minor Nations, raise armies, and win the Council of Governors.
 
-## Quick Start
+## Prerequisites
+
+| Tool | Required for | Install |
+|------|-------------|---------|
+| **Rust (stable)** | Core engine, CLI | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| **wasm-pack** | WASM build (web frontend) | `cargo install wasm-pack` |
+| **wasm32-unknown-unknown** | Rust WASM target (web frontend) | `rustup target add wasm32-unknown-unknown` |
+| **Node.js + npm** | Web dev server (web frontend) | `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh \| bash && nvm install --lts` |
+| **Python 3 + PyMuPDF** | Manual PDF extraction (optional) | `sudo apt install python3 python3-pip && pip install pymupdf` |
+
+## Quick Start (CLI)
 
 ```bash
-# Install Rust (if needed)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
 # Build and run
 cargo run
 
@@ -18,6 +25,18 @@ cargo run -- --scenario 1848
 
 # Play with a specific map key and nation
 cargo run -- "rome" 3
+```
+
+## Quick Start (Web)
+
+```bash
+# Install web dependencies (first time only)
+cd web && npm install && cd ..
+
+# Build WASM and start dev server
+./web/restart-web-server.sh
+
+# Open http://localhost:5173
 ```
 
 ## Historical Scenarios
