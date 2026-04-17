@@ -3,8 +3,10 @@ use wasm_bindgen::prelude::*;
 use domain::ai::common::next_unit_id;
 use domain::economy::buildings::BuildingType;
 use domain::economy::civilians::{CivilianType, next_civilian_id, parse_civilian_type};
-use domain::economy::production::{calculate_factory_production, calculate_mill_production, ProductionChain};
-use domain::economy::trade::{base_price, commodity_price, Commodity};
+use domain::economy::production::{
+    ProductionChain, calculate_factory_production, calculate_mill_production,
+};
+use domain::economy::trade::{Commodity, base_price, commodity_price};
 use domain::economy::transport::TransportSystem;
 use domain::events::TreatyType;
 use domain::game_state::{GameState, new_game};
@@ -1394,7 +1396,10 @@ fn parse_goods_type(name: &str) -> Option<GoodsType> {
     }
 }
 
-fn parse_commodity(commodity_type: &str, commodity_name: &str) -> Option<domain::economy::trade::Commodity> {
+fn parse_commodity(
+    commodity_type: &str,
+    commodity_name: &str,
+) -> Option<domain::economy::trade::Commodity> {
     use domain::economy::trade::Commodity;
     match commodity_type {
         "resource" => parse_resource_type(commodity_name).map(Commodity::Resource),
@@ -1617,7 +1622,8 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
         .iter()
         .map(|b| {
             let next_cap = b.next_capacity();
-            let (exp_lumber, exp_steel) = domain::economy::buildings::Building::expansion_cost(next_cap - b.capacity);
+            let (exp_lumber, exp_steel) =
+                domain::economy::buildings::Building::expansion_cost(next_cap - b.capacity);
             serde_json::json!({
                 "type": format!("{:?}", b.building_type),
                 "display_name": format!("{}", b.building_type),
@@ -1666,11 +1672,15 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
         .iter()
         .map(|b| {
             let next_cap = b.next_capacity();
-            let (exp_lumber, exp_steel) = domain::economy::buildings::Building::expansion_cost(next_cap - b.capacity);
+            let (exp_lumber, exp_steel) =
+                domain::economy::buildings::Building::expansion_cost(next_cap - b.capacity);
             let expandable = b.turns_until_upgrade == 0
                 && available_lumber_mat >= exp_lumber
                 && available_steel_mat >= exp_steel;
-            (format!("{:?}", b.building_type), serde_json::json!(expandable))
+            (
+                format!("{:?}", b.building_type),
+                serde_json::json!(expandable),
+            )
         })
         .collect::<serde_json::Map<String, serde_json::Value>>()
         .into();
@@ -1763,12 +1773,8 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
         furniture_cap,
         labor_units,
     );
-    let hardware_prod = calculate_factory_production(
-        ProductionChain::Metal,
-        &all_mats,
-        hardware_cap,
-        labor_units,
-    );
+    let hardware_prod =
+        calculate_factory_production(ProductionChain::Metal, &all_mats, hardware_cap, labor_units);
     let clothing_prod = calculate_factory_production(
         ProductionChain::Textile,
         &all_mats,
@@ -1988,12 +1994,13 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
                     for &coord in &prov.tiles {
                         if let Some(tile) = game.hex_map.get_tile(coord)
                             && tile.has_visible_resource()
-                                && let Some(r) = tile.resource_deposit() {
-                                    let rs = format!("{:?}", r);
-                                    if !mn_resources.contains(&rs) {
-                                        mn_resources.push(rs);
-                                    }
-                                }
+                            && let Some(r) = tile.resource_deposit()
+                        {
+                            let rs = format!("{:?}", r);
+                            if !mn_resources.contains(&rs) {
+                                mn_resources.push(rs);
+                            }
+                        }
                     }
                 }
             }
@@ -2041,21 +2048,27 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         .collect();
 
     // Available offers from minor nations
-    let available_offers: Vec<serde_json::Value> = domain::economy::trade::generate_minor_nation_offers(
-        &game.nations, &game.provinces, &game.hex_map,
-    )
-    .iter()
-    .map(|o| {
-        let seller_name = game.get_nation(o.seller).map(|n| n.name.as_str()).unwrap_or("Unknown");
-        serde_json::json!({
-            "seller_id": o.seller.0,
-            "seller_name": seller_name,
-            "resource": format!("{:?}", o.resource),
-            "quantity": o.quantity,
-            "price": o.price_per_unit.as_dollars(),
+    let available_offers: Vec<serde_json::Value> =
+        domain::economy::trade::generate_minor_nation_offers(
+            &game.nations,
+            &game.provinces,
+            &game.hex_map,
+        )
+        .iter()
+        .map(|o| {
+            let seller_name = game
+                .get_nation(o.seller)
+                .map(|n| n.name.as_str())
+                .unwrap_or("Unknown");
+            serde_json::json!({
+                "seller_id": o.seller.0,
+                "seller_name": seller_name,
+                "resource": format!("{:?}", o.resource),
+                "quantity": o.quantity,
+                "price": o.price_per_unit.as_dollars(),
+            })
         })
-    })
-    .collect();
+        .collect();
 
     // Sellable items: resources, materials, goods with stock > 0
     let sellable_resources: Vec<serde_json::Value> = all_resources
@@ -2075,8 +2088,12 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         .collect();
 
     let all_materials = [
-        MaterialType::Lumber, MaterialType::Steel, MaterialType::Fabric,
-        MaterialType::Paper, MaterialType::Arms, MaterialType::CannedFood,
+        MaterialType::Lumber,
+        MaterialType::Steel,
+        MaterialType::Fabric,
+        MaterialType::Paper,
+        MaterialType::Arms,
+        MaterialType::CannedFood,
     ];
     let sellable_materials: Vec<serde_json::Value> = all_materials
         .iter()
@@ -2094,7 +2111,11 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         })
         .collect();
 
-    let all_goods = [GoodsType::Furniture, GoodsType::Clothing, GoodsType::Hardware];
+    let all_goods = [
+        GoodsType::Furniture,
+        GoodsType::Clothing,
+        GoodsType::Hardware,
+    ];
     let sellable_goods: Vec<serde_json::Value> = all_goods
         .iter()
         .filter_map(|&g| {
@@ -2162,7 +2183,11 @@ pub fn wasm_set_trade_subsidy(
     if game.get_nation(target_nid).is_none() {
         return "{\"error\":\"target nation not found\"}".to_string();
     }
-    if game.get_nation(target_nid).map(|n| n.nation_type != NationType::MinorNation).unwrap_or(true) {
+    if game
+        .get_nation(target_nid)
+        .map(|n| n.nation_type != NationType::MinorNation)
+        .unwrap_or(true)
+    {
         return "{\"error\":\"subsidies can only be set for minor nations\"}".to_string();
     }
 
@@ -2231,11 +2256,16 @@ pub fn wasm_set_player_sell_order(
     }
 
     // Upsert: remove existing for this commodity, add new if qty > 0
-    nation.player_sell_orders.retain(|o| o.commodity != commodity);
+    nation
+        .player_sell_orders
+        .retain(|o| o.commodity != commodity);
     if quantity > 0 {
         nation
             .player_sell_orders
-            .push(domain::economy::trade::PlayerSellOrder { commodity, quantity });
+            .push(domain::economy::trade::PlayerSellOrder {
+                commodity,
+                quantity,
+            });
     }
 
     serialize_game(&game)
@@ -2341,7 +2371,12 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
             let has_consulate = rel.map(|r| r.has_consulate).unwrap_or(false);
             let has_embassy = rel.map(|r| r.has_embassy).unwrap_or(false);
             let treaties: Vec<String> = rel
-                .map(|r| r.active_treaties.iter().map(|t| format!("{:?}", t)).collect())
+                .map(|r| {
+                    r.active_treaties
+                        .iter()
+                        .map(|t| format!("{:?}", t))
+                        .collect()
+                })
                 .unwrap_or_default();
             let has_nap = rel
                 .map(|r| r.has_treaty(TreatyType::NonAggressionPact))
@@ -2364,13 +2399,12 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
 
             // Outgoing pending proposals (for badge display)
             let has_pending_nap = game.diplomacy.pending_proposals.iter().any(|p| {
-                p.proposal_type == TreatyType::NonAggressionPact
-                    && p.from == nid
-                    && p.to == n.id
+                p.proposal_type == TreatyType::NonAggressionPact && p.from == nid && p.to == n.id
             });
-            let has_pending_alliance = game.diplomacy.pending_proposals.iter().any(|p| {
-                p.proposal_type == TreatyType::Alliance && p.from == nid && p.to == n.id
-            });
+            let has_pending_alliance =
+                game.diplomacy.pending_proposals.iter().any(|p| {
+                    p.proposal_type == TreatyType::Alliance && p.from == nid && p.to == n.id
+                });
             let has_pending_peace = game.diplomacy.pending_proposals.iter().any(|p| {
                 p.proposal_type == TreatyType::PeaceTreaty && p.from == nid && p.to == n.id
             });
@@ -2384,15 +2418,11 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
                 });
             let any_pending_alliance = has_pending_alliance
                 || game.diplomacy.pending_proposals.iter().any(|p| {
-                    p.proposal_type == TreatyType::Alliance
-                        && p.from == n.id
-                        && p.to == nid
+                    p.proposal_type == TreatyType::Alliance && p.from == n.id && p.to == nid
                 });
             let any_pending_peace = has_pending_peace
                 || game.diplomacy.pending_proposals.iter().any(|p| {
-                    p.proposal_type == TreatyType::PeaceTreaty
-                        && p.from == n.id
-                        && p.to == nid
+                    p.proposal_type == TreatyType::PeaceTreaty && p.from == n.id && p.to == nid
                 });
 
             // Pre-compute available actions
@@ -2927,6 +2957,194 @@ pub fn wasm_reject_proposal(game_json: &str, nation_id: u32, proposal_index: u32
     }
 
     serialize_game(&game)
+}
+
+/// Return comprehensive ledger/statistics data for a nation.
+#[wasm_bindgen]
+pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
+    let game: GameState = match serde_json::from_str(game_json) {
+        Ok(g) => g,
+        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    };
+
+    let nid = NationId(nation_id);
+    let nation = match game.get_nation(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"Nation not found\"}".to_string(),
+    };
+
+    // Economy
+    let treasury_dollars = nation.treasury.as_dollars();
+    let subsidies: Vec<serde_json::Value> = nation
+        .trade_subsidies
+        .iter()
+        .map(|(target_id, amount)| {
+            let name = game
+                .get_nation(*target_id)
+                .map(|n| n.name.as_str())
+                .unwrap_or("?");
+            serde_json::json!({"nation": name, "amount": amount.as_dollars()})
+        })
+        .collect();
+
+    // Buildings
+    let buildings: Vec<serde_json::Value> = nation
+        .buildings
+        .iter()
+        .map(|b| {
+            serde_json::json!({
+                "type": format!("{:?}", b.building_type),
+                "capacity": b.capacity,
+                "upgrading": b.turns_until_upgrade > 0,
+            })
+        })
+        .collect();
+
+    // Resources, materials, goods
+    let resources: Vec<serde_json::Value> = nation
+        .warehouse
+        .iter()
+        .filter(|(_, qty)| **qty > 0)
+        .map(|(rt, qty)| serde_json::json!({"name": format!("{:?}", rt), "quantity": qty}))
+        .collect();
+    let materials: Vec<serde_json::Value> = nation
+        .materials
+        .iter()
+        .filter(|(_, qty)| **qty > 0)
+        .map(|(mt, qty)| serde_json::json!({"name": format!("{:?}", mt), "quantity": qty}))
+        .collect();
+    let goods: Vec<serde_json::Value> = nation
+        .goods
+        .iter()
+        .filter(|(_, qty)| **qty > 0)
+        .map(|(gt, qty)| serde_json::json!({"name": format!("{:?}", gt), "quantity": qty}))
+        .collect();
+
+    // Military — army by type
+    let mut army_counts: std::collections::HashMap<String, (u32, u32)> =
+        std::collections::HashMap::new();
+    for unit in &nation.army {
+        let type_name = format!("{:?}", unit.unit_type);
+        let fp = unit.unit_type.stats().firepower;
+        let entry = army_counts.entry(type_name).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += fp;
+    }
+    let army_by_type: Vec<serde_json::Value> = army_counts
+        .iter()
+        .map(|(name, (count, fp))| {
+            serde_json::json!({"unit_type": name, "count": count, "firepower": fp})
+        })
+        .collect();
+    let total_army_fp: u32 = army_counts.values().map(|(_, fp)| fp).sum();
+
+    // Warships by type
+    let mut warship_counts: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
+    for ship in &nation.warships {
+        let type_name = format!("{:?}", ship.ship_type);
+        *warship_counts.entry(type_name).or_insert(0) += 1;
+    }
+    let warships_by_type: Vec<serde_json::Value> = warship_counts
+        .iter()
+        .map(|(name, count)| serde_json::json!({"ship_type": name, "count": count}))
+        .collect();
+
+    // Diplomacy summary
+    let standing = game.diplomacy.get_standing(nid);
+    let mut consulate_count = 0u32;
+    let mut embassy_count = 0u32;
+    let mut treaties: Vec<serde_json::Value> = Vec::new();
+    let mut wars: Vec<String> = Vec::new();
+
+    for other in &game.nations {
+        if other.id == nid {
+            continue;
+        }
+        if let Some(rel) = game.diplomacy.get_relation(nid, other.id) {
+            if rel.has_consulate {
+                consulate_count += 1;
+            }
+            if rel.has_embassy {
+                embassy_count += 1;
+            }
+            if rel.at_war {
+                wars.push(other.name.clone());
+            }
+            for t in &rel.active_treaties {
+                treaties.push(
+                    serde_json::json!({"nation": other.name, "treaty_type": format!("{:?}", t)}),
+                );
+            }
+        }
+    }
+
+    let result = serde_json::json!({
+        "economy": {
+            "treasury": treasury_dollars,
+            "goods_revenue": nation.goods_sales_revenue_dollars,
+            "subsidies": subsidies,
+        },
+        "production": {
+            "buildings": buildings,
+            "resources": resources,
+            "materials": materials,
+            "goods": goods,
+        },
+        "military": {
+            "army_by_type": army_by_type,
+            "total_army_fp": total_army_fp,
+            "total_army_count": nation.army.len(),
+            "warships_by_type": warships_by_type,
+            "total_warship_count": nation.warships.len(),
+            "merchant_ships": nation.merchant_fleet.len(),
+            "total_arms_built": nation.total_arms_built,
+            "generals_earned": nation.generals_earned,
+        },
+        "diplomacy": {
+            "standing": standing,
+            "consulates": consulate_count,
+            "embassies": embassy_count,
+            "treaties": treaties,
+            "wars": wars,
+        },
+        "labor": {
+            "untrained": nation.labor.untrained,
+            "trained": nation.labor.trained,
+            "expert": nation.labor.expert,
+            "total": nation.labor.total_workers(),
+        },
+    });
+
+    serde_json::to_string(&result).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+}
+
+/// Return the newspaper headline archive for all past turns.
+#[wasm_bindgen]
+pub fn wasm_get_newspaper_archive(game_json: &str) -> String {
+    let game: GameState = match serde_json::from_str(game_json) {
+        Ok(g) => g,
+        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    };
+
+    let archive: Vec<serde_json::Value> = game
+        .newspaper_archive
+        .iter()
+        .map(|(turn, headlines)| {
+            let items: Vec<serde_json::Value> = headlines
+                .iter()
+                .map(|(text, cat)| serde_json::json!({"text": text, "category": cat}))
+                .collect();
+            serde_json::json!({
+                "turn": turn.0,
+                "year": turn.year(),
+                "quarter": turn.quarter(),
+                "headlines": items,
+            })
+        })
+        .collect();
+
+    serde_json::to_string(&archive).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
 }
 
 #[cfg(test)]

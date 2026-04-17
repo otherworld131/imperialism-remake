@@ -46,6 +46,10 @@ import init, {
   wasm_get_pending_proposals,
   wasm_accept_proposal,
   wasm_reject_proposal,
+  // Newspaper archive
+  wasm_get_newspaper_archive,
+  // Ledger
+  wasm_get_ledger_data,
 } from '../../crates/wasm-bridge/pkg/wasm_bridge.js';
 
 let initialized = false;
@@ -81,6 +85,50 @@ export interface TileData {
 export interface Headline {
   text: string;
   category: 'war' | 'battle' | 'diplomacy' | 'growth' | 'trade' | 'crisis' | 'politics' | 'military' | 'default';
+}
+
+export interface ArchivedNewspaper {
+  turn: number;
+  year: number;
+  quarter: number;
+  headlines: Headline[];
+}
+
+export interface LedgerData {
+  economy: {
+    treasury: number;
+    goods_revenue: number;
+    subsidies: { nation: string; amount: number }[];
+  };
+  production: {
+    buildings: { type: string; capacity: number; upgrading: boolean }[];
+    resources: { name: string; quantity: number }[];
+    materials: { name: string; quantity: number }[];
+    goods: { name: string; quantity: number }[];
+  };
+  military: {
+    army_by_type: { unit_type: string; count: number; firepower: number }[];
+    total_army_fp: number;
+    total_army_count: number;
+    warships_by_type: { ship_type: string; count: number }[];
+    total_warship_count: number;
+    merchant_ships: number;
+    total_arms_built: number;
+    generals_earned: number;
+  };
+  diplomacy: {
+    standing: number;
+    consulates: number;
+    embassies: number;
+    treaties: { nation: string; treaty_type: string }[];
+    wars: string[];
+  };
+  labor: {
+    untrained: number;
+    trained: number;
+    expert: number;
+    total: number;
+  };
 }
 
 export interface DiplomacyOverlayRelation {
@@ -240,6 +288,18 @@ export function newScenarioGame(scenarioId: string, difficulty: number, nationIn
 export function getDiplomacyOverlay(gameJson: string, nationId: number): DiplomacyOverlay | null {
   const parsed = JSON.parse(wasm_get_diplomacy_overlay(gameJson, nationId));
   if (parsed.error || !parsed.relations) return null;
+  return parsed;
+}
+
+export function getNewspaperArchive(gameJson: string): ArchivedNewspaper[] {
+  const parsed = JSON.parse(wasm_get_newspaper_archive(gameJson));
+  if (parsed.error || !Array.isArray(parsed)) return [];
+  return parsed;
+}
+
+export function getLedgerData(gameJson: string, nationId: number): LedgerData | null {
+  const parsed = JSON.parse(wasm_get_ledger_data(gameJson, nationId));
+  if (parsed.error) return null;
   return parsed;
 }
 

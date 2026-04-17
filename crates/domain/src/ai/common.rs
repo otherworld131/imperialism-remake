@@ -161,6 +161,7 @@ pub(crate) mod test_helpers {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         }
     }
@@ -245,6 +246,7 @@ pub(crate) mod test_helpers {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         }
     }
@@ -359,6 +361,7 @@ pub(crate) mod test_helpers {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         }
     }

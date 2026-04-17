@@ -41,7 +41,7 @@ economic = {
     -- Diplomacy
     consulate_max_per_turn = 2,
     propose_pacts = true,
-    propose_alliances = false,
+    propose_alliances = true,
     grant_amount = 500,
     grant_interval = 6,
     embassy_treasury_threshold = 10000,

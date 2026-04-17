@@ -45,7 +45,7 @@ aggressive = {
     grant_amount = 0,
     grant_interval = 0,
     embassy_treasury_threshold = 15000,
-    max_alliances = 0,
+    max_alliances = 1,
 
     -- Naval
     max_warships_low_treasury = 4,

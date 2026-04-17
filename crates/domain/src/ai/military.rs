@@ -339,8 +339,7 @@ fn estimate_target_defense(game: &GameState, attacker_id: NationId, target_id: N
 
             // Terrain bonus on capital tile
             if let Some(tile) = game.hex_map.get_tile(prov.capital_tile) {
-                let terrain_bonus =
-                    crate::military::combat::terrain_defense_bonus(tile.terrain());
+                let terrain_bonus = crate::military::combat::terrain_defense_bonus(tile.terrain());
                 multiplied *= 1.0 + terrain_bonus;
 
                 // Fort bonus (reduced by siege artillery, matching combat)
@@ -560,7 +559,9 @@ pub(crate) fn ai_declare_wars(
 
             // Minor nation artillery gate: require sufficient artillery to breach
             // garrison defenses (original game required 2-3 Light Artillery)
-            let target_is_gp = game.get_nation(target_id).is_some_and(|n| n.is_great_power());
+            let target_is_gp = game
+                .get_nation(target_id)
+                .is_some_and(|n| n.is_great_power());
             if !target_is_gp {
                 let artillery_count = game
                     .get_nation(ai_id)
@@ -1545,6 +1546,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 

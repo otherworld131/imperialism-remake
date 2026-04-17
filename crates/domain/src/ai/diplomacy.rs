@@ -194,7 +194,10 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.propose_alliances) {
             break 'val v;
         }
-        matches!(personality, AiPersonality::Diplomatic)
+        matches!(
+            personality,
+            AiPersonality::Diplomatic | AiPersonality::Balanced | AiPersonality::Economic
+        )
     };
     let grant_amount: i64 = 'val: {
         #[cfg(feature = "lua")]
@@ -275,7 +278,7 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
         }
     }
 
-    // Phase 2: Propose alliances with other Great Powers (Diplomatic personality only)
+    // Phase 2: Propose alliances with other Great Powers
     // Wait until turn 10+ so diplomatic history develops, and limit alliances
     if propose_alliance_chance && turn_number >= 10 {
         let max_alliances: usize = 'val: {
@@ -353,75 +356,21 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
                     continue;
                 }
 
-                // Evaluate whether the target would accept the alliance
-                let target_is_ai = game
-                    .get_nation(gp_id)
-                    .is_some_and(|n| n.ai_personality.is_some());
-
-                if target_is_ai {
-                    // AI-to-AI: evaluate inline
-                    let receiver_personality = super::common::get_personality(game, gp_id);
-
-                    #[cfg(feature = "lua")]
-                    let receiver_lua_cfg =
-                        game.game_data.lua_engine.as_ref().and_then(|e| {
-                            super::lua_bridge::lua_get_config(e, receiver_personality)
-                        });
-
-                    let accepted = super::assessment::evaluate_alliance_proposal(
-                        game,
-                        nation_id,
-                        gp_id,
-                        receiver_personality,
-                        #[cfg(feature = "lua")]
-                        receiver_lua_cfg.as_ref(),
-                    );
-
-                    if accepted {
-                        if game.diplomacy.propose_alliance(nation_id, gp_id).is_ok() {
-                            alliances_formed += 1;
-                            let nation_name = game
-                                .get_nation(nation_id)
-                                .map(|n| n.name.clone())
-                                .unwrap_or_default();
-                            let gp_name = game
-                                .get_nation(gp_id)
-                                .map(|n| n.name.clone())
-                                .unwrap_or_default();
-                            let alliance_text =
-                                format!("{} and {} have formed an alliance!", nation_name, gp_name);
-                            actions.push(alliance_text.clone());
-                            let turn = game.turn;
-                            if !game
-                                .history
-                                .iter()
-                                .any(|(t, text)| *t == turn && text == &alliance_text)
-                            {
-                                game.history.push((turn, alliance_text));
-                            }
-                        }
-                    } else if game.ai_debug {
-                        let nation_name = game
-                            .get_nation(nation_id)
-                            .map(|n| n.name.as_str())
-                            .unwrap_or("?");
-                        let gp_name = game
-                            .get_nation(gp_id)
-                            .map(|n| n.name.as_str())
-                            .unwrap_or("?");
-                        eprintln!(
-                            "[AI:{}:diplomacy] {} rejected alliance proposal",
-                            nation_name, gp_name,
-                        );
-                    }
-                } else {
-                    // AI-to-human: create pending proposal
-                    let _ = game.diplomacy.propose_treaty(
+                // Create pending proposal — evaluated at end of turn by
+                // resolve_diplomatic_proposals()
+                if game
+                    .diplomacy
+                    .propose_treaty(
                         nation_id,
                         gp_id,
                         crate::events::TreatyType::Alliance,
                         game.turn,
-                    );
+                    )
+                    .is_ok()
+                {
+                    // Count as "formed" for the max-alliance cap within this turn's
+                    // proposal loop so we don't over-propose.
+                    alliances_formed += 1;
                     let nation_name = game
                         .get_nation(nation_id)
                         .map(|n| n.name.clone())
@@ -1032,11 +981,15 @@ mod tests {
         let mut actions = Vec::new();
         ai_manage_diplomacy(&mut game, ai_id, &mut actions);
 
-        // Diplomatic AI should propose alliance with ThirdPower (not human player)
-        // The receiver (Diplomatic personality, score +0.4 bias + 0.3*0.4 relationship) accepts
+        // Diplomatic AI should create a pending alliance proposal with ThirdPower
+        // (alliance is no longer formed inline — resolved at end of turn)
         assert!(
             game.diplomacy
-                .has_treaty(ai_id, NationId(4), crate::events::TreatyType::Alliance),
+                .pending_proposals
+                .iter()
+                .any(|p| p.from == ai_id
+                    && p.to == NationId(4)
+                    && p.proposal_type == crate::events::TreatyType::Alliance),
             "Diplomatic AI should propose alliance with non-threatening GP"
         );
     }

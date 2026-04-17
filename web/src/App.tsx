@@ -14,12 +14,15 @@ import {
   diplomacyProposeAlliance, diplomacyDeclareWar, diplomacySendGrant,
   diplomacyBreakTreaty, diplomacyProposePeace,
   getPendingProposals, acceptProposal, rejectProposal,
+  getNewspaperArchive,
+  getLedgerData,
 } from './wasm';
 import type {
   TileData, Headline, MapMode, DiplomacyOverlay, DiplomacyOverlayRelation, MilitaryOverlayEntry,
   ArmyUnitDetail, ProvinceUnits, CiviliansData, CivilianDetail, ShipsData,
   ValidMoveTargets, BuildableUnits, PendingMove,
   TransportData, IndustryData, TradeData, DiplomacyScreenData, ProposalData,
+  ArchivedNewspaper, LedgerData,
 } from './wasm';
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -34,13 +37,14 @@ const CATEGORY_COLORS: Record<string, string> = {
   default:   '#e0d8c0',
 };
 
-type ScreenTab = 'map' | 'transport' | 'industry' | 'trade' | 'diplomacy';
+type ScreenTab = 'map' | 'transport' | 'industry' | 'trade' | 'diplomacy' | 'ledger';
 const SCREEN_TABS: { key: ScreenTab; label: string; hotkey: string }[] = [
   { key: 'map', label: 'Map', hotkey: 'F1' },
   { key: 'transport', label: 'Transport', hotkey: 'F2' },
   { key: 'industry', label: 'Industry', hotkey: 'F3' },
   { key: 'trade', label: 'Trade', hotkey: 'F4' },
   { key: 'diplomacy', label: 'Diplomacy', hotkey: 'F5' },
+  { key: 'ledger', label: 'Ledger', hotkey: 'F6' },
 ];
 
 function extractNationTag(text: string, nations?: any[]): string | null {
@@ -60,6 +64,7 @@ import TransportPanel from './components/TransportPanel';
 import IndustryPanel from './components/IndustryPanel';
 import TradePanel from './components/TradePanel';
 import DiplomacyPanel from './components/DiplomacyPanel';
+import LedgerPanel from './components/LedgerPanel';
 import ProposalModal from './components/ProposalModal';
 
 function App() {
@@ -82,6 +87,11 @@ function App() {
   const [diplomacyOverlay, setDiplomacyOverlay] = useState<DiplomacyOverlay | null>(null);
   const [militaryOverlay, setMilitaryOverlay] = useState<MilitaryOverlayEntry[] | null>(null);
 
+  // Newspaper archive state
+  const [showArchive, setShowArchive] = useState(false);
+  const [archiveData, setArchiveData] = useState<ArchivedNewspaper[]>([]);
+  const [selectedArchiveTurn, setSelectedArchiveTurn] = useState<number | null>(null);
+
   // Unit interaction state
   const [provinceUnits, setProvinceUnits] = useState<ProvinceUnits | null>(null);
   const [civilians, setCivilians] = useState<CiviliansData | null>(null);
@@ -100,6 +110,7 @@ function App() {
   const [industryData, setIndustryData] = useState<IndustryData | null>(null);
   const [tradeData, setTradeData] = useState<TradeData | null>(null);
   const [diplomacyScreenData, setDiplomacyScreenData] = useState<DiplomacyScreenData | null>(null);
+  const [ledgerData, setLedgerData] = useState<LedgerData | null>(null);
   const [proposalData, setProposalData] = useState<ProposalData | null>(null);
   const [showProposals, setShowProposals] = useState(false);
 
@@ -149,6 +160,7 @@ function App() {
     setIndustryData(getIndustryData(json, nid));
     setTradeData(getTradeData(json, nid));
     setDiplomacyScreenData(getDiplomacyScreenData(json, nid));
+    setLedgerData(getLedgerData(json, nid));
     return true;
   }, [showError]);
 
@@ -187,7 +199,7 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !showNewspaper && !showTech) {
+      if (e.code === 'Space' && !showNewspaper && !showTech && !showArchive) {
         e.preventDefault();
         handleEndTurn();
       }
@@ -196,6 +208,7 @@ function App() {
         else if (isDeployMode) { setIsDeployMode(false); setDeployingCivilian(null); setDeployableTiles(new Set()); }
         else if (showProposals) setShowProposals(false);
         else if (showNewspaper) { setShowNewspaper(false); }
+        else if (showArchive) setShowArchive(false);
         else if (showTech) setShowTech(false);
       }
       if (e.code === 'F1') { e.preventDefault(); setActiveScreen('map'); }
@@ -203,10 +216,11 @@ function App() {
       if (e.code === 'F3') { e.preventDefault(); setActiveScreen('industry'); }
       if (e.code === 'F4') { e.preventDefault(); setActiveScreen('trade'); }
       if (e.code === 'F5') { e.preventDefault(); setActiveScreen('diplomacy'); }
+      if (e.code === 'F6') { e.preventDefault(); setActiveScreen('ledger'); }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showNewspaper, showTech, showProposals, handleEndTurn, isMovementMode, isDeployMode]);
+  }, [showNewspaper, showTech, showProposals, showArchive, handleEndTurn, isMovementMode, isDeployMode]);
 
   // Fetch overlay data when map mode or selected nation changes
   useEffect(() => {
@@ -601,6 +615,7 @@ function App() {
         <span>Treasury: ${player?.treasury?.[0] ? player.treasury[0] / 100 : 0}</span>
         <span>Provinces: {player?.province_ids?.length || 0}</span>
         <button onClick={() => setShowTech(!showTech)} style={styles.btn}>Tech</button>
+        <button onClick={() => { setArchiveData(getNewspaperArchive(gameJson)); setShowArchive(true); setSelectedArchiveTurn(null); }} style={styles.btn}>History</button>
         <button onClick={handleEndTurn} style={styles.endTurnBtn}>End Turn</button>
       </div>
 
@@ -907,6 +922,13 @@ function App() {
               <p style={styles.hint}>Loading diplomacy data...</p>
             )
           )}
+          {activeScreen === 'ledger' && (
+            ledgerData ? (
+              <LedgerPanel ledger={ledgerData} />
+            ) : (
+              <p style={styles.hint}>Loading ledger data...</p>
+            )
+          )}
         </div>
       </div>
 
@@ -955,6 +977,79 @@ function App() {
           </div>
         );
       })()}
+
+      {/* Newspaper archive modal */}
+      {showArchive && (
+        <div style={styles.modal} onClick={() => setShowArchive(false)}>
+          <div style={{ ...styles.newspaperModal, width: 640, display: 'flex', flexDirection: 'column' as const }} onClick={e => e.stopPropagation()}>
+            <div style={styles.masthead}>
+              <h2 style={styles.newspaperTitle}>The Imperial Times — Archive</h2>
+              <div style={styles.mastheadDate}>
+                {selectedArchiveTurn !== null
+                  ? (() => {
+                      const entry = archiveData.find(a => a.turn === selectedArchiveTurn);
+                      return entry ? `${entry.year} Q${entry.quarter} — Turn ${entry.turn}` : '';
+                    })()
+                  : `${archiveData.length} reports available`}
+              </div>
+            </div>
+            <div style={{ display: 'flex', flex: 1, minHeight: 0, maxHeight: '60vh' }}>
+              {/* Turn list */}
+              <div style={{ width: 140, borderRight: '1px solid #333', overflowY: 'auto' as const, padding: '8px 0' }}>
+                {archiveData.length === 0 && <div style={{ padding: 12, color: '#666' }}>No reports yet</div>}
+                {archiveData.map(entry => (
+                  <div
+                    key={entry.turn}
+                    onClick={() => setSelectedArchiveTurn(entry.turn)}
+                    style={{
+                      padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+                      background: selectedArchiveTurn === entry.turn ? '#2a2a45' : 'transparent',
+                      borderLeft: selectedArchiveTurn === entry.turn ? '3px solid #daa520' : '3px solid transparent',
+                      color: selectedArchiveTurn === entry.turn ? '#daa520' : '#aaa',
+                    }}
+                  >
+                    Turn {entry.turn} ({entry.year} Q{entry.quarter})
+                  </div>
+                ))}
+              </div>
+              {/* Headlines */}
+              <div style={{ flex: 1, overflowY: 'auto' as const, padding: '12px 16px' }}>
+                {selectedArchiveTurn === null && <div style={{ color: '#666' }}>Select a turn to view its headlines</div>}
+                {selectedArchiveTurn !== null && (() => {
+                  const entry = archiveData.find(a => a.turn === selectedArchiveTurn);
+                  if (!entry) return <div style={{ color: '#666' }}>No data</div>;
+                  const pNews = entry.headlines.filter(h => h.text.includes(playerName));
+                  const wNews = entry.headlines.filter(h => !h.text.includes(playerName));
+                  return (
+                    <>
+                      {pNews.length > 0 && (
+                        <div style={{ marginBottom: 12 }}>
+                          <div style={styles.sectionLabelPlayer}>Your Empire — {playerName}</div>
+                          {pNews.map((h, i) => (
+                            <div key={i} style={{ ...styles.headlineRow, borderLeftColor: CATEGORY_COLORS[h.category] || '#3a3520', color: CATEGORY_COLORS[h.category] || '#e0d8c0' }}>{h.text}</div>
+                          ))}
+                        </div>
+                      )}
+                      {wNews.length > 0 && (
+                        <div>
+                          <div style={styles.sectionLabelWorld}>World News</div>
+                          {wNews.map((h, i) => (
+                            <div key={i} style={{ ...styles.headlineRow, borderLeftColor: CATEGORY_COLORS[h.category] || '#3a3520', color: CATEGORY_COLORS[h.category] || '#e0d8c0' }}>{h.text}</div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+            <div style={styles.newsFooter}>
+              <span style={{ fontSize: 11, color: '#666' }}>Esc to dismiss</span>
+              <button onClick={() => setShowArchive(false)} style={styles.endTurnBtn}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Tech panel */}
       {showTech && (

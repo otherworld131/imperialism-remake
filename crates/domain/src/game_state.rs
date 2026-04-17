@@ -3,7 +3,7 @@ use crate::data::GameData;
 use crate::diplomacy::DiplomacyState;
 use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::civilians::{Civilian, CivilianType, next_civilian_id};
-use crate::events::DomainEvent;
+use crate::events::{DomainEvent, HeadlineCategory};
 use crate::map::{HexMap, Province, UnitId};
 use crate::military::ships::{Ship, ShipType};
 use crate::nation::{Nation, NationColor};
@@ -53,6 +53,9 @@ pub struct GameState {
     /// High score table: (nation_name, score, date_string).
     #[serde(default)]
     pub high_scores: Vec<(String, u32, String)>,
+    /// Archived newspaper headlines from past turns.
+    #[serde(default)]
+    pub newspaper_archive: Vec<(TurnNumber, Vec<(String, HeadlineCategory)>)>,
     /// When true, AI functions print detailed decision traces to stderr.
     #[serde(skip, default)]
     pub ai_debug: bool,
@@ -434,6 +437,7 @@ pub fn new_game_with_seed(
         pending_landings: Vec::new(),
         history: Vec::new(),
         high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
         ai_debug: false,
     };
 
@@ -557,6 +561,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         }
     }

@@ -332,6 +332,10 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 11. Generate newspaper
     generate_newspaper(game, &mut report);
 
+    // 11b. Archive headlines for history browsing
+    game.newspaper_archive
+        .push((game.turn, report.newspaper_headlines.clone()));
+
     // 12. Advance turn
     report
         .events
@@ -3362,15 +3366,14 @@ fn resolve_technology(game: &mut GameState, report: &mut TurnReport) {
 /// buildup, war declarations), trade activity, and adds period-appropriate
 /// flavor headlines that rotate based on the turn number.
 /// Check for alliance obligations when nations are at war.
-/// Resolve pending diplomatic proposals from the turn.
+/// Resolve all pending diplomatic proposals from the turn.
 ///
 /// - Mutual peace proposals (both sides proposed): auto-accept.
-/// - AI-targeted proposals: evaluate using assessment logic.
-/// - Human-targeted proposals: keep pending for UI.
+/// - Player→AI proposals: evaluate using AI assessment logic.
+/// - AI→Human proposals: keep pending for UI modal.
+/// - AI→AI proposals: evaluate using AI assessment logic (alliance, NAP, peace).
 ///
-/// Most AI-to-AI proposals are already resolved inline during `ai_propose_peace`
-/// and `ai_manage_diplomacy`. This function handles edge cases like mutual proposals
-/// and expires stale proposals.
+/// Also expires stale proposals older than 4 turns.
 fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
     let proposals: Vec<_> = game
         .diplomacy
@@ -3450,36 +3453,30 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                 .and_then(|e| crate::ai::lua_bridge::lua_get_config(e, personality));
 
             let accepted = match proposal.proposal_type {
-                TreatyType::NonAggressionPact => {
-                    crate::ai::assessment::evaluate_nap_proposal(
-                        game,
-                        human,
-                        target_id,
-                        personality,
-                        #[cfg(feature = "lua")]
-                        lua_cfg.as_ref(),
-                    )
-                }
-                TreatyType::Alliance => {
-                    crate::ai::assessment::evaluate_alliance_proposal(
-                        game,
-                        human,
-                        target_id,
-                        personality,
-                        #[cfg(feature = "lua")]
-                        lua_cfg.as_ref(),
-                    )
-                }
-                TreatyType::PeaceTreaty => {
-                    crate::ai::assessment::evaluate_peace_proposal(
-                        game,
-                        human,
-                        target_id,
-                        personality,
-                        #[cfg(feature = "lua")]
-                        lua_cfg.as_ref(),
-                    )
-                }
+                TreatyType::NonAggressionPact => crate::ai::assessment::evaluate_nap_proposal(
+                    game,
+                    human,
+                    target_id,
+                    personality,
+                    #[cfg(feature = "lua")]
+                    lua_cfg.as_ref(),
+                ),
+                TreatyType::Alliance => crate::ai::assessment::evaluate_alliance_proposal(
+                    game,
+                    human,
+                    target_id,
+                    personality,
+                    #[cfg(feature = "lua")]
+                    lua_cfg.as_ref(),
+                ),
+                TreatyType::PeaceTreaty => crate::ai::assessment::evaluate_peace_proposal(
+                    game,
+                    human,
+                    target_id,
+                    personality,
+                    #[cfg(feature = "lua")]
+                    lua_cfg.as_ref(),
+                ),
                 _ => false,
             };
 
@@ -3554,23 +3551,151 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                     ));
                 }
             } else {
-                report.events.push(DomainEvent::TreatyRejected(
-                    crate::events::TreatyRejected {
+                report
+                    .events
+                    .push(DomainEvent::TreatyRejected(crate::events::TreatyRejected {
                         from: human,
                         to: target_id,
                         treaty_type: proposal.proposal_type,
-                    },
-                ));
+                    }));
                 report.newspaper_headlines.push((
-                    format!("{} rejects {}'s {} proposal", to_name, from_name, treaty_label),
+                    format!(
+                        "{} rejects {}'s {} proposal",
+                        to_name, from_name, treaty_label
+                    ),
                     HeadlineCategory::Diplomacy,
                 ));
             }
         } else if proposal.to == human {
             // AI→human: keep pending for UI
             game.diplomacy.pending_proposals.push(proposal);
+        } else {
+            // AI→AI: evaluate the proposal at end of turn
+            let from_id = proposal.from;
+            let target_id = proposal.to;
+            let personality = crate::ai::common::get_personality(game, target_id);
+
+            #[cfg(feature = "lua")]
+            let lua_cfg = game
+                .game_data
+                .lua_engine
+                .as_ref()
+                .and_then(|e| crate::ai::lua_bridge::lua_get_config(e, personality));
+
+            let accepted = match proposal.proposal_type {
+                TreatyType::NonAggressionPact => crate::ai::assessment::evaluate_nap_proposal(
+                    game,
+                    from_id,
+                    target_id,
+                    personality,
+                    #[cfg(feature = "lua")]
+                    lua_cfg.as_ref(),
+                ),
+                TreatyType::Alliance => crate::ai::assessment::evaluate_alliance_proposal(
+                    game,
+                    from_id,
+                    target_id,
+                    personality,
+                    #[cfg(feature = "lua")]
+                    lua_cfg.as_ref(),
+                ),
+                TreatyType::PeaceTreaty => crate::ai::assessment::evaluate_peace_proposal(
+                    game,
+                    from_id,
+                    target_id,
+                    personality,
+                    #[cfg(feature = "lua")]
+                    lua_cfg.as_ref(),
+                ),
+                _ => false,
+            };
+
+            let from_name = game
+                .get_nation(from_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            let to_name = game
+                .get_nation(target_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            let treaty_label = match proposal.proposal_type {
+                TreatyType::NonAggressionPact => "Non-Aggression Pact",
+                TreatyType::Alliance => "Alliance",
+                TreatyType::PeaceTreaty => "Peace Treaty",
+                _ => "Treaty",
+            };
+
+            if accepted {
+                let applied = match proposal.proposal_type {
+                    TreatyType::NonAggressionPact => {
+                        game.diplomacy.propose_pact(from_id, target_id).is_ok()
+                    }
+                    TreatyType::Alliance => {
+                        game.diplomacy.propose_alliance(from_id, target_id).is_ok()
+                    }
+                    TreatyType::PeaceTreaty => {
+                        game.diplomacy.make_peace(from_id, target_id);
+                        true
+                    }
+                    _ => false,
+                };
+                if applied {
+                    report.events.push(DomainEvent::TreatyAccepted(
+                        crate::events::TreatyAccepted {
+                            from: from_id,
+                            to: target_id,
+                            treaty_type: proposal.proposal_type,
+                        },
+                    ));
+                    report.newspaper_headlines.push((
+                        format!(
+                            "{} accepts {}'s {} proposal",
+                            to_name, from_name, treaty_label
+                        ),
+                        HeadlineCategory::Diplomacy,
+                    ));
+                    let turn = game.turn;
+                    game.history.push((
+                        turn,
+                        format!(
+                            "{} accepted {}'s {} proposal",
+                            to_name, from_name, treaty_label
+                        ),
+                    ));
+                } else {
+                    // AI accepted but treaty could not be applied (state drift)
+                    report.events.push(DomainEvent::TreatyRejected(
+                        crate::events::TreatyRejected {
+                            from: from_id,
+                            to: target_id,
+                            treaty_type: proposal.proposal_type,
+                        },
+                    ));
+                    report.newspaper_headlines.push((
+                        format!(
+                            "{} proposal to {} could not be fulfilled",
+                            treaty_label, to_name
+                        ),
+                        HeadlineCategory::Diplomacy,
+                    ));
+                }
+            } else {
+                report
+                    .events
+                    .push(DomainEvent::TreatyRejected(crate::events::TreatyRejected {
+                        from: from_id,
+                        to: target_id,
+                        treaty_type: proposal.proposal_type,
+                    }));
+                report.newspaper_headlines.push((
+                    format!(
+                        "{} rejects {}'s {} proposal",
+                        to_name, from_name, treaty_label
+                    ),
+                    HeadlineCategory::Diplomacy,
+                ));
+            }
         }
-        // AI-targeted proposals were already evaluated inline during AI turns
     }
 
     // Expire proposals older than 4 turns
@@ -3785,10 +3910,8 @@ fn incorporate_minor_into_empire(
 
     award_first_colony_clippers(game, gp_id, report);
 
-    game.history.push((
-        game.turn,
-        format!("{} {} {}", minor_name, reason, gp_name),
-    ));
+    game.history
+        .push((game.turn, format!("{} {} {}", minor_name, reason, gp_name)));
 }
 
 fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnReport) {
@@ -4402,6 +4525,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         }
     }
@@ -4452,6 +4576,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         }
     }
@@ -4675,6 +4800,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -4772,6 +4898,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         }
     }
@@ -5391,6 +5518,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -5652,6 +5780,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -5719,6 +5848,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -5855,6 +5985,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         }
     }
@@ -5957,6 +6088,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -6131,6 +6263,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -6201,6 +6334,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -6272,6 +6406,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -6589,6 +6724,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         }
     }
@@ -6958,6 +7094,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -7083,6 +7220,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -7246,6 +7384,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -7352,6 +7491,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -7595,6 +7735,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         }
     }
@@ -7848,6 +7989,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -7980,6 +8122,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -8189,6 +8332,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -8283,6 +8427,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -8396,6 +8541,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -8560,6 +8706,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -8903,6 +9050,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -8973,6 +9121,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -9036,6 +9185,7 @@ mod tests {
             pending_landings: vec![(NationId(1), ProvinceId(2), TurnNumber::new(1))],
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -9099,6 +9249,7 @@ mod tests {
             pending_landings: vec![(NationId(1), ProvinceId(2), TurnNumber::new(1))],
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -9219,6 +9370,7 @@ mod tests {
             pending_landings: Vec::new(),
             history: Vec::new(),
             high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
             ai_debug: false,
         }
     }
@@ -9423,10 +9575,9 @@ mod tests {
                 .has_treaty(TreatyType::Alliance),
             "Alliance should be active after acceptance"
         );
-        assert!(report
-            .events
-            .iter()
-            .any(|e| matches!(e, DomainEvent::TreatyAccepted(a) if a.treaty_type == TreatyType::Alliance)));
+        assert!(report.events.iter().any(
+            |e| matches!(e, DomainEvent::TreatyAccepted(a) if a.treaty_type == TreatyType::Alliance)
+        ));
     }
 
     #[test]
@@ -9461,10 +9612,9 @@ mod tests {
                 .has_treaty(TreatyType::Alliance),
             "Alliance should not be active after rejection"
         );
-        assert!(report
-            .events
-            .iter()
-            .any(|e| matches!(e, DomainEvent::TreatyRejected(r) if r.treaty_type == TreatyType::Alliance)));
+        assert!(report.events.iter().any(
+            |e| matches!(e, DomainEvent::TreatyRejected(r) if r.treaty_type == TreatyType::Alliance)
+        ));
     }
 
     #[test]

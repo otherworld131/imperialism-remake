@@ -394,13 +394,19 @@ impl DiplomacyState {
                 let rel = self.get_relation(from, to);
                 if !rel.map(|r| r.has_embassy).unwrap_or(false) {
                     return Err(
-                        "Embassy required before proposing a non-aggression pact".to_string(),
+                        "Embassy required before proposing a non-aggression pact".to_string()
                     );
                 }
-                if rel.map(|r| r.has_treaty(TreatyType::NonAggressionPact)).unwrap_or(false) {
+                if rel
+                    .map(|r| r.has_treaty(TreatyType::NonAggressionPact))
+                    .unwrap_or(false)
+                {
                     return Err("Non-aggression pact already active".to_string());
                 }
-                if rel.map(|r| r.has_treaty(TreatyType::Alliance)).unwrap_or(false) {
+                if rel
+                    .map(|r| r.has_treaty(TreatyType::Alliance))
+                    .unwrap_or(false)
+                {
                     return Err("Alliance already active — NAP is redundant".to_string());
                 }
             }
@@ -412,7 +418,10 @@ impl DiplomacyState {
                 if !rel.map(|r| r.has_embassy).unwrap_or(false) {
                     return Err("Embassy required before proposing an alliance".to_string());
                 }
-                if rel.map(|r| r.has_treaty(TreatyType::Alliance)).unwrap_or(false) {
+                if rel
+                    .map(|r| r.has_treaty(TreatyType::Alliance))
+                    .unwrap_or(false)
+                {
                     return Err("Alliance already active".to_string());
                 }
             }

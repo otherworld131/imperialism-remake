@@ -167,9 +167,7 @@ pub fn collect_target_hypothetical_coalition(
     }
     // Add NAP pact-defense holders (only for minor nations — pact defense
     // only triggers when a minor nation with a NAP is attacked)
-    let is_minor = game
-        .get_nation(target)
-        .is_some_and(|n| !n.is_great_power());
+    let is_minor = game.get_nation(target).is_some_and(|n| !n.is_great_power());
     if is_minor {
         for pact_id in game.diplomacy.get_pact_holders(target) {
             if pact_id != attacker && !defenders.contains(&pact_id) {
@@ -407,8 +405,7 @@ pub fn evaluate_pact_defense(
 
     // Military factor: can the protector beat the attacker?
     #[cfg(feature = "lua")]
-    let assessment =
-        evaluate_hypothetical_war(game, protector_id, attacker_id, lua_cfg);
+    let assessment = evaluate_hypothetical_war(game, protector_id, attacker_id, lua_cfg);
     #[cfg(not(feature = "lua"))]
     let assessment = evaluate_hypothetical_war(game, protector_id, attacker_id);
     let military_factor = assessment.win_likelihood * 0.4;
@@ -930,7 +927,7 @@ pub fn evaluate_alliance_proposal(
         }
         match personality {
             AiPersonality::Diplomatic => 0.4,
-            AiPersonality::Aggressive => -0.3,
+            AiPersonality::Aggressive => -0.15,
             AiPersonality::Economic => 0.0,
             _ => 0.1,
         }

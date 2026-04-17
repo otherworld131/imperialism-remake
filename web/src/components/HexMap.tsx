@@ -574,6 +574,47 @@ export default function HexMap({
       }
     }
 
+    // ── Pass 5b: Diplomatic presence icons (consulate/embassy) ──
+    if (mapMode === 'diplomatic' && diplomacyOverlay && scale > 0.6) {
+      const diploByNation = new Map<string, typeof diplomacyOverlay.relations[0]>();
+      for (const rel of diplomacyOverlay.relations) {
+        diploByNation.set(rel.nation_name, rel);
+      }
+
+      const badgeSize = Math.max(9, HEX_SIZE * 0.35);
+      const badgeR = badgeSize * 0.65;
+
+      for (const tile of tiles) {
+        if (!tile.is_country_capital || tile.terrain === 'Sea') continue;
+        if (!tile.owner) continue;
+        const rel = diploByNation.get(tile.owner);
+        if (!rel) continue;
+
+        if (!rel.has_consulate && !rel.has_embassy) continue;
+
+        const [px, py] = hexToPixel(tile.q, tile.r);
+        const iy = py + HEX_SIZE * 0.55;
+
+        // Draw badge circle + letter
+        const letter = rel.has_embassy ? 'E' : 'C';
+        const bgColor = rel.has_embassy ? 'rgba(30,80,160,0.85)' : 'rgba(0,150,136,0.85)';
+
+        ctx.beginPath();
+        ctx.arc(px, iy, badgeR, 0, Math.PI * 2);
+        ctx.fillStyle = bgColor;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(218,165,32,0.9)';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+
+        ctx.font = `bold ${badgeSize * 0.7}px Georgia, serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#fff';
+        ctx.fillText(letter, px, iy);
+      }
+    }
+
     // ── Pass 6: Nation name labels (all non-terrain modes) ──
     if (showPoliticalColors) {
       ctx.textAlign = 'center';

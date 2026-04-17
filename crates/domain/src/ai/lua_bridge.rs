@@ -68,8 +68,12 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         hardware_price: table.get("hardware_price").unwrap_or(500),
         ai_consulate_target: table.get("ai_consulate_target").unwrap_or(4),
         ai_consulate_priority_score: table.get("ai_consulate_priority_score").unwrap_or(30.0),
-        ai_consulate_beyond_target_score: table.get("ai_consulate_beyond_target_score").unwrap_or(3.0),
-        ai_consulate_beyond_target_decay: table.get("ai_consulate_beyond_target_decay").unwrap_or(4.0),
+        ai_consulate_beyond_target_score: table
+            .get("ai_consulate_beyond_target_score")
+            .unwrap_or(3.0),
+        ai_consulate_beyond_target_decay: table
+            .get("ai_consulate_beyond_target_decay")
+            .unwrap_or(4.0),
         min_food_tile_percent: table.get("min_food_tile_percent").unwrap_or(20),
         food_cluster_chance: table.get("food_cluster_chance").unwrap_or(40),
     };
@@ -102,9 +106,21 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         clothing_price: cfg.clothing_price.clamp(1, 1_000_000),
         hardware_price: cfg.hardware_price.clamp(1, 1_000_000),
         ai_consulate_target: cfg.ai_consulate_target.clamp(0, 20),
-        ai_consulate_priority_score: if cfg.ai_consulate_priority_score.is_finite() { cfg.ai_consulate_priority_score.clamp(0.0, 1000.0) } else { 30.0 },
-        ai_consulate_beyond_target_score: if cfg.ai_consulate_beyond_target_score.is_finite() { cfg.ai_consulate_beyond_target_score.clamp(0.0, 100.0) } else { 3.0 },
-        ai_consulate_beyond_target_decay: if cfg.ai_consulate_beyond_target_decay.is_finite() { cfg.ai_consulate_beyond_target_decay.clamp(0.0, 100.0) } else { 4.0 },
+        ai_consulate_priority_score: if cfg.ai_consulate_priority_score.is_finite() {
+            cfg.ai_consulate_priority_score.clamp(0.0, 1000.0)
+        } else {
+            30.0
+        },
+        ai_consulate_beyond_target_score: if cfg.ai_consulate_beyond_target_score.is_finite() {
+            cfg.ai_consulate_beyond_target_score.clamp(0.0, 100.0)
+        } else {
+            3.0
+        },
+        ai_consulate_beyond_target_decay: if cfg.ai_consulate_beyond_target_decay.is_finite() {
+            cfg.ai_consulate_beyond_target_decay.clamp(0.0, 100.0)
+        } else {
+            4.0
+        },
         min_food_tile_percent: cfg.min_food_tile_percent.clamp(0, 100),
         food_cluster_chance: cfg.food_cluster_chance.clamp(0, 100),
         ..cfg
