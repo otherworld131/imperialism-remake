@@ -3119,6 +3119,117 @@ pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
     serde_json::to_string(&result).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
 }
 
+/// Return ledger data for ALL Great Powers.
+#[wasm_bindgen]
+pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
+    let game: GameState = match serde_json::from_str(game_json) {
+        Ok(g) => g,
+        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    };
+
+    let entries: Vec<serde_json::Value> = game
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power())
+        .map(|nation| {
+            let nid = nation.id;
+            let nation_name = &nation.name;
+            let nation_color = format!("{:?}", nation.color);
+            let is_human = nid == game.human_player_nation;
+
+            // Per-nation ledger data (same logic as wasm_get_ledger_data)
+            let treasury_dollars = nation.treasury.as_dollars();
+            let provinces = nation.province_ids.len();
+
+            let mut total_army_fp: u32 = 0;
+            let total_army_count = nation.army.len();
+            for unit in &nation.army {
+                total_army_fp += unit.unit_type.stats().firepower;
+            }
+            let total_warship_count = nation.warships.len();
+            let merchant_ships = nation.merchant_fleet.len();
+
+            let building_count = nation.buildings.len();
+
+            let standing = game.diplomacy.get_standing(nid);
+            let mut consulate_count = 0u32;
+            let mut embassy_count = 0u32;
+            let mut alliance_count = 0u32;
+            let mut war_count = 0u32;
+            let mut wars: Vec<String> = Vec::new();
+            let mut alliances: Vec<String> = Vec::new();
+
+            for other in &game.nations {
+                if other.id == nid {
+                    continue;
+                }
+                if let Some(rel) = game.diplomacy.get_relation(nid, other.id) {
+                    if rel.has_consulate {
+                        consulate_count += 1;
+                    }
+                    if rel.has_embassy {
+                        embassy_count += 1;
+                    }
+                    if rel.at_war {
+                        war_count += 1;
+                        wars.push(other.name.clone());
+                    }
+                    if rel.has_treaty(domain::events::TreatyType::Alliance) {
+                        alliance_count += 1;
+                        alliances.push(other.name.clone());
+                    }
+                }
+            }
+
+            // Resource totals
+            let total_resources: u32 = nation.warehouse.values().sum();
+            let total_materials: u32 = nation.materials.values().sum();
+            let total_goods: u32 = nation.goods.values().sum();
+
+            serde_json::json!({
+                "nation_id": nid.0,
+                "nation_name": nation_name,
+                "nation_color": nation_color,
+                "is_human": is_human,
+                "economy": {
+                    "treasury": treasury_dollars,
+                    "provinces": provinces,
+                    "buildings": building_count,
+                    "goods_revenue": nation.goods_sales_revenue_dollars,
+                    "total_resources": total_resources,
+                    "total_materials": total_materials,
+                    "total_goods": total_goods,
+                },
+                "labor": {
+                    "untrained": nation.labor.untrained,
+                    "trained": nation.labor.trained,
+                    "expert": nation.labor.expert,
+                    "total": nation.labor.total_workers(),
+                },
+                "military": {
+                    "total_army_count": total_army_count,
+                    "total_army_fp": total_army_fp,
+                    "total_warship_count": total_warship_count,
+                    "merchant_ships": merchant_ships,
+                    "generals_earned": nation.generals_earned,
+                    "total_arms_built": nation.total_arms_built,
+                },
+                "diplomacy": {
+                    "standing": standing,
+                    "consulates": consulate_count,
+                    "embassies": embassy_count,
+                    "alliances": alliance_count,
+                    "alliance_names": alliances,
+                    "wars": war_count,
+                    "war_names": wars,
+                },
+            })
+        })
+        .collect();
+
+    serde_json::to_string(&entries).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+}
+
 /// Return the newspaper headline archive for all past turns.
 #[wasm_bindgen]
 pub fn wasm_get_newspaper_archive(game_json: &str) -> String {

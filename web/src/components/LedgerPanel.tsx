@@ -1,195 +1,294 @@
 import React, { useState } from 'react';
-import type { LedgerData } from '../wasm';
+import type { GPLedgerEntry } from '../wasm';
 
-type Tab = 'economy' | 'production' | 'military' | 'diplomacy';
+type Tab = 'economy' | 'military' | 'diplomacy';
+
+const NATION_COLORS: Record<string, string> = {
+  Yellow: '#e6c619', Orange: '#e68a19', LightBlue: '#66b3ff', Red: '#e63946',
+  Green: '#4caf50', Purple: '#9c27b0', Blue: '#3359e6',
+};
 
 interface Props {
-  ledger: LedgerData;
+  entries: GPLedgerEntry[];
+  onClose: () => void;
 }
 
-export default function LedgerPanel({ ledger }: Props) {
+export default function LedgerPanel({ entries, onClose }: Props) {
   const [tab, setTab] = useState<Tab>('economy');
+  const [expanded, setExpanded] = useState<number | null>(null);
 
   const tabs: { key: Tab; label: string }[] = [
-    { key: 'economy', label: 'Economy' },
-    { key: 'production', label: 'Production' },
+    { key: 'economy', label: 'Economy & Production' },
     { key: 'military', label: 'Military' },
     { key: 'diplomacy', label: 'Diplomacy' },
   ];
 
-  return (
-    <div style={styles.container}>
-      <h2 style={styles.title}>National Ledger</h2>
+  // Sort: human player first, then by score proxy (treasury for economy, army for military, etc.)
+  const sorted = [...entries].sort((a, b) => {
+    if (a.is_human && !b.is_human) return -1;
+    if (!a.is_human && b.is_human) return 1;
+    return b.economy.treasury - a.economy.treasury;
+  });
 
-      <div style={styles.tabBar}>
-        {tabs.map(t => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            style={tab === t.key ? { ...styles.tab, ...styles.tabActive } : styles.tab}
-          >
-            {t.label}
-          </button>
+  return (
+    <div style={styles.overlay}>
+      <div style={styles.container}>
+        {/* Header */}
+        <div style={styles.header}>
+          <h2 style={styles.title}>National Ledger</h2>
+          <div style={styles.tabBar}>
+            {tabs.map(t => (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                style={tab === t.key ? { ...styles.tab, ...styles.tabActive } : styles.tab}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <button onClick={onClose} style={styles.closeBtn}>Esc</button>
+        </div>
+
+        {/* Table */}
+        <div style={styles.tableWrap}>
+          {tab === 'economy' && <EconomyTable entries={sorted} expanded={expanded} onExpand={setExpanded} />}
+          {tab === 'military' && <MilitaryTable entries={sorted} expanded={expanded} onExpand={setExpanded} />}
+          {tab === 'diplomacy' && <DiplomacyTable entries={sorted} expanded={expanded} onExpand={setExpanded} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NationCell({ entry }: { entry: GPLedgerEntry }) {
+  const color = NATION_COLORS[entry.nation_color] || '#aaa';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ width: 10, height: 10, borderRadius: '50%', background: color, display: 'inline-block', flexShrink: 0 }} />
+      <span style={{ color: entry.is_human ? '#daa520' : '#ccc', fontWeight: entry.is_human ? 'bold' : 'normal' }}>
+        {entry.nation_name}
+      </span>
+    </div>
+  );
+}
+
+function EconomyTable({ entries, expanded, onExpand }: { entries: GPLedgerEntry[]; expanded: number | null; onExpand: (id: number | null) => void }) {
+  return (
+    <table style={styles.table}>
+      <thead>
+        <tr>
+          <Th text="Nation" align="left" />
+          <Th text="Treasury" />
+          <Th text="Provinces" />
+          <Th text="Buildings" />
+          <Th text="Resources" />
+          <Th text="Materials" />
+          <Th text="Goods" />
+          <Th text="Workers" />
+          <Th text="Revenue" />
+        </tr>
+      </thead>
+      <tbody>
+        {entries.map(e => (
+          <React.Fragment key={e.nation_id}>
+            <tr
+              style={e.is_human ? styles.rowHuman : styles.row}
+              onClick={() => onExpand(expanded === e.nation_id ? null : e.nation_id)}
+            >
+              <td style={styles.tdName}><NationCell entry={e} /></td>
+              <Td value={`$${e.economy.treasury.toLocaleString()}`} />
+              <Td value={String(e.economy.provinces)} />
+              <Td value={String(e.economy.buildings)} />
+              <Td value={String(e.economy.total_resources)} />
+              <Td value={String(e.economy.total_materials)} />
+              <Td value={String(e.economy.total_goods)} />
+              <Td value={String(e.labor.total)} />
+              <Td value={`$${e.economy.goods_revenue.toLocaleString()}`} />
+            </tr>
+            {expanded === e.nation_id && (
+              <tr style={styles.expandedRow}>
+                <td colSpan={9} style={styles.expandedCell}>
+                  <div style={styles.detailGrid}>
+                    <DetailItem label="Untrained" value={String(e.labor.untrained)} />
+                    <DetailItem label="Trained" value={String(e.labor.trained)} />
+                    <DetailItem label="Expert" value={String(e.labor.expert)} />
+                  </div>
+                </td>
+              </tr>
+            )}
+          </React.Fragment>
         ))}
-      </div>
-
-      <div style={styles.body}>
-        {tab === 'economy' && <EconomyTab ledger={ledger} />}
-        {tab === 'production' && <ProductionTab ledger={ledger} />}
-        {tab === 'military' && <MilitaryTab ledger={ledger} />}
-        {tab === 'diplomacy' && <DiplomacyTab ledger={ledger} />}
-      </div>
-    </div>
+      </tbody>
+    </table>
   );
 }
 
-function EconomyTab({ ledger }: { ledger: LedgerData }) {
-  const { economy, labor } = ledger;
+function MilitaryTable({ entries, expanded, onExpand }: { entries: GPLedgerEntry[]; expanded: number | null; onExpand: (id: number | null) => void }) {
   return (
-    <div>
-      <SectionLabel text="Treasury" />
-      <Row label="Balance" value={`$${economy.treasury.toLocaleString()}`} />
-      <Row label="Goods Revenue (cumulative)" value={`$${economy.goods_revenue.toLocaleString()}`} />
-
-      {economy.subsidies.length > 0 && (
-        <>
-          <SectionLabel text="Subsidies" />
-          {economy.subsidies.map((s, i) => (
-            <Row key={i} label={s.nation} value={`$${s.amount}/turn`} />
-          ))}
-        </>
-      )}
-
-      <SectionLabel text="Labor Force" />
-      <Row label="Untrained Workers" value={String(labor.untrained)} />
-      <Row label="Trained Workers" value={String(labor.trained)} />
-      <Row label="Expert Workers" value={String(labor.expert)} />
-      <Row label="Total" value={String(labor.total)} highlight />
-    </div>
+    <table style={styles.table}>
+      <thead>
+        <tr>
+          <Th text="Nation" align="left" />
+          <Th text="Army" />
+          <Th text="Firepower" />
+          <Th text="Warships" />
+          <Th text="Merchants" />
+          <Th text="Arms Built" />
+          <Th text="Generals" />
+        </tr>
+      </thead>
+      <tbody>
+        {entries.map(e => (
+          <tr
+            key={e.nation_id}
+            style={e.is_human ? styles.rowHuman : styles.row}
+            onClick={() => onExpand(expanded === e.nation_id ? null : e.nation_id)}
+          >
+            <td style={styles.tdName}><NationCell entry={e} /></td>
+            <Td value={String(e.military.total_army_count)} />
+            <Td value={String(e.military.total_army_fp)} highlight={e.military.total_army_fp === Math.max(...entries.map(x => x.military.total_army_fp))} />
+            <Td value={String(e.military.total_warship_count)} />
+            <Td value={String(e.military.merchant_ships)} />
+            <Td value={String(e.military.total_arms_built)} />
+            <Td value={String(e.military.generals_earned)} />
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
-function ProductionTab({ ledger }: { ledger: LedgerData }) {
-  const { production } = ledger;
+function DiplomacyTable({ entries, expanded, onExpand }: { entries: GPLedgerEntry[]; expanded: number | null; onExpand: (id: number | null) => void }) {
   return (
-    <div>
-      <SectionLabel text="Buildings" />
-      {production.buildings.length === 0 && <EmptyNote text="No buildings" />}
-      {production.buildings.map((b, i) => (
-        <Row key={i} label={b.type.replace(/([A-Z])/g, ' $1').trim()} value={`Cap: ${b.capacity}${b.upgrading ? ' (upgrading)' : ''}`} />
-      ))}
-
-      <SectionLabel text="Resources" />
-      {production.resources.length === 0 && <EmptyNote text="Warehouse empty" />}
-      {production.resources.map((r, i) => (
-        <Row key={i} label={r.name} value={String(r.quantity)} />
-      ))}
-
-      <SectionLabel text="Materials" />
-      {production.materials.length === 0 && <EmptyNote text="No materials" />}
-      {production.materials.map((m, i) => (
-        <Row key={i} label={m.name} value={String(m.quantity)} />
-      ))}
-
-      <SectionLabel text="Goods" />
-      {production.goods.length === 0 && <EmptyNote text="No goods" />}
-      {production.goods.map((g, i) => (
-        <Row key={i} label={g.name} value={String(g.quantity)} />
-      ))}
-    </div>
+    <table style={styles.table}>
+      <thead>
+        <tr>
+          <Th text="Nation" align="left" />
+          <Th text="Standing" />
+          <Th text="Consulates" />
+          <Th text="Embassies" />
+          <Th text="Alliances" />
+          <Th text="Wars" />
+        </tr>
+      </thead>
+      <tbody>
+        {entries.map(e => (
+          <React.Fragment key={e.nation_id}>
+            <tr
+              style={e.is_human ? styles.rowHuman : styles.row}
+              onClick={() => onExpand(expanded === e.nation_id ? null : e.nation_id)}
+            >
+              <td style={styles.tdName}><NationCell entry={e} /></td>
+              <Td value={String(e.diplomacy.standing)} />
+              <Td value={String(e.diplomacy.consulates)} />
+              <Td value={String(e.diplomacy.embassies)} />
+              <Td value={String(e.diplomacy.alliances)} highlight={e.diplomacy.alliances > 0} highlightColor="#2ecc40" />
+              <Td value={String(e.diplomacy.wars)} highlight={e.diplomacy.wars > 0} highlightColor="#e63946" />
+            </tr>
+            {expanded === e.nation_id && (e.diplomacy.alliance_names.length > 0 || e.diplomacy.war_names.length > 0) && (
+              <tr style={styles.expandedRow}>
+                <td colSpan={6} style={styles.expandedCell}>
+                  <div style={styles.detailGrid}>
+                    {e.diplomacy.alliance_names.length > 0 && (
+                      <DetailItem label="Allied with" value={e.diplomacy.alliance_names.join(', ')} color="#2ecc40" />
+                    )}
+                    {e.diplomacy.war_names.length > 0 && (
+                      <DetailItem label="At war with" value={e.diplomacy.war_names.join(', ')} color="#e63946" />
+                    )}
+                  </div>
+                </td>
+              </tr>
+            )}
+          </React.Fragment>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
-function MilitaryTab({ ledger }: { ledger: LedgerData }) {
-  const { military } = ledger;
+function Th({ text, align }: { text: string; align?: string }) {
   return (
-    <div>
-      <SectionLabel text="Army" />
-      {military.army_by_type.length === 0 && <EmptyNote text="No army units" />}
-      {military.army_by_type.map((u, i) => (
-        <Row key={i} label={u.unit_type.replace(/([A-Z])/g, ' $1').trim()} value={`${u.count} (FP: ${u.firepower})`} />
-      ))}
-      <Row label="Total Army" value={`${military.total_army_count} units, ${military.total_army_fp} FP`} highlight />
-      <Row label="Arms Built" value={String(military.total_arms_built)} />
-      <Row label="Generals Earned" value={String(military.generals_earned)} />
-
-      <SectionLabel text="Navy" />
-      {military.warships_by_type.length === 0 && <EmptyNote text="No warships" />}
-      {military.warships_by_type.map((s, i) => (
-        <Row key={i} label={s.ship_type.replace(/([A-Z])/g, ' $1').trim()} value={String(s.count)} />
-      ))}
-      <Row label="Total Warships" value={String(military.total_warship_count)} highlight />
-      <Row label="Merchant Ships" value={String(military.merchant_ships)} />
-    </div>
+    <th style={{ ...styles.th, textAlign: (align || 'right') as any }}>
+      {text}
+    </th>
   );
 }
 
-function DiplomacyTab({ ledger }: { ledger: LedgerData }) {
-  const { diplomacy } = ledger;
+function Td({ value, highlight, highlightColor }: { value: string; highlight?: boolean; highlightColor?: string }) {
   return (
-    <div>
-      <SectionLabel text="Standing" />
-      <Row label="Diplomatic Standing" value={String(diplomacy.standing)} />
-      <Row label="Consulates" value={String(diplomacy.consulates)} />
-      <Row label="Embassies" value={String(diplomacy.embassies)} />
-
-      {diplomacy.treaties.length > 0 && (
-        <>
-          <SectionLabel text="Active Treaties" />
-          {diplomacy.treaties.map((t, i) => (
-            <Row key={i} label={t.nation} value={t.treaty_type.replace(/([A-Z])/g, ' $1').trim()} />
-          ))}
-        </>
-      )}
-
-      {diplomacy.wars.length > 0 && (
-        <>
-          <SectionLabel text="At War With" />
-          {diplomacy.wars.map((w, i) => (
-            <Row key={i} label={w} value="At War" valueColor="#e63946" />
-          ))}
-        </>
-      )}
-    </div>
+    <td style={{
+      ...styles.td,
+      color: highlight ? (highlightColor || '#daa520') : '#bbb',
+      fontWeight: highlight ? 'bold' : 'normal',
+    }}>
+      {value}
+    </td>
   );
 }
 
-function SectionLabel({ text }: { text: string }) {
-  return <div style={styles.sectionLabel}>{text}</div>;
-}
-
-function Row({ label, value, highlight, valueColor }: { label: string; value: string; highlight?: boolean; valueColor?: string }) {
+function DetailItem({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <div style={highlight ? { ...styles.row, background: 'rgba(218,165,32,0.1)' } : styles.row}>
-      <span style={styles.rowLabel}>{label}</span>
-      <span style={{ ...styles.rowValue, color: valueColor || (highlight ? '#daa520' : '#ccc') }}>{value}</span>
+    <div style={{ fontSize: 12 }}>
+      <span style={{ color: '#777' }}>{label}: </span>
+      <span style={{ color: color || '#ccc' }}>{value}</span>
     </div>
   );
-}
-
-function EmptyNote({ text }: { text: string }) {
-  return <div style={{ padding: '4px 0', color: '#666', fontSize: 12, fontStyle: 'italic' }}>{text}</div>;
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  container: { padding: 0, height: '100%', display: 'flex', flexDirection: 'column' },
-  title: { margin: '0 0 8px', fontSize: 18, fontFamily: 'Georgia, serif', color: '#daa520' },
-  tabBar: { display: 'flex', gap: 2, marginBottom: 12, borderBottom: '1px solid #333' },
-  tab: {
-    background: 'transparent', border: 'none', color: '#888', padding: '6px 14px',
-    cursor: 'pointer', fontFamily: 'Georgia, serif', fontSize: 13,
-    borderBottom: '2px solid transparent',
+  overlay: {
+    position: 'absolute', inset: 0, background: '#111118',
+    display: 'flex', flexDirection: 'column', zIndex: 10,
   },
-  tabActive: { color: '#daa520', borderBottom: '2px solid #daa520' },
-  body: { flex: 1, overflowY: 'auto' },
-  sectionLabel: {
-    fontSize: 12, fontWeight: 'bold', color: '#daa520', textTransform: 'uppercase' as const,
-    letterSpacing: 1, marginTop: 14, marginBottom: 4, borderBottom: '1px solid #333', paddingBottom: 2,
+  container: {
+    flex: 1, display: 'flex', flexDirection: 'column', padding: '16px 24px',
+    maxWidth: 1100, margin: '0 auto', width: '100%',
+  },
+  header: {
+    display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16,
+    borderBottom: '2px solid #333', paddingBottom: 12,
+  },
+  title: {
+    margin: 0, fontSize: 22, fontFamily: 'Georgia, serif', color: '#daa520',
+    whiteSpace: 'nowrap',
+  },
+  tabBar: { display: 'flex', gap: 4, flex: 1 },
+  tab: {
+    background: 'transparent', border: '1px solid #333', color: '#888',
+    padding: '6px 16px', cursor: 'pointer', fontFamily: 'Georgia, serif',
+    fontSize: 13, borderRadius: 4,
+  },
+  tabActive: {
+    color: '#daa520', borderColor: '#daa520', background: 'rgba(218,165,32,0.08)',
+  },
+  closeBtn: {
+    background: 'transparent', border: '1px solid #555', color: '#888',
+    padding: '4px 12px', cursor: 'pointer', fontSize: 12, borderRadius: 4,
+  },
+  tableWrap: { flex: 1, overflowY: 'auto' },
+  table: {
+    width: '100%', borderCollapse: 'collapse' as const, fontSize: 14,
+    fontFamily: "'Segoe UI', sans-serif",
+  },
+  th: {
+    padding: '8px 12px', color: '#daa520', fontWeight: 'bold', fontSize: 12,
+    textTransform: 'uppercase' as const, letterSpacing: 0.5,
+    borderBottom: '1px solid #333', whiteSpace: 'nowrap' as const,
   },
   row: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '3px 0', fontSize: 13,
+    cursor: 'pointer', borderBottom: '1px solid #1e1e30',
   },
-  rowLabel: { color: '#aaa' },
-  rowValue: { color: '#ccc', fontFamily: 'monospace' },
+  rowHuman: {
+    cursor: 'pointer', borderBottom: '1px solid #1e1e30',
+    background: 'rgba(218,165,32,0.04)',
+  },
+  tdName: { padding: '8px 12px', whiteSpace: 'nowrap' as const },
+  td: {
+    padding: '8px 12px', textAlign: 'right' as const,
+    fontFamily: 'monospace', fontSize: 13,
+  },
+  expandedRow: { background: 'rgba(218,165,32,0.03)' },
+  expandedCell: { padding: '6px 12px 10px 32px' },
+  detailGrid: { display: 'flex', gap: 20, flexWrap: 'wrap' as const },
 };

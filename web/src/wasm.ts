@@ -50,6 +50,7 @@ import init, {
   wasm_get_newspaper_archive,
   // Ledger
   wasm_get_ledger_data,
+  wasm_get_all_gp_ledger_data,
 } from '../../crates/wasm-bridge/pkg/wasm_bridge.js';
 
 let initialized = false;
@@ -128,6 +129,45 @@ export interface LedgerData {
     trained: number;
     expert: number;
     total: number;
+  };
+}
+
+export interface GPLedgerEntry {
+  nation_id: number;
+  nation_name: string;
+  nation_color: string;
+  is_human: boolean;
+  economy: {
+    treasury: number;
+    provinces: number;
+    buildings: number;
+    goods_revenue: number;
+    total_resources: number;
+    total_materials: number;
+    total_goods: number;
+  };
+  labor: {
+    untrained: number;
+    trained: number;
+    expert: number;
+    total: number;
+  };
+  military: {
+    total_army_count: number;
+    total_army_fp: number;
+    total_warship_count: number;
+    merchant_ships: number;
+    generals_earned: number;
+    total_arms_built: number;
+  };
+  diplomacy: {
+    standing: number;
+    consulates: number;
+    embassies: number;
+    alliances: number;
+    alliance_names: string[];
+    wars: number;
+    war_names: string[];
   };
 }
 
@@ -293,6 +333,12 @@ export function getDiplomacyOverlay(gameJson: string, nationId: number): Diploma
 
 export function getNewspaperArchive(gameJson: string): ArchivedNewspaper[] {
   const parsed = JSON.parse(wasm_get_newspaper_archive(gameJson));
+  if (parsed.error || !Array.isArray(parsed)) return [];
+  return parsed;
+}
+
+export function getAllGPLedgerData(gameJson: string): GPLedgerEntry[] {
+  const parsed = JSON.parse(wasm_get_all_gp_ledger_data(gameJson));
   if (parsed.error || !Array.isArray(parsed)) return [];
   return parsed;
 }

@@ -16,13 +16,14 @@ import {
   getPendingProposals, acceptProposal, rejectProposal,
   getNewspaperArchive,
   getLedgerData,
+  getAllGPLedgerData,
 } from './wasm';
 import type {
   TileData, Headline, MapMode, DiplomacyOverlay, DiplomacyOverlayRelation, MilitaryOverlayEntry,
   ArmyUnitDetail, ProvinceUnits, CiviliansData, CivilianDetail, ShipsData,
   ValidMoveTargets, BuildableUnits, PendingMove,
   TransportData, IndustryData, TradeData, DiplomacyScreenData, ProposalData,
-  ArchivedNewspaper, LedgerData,
+  ArchivedNewspaper, LedgerData, GPLedgerEntry,
 } from './wasm';
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -111,6 +112,7 @@ function App() {
   const [tradeData, setTradeData] = useState<TradeData | null>(null);
   const [diplomacyScreenData, setDiplomacyScreenData] = useState<DiplomacyScreenData | null>(null);
   const [ledgerData, setLedgerData] = useState<LedgerData | null>(null);
+  const [gpLedgerData, setGpLedgerData] = useState<GPLedgerEntry[]>([]);
   const [proposalData, setProposalData] = useState<ProposalData | null>(null);
   const [showProposals, setShowProposals] = useState(false);
 
@@ -161,6 +163,7 @@ function App() {
     setTradeData(getTradeData(json, nid));
     setDiplomacyScreenData(getDiplomacyScreenData(json, nid));
     setLedgerData(getLedgerData(json, nid));
+    setGpLedgerData(getAllGPLedgerData(json));
     return true;
   }, [showError]);
 
@@ -635,6 +638,9 @@ function App() {
 
       {/* Main area */}
       <div style={styles.mainArea} className="main-area-responsive">
+        {activeScreen === 'ledger' ? (
+          <LedgerPanel entries={gpLedgerData} onClose={() => setActiveScreen('map')} />
+        ) : (<>
         <div style={styles.mapContainer}>
           <HexMap
             tiles={tiles}
@@ -922,14 +928,8 @@ function App() {
               <p style={styles.hint}>Loading diplomacy data...</p>
             )
           )}
-          {activeScreen === 'ledger' && (
-            ledgerData ? (
-              <LedgerPanel ledger={ledgerData} />
-            ) : (
-              <p style={styles.hint}>Loading ledger data...</p>
-            )
-          )}
         </div>
+        </>)}
       </div>
 
       {/* Newspaper modal — grouped */}
