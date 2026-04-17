@@ -69,6 +69,43 @@ pub struct TurnReport {
 }
 
 impl TurnReport {
+    /// Create an empty report (used by WASM bridge for pact defense responses).
+    pub fn empty() -> Self {
+        Self {
+            turn: TurnNumber(0),
+            year: 0,
+            quarter: 0,
+            events: Vec::new(),
+            resource_production: Vec::new(),
+            gold_income: Vec::new(),
+            maintenance_costs: Vec::new(),
+            production_output: Vec::new(),
+            food_consumed: Vec::new(),
+            starvation: Vec::new(),
+            newspaper_headlines: Vec::new(),
+            techs_available: Vec::new(),
+            council_vote: None,
+            trade_transactions: Vec::new(),
+            battles: Vec::new(),
+            naval_battles: Vec::new(),
+            scores: Vec::new(),
+            ai_actions: Vec::new(),
+            civilian_completions: Vec::new(),
+            transport_overflow: Vec::new(),
+            immigration: Vec::new(),
+            settlement_upgrades: Vec::new(),
+            trade_balance: Vec::new(),
+            town_production: Vec::new(),
+            unit_movements: Vec::new(),
+            incorporations: Vec::new(),
+            unit_upgrades: Vec::new(),
+            subsidy_costs: Vec::new(),
+            trade_diplomacy: Vec::new(),
+            disconnected_resources: Vec::new(),
+            rewards_earned: Vec::new(),
+        }
+    }
+
     /// Format a compact summary line suitable for CLI display.
     ///
     /// Example: `Turn 21 (1820 Q1) | Treasury: $8,500 | Workers: 5 | Army: 3 | Provinces: 9 | Score: 1,230 (#2)`

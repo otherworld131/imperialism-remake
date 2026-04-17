@@ -2868,7 +2868,7 @@ pub fn wasm_accept_proposal(game_json: &str, nation_id: u32, proposal_index: u32
         }
         TreatyType::PactDefenseRequest => {
             if let Some(attacker_id) = proposal.attacker {
-                let mut report = domain::turn::TurnReport::default();
+                let mut report = domain::turn::TurnReport::empty();
                 domain::turn::accept_pact_defense(
                     &mut game,
                     nid,
@@ -2915,7 +2915,7 @@ pub fn wasm_reject_proposal(game_json: &str, nation_id: u32, proposal_index: u32
     if proposal.proposal_type == TreatyType::PactDefenseRequest {
         if let Some(attacker_id) = proposal.attacker {
             let remaining = proposal.cascade_remaining.unwrap_or_default();
-            let mut report = domain::turn::TurnReport::default();
+            let mut report = domain::turn::TurnReport::empty();
             domain::turn::continue_pact_defense_cascade(
                 &mut game,
                 attacker_id,
