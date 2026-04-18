@@ -82,6 +82,7 @@ function App() {
   const [activeScreen, setActiveScreen] = useState<ScreenTab>('map');
   const [gameStarted, setGameStarted] = useState(false);
   const [showHiddenResources, setShowHiddenResources] = useState(false);
+  const [showAiCivilians, setShowAiCivilians] = useState(false);
   const [mapMode, setMapMode] = useState<MapMode>('terrain');
   const [selectedNation, setSelectedNation] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<string>('');
@@ -202,15 +203,19 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !showNewspaper && !showTech && !showArchive) {
+      if (e.code === 'Space') {
         e.preventDefault();
-        handleEndTurn();
+        if (showNewspaper) {
+          dismissNewspaper();
+        } else if (!showTech && !showArchive && !showProposals) {
+          handleEndTurn();
+        }
       }
       if (e.code === 'Escape') {
         if (isMovementMode) { setIsMovementMode(false); setValidMoveTargets(null); setSelectedUnitIds([]); }
         else if (isDeployMode) { setIsDeployMode(false); setDeployingCivilian(null); setDeployableTiles(new Set()); }
         else if (showProposals) setShowProposals(false);
-        else if (showNewspaper) { setShowNewspaper(false); }
+        else if (showNewspaper) dismissNewspaper();
         else if (showArchive) setShowArchive(false);
         else if (showTech) setShowTech(false);
       }
@@ -223,7 +228,7 @@ function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showNewspaper, showTech, showProposals, showArchive, handleEndTurn, isMovementMode, isDeployMode]);
+  }, [showNewspaper, showTech, showProposals, showArchive, handleEndTurn, dismissNewspaper, isMovementMode, isDeployMode]);
 
   // Fetch overlay data when map mode or selected nation changes
   useEffect(() => {
@@ -651,6 +656,7 @@ function App() {
             onTileClick={handleTileClick}
             onTileHover={setHoveredTile}
             showHiddenResources={showHiddenResources}
+            showAiCivilians={showAiCivilians}
             selectedUnit={null}
             pendingMoves={pendingMoveArrows}
             validMoveTargets={validMoveTargets}
@@ -860,10 +866,15 @@ function App() {
                 </div>
               )}
 
-              <div style={{ padding: '4px 0', fontSize: '12px' }}>
+              <h3 style={styles.panelTitle}>Debug</h3>
+              <div style={{ padding: '4px 0', fontSize: '12px', display: 'flex', flexDirection: 'column' as const, gap: 4 }}>
                 <label>
                   <input type="checkbox" checked={showHiddenResources} onChange={e => setShowHiddenResources(e.target.checked)} />
-                  {' '}Show hidden resources (debug)
+                  {' '}Show hidden resources
+                </label>
+                <label>
+                  <input type="checkbox" checked={showAiCivilians} onChange={e => setShowAiCivilians(e.target.checked)} />
+                  {' '}Show AI civilians
                 </label>
               </div>
 

@@ -80,7 +80,7 @@ export interface TileData {
   army_unit_count: number;
   naval_firepower: number;
   naval_ship_count: number;
-  civilian_on_tile: { id: number; type: string; working: boolean; turns_remaining: number } | null;
+  civilian_on_tile: { id: number; type: string; working: boolean; turns_remaining: number; owner: string; owner_color: string; is_human: boolean } | null;
 }
 
 export interface Headline {

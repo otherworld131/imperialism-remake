@@ -147,12 +147,21 @@ pub fn wasm_get_map_data(game_json: &str) -> String {
         .map(|n| (n.id, (n.total_naval_firepower(), n.warship_count())))
         .collect();
 
-    // Build hex coord → civilian lookup for human player
+    // Build hex coord → civilian lookup for ALL nations
     let mut civilian_on_tile: std::collections::HashMap<domain::hex::HexCoord, serde_json::Value> =
         std::collections::HashMap::new();
-    if let Some(nation) = game.get_nation(game.human_player_nation) {
+    for nation in &game.nations {
+        let (nation_name, nation_color) = nation_lookup
+            .get(&nation.id)
+            .map(|(name, color)| (*name, color.as_str()))
+            .unwrap_or(("", ""));
+        let is_human = nation.id == game.human_player_nation;
         for civ in &nation.civilians {
             if let Some(pos) = civ.position {
+                // If tile already has a civilian, only overwrite if this is the human player
+                if civilian_on_tile.contains_key(&pos) && !is_human {
+                    continue;
+                }
                 civilian_on_tile.insert(
                     pos,
                     serde_json::json!({
@@ -160,6 +169,9 @@ pub fn wasm_get_map_data(game_json: &str) -> String {
                         "type": format!("{}", civ.civilian_type),
                         "working": civ.working,
                         "turns_remaining": civ.turns_remaining,
+                        "owner": nation_name,
+                        "owner_color": nation_color,
+                        "is_human": is_human,
                     }),
                 );
             }

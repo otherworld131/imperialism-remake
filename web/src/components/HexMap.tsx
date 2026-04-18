@@ -199,6 +199,7 @@ interface Props {
   onTileClick?: (tile: TileData) => void;
   onTileHover?: (tile: TileData | null) => void;
   showHiddenResources?: boolean;
+  showAiCivilians?: boolean;
   selectedUnit?: ArmyUnitDetail | null;
   pendingMoves?: PendingMoveArrow[];
   validMoveTargets?: ValidMoveTargets | null;
@@ -219,7 +220,7 @@ const CIVILIAN_EMOJI: Record<string, string> = {
 
 export default function HexMap({
   tiles, mapMode, diplomacyOverlay, militaryOverlay,
-  onMapModeChange, onTileClick, onTileHover, showHiddenResources = false,
+  onMapModeChange, onTileClick, onTileHover, showHiddenResources = false, showAiCivilians = false,
   selectedUnit, pendingMoves = [], validMoveTargets, isMovementMode = false,
   isDeployMode = false, deployableTiles,
 }: Props) {
@@ -229,6 +230,8 @@ export default function HexMap({
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [scale, setScale] = useState(0.7);
   const [dropupOpen, setDropupOpen] = useState(false);
+  const lastTouchRef = useRef<{ x: number; y: number } | null>(null);
+  const lastPinchDistRef = useRef<number | null>(null);
 
   const showPoliticalColors = mapMode !== 'terrain';
 
@@ -698,12 +701,26 @@ export default function HexMap({
 
       for (const tile of tiles) {
         if (!tile.civilian_on_tile) continue;
+        // Skip AI civilians unless toggle is on
+        if (!tile.civilian_on_tile.is_human && !showAiCivilians) continue;
+
         const [px, py] = hexToPixel(tile.q, tile.r);
         const emoji = CIVILIAN_EMOJI[tile.civilian_on_tile.type] || '\u{1F464}';
 
         // Position in lower-left of hex to avoid resource icons (center)
         const cx = px - HEX_SIZE * 0.3;
         const cy = py + HEX_SIZE * 0.35;
+
+        // Draw nation-colored circle behind civilian emoji
+        const civColor = NATION_COLORS[tile.civilian_on_tile.owner_color];
+        if (civColor) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, civFontSize * 0.45, 0, Math.PI * 2);
+          ctx.fillStyle = civColor;
+          ctx.globalAlpha = 0.5;
+          ctx.fill();
+          ctx.globalAlpha = 1.0;
+        }
 
         ctx.fillText(emoji, cx, cy);
 
@@ -795,7 +812,7 @@ export default function HexMap({
     }
 
     ctx.restore();
-  }, [tiles, offset, scale, showPoliticalColors, showHiddenResources, mapMode, nationFillMap,
+  }, [tiles, offset, scale, showPoliticalColors, showHiddenResources, showAiCivilians, mapMode, nationFillMap,
       isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves, nationLabels]);
 
   useEffect(() => { render(); }, [render]);
@@ -840,6 +857,52 @@ export default function HexMap({
     setScale(s => Math.max(0.3, Math.min(4, s - e.deltaY * 0.001)));
   };
 
+  const handleTouchStart = (e: React.TouchEvent) => {
+    e.preventDefault();
+    if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
+      setDragging(true);
+      setDragStart({ x: touch.clientX - offset.x, y: touch.clientY - offset.y });
+    } else if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      lastPinchDistRef.current = Math.sqrt(dx * dx + dy * dy);
+      setDragging(false);
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    e.preventDefault();
+    if (e.touches.length === 1 && lastTouchRef.current) {
+      const touch = e.touches[0];
+      setOffset({ x: touch.clientX - dragStart.x, y: touch.clientY - dragStart.y });
+      lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
+    } else if (e.touches.length === 2 && lastPinchDistRef.current !== null) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const scaleFactor = dist / lastPinchDistRef.current;
+      setScale(s => Math.max(0.3, Math.min(4, s * scaleFactor)));
+      lastPinchDistRef.current = dist;
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    e.preventDefault();
+    if (e.touches.length === 0) {
+      setDragging(false);
+      lastTouchRef.current = null;
+      lastPinchDistRef.current = null;
+    } else if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
+      lastPinchDistRef.current = null;
+      setDragging(true);
+      setDragStart({ x: touch.clientX - offset.x, y: touch.clientY - offset.y });
+    }
+  };
+
   const handleClick = (e: React.MouseEvent) => {
     if (onTileClick && canvasRef.current) {
       const rect = canvasRef.current.getBoundingClientRect();
@@ -863,13 +926,16 @@ export default function HexMap({
         ref={canvasRef}
         role="img"
         aria-label="Game map"
-        style={{ width: '100%', height: '100%', display: 'block', cursor: dragging ? 'grabbing' : 'grab' }}
+        style={{ width: '100%', height: '100%', display: 'block', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none' }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
         onWheel={handleWheel}
         onClick={handleClick}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
       />
       {/* Map controls */}
       <div style={{ position: 'absolute', bottom: 12, right: 12, display: 'flex', gap: 6, alignItems: 'flex-end' }}>
