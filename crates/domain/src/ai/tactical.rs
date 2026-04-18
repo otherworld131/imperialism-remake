@@ -511,7 +511,7 @@ fn ai_propose_peace(
             );
 
             if accepted {
-                game.diplomacy.make_peace(nation_id, enemy_id);
+                game.diplomacy.queue_peace(nation_id, enemy_id);
                 let reason = if worthiness.lost_enough {
                     " (heavy losses)"
                 } else if worthiness.won_enough {
@@ -570,7 +570,7 @@ fn ai_propose_peace(
             });
         } else {
             // AI-to-minor-nation: auto-accept (minor nations are passive)
-            game.diplomacy.make_peace(nation_id, enemy_id);
+            game.diplomacy.queue_peace(nation_id, enemy_id);
             let reason = if worthiness.lost_enough {
                 " (heavy losses)"
             } else if worthiness.won_enough {

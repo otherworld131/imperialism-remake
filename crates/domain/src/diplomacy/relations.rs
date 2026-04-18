@@ -30,6 +30,14 @@ pub struct DiplomaticRelation {
     pub at_war: bool,
 }
 
+/// Records an alliance that was broken because one side made separate peace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokenAlliance {
+    pub peacemaker: NationId,
+    pub former_ally: NationId,
+    pub enemy: NationId,
+}
+
 impl DiplomaticRelation {
     /// Create a new diplomatic relation between two nations with default values.
     pub fn new(a: NationId, b: NationId) -> Self {
@@ -104,6 +112,10 @@ pub struct DiplomacyState {
     /// Proposals awaiting evaluation by the target nation.
     #[serde(default)]
     pub pending_proposals: Vec<DiplomaticProposal>,
+    /// Separate-peace alliance breaks recorded this turn and finalized after all
+    /// peace outcomes for the turn are known.
+    #[serde(default)]
+    pending_separate_peace_breaks: Vec<BrokenAlliance>,
 }
 
 /// Serialize HashMap<(NationId, NationId), DiplomaticRelation> as a Vec of pairs
@@ -136,12 +148,20 @@ fn ordered_key(a: NationId, b: NationId) -> (NationId, NationId) {
 }
 
 impl DiplomacyState {
+    fn has_pending_separate_peace_break(&self, a: NationId, b: NationId) -> bool {
+        self.pending_separate_peace_breaks.iter().any(|broken| {
+            (broken.peacemaker == a && broken.former_ally == b)
+                || (broken.peacemaker == b && broken.former_ally == a)
+        })
+    }
+
     /// Create an empty diplomacy state.
     pub fn new() -> Self {
         Self {
             relations: HashMap::new(),
             standing: HashMap::new(),
             pending_proposals: Vec::new(),
+            pending_separate_peace_breaks: Vec::new(),
         }
     }
 
@@ -314,10 +334,70 @@ impl DiplomacyState {
         rel.score = -100;
     }
 
-    /// Make peace between two nations. Clears the at_war flag.
-    pub fn make_peace(&mut self, a: NationId, b: NationId) {
+    /// Queue peace between two nations without finalizing any same-turn
+    /// separate-peace alliance penalties yet.
+    pub fn queue_peace(&mut self, a: NationId, b: NationId) {
+        if !self.is_at_war(a, b) {
+            return;
+        }
+
+        let mut broken_alliances: Vec<BrokenAlliance> = self
+            .get_allies(a)
+            .into_iter()
+            .filter(|ally| self.is_at_war(*ally, b))
+            .map(|ally| BrokenAlliance {
+                peacemaker: a,
+                former_ally: ally,
+                enemy: b,
+            })
+            .collect();
+        broken_alliances.extend(
+            self.get_allies(b)
+                .into_iter()
+                .filter(|ally| self.is_at_war(*ally, a))
+                .map(|ally| BrokenAlliance {
+                    peacemaker: b,
+                    former_ally: ally,
+                    enemy: a,
+                }),
+        );
+
         let rel = self.ensure_relation(a, b);
         rel.at_war = false;
+
+        for broken in broken_alliances {
+            let already_pending = self.pending_separate_peace_breaks.contains(&broken);
+            if !already_pending {
+                self.pending_separate_peace_breaks.push(broken);
+            }
+        }
+    }
+
+    /// Finalize any alliance breaks caused by separate peace after all peace
+    /// outcomes for the current turn are known.
+    pub fn finalize_pending_separate_peace_breaks(&mut self) -> Vec<BrokenAlliance> {
+        let pending = std::mem::take(&mut self.pending_separate_peace_breaks);
+        let mut finalized = Vec::new();
+
+        for broken in pending {
+            let alliance_still_active =
+                self.has_treaty(broken.peacemaker, broken.former_ally, TreatyType::Alliance);
+            let ally_still_at_war = self.is_at_war(broken.former_ally, broken.enemy);
+            if alliance_still_active && ally_still_at_war {
+                self.break_treaty(broken.peacemaker, broken.former_ally, TreatyType::Alliance);
+                finalized.push(broken);
+            }
+        }
+
+        finalized
+    }
+
+    /// Make peace between two nations and immediately finalize any separate-peace
+    /// alliance breaks. Use `queue_peace` during turn resolution when multiple
+    /// same-turn peaces may need to be reconciled together.
+    pub fn make_peace(&mut self, a: NationId, b: NationId) -> Vec<BrokenAlliance> {
+        self.queue_peace(a, b);
+        self.finalize_pending_separate_peace_breaks()
     }
 
     /// Get the diplomatic standing of a nation. Defaults to 100 for new nations.
@@ -476,9 +556,9 @@ impl DiplomacyState {
             .iter()
             .filter(|(_, rel)| rel.has_treaty(TreatyType::Alliance))
             .filter_map(|((a, b), _)| {
-                if *a == nation {
+                if *a == nation && !self.has_pending_separate_peace_break(*a, *b) {
                     Some(*b)
-                } else if *b == nation {
+                } else if *b == nation && !self.has_pending_separate_peace_break(*a, *b) {
                     Some(*a)
                 } else {
                     None
@@ -684,12 +764,89 @@ mod tests {
     fn make_peace() {
         let mut state = DiplomacyState::new();
         state.declare_war(NationId(1), NationId(2));
-        state.make_peace(NationId(1), NationId(2));
+        let broken = state.make_peace(NationId(1), NationId(2));
 
         let rel = state.get_relation(NationId(1), NationId(2)).unwrap();
         assert!(!rel.at_war);
         // Score remains at -100 after peace; it doesn't automatically recover.
         assert_eq!(rel.score, -100);
+        assert!(broken.is_empty());
+    }
+
+    #[test]
+    fn make_peace_breaks_alliance_for_separate_peace() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2), NationId(3)];
+        state.initialize_great_powers(&gps);
+
+        state.propose_alliance(NationId(1), NationId(3)).unwrap();
+        state.declare_war(NationId(1), NationId(2));
+        state.declare_war(NationId(3), NationId(2));
+
+        let standing_before = state.get_standing(NationId(1));
+        let relation_before = state.get_relation(NationId(1), NationId(3)).unwrap().score;
+
+        let broken = state.make_peace(NationId(1), NationId(2));
+
+        assert_eq!(
+            broken,
+            vec![BrokenAlliance {
+                peacemaker: NationId(1),
+                former_ally: NationId(3),
+                enemy: NationId(2),
+            }]
+        );
+        assert!(!state.is_at_war(NationId(1), NationId(2)));
+        assert!(state.is_at_war(NationId(3), NationId(2)));
+        assert!(!state.has_treaty(NationId(1), NationId(3), TreatyType::Alliance));
+        assert_eq!(state.get_standing(NationId(1)), standing_before - 15);
+        assert_eq!(
+            state.get_relation(NationId(1), NationId(3)).unwrap().score,
+            relation_before - 20
+        );
+    }
+
+    #[test]
+    fn queued_same_turn_coalition_peaces_do_not_break_alliance() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2), NationId(3)];
+        state.initialize_great_powers(&gps);
+
+        state.propose_alliance(NationId(1), NationId(3)).unwrap();
+        state.declare_war(NationId(1), NationId(2));
+        state.declare_war(NationId(3), NationId(2));
+
+        let standing_before = state.get_standing(NationId(1));
+        let relation_before = state.get_relation(NationId(1), NationId(3)).unwrap().score;
+
+        state.queue_peace(NationId(1), NationId(2));
+        state.queue_peace(NationId(3), NationId(2));
+        let broken = state.finalize_pending_separate_peace_breaks();
+
+        assert!(broken.is_empty());
+        assert!(state.has_treaty(NationId(1), NationId(3), TreatyType::Alliance));
+        assert_eq!(state.get_standing(NationId(1)), standing_before);
+        assert_eq!(
+            state.get_relation(NationId(1), NationId(3)).unwrap().score,
+            relation_before
+        );
+    }
+
+    #[test]
+    fn make_peace_keeps_alliance_when_ally_is_not_in_same_war() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2), NationId(3)];
+        state.initialize_great_powers(&gps);
+
+        state.propose_alliance(NationId(1), NationId(3)).unwrap();
+        state.declare_war(NationId(1), NationId(2));
+
+        let standing_before = state.get_standing(NationId(1));
+        let broken = state.make_peace(NationId(1), NationId(2));
+
+        assert!(broken.is_empty());
+        assert!(state.has_treaty(NationId(1), NationId(3), TreatyType::Alliance));
+        assert_eq!(state.get_standing(NationId(1)), standing_before);
     }
 
     #[test]
