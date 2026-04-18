@@ -2938,7 +2938,7 @@ pub fn wasm_accept_proposal(game_json: &str, nation_id: u32, proposal_index: u32
             }
         }
         TreatyType::PeaceTreaty => {
-            game.diplomacy.make_peace(proposal.from, proposal.to);
+            game.diplomacy.queue_peace(proposal.from, proposal.to);
         }
         TreatyType::PactDefenseRequest => {
             if let Some(attacker_id) = proposal.attacker {
@@ -3231,25 +3231,36 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
             let total_goods: u32 = nation.goods.values().sum();
 
             // Per-resource breakdown
-            let resources_detail: serde_json::Map<String, serde_json::Value> = nation.warehouse.iter()
+            let resources_detail: serde_json::Map<String, serde_json::Value> = nation
+                .warehouse
+                .iter()
                 .map(|(k, v)| (format!("{:?}", k), serde_json::json!(*v)))
                 .collect();
 
             // Per-material breakdown
-            let materials_detail: serde_json::Map<String, serde_json::Value> = nation.materials.iter()
+            let materials_detail: serde_json::Map<String, serde_json::Value> = nation
+                .materials
+                .iter()
                 .map(|(k, v)| (format!("{:?}", k), serde_json::json!(*v)))
                 .collect();
 
             // Per-goods breakdown
-            let goods_detail: serde_json::Map<String, serde_json::Value> = nation.goods.iter()
+            let goods_detail: serde_json::Map<String, serde_json::Value> = nation
+                .goods
+                .iter()
                 .map(|(k, v)| (format!("{:?}", k), serde_json::json!(*v)))
                 .collect();
 
             // Technology data
             let researched_count = nation.researched_techs.len();
-            let researched_names: Vec<String> = nation.researched_techs.iter()
+            let researched_names: Vec<String> = nation
+                .researched_techs
+                .iter()
                 .filter_map(|tid| {
-                    game.game_data.tech_tree.all_techs().iter()
+                    game.game_data
+                        .tech_tree
+                        .all_techs()
+                        .iter()
                         .find(|t| t.id == *tid)
                         .map(|t| t.name.clone())
                 })
@@ -3469,6 +3480,8 @@ pub fn wasm_get_battle_data(game_json: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use domain::diplomacy::DiplomaticProposal;
+    use domain::events::TreatyType;
 
     fn make_game_json() -> String {
         let game = new_game("default", Difficulty::Normal, 0);
@@ -3553,6 +3566,68 @@ mod tests {
             .filter(|(_, id, _)| id.0 == uid)
             .count();
         assert_eq!(moves_for_unit, 1);
+    }
+
+    #[test]
+    fn wasm_accept_peace_preserves_same_turn_coalition_alliance() {
+        let mut game = new_game("wasm_peace", Difficulty::Normal, 0);
+        let human = game.human_player_nation;
+        let gp_ids: Vec<NationId> = game.great_powers().iter().map(|n| n.id).collect();
+        let enemy = gp_ids[1];
+        let ally = gp_ids[2];
+
+        game.diplomacy.propose_alliance(human, ally).unwrap();
+        game.diplomacy.declare_war(enemy, human);
+        game.diplomacy.declare_war(ally, enemy);
+        game.diplomacy.pending_proposals.push(DiplomaticProposal {
+            from: enemy,
+            to: human,
+            proposal_type: TreatyType::PeaceTreaty,
+            turn_proposed: game.turn,
+            attacker: None,
+            cascade_remaining: None,
+        });
+        game.diplomacy
+            .propose_peace(ally, enemy, game.turn)
+            .unwrap();
+        game.diplomacy.pending_proposals.push(DiplomaticProposal {
+            from: enemy,
+            to: ally,
+            proposal_type: TreatyType::PeaceTreaty,
+            turn_proposed: game.turn,
+            attacker: None,
+            cascade_remaining: None,
+        });
+
+        let accepted_json = wasm_accept_proposal(&serialize_game(&game), human.0, 0);
+        let mut accepted_game: GameState = serde_json::from_str(&accepted_json).unwrap();
+
+        assert!(
+            !accepted_game.diplomacy.is_at_war(human, enemy),
+            "human peace acceptance should clear the war immediately"
+        );
+        assert!(
+            accepted_game
+                .diplomacy
+                .has_treaty(human, ally, TreatyType::Alliance),
+            "alliance should remain pending same-turn reconciliation"
+        );
+
+        let report = process_turn(&mut accepted_game);
+
+        assert!(
+            accepted_game
+                .diplomacy
+                .has_treaty(human, ally, TreatyType::Alliance),
+            "coordinated same-turn coalition peace via wasm should preserve the alliance"
+        );
+        assert!(
+            report
+                .newspaper_headlines
+                .iter()
+                .all(|h| !h.text.contains("breaks its alliance")),
+            "coordinated wasm peace should not publish a separate-peace alliance-break headline"
+        );
     }
 
     #[test]

@@ -140,7 +140,7 @@ pub fn ai_manage_diplomacy(
             if has_pending_attack {
                 continue;
             }
-            game.diplomacy.make_peace(nation_id, target_id);
+            game.diplomacy.queue_peace(nation_id, target_id);
             let nation_name = game
                 .get_nation(nation_id)
                 .map(|n| n.name.clone())

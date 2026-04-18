@@ -1171,7 +1171,7 @@ pub(crate) fn cmd_peace(game: &mut GameState, query: &str) {
         }
     }
 
-    game.diplomacy.make_peace(player_id, target_id);
+    let _ = game.diplomacy.make_peace(player_id, target_id);
     let player_name = game
         .get_nation(player_id)
         .map(|n| n.name.clone())

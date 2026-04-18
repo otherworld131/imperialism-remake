@@ -243,6 +243,8 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 0-post. Resolve pending diplomatic proposals (AI-to-AI evaluated inline,
     // but this handles any proposals from the turn processor level — e.g. mutual proposals)
     resolve_diplomatic_proposals(game, &mut report);
+    let broken_alliances = game.diplomacy.finalize_pending_separate_peace_breaks();
+    record_broken_alliance_headlines(game, &mut report, &broken_alliances);
 
     // 0a. Alliance obligations: AI allies automatically join wars
     resolve_alliance_obligations(game, &mut report);
@@ -3453,6 +3455,55 @@ fn diplomacy_reason(
     )
 }
 
+fn separate_peace_reason(
+    game: &GameState,
+    peacemaker: NationId,
+    former_ally: NationId,
+    enemy: NationId,
+) -> String {
+    let peacemaker_name = game
+        .get_nation(peacemaker)
+        .map(|n| n.name.as_str())
+        .unwrap_or("Unknown");
+    let ally_name = game
+        .get_nation(former_ally)
+        .map(|n| n.name.as_str())
+        .unwrap_or("Unknown");
+    let enemy_name = game
+        .get_nation(enemy)
+        .map(|n| n.name.as_str())
+        .unwrap_or("Unknown");
+    format!(
+        "Separate peace: {} ended its war with {} while ally {} remained at war with {}",
+        peacemaker_name, enemy_name, ally_name, enemy_name
+    )
+}
+
+fn record_broken_alliance_headlines(
+    game: &GameState,
+    report: &mut TurnReport,
+    broken_alliances: &[crate::diplomacy::relations::BrokenAlliance],
+) {
+    for broken in broken_alliances {
+        let peacemaker_name = game
+            .get_nation(broken.peacemaker)
+            .map(|n| n.name.clone())
+            .unwrap_or_default();
+        let ally_name = game
+            .get_nation(broken.former_ally)
+            .map(|n| n.name.clone())
+            .unwrap_or_default();
+        report.newspaper_headlines.push(Headline::with_reason(
+            format!(
+                "{} breaks its alliance with {} after making separate peace",
+                peacemaker_name, ally_name
+            ),
+            HeadlineCategory::Diplomacy,
+            separate_peace_reason(game, broken.peacemaker, broken.former_ally, broken.enemy),
+        ));
+    }
+}
+
 /// - Mutual peace proposals (both sides proposed): auto-accept.
 /// - Player→AI proposals: evaluate using AI assessment logic.
 /// - AI→Human proposals: keep pending for UI modal.
@@ -3489,7 +3540,7 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
     // Apply mutual peace immediately
     for &(a, b) in &mutual_peace {
         if game.diplomacy.is_at_war(a, b) {
-            game.diplomacy.make_peace(a, b);
+            game.diplomacy.queue_peace(a, b);
             let name_a = game
                 .get_nation(a)
                 .map(|n| n.name.clone())
@@ -3590,7 +3641,7 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                         game.diplomacy.propose_alliance(human, target_id).is_ok()
                     }
                     TreatyType::PeaceTreaty => {
-                        game.diplomacy.make_peace(human, target_id);
+                        game.diplomacy.queue_peace(human, target_id);
                         true
                     }
                     _ => false,
@@ -3722,7 +3773,7 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                         game.diplomacy.propose_alliance(from_id, target_id).is_ok()
                     }
                     TreatyType::PeaceTreaty => {
-                        game.diplomacy.make_peace(from_id, target_id);
+                        game.diplomacy.queue_peace(from_id, target_id);
                         true
                     }
                     _ => false,
@@ -3815,6 +3866,15 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
     // For each war, check if either side has allies that are not yet at war with the other side
     let mut new_wars: Vec<(NationId, NationId, String, String)> = Vec::new();
     for (attacker, defender) in &wars {
+        let is_gp_war = game
+            .get_nation(*attacker)
+            .is_some_and(|n| n.is_great_power())
+            && game
+                .get_nation(*defender)
+                .is_some_and(|n| n.is_great_power());
+        if !is_gp_war {
+            continue;
+        }
         // Skip alliance obligations for anarchic defenders
         if game.get_nation(*defender).is_some_and(|n| n.is_in_anarchy) {
             continue;

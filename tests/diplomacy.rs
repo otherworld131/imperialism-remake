@@ -1,5 +1,6 @@
 mod test_helpers;
 
+use domain::diplomacy::DiplomaticProposal;
 use domain::events::TreatyType;
 use domain::game_state::new_game;
 use domain::turn::process_turn;
@@ -74,10 +75,24 @@ fn war_alliance_cascade_peace_standing() {
 
     // Process a turn — alliance should activate (ally joins war)
     process_turn(&mut game);
+    assert!(game.diplomacy.is_at_war(ally, attacker));
+    assert!(
+        game.diplomacy
+            .has_treaty(defender, ally, TreatyType::Alliance)
+    );
 
     // Make peace
-    game.diplomacy.make_peace(attacker, defender);
+    let broken_alliances = game.diplomacy.make_peace(attacker, defender);
     assert!(!game.diplomacy.is_at_war(attacker, defender));
+    assert_eq!(broken_alliances.len(), 1);
+    assert_eq!(broken_alliances[0].peacemaker, defender);
+    assert_eq!(broken_alliances[0].former_ally, ally);
+    assert_eq!(broken_alliances[0].enemy, attacker);
+    assert!(
+        !game
+            .diplomacy
+            .has_treaty(defender, ally, TreatyType::Alliance)
+    );
 
     // Verify standing was affected by war
     let final_standing = game.diplomacy.get_standing(attacker);
@@ -87,6 +102,104 @@ fn war_alliance_cascade_peace_standing() {
         "Standing should not have increased after war: initial={}, final={}",
         initial_standing,
         final_standing
+    );
+    assert_eq!(game.diplomacy.get_standing(defender), 85);
+}
+
+#[test]
+fn separate_peace_alliance_break_reason_appears_in_newspaper() {
+    let mut game = new_game("peace_break_news", Difficulty::Normal, 0);
+    let human = game.human_player_nation;
+    let gp_ids: Vec<NationId> = game.great_powers().iter().map(|n| n.id).collect();
+    let defender = gp_ids[1];
+    let ally = gp_ids[2];
+
+    game.diplomacy.propose_alliance(defender, ally).unwrap();
+    game.diplomacy.declare_war(human, defender);
+    game.diplomacy.declare_war(ally, human);
+    game.diplomacy
+        .propose_peace(human, defender, game.turn)
+        .unwrap();
+    game.diplomacy.pending_proposals.push(DiplomaticProposal {
+        from: defender,
+        to: human,
+        proposal_type: TreatyType::PeaceTreaty,
+        turn_proposed: game.turn,
+        attacker: None,
+        cascade_remaining: None,
+    });
+
+    let report = process_turn(&mut game);
+    let defender_name = game.get_nation(defender).unwrap().name.clone();
+    let ally_name = game.get_nation(ally).unwrap().name.clone();
+
+    let headline = report
+        .newspaper_headlines
+        .iter()
+        .find(|h| {
+            h.text.contains(&defender_name)
+                && h.text.contains(&ally_name)
+                && h.text.contains("breaks its alliance")
+        })
+        .expect("expected alliance-break newspaper headline after separate peace");
+
+    assert!(
+        headline
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("Separate peace")),
+        "alliance-break headline should carry a separate-peace reason: {:?}",
+        headline.reason
+    );
+}
+
+#[test]
+fn same_turn_coalition_peace_does_not_break_alliance_or_publish_break_reason() {
+    let mut game = new_game("coalition_peace", Difficulty::Normal, 0);
+    let human = game.human_player_nation;
+    let gp_ids: Vec<NationId> = game.great_powers().iter().map(|n| n.id).collect();
+    let defender = gp_ids[1];
+    let ally = gp_ids[2];
+
+    game.diplomacy.propose_alliance(defender, ally).unwrap();
+    game.diplomacy.declare_war(human, defender);
+    game.diplomacy.declare_war(ally, human);
+    game.diplomacy
+        .propose_peace(human, defender, game.turn)
+        .unwrap();
+    game.diplomacy.pending_proposals.push(DiplomaticProposal {
+        from: defender,
+        to: human,
+        proposal_type: TreatyType::PeaceTreaty,
+        turn_proposed: game.turn,
+        attacker: None,
+        cascade_remaining: None,
+    });
+    game.diplomacy
+        .propose_peace(ally, human, game.turn)
+        .unwrap();
+    game.diplomacy.pending_proposals.push(DiplomaticProposal {
+        from: human,
+        to: ally,
+        proposal_type: TreatyType::PeaceTreaty,
+        turn_proposed: game.turn,
+        attacker: None,
+        cascade_remaining: None,
+    });
+
+    let report = process_turn(&mut game);
+
+    assert!(
+        game.diplomacy
+            .has_treaty(defender, ally, TreatyType::Alliance),
+        "coordinated same-turn coalition peace should not dissolve the alliance"
+    );
+    assert!(
+        report
+            .newspaper_headlines
+            .iter()
+            .all(|h| !h.text.contains("breaks its alliance")),
+        "coordinated peace should not publish a separate-peace alliance-break headline"
     );
 }
 
@@ -284,6 +397,33 @@ fn alliance_war_pact_combinations() {
     // Verify complex state
     assert!(game.diplomacy.is_at_war(gps[3], gps[2]));
     assert!(game.diplomacy.is_at_war(gps[4], mns[0]));
+}
+
+#[test]
+fn allies_are_not_called_into_minor_nation_wars() {
+    let mut game = new_game("minor_war_no_allies", Difficulty::Normal, 0);
+    let gps: Vec<NationId> = game.great_powers().iter().map(|n| n.id).collect();
+    let mns: Vec<NationId> = game.minor_nations().iter().map(|n| n.id).collect();
+
+    let attacker = gps[1];
+    let ally = gps[2];
+    let minor = mns[0];
+
+    game.diplomacy.propose_alliance(attacker, ally).unwrap();
+    game.diplomacy.declare_war(attacker, minor);
+
+    process_turn(&mut game);
+
+    assert!(game.diplomacy.is_at_war(attacker, minor));
+    assert!(
+        !game.diplomacy.is_at_war(ally, minor),
+        "Alliance obligations should not trigger against minor nations"
+    );
+    assert!(
+        game.diplomacy
+            .has_treaty(attacker, ally, TreatyType::Alliance),
+        "The alliance should remain intact when the ally is not called into the minor war"
+    );
 }
 
 #[test]
