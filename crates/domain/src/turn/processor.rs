@@ -4783,6 +4783,55 @@ mod tests {
     }
 
     #[test]
+    fn generate_newspaper_propagates_non_action_flag() {
+        // A non-action AiAction should produce a headline with is_non_action=true
+        // AND the reason preserved.
+        let game = test_game_state();
+        let mut report = TurnReport::empty();
+        report.turn = game.turn;
+        report.year = game.turn.year();
+        report.quarter = game.turn.quarter();
+        report.ai_actions = vec![
+            crate::ai::AiAction {
+                text: "Testland did not declare war this turn".to_string(),
+                reason: "war cooldown active".to_string(),
+                is_non_action: true,
+            },
+            crate::ai::AiAction {
+                text: "Testland has declared war on Otherland!".to_string(),
+                reason: "combined score above threshold".to_string(),
+                is_non_action: false,
+            },
+        ];
+
+        generate_newspaper(&game, &mut report);
+
+        let non_action_headline = report
+            .newspaper_headlines
+            .iter()
+            .find(|h| h.text.contains("did not declare war"))
+            .expect("non-action propagated");
+        assert!(
+            non_action_headline.is_non_action,
+            "non-action flag must propagate from AiAction to Headline"
+        );
+        assert_eq!(
+            non_action_headline.reason.as_deref(),
+            Some("war cooldown active")
+        );
+
+        let action_headline = report
+            .newspaper_headlines
+            .iter()
+            .find(|h| h.text.contains("has declared war"))
+            .expect("action propagated");
+        assert!(
+            !action_headline.is_non_action,
+            "positive actions must not be marked as non-action"
+        );
+    }
+
+    #[test]
     fn generate_newspaper_propagates_ai_action_reasons() {
         // AI actions in the report should become headlines with reason: Some(_),
         // while non-AI headlines added by generate_newspaper remain reason: None.

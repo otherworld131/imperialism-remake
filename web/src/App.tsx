@@ -84,7 +84,7 @@ function applyNewsFilters(
 function NewsFilters(props: {
   category: string;
   country: string;
-  greatPowers: string[];
+  countryOptions: string[];
   onCategoryChange: (v: string) => void;
   onCountryChange: (v: string) => void;
 }) {
@@ -112,7 +112,7 @@ function NewsFilters(props: {
         <span style={{ color: '#aaa' }}>Country</span>
         <select value={props.country} onChange={e => props.onCountryChange(e.target.value)} style={selectStyle}>
           <option value="all">All countries</option>
-          {props.greatPowers.map(name => (
+          {props.countryOptions.map(name => (
             <option key={name} value={name}>{name}</option>
           ))}
         </select>
@@ -1054,8 +1054,8 @@ function App() {
         });
         const playerNews = visible.filter(h => h.text.includes(playerName));
         const worldNews = visible.filter(h => !h.text.includes(playerName));
-        const greatPowers: string[] = (gameState?.nations || [])
-          .filter((n: any) => n.nation_type === 'GreatPower')
+        const countryOptions: string[] = (gameState?.nations || [])
+          .filter((n: any) => !!n.name)
           .map((n: any) => n.name);
         return (
           <div style={styles.modal} onClick={dismissNewspaper}>
@@ -1067,7 +1067,7 @@ function App() {
               <NewsFilters
                 category={newsFilterCategory}
                 country={newsFilterCountry}
-                greatPowers={greatPowers}
+                countryOptions={countryOptions}
                 onCategoryChange={setNewsFilterCategory}
                 onCountryChange={setNewsFilterCountry}
               />
@@ -1110,8 +1110,8 @@ function App() {
 
       {/* Newspaper archive modal */}
       {showArchive && (() => {
-        const greatPowers: string[] = (gameState?.nations || [])
-          .filter((n: any) => n.nation_type === 'GreatPower')
+        const countryOptions: string[] = (gameState?.nations || [])
+          .filter((n: any) => !!n.name)
           .map((n: any) => n.name);
         return (
         <div style={styles.modal} onClick={() => setShowArchive(false)}>
@@ -1130,7 +1130,7 @@ function App() {
             <NewsFilters
               category={newsFilterCategory}
               country={newsFilterCountry}
-              greatPowers={greatPowers}
+              countryOptions={countryOptions}
               onCategoryChange={setNewsFilterCategory}
               onCountryChange={setNewsFilterCountry}
             />

@@ -3603,4 +3603,56 @@ mod tests {
             masthead
         );
     }
+
+    #[test]
+    fn newspaper_archive_json_marks_non_actions() {
+        use domain::events::{Headline, HeadlineCategory};
+
+        let json = make_game_json();
+        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        game.game_data = domain::data::GameData::default();
+
+        game.newspaper_archive.push((
+            game.turn,
+            vec![
+                Headline::non_action(
+                    "Testland did not declare war this turn".to_string(),
+                    HeadlineCategory::Default,
+                    "war cooldown active".to_string(),
+                ),
+                Headline::with_reason(
+                    "Testland declared war on Otherland!".to_string(),
+                    HeadlineCategory::War,
+                    "combined score above threshold".to_string(),
+                ),
+            ],
+        ));
+
+        let game_json = serde_json::to_string(&game).unwrap();
+        let archive_json = wasm_get_newspaper_archive(&game_json);
+        let parsed: serde_json::Value = serde_json::from_str(&archive_json).unwrap();
+        let headlines = parsed.as_array().unwrap()[0]["headlines"]
+            .as_array()
+            .unwrap();
+
+        let non_action = headlines
+            .iter()
+            .find(|h| h["text"].as_str().unwrap().contains("did not declare"))
+            .expect("non-action headline");
+        assert_eq!(
+            non_action["is_non_action"].as_bool(),
+            Some(true),
+            "non-action headlines must serialize is_non_action=true"
+        );
+
+        let action = headlines
+            .iter()
+            .find(|h| h["text"].as_str().unwrap().contains("declared war on"))
+            .expect("action headline");
+        assert!(
+            action.get("is_non_action").is_none() || action["is_non_action"].is_null(),
+            "positive-action headlines must OMIT is_non_action (skip_serializing_if), got: {}",
+            action
+        );
+    }
 }

@@ -481,18 +481,43 @@ pub(crate) fn ai_declare_wars(
         if let Some(last) = last_war_turn
             && turn_number.saturating_sub(last) < war_cooldown
         {
+            actions.push(super::AiAction {
+                text: format!("{} did not declare war this turn", attacker_name),
+                reason: format!(
+                    "war cooldown active: last war {} turns ago, cooldown is {} turns",
+                    turn_number.saturating_sub(last),
+                    war_cooldown
+                ),
+                is_non_action: true,
+            });
             continue;
         }
 
         // ── 2. Military readiness ──────────────────────────────
         let ai_army = game.get_nation(ai_id).map(|n| n.army.len()).unwrap_or(0);
         if ai_army < army_min_for_war {
+            actions.push(super::AiAction {
+                text: format!("{} did not declare war this turn", attacker_name),
+                reason: format!(
+                    "army too small: {} units < minimum {} for war",
+                    ai_army, army_min_for_war
+                ),
+                is_non_action: true,
+            });
             continue;
         }
 
         // ── 3. Standing check ──────────────────────────────────
         let standing = game.diplomacy.get_standing(ai_id);
         if standing < 30 {
+            actions.push(super::AiAction {
+                text: format!("{} did not declare war this turn", attacker_name),
+                reason: format!(
+                    "diplomatic standing too low: {}/30 — a pariah nation cannot afford another war",
+                    standing
+                ),
+                is_non_action: true,
+            });
             continue;
         }
 
@@ -856,6 +881,17 @@ pub(crate) fn ai_declare_wars(
                             target_name, relations
                         );
                     }
+                    actions.push(super::AiAction {
+                        text: format!("{} did not declare war this turn", attacker_name),
+                        reason: format!(
+                            "Lua script vetoed war on {} (relations={}, need={:.2}, opportunity={:.2})",
+                            target_name,
+                            relations,
+                            candidate.need_score,
+                            candidate.opportunity_score
+                        ),
+                        is_non_action: true,
+                    });
                     continue;
                 }
             }
