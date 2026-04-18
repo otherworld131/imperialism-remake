@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
 import type { TileData, MapMode, DiplomacyOverlay, MilitaryOverlayEntry, ArmyUnitDetail, ValidMoveTargets } from '../wasm';
 
 const HEX_SIZE = 18;
@@ -238,9 +238,12 @@ export default function HexMap({
   const [dropupOpen, setDropupOpen] = useState(false);
   const lastTouchRef = useRef<{ x: number; y: number } | null>(null);
   const lastPinchDistRef = useRef<number | null>(null);
+  const scaleRef = useRef(scaleProp ?? 0.7);
+  const offsetRef = useRef(offsetProp ?? { x: -200, y: -100 });
 
   const offset = offsetProp ?? localOffset;
   const scale = scaleProp ?? localScale;
+  useLayoutEffect(() => { scaleRef.current = scale; offsetRef.current = offset; }, [scale, offset]);
   const setOffset = onOffsetChange ?? setLocalOffset;
   const setScale = (valOrFn: number | ((prev: number) => number)) => {
     if (onScaleChange) {
@@ -249,6 +252,23 @@ export default function HexMap({
     } else {
       setLocalScale(valOrFn as any);
     }
+  };
+
+  /** Pure zoom-to-point math: returns clamped new scale and adjusted offset. */
+  const computeZoom = (cx: number, cy: number, oldScale: number, oldOffset: { x: number; y: number }, newScale: number) => {
+    const clamped = Math.max(0.3, Math.min(4, newScale));
+    const ratio = clamped / oldScale;
+    return {
+      scale: clamped,
+      offset: { x: cx - (cx - oldOffset.x) * ratio, y: cy - (cy - oldOffset.y) * ratio },
+    };
+  };
+
+  /** Zoom toward a screen-space point, adjusting offset so that point stays fixed. */
+  const zoomAt = (cx: number, cy: number, newScale: number) => {
+    const z = computeZoom(cx, cy, scale, offset, newScale);
+    setOffset(z.offset);
+    setScale(z.scale);
   };
 
   const showPoliticalColors = mapMode !== 'terrain';
@@ -846,8 +866,20 @@ export default function HexMap({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === '+' || e.key === '=') { setScale(s => Math.min(4, s + 0.2)); }
-      if (e.key === '-') { setScale(s => Math.max(0.3, s - 0.2)); }
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if ((e.target as HTMLElement)?.isContentEditable) return;
+      const canvas = canvasRef.current;
+      if (!canvas || canvas.clientWidth === 0 || canvas.clientHeight === 0) return;
+      const cx = canvas.clientWidth / 2;
+      const cy = canvas.clientHeight / 2;
+      let delta = 0;
+      if (e.key === '+' || e.key === '=') delta = 0.2;
+      else if (e.key === '-') delta = -0.2;
+      if (delta === 0) return;
+      const z = computeZoom(cx, cy, scaleRef.current, offsetRef.current, scaleRef.current + delta);
+      setOffset(z.offset);
+      setScale(z.scale);
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -881,7 +913,11 @@ export default function HexMap({
 
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
-    setScale(s => Math.max(0.3, Math.min(4, s - e.deltaY * 0.001)));
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    zoomAt(cx, cy, scale - e.deltaY * 0.001);
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -906,11 +942,15 @@ export default function HexMap({
       setOffset({ x: touch.clientX - dragStart.x, y: touch.clientY - dragStart.y });
       lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
     } else if (e.touches.length === 2 && lastPinchDistRef.current !== null) {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       const dist = Math.sqrt(dx * dx + dy * dy);
       const scaleFactor = dist / lastPinchDistRef.current;
-      setScale(s => Math.max(0.3, Math.min(4, s * scaleFactor)));
+      const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+      const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+      zoomAt(cx, cy, scale * scaleFactor);
       lastPinchDistRef.current = dist;
     }
   };
@@ -967,12 +1007,20 @@ export default function HexMap({
       {/* Map controls */}
       <div style={{ position: 'absolute', bottom: 12, right: 12, display: 'flex', gap: 6, alignItems: 'flex-end' }}>
         <button
-          onClick={() => setScale(s => Math.max(0.3, s - 0.2))}
+          onClick={() => {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, scale - 0.2);
+          }}
           style={controlBtn}
           aria-label="Zoom out"
         >{'\u2212'}</button>
         <button
-          onClick={() => setScale(s => Math.min(4, s + 0.2))}
+          onClick={() => {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, scale + 0.2);
+          }}
           style={controlBtn}
           aria-label="Zoom in"
         >+</button>
