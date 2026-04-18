@@ -2292,30 +2292,45 @@ fn resolve_combat(
             continue;
         }
 
-        // Create attacker force from nation's army.
-        // If attacking via naval landing (beachhead), cap the force by the
-        // beachhead capacity (total arms cost of all warships assigned).
-        let is_naval_attack = !{
-            // Check if there's a land-adjacent route
-            let attacker_pids: Vec<ProvinceId> = game
-                .get_nation(attacker_id)
-                .map(|n| n.province_ids.clone())
-                .unwrap_or_default();
-            let target_prov = game.get_province(province_id);
-            target_prov.is_some_and(|tp| {
-                attacker_pids.iter().any(|&our_pid| {
-                    game.get_province(our_pid).is_some_and(|our_prov| {
-                        crate::map::provinces_are_adjacent(&game.hex_map, our_prov, tp)
-                    })
-                })
-            })
-        };
+        // Determine which attacker-owned provinces are adjacent to the target.
+        let target_tiles: Vec<crate::hex::HexCoord> = game
+            .get_province(province_id)
+            .map(|p| p.tiles.clone())
+            .unwrap_or_default();
+        let attacker_owned: HashSet<ProvinceId> = game
+            .get_nation(attacker_id)
+            .map(|n| n.province_ids.iter().copied().collect())
+            .unwrap_or_default();
+        let mut adjacent_attacker_pids: HashSet<ProvinceId> = HashSet::new();
+        for &tile_coord in &target_tiles {
+            for neighbor in tile_coord.neighbors() {
+                if let Some(tile) = game.hex_map.get_tile(neighbor)
+                    && let Some(pid) = tile.province_id
+                    && pid != province_id
+                    && attacker_owned.contains(&pid)
+                {
+                    adjacent_attacker_pids.insert(pid);
+                }
+            }
+        }
 
+        let is_naval_attack = adjacent_attacker_pids.is_empty();
+
+        // Create attacker force from nation's army.
+        // Land attacks: only units stationed in adjacent provinces participate.
+        // Naval attacks: all units (capped by beachhead capacity below).
         let mut attacker_units: Vec<_> = match game.get_nation(attacker_id) {
             Some(n) => n
                 .army
                 .iter()
                 .filter(|u| !moved_unit_ids.contains(&u.id))
+                .filter(|u| {
+                    if is_naval_attack {
+                        true // Naval: all units eligible, capped by beachhead below
+                    } else {
+                        adjacent_attacker_pids.contains(&u.position)
+                    }
+                })
                 .cloned()
                 .collect(),
             None => continue,
@@ -2386,7 +2401,10 @@ fn resolve_combat(
 
         // If no defenders at all, province falls without a fight
         if defense_units.is_empty() {
-            // Auto-conquer: no battle needed
+            // Auto-conquer: no battle needed.
+            // For land attacks, participating units (those in adjacent provinces
+            // that didn't move this turn) move into the conquered province.
+            // Naval attacks: units return to origin (no position change).
             if let Some(province) = game.get_province_mut(province_id) {
                 province.owner = attacker_id;
             }
@@ -2399,6 +2417,16 @@ fn resolve_combat(
             }
             if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
                 attacker_nation.add_province(province_id);
+                // Relocate participating land units into the conquered province
+                if !is_naval_attack {
+                    for unit in &mut attacker_nation.army {
+                        if !moved_unit_ids.contains(&unit.id)
+                            && adjacent_attacker_pids.contains(&unit.position)
+                        {
+                            unit.position = province_id;
+                        }
+                    }
+                }
             }
             already_contested.insert(province_id);
             already_conquered.insert(attacker_id);
@@ -2494,8 +2522,10 @@ fn resolve_combat(
         }
 
         if result.attacker_won {
-            // Move surviving attacker units into the conquered province
-            {
+            // Move surviving attacker units:
+            // - Land attacks: survivors move into the conquered province
+            // - Naval attacks: survivors return to their origin (position unchanged)
+            if !is_naval_attack {
                 let survivor_ids: HashSet<crate::map::UnitId> =
                     result.attacker_survivors.iter().map(|u| u.id).collect();
                 if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
@@ -2834,8 +2864,19 @@ fn resolve_combat(
                 // Destroy any occupier units in the re-conquered province
                 occ_nation.army.retain(|u| u.position != target_province_id);
             }
-            if let Some(ca_nation) = game.get_nation_mut(counter_attacker_id) {
-                ca_nation.add_province(target_province_id);
+            // Move surviving counter-attacker units into the recaptured province
+            // (counter-attacks are always land-based — from adjacent provinces)
+            {
+                let survivor_ids: HashSet<crate::map::UnitId> =
+                    result.attacker_survivors.iter().map(|u| u.id).collect();
+                if let Some(ca_nation) = game.get_nation_mut(counter_attacker_id) {
+                    ca_nation.add_province(target_province_id);
+                    for unit in &mut ca_nation.army {
+                        if survivor_ids.contains(&unit.id) {
+                            unit.position = target_province_id;
+                        }
+                    }
+                }
             }
 
             // Reset garrison to 0 on re-conquered province
@@ -10100,15 +10141,21 @@ mod tests {
             "Initial attack should succeed"
         );
 
-        // If there's a counter-attack, the defender (occupier) should have had units
-        if report.battles.len() >= 2 {
-            let counter = &report.battles[1];
-            assert!(
-                counter.defender_initial_count > 0,
-                "Counter-attack defender (occupier) should have units from the conquest, got {}",
-                counter.defender_initial_count
-            );
-        }
+        // A counter-attack must be generated (defender had adjacent units in Province 3)
+        assert!(
+            report.battles.len() >= 2,
+            "Counter-attack should be generated, got {} battles",
+            report.battles.len()
+        );
+
+        // The counter-attack's defender (occupier) should have the relocated
+        // attacker survivors stationed in the conquered province
+        let counter = &report.battles[1];
+        assert!(
+            counter.defender_initial_count > 0,
+            "Counter-attack defender (occupier) should have units from the conquest, got {}",
+            counter.defender_initial_count
+        );
     }
 
     // ── Move-then-attack restriction tests ─────────────────────
@@ -10155,5 +10202,211 @@ mod tests {
             report.battles[0].attacker_initial_count, 5,
             "Attack force should be 5 (6 army minus 1 moved unit)"
         );
+    }
+
+    // ── Adjacency-based attack force tests ────────────────────
+
+    #[test]
+    fn only_adjacent_units_participate_in_land_attack() {
+        use crate::map::UnitId;
+
+        let mut game = test_game_for_counter_attack();
+
+        // Nation 1 owns Province 1 (adjacent to Province 2) with 6 Guards there.
+        // Add Province 5 (far from Province 2) with 2 more units.
+        // Those 2 far units should NOT participate in the attack on Province 2.
+        let coord5 = HexCoord::new(0, 2);
+        let tile5 = Tile::with_province(TerrainType::Grassland, ProvinceId(5));
+        game.hex_map.set_tile(coord5, tile5);
+        let province5 = Province::new(
+            ProvinceId(5),
+            "Far Province".to_string(),
+            NationId(1),
+            coord5,
+            vec![coord5],
+            4,
+        );
+        game.provinces.push(province5);
+        let nation1 = game.get_nation_mut(NationId(1)).unwrap();
+        nation1.add_province(ProvinceId(5));
+        for i in 0..2 {
+            nation1.army.push(ArmyUnit::new(
+                UnitId(300 + i),
+                ArmyUnitType::Guards,
+                NationId(1),
+                ProvinceId(5),
+            ));
+        }
+
+        game.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.diplomacy.declare_war(NationId(1), NationId(2));
+
+        let report = process_turn(&mut game);
+
+        // Only 6 units (from adjacent Province 1) should have attacked, not 8
+        assert!(!report.battles.is_empty());
+        assert_eq!(
+            report.battles[0].attacker_initial_count, 6,
+            "Only units from adjacent Province 1 should fight (6), not far Province 5 units (2)"
+        );
+
+        // Units in Province 5 should retain their position after victory
+        let nation1 = game.get_nation(NationId(1)).unwrap();
+        let far_units_still_far = nation1
+            .army
+            .iter()
+            .filter(|u| u.id.0 >= 300 && u.id.0 < 302)
+            .filter(|u| u.position == ProvinceId(5))
+            .count();
+        assert_eq!(
+            far_units_still_far, 2,
+            "Units in far Province 5 should keep their position, not teleport"
+        );
+    }
+
+    #[test]
+    fn auto_conquer_relocates_adjacent_land_units() {
+        use crate::map::UnitId;
+
+        // Auto-conquer fixture: Nation 1 owns P1 + P10 (capital), Nation 2 owns
+        // non-capital P2 (no army, no garrison since not a capital). P1 adjacent to P2.
+        let coord1 = HexCoord::new(0, 0);
+        let coord2 = HexCoord::new(1, 0);
+        let coord10 = HexCoord::new(5, 5); // far away — Nation 1's capital
+
+        let mut hex_map = HexMap::new(20, 20);
+        hex_map.set_tile(coord1, Tile::with_province(TerrainType::Grassland, ProvinceId(1)));
+        hex_map.set_tile(coord2, Tile::with_province(TerrainType::Grassland, ProvinceId(2)));
+        hex_map.set_tile(coord10, Tile::with_province(TerrainType::Grassland, ProvinceId(10)));
+
+        let p1 = Province::new(ProvinceId(1), "P1".into(), NationId(1), coord1, vec![coord1], 4);
+        let p2 = Province::new(ProvinceId(2), "P2".into(), NationId(2), coord2, vec![coord2], 3);
+        let p10 = Province::new(ProvinceId(10), "Capital".into(), NationId(1), coord10, vec![coord10], 4);
+
+        let mut nation1 = Nation::new(
+            NationId(1),
+            "Attacker".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(10), // capital elsewhere so P1 is not the capital
+        );
+        nation1.add_province(ProvinceId(1));
+        nation1.treasury = Money::dollars(10000);
+        // 4 Guards in adjacent P1
+        for i in 0..4 {
+            nation1.army.push(ArmyUnit::new(
+                UnitId(100 + i),
+                ArmyUnitType::Guards,
+                NationId(1),
+                ProvinceId(1),
+            ));
+        }
+
+        // Nation 2 owns P2 but it's NOT their capital (they have a fake capital at P2 index).
+        // Make Nation 2's capital a different province so P2 won't auto-garrison.
+        // Use ProvinceId(99) as a dummy capital so P2 (defender_id=2) != capital
+        let mut nation2 = Nation::new(
+            NationId(2),
+            "Defender".to_string(),
+            NationColor::Red,
+            NationType::MinorNation,
+            ProvinceId(99), // fake capital — P2 will NOT be capital
+        );
+        nation2.add_province(ProvinceId(2));
+
+        let mut game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![p1, p2, p10],
+            nations: vec![nation1, nation2],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
+            ai_debug: false,
+        };
+
+        game.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.diplomacy.declare_war(NationId(1), NationId(2));
+
+        let report = process_turn(&mut game);
+
+        // Verify P2 is auto-conquered (no battle recorded for it, or it's a trivial victory)
+        assert_eq!(
+            game.get_province(ProvinceId(2)).unwrap().owner,
+            NationId(1),
+            "P2 should be conquered"
+        );
+
+        // Verify Nation 1's units from adjacent P1 are now in P2
+        let attacker = game.get_nation(NationId(1)).unwrap();
+        let units_in_p2 = attacker.army.iter().filter(|u| u.position == ProvinceId(2)).count();
+        assert!(
+            units_in_p2 > 0,
+            "Adjacent units should relocate to auto-conquered P2, got {} units there",
+            units_in_p2
+        );
+
+        // Defender test not strictly needed — just verify no battle report (auto-conquer = no battle)
+        assert!(
+            report.battles.is_empty() || !report.battles.iter().any(|b| b.province == ProvinceId(2)),
+            "Auto-conquer should not produce a battle report"
+        );
+    }
+
+    // ── Counter-attack relocation test ────────────────────────
+
+    #[test]
+    fn counter_attack_survivors_move_to_recaptured_province() {
+        use crate::map::UnitId;
+
+        let mut game = test_game_for_counter_attack();
+
+        // Give defender a strong army in Province 3 (adjacent to Province 2)
+        // so the counter-attack can succeed
+        let nation2 = game.get_nation_mut(NationId(2)).unwrap();
+        for i in 0..20 {
+            nation2.army.push(ArmyUnit::new(
+                UnitId(200 + i),
+                ArmyUnitType::Guards,
+                NationId(2),
+                ProvinceId(3),
+            ));
+        }
+
+        game.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.diplomacy.declare_war(NationId(1), NationId(2));
+
+        let report = process_turn(&mut game);
+
+        // If counter-attack succeeded (Nation 2 recaptured Province 2),
+        // their surviving counter-attackers should be positioned in Province 2
+        if report.battles.len() >= 2 && report.battles[1].attacker_won {
+            let owner = game.get_province(ProvinceId(2)).unwrap().owner;
+            assert_eq!(
+                owner,
+                NationId(2),
+                "Counter-attack should have recaptured Province 2"
+            );
+            let nation2 = game.get_nation(NationId(2)).unwrap();
+            let units_in_recaptured = nation2
+                .army
+                .iter()
+                .filter(|u| u.position == ProvinceId(2))
+                .count();
+            assert!(
+                units_in_recaptured > 0,
+                "Counter-attack survivors should be stationed in recaptured Province 2"
+            );
+        }
     }
 }
