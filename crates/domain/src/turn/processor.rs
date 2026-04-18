@@ -336,6 +336,27 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     game.newspaper_archive
         .push((game.turn, report.newspaper_headlines.clone()));
 
+    // 11c. Archive battle results for history browsing
+    // Strip heavyweight survivor vectors (ArmyUnit/Ship structs) — the archive
+    // only needs counts, which are already stored as initial_count fields.
+    if !report.battles.is_empty() || !report.naval_battles.is_empty() {
+        let archived_battles: Vec<BattleResult> = report
+            .battles
+            .iter()
+            .map(|b| {
+                let mut archived = b.clone();
+                archived.attacker_survivors = Vec::new();
+                archived.defender_survivors = Vec::new();
+                archived
+            })
+            .collect();
+        // Naval battles keep survivors (Ship is lightweight, and NavalBattleResult
+        // has no initial_count field so we can't derive counts from casualties alone)
+        let archived_naval: Vec<NavalBattleResult> = report.naval_battles.clone();
+        game.battle_archive
+            .push((game.turn, archived_battles, archived_naval));
+    }
+
     // 12. Advance turn
     report
         .events
@@ -2409,13 +2430,26 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
             })
             .unwrap_or((None, 0));
 
-        let result = resolve_battle(
+        let mut result = resolve_battle(
             &attacker_force,
             &defender_force,
             province_id,
             battle_terrain,
             battle_fort_level,
         );
+
+        // Track which provinces the attacking units came from (for battle screen arrows)
+        if !is_naval_attack {
+            let mut origins: Vec<ProvinceId> = attacker_force
+                .units
+                .iter()
+                .map(|u| u.position)
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            origins.sort_by_key(|p| p.0);
+            result.attacker_origin_provinces = origins;
+        }
 
         // Update attacker's army: remove units that fought, add back survivors
         {
@@ -2712,13 +2746,26 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
             })
             .unwrap_or((None, 0));
 
-        let result = resolve_battle(
+        let mut result = resolve_battle(
             &counter_force,
             &defender_force,
             target_province_id,
             battle_terrain,
             battle_fort_level,
         );
+
+        // Track which provinces the counter-attacking units came from
+        {
+            let mut origins: Vec<ProvinceId> = counter_force
+                .units
+                .iter()
+                .map(|u| u.position)
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            origins.sort_by_key(|p| p.0);
+            result.attacker_origin_provinces = origins;
+        }
 
         // Update counter-attacker's army: remove participants, add survivors
         {
@@ -4593,6 +4640,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         }
     }
@@ -4644,6 +4692,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         }
     }
@@ -4977,6 +5026,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -5075,6 +5125,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         }
     }
@@ -5695,6 +5746,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -5957,6 +6009,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -6025,6 +6078,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -6162,6 +6216,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         }
     }
@@ -6265,6 +6320,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -6440,6 +6496,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -6511,6 +6568,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -6583,6 +6641,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -6901,6 +6960,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         }
     }
@@ -7271,6 +7331,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -7397,6 +7458,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -7561,6 +7623,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -7668,6 +7731,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -7912,6 +7976,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         }
     }
@@ -8166,6 +8231,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -8299,6 +8365,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -8509,6 +8576,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -8604,6 +8672,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -8718,6 +8787,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -8883,6 +8953,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -9227,6 +9298,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -9298,6 +9370,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -9362,6 +9435,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -9426,6 +9500,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         };
 
@@ -9547,6 +9622,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         }
     }
@@ -9815,5 +9891,57 @@ mod tests {
         );
         assert_eq!(game.diplomacy.pending_proposals[0].from, ai);
         assert_eq!(game.diplomacy.pending_proposals[0].to, human);
+    }
+
+    #[test]
+    fn battle_archive_populated_after_combat() {
+        let mut game = test_game_for_counter_attack();
+
+        // Queue attack on Province 2
+        game.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.diplomacy.declare_war(NationId(1), NationId(2));
+
+        assert!(game.battle_archive.is_empty(), "archive should start empty");
+
+        let report = process_turn(&mut game);
+
+        // Battles occurred — archive should be populated
+        assert!(!report.battles.is_empty(), "should have battles in report");
+        assert_eq!(
+            game.battle_archive.len(),
+            1,
+            "should have one archive entry after one turn with battles"
+        );
+
+        let (archived_turn, archived_battles, archived_naval) = &game.battle_archive[0];
+        // The turn was 1 before processing, which is the turn that gets archived
+        assert_eq!(archived_turn.0, 1, "archived turn should be 1");
+        assert_eq!(
+            archived_battles.len(),
+            report.battles.len(),
+            "archive should contain same number of battles as report"
+        );
+        assert!(archived_naval.is_empty(), "no naval battles in this test");
+
+        // Verify attacker_origin_provinces is set (attacker units are in Province 1)
+        let first_battle = &archived_battles[0];
+        assert!(
+            !first_battle.attacker_origin_provinces.is_empty(),
+            "attacker_origin_provinces should be populated"
+        );
+        assert!(
+            first_battle.attacker_origin_provinces.contains(&ProvinceId(1)),
+            "origin should include Province 1 where attacker units are stationed"
+        );
+
+        // Verify survivors are stripped from archived battles (lightweight archive)
+        assert!(
+            first_battle.attacker_survivors.is_empty(),
+            "archived battles should have stripped attacker survivors"
+        );
+        assert!(
+            first_battle.defender_survivors.is_empty(),
+            "archived battles should have stripped defender survivors"
+        );
     }
 }

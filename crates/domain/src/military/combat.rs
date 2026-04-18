@@ -49,7 +49,7 @@ pub struct CombatForce {
 }
 
 /// Result of a battle.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BattleResult {
     pub attacker: NationId,
     pub defender: NationId,
@@ -77,6 +77,9 @@ pub struct BattleResult {
     pub siege_reduced_fort: bool,
     /// Medal awards for surviving units on the winning side: (unit_type, new_medal_count).
     pub medal_awards: Vec<(ArmyUnitType, u8)>,
+    /// Province IDs where attacking units originated (for battle screen arrows).
+    /// Multiple provinces when army units are spread across different locations.
+    pub attacker_origin_provinces: Vec<ProvinceId>,
 }
 
 /// Calculate the General bonus multiplier for a force.
@@ -212,6 +215,7 @@ pub fn resolve_battle_with_targeting(
             retreated: false,
             siege_reduced_fort: false,
             medal_awards: Vec::new(),
+            attacker_origin_provinces: Vec::new(),
         };
     }
 
@@ -235,6 +239,7 @@ pub fn resolve_battle_with_targeting(
             retreated: false,
             siege_reduced_fort: false,
             medal_awards: Vec::new(),
+            attacker_origin_provinces: Vec::new(),
         };
     }
 
@@ -265,6 +270,7 @@ pub fn resolve_battle_with_targeting(
             retreated: false,
             siege_reduced_fort,
             medal_awards,
+            attacker_origin_provinces: Vec::new(),
         };
     }
 
@@ -441,6 +447,7 @@ pub fn resolve_battle_with_targeting(
         retreated,
         siege_reduced_fort,
         medal_awards,
+        attacker_origin_provinces: Vec::new(),
     }
 }
 

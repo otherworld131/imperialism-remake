@@ -48,6 +48,8 @@ import init, {
   wasm_reject_proposal,
   // Newspaper archive
   wasm_get_newspaper_archive,
+  // Battle archive
+  wasm_get_battle_data,
   // Ledger
   wasm_get_ledger_data,
   wasm_get_all_gp_ledger_data,
@@ -95,6 +97,64 @@ export interface ArchivedNewspaper {
   year: number;
   quarter: number;
   headlines: Headline[];
+}
+
+export interface BattleTile {
+  q: number;
+  r: number;
+}
+
+export interface MedalAward {
+  unit_type: string;
+  medals: number;
+}
+
+export interface LandBattleData {
+  type: 'land';
+  attacker: string;
+  attacker_id: number;
+  defender: string;
+  defender_id: number;
+  province: string;
+  province_id: number;
+  attacker_won: boolean;
+  retreated: boolean;
+  attacker_casualties: string[];
+  defender_casualties: string[];
+  terrain: string | null;
+  fort_level: number;
+  siege_reduced_fort: boolean;
+  attacker_initial_count: number;
+  defender_initial_count: number;
+  attacker_survivors_count: number;
+  defender_survivors_count: number;
+  medal_awards: MedalAward[];
+  capital_tile: BattleTile | null;
+  province_tiles: BattleTile[];
+  origin_tiles: BattleTile[];
+}
+
+export interface NavalBattleData {
+  type: 'naval';
+  attacker: string;
+  attacker_id: number;
+  defender: string;
+  defender_id: number;
+  attacker_won: boolean;
+  attacker_ships_lost: string[];
+  defender_ships_lost: string[];
+  attacker_survivors_count: number;
+  defender_survivors_count: number;
+}
+
+export type BattleData = LandBattleData | NavalBattleData;
+
+export interface ArchivedBattleTurn {
+  turn: number;
+  year: number;
+  quarter: number;
+  battles: LandBattleData[];
+  naval_battles: NavalBattleData[];
 }
 
 export interface LedgerData {
@@ -342,6 +402,12 @@ export function getDiplomacyOverlay(gameJson: string, nationId: number): Diploma
 
 export function getNewspaperArchive(gameJson: string): ArchivedNewspaper[] {
   const parsed = JSON.parse(wasm_get_newspaper_archive(gameJson));
+  if (parsed.error || !Array.isArray(parsed)) return [];
+  return parsed;
+}
+
+export function getBattleArchive(gameJson: string): ArchivedBattleTurn[] {
+  const parsed = JSON.parse(wasm_get_battle_data(gameJson));
   if (parsed.error || !Array.isArray(parsed)) return [];
   return parsed;
 }

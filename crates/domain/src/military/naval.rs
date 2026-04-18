@@ -1,7 +1,7 @@
 use crate::military::ships::{Ship, ShipCategory, ShipType};
 use crate::types::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NavalBattleResult {
     pub attacker: NationId,
     pub defender: NationId,

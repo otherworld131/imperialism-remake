@@ -15,6 +15,7 @@ import {
   diplomacyBreakTreaty, diplomacyProposePeace,
   getPendingProposals, acceptProposal, rejectProposal,
   getNewspaperArchive,
+  getBattleArchive,
   getLedgerData,
   getAllGPLedgerData,
 } from './wasm';
@@ -24,6 +25,7 @@ import type {
   ValidMoveTargets, BuildableUnits, PendingMove,
   TransportData, IndustryData, TradeData, DiplomacyScreenData, ProposalData,
   ArchivedNewspaper, LedgerData, GPLedgerEntry,
+  LandBattleData, NavalBattleData, ArchivedBattleTurn,
 } from './wasm';
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -118,6 +120,14 @@ function App() {
 
   // Newspaper archive state
   const [archiveData, setArchiveData] = useState<ArchivedNewspaper[]>([]);
+
+  // Battle state
+  const [currentBattles, setCurrentBattles] = useState<LandBattleData[]>([]);
+  const [currentNavalBattles, setCurrentNavalBattles] = useState<NavalBattleData[]>([]);
+  const battleArchive = useMemo(
+    () => activeScreen === 'battle' && gameJson ? getBattleArchive(gameJson) : [],
+    [activeScreen, gameJson],
+  );
 
   // Unit interaction state
   const [provinceUnits, setProvinceUnits] = useState<ProvinceUnits | null>(null);
@@ -215,6 +225,8 @@ function App() {
     const newJson = JSON.stringify(result.game);
     if (!applyGameJson(newJson)) return;
     setHeadlines(result.report?.headlines || []);
+    setCurrentBattles(result.report?.battles || []);
+    setCurrentNavalBattles(result.report?.naval_battles || []);
     setActiveScreen('newspaper');
     // Check for pending proposals
     const newState = JSON.parse(newJson);
@@ -751,7 +763,15 @@ function App() {
           />
         )}
         {activeScreen === 'battle' && (
-          <BattleScreen onClose={() => setActiveScreen('map')} />
+          <BattleScreen
+            currentBattles={currentBattles}
+            currentNavalBattles={currentNavalBattles}
+            archiveData={battleArchive}
+            tiles={tiles}
+            year={year}
+            quarter={quarter}
+            onClose={() => setActiveScreen('map')}
+          />
         )}
         {activeScreen === 'legend' && (
           <LegendScreen onClose={() => setActiveScreen('map')} />

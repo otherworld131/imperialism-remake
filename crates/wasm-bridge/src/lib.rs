@@ -11,6 +11,8 @@ use domain::economy::transport::TransportSystem;
 use domain::events::TreatyType;
 use domain::game_state::{GameState, new_game};
 use domain::hex::HexCoord;
+use domain::military::combat::BattleResult;
+use domain::military::naval::NavalBattleResult;
 use domain::military::ships::{Ship, ShipCategory, ShipType};
 use domain::military::units::{ArmyUnit, ArmyUnitType};
 use domain::scenarios::{list_scenarios, new_scenario_game};
@@ -97,11 +99,10 @@ pub fn wasm_process_turn(game_json: &str) -> String {
                 }))
                 .collect::<Vec<_>>(),
             "battles": report.battles.iter()
-                .map(|b| serde_json::json!({
-                    "attacker_won": b.attacker_won,
-                    "attacker_casualties": b.attacker_casualties,
-                    "defender_casualties": b.defender_casualties,
-                }))
+                .map(|b| serialize_battle(b, &game))
+                .collect::<Vec<_>>(),
+            "naval_battles": report.naval_battles.iter()
+                .map(|nb| serialize_naval_battle(nb, &game))
                 .collect::<Vec<_>>(),
             "scores": report.scores,
         }
@@ -3342,6 +3343,129 @@ pub fn wasm_get_newspaper_archive(game_json: &str) -> String {
     serde_json::to_string(&archive).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
 }
 
+/// Serialize a land battle result to JSON, resolving nation/province names from game state.
+fn serialize_battle(b: &BattleResult, game: &GameState) -> serde_json::Value {
+    let attacker_name = game
+        .get_nation(b.attacker)
+        .map(|n| n.name.as_str())
+        .unwrap_or("Unknown");
+    let defender_name = game
+        .get_nation(b.defender)
+        .map(|n| n.name.as_str())
+        .unwrap_or("Unknown");
+    let province_name = game
+        .get_province(b.province)
+        .map(|p| p.name.as_str())
+        .unwrap_or("Unknown");
+    let capital_tile = game
+        .get_province(b.province)
+        .map(|p| serde_json::json!({"q": p.capital_tile.q, "r": p.capital_tile.r}));
+    let province_tiles: Vec<serde_json::Value> = game
+        .get_province(b.province)
+        .map(|p| {
+            p.tiles
+                .iter()
+                .map(|t| serde_json::json!({"q": t.q, "r": t.r}))
+                .collect()
+        })
+        .unwrap_or_default();
+    let origin_tiles: Vec<serde_json::Value> = b
+        .attacker_origin_provinces
+        .iter()
+        .filter_map(|pid| {
+            game.get_province(*pid)
+                .map(|p| serde_json::json!({"q": p.capital_tile.q, "r": p.capital_tile.r}))
+        })
+        .collect();
+
+    serde_json::json!({
+        "type": "land",
+        "attacker": attacker_name,
+        "attacker_id": b.attacker.0,
+        "defender": defender_name,
+        "defender_id": b.defender.0,
+        "province": province_name,
+        "province_id": b.province.0,
+        "attacker_won": b.attacker_won,
+        "retreated": b.retreated,
+        "attacker_casualties": b.attacker_casualties.iter()
+            .map(|c| format!("{:?}", c)).collect::<Vec<_>>(),
+        "defender_casualties": b.defender_casualties.iter()
+            .map(|c| format!("{:?}", c)).collect::<Vec<_>>(),
+        "terrain": b.terrain.map(|t| format!("{:?}", t)),
+        "fort_level": b.fort_level,
+        "siege_reduced_fort": b.siege_reduced_fort,
+        "attacker_initial_count": b.attacker_initial_count,
+        "defender_initial_count": b.defender_initial_count,
+        "attacker_survivors_count": b.attacker_initial_count.saturating_sub(b.attacker_casualties.len()),
+        "defender_survivors_count": b.defender_initial_count.saturating_sub(b.defender_casualties.len()),
+        "medal_awards": b.medal_awards.iter()
+            .map(|(t, c)| serde_json::json!({"unit_type": format!("{:?}", t), "medals": c}))
+            .collect::<Vec<_>>(),
+        "capital_tile": capital_tile,
+        "province_tiles": province_tiles,
+        "origin_tiles": origin_tiles,
+    })
+}
+
+/// Serialize a naval battle result to JSON, resolving nation names from game state.
+fn serialize_naval_battle(nb: &NavalBattleResult, game: &GameState) -> serde_json::Value {
+    let attacker_name = game
+        .get_nation(nb.attacker)
+        .map(|n| n.name.as_str())
+        .unwrap_or("Unknown");
+    let defender_name = game
+        .get_nation(nb.defender)
+        .map(|n| n.name.as_str())
+        .unwrap_or("Unknown");
+
+    serde_json::json!({
+        "type": "naval",
+        "attacker": attacker_name,
+        "attacker_id": nb.attacker.0,
+        "defender": defender_name,
+        "defender_id": nb.defender.0,
+        "attacker_won": nb.attacker_won,
+        "attacker_ships_lost": nb.attacker_ships_lost.iter()
+            .map(|s| format!("{:?}", s)).collect::<Vec<_>>(),
+        "defender_ships_lost": nb.defender_ships_lost.iter()
+            .map(|s| format!("{:?}", s)).collect::<Vec<_>>(),
+        "attacker_survivors_count": nb.attacker_survivors.len(),
+        "defender_survivors_count": nb.defender_survivors.len(),
+    })
+}
+
+/// Return the battle archive for all past turns.
+#[wasm_bindgen]
+pub fn wasm_get_battle_data(game_json: &str) -> String {
+    let game: GameState = match serde_json::from_str(game_json) {
+        Ok(g) => g,
+        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    };
+
+    let archive: Vec<serde_json::Value> = game
+        .battle_archive
+        .iter()
+        .map(|(turn, battles, naval_battles)| {
+            let land: Vec<serde_json::Value> =
+                battles.iter().map(|b| serialize_battle(b, &game)).collect();
+            let naval: Vec<serde_json::Value> = naval_battles
+                .iter()
+                .map(|nb| serialize_naval_battle(nb, &game))
+                .collect();
+            serde_json::json!({
+                "turn": turn.0,
+                "year": turn.year(),
+                "quarter": turn.quarter(),
+                "battles": land,
+                "naval_battles": naval,
+            })
+        })
+        .collect();
+
+    serde_json::to_string(&archive).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3708,5 +3832,149 @@ mod tests {
             "positive-action headlines must OMIT is_non_action (skip_serializing_if), got: {}",
             action
         );
+    }
+
+    #[test]
+    fn wasm_get_battle_data_returns_archive() {
+        use domain::military::combat::BattleResult;
+        use domain::military::units::ArmyUnitType;
+
+        let mut game = new_game("default", Difficulty::Normal, 0);
+
+        // Manually populate battle archive with test data
+        let battle = BattleResult {
+            attacker: NationId(0),
+            defender: NationId(1),
+            province: ProvinceId(0),
+            attacker_won: true,
+            attacker_casualties: vec![ArmyUnitType::Regulars],
+            defender_casualties: vec![ArmyUnitType::Militia, ArmyUnitType::Militia],
+            attacker_survivors: Vec::new(), // stripped for archive
+            defender_survivors: Vec::new(), // stripped for archive
+            terrain: Some(domain::types::TerrainType::Hills),
+            fort_level: 1,
+            attacker_initial_fp: 100.0,
+            defender_initial_fp: 60.0,
+            attacker_initial_count: 5,
+            defender_initial_count: 3,
+            retreated: false,
+            siege_reduced_fort: true,
+            medal_awards: vec![(ArmyUnitType::Guards, 2)],
+            attacker_origin_provinces: vec![ProvinceId(2), ProvinceId(3)],
+        };
+
+        game.battle_archive.push((
+            TurnNumber::new(1),
+            vec![battle],
+            Vec::new(),
+        ));
+
+        let game_json = serde_json::to_string(&game).unwrap();
+        let result_json = wasm_get_battle_data(&game_json);
+        let parsed: serde_json::Value = serde_json::from_str(&result_json).unwrap();
+
+        let archive = parsed.as_array().expect("should be array");
+        assert_eq!(archive.len(), 1, "should have one archived turn");
+
+        let entry = &archive[0];
+        assert_eq!(entry["turn"].as_u64(), Some(1));
+        assert_eq!(entry["year"].as_u64(), Some(1815));
+        assert_eq!(entry["quarter"].as_u64(), Some(1));
+
+        let battles = entry["battles"].as_array().expect("should have battles array");
+        assert_eq!(battles.len(), 1);
+
+        let b = &battles[0];
+        assert_eq!(b["type"].as_str(), Some("land"));
+        assert_eq!(b["attacker_won"].as_bool(), Some(true));
+        assert_eq!(b["fort_level"].as_u64(), Some(1));
+        assert_eq!(b["siege_reduced_fort"].as_bool(), Some(true));
+        assert_eq!(b["retreated"].as_bool(), Some(false));
+        assert_eq!(b["attacker_initial_count"].as_u64(), Some(5));
+        assert_eq!(b["defender_initial_count"].as_u64(), Some(3));
+        // Survivor counts derived from initial - casualties
+        assert_eq!(b["attacker_survivors_count"].as_u64(), Some(4));
+        assert_eq!(b["defender_survivors_count"].as_u64(), Some(1));
+        assert_eq!(b["terrain"].as_str(), Some("Hills"));
+
+        // Check origin_tiles are populated (two origin provinces)
+        let origin_tiles = b["origin_tiles"].as_array().expect("should have origin_tiles");
+        assert_eq!(origin_tiles.len(), 2, "should have two origin tiles for two origin provinces");
+
+        // Check medal awards
+        let medals = b["medal_awards"].as_array().expect("should have medal_awards");
+        assert_eq!(medals.len(), 1);
+        assert_eq!(medals[0]["medals"].as_u64(), Some(2));
+
+        // Naval battles should be empty
+        let naval = entry["naval_battles"].as_array().expect("should have naval_battles");
+        assert!(naval.is_empty());
+    }
+
+    #[test]
+    fn wasm_get_battle_data_empty_archive() {
+        let game_json = make_game_json();
+        let result_json = wasm_get_battle_data(&game_json);
+        let parsed: serde_json::Value = serde_json::from_str(&result_json).unwrap();
+        let archive = parsed.as_array().expect("should be array");
+        assert!(archive.is_empty(), "new game should have empty battle archive");
+    }
+
+    #[test]
+    fn wasm_get_battle_data_naval_archive() {
+        use domain::map::UnitId;
+        use domain::military::naval::NavalBattleResult;
+        use domain::military::ships::{Ship, ShipType};
+
+        let mut game = new_game("default", Difficulty::Normal, 0);
+
+        let naval = NavalBattleResult {
+            attacker: NationId(0),
+            defender: NationId(1),
+            attacker_won: true,
+            attacker_ships_lost: vec![ShipType::Frigate],
+            defender_ships_lost: vec![ShipType::ShipOfTheLine, ShipType::Frigate],
+            attacker_survivors: vec![Ship {
+                id: UnitId(999),
+                ship_type: ShipType::ShipOfTheLine,
+                owner: NationId(0),
+                hull_remaining: 100,
+                sea_zone: None,
+                operation: None,
+            }],
+            defender_survivors: Vec::new(),
+        };
+
+        game.battle_archive.push((
+            TurnNumber::new(2),
+            Vec::new(),
+            vec![naval],
+        ));
+
+        let game_json = serde_json::to_string(&game).unwrap();
+        let result_json = wasm_get_battle_data(&game_json);
+        let parsed: serde_json::Value = serde_json::from_str(&result_json).unwrap();
+
+        let archive = parsed.as_array().unwrap();
+        assert_eq!(archive.len(), 1);
+
+        let entry = &archive[0];
+        assert_eq!(entry["turn"].as_u64(), Some(2));
+
+        // Land battles should be empty
+        let land = entry["battles"].as_array().unwrap();
+        assert!(land.is_empty());
+
+        // Naval battles should be populated
+        let naval = entry["naval_battles"].as_array().unwrap();
+        assert_eq!(naval.len(), 1);
+
+        let nb = &naval[0];
+        assert_eq!(nb["type"].as_str(), Some("naval"));
+        assert_eq!(nb["attacker_won"].as_bool(), Some(true));
+        assert_eq!(nb["attacker_ships_lost"].as_array().unwrap().len(), 1);
+        assert_eq!(nb["defender_ships_lost"].as_array().unwrap().len(), 2);
+        assert_eq!(nb["attacker_survivors_count"].as_u64(), Some(1));
+        assert_eq!(nb["defender_survivors_count"].as_u64(), Some(0));
     }
 }

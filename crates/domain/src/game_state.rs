@@ -5,6 +5,8 @@ use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::civilians::{Civilian, CivilianType, next_civilian_id};
 use crate::events::{DomainEvent, Headline};
 use crate::map::{HexMap, Province, UnitId};
+use crate::military::combat::BattleResult;
+use crate::military::naval::NavalBattleResult;
 use crate::military::ships::{Ship, ShipType};
 use crate::nation::{Nation, NationColor};
 use crate::types::*;
@@ -56,6 +58,9 @@ pub struct GameState {
     /// Archived newspaper headlines from past turns.
     #[serde(default)]
     pub newspaper_archive: Vec<(TurnNumber, Vec<Headline>)>,
+    /// Archived battle results from past turns: (turn, land battles, naval battles).
+    #[serde(default)]
+    pub battle_archive: Vec<(TurnNumber, Vec<BattleResult>, Vec<NavalBattleResult>)>,
     /// When true, AI functions print detailed decision traces to stderr.
     #[serde(skip, default)]
     pub ai_debug: bool,
@@ -438,6 +443,7 @@ pub fn new_game_with_seed(
         history: Vec::new(),
         high_scores: Vec::new(),
         newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
         ai_debug: false,
     };
 
@@ -562,6 +568,7 @@ mod tests {
             history: Vec::new(),
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
             ai_debug: false,
         }
     }
