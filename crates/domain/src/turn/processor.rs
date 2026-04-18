@@ -2329,23 +2329,37 @@ fn resolve_combat(
             })
             .unwrap_or(0) as usize;
 
+        // Precompute set of attacker-owned coastal (port) province IDs —
+        // only units in port provinces may embark for a naval landing.
+        let coastal_attacker_pids: HashSet<ProvinceId> = attacker_owned
+            .iter()
+            .copied()
+            .filter(|&pid| game.get_province(pid).is_some_and(|p| p.coastal))
+            .collect();
+
         // Assemble two cohorts:
         //   - Land cohort: units in adjacent attacker-owned provinces (no cap)
-        //   - Naval cohort: non-adjacent units, capped by beachhead_cap (if > 0)
+        //   - Naval cohort: units in coastal (port) non-adjacent provinces,
+        //     capped by beachhead_cap (only if beachhead exists on target)
         // These compose a mixed attack when both are present.
         let (land_cohort, naval_cohort): (Vec<ArmyUnit>, Vec<ArmyUnit>) =
             match game.get_nation(attacker_id) {
                 Some(n) => {
-                    let eligible: Vec<ArmyUnit> = n
+                    let (land, other): (Vec<_>, Vec<_>) = n
                         .army
                         .iter()
                         .filter(|u| !moved_unit_ids.contains(&u.id))
                         .cloned()
-                        .collect();
-                    let (land, other): (Vec<_>, Vec<_>) = eligible
-                        .into_iter()
                         .partition(|u| adjacent_attacker_pids.contains(&u.position));
-                    let mut naval = if beachhead_cap > 0 { other } else { Vec::new() };
+                    // Naval embarkation: only units in coastal/port provinces can board ships
+                    let mut naval: Vec<ArmyUnit> = if beachhead_cap > 0 {
+                        other
+                            .into_iter()
+                            .filter(|u| coastal_attacker_pids.contains(&u.position))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
                     if naval.len() > beachhead_cap {
                         // Send best-firepower units first up to the beachhead capacity
                         naval.sort_by(|a, b| {
@@ -10582,17 +10596,154 @@ mod tests {
 
         let report = process_turn(&mut game);
 
-        // There may or may not be a counter-attack depending on remaining units.
-        // The assertion is: if a counter-attack happens, the force must not include
-        // the moved unit (but since the moved unit went to P2 which gets conquered,
-        // it's destroyed anyway). The strong assertion: counter-attack force count
-        // equals (P3 units minus moved) = 4.
-        if report.battles.len() >= 2 {
-            // battles[1] is the counter-attack
-            assert_eq!(
-                report.battles[1].attacker_initial_count, 4,
-                "Counter-attack force should exclude the moved unit (5 in P3 - 1 moved = 4)"
-            );
+        // Hard precondition: counter-attack MUST be generated.
+        // 5 units in P3 (adjacent to P2) — 1 moved leaves 4 available counter-attackers.
+        // The initial attack by Nation 1 succeeds so P2 is conquered, then Nation 2's
+        // remaining P3 units counter-attack.
+        assert!(
+            report.battles.len() >= 2,
+            "Counter-attack must be generated (4 non-moved units in P3), got {} battles",
+            report.battles.len()
+        );
+        // battles[1] is the counter-attack
+        assert_eq!(
+            report.battles[1].attacker_initial_count, 4,
+            "Counter-attack force should exclude the moved unit (5 in P3 - 1 moved = 4)"
+        );
+    }
+
+    // ── Mixed land + naval attack test ────────────────────────
+
+    #[test]
+    fn mixed_attack_splits_cohorts_and_relocates_by_origin() {
+        use crate::map::UnitId;
+        use crate::military::naval::NavalOperation;
+        use crate::military::ships::{Ship, ShipType};
+
+        // Fixture:
+        //   P1 (coastal) — Nation 1 home/port, not adjacent to P2
+        //   P2 (coastal) — Nation 2 target (non-capital, no army)
+        //   P3 (land)    — Nation 1 adjacent to P2
+        //   Coords chosen so P1 and P2 are NOT adjacent but P3 IS adjacent to P2.
+        //   Nation 1: 3 Guards in P1 (port), 2 Guards in P3 (adjacent land),
+        //             1 Guard in P4 (inland — neither adjacent nor port)
+        //   Beachhead established on P2 from a prior turn.
+        //   Expected: attack force = 2 land (from P3) + 3 naval (from P1, capped by
+        //   beachhead) = 5 units. Inland P4 unit is excluded entirely.
+        //   After victory: P3 units → P2 (conquered); P1 units stay at P1; P4 unit stays at P4.
+        let coord_p2 = HexCoord::new(5, 0);
+        let coord_p3 = HexCoord::new(4, 0); // adjacent to P2
+        let coord_p1 = HexCoord::new(0, 0); // far from P2 — not adjacent
+        let coord_p4 = HexCoord::new(0, 3); // inland, not coastal
+
+        let mut hex_map = HexMap::new(20, 20);
+        hex_map.set_tile(coord_p1, Tile::with_province(TerrainType::Grassland, ProvinceId(1)));
+        hex_map.set_tile(coord_p2, Tile::with_province(TerrainType::Grassland, ProvinceId(2)));
+        hex_map.set_tile(coord_p3, Tile::with_province(TerrainType::Grassland, ProvinceId(3)));
+        hex_map.set_tile(coord_p4, Tile::with_province(TerrainType::Grassland, ProvinceId(4)));
+
+        let mut p1 = Province::new(ProvinceId(1), "Port".into(), NationId(1), coord_p1, vec![coord_p1], 4);
+        p1.coastal = true;
+        let mut p2 = Province::new(ProvinceId(2), "Target".into(), NationId(2), coord_p2, vec![coord_p2], 3);
+        p2.coastal = true;
+        let p3 = Province::new(ProvinceId(3), "Border".into(), NationId(1), coord_p3, vec![coord_p3], 4);
+        let p4 = Province::new(ProvinceId(4), "Inland".into(), NationId(1), coord_p4, vec![coord_p4], 4);
+
+        let mut nation1 = Nation::new(
+            NationId(1),
+            "Attacker".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation1.add_province(ProvinceId(3));
+        nation1.add_province(ProvinceId(4));
+        nation1.treasury = Money::dollars(20000);
+        // 3 Guards in P1 (port)
+        for i in 0..3 {
+            nation1.army.push(ArmyUnit::new(UnitId(100 + i), ArmyUnitType::Guards, NationId(1), ProvinceId(1)));
         }
+        // 2 Guards in P3 (land adjacent)
+        for i in 0..2 {
+            nation1.army.push(ArmyUnit::new(UnitId(200 + i), ArmyUnitType::Guards, NationId(1), ProvinceId(3)));
+        }
+        // 1 Guard in P4 (inland non-port)
+        nation1.army.push(ArmyUnit::new(UnitId(300), ArmyUnitType::Guards, NationId(1), ProvinceId(4)));
+
+        // ShipOfTheLine: arms_cost = 5 → beachhead_cap = 5 (room for 3 P1 + 2 P3 = 5 but
+        // land cohort doesn't consume beachhead, so naval cap only affects P1 units: 3 <= 5)
+        let mut ship = Ship::new(UnitId(500), ShipType::ShipOfTheLine, NationId(1));
+        ship.operation = Some(NavalOperation::Beachhead(ProvinceId(2)));
+        nation1.warships.push(ship);
+
+        let nation2 = Nation::new(
+            NationId(2),
+            "Defender".to_string(),
+            NationColor::Red,
+            NationType::MinorNation,
+            ProvinceId(99), // fake capital — P2 gets no auto-garrison
+        );
+
+        let mut game = GameState {
+            turn: TurnNumber::new(5),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![p1, p2, p3, p4],
+            nations: vec![nation1, nation2],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: vec![(NationId(1), ProvinceId(2), TurnNumber::new(4))],
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
+            ai_debug: false,
+        };
+        game.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.diplomacy.declare_war(NationId(1), NationId(2));
+
+        process_turn(&mut game);
+
+        // Verify conquest
+        assert_eq!(game.get_province(ProvinceId(2)).unwrap().owner, NationId(1));
+
+        let attacker = game.get_nation(NationId(1)).unwrap();
+
+        // Land cohort (from P3, IDs 200-201) should be in P2 (conquered)
+        let land_in_p2 = attacker.army.iter()
+            .filter(|u| u.id.0 >= 200 && u.id.0 < 202)
+            .filter(|u| u.position == ProvinceId(2))
+            .count();
+        assert!(
+            land_in_p2 > 0,
+            "Land cohort survivors (from P3) should relocate to conquered P2, got {}",
+            land_in_p2
+        );
+
+        // Naval cohort (from P1, IDs 100-102) should still be at P1 (origin)
+        let naval_still_at_port = attacker.army.iter()
+            .filter(|u| u.id.0 >= 100 && u.id.0 < 103)
+            .filter(|u| u.position == ProvinceId(1))
+            .count();
+        assert!(
+            naval_still_at_port > 0,
+            "Naval cohort survivors (from P1) should stay at origin P1, got {}",
+            naval_still_at_port
+        );
+
+        // Inland unit (ID 300 at P4) must NOT have participated — still at P4
+        let inland_still_at_p4 = attacker.army.iter()
+            .find(|u| u.id.0 == 300)
+            .map(|u| u.position == ProvinceId(4))
+            .unwrap_or(false);
+        assert!(
+            inland_still_at_p4,
+            "Inland non-port unit must not participate in naval attack, should remain at P4"
+        );
     }
 }
