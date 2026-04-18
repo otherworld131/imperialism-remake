@@ -10676,13 +10676,20 @@ mod tests {
         ship.operation = Some(NavalOperation::Beachhead(ProvinceId(2)));
         nation1.warships.push(ship);
 
-        let nation2 = Nation::new(
+        let mut nation2 = Nation::new(
             NationId(2),
             "Defender".to_string(),
             NationColor::Red,
             NationType::MinorNation,
             ProvinceId(99), // fake capital — P2 gets no auto-garrison
         );
+        // Give Nation 2 a defender unit at P2 so a real battle occurs (not auto-conquer)
+        nation2.army.push(ArmyUnit::new(
+            UnitId(400),
+            ArmyUnitType::Militia,
+            NationId(2),
+            ProvinceId(2),
+        ));
 
         let mut game = GameState {
             turn: TurnNumber::new(5),
@@ -10707,10 +10714,26 @@ mod tests {
         game.pending_attacks.push((NationId(1), ProvinceId(2)));
         game.diplomacy.declare_war(NationId(1), NationId(2));
 
-        process_turn(&mut game);
+        let report = process_turn(&mut game);
 
         // Verify conquest
         assert_eq!(game.get_province(ProvinceId(2)).unwrap().owner, NationId(1));
+
+        // Primary assertion: prove both cohorts participated in the battle.
+        // Expected: 2 (P3 land) + 3 (P1 naval port) = 5; P4 inland excluded.
+        assert!(!report.battles.is_empty(), "attack should produce a battle");
+        let battle = &report.battles[0];
+        assert_eq!(
+            battle.attacker_initial_count, 5,
+            "Mixed attack force = 2 land (P3) + 3 naval (P1 port) = 5; P4 inland unit excluded"
+        );
+        // Both origin provinces should appear in the battle's attacker origins list
+        assert!(
+            battle.attacker_origin_provinces.contains(&ProvinceId(1))
+                || battle.attacker_origin_provinces.contains(&ProvinceId(3)),
+            "battle should record at least one of the cohort origin provinces, got {:?}",
+            battle.attacker_origin_provinces
+        );
 
         let attacker = game.get_nation(NationId(1)).unwrap();
 
