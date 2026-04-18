@@ -301,10 +301,10 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     resolve_beachheads(game, &mut report);
 
     // 6c. Resolve military unit movement (pending moves)
-    resolve_military_movement(game, &mut report);
+    let moved_unit_ids = resolve_military_movement(game, &mut report);
 
-    // 7. Resolve combat (pending attacks)
-    resolve_combat(game, &mut report);
+    // 7. Resolve combat (pending attacks — units that moved this turn are excluded)
+    resolve_combat(game, &mut report, &moved_unit_ids);
 
     // 7b. Resolve naval combat (warship engagements between nations at war)
     resolve_naval_combat(game, &mut report);
@@ -2116,7 +2116,11 @@ fn can_attack_province(
 /// 2. If destination is owned by the nation, move the unit there
 /// 3. If destination is owned by an enemy at war, convert to a pending_attack instead
 /// 4. Otherwise, reject the move
-fn resolve_military_movement(game: &mut GameState, report: &mut TurnReport) {
+fn resolve_military_movement(
+    game: &mut GameState,
+    report: &mut TurnReport,
+) -> HashSet<crate::map::UnitId> {
+    let mut moved_unit_ids: HashSet<crate::map::UnitId> = HashSet::new();
     let moves: Vec<(NationId, crate::map::UnitId, ProvinceId)> =
         game.pending_moves.drain(..).collect();
 
@@ -2143,6 +2147,7 @@ fn resolve_military_movement(game: &mut GameState, report: &mut TurnReport) {
             {
                 let unit_type = format!("{:?}", unit.unit_type);
                 unit.position = dest_province_id;
+                moved_unit_ids.insert(unit_id);
                 report
                     .unit_movements
                     .push((nation_id, format!("{} moved to {}", unit_type, dest_name)));
@@ -2177,6 +2182,8 @@ fn resolve_military_movement(game: &mut GameState, report: &mut TurnReport) {
             // Otherwise ignore the invalid move
         }
     }
+
+    moved_unit_ids
 }
 
 /// Resolve combat for all pending attacks.
@@ -2187,7 +2194,11 @@ fn resolve_military_movement(game: &mut GameState, report: &mut TurnReport) {
 /// 3. Call resolve_battle()
 /// 4. If attacker wins: change province owner, record ProvinceConquered event, add headline
 /// 5. Clear pending_attacks after processing
-fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
+fn resolve_combat(
+    game: &mut GameState,
+    report: &mut TurnReport,
+    moved_unit_ids: &HashSet<crate::map::UnitId>,
+) {
     let all_attacks: Vec<(NationId, ProvinceId)> = game.pending_attacks.drain(..).collect();
     // Filter out attacks from anarchic nations (their armies only defend)
     let attacks: Vec<(NationId, ProvinceId)> = all_attacks
@@ -2301,7 +2312,12 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
         };
 
         let mut attacker_units: Vec<_> = match game.get_nation(attacker_id) {
-            Some(n) => n.army.clone(),
+            Some(n) => n
+                .army
+                .iter()
+                .filter(|u| !moved_unit_ids.contains(&u.id))
+                .cloned()
+                .collect(),
             None => continue,
         };
 
@@ -2478,6 +2494,19 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
         }
 
         if result.attacker_won {
+            // Move surviving attacker units into the conquered province
+            {
+                let survivor_ids: HashSet<crate::map::UnitId> =
+                    result.attacker_survivors.iter().map(|u| u.id).collect();
+                if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
+                    for unit in &mut attacker_nation.army {
+                        if survivor_ids.contains(&unit.id) {
+                            unit.position = province_id;
+                        }
+                    }
+                }
+            }
+
             // Siege artillery destroys fort sections: reduce fort_level by 1
             if result.siege_reduced_fort
                 && let Some(province) = game.get_province(province_id)
@@ -10002,6 +10031,129 @@ mod tests {
         assert!(
             first_battle.defender_survivors.is_empty(),
             "archived battles should have stripped defender survivors"
+        );
+    }
+
+    // ── Post-victory unit relocation tests ─────────────────────
+
+    #[test]
+    fn attacker_survivors_move_to_conquered_province() {
+        let mut game = test_game_for_counter_attack();
+
+        // Attacker (Nation 1) has 6 Guards in Province 1, attacks Province 2
+        game.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.diplomacy.declare_war(NationId(1), NationId(2));
+
+        let report = process_turn(&mut game);
+
+        // Verify attack succeeded
+        assert!(
+            report.battles[0].attacker_won,
+            "Attacker should win with 6 Guards vs garrison"
+        );
+
+        // Verify Province 2 is now owned by attacker
+        assert_eq!(
+            game.get_province(ProvinceId(2)).unwrap().owner,
+            NationId(1)
+        );
+
+        // Verify surviving attacker units are now positioned in the conquered province
+        let attacker = game.get_nation(NationId(1)).unwrap();
+        let units_in_conquered = attacker
+            .army
+            .iter()
+            .filter(|u| u.position == ProvinceId(2))
+            .count();
+        assert!(
+            units_in_conquered > 0,
+            "Surviving attacker units should be in conquered Province 2, but found {} units there",
+            units_in_conquered
+        );
+    }
+
+    #[test]
+    fn counter_attack_faces_occupier_defenders() {
+        use crate::map::UnitId;
+
+        let mut game = test_game_for_counter_attack();
+
+        // Give defender army units in Province 3 (adjacent to Province 2)
+        let nation2 = game.get_nation_mut(NationId(2)).unwrap();
+        for i in 0..5 {
+            nation2.army.push(ArmyUnit::new(
+                UnitId(200 + i),
+                ArmyUnitType::Guards,
+                NationId(2),
+                ProvinceId(3),
+            ));
+        }
+
+        game.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.diplomacy.declare_war(NationId(1), NationId(2));
+
+        let report = process_turn(&mut game);
+
+        // First battle should be the initial attack (attacker wins)
+        assert!(
+            report.battles[0].attacker_won,
+            "Initial attack should succeed"
+        );
+
+        // If there's a counter-attack, the defender (occupier) should have had units
+        if report.battles.len() >= 2 {
+            let counter = &report.battles[1];
+            assert!(
+                counter.defender_initial_count > 0,
+                "Counter-attack defender (occupier) should have units from the conquest, got {}",
+                counter.defender_initial_count
+            );
+        }
+    }
+
+    // ── Move-then-attack restriction tests ─────────────────────
+
+    #[test]
+    fn moved_units_excluded_from_attack() {
+        let mut game = test_game_for_counter_attack();
+
+        // Nation 1 has 6 Guards in Province 1
+        // Add Province 4 as another owned province (friendly, to move to)
+        let coord4 = HexCoord::new(0, 1);
+        let tile4 = Tile::with_province(TerrainType::Grassland, ProvinceId(4));
+        game.hex_map.set_tile(coord4, tile4);
+        let province4 = Province::new(
+            ProvinceId(4),
+            "Friendly Rear".to_string(),
+            NationId(1),
+            coord4,
+            vec![coord4],
+            4,
+        );
+        game.provinces.push(province4);
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .add_province(ProvinceId(4));
+
+        // Move one unit to Province 4 (friendly move)
+        let unit_to_move = game.get_nation(NationId(1)).unwrap().army[0].id;
+        game.pending_moves
+            .push((NationId(1), unit_to_move, ProvinceId(4)));
+
+        // Also queue an attack on Province 2
+        game.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.diplomacy.declare_war(NationId(1), NationId(2));
+
+        let report = process_turn(&mut game);
+
+        // The attack should have used 5 units (6 total minus 1 moved)
+        assert!(
+            !report.battles.is_empty(),
+            "There should be at least one battle"
+        );
+        assert_eq!(
+            report.battles[0].attacker_initial_count, 5,
+            "Attack force should be 5 (6 army minus 1 moved unit)"
         );
     }
 }
