@@ -2956,12 +2956,16 @@ fn run_pact_defense_cascade(
             if accepts {
                 // Protector accepts: declare war and incorporate the minor
                 game.diplomacy.declare_war(gp_id, attacker_id);
-                report.newspaper_headlines.push(Headline::new(
+                report.newspaper_headlines.push(Headline::with_reason(
                     format!(
                         "{} intervenes to protect {} and declares war on {}!",
                         gp_name, defender_name, attacker_name
                     ),
                     HeadlineCategory::War,
+                    format!(
+                        "{} personality judged {} worth protecting against {} (pact defense cascade)",
+                        personality, defender_name, attacker_name
+                    ),
                 ));
                 game.history.push((
                     game.turn,
@@ -2981,12 +2985,16 @@ fn run_pact_defense_cascade(
                 return; // Stop cascade — one protector is enough
             } else {
                 // AI declines
-                report.newspaper_headlines.push(Headline::new(
+                report.newspaper_headlines.push(Headline::with_reason(
                     format!(
                         "{} declines to intervene on behalf of {}",
                         gp_name, defender_name
                     ),
                     HeadlineCategory::Diplomacy,
+                    format!(
+                        "{} personality judged intervention too costly — insufficient strategic value or unfavorable balance vs {}",
+                        personality, attacker_name
+                    ),
                 ));
             }
         } else {
@@ -3368,6 +3376,36 @@ fn resolve_technology(game: &mut GameState, report: &mut TurnReport) {
 /// Check for alliance obligations when nations are at war.
 /// Resolve all pending diplomatic proposals from the turn.
 ///
+/// Build a short, human-readable reason for an AI treaty-evaluation outcome,
+/// drawing on the evaluator's core signals (personality, relation score, war
+/// status, diplomatic infrastructure).
+fn diplomacy_reason(
+    game: &GameState,
+    evaluator: NationId,
+    counterpart: NationId,
+    treaty_label: &str,
+    accepted: bool,
+) -> String {
+    let personality = crate::ai::common::get_personality(game, evaluator);
+    let (score, at_war, has_embassy, has_consulate) = game
+        .diplomacy
+        .get_relation(evaluator, counterpart)
+        .map(|r| (r.score, r.at_war, r.has_embassy, r.has_consulate))
+        .unwrap_or((0, false, false, false));
+    let infra = if has_embassy {
+        "embassy"
+    } else if has_consulate {
+        "consulate"
+    } else {
+        "no diplomatic infrastructure"
+    };
+    let verdict = if accepted { "accepted" } else { "rejected" };
+    format!(
+        "{} personality {} {} (relation={}, at_war={}, {})",
+        personality, verdict, treaty_label, score, at_war, infra
+    )
+}
+
 /// - Mutual peace proposals (both sides proposed): auto-accept.
 /// - Player→AI proposals: evaluate using AI assessment logic.
 /// - AI→Human proposals: keep pending for UI modal.
@@ -3518,12 +3556,13 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                             treaty_type: proposal.proposal_type,
                         },
                     ));
-                    report.newspaper_headlines.push(Headline::new(
+                    report.newspaper_headlines.push(Headline::with_reason(
                         format!(
                             "{} accepts {}'s {} proposal",
                             to_name, from_name, treaty_label
                         ),
                         HeadlineCategory::Diplomacy,
+                        diplomacy_reason(game, target_id, human, treaty_label, true),
                     ));
                     let turn = game.turn;
                     game.history.push((
@@ -3542,12 +3581,13 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                             treaty_type: proposal.proposal_type,
                         },
                     ));
-                    report.newspaper_headlines.push(Headline::new(
+                    report.newspaper_headlines.push(Headline::with_reason(
                         format!(
                             "{} proposal to {} could not be fulfilled",
                             treaty_label, to_name
                         ),
                         HeadlineCategory::Diplomacy,
+                        "AI accepted but state drifted (counterpart relation changed mid-turn); treaty could not be applied".to_string(),
                     ));
                 }
             } else {
@@ -3558,12 +3598,13 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                         to: target_id,
                         treaty_type: proposal.proposal_type,
                     }));
-                report.newspaper_headlines.push(Headline::new(
+                report.newspaper_headlines.push(Headline::with_reason(
                     format!(
                         "{} rejects {}'s {} proposal",
                         to_name, from_name, treaty_label
                     ),
                     HeadlineCategory::Diplomacy,
+                    diplomacy_reason(game, target_id, human, treaty_label, false),
                 ));
             }
         } else if proposal.to == human {
@@ -3647,12 +3688,13 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                             treaty_type: proposal.proposal_type,
                         },
                     ));
-                    report.newspaper_headlines.push(Headline::new(
+                    report.newspaper_headlines.push(Headline::with_reason(
                         format!(
                             "{} accepts {}'s {} proposal",
                             to_name, from_name, treaty_label
                         ),
                         HeadlineCategory::Diplomacy,
+                        diplomacy_reason(game, target_id, from_id, treaty_label, true),
                     ));
                     let turn = game.turn;
                     game.history.push((
@@ -3671,12 +3713,13 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                             treaty_type: proposal.proposal_type,
                         },
                     ));
-                    report.newspaper_headlines.push(Headline::new(
+                    report.newspaper_headlines.push(Headline::with_reason(
                         format!(
                             "{} proposal to {} could not be fulfilled",
                             treaty_label, to_name
                         ),
                         HeadlineCategory::Diplomacy,
+                        "AI accepted but state drifted (counterpart relation changed mid-turn); treaty could not be applied".to_string(),
                     ));
                 }
             } else {
@@ -3687,12 +3730,13 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                         to: target_id,
                         treaty_type: proposal.proposal_type,
                     }));
-                report.newspaper_headlines.push(Headline::new(
+                report.newspaper_headlines.push(Headline::with_reason(
                     format!(
                         "{} rejects {}'s {} proposal",
                         to_name, from_name, treaty_label
                     ),
                     HeadlineCategory::Diplomacy,
+                    diplomacy_reason(game, target_id, from_id, treaty_label, false),
                 ));
             }
         }
@@ -4682,11 +4726,11 @@ mod tests {
         assert!(!report.newspaper_headlines.is_empty());
         assert!(
             report.newspaper_headlines[0]
-                .0
+                .text
                 .contains("The Imperial Times")
         );
-        assert!(report.newspaper_headlines[0].0.contains("1815"));
-        assert!(report.newspaper_headlines[0].0.contains("Q1"));
+        assert!(report.newspaper_headlines[0].text.contains("1815"));
+        assert!(report.newspaper_headlines[0].text.contains("Q1"));
     }
 
     #[test]
@@ -4698,7 +4742,7 @@ mod tests {
         let has_empire_headline = report
             .newspaper_headlines
             .iter()
-            .any(|(h, _)| h.contains("Testlandia"));
+            .any(|h| h.text.contains("Testlandia"));
         assert!(has_empire_headline);
     }
 
@@ -4713,8 +4757,66 @@ mod tests {
         let has_election = report
             .newspaper_headlines
             .iter()
-            .any(|(h, _)| h.contains("Council of Governors"));
+            .any(|h| h.text.contains("Council of Governors"));
         assert!(has_election);
+    }
+
+    #[test]
+    fn generate_newspaper_propagates_ai_action_reasons() {
+        // AI actions in the report should become headlines with reason: Some(_),
+        // while non-AI headlines added by generate_newspaper remain reason: None.
+        let game = test_game_state();
+        let mut report = TurnReport::empty();
+        report.turn = game.turn;
+        report.year = game.turn.year();
+        report.quarter = game.turn.quarter();
+        report.ai_actions = vec![
+            crate::ai::AiAction {
+                text: "Scientists in Testland have discovered Steam Engine!".to_string(),
+                reason: "Economic personality selected tech (cost=$500)".to_string(),
+            },
+            crate::ai::AiAction {
+                text: "Testland has declared war on Otherland!".to_string(),
+                reason: "Combined score 2.30 > threshold 1.50".to_string(),
+            },
+        ];
+
+        generate_newspaper(&game, &mut report);
+
+        // Each AI action should have produced a headline whose reason matches.
+        for action in &report.ai_actions {
+            let h = report
+                .newspaper_headlines
+                .iter()
+                .find(|h| h.text == action.text)
+                .unwrap_or_else(|| panic!("action not propagated: {}", action.text));
+            assert_eq!(h.reason.as_deref(), Some(action.reason.as_str()));
+        }
+
+        // Masthead never carries a reason.
+        let masthead = report
+            .newspaper_headlines
+            .iter()
+            .find(|h| h.text.contains("The Imperial Times"))
+            .expect("masthead present");
+        assert!(masthead.reason.is_none(), "masthead should have no reason");
+
+        // Flavor headline (always appended) should have no reason.
+        let has_flavor_without_reason = report.newspaper_headlines.iter().any(|h| {
+            h.reason.is_none()
+                && (h.text.contains("Railroad expansion")
+                    || h.text.contains("Industrial production")
+                    || h.text.contains("Diplomatic tensions")
+                    || h.text.contains("Colonial ambitions")
+                    || h.text.contains("trade routes")
+                    || h.text.contains("age of progress")
+                    || h.text.contains("unrest in the frontier")
+                    || h.text.contains("Great exhibitions"))
+        });
+        assert!(
+            has_flavor_without_reason,
+            "expected at least one flavor headline with reason: None"
+        );
     }
 
     // ── Multiple turns in sequence ────────────────────────────
@@ -7167,7 +7269,7 @@ mod tests {
             report
                 .newspaper_headlines
                 .iter()
-                .any(|(h, _)| h.contains("intervenes") && h.contains("protect")),
+                .any(|h| h.text.contains("intervenes") && h.text.contains("protect")),
             "Should generate intervention headline: {:?}",
             report.newspaper_headlines
         );
@@ -7776,7 +7878,7 @@ mod tests {
         let has_counter_attack_headline = report
             .newspaper_headlines
             .iter()
-            .any(|(h, _)| h.contains("counter-attack") || h.contains("repels counter-attack"));
+            .any(|h| h.text.contains("counter-attack") || h.text.contains("repels counter-attack"));
         assert!(
             has_counter_attack_headline,
             "Should have counter-attack headline; headlines: {:?}",
@@ -7807,7 +7909,7 @@ mod tests {
         let has_counter_attack_headline = report
             .newspaper_headlines
             .iter()
-            .any(|(h, _)| h.contains("counter-attack"));
+            .any(|h| h.text.contains("counter-attack"));
         assert!(
             !has_counter_attack_headline,
             "Should not have counter-attack headline"
@@ -8172,7 +8274,7 @@ mod tests {
         let has_crisis_headline = report
             .newspaper_headlines
             .iter()
-            .any(|(h, _)| h.contains("FINANCIAL CRISIS"));
+            .any(|h| h.text.contains("FINANCIAL CRISIS"));
         assert!(
             !has_crisis_headline,
             "Should NOT have FINANCIAL CRISIS headline when floor is $0"
@@ -9446,7 +9548,7 @@ mod tests {
         );
 
         // Headline should mention acceptance
-        let headline = &report.newspaper_headlines[0].0;
+        let headline = &report.newspaper_headlines[0].text;
         assert!(
             headline.contains("accepts"),
             "Headline should mention acceptance: {headline}"
@@ -9499,7 +9601,7 @@ mod tests {
         );
 
         // Headline should mention rejection
-        let headline = &report.newspaper_headlines[0].0;
+        let headline = &report.newspaper_headlines[0].text;
         assert!(
             headline.contains("rejects"),
             "Headline should mention rejection: {headline}"
@@ -9545,7 +9647,7 @@ mod tests {
 
         // Headline should report "could not be fulfilled" (not "accepts")
         assert!(!report.newspaper_headlines.is_empty());
-        let headline = &report.newspaper_headlines[0].0;
+        let headline = &report.newspaper_headlines[0].text;
         assert!(
             headline.contains("could not be fulfilled"),
             "Should report application failure: {headline}"

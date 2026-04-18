@@ -3544,4 +3544,57 @@ mod tests {
             "Error should be a string field"
         );
     }
+
+    // ── Newspaper archive reason serialization ─────────────────
+
+    #[test]
+    fn newspaper_archive_json_includes_reason_for_ai_headlines() {
+        use domain::events::{Headline, HeadlineCategory};
+
+        let json = make_game_json();
+        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        game.game_data = domain::data::GameData::default();
+
+        // Seed the archive with one AI-reasoned headline and one plain headline.
+        game.newspaper_archive.push((
+            game.turn,
+            vec![
+                Headline::with_reason(
+                    "Testland has declared war!".to_string(),
+                    HeadlineCategory::War,
+                    "need=2.3, opp=1.1, combined=3.4 > threshold 1.5".to_string(),
+                ),
+                Headline::new(
+                    "The Imperial Times - 1815 Q1".to_string(),
+                    HeadlineCategory::Default,
+                ),
+            ],
+        ));
+
+        let game_json = serde_json::to_string(&game).unwrap();
+        let archive_json = wasm_get_newspaper_archive(&game_json);
+        let parsed: serde_json::Value = serde_json::from_str(&archive_json).unwrap();
+        let first_turn = &parsed.as_array().unwrap()[0];
+        let headlines = first_turn["headlines"].as_array().unwrap();
+
+        let war = headlines
+            .iter()
+            .find(|h| h["text"].as_str().unwrap().contains("declared war"))
+            .expect("war headline");
+        assert_eq!(
+            war["reason"].as_str(),
+            Some("need=2.3, opp=1.1, combined=3.4 > threshold 1.5"),
+            "AI headline must carry reason through WASM"
+        );
+
+        let masthead = headlines
+            .iter()
+            .find(|h| h["text"].as_str().unwrap().contains("Imperial Times"))
+            .expect("masthead headline");
+        assert!(
+            masthead.get("reason").is_none() || masthead["reason"].is_null(),
+            "non-AI headline must omit reason field, got: {}",
+            masthead
+        );
+    }
 }

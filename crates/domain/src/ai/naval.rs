@@ -610,7 +610,7 @@ mod tests {
         assert!(
             actions
                 .iter()
-                .any(|a| a.contains("warships") || a.contains("naval")),
+                .any(|a| a.text.contains("warships") || a.text.contains("naval")),
             "Should report shipbuilding action"
         );
     }

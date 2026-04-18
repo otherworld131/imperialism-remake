@@ -1235,7 +1235,7 @@ mod tests {
             "Treasury should increase by goods revenue"
         );
         assert!(
-            actions.iter().any(|a| a.contains("sold excess goods")),
+            actions.iter().any(|a| a.text.contains("sold excess goods")),
             "Should report selling goods"
         );
     }

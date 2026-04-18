@@ -419,4 +419,61 @@ mod tests {
         ];
         assert_eq!(events.len(), 5);
     }
+
+    // ── Headline struct ───────────────────────────────────────
+
+    #[test]
+    fn headline_new_has_no_reason() {
+        let h = Headline::new("Trade flourishes".to_string(), HeadlineCategory::Trade);
+        assert_eq!(h.text, "Trade flourishes");
+        assert_eq!(h.category, HeadlineCategory::Trade);
+        assert!(h.reason.is_none());
+    }
+
+    #[test]
+    fn headline_with_reason_carries_reason() {
+        let h = Headline::with_reason(
+            "Scientists in X have discovered Y!".to_string(),
+            HeadlineCategory::Default,
+            "Aggressive personality selected military tech".to_string(),
+        );
+        assert_eq!(
+            h.reason.as_deref(),
+            Some("Aggressive personality selected military tech")
+        );
+    }
+
+    #[test]
+    fn headline_serializes_omits_reason_when_none() {
+        let h = Headline::new("Plain headline".to_string(), HeadlineCategory::Default);
+        let json = serde_json::to_string(&h).expect("serialize");
+        // skip_serializing_if should omit the field entirely when None
+        assert!(
+            !json.contains("reason"),
+            "Expected reason omitted, got: {}",
+            json
+        );
+        assert!(json.contains("\"text\":\"Plain headline\""));
+    }
+
+    #[test]
+    fn headline_serializes_includes_reason_when_some() {
+        let h = Headline::with_reason(
+            "Country X declared war".to_string(),
+            HeadlineCategory::War,
+            "Need score 2.3 > threshold 1.5".to_string(),
+        );
+        let json = serde_json::to_string(&h).expect("serialize");
+        assert!(json.contains("\"reason\":\"Need score 2.3 > threshold 1.5\""));
+    }
+
+    #[test]
+    fn headline_deserializes_without_reason_field() {
+        // Saves produced by this codebase never emit the field when None; make sure
+        // round-tripping a reason-less JSON still works.
+        let json = r#"{"text":"Test","category":"default"}"#;
+        let h: Headline = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(h.text, "Test");
+        assert!(h.reason.is_none());
+    }
 }
