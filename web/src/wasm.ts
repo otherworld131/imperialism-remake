@@ -171,6 +171,13 @@ export interface GPLedgerEntry {
     wars: number;
     war_names: string[];
   };
+  resources_detail: Record<string, number>;
+  materials_detail: Record<string, number>;
+  goods_detail: Record<string, number>;
+  technology: {
+    researched_count: number;
+    researched_names: string[];
+  };
 }
 
 export interface DiplomacyOverlayRelation {
@@ -581,6 +588,7 @@ export interface AvailableOffer {
   resource: string;
   quantity: number;
   price: number;
+  is_great_power: boolean;
 }
 
 export interface SellableItem {

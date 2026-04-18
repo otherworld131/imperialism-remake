@@ -1,0 +1,241 @@
+import React from 'react';
+
+interface Props {
+  onClose: () => void;
+}
+
+const TERRAIN_LEGEND = [
+  { name: 'Grassland', color: '#a8b860', desc: 'Fertile plains for farming' },
+  { name: 'Hills', color: '#9a8a68', desc: 'Elevated terrain, +30% defense' },
+  { name: 'Forest', color: '#3a7a3a', desc: 'Timber source, +20% defense' },
+  { name: 'Mountain', color: '#7a7068', desc: 'Mineral-rich, +50% defense' },
+  { name: 'Desert', color: '#d8c888', desc: 'Arid terrain, limited use' },
+  { name: 'Swamp', color: '#5a7a5a', desc: 'Difficult terrain, +15% defense' },
+  { name: 'Tundra', color: '#b8c8d0', desc: 'Cold terrain, limited farming' },
+  { name: 'Sea', color: '#4a88b8', desc: 'Naval zones for trade and combat' },
+];
+
+const RESOURCE_LEGEND = [
+  { name: 'Grain', emoji: '\u{1F33E}', desc: 'Food staple, farmed on grassland' },
+  { name: 'Fruit', emoji: '\u{1F34E}', desc: 'Food resource, farmed on grassland' },
+  { name: 'Cotton', emoji: '\u{1F331}', desc: 'Textile raw material' },
+  { name: 'Wool', emoji: '\u{1F411}', desc: 'Textile raw material from ranching' },
+  { name: 'Timber', emoji: '\u{1FAB5}', desc: 'Wood from forests, makes lumber' },
+  { name: 'Livestock', emoji: '\u{1F404}', desc: 'Food resource from ranching' },
+  { name: 'Horses', emoji: '\u{1F434}', desc: 'Required for cavalry units' },
+  { name: 'Coal', emoji: '\u26CF\uFE0F', desc: 'Industrial fuel, mined in mountains/hills' },
+  { name: 'Iron', emoji: '\u2692\uFE0F', desc: 'Makes steel, mined in mountains/hills' },
+  { name: 'Gold', emoji: '\u{1F4B0}', desc: 'Monetary resource, high value' },
+  { name: 'Gems', emoji: '\u{1F48E}', desc: 'Precious stones, very high value' },
+  { name: 'Oil', emoji: '\u{1F6E2}\uFE0F', desc: 'Late-game industrial resource' },
+];
+
+const CIVILIAN_LEGEND = [
+  { name: 'Farmer', emoji: '\u{1F33E}', desc: 'Improves grassland for grain/fruit/cotton' },
+  { name: 'Miner', emoji: '\u26CF\uFE0F', desc: 'Improves mountain/hill tiles for coal/iron/gold/gems' },
+  { name: 'Engineer', emoji: '\u{1F527}', desc: 'Builds railroads and infrastructure' },
+  { name: 'Forester', emoji: '\u{1FAA3}', desc: 'Improves forest tiles for timber' },
+  { name: 'Rancher', emoji: '\u{1F920}', desc: 'Improves grassland for wool/livestock/horses' },
+  { name: 'Driller', emoji: '\u{1F6E2}\uFE0F', desc: 'Extracts oil from desert/swamp tiles' },
+  { name: 'Prospector', emoji: '\u{1F50D}', desc: 'Reveals hidden resources on tiles' },
+];
+
+const INFRASTRUCTURE_LEGEND = [
+  { name: 'Capital', symbol: '\u2605', color: '#ffd900', desc: 'Nation capital (gold star)' },
+  { name: 'Province Capital', symbol: '\u25CF', color: '#fff', desc: 'Province center (white dot)' },
+  { name: 'Railroad', symbol: '\u2550', color: '#8B4513', desc: 'Transport network for resources' },
+  { name: 'Depot', symbol: '\u25A0', color: '#8B4513', desc: 'Railroad junction point' },
+  { name: 'Port', symbol: '\u2693', color: '#4a88b8', desc: 'Enables naval trade and transport' },
+  { name: 'Fort', symbol: '\u{1F3F0}', color: '#7a7068', desc: 'Defensive fortification (L1-L3)' },
+];
+
+const UNIT_LEGEND = [
+  { category: 'Infantry', units: ['Militia', 'Regulars', 'Grenadiers', 'Rifle Infantry', 'Guards', 'Sharpshooters', 'Modern Infantry', 'Machine Gunners', 'Rangers'] },
+  { category: 'Cavalry', units: ['Cuirassiers', 'Scouts', 'Carbine Cavalry', 'Armour', 'Mechanised'] },
+  { category: 'Artillery', units: ['Light Artillery', 'Standard Artillery', 'Field Artillery', 'Siege Artillery', 'Railroad Gun', 'Mobile Artillery'] },
+  { category: 'Special', units: ['Sapper', 'General'] },
+];
+
+const DIPLO_LEGEND = [
+  { color: '#ffd900', label: 'Self (your nation)' },
+  { color: '#2ecc40', label: 'Alliance' },
+  { color: '#7fdbff', label: 'Non-Aggression Pact' },
+  { color: '#ff4136', label: 'At War' },
+  { color: '#aaaaaa', label: 'Neutral' },
+];
+
+export default function LegendScreen({ onClose }: Props) {
+  return (
+    <div style={styles.overlay}>
+      <div style={styles.container}>
+        <div style={styles.header}>
+          <h2 style={styles.title}>Legend</h2>
+          <button onClick={onClose} style={styles.closeBtn}>Esc</button>
+        </div>
+
+        <div style={styles.body}>
+          {/* Terrain */}
+          <div style={styles.section}>
+            <h3 style={styles.sectionTitle}>Terrain</h3>
+            <div style={styles.grid}>
+              {TERRAIN_LEGEND.map(t => (
+                <div key={t.name} style={styles.legendItem}>
+                  <span style={{ ...styles.swatch, background: t.color }} />
+                  <div>
+                    <div style={styles.itemName}>{t.name}</div>
+                    <div style={styles.itemDesc}>{t.desc}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Resources */}
+          <div style={styles.section}>
+            <h3 style={styles.sectionTitle}>Resources</h3>
+            <div style={styles.grid}>
+              {RESOURCE_LEGEND.map(r => (
+                <div key={r.name} style={styles.legendItem}>
+                  <span style={styles.emoji}>{r.emoji}</span>
+                  <div>
+                    <div style={styles.itemName}>{r.name}</div>
+                    <div style={styles.itemDesc}>{r.desc}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Civilians */}
+          <div style={styles.section}>
+            <h3 style={styles.sectionTitle}>Civilians</h3>
+            <div style={styles.grid}>
+              {CIVILIAN_LEGEND.map(c => (
+                <div key={c.name} style={styles.legendItem}>
+                  <span style={styles.emoji}>{c.emoji}</span>
+                  <div>
+                    <div style={styles.itemName}>{c.name}</div>
+                    <div style={styles.itemDesc}>{c.desc}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Infrastructure */}
+          <div style={styles.section}>
+            <h3 style={styles.sectionTitle}>Infrastructure</h3>
+            <div style={styles.grid}>
+              {INFRASTRUCTURE_LEGEND.map(inf => (
+                <div key={inf.name} style={styles.legendItem}>
+                  <span style={{ ...styles.emoji, color: inf.color }}>{inf.symbol}</span>
+                  <div>
+                    <div style={styles.itemName}>{inf.name}</div>
+                    <div style={styles.itemDesc}>{inf.desc}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Military Units */}
+          <div style={styles.section}>
+            <h3 style={styles.sectionTitle}>Military Units</h3>
+            {UNIT_LEGEND.map(cat => (
+              <div key={cat.category} style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 12, color: '#daa520', textTransform: 'uppercase' as const, letterSpacing: 1, marginBottom: 4 }}>
+                  {cat.category}
+                </div>
+                <div style={{ fontSize: 13, color: '#ccc', lineHeight: 1.6 }}>
+                  {cat.units.join(' \u2022 ')}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Diplomatic Colors */}
+          <div style={styles.section}>
+            <h3 style={styles.sectionTitle}>Diplomatic Map Mode</h3>
+            <div style={styles.grid}>
+              {DIPLO_LEGEND.map(d => (
+                <div key={d.label} style={styles.legendItem}>
+                  <span style={{ ...styles.swatch, background: d.color }} />
+                  <span style={styles.itemName}>{d.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Strength Gradients */}
+          <div style={styles.section}>
+            <h3 style={styles.sectionTitle}>Strength Map Modes</h3>
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>Military / Naval Strength (relative to average)</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 12 }}>Weak</span>
+                <div style={{ flex: 1, height: 16, background: 'linear-gradient(to right, rgb(220,40,40), rgb(200,200,40) 50%, rgb(40,200,40))', borderRadius: 3 }} />
+                <span style={{ fontSize: 12 }}>Strong</span>
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>Relationship Score</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 12 }}>-100</span>
+                <div style={{ flex: 1, height: 16, background: 'linear-gradient(to right, rgb(220,40,40), rgb(160,160,160) 50%, rgb(40,200,40))', borderRadius: 3 }} />
+                <span style={{ fontSize: 12 }}>+100</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  overlay: {
+    flex: 1, minHeight: 0,
+    background: '#1a1a2e', color: '#e0d8c0',
+    display: 'flex', flexDirection: 'column',
+    fontFamily: "'Georgia', serif",
+  },
+  container: {
+    display: 'flex', flexDirection: 'column', height: '100%',
+  },
+  header: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '12px 24px', borderBottom: '2px solid #3a3520',
+    background: '#0f0f23',
+  },
+  title: { color: '#daa520', margin: 0, fontSize: 22 },
+  closeBtn: {
+    padding: '4px 12px', background: '#3a3520', color: '#e0d8c0',
+    border: '1px solid #5a5030', cursor: 'pointer', fontFamily: "'Georgia', serif",
+  },
+  body: {
+    flex: 1, overflowY: 'auto' as const, padding: '16px 32px',
+  },
+  section: {
+    marginBottom: 28, paddingBottom: 16, borderBottom: '1px solid #3a3520',
+  },
+  sectionTitle: {
+    color: '#daa520', margin: '0 0 12px', fontSize: 18,
+    borderBottom: '1px solid #3a3520', paddingBottom: 6,
+  },
+  grid: {
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+    gap: 8,
+  },
+  legendItem: {
+    display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0',
+  },
+  swatch: {
+    display: 'inline-block', width: 24, height: 24, borderRadius: 3,
+    border: '1px solid rgba(255,255,255,0.15)', flexShrink: 0,
+  },
+  emoji: {
+    fontSize: 20, width: 28, textAlign: 'center' as const, flexShrink: 0,
+  },
+  itemName: { fontSize: 14, fontWeight: 'bold' as const },
+  itemDesc: { fontSize: 12, color: '#999' },
+};

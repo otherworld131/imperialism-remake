@@ -2069,7 +2069,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         .collect();
 
     // Available offers from minor nations
-    let available_offers: Vec<serde_json::Value> =
+    let mut available_offers: Vec<serde_json::Value> =
         domain::economy::trade::generate_minor_nation_offers(
             &game.nations,
             &game.provinces,
@@ -2087,9 +2087,31 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
                 "resource": format!("{:?}", o.resource),
                 "quantity": o.quantity,
                 "price": o.price_per_unit.as_dollars(),
+                "is_great_power": false,
             })
         })
         .collect();
+
+    // Add surplus offers from other Great Powers
+    for gp in &game.nations {
+        if gp.id == nid || !gp.is_great_power() {
+            continue;
+        }
+        for (&resource, &qty) in &gp.warehouse {
+            if qty > 3 {
+                let surplus = qty - 3;
+                let price = base_price(resource);
+                available_offers.push(serde_json::json!({
+                    "seller_id": gp.id.0,
+                    "seller_name": gp.name,
+                    "resource": format!("{:?}", resource),
+                    "quantity": surplus,
+                    "price": price.as_dollars(),
+                    "is_great_power": true,
+                }));
+            }
+        }
+    }
 
     // Sellable items: resources, materials, goods with stock > 0
     let sellable_resources: Vec<serde_json::Value> = all_resources
@@ -3207,6 +3229,31 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
             let total_materials: u32 = nation.materials.values().sum();
             let total_goods: u32 = nation.goods.values().sum();
 
+            // Per-resource breakdown
+            let resources_detail: serde_json::Map<String, serde_json::Value> = nation.warehouse.iter()
+                .map(|(k, v)| (format!("{:?}", k), serde_json::json!(*v)))
+                .collect();
+
+            // Per-material breakdown
+            let materials_detail: serde_json::Map<String, serde_json::Value> = nation.materials.iter()
+                .map(|(k, v)| (format!("{:?}", k), serde_json::json!(*v)))
+                .collect();
+
+            // Per-goods breakdown
+            let goods_detail: serde_json::Map<String, serde_json::Value> = nation.goods.iter()
+                .map(|(k, v)| (format!("{:?}", k), serde_json::json!(*v)))
+                .collect();
+
+            // Technology data
+            let researched_count = nation.researched_techs.len();
+            let researched_names: Vec<String> = nation.researched_techs.iter()
+                .filter_map(|tid| {
+                    game.game_data.tech_tree.all_techs().iter()
+                        .find(|t| t.id == *tid)
+                        .map(|t| t.name.clone())
+                })
+                .collect();
+
             serde_json::json!({
                 "nation_id": nid.0,
                 "nation_name": nation_name,
@@ -3243,6 +3290,13 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
                     "alliance_names": alliances,
                     "wars": war_count,
                     "war_names": wars,
+                },
+                "resources_detail": resources_detail,
+                "materials_detail": materials_detail,
+                "goods_detail": goods_detail,
+                "technology": {
+                    "researched_count": researched_count,
+                    "researched_names": researched_names,
                 },
             })
         })

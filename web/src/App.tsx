@@ -38,15 +38,22 @@ const CATEGORY_COLORS: Record<string, string> = {
   default:   '#e0d8c0',
 };
 
-type ScreenTab = 'map' | 'transport' | 'industry' | 'trade' | 'diplomacy' | 'ledger';
+type ScreenTab = 'map' | 'transport' | 'industry' | 'diplomacy' | 'trade' | 'ledger' | 'newspaper' | 'battle' | 'legend';
 const SCREEN_TABS: { key: ScreenTab; label: string; hotkey: string }[] = [
   { key: 'map', label: 'Map', hotkey: 'F1' },
   { key: 'transport', label: 'Transport', hotkey: 'F2' },
   { key: 'industry', label: 'Industry', hotkey: 'F3' },
-  { key: 'trade', label: 'Trade', hotkey: 'F4' },
-  { key: 'diplomacy', label: 'Diplomacy', hotkey: 'F5' },
+  { key: 'diplomacy', label: 'Diplomacy', hotkey: 'F4' },
+  { key: 'trade', label: 'Trade', hotkey: 'F5' },
   { key: 'ledger', label: 'Ledger', hotkey: 'F6' },
+  { key: 'newspaper', label: 'News', hotkey: 'F7' },
+  { key: 'battle', label: 'Battles', hotkey: 'F8' },
+  { key: 'legend', label: 'Legend', hotkey: 'F9' },
 ];
+
+function isFullScreen(screen: ScreenTab): boolean {
+  return ['ledger', 'trade', 'newspaper', 'battle', 'legend'].includes(screen);
+}
 
 function extractNationTag(text: string, nations?: any[]): string | null {
   if (!nations) return null;
@@ -56,18 +63,6 @@ function extractNationTag(text: string, nations?: any[]): string | null {
   return null;
 }
 
-const NEWS_CATEGORY_OPTIONS: { value: string; label: string }[] = [
-  { value: 'all',       label: 'All topics' },
-  { value: 'war',       label: 'War' },
-  { value: 'battle',    label: 'Battle' },
-  { value: 'diplomacy', label: 'Diplomacy' },
-  { value: 'growth',    label: 'Growth' },
-  { value: 'trade',     label: 'Trade' },
-  { value: 'crisis',    label: 'Crisis' },
-  { value: 'politics',  label: 'Politics' },
-  { value: 'military',  label: 'Military' },
-  { value: 'default',   label: 'Other' },
-];
 
 function applyNewsFilters(
   headlines: Headline[],
@@ -81,69 +76,6 @@ function applyNewsFilters(
   });
 }
 
-function NewsFilters(props: {
-  category: string;
-  country: string;
-  countryOptions: string[];
-  onCategoryChange: (v: string) => void;
-  onCountryChange: (v: string) => void;
-}) {
-  const selectStyle: React.CSSProperties = {
-    background: '#1a1a2e',
-    color: '#e0d8c0',
-    border: '1px solid #3a3520',
-    borderRadius: 3,
-    padding: '2px 6px',
-    fontSize: 12,
-    fontFamily: 'inherit',
-  };
-  return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 16px', borderBottom: '1px solid #3a3520', fontSize: 12 }}>
-      <span style={{ color: '#888' }}>Filter:</span>
-      <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-        <span style={{ color: '#aaa' }}>Topic</span>
-        <select value={props.category} onChange={e => props.onCategoryChange(e.target.value)} style={selectStyle}>
-          {NEWS_CATEGORY_OPTIONS.map(opt => (
-            <option key={opt.value} value={opt.value}>{opt.label}</option>
-          ))}
-        </select>
-      </label>
-      <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-        <span style={{ color: '#aaa' }}>Country</span>
-        <select value={props.country} onChange={e => props.onCountryChange(e.target.value)} style={selectStyle}>
-          <option value="all">All countries</option>
-          {props.countryOptions.map(name => (
-            <option key={name} value={name}>{name}</option>
-          ))}
-        </select>
-      </label>
-    </div>
-  );
-}
-
-function HeadlineView(props: { headline: Headline; showReason: boolean; nationTag?: string | null }) {
-  const { headline: h, showReason, nationTag } = props;
-  const color = CATEGORY_COLORS[h.category] || '#e0d8c0';
-  const border = CATEGORY_COLORS[h.category] || '#3a3520';
-  // Non-actions render dimmer to visually distinguish them
-  const rowStyle: React.CSSProperties = {
-    ...styles.headlineRow,
-    borderLeftColor: border,
-    color,
-    opacity: h.is_non_action ? 0.55 : 1,
-    fontStyle: h.is_non_action ? 'italic' : 'normal',
-  };
-  return (
-    <div style={rowStyle}>
-      {nationTag && <span style={styles.nationTag}>{nationTag}</span>}
-      {h.is_non_action && <span style={{ color: '#888', marginRight: 4 }}>[no action]</span>}
-      {h.text}
-      {showReason && h.reason && (
-        <div style={{ fontSize: 11, color: '#888', marginTop: 2, fontStyle: 'italic', paddingLeft: 8 }}>{h.reason}</div>
-      )}
-    </div>
-  );
-}
 
 import HexMap from './components/HexMap';
 import GameSetup from './components/GameSetup';
@@ -152,9 +84,12 @@ import CivilianPanel from './components/CivilianPanel';
 import NavalPanel from './components/NavalPanel';
 import TransportPanel from './components/TransportPanel';
 import IndustryPanel from './components/IndustryPanel';
-import TradePanel from './components/TradePanel';
 import DiplomacyPanel from './components/DiplomacyPanel';
 import LedgerPanel from './components/LedgerPanel';
+import NewspaperScreen from './components/NewspaperScreen';
+import TradeScreen from './components/TradeScreen';
+import BattleScreen from './components/BattleScreen';
+import LegendScreen from './components/LegendScreen';
 import ProposalModal from './components/ProposalModal';
 
 function App() {
@@ -165,7 +100,6 @@ function App() {
   const [selectedTile, setSelectedTile] = useState<TileData | null>(null);
   const [hoveredTile, setHoveredTile] = useState<TileData | null>(null);
   const [headlines, setHeadlines] = useState<Headline[]>([]);
-  const [showNewspaper, setShowNewspaper] = useState(false);
   const [techs, setTechs] = useState<any[]>([]);
   const [showTech, setShowTech] = useState(false);
   const [activeScreen, setActiveScreen] = useState<ScreenTab>('map');
@@ -183,9 +117,7 @@ function App() {
   const [militaryOverlay, setMilitaryOverlay] = useState<MilitaryOverlayEntry[] | null>(null);
 
   // Newspaper archive state
-  const [showArchive, setShowArchive] = useState(false);
   const [archiveData, setArchiveData] = useState<ArchivedNewspaper[]>([]);
-  const [selectedArchiveTurn, setSelectedArchiveTurn] = useState<number | null>(null);
 
   // Unit interaction state
   const [provinceUnits, setProvinceUnits] = useState<ProvinceUnits | null>(null);
@@ -209,6 +141,10 @@ function App() {
   const [gpLedgerData, setGpLedgerData] = useState<GPLedgerEntry[]>([]);
   const [proposalData, setProposalData] = useState<ProposalData | null>(null);
   const [showProposals, setShowProposals] = useState(false);
+
+  // Map zoom/pan state — lifted here so it persists across screen switches
+  const [mapScale, setMapScale] = useState(0.7);
+  const [mapOffset, setMapOffset] = useState({ x: -200, y: -100 });
 
   useEffect(() => {
     (async () => {
@@ -279,7 +215,7 @@ function App() {
     const newJson = JSON.stringify(result.game);
     if (!applyGameJson(newJson)) return;
     setHeadlines(result.report?.headlines || []);
-    setShowNewspaper(true);
+    setActiveScreen('newspaper');
     // Check for pending proposals
     const newState = JSON.parse(newJson);
     const nid = newState.human_player_nation;
@@ -295,7 +231,7 @@ function App() {
   }, [gameJson, applyGameJson]);
 
   const dismissNewspaper = useCallback(() => {
-    setShowNewspaper(false);
+    setActiveScreen('map');
     if (proposalData && proposalData.proposals.length > 0) {
       setShowProposals(true);
     }
@@ -305,9 +241,9 @@ function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
         e.preventDefault();
-        if (showNewspaper) {
+        if (activeScreen === 'newspaper') {
           dismissNewspaper();
-        } else if (!showTech && !showArchive && !showProposals) {
+        } else if (!showTech && !showProposals) {
           handleEndTurn();
         }
       }
@@ -315,20 +251,23 @@ function App() {
         if (isMovementMode) { setIsMovementMode(false); setValidMoveTargets(null); setSelectedUnitIds([]); }
         else if (isDeployMode) { setIsDeployMode(false); setDeployingCivilian(null); setDeployableTiles(new Set()); }
         else if (showProposals) setShowProposals(false);
-        else if (showNewspaper) dismissNewspaper();
-        else if (showArchive) setShowArchive(false);
+        else if (activeScreen === 'newspaper') dismissNewspaper();
         else if (showTech) setShowTech(false);
+        else if (isFullScreen(activeScreen)) setActiveScreen('map');
       }
       if (e.code === 'F1') { e.preventDefault(); setActiveScreen('map'); }
       if (e.code === 'F2') { e.preventDefault(); setActiveScreen('transport'); }
       if (e.code === 'F3') { e.preventDefault(); setActiveScreen('industry'); }
-      if (e.code === 'F4') { e.preventDefault(); setActiveScreen('trade'); }
-      if (e.code === 'F5') { e.preventDefault(); setActiveScreen('diplomacy'); }
+      if (e.code === 'F4') { e.preventDefault(); setActiveScreen('diplomacy'); }
+      if (e.code === 'F5') { e.preventDefault(); setActiveScreen('trade'); }
       if (e.code === 'F6') { e.preventDefault(); setActiveScreen('ledger'); }
+      if (e.code === 'F7') { e.preventDefault(); setActiveScreen('newspaper'); }
+      if (e.code === 'F8') { e.preventDefault(); setActiveScreen('battle'); }
+      if (e.code === 'F9') { e.preventDefault(); setActiveScreen('legend'); }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showNewspaper, showTech, showProposals, showArchive, handleEndTurn, dismissNewspaper, isMovementMode, isDeployMode]);
+  }, [activeScreen, showTech, showProposals, handleEndTurn, dismissNewspaper, isMovementMode, isDeployMode]);
 
   // Fetch overlay data when map mode or selected nation changes
   useEffect(() => {
@@ -717,7 +656,7 @@ function App() {
         <span>Treasury: ${player?.treasury?.[0] ? player.treasury[0] / 100 : 0}</span>
         <span>Provinces: {player?.province_ids?.length || 0}</span>
         <button onClick={() => setShowTech(!showTech)} style={styles.btn}>Tech</button>
-        <button onClick={() => { setArchiveData(getNewspaperArchive(gameJson)); setShowArchive(true); setSelectedArchiveTurn(null); }} style={styles.btn}>History</button>
+        <button onClick={() => { setArchiveData(getNewspaperArchive(gameJson)); setActiveScreen('newspaper'); }} style={styles.btn}>History</button>
         <button onClick={handleEndTurn} style={styles.endTurnBtn}>End Turn</button>
       </div>
 
@@ -737,10 +676,8 @@ function App() {
 
       {/* Main area */}
       <div style={styles.mainArea} className="main-area-responsive">
-        {activeScreen === 'ledger' ? (
-          <LedgerPanel entries={gpLedgerData} onClose={() => setActiveScreen('map')} />
-        ) : (<>
-        <div style={styles.mapContainer}>
+        {/* Map — always mounted, hidden behind full-screen views to preserve zoom/pan */}
+        <div style={{ ...styles.mapContainer, display: isFullScreen(activeScreen) ? 'none' : undefined }}>
           <HexMap
             tiles={tiles}
             mapMode={mapMode}
@@ -757,10 +694,71 @@ function App() {
             isMovementMode={isMovementMode}
             isDeployMode={isDeployMode}
             deployableTiles={deployableTiles}
+            scale={mapScale}
+            offset={mapOffset}
+            onScaleChange={setMapScale}
+            onOffsetChange={setMapOffset}
           />
         </div>
 
-        {/* Side panel — context-sensitive */}
+        {/* Full-screen views */}
+        {activeScreen === 'ledger' && (
+          <LedgerPanel entries={gpLedgerData} onClose={() => setActiveScreen('map')} />
+        )}
+        {activeScreen === 'newspaper' && (() => {
+          const countryOptions: string[] = (gameState?.nations || [])
+            .filter((n: any) => !!n.name)
+            .map((n: any) => n.name);
+          const visible = applyNewsFilters(headlines, {
+            showNonActions: showAiNonActions,
+            category: newsFilterCategory,
+            country: newsFilterCountry,
+          });
+          const playerNews = visible.filter(h => h.text.includes(playerName));
+          const worldNews = visible.filter(h => !h.text.includes(playerName));
+          // Ensure archive data is available
+          const archive = archiveData.length > 0 ? archiveData : getNewspaperArchive(gameJson);
+          return (
+            <NewspaperScreen
+              playerName={playerName}
+              year={year}
+              quarter={quarter}
+              turnNumber={turnNumber}
+              headlines={headlines}
+              playerNews={playerNews}
+              worldNews={worldNews}
+              archiveData={archive}
+              nations={gameState?.nations || []}
+              countryOptions={countryOptions}
+              newsFilterCategory={newsFilterCategory}
+              newsFilterCountry={newsFilterCountry}
+              showAiReasoning={showAiReasoning}
+              showAiNonActions={showAiNonActions}
+              onCategoryChange={setNewsFilterCategory}
+              onCountryChange={setNewsFilterCountry}
+              onDismiss={dismissNewspaper}
+              onClose={() => setActiveScreen('map')}
+            />
+          );
+        })()}
+        {activeScreen === 'trade' && (
+          <TradeScreen
+            trade={tradeData}
+            onSetSubsidy={handleSetSubsidy}
+            onSetSellOrder={handleSetSellOrder}
+            onSetBuyOrder={handleSetBuyOrder}
+            onClose={() => setActiveScreen('map')}
+          />
+        )}
+        {activeScreen === 'battle' && (
+          <BattleScreen onClose={() => setActiveScreen('map')} />
+        )}
+        {activeScreen === 'legend' && (
+          <LegendScreen onClose={() => setActiveScreen('map')} />
+        )}
+
+        {/* Side panel — context-sensitive, hidden for full-screen views */}
+        {!isFullScreen(activeScreen) && (
         <div style={styles.sidePanel} className="side-panel-responsive">
           {activeScreen === 'map' && (
             <>
@@ -1012,18 +1010,6 @@ function App() {
               <p style={styles.hint}>Loading industry data...</p>
             )
           )}
-          {activeScreen === 'trade' && (
-            tradeData ? (
-              <TradePanel
-                trade={tradeData}
-                onSetSubsidy={handleSetSubsidy}
-                onSetSellOrder={handleSetSellOrder}
-                onSetBuyOrder={handleSetBuyOrder}
-              />
-            ) : (
-              <p style={styles.hint}>Loading trade data...</p>
-            )
-          )}
           {activeScreen === 'diplomacy' && (
             diplomacyScreenData ? (
               <DiplomacyPanel
@@ -1042,169 +1028,21 @@ function App() {
             )
           )}
         </div>
-        </>)}
-      </div>
+        )}
+      </div>{/* end mainArea */}
 
-      {/* Newspaper modal — grouped */}
-      {showNewspaper && (() => {
-        const visible = applyNewsFilters(headlines, {
-          showNonActions: showAiNonActions,
-          category: newsFilterCategory,
-          country: newsFilterCountry,
-        });
-        const playerNews = visible.filter(h => h.text.includes(playerName));
-        const worldNews = visible.filter(h => !h.text.includes(playerName));
-        const countryOptions: string[] = (gameState?.nations || [])
-          .filter((n: any) => !!n.name)
-          .map((n: any) => n.name);
-        return (
-          <div style={styles.modal} onClick={dismissNewspaper}>
-            <div style={styles.newspaperModal} onClick={e => e.stopPropagation()}>
-              <div style={styles.masthead}>
-                <h2 style={styles.newspaperTitle}>The Imperial Times</h2>
-                <div style={styles.mastheadDate}>{year} Q{quarter} — Turn {turnNumber}</div>
-              </div>
-              <NewsFilters
-                category={newsFilterCategory}
-                country={newsFilterCountry}
-                countryOptions={countryOptions}
-                onCategoryChange={setNewsFilterCategory}
-                onCountryChange={setNewsFilterCountry}
-              />
-              <div style={styles.newsBody}>
-                {playerNews.length === 0 && worldNews.length === 0 && (
-                  <div style={{ padding: 12, color: '#666', fontStyle: 'italic' }}>
-                    No headlines match the current filters.
-                  </div>
-                )}
-                {playerNews.length > 0 && (
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={styles.sectionLabelPlayer}>Your Empire — {playerName}</div>
-                    {playerNews.map((h, i) => (
-                      <HeadlineView key={i} headline={h} showReason={showAiReasoning} />
-                    ))}
-                  </div>
-                )}
-                {worldNews.length > 0 && (
-                  <div>
-                    <div style={styles.sectionLabelWorld}>World News</div>
-                    {worldNews.map((h, i) => (
-                      <HeadlineView
-                        key={i}
-                        headline={h}
-                        showReason={showAiReasoning}
-                        nationTag={extractNationTag(h.text, gameState?.nations)}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div style={styles.newsFooter}>
-                <span style={{ fontSize: 11, color: '#666' }}>Esc to dismiss</span>
-                <button onClick={dismissNewspaper} style={styles.endTurnBtn}>Continue</button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Newspaper archive modal */}
-      {showArchive && (() => {
-        const countryOptions: string[] = (gameState?.nations || [])
-          .filter((n: any) => !!n.name)
-          .map((n: any) => n.name);
-        return (
-        <div style={styles.modal} onClick={() => setShowArchive(false)}>
-          <div style={{ ...styles.newspaperModal, width: 720, display: 'flex', flexDirection: 'column' as const }} onClick={e => e.stopPropagation()}>
-            <div style={styles.masthead}>
-              <h2 style={styles.newspaperTitle}>The Imperial Times — Archive</h2>
-              <div style={styles.mastheadDate}>
-                {selectedArchiveTurn !== null
-                  ? (() => {
-                      const entry = archiveData.find(a => a.turn === selectedArchiveTurn);
-                      return entry ? `${entry.year} Q${entry.quarter} — Turn ${entry.turn}` : '';
-                    })()
-                  : `${archiveData.length} reports available`}
-              </div>
-            </div>
-            <NewsFilters
-              category={newsFilterCategory}
-              country={newsFilterCountry}
-              countryOptions={countryOptions}
-              onCategoryChange={setNewsFilterCategory}
-              onCountryChange={setNewsFilterCountry}
-            />
-            <div style={{ display: 'flex', flex: 1, minHeight: 0, maxHeight: '60vh' }}>
-              {/* Turn list */}
-              <div style={{ width: 140, borderRight: '1px solid #333', overflowY: 'auto' as const, padding: '8px 0' }}>
-                {archiveData.length === 0 && <div style={{ padding: 12, color: '#666' }}>No reports yet</div>}
-                {archiveData.map(entry => (
-                  <div
-                    key={entry.turn}
-                    onClick={() => setSelectedArchiveTurn(entry.turn)}
-                    style={{
-                      padding: '6px 12px', cursor: 'pointer', fontSize: 13,
-                      background: selectedArchiveTurn === entry.turn ? '#2a2a45' : 'transparent',
-                      borderLeft: selectedArchiveTurn === entry.turn ? '3px solid #daa520' : '3px solid transparent',
-                      color: selectedArchiveTurn === entry.turn ? '#daa520' : '#aaa',
-                    }}
-                  >
-                    Turn {entry.turn} ({entry.year} Q{entry.quarter})
-                  </div>
-                ))}
-              </div>
-              {/* Headlines */}
-              <div style={{ flex: 1, overflowY: 'auto' as const, padding: '12px 16px' }}>
-                {selectedArchiveTurn === null && <div style={{ color: '#666' }}>Select a turn to view its headlines</div>}
-                {selectedArchiveTurn !== null && (() => {
-                  const entry = archiveData.find(a => a.turn === selectedArchiveTurn);
-                  if (!entry) return <div style={{ color: '#666' }}>No data</div>;
-                  const visible = applyNewsFilters(entry.headlines, {
-                    showNonActions: showAiNonActions,
-                    category: newsFilterCategory,
-                    country: newsFilterCountry,
-                  });
-                  const pNews = visible.filter(h => h.text.includes(playerName));
-                  const wNews = visible.filter(h => !h.text.includes(playerName));
-                  if (pNews.length === 0 && wNews.length === 0) {
-                    return <div style={{ color: '#666', fontStyle: 'italic' }}>No headlines match the current filters.</div>;
-                  }
-                  return (
-                    <>
-                      {pNews.length > 0 && (
-                        <div style={{ marginBottom: 12 }}>
-                          <div style={styles.sectionLabelPlayer}>Your Empire — {playerName}</div>
-                          {pNews.map((h, i) => (
-                            <HeadlineView key={i} headline={h} showReason={showAiReasoning} />
-                          ))}
-                        </div>
-                      )}
-                      {wNews.length > 0 && (
-                        <div>
-                          <div style={styles.sectionLabelWorld}>World News</div>
-                          {wNews.map((h, i) => (
-                            <HeadlineView
-                              key={i}
-                              headline={h}
-                              showReason={showAiReasoning}
-                              nationTag={extractNationTag(h.text, gameState?.nations)}
-                            />
-                          ))}
-                        </div>
-                      )}
-                    </>
-                  );
-                })()}
-              </div>
-            </div>
-            <div style={styles.newsFooter}>
-              <span style={{ fontSize: 11, color: '#666' }}>Esc to dismiss</span>
-              <button onClick={() => setShowArchive(false)} style={styles.endTurnBtn}>Close</button>
-            </div>
-          </div>
+      {/* Global error toast — visible across all screens including full-screen views */}
+      {statusMessage && (
+        <div style={{
+          position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)',
+          background: 'rgba(200,50,50,0.95)', border: '1px solid rgba(255,80,80,0.8)',
+          borderRadius: 6, padding: '10px 20px', fontSize: 13, color: '#fff',
+          zIndex: 200, maxWidth: 500, textAlign: 'center',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+        }}>
+          {statusMessage}
         </div>
-        );
-      })()}
+      )}
 
       {/* Tech panel */}
       {showTech && (
@@ -1263,16 +1101,6 @@ const styles: Record<string, React.CSSProperties> = {
   endTurnBtn: { padding: '6px 20px', background: '#8b4513', color: '#fff', border: '1px solid #a0522d', cursor: 'pointer', fontWeight: 'bold', fontFamily: 'Georgia, serif' },
   modal: { position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 100 },
   modalContent: { background: '#1a1a2e', border: '2px solid #daa520', padding: 24, maxWidth: 500, maxHeight: '80vh', overflowY: 'auto' as const },
-  newspaperModal: { background: '#1a1a2e', border: '2px solid #daa520', width: 540, maxHeight: '80vh', overflowY: 'auto' as const },
-  masthead: { padding: '20px 24px 16px', textAlign: 'center' as const, borderBottom: '3px double #daa520', background: 'linear-gradient(180deg, #1e1e35 0%, #1a1a2e 100%)' },
-  newspaperTitle: { fontFamily: "'Times New Roman', serif", textAlign: 'center' as const, color: '#daa520', margin: 0, fontSize: 28 },
-  mastheadDate: { fontSize: 13, color: '#9a9a9a', marginTop: 4 },
-  newsBody: { padding: '16px 24px 20px' },
-  sectionLabelPlayer: { fontSize: 11, textTransform: 'uppercase' as const, letterSpacing: 1, padding: '4px 0', marginBottom: 8, borderBottom: '1px solid #5a4a20', color: '#daa520' },
-  sectionLabelWorld: { fontSize: 11, textTransform: 'uppercase' as const, letterSpacing: 1, padding: '4px 0', marginBottom: 8, borderBottom: '1px solid #3a3520', color: '#666' },
-  headlineRow: { padding: '5px 0 5px 12px', margin: '3px 0', fontSize: 13, borderLeft: '3px solid transparent', lineHeight: '1.4' },
-  nationTag: { fontSize: 10, fontWeight: 'bold' as const, textTransform: 'uppercase' as const, letterSpacing: 0.5, marginRight: 6, opacity: 0.7 },
-  newsFooter: { padding: '12px 24px', borderTop: '1px solid #3a3520', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   headline: { margin: '6px 0', fontSize: 14 },
   techItem: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' },
 };

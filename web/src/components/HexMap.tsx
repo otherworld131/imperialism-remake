@@ -206,6 +206,10 @@ interface Props {
   isMovementMode?: boolean;
   isDeployMode?: boolean;
   deployableTiles?: Set<string>;
+  scale?: number;
+  offset?: { x: number; y: number };
+  onScaleChange?: (scale: number) => void;
+  onOffsetChange?: (offset: { x: number; y: number }) => void;
 }
 
 const CIVILIAN_EMOJI: Record<string, string> = {
@@ -223,15 +227,29 @@ export default function HexMap({
   onMapModeChange, onTileClick, onTileHover, showHiddenResources = false, showAiCivilians = false,
   selectedUnit, pendingMoves = [], validMoveTargets, isMovementMode = false,
   isDeployMode = false, deployableTiles,
+  scale: scaleProp, offset: offsetProp, onScaleChange, onOffsetChange,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [offset, setOffset] = useState({ x: -200, y: -100 });
+  // Use props if provided (controlled mode), otherwise use local state (uncontrolled)
+  const [localOffset, setLocalOffset] = useState({ x: -200, y: -100 });
   const [dragging, setDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [scale, setScale] = useState(0.7);
+  const [localScale, setLocalScale] = useState(0.7);
   const [dropupOpen, setDropupOpen] = useState(false);
   const lastTouchRef = useRef<{ x: number; y: number } | null>(null);
   const lastPinchDistRef = useRef<number | null>(null);
+
+  const offset = offsetProp ?? localOffset;
+  const scale = scaleProp ?? localScale;
+  const setOffset = onOffsetChange ?? setLocalOffset;
+  const setScale = (valOrFn: number | ((prev: number) => number)) => {
+    if (onScaleChange) {
+      const newVal = typeof valOrFn === 'function' ? valOrFn(scale) : valOrFn;
+      onScaleChange(newVal);
+    } else {
+      setLocalScale(valOrFn as any);
+    }
+  };
 
   const showPoliticalColors = mapMode !== 'terrain';
 
@@ -816,6 +834,15 @@ export default function HexMap({
       isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves, nationLabels]);
 
   useEffect(() => { render(); }, [render]);
+
+  // Re-render when canvas becomes visible after being hidden (display: none → visible)
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const observer = new ResizeObserver(() => { render(); });
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [render]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
