@@ -21,10 +21,33 @@ use crate::game_state::GameState;
 use crate::types::*;
 
 /// An AI action with its human-readable rationale.
+///
+/// When `is_non_action` is `true`, this represents a decision the AI *declined*
+/// to make (e.g., considered but did not propose an alliance). Non-actions are
+/// hidden from the newspaper by default and revealed only via a debug toggle.
 #[derive(Debug, Clone)]
 pub struct AiAction {
     pub text: String,
     pub reason: String,
+    pub is_non_action: bool,
+}
+
+impl AiAction {
+    pub fn action(text: String, reason: String) -> Self {
+        Self {
+            text,
+            reason,
+            is_non_action: false,
+        }
+    }
+
+    pub fn non_action(text: String, reason: String) -> Self {
+        Self {
+            text,
+            reason,
+            is_non_action: true,
+        }
+    }
 }
 
 /// Run AI decisions for all non-human Great Powers.

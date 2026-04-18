@@ -79,6 +79,9 @@ pub fn wasm_process_turn(game_json: &str) -> String {
                     if let Some(ref reason) = h.reason {
                         obj["reason"] = serde_json::json!(reason);
                     }
+                    if h.is_non_action {
+                        obj["is_non_action"] = serde_json::json!(true);
+                    }
                     obj
                 })
                 .collect::<Vec<_>>(),
@@ -3266,6 +3269,9 @@ pub fn wasm_get_newspaper_archive(game_json: &str) -> String {
                     let mut obj = serde_json::json!({"text": &h.text, "category": &h.category});
                     if let Some(ref reason) = h.reason {
                         obj["reason"] = serde_json::json!(reason);
+                    }
+                    if h.is_non_action {
+                        obj["is_non_action"] = serde_json::json!(true);
                     }
                     obj
                 })

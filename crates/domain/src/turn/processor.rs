@@ -3817,13 +3817,18 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
                 .map(|n| n.name.clone())
                 .unwrap_or_default();
 
+            let defender_allies_count = defender_allies.len();
             new_wars.push((*ally, *attacker, ally_name.clone(), attacker_name.clone()));
-            report.newspaper_headlines.push(Headline::new(
+            report.newspaper_headlines.push(Headline::with_reason(
                 format!(
                     "{} honors its alliance with {} and declares war on {}!",
                     ally_name, defender_name, attacker_name
                 ),
                 HeadlineCategory::War,
+                format!(
+                    "Alliance obligation: {} was attacked by {} — treaty auto-triggers defensive war ({} defending ally/allies in total)",
+                    defender_name, attacker_name, defender_allies_count
+                ),
             ));
         }
 
@@ -3870,13 +3875,18 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
                 .map(|n| n.name.clone())
                 .unwrap_or_default();
 
+            let attacker_allies_count = attacker_allies.len();
             new_wars.push((*ally, *defender, ally_name.clone(), defender_name.clone()));
-            report.newspaper_headlines.push(Headline::new(
+            report.newspaper_headlines.push(Headline::with_reason(
                 format!(
                     "{} honors its alliance with {} and declares war on {}!",
                     ally_name, attacker_name, defender_name
                 ),
                 HeadlineCategory::War,
+                format!(
+                    "Alliance obligation: {} declared war on {} — treaty auto-triggers offensive support ({} supporting ally/allies in total)",
+                    attacker_name, defender_name, attacker_allies_count
+                ),
             ));
         }
     }
@@ -4300,13 +4310,24 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
         HeadlineCategory::Default,
     ));
 
-    // AI actions (tech research, military buildup, war declarations)
+    // AI actions (tech research, military buildup, war declarations).
+    // Non-actions ("considered but declined") flow through with is_non_action=true
+    // so the UI can filter them behind a debug toggle.
     for action in &report.ai_actions {
-        report.newspaper_headlines.push(Headline::with_reason(
-            action.text.clone(),
-            HeadlineCategory::Default,
-            action.reason.clone(),
-        ));
+        let headline = if action.is_non_action {
+            Headline::non_action(
+                action.text.clone(),
+                HeadlineCategory::Default,
+                action.reason.clone(),
+            )
+        } else {
+            Headline::with_reason(
+                action.text.clone(),
+                HeadlineCategory::Default,
+                action.reason.clone(),
+            )
+        };
+        report.newspaper_headlines.push(headline);
     }
 
     // Voluntary incorporations — major headline
@@ -4774,10 +4795,12 @@ mod tests {
             crate::ai::AiAction {
                 text: "Scientists in Testland have discovered Steam Engine!".to_string(),
                 reason: "Economic personality selected tech (cost=$500)".to_string(),
+                is_non_action: false,
             },
             crate::ai::AiAction {
                 text: "Testland has declared war on Otherland!".to_string(),
                 reason: "Combined score 2.30 > threshold 1.50".to_string(),
+                is_non_action: false,
             },
         ];
 

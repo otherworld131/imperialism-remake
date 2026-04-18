@@ -158,6 +158,7 @@ pub fn ai_manage_diplomacy(
                     "{} has 0 provinces left; nothing to fight over",
                     target_name
                 ),
+                is_non_action: false,
             });
         }
     }
@@ -235,6 +236,8 @@ pub fn ai_manage_diplomacy(
     };
 
     // Phase 1: Propose non-aggression pacts with Minor Nations that have embassies
+    let mut nap_proposed_this_turn = false;
+    let mut nap_decline_summary: Option<String> = None;
     if propose_pact_chance {
         // Only propose pacts with minor nations that still have provinces
         let minor_ids: Vec<NationId> = game
@@ -243,6 +246,25 @@ pub fn ai_manage_diplomacy(
             .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
             .map(|n| n.id)
             .collect();
+
+        let mut embassy_partners = 0usize;
+        let mut existing_pacts = 0usize;
+        for mn_id in &minor_ids {
+            let has_embassy = game
+                .diplomacy
+                .get_relation(nation_id, *mn_id)
+                .is_some_and(|r| r.has_embassy);
+            if has_embassy {
+                embassy_partners += 1;
+                if game.diplomacy.has_treaty(
+                    nation_id,
+                    *mn_id,
+                    crate::events::TreatyType::NonAggressionPact,
+                ) {
+                    existing_pacts += 1;
+                }
+            }
+        }
 
         for mn_id in minor_ids {
             let has_embassy = game
@@ -263,6 +285,7 @@ pub fn ai_manage_diplomacy(
             }
 
             if game.diplomacy.propose_pact(nation_id, mn_id).is_ok() {
+                nap_proposed_this_turn = true;
                 let nation_name = game
                     .get_nation(nation_id)
                     .map(|n| n.name.clone())
@@ -281,6 +304,7 @@ pub fn ai_manage_diplomacy(
                         "{:?} personality favors non-aggression pacts with embassy partners",
                         personality
                     ),
+                    is_non_action: false,
                 });
                 let turn = game.turn;
                 if !game
@@ -292,10 +316,48 @@ pub fn ai_manage_diplomacy(
                 }
             }
         }
+
+        if !nap_proposed_this_turn {
+            nap_decline_summary = Some(if embassy_partners == 0 {
+                "no minor nations with embassy connection".to_string()
+            } else if existing_pacts >= embassy_partners {
+                format!(
+                    "all {} embassy partners already have pacts",
+                    embassy_partners
+                )
+            } else {
+                format!(
+                    "{} embassy partners but none accepted (propose_pact failed)",
+                    embassy_partners
+                )
+            });
+        }
+    } else {
+        nap_decline_summary = Some(format!(
+            "{:?} personality does not pursue non-aggression pacts",
+            personality
+        ));
+    }
+
+    if !nap_proposed_this_turn && let Some(why) = nap_decline_summary {
+        let nation_name = game
+            .get_nation(nation_id)
+            .map(|n| n.name.clone())
+            .unwrap_or_default();
+        actions.push(super::AiAction {
+            text: format!(
+                "{} did not sign any non-aggression pact this turn",
+                nation_name
+            ),
+            reason: why,
+            is_non_action: true,
+        });
     }
 
     // Phase 2: Propose alliances with other Great Powers
     // Wait until turn 10+ so diplomatic history develops, and limit alliances
+    let mut alliance_proposed_this_turn = false;
+    let mut alliance_decline_summary: Option<String> = None;
     if propose_alliance_chance && turn_number >= 10 {
         let max_alliances: usize = 'val: {
             #[cfg(feature = "lua")]
@@ -321,7 +383,10 @@ pub fn ai_manage_diplomacy(
             .count();
 
         if existing_alliances >= max_alliances {
-            // Already have max alliances, skip
+            alliance_decline_summary = Some(format!(
+                "already holds {}/{} alliances; cap reached",
+                existing_alliances, max_alliances
+            ));
         } else {
             let gp_ids: Vec<NationId> = game
                 .nations
@@ -333,17 +398,31 @@ pub fn ai_manage_diplomacy(
                 .collect();
 
             let mut alliances_formed = existing_alliances;
+            // Track decline reasons for the best-considered candidate so we can
+            // surface a summary non-action if nothing is proposed this turn.
+            let mut best_decline: Option<(String, String)> = None; // (gp_name, reason)
+            let mut considered_any = false;
             for gp_id in gp_ids {
+                considered_any = true;
                 // Re-check cap inside loop to prevent forming more than max total
                 if alliances_formed >= max_alliances {
                     break;
                 }
+
+                let gp_name_for_decline = game
+                    .get_nation(gp_id)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_default();
 
                 let at_war = game
                     .diplomacy
                     .get_relation(nation_id, gp_id)
                     .is_some_and(|r| r.at_war);
                 if at_war {
+                    best_decline.get_or_insert((
+                        gp_name_for_decline.clone(),
+                        "currently at war".to_string(),
+                    ));
                     continue;
                 }
 
@@ -359,6 +438,10 @@ pub fn ai_manage_diplomacy(
                 // Skip nations with low standing (<50) — AI is less likely to accept treaties
                 let partner_standing = game.diplomacy.get_standing(gp_id);
                 if partner_standing < 50 {
+                    best_decline.get_or_insert((
+                        gp_name_for_decline.clone(),
+                        format!("partner standing {} < 50", partner_standing),
+                    ));
                     continue;
                 }
 
@@ -369,6 +452,10 @@ pub fn ai_manage_diplomacy(
                     .map(|r| r.score)
                     .unwrap_or(0);
                 if score < 0 {
+                    best_decline.get_or_insert((
+                        gp_name_for_decline.clone(),
+                        format!("relation score {} is negative", score),
+                    ));
                     continue;
                 }
 
@@ -387,6 +474,7 @@ pub fn ai_manage_diplomacy(
                     // Count as "formed" for the max-alliance cap within this turn's
                     // proposal loop so we don't over-propose.
                     alliances_formed += 1;
+                    alliance_proposed_this_turn = true;
                     let nation_name = game
                         .get_nation(nation_id)
                         .map(|n| n.name.clone())
@@ -401,10 +489,42 @@ pub fn ai_manage_diplomacy(
                             "{:?} personality; relationship score {} and partner standing {}",
                             personality, score, partner_standing
                         ),
+                        is_non_action: false,
                     });
                 }
             }
-        } // end else (existing_alliances < 2)
+
+            if !alliance_proposed_this_turn && alliance_decline_summary.is_none() {
+                alliance_decline_summary = Some(match (best_decline, considered_any) {
+                    (Some((name, why)), _) => format!("closest candidate {} — {}", name, why),
+                    (None, true) => "no non-allied Great Powers remain".to_string(),
+                    (None, false) => "no eligible Great Power candidates".to_string(),
+                });
+            }
+        } // end else (existing_alliances < max_alliances)
+    } else if !propose_alliance_chance {
+        alliance_decline_summary = Some(format!(
+            "{:?} personality does not pursue alliances",
+            personality
+        ));
+    } else {
+        alliance_decline_summary = Some(format!(
+            "turn {} < 10 — diplomatic history too short to justify alliance",
+            turn_number
+        ));
+    }
+
+    // Emit a single summary non-action when no alliance was proposed this turn.
+    if !alliance_proposed_this_turn && let Some(why) = alliance_decline_summary {
+        let nation_name = game
+            .get_nation(nation_id)
+            .map(|n| n.name.clone())
+            .unwrap_or_default();
+        actions.push(super::AiAction {
+            text: format!("{} did not propose any alliance this turn", nation_name),
+            reason: why,
+            is_non_action: true,
+        });
     }
 
     // Phase 3: Send cash grants to Minor Nations with embassies
@@ -594,6 +714,7 @@ pub fn ai_pre_election_strategy(
                         "election approaching at turn {}; {:?} personality building influence",
                         game.turn.0, personality
                     ),
+                    is_non_action: false,
                 });
             }
         }
@@ -926,8 +1047,8 @@ mod tests {
             "Aggressive AI should not propose pacts"
         );
         assert!(
-            actions.is_empty(),
-            "Aggressive AI should not take diplomatic actions"
+            !actions.iter().any(|a| !a.is_non_action),
+            "Aggressive AI should not take diplomatic actions (non-actions allowed)"
         );
     }
 

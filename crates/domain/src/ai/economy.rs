@@ -491,6 +491,7 @@ pub fn ai_manage_resources(
                 goods_sell_threshold,
                 total_revenue.as_dollars()
             ),
+            is_non_action: false,
         });
     }
 }

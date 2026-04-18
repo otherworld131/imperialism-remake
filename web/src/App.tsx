@@ -56,6 +56,95 @@ function extractNationTag(text: string, nations?: any[]): string | null {
   return null;
 }
 
+const NEWS_CATEGORY_OPTIONS: { value: string; label: string }[] = [
+  { value: 'all',       label: 'All topics' },
+  { value: 'war',       label: 'War' },
+  { value: 'battle',    label: 'Battle' },
+  { value: 'diplomacy', label: 'Diplomacy' },
+  { value: 'growth',    label: 'Growth' },
+  { value: 'trade',     label: 'Trade' },
+  { value: 'crisis',    label: 'Crisis' },
+  { value: 'politics',  label: 'Politics' },
+  { value: 'military',  label: 'Military' },
+  { value: 'default',   label: 'Other' },
+];
+
+function applyNewsFilters(
+  headlines: Headline[],
+  opts: { showNonActions: boolean; category: string; country: string },
+): Headline[] {
+  return headlines.filter(h => {
+    if (h.is_non_action && !opts.showNonActions) return false;
+    if (opts.category !== 'all' && h.category !== opts.category) return false;
+    if (opts.country !== 'all' && !h.text.includes(opts.country)) return false;
+    return true;
+  });
+}
+
+function NewsFilters(props: {
+  category: string;
+  country: string;
+  greatPowers: string[];
+  onCategoryChange: (v: string) => void;
+  onCountryChange: (v: string) => void;
+}) {
+  const selectStyle: React.CSSProperties = {
+    background: '#1a1a2e',
+    color: '#e0d8c0',
+    border: '1px solid #3a3520',
+    borderRadius: 3,
+    padding: '2px 6px',
+    fontSize: 12,
+    fontFamily: 'inherit',
+  };
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 16px', borderBottom: '1px solid #3a3520', fontSize: 12 }}>
+      <span style={{ color: '#888' }}>Filter:</span>
+      <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        <span style={{ color: '#aaa' }}>Topic</span>
+        <select value={props.category} onChange={e => props.onCategoryChange(e.target.value)} style={selectStyle}>
+          {NEWS_CATEGORY_OPTIONS.map(opt => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
+      </label>
+      <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        <span style={{ color: '#aaa' }}>Country</span>
+        <select value={props.country} onChange={e => props.onCountryChange(e.target.value)} style={selectStyle}>
+          <option value="all">All countries</option>
+          {props.greatPowers.map(name => (
+            <option key={name} value={name}>{name}</option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
+function HeadlineView(props: { headline: Headline; showReason: boolean; nationTag?: string | null }) {
+  const { headline: h, showReason, nationTag } = props;
+  const color = CATEGORY_COLORS[h.category] || '#e0d8c0';
+  const border = CATEGORY_COLORS[h.category] || '#3a3520';
+  // Non-actions render dimmer to visually distinguish them
+  const rowStyle: React.CSSProperties = {
+    ...styles.headlineRow,
+    borderLeftColor: border,
+    color,
+    opacity: h.is_non_action ? 0.55 : 1,
+    fontStyle: h.is_non_action ? 'italic' : 'normal',
+  };
+  return (
+    <div style={rowStyle}>
+      {nationTag && <span style={styles.nationTag}>{nationTag}</span>}
+      {h.is_non_action && <span style={{ color: '#888', marginRight: 4 }}>[no action]</span>}
+      {h.text}
+      {showReason && h.reason && (
+        <div style={{ fontSize: 11, color: '#888', marginTop: 2, fontStyle: 'italic', paddingLeft: 8 }}>{h.reason}</div>
+      )}
+    </div>
+  );
+}
+
 import HexMap from './components/HexMap';
 import GameSetup from './components/GameSetup';
 import UnitPanel from './components/UnitPanel';
@@ -84,6 +173,9 @@ function App() {
   const [showHiddenResources, setShowHiddenResources] = useState(false);
   const [showAiCivilians, setShowAiCivilians] = useState(false);
   const [showAiReasoning, setShowAiReasoning] = useState(false);
+  const [showAiNonActions, setShowAiNonActions] = useState(false);
+  const [newsFilterCategory, setNewsFilterCategory] = useState<string>('all');
+  const [newsFilterCountry, setNewsFilterCountry] = useState<string>('all');
   const [mapMode, setMapMode] = useState<MapMode>('terrain');
   const [selectedNation, setSelectedNation] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<string>('');
@@ -882,6 +974,10 @@ function App() {
                   <input type="checkbox" checked={showAiReasoning} onChange={e => setShowAiReasoning(e.target.checked)} />
                   {' '}Show AI reasoning
                 </label>
+                <label>
+                  <input type="checkbox" checked={showAiNonActions} onChange={e => setShowAiNonActions(e.target.checked)} />
+                  {' '}Show AI non-actions
+                </label>
               </div>
 
               <h3 style={styles.panelTitle}>Nations</h3>
@@ -951,8 +1047,16 @@ function App() {
 
       {/* Newspaper modal — grouped */}
       {showNewspaper && (() => {
-        const playerNews = headlines.filter(h => h.text.includes(playerName));
-        const worldNews = headlines.filter(h => !h.text.includes(playerName));
+        const visible = applyNewsFilters(headlines, {
+          showNonActions: showAiNonActions,
+          category: newsFilterCategory,
+          country: newsFilterCountry,
+        });
+        const playerNews = visible.filter(h => h.text.includes(playerName));
+        const worldNews = visible.filter(h => !h.text.includes(playerName));
+        const greatPowers: string[] = (gameState?.nations || [])
+          .filter((n: any) => n.nation_type === 'GreatPower')
+          .map((n: any) => n.name);
         return (
           <div style={styles.modal} onClick={dismissNewspaper}>
             <div style={styles.newspaperModal} onClick={e => e.stopPropagation()}>
@@ -960,35 +1064,38 @@ function App() {
                 <h2 style={styles.newspaperTitle}>The Imperial Times</h2>
                 <div style={styles.mastheadDate}>{year} Q{quarter} — Turn {turnNumber}</div>
               </div>
+              <NewsFilters
+                category={newsFilterCategory}
+                country={newsFilterCountry}
+                greatPowers={greatPowers}
+                onCategoryChange={setNewsFilterCategory}
+                onCountryChange={setNewsFilterCountry}
+              />
               <div style={styles.newsBody}>
+                {playerNews.length === 0 && worldNews.length === 0 && (
+                  <div style={{ padding: 12, color: '#666', fontStyle: 'italic' }}>
+                    No headlines match the current filters.
+                  </div>
+                )}
                 {playerNews.length > 0 && (
                   <div style={{ marginBottom: 16 }}>
                     <div style={styles.sectionLabelPlayer}>Your Empire — {playerName}</div>
                     {playerNews.map((h, i) => (
-                      <div key={i} style={{ ...styles.headlineRow, borderLeftColor: CATEGORY_COLORS[h.category] || '#3a3520', color: CATEGORY_COLORS[h.category] || '#e0d8c0' }}>
-                        {h.text}
-                        {showAiReasoning && h.reason && (
-                          <div style={{ fontSize: 11, color: '#888', marginTop: 2, fontStyle: 'italic', paddingLeft: 8 }}>{h.reason}</div>
-                        )}
-                      </div>
+                      <HeadlineView key={i} headline={h} showReason={showAiReasoning} />
                     ))}
                   </div>
                 )}
                 {worldNews.length > 0 && (
                   <div>
                     <div style={styles.sectionLabelWorld}>World News</div>
-                    {worldNews.map((h, i) => {
-                      const tag = extractNationTag(h.text, gameState?.nations);
-                      return (
-                        <div key={i} style={{ ...styles.headlineRow, borderLeftColor: CATEGORY_COLORS[h.category] || '#3a3520', color: CATEGORY_COLORS[h.category] || '#e0d8c0' }}>
-                          {tag && <span style={styles.nationTag}>{tag}</span>}
-                          {h.text}
-                          {showAiReasoning && h.reason && (
-                            <div style={{ fontSize: 11, color: '#888', marginTop: 2, fontStyle: 'italic', paddingLeft: 8 }}>{h.reason}</div>
-                          )}
-                        </div>
-                      );
-                    })}
+                    {worldNews.map((h, i) => (
+                      <HeadlineView
+                        key={i}
+                        headline={h}
+                        showReason={showAiReasoning}
+                        nationTag={extractNationTag(h.text, gameState?.nations)}
+                      />
+                    ))}
                   </div>
                 )}
               </div>
@@ -1002,9 +1109,13 @@ function App() {
       })()}
 
       {/* Newspaper archive modal */}
-      {showArchive && (
+      {showArchive && (() => {
+        const greatPowers: string[] = (gameState?.nations || [])
+          .filter((n: any) => n.nation_type === 'GreatPower')
+          .map((n: any) => n.name);
+        return (
         <div style={styles.modal} onClick={() => setShowArchive(false)}>
-          <div style={{ ...styles.newspaperModal, width: 640, display: 'flex', flexDirection: 'column' as const }} onClick={e => e.stopPropagation()}>
+          <div style={{ ...styles.newspaperModal, width: 720, display: 'flex', flexDirection: 'column' as const }} onClick={e => e.stopPropagation()}>
             <div style={styles.masthead}>
               <h2 style={styles.newspaperTitle}>The Imperial Times — Archive</h2>
               <div style={styles.mastheadDate}>
@@ -1016,6 +1127,13 @@ function App() {
                   : `${archiveData.length} reports available`}
               </div>
             </div>
+            <NewsFilters
+              category={newsFilterCategory}
+              country={newsFilterCountry}
+              greatPowers={greatPowers}
+              onCategoryChange={setNewsFilterCategory}
+              onCountryChange={setNewsFilterCountry}
+            />
             <div style={{ display: 'flex', flex: 1, minHeight: 0, maxHeight: '60vh' }}>
               {/* Turn list */}
               <div style={{ width: 140, borderRight: '1px solid #333', overflowY: 'auto' as const, padding: '8px 0' }}>
@@ -1041,20 +1159,23 @@ function App() {
                 {selectedArchiveTurn !== null && (() => {
                   const entry = archiveData.find(a => a.turn === selectedArchiveTurn);
                   if (!entry) return <div style={{ color: '#666' }}>No data</div>;
-                  const pNews = entry.headlines.filter(h => h.text.includes(playerName));
-                  const wNews = entry.headlines.filter(h => !h.text.includes(playerName));
+                  const visible = applyNewsFilters(entry.headlines, {
+                    showNonActions: showAiNonActions,
+                    category: newsFilterCategory,
+                    country: newsFilterCountry,
+                  });
+                  const pNews = visible.filter(h => h.text.includes(playerName));
+                  const wNews = visible.filter(h => !h.text.includes(playerName));
+                  if (pNews.length === 0 && wNews.length === 0) {
+                    return <div style={{ color: '#666', fontStyle: 'italic' }}>No headlines match the current filters.</div>;
+                  }
                   return (
                     <>
                       {pNews.length > 0 && (
                         <div style={{ marginBottom: 12 }}>
                           <div style={styles.sectionLabelPlayer}>Your Empire — {playerName}</div>
                           {pNews.map((h, i) => (
-                            <div key={i} style={{ ...styles.headlineRow, borderLeftColor: CATEGORY_COLORS[h.category] || '#3a3520', color: CATEGORY_COLORS[h.category] || '#e0d8c0' }}>
-                              {h.text}
-                              {showAiReasoning && h.reason && (
-                                <div style={{ fontSize: 11, color: '#888', marginTop: 2, fontStyle: 'italic', paddingLeft: 8 }}>{h.reason}</div>
-                              )}
-                            </div>
+                            <HeadlineView key={i} headline={h} showReason={showAiReasoning} />
                           ))}
                         </div>
                       )}
@@ -1062,12 +1183,12 @@ function App() {
                         <div>
                           <div style={styles.sectionLabelWorld}>World News</div>
                           {wNews.map((h, i) => (
-                            <div key={i} style={{ ...styles.headlineRow, borderLeftColor: CATEGORY_COLORS[h.category] || '#3a3520', color: CATEGORY_COLORS[h.category] || '#e0d8c0' }}>
-                              {h.text}
-                              {showAiReasoning && h.reason && (
-                                <div style={{ fontSize: 11, color: '#888', marginTop: 2, fontStyle: 'italic', paddingLeft: 8 }}>{h.reason}</div>
-                              )}
-                            </div>
+                            <HeadlineView
+                              key={i}
+                              headline={h}
+                              showReason={showAiReasoning}
+                              nationTag={extractNationTag(h.text, gameState?.nations)}
+                            />
                           ))}
                         </div>
                       )}
@@ -1082,7 +1203,8 @@ function App() {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Tech panel */}
       {showTech && (

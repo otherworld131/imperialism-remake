@@ -164,6 +164,7 @@ pub(crate) fn ai_build_military(
                     treasury.as_dollars(),
                     personality
                 ),
+                is_non_action: false,
             });
         }
     } else if army_count < tier2_max && treasury > tier2_treasury {
@@ -208,6 +209,7 @@ pub(crate) fn ai_build_military(
                     tier2_max,
                     treasury.as_dollars()
                 ),
+                is_non_action: false,
             });
         }
     } else if army_count >= tier2_max && treasury > tier3_treasury {
@@ -267,6 +269,7 @@ pub(crate) fn ai_build_military(
                                 tier3_max,
                                 unit_type
                             ),
+                            is_non_action: false,
                         });
                     }
                 } else {
@@ -297,6 +300,7 @@ pub(crate) fn ai_build_military(
                             nation.army.len(),
                             treasury.as_dollars()
                         ),
+                        is_non_action: false,
                     });
                 }
             }
@@ -513,10 +517,17 @@ pub(crate) fn ai_declare_wars(
         struct Candidate {
             target_id: NationId,
             combined_score: f64,
-            #[allow(dead_code)]
             need_score: f64,
-            #[allow(dead_code)]
             opportunity_score: f64,
+            // Sub-components captured for reason text
+            base_need: f64,
+            resource_bonus: f64,
+            missing_count: usize,
+            army_ratio: f64,
+            province_bonus: f64,
+            at_war_bonus: f64,
+            coalition_factor: f64,
+            relationship_penalty: f64,
         }
 
         let mut best: Option<Candidate> = None;
@@ -746,6 +757,14 @@ pub(crate) fn ai_declare_wars(
                     combined_score,
                     need_score,
                     opportunity_score,
+                    base_need,
+                    resource_bonus,
+                    missing_count,
+                    army_ratio,
+                    province_bonus,
+                    at_war_bonus,
+                    coalition_factor,
+                    relationship_penalty,
                 });
             }
         }
@@ -753,7 +772,44 @@ pub(crate) fn ai_declare_wars(
         // ── 5-6. Best target + threshold check ────────────────
         let candidate = match best {
             Some(c) if c.combined_score > war_threshold => c,
-            _ => continue,
+            Some(c) => {
+                // Considered a best candidate but scored below threshold —
+                // emit a non-action summarizing why we did not declare war.
+                let target_name = nation_infos
+                    .iter()
+                    .find(|(id, _, _, _, _)| *id == c.target_id)
+                    .map(|(_, name, _, _, _)| name.clone())
+                    .unwrap_or_else(|| "Unknown".to_string());
+                actions.push(super::AiAction {
+                    text: format!(
+                        "{} did not declare war this turn",
+                        attacker_name
+                    ),
+                    reason: format!(
+                        "best candidate {} scored combined={:.2} (need={:.2}, opp={:.2}) < threshold {:.2}; relationship_penalty={:.2}",
+                        target_name,
+                        c.combined_score,
+                        c.need_score,
+                        c.opportunity_score,
+                        war_threshold,
+                        c.relationship_penalty,
+                    ),
+                    is_non_action: true,
+                });
+                continue;
+            }
+            None => {
+                // No eligible candidates (all at war, allied, anarchic, dogpiled, or no targets)
+                actions.push(super::AiAction {
+                    text: format!(
+                        "{} did not declare war this turn",
+                        attacker_name
+                    ),
+                    reason: "no eligible targets (already at war, allied, anarchic, or dogpile-prevented)".to_string(),
+                    is_non_action: true,
+                });
+                continue;
+            }
         };
 
         let target_id = candidate.target_id;
@@ -838,12 +894,25 @@ pub(crate) fn ai_declare_wars(
         actions.push(super::AiAction {
             text: format!("{} has declared war on {}!", attacker_name, target_name),
             reason: format!(
-                "need={:.2}, opportunity={:.2}, combined={:.2} > threshold={:.2}",
-                candidate.need_score,
-                candidate.opportunity_score,
+                "combined={:.2} > threshold={:.2}. \
+                 need={:.2} = base_need {:.2} (target provinces/5) + resource_bonus {:.2} ({} missing resources). \
+                 opportunity={:.2} = army_ratio {:.2} (firepower advantage) + province_bonus {:.2} (larger empire) + at_war_bonus {:.2} (target already at war). \
+                 opportunism_weight={:.2}, coalition_factor={:.2} (ally power ratio), relationship_penalty={:.2} (standing/treaties/pact-defense risk).",
                 candidate.combined_score,
-                war_threshold
+                war_threshold,
+                candidate.need_score,
+                candidate.base_need,
+                candidate.resource_bonus,
+                candidate.missing_count,
+                candidate.opportunity_score,
+                candidate.army_ratio,
+                candidate.province_bonus,
+                candidate.at_war_bonus,
+                opportunism_weight,
+                candidate.coalition_factor,
+                candidate.relationship_penalty,
             ),
+            is_non_action: false,
         });
         let turn = game.turn;
         game.history.push((

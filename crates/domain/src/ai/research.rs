@@ -101,6 +101,7 @@ pub(crate) fn ai_research_tech(
                             tech_name,
                             tech_cost.as_dollars()
                         ),
+                        is_non_action: false,
                     });
                     let turn = game.turn;
                     let entry_text = format!("{} researched {}", nation_name, tech_name);
@@ -220,6 +221,7 @@ pub(crate) fn ai_research_tech(
                 all_candidates.len(),
                 tech_cost.as_dollars()
             ),
+            is_non_action: false,
         });
         let turn = game.turn;
         let entry_text = format!("{} researched {}", nation_name, tech_name);
@@ -262,6 +264,7 @@ pub(crate) fn ai_research_tech(
                         treasury.as_dollars(),
                         cand_cost.as_dollars()
                     ),
+                    is_non_action: false,
                 });
                 let turn = game.turn;
                 let entry_text = format!("{} researched {}", nation_name, cand_name);

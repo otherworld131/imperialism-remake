@@ -33,6 +33,15 @@ pub struct Headline {
     /// AI decision rationale; `None` for non-AI headlines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// When `true`, this headline describes a decision the AI *declined* to make
+    /// (e.g., "X did not declare war this turn"). Hidden from the newspaper by
+    /// default; revealed by the "Show AI non-actions" debug toggle.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_non_action: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Headline {
@@ -41,6 +50,7 @@ impl Headline {
             text,
             category,
             reason: None,
+            is_non_action: false,
         }
     }
 
@@ -49,6 +59,16 @@ impl Headline {
             text,
             category,
             reason: Some(reason),
+            is_non_action: false,
+        }
+    }
+
+    pub fn non_action(text: String, category: HeadlineCategory, reason: String) -> Self {
+        Self {
+            text,
+            category,
+            reason: Some(reason),
+            is_non_action: true,
         }
     }
 }

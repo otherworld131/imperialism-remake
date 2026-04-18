@@ -87,6 +87,7 @@ export interface Headline {
   text: string;
   category: 'war' | 'battle' | 'diplomacy' | 'growth' | 'trade' | 'crisis' | 'politics' | 'military' | 'default';
   reason?: string;
+  is_non_action?: boolean;
 }
 
 export interface ArchivedNewspaper {

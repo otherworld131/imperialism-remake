@@ -211,6 +211,7 @@ fn ai_build_forts(
                 enemies.len(),
                 nation.treasury.as_dollars(),
             ),
+            is_non_action: false,
         });
     }
 }
@@ -450,6 +451,23 @@ fn ai_propose_peace(
         };
 
         if !should_propose {
+            // Non-action: AI stays at war with this enemy despite evaluating
+            actions.push(super::AiAction {
+                text: format!(
+                    "{} did not propose peace with {}",
+                    nation_name, enemy_name
+                ),
+                reason: format!(
+                    "war_duration={}, win_likelihood={:.2}, captured={}, lost={}, won_enough={}, lost_enough={} — conditions for peace not met",
+                    war_duration,
+                    assessment.win_likelihood,
+                    worthiness.provinces_captured,
+                    worthiness.provinces_lost,
+                    worthiness.won_enough,
+                    worthiness.lost_enough,
+                ),
+                is_non_action: true,
+            });
             continue;
         }
 
@@ -513,6 +531,7 @@ fn ai_propose_peace(
                         worthiness.won_enough,
                         worthiness.lost_enough,
                     ),
+                    is_non_action: false,
                 });
                 let turn = game.turn;
                 game.history.push((
@@ -547,6 +566,7 @@ fn ai_propose_peace(
                     worthiness.won_enough,
                     worthiness.lost_enough,
                 ),
+                is_non_action: false,
             });
         } else {
             // AI-to-minor-nation: auto-accept (minor nations are passive)
@@ -570,6 +590,7 @@ fn ai_propose_peace(
                     worthiness.won_enough,
                     worthiness.lost_enough,
                 ),
+                is_non_action: false,
             });
             let turn = game.turn;
             game.history.push((
@@ -1002,8 +1023,8 @@ mod tests {
         );
 
         assert!(
-            actions.is_empty(),
-            "AI should not sue for peace when not losing; actions: {:?}",
+            !actions.iter().any(|a| !a.is_non_action),
+            "AI should not sue for peace when not losing (non-actions allowed); actions: {:?}",
             actions
         );
     }

@@ -538,6 +538,7 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
         actions.push(super::AiAction {
             text: format!("{} has been expanding its military forces", nation_name),
             reason: "Spending system selected military category for expansion".to_string(),
+            is_non_action: false,
         });
     }
 }

@@ -277,6 +277,7 @@ pub fn ai_naval_strategy(
                     "Enemy naval firepower {} vs our {}; building frigates to close the gap",
                     max_enemy_naval_fp, our_naval_fp
                 ),
+                is_non_action: false,
             });
         }
         return; // Focus on shipbuilding when outmatched
@@ -354,6 +355,7 @@ pub fn ai_naval_strategy(
                             "Naval superiority ({} vs enemy {}) and no land-adjacent provinces to attack; launching amphibious assault",
                             our_naval_fp, max_enemy_naval_fp
                         ),
+                        is_non_action: false,
                     });
 
                     if game.ai_debug {
