@@ -23,6 +23,36 @@ pub enum HeadlineCategory {
     Default,
 }
 
+// ── Headline struct ────────────────────────────────────────────
+
+/// A newspaper headline with optional AI reasoning.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Headline {
+    pub text: String,
+    pub category: HeadlineCategory,
+    /// AI decision rationale; `None` for non-AI headlines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl Headline {
+    pub fn new(text: String, category: HeadlineCategory) -> Self {
+        Self {
+            text,
+            category,
+            reason: None,
+        }
+    }
+
+    pub fn with_reason(text: String, category: HeadlineCategory, reason: String) -> Self {
+        Self {
+            text,
+            category,
+            reason: Some(reason),
+        }
+    }
+}
+
 // ── Treaty & Victory enums ─────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]

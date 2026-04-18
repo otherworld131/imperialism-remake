@@ -39,7 +39,7 @@ pub(crate) fn ai_research_tech(
     game: &mut GameState,
     nation_id: NationId,
     current_year: u32,
-    actions: &mut Vec<String>,
+    actions: &mut Vec<super::AiAction>,
 ) {
     let personality = get_personality(game, nation_id);
 
@@ -90,10 +90,18 @@ pub(crate) fn ai_research_tech(
                             tech_cost.as_dollars()
                         );
                     }
-                    actions.push(format!(
-                        "Scientists in {} have discovered {}!",
-                        nation_name, tech_name
-                    ));
+                    actions.push(super::AiAction {
+                        text: format!(
+                            "Scientists in {} have discovered {}!",
+                            nation_name, tech_name
+                        ),
+                        reason: format!(
+                            "Lua/{} personality selected tech \"{}\" (cost=${})",
+                            personality,
+                            tech_name,
+                            tech_cost.as_dollars()
+                        ),
+                    });
                     let turn = game.turn;
                     let entry_text = format!("{} researched {}", nation_name, tech_name);
                     if !game
@@ -201,10 +209,18 @@ pub(crate) fn ai_research_tech(
         nation.treasury = remaining;
         nation.research_tech(tech_id);
         let nation_name = nation.name.clone();
-        actions.push(format!(
-            "Scientists in {} have discovered {}!",
-            nation_name, tech_name
-        ));
+        actions.push(super::AiAction {
+            text: format!(
+                "Scientists in {} have discovered {}!",
+                nation_name, tech_name
+            ),
+            reason: format!(
+                "{} personality preference, picked from {} candidates (cost=${})",
+                personality,
+                all_candidates.len(),
+                tech_cost.as_dollars()
+            ),
+        });
         let turn = game.turn;
         let entry_text = format!("{} researched {}", nation_name, tech_name);
         // Deduplicate: only push if this exact text doesn't already exist for this turn
@@ -236,10 +252,17 @@ pub(crate) fn ai_research_tech(
                 nation.treasury = remaining;
                 nation.research_tech(*cand_id);
                 let nation_name = nation.name.clone();
-                actions.push(format!(
-                    "Scientists in {} have discovered {}!",
-                    nation_name, cand_name
-                ));
+                actions.push(super::AiAction {
+                    text: format!(
+                        "Scientists in {} have discovered {}!",
+                        nation_name, cand_name
+                    ),
+                    reason: format!(
+                        "Fallback research path: treasury ${} > $10,000, picked cheapest affordable tech (cost=${})",
+                        treasury.as_dollars(),
+                        cand_cost.as_dollars()
+                    ),
+                });
                 let turn = game.turn;
                 let entry_text = format!("{} researched {}", nation_name, cand_name);
                 if !game

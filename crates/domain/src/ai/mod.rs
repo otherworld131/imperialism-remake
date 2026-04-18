@@ -20,11 +20,18 @@ pub use tactical::ai_tactical_decisions;
 use crate::game_state::GameState;
 use crate::types::*;
 
+/// An AI action with its human-readable rationale.
+#[derive(Debug, Clone)]
+pub struct AiAction {
+    pub text: String,
+    pub reason: String,
+}
+
 /// Run AI decisions for all non-human Great Powers.
 ///
 /// Returns a list of notable actions taken by AI nations, suitable for
 /// inclusion in the newspaper / turn report.
-pub fn run_ai_turns(game: &mut GameState) -> Vec<String> {
+pub fn run_ai_turns(game: &mut GameState) -> Vec<AiAction> {
     let human_id = game.human_player_nation;
     let current_year = game.turn.year();
 
@@ -36,7 +43,7 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<String> {
         .map(|n| n.id)
         .collect();
 
-    let mut actions: Vec<String> = Vec::new();
+    let mut actions: Vec<AiAction> = Vec::new();
 
     // Shuffle AI nation processing order to prevent first-mover advantage
     let mut ai_ids = ai_nation_ids.clone();

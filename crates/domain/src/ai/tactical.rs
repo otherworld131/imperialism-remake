@@ -18,7 +18,11 @@ use super::common::{AiPersonality, get_personality};
 /// - **Retreat from losing wars**: If at war for 20+ turns and has lost provinces
 ///   (owns fewer than started with), propose peace. Diplomatic AI: 10 turns.
 ///   Aggressive AI: 30 turns.
-pub fn ai_tactical_decisions(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
+pub fn ai_tactical_decisions(
+    game: &mut GameState,
+    nation_id: NationId,
+    actions: &mut Vec<super::AiAction>,
+) {
     let personality = get_personality(game, nation_id);
 
     if game.ai_debug {
@@ -58,7 +62,7 @@ fn ai_build_forts(
     game: &mut GameState,
     nation_id: NationId,
     personality: AiPersonality,
-    actions: &mut Vec<String>,
+    actions: &mut Vec<super::AiAction>,
 ) {
     use crate::map::infrastructure::build_fort;
 
@@ -199,7 +203,15 @@ fn ai_build_forts(
             return;
         };
         nation.treasury -= cost;
-        actions.push(format!("{} has fortified its borders", nation_name));
+        actions.push(super::AiAction {
+            text: format!("{} has fortified its borders", nation_name),
+            reason: format!(
+                "Built level {} fort ({} enemies at border, treasury ${})",
+                new_level,
+                enemies.len(),
+                nation.treasury.as_dollars(),
+            ),
+        });
     }
 }
 
@@ -317,7 +329,7 @@ fn ai_propose_peace(
     game: &mut GameState,
     nation_id: NationId,
     personality: AiPersonality,
-    actions: &mut Vec<String>,
+    actions: &mut Vec<super::AiAction>,
 ) {
     use super::assessment::{
         evaluate_coalition_strength, evaluate_peace_proposal, evaluate_war_worthiness,
@@ -489,10 +501,19 @@ fn ai_propose_peace(
                 } else {
                     ""
                 };
-                actions.push(format!(
-                    "{} has sued for peace with {}{}",
-                    nation_name, enemy_name, reason
-                ));
+                actions.push(super::AiAction {
+                    text: format!(
+                        "{} has sued for peace with {}{}",
+                        nation_name, enemy_name, reason
+                    ),
+                    reason: format!(
+                        "captured={}, lost={}, won_enough={}, lost_enough={}",
+                        worthiness.provinces_captured,
+                        worthiness.provinces_lost,
+                        worthiness.won_enough,
+                        worthiness.lost_enough,
+                    ),
+                });
                 let turn = game.turn;
                 game.history.push((
                     turn,
@@ -514,10 +535,19 @@ fn ai_propose_peace(
             } else {
                 ""
             };
-            actions.push(format!(
-                "{} proposes peace with {}{}",
-                nation_name, enemy_name, reason
-            ));
+            actions.push(super::AiAction {
+                text: format!(
+                    "{} proposes peace with {}{}",
+                    nation_name, enemy_name, reason
+                ),
+                reason: format!(
+                    "captured={}, lost={}, won_enough={}, lost_enough={}",
+                    worthiness.provinces_captured,
+                    worthiness.provinces_lost,
+                    worthiness.won_enough,
+                    worthiness.lost_enough,
+                ),
+            });
         } else {
             // AI-to-minor-nation: auto-accept (minor nations are passive)
             game.diplomacy.make_peace(nation_id, enemy_id);
@@ -528,10 +558,19 @@ fn ai_propose_peace(
             } else {
                 ""
             };
-            actions.push(format!(
-                "{} has sued for peace with {}{}",
-                nation_name, enemy_name, reason
-            ));
+            actions.push(super::AiAction {
+                text: format!(
+                    "{} has sued for peace with {}{}",
+                    nation_name, enemy_name, reason
+                ),
+                reason: format!(
+                    "captured={}, lost={}, won_enough={}, lost_enough={}",
+                    worthiness.provinces_captured,
+                    worthiness.provinces_lost,
+                    worthiness.won_enough,
+                    worthiness.lost_enough,
+                ),
+            });
             let turn = game.turn;
             game.history.push((
                 turn,
@@ -581,7 +620,7 @@ mod tests {
         );
 
         assert!(
-            actions.iter().any(|a| a.contains("fortified")),
+            actions.iter().any(|a| a.text.contains("fortified")),
             "Should report fort building"
         );
     }
@@ -743,7 +782,7 @@ mod tests {
             "AI should propose peace after heavy losses (lost_enough triggered)"
         );
         assert!(
-            actions.iter().any(|a| a.contains("sued for peace")),
+            actions.iter().any(|a| a.text.contains("sued for peace")),
             "Should report peace proposal"
         );
     }
@@ -863,7 +902,7 @@ mod tests {
         assert!(
             actions
                 .iter()
-                .any(|a| a.contains("proposes peace") && a.contains("heavy losses")),
+                .any(|a| a.text.contains("proposes peace") && a.text.contains("heavy losses")),
             "AI should propose peace when heavily losing; actions: {:?}",
             actions
         );
@@ -915,7 +954,7 @@ mod tests {
 
         // Diplomatic AI should propose peace (lost_enough: 1 loss >= threshold of 1)
         assert!(
-            actions.iter().any(|a| a.contains("proposes peace")),
+            actions.iter().any(|a| a.text.contains("proposes peace")),
             "Diplomatic AI should propose peace after 1 province loss; actions: {:?}",
             actions
         );

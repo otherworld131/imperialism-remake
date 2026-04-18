@@ -29,7 +29,7 @@ pub struct TurnReport {
     pub production_output: Vec<(NationId, String, u32)>,
     pub food_consumed: Vec<(NationId, u32)>,
     pub starvation: Vec<(NationId, u32)>,
-    pub newspaper_headlines: Vec<(String, HeadlineCategory)>,
+    pub newspaper_headlines: Vec<Headline>,
     pub techs_available: Vec<(NationId, Vec<String>)>,
     pub council_vote: Option<CouncilVoteResult>,
     pub trade_transactions: Vec<TradeTransaction>,
@@ -39,7 +39,7 @@ pub struct TurnReport {
     /// Scores for all Great Powers: (nation_id, nation_name, total_score).
     pub scores: Vec<(NationId, String, u32)>,
     /// Summary of notable actions taken by AI nations this turn.
-    pub ai_actions: Vec<String>,
+    pub ai_actions: Vec<crate::ai::AiAction>,
     /// Descriptions of completed civilian work this turn.
     pub civilian_completions: Vec<(NationId, String)>,
     /// Resources lost to insufficient transport capacity: (nation, resource, amount lost).
@@ -190,7 +190,7 @@ fn award_first_colony_clippers(game: &mut GameState, nation_id: NationId, report
             name
         ),
     ));
-    report.newspaper_headlines.push((
+    report.newspaper_headlines.push(Headline::new(
         format!(
             "{} receives free Clipper ships for establishing its first colony!",
             name
@@ -868,7 +868,7 @@ fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
                             let headline = format!("{} has grown into a Village!", prov.name);
                             report
                                 .newspaper_headlines
-                                .push((headline.clone(), HeadlineCategory::Growth));
+                                .push(Headline::new(headline.clone(), HeadlineCategory::Growth));
                             report
                                 .settlement_upgrades
                                 .push((*province_id, "Village".to_string()));
@@ -909,7 +909,7 @@ fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
                         let headline = format!("{} has grown into a Town!", prov.name);
                         report
                             .newspaper_headlines
-                            .push((headline.clone(), HeadlineCategory::Growth));
+                            .push(Headline::new(headline.clone(), HeadlineCategory::Growth));
                         report
                             .settlement_upgrades
                             .push((*province_id, "Town".to_string()));
@@ -1903,7 +1903,7 @@ fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
 
         // Generate bankruptcy headline if treasury went negative
         if nation.is_bankrupt() {
-            report.newspaper_headlines.push((
+            report.newspaper_headlines.push(Headline::new(
                 format!("FINANCIAL CRISIS: {} faces bankruptcy!", nation.name),
                 HeadlineCategory::Crisis,
             ));
@@ -2033,7 +2033,7 @@ fn resolve_beachheads(game: &mut GameState, report: &mut TurnReport) {
                 .get_province(target_pid)
                 .map(|p| p.name.clone())
                 .unwrap_or_default();
-            report.newspaper_headlines.push((
+            report.newspaper_headlines.push(Headline::new(
                 format!(
                     "{} establishes a naval landing site at {}",
                     attacker_name, target_name
@@ -2243,7 +2243,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
             .map(|p| p.owner)
             .unwrap_or(defender_id);
         if current_owner != defender_id {
-            report.newspaper_headlines.push((
+            report.newspaper_headlines.push(Headline::new(
                 format!(
                     "{}'s attack on {} is thwarted by intervention!",
                     game.get_nation(attacker_id)
@@ -2494,7 +2494,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 report
                     .settlement_upgrades
                     .push((province_id, "Village".to_string()));
-                report.newspaper_headlines.push((
+                report.newspaper_headlines.push(Headline::new(
                     format!(
                         "{} immediately industrializes under new management!",
                         province.name
@@ -2544,7 +2544,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 .get_province(province_id)
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
-            report.newspaper_headlines.push((
+            report.newspaper_headlines.push(Headline::new(
                 format!(
                     "BREAKING: {} conquers {} from {}!",
                     atk_name, prov_name, def_name_conquest
@@ -2569,7 +2569,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 .get_nation(defender_id)
                 .is_some_and(|n| n.is_great_power() && n.province_ids.is_empty());
             if defender_eliminated {
-                report.newspaper_headlines.push((
+                report.newspaper_headlines.push(Headline::new(
                     format!("{} has been eliminated!", def_name_conquest),
                     HeadlineCategory::War,
                 ));
@@ -2583,7 +2583,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 .get_province(province_id)
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
-            report.newspaper_headlines.push((
+            report.newspaper_headlines.push(Headline::new(
                 format!("{} repels attack on {}!", def_name, prov_name),
                 HeadlineCategory::Battle,
             ));
@@ -2773,7 +2773,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 .get_province(target_province_id)
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
-            report.newspaper_headlines.push((
+            report.newspaper_headlines.push(Headline::new(
                 format!("{} counter-attacks and recaptures {}!", ca_name, prov_name),
                 HeadlineCategory::War,
             ));
@@ -2788,7 +2788,7 @@ fn resolve_combat(game: &mut GameState, report: &mut TurnReport) {
                 .get_province(target_province_id)
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
-            report.newspaper_headlines.push((
+            report.newspaper_headlines.push(Headline::new(
                 format!("{} repels counter-attack on {}!", occ_name, prov_name),
                 HeadlineCategory::Battle,
             ));
@@ -2826,7 +2826,7 @@ fn check_and_apply_anarchy(
         .push(DomainEvent::NationEnteredAnarchy(NationEnteredAnarchy {
             nation: nation_id,
         }));
-    report.newspaper_headlines.push((
+    report.newspaper_headlines.push(Headline::new(
         format!(
             "ANARCHY: {} collapses into chaos after losing its capital!",
             name
@@ -2956,7 +2956,7 @@ fn run_pact_defense_cascade(
             if accepts {
                 // Protector accepts: declare war and incorporate the minor
                 game.diplomacy.declare_war(gp_id, attacker_id);
-                report.newspaper_headlines.push((
+                report.newspaper_headlines.push(Headline::new(
                     format!(
                         "{} intervenes to protect {} and declares war on {}!",
                         gp_name, defender_name, attacker_name
@@ -2981,7 +2981,7 @@ fn run_pact_defense_cascade(
                 return; // Stop cascade — one protector is enough
             } else {
                 // AI declines
-                report.newspaper_headlines.push((
+                report.newspaper_headlines.push(Headline::new(
                     format!(
                         "{} declines to intervene on behalf of {}",
                         gp_name, defender_name
@@ -3006,7 +3006,7 @@ fn run_pact_defense_cascade(
                         Some(remaining)
                     },
                 });
-            report.newspaper_headlines.push((
+            report.newspaper_headlines.push(Headline::new(
                 format!(
                     "{} requests your protection against {}!",
                     defender_name, attacker_name
@@ -3018,7 +3018,7 @@ fn run_pact_defense_cascade(
     }
 
     // No one accepted
-    report.newspaper_headlines.push((
+    report.newspaper_headlines.push(Headline::new(
         format!(
             "No protector came to {}'s defense against {}",
             defender_name, attacker_name
@@ -3059,7 +3059,7 @@ pub fn accept_pact_defense(
         .unwrap_or_default();
 
     game.diplomacy.declare_war(protector_id, attacker_id);
-    report.newspaper_headlines.push((
+    report.newspaper_headlines.push(Headline::new(
         format!(
             "{} intervenes to protect {} and declares war on {}!",
             protector_name, minor_name, attacker_name
@@ -3182,7 +3182,7 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
 
         // Add headline
         if result.attacker_won {
-            report.newspaper_headlines.push((
+            report.newspaper_headlines.push(Headline::new(
                 format!(
                     "NAVAL VICTORY: {} defeats {} fleet! ({} ships sunk)",
                     atk_name,
@@ -3192,7 +3192,7 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
                 HeadlineCategory::Battle,
             ));
         } else {
-            report.newspaper_headlines.push((
+            report.newspaper_headlines.push(Headline::new(
                 format!(
                     "NAVAL VICTORY: {} defeats {} fleet! ({} ships sunk)",
                     def_name,
@@ -3302,7 +3302,7 @@ fn apply_blockade_effects(game: &GameState, report: &mut TurnReport) {
             let blocked = cargo - effective_cargo;
             if blocked > 0 {
                 let nation_name = &nation.name;
-                report.newspaper_headlines.push((
+                report.newspaper_headlines.push(Headline::new(
                     format!(
                         "BLOCKADE: {} merchant fleet loses {} cargo capacity to enemy warships",
                         nation_name, blocked
@@ -3341,8 +3341,8 @@ fn resolve_technology(game: &mut GameState, report: &mut TurnReport) {
     // AI actions contain strings like "Deneb researched High Pressure Steam Engine ($0)"
     let researched_pattern = " researched ";
     for action in &report.ai_actions {
-        if let Some(pos) = action.find(researched_pattern) {
-            let nation_name = &action[..pos];
+        if let Some(pos) = action.text.find(researched_pattern) {
+            let nation_name = &action.text[..pos];
             // Find the nation by name
             if let Some(nation) = game.nations.iter().find(|n| n.name == nation_name) {
                 let nation_id = nation.id;
@@ -3518,7 +3518,7 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                             treaty_type: proposal.proposal_type,
                         },
                     ));
-                    report.newspaper_headlines.push((
+                    report.newspaper_headlines.push(Headline::new(
                         format!(
                             "{} accepts {}'s {} proposal",
                             to_name, from_name, treaty_label
@@ -3542,7 +3542,7 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                             treaty_type: proposal.proposal_type,
                         },
                     ));
-                    report.newspaper_headlines.push((
+                    report.newspaper_headlines.push(Headline::new(
                         format!(
                             "{} proposal to {} could not be fulfilled",
                             treaty_label, to_name
@@ -3558,7 +3558,7 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                         to: target_id,
                         treaty_type: proposal.proposal_type,
                     }));
-                report.newspaper_headlines.push((
+                report.newspaper_headlines.push(Headline::new(
                     format!(
                         "{} rejects {}'s {} proposal",
                         to_name, from_name, treaty_label
@@ -3647,7 +3647,7 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                             treaty_type: proposal.proposal_type,
                         },
                     ));
-                    report.newspaper_headlines.push((
+                    report.newspaper_headlines.push(Headline::new(
                         format!(
                             "{} accepts {}'s {} proposal",
                             to_name, from_name, treaty_label
@@ -3671,7 +3671,7 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                             treaty_type: proposal.proposal_type,
                         },
                     ));
-                    report.newspaper_headlines.push((
+                    report.newspaper_headlines.push(Headline::new(
                         format!(
                             "{} proposal to {} could not be fulfilled",
                             treaty_label, to_name
@@ -3687,7 +3687,7 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                         to: target_id,
                         treaty_type: proposal.proposal_type,
                     }));
-                report.newspaper_headlines.push((
+                report.newspaper_headlines.push(Headline::new(
                     format!(
                         "{} rejects {}'s {} proposal",
                         to_name, from_name, treaty_label
@@ -3774,7 +3774,7 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
                 .unwrap_or_default();
 
             new_wars.push((*ally, *attacker, ally_name.clone(), attacker_name.clone()));
-            report.newspaper_headlines.push((
+            report.newspaper_headlines.push(Headline::new(
                 format!(
                     "{} honors its alliance with {} and declares war on {}!",
                     ally_name, defender_name, attacker_name
@@ -3827,7 +3827,7 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
                 .unwrap_or_default();
 
             new_wars.push((*ally, *defender, ally_name.clone(), defender_name.clone()));
-            report.newspaper_headlines.push((
+            report.newspaper_headlines.push(Headline::new(
                 format!(
                     "{} honors its alliance with {} and declares war on {}!",
                     ally_name, attacker_name, defender_name
@@ -4097,7 +4097,7 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                 report
                     .rewards_earned
                     .push((*nation_id, format!("{} has earned a General!", nation_name)));
-                report.newspaper_headlines.push((
+                report.newspaper_headlines.push(Headline::new(
                     format!("{} has earned a General!", nation_name),
                     HeadlineCategory::Military,
                 ));
@@ -4154,7 +4154,7 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                     *nation_id,
                     format!("{} has earned an Admiral!", nation_name),
                 ));
-                report.newspaper_headlines.push((
+                report.newspaper_headlines.push(Headline::new(
                     format!("{} has earned an Admiral!", nation_name),
                     HeadlineCategory::Military,
                 ));
@@ -4190,7 +4190,7 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                     attacker_name
                 ),
             ));
-            report.newspaper_headlines.push((
+            report.newspaper_headlines.push(Headline::new(
                 format!("{}'s capitol building has expanded!", attacker_name),
                 HeadlineCategory::Growth,
             ));
@@ -4235,7 +4235,7 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                         nation_name
                     ),
                 ));
-                report.newspaper_headlines.push((
+                report.newspaper_headlines.push(Headline::new(
                     format!(
                         "{}'s expert workforce drives capitol expansion!",
                         nation_name
@@ -4251,16 +4251,18 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
     let year = game.turn.year();
     let quarter = game.turn.quarter();
 
-    report.newspaper_headlines.push((
+    report.newspaper_headlines.push(Headline::new(
         format!("The Imperial Times - {year} Q{quarter}"),
         HeadlineCategory::Default,
     ));
 
     // AI actions (tech research, military buildup, war declarations)
     for action in &report.ai_actions {
-        report
-            .newspaper_headlines
-            .push((action.clone(), HeadlineCategory::Default));
+        report.newspaper_headlines.push(Headline::with_reason(
+            action.text.clone(),
+            HeadlineCategory::Default,
+            action.reason.clone(),
+        ));
     }
 
     // Voluntary incorporations — major headline
@@ -4273,7 +4275,7 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
             .get_nation(*gp_id)
             .map(|n| n.name.clone())
             .unwrap_or_else(|| "Unknown".to_string());
-        report.newspaper_headlines.push((
+        report.newspaper_headlines.push(Headline::new(
             format!(
                 "BREAKING: {} has voluntarily joined the {} empire!",
                 minor_name, gp_name
@@ -4285,7 +4287,7 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
     // Unit upgrades — brief mention
     if !report.unit_upgrades.is_empty() {
         let upgrade_count = report.unit_upgrades.len();
-        report.newspaper_headlines.push((
+        report.newspaper_headlines.push(Headline::new(
             format!(
                 "Military modernization: {} unit{} upgraded across the nations",
                 upgrade_count,
@@ -4304,7 +4306,7 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
             .iter()
             .any(|txn| txn.buyer == game.human_player_nation);
         if human_traded {
-            report.newspaper_headlines.push((
+            report.newspaper_headlines.push(Headline::new(
                 format!(
                     "Trade flourishes between {} and its partners",
                     human_nation.name
@@ -4315,14 +4317,14 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
     }
 
     if let Some(human_nation) = game.get_nation(game.human_player_nation) {
-        report.newspaper_headlines.push((
+        report.newspaper_headlines.push(Headline::new(
             format!("The {} empire grows stronger", human_nation.name),
             HeadlineCategory::Default,
         ));
     }
 
     if game.turn.is_decade_election() {
-        report.newspaper_headlines.push((
+        report.newspaper_headlines.push(Headline::new(
             "Council of Governors to convene!".to_string(),
             HeadlineCategory::Politics,
         ));
@@ -4331,7 +4333,7 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
     // Report nations currently in anarchy
     for nation in &game.nations {
         if nation.is_in_anarchy && !nation.province_ids.is_empty() {
-            report.newspaper_headlines.push((
+            report.newspaper_headlines.push(Headline::new(
                 format!("{} remains mired in anarchy", nation.name),
                 HeadlineCategory::Crisis,
             ));
@@ -4343,7 +4345,7 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
         .get_nation(game.human_player_nation)
         .is_some_and(|n| n.is_in_anarchy)
     {
-        report.newspaper_headlines.push((
+        report.newspaper_headlines.push(Headline::new(
             "Your nation has fallen into anarchy! All governance has ceased.".to_string(),
             HeadlineCategory::Crisis,
         ));
@@ -4361,7 +4363,7 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
         "Great exhibitions showcase industrial might",
     ];
     let flavor_index = (game.turn.0 as usize) % flavor_headlines.len();
-    report.newspaper_headlines.push((
+    report.newspaper_headlines.push(Headline::new(
         flavor_headlines[flavor_index].to_string(),
         HeadlineCategory::Default,
     ));
@@ -4392,7 +4394,7 @@ fn check_council_vote(game: &GameState, report: &mut TurnReport) {
 
     if let Some(winner_id) = result.winner {
         if let Some(winner) = game.get_nation(winner_id) {
-            report.newspaper_headlines.push((
+            report.newspaper_headlines.push(Headline::new(
                 format!(
                     "BREAKING: {} wins the Council of Governors with {} of {} votes!",
                     winner.name,
@@ -4408,7 +4410,7 @@ fn check_council_vote(game: &GameState, report: &mut TurnReport) {
             ));
         }
     } else {
-        report.newspaper_headlines.push((
+        report.newspaper_headlines.push(Headline::new(
             format!(
                 "Council of Governors: No nation achieves the required {} vote majority.",
                 result.majority_threshold

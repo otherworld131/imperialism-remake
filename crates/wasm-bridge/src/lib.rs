@@ -74,7 +74,13 @@ pub fn wasm_process_turn(game_json: &str) -> String {
             "year": report.year,
             "quarter": report.quarter,
             "headlines": report.newspaper_headlines.iter()
-                .map(|(text, cat)| serde_json::json!({"text": text, "category": cat}))
+                .map(|h| {
+                    let mut obj = serde_json::json!({"text": &h.text, "category": &h.category});
+                    if let Some(ref reason) = h.reason {
+                        obj["reason"] = serde_json::json!(reason);
+                    }
+                    obj
+                })
                 .collect::<Vec<_>>(),
             "resources": report.resource_production.iter()
                 .filter(|(nid, _, _)| *nid == game.human_player_nation)
@@ -3256,7 +3262,13 @@ pub fn wasm_get_newspaper_archive(game_json: &str) -> String {
         .map(|(turn, headlines)| {
             let items: Vec<serde_json::Value> = headlines
                 .iter()
-                .map(|(text, cat)| serde_json::json!({"text": text, "category": cat}))
+                .map(|h| {
+                    let mut obj = serde_json::json!({"text": &h.text, "category": &h.category});
+                    if let Some(ref reason) = h.reason {
+                        obj["reason"] = serde_json::json!(reason);
+                    }
+                    obj
+                })
                 .collect();
             serde_json::json!({
                 "turn": turn.0,

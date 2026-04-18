@@ -87,7 +87,7 @@ struct ScoredAction {
 pub(crate) fn ai_scored_spending(
     game: &mut GameState,
     nation_id: NationId,
-    actions: &mut Vec<String>,
+    actions: &mut Vec<super::AiAction>,
 ) {
     let personality = get_personality(game, nation_id);
     let weights = load_weights(game, personality);
@@ -475,7 +475,7 @@ fn execute(
     game: &mut GameState,
     nation_id: NationId,
     category: SpendingCategory,
-    actions: &mut Vec<String>,
+    actions: &mut Vec<super::AiAction>,
 ) {
     match category {
         SpendingCategory::Military => execute_military(game, nation_id, actions),
@@ -486,7 +486,7 @@ fn execute(
     }
 }
 
-fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
+fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec<super::AiAction>) {
     let turn_number = game.turn.0;
     let nation = match game.get_nation_mut(nation_id) {
         Some(n) => n,
@@ -535,10 +535,10 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
         nation.treasury = remaining;
         let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
         nation.army.push(unit);
-        actions.push(format!(
-            "{} has been expanding its military forces",
-            nation_name
-        ));
+        actions.push(super::AiAction {
+            text: format!("{} has been expanding its military forces", nation_name),
+            reason: "Spending system selected military category for expansion".to_string(),
+        });
     }
 }
 

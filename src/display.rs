@@ -1012,8 +1012,8 @@ pub(crate) fn print_turn_report(game: &GameState, report: &TurnReport) {
     println!("  \u{2554}{}\u{2557}", "\u{2550}".repeat(42));
     println!("  \u{2551}  {}{}  \u{2551}", date_str, " ".repeat(pad));
     println!("  \u{255a}{}\u{255d}", "\u{2550}".repeat(42));
-    for (headline, _cat) in &report.newspaper_headlines {
-        println!("    {}", headline);
+    for headline in &report.newspaper_headlines {
+        println!("    {}", headline.text);
     }
     println!();
 
@@ -1290,11 +1290,11 @@ pub(crate) fn print_turn_report(game: &GameState, report: &TurnReport) {
     let blockade_headlines: Vec<_> = report
         .newspaper_headlines
         .iter()
-        .filter(|(h, _)| h.contains("BLOCKADE"))
+        .filter(|h| h.text.contains("BLOCKADE"))
         .collect();
     if !blockade_headlines.is_empty() {
-        for (headline, _) in &blockade_headlines {
-            println!("  Blockade: {}", color_yellow(headline));
+        for headline in &blockade_headlines {
+            println!("  Blockade: {}", color_yellow(&headline.text));
         }
     }
 

@@ -83,6 +83,7 @@ function App() {
   const [gameStarted, setGameStarted] = useState(false);
   const [showHiddenResources, setShowHiddenResources] = useState(false);
   const [showAiCivilians, setShowAiCivilians] = useState(false);
+  const [showAiReasoning, setShowAiReasoning] = useState(false);
   const [mapMode, setMapMode] = useState<MapMode>('terrain');
   const [selectedNation, setSelectedNation] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<string>('');
@@ -200,6 +201,13 @@ function App() {
     setIsDeployMode(false);
     setDeployingCivilian(null);
   }, [gameJson, applyGameJson]);
+
+  const dismissNewspaper = useCallback(() => {
+    setShowNewspaper(false);
+    if (proposalData && proposalData.proposals.length > 0) {
+      setShowProposals(true);
+    }
+  }, [proposalData]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -568,12 +576,6 @@ function App() {
     } else if (cmd.error) showError(`Reject failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
-  const dismissNewspaper = useCallback(() => {
-    setShowNewspaper(false);
-    if (proposalData && proposalData.proposals.length > 0) {
-      setShowProposals(true);
-    }
-  }, [proposalData]);
 
   // Look up diplomacy info for a given tile's owner
   const getDiploInfoForTile = useCallback((tile: TileData | null): DiplomacyOverlayRelation | null => {
@@ -876,6 +878,10 @@ function App() {
                   <input type="checkbox" checked={showAiCivilians} onChange={e => setShowAiCivilians(e.target.checked)} />
                   {' '}Show AI civilians
                 </label>
+                <label>
+                  <input type="checkbox" checked={showAiReasoning} onChange={e => setShowAiReasoning(e.target.checked)} />
+                  {' '}Show AI reasoning
+                </label>
               </div>
 
               <h3 style={styles.panelTitle}>Nations</h3>
@@ -961,6 +967,9 @@ function App() {
                     {playerNews.map((h, i) => (
                       <div key={i} style={{ ...styles.headlineRow, borderLeftColor: CATEGORY_COLORS[h.category] || '#3a3520', color: CATEGORY_COLORS[h.category] || '#e0d8c0' }}>
                         {h.text}
+                        {showAiReasoning && h.reason && (
+                          <div style={{ fontSize: 11, color: '#888', marginTop: 2, fontStyle: 'italic', paddingLeft: 8 }}>{h.reason}</div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -974,6 +983,9 @@ function App() {
                         <div key={i} style={{ ...styles.headlineRow, borderLeftColor: CATEGORY_COLORS[h.category] || '#3a3520', color: CATEGORY_COLORS[h.category] || '#e0d8c0' }}>
                           {tag && <span style={styles.nationTag}>{tag}</span>}
                           {h.text}
+                          {showAiReasoning && h.reason && (
+                            <div style={{ fontSize: 11, color: '#888', marginTop: 2, fontStyle: 'italic', paddingLeft: 8 }}>{h.reason}</div>
+                          )}
                         </div>
                       );
                     })}
@@ -1037,7 +1049,12 @@ function App() {
                         <div style={{ marginBottom: 12 }}>
                           <div style={styles.sectionLabelPlayer}>Your Empire — {playerName}</div>
                           {pNews.map((h, i) => (
-                            <div key={i} style={{ ...styles.headlineRow, borderLeftColor: CATEGORY_COLORS[h.category] || '#3a3520', color: CATEGORY_COLORS[h.category] || '#e0d8c0' }}>{h.text}</div>
+                            <div key={i} style={{ ...styles.headlineRow, borderLeftColor: CATEGORY_COLORS[h.category] || '#3a3520', color: CATEGORY_COLORS[h.category] || '#e0d8c0' }}>
+                              {h.text}
+                              {showAiReasoning && h.reason && (
+                                <div style={{ fontSize: 11, color: '#888', marginTop: 2, fontStyle: 'italic', paddingLeft: 8 }}>{h.reason}</div>
+                              )}
+                            </div>
                           ))}
                         </div>
                       )}
@@ -1045,7 +1062,12 @@ function App() {
                         <div>
                           <div style={styles.sectionLabelWorld}>World News</div>
                           {wNews.map((h, i) => (
-                            <div key={i} style={{ ...styles.headlineRow, borderLeftColor: CATEGORY_COLORS[h.category] || '#3a3520', color: CATEGORY_COLORS[h.category] || '#e0d8c0' }}>{h.text}</div>
+                            <div key={i} style={{ ...styles.headlineRow, borderLeftColor: CATEGORY_COLORS[h.category] || '#3a3520', color: CATEGORY_COLORS[h.category] || '#e0d8c0' }}>
+                              {h.text}
+                              {showAiReasoning && h.reason && (
+                                <div style={{ fontSize: 11, color: '#888', marginTop: 2, fontStyle: 'italic', paddingLeft: 8 }}>{h.reason}</div>
+                              )}
+                            </div>
                           ))}
                         </div>
                       )}

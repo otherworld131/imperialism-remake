@@ -107,7 +107,11 @@ pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
 /// - **Aggressive**: rarely proposes treaties, breaks alliances more easily.
 /// - **Economic**: proposes pacts for trade security, sends grants.
 /// - **All AI**: send small grants ($500) to Minor Nations with embassies to improve relations.
-pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
+pub fn ai_manage_diplomacy(
+    game: &mut GameState,
+    nation_id: NationId,
+    actions: &mut Vec<super::AiAction>,
+) {
     // Auto-make peace with any nation that has 0 provinces left.
     // There is nothing left to fight over, so continuing a war is pointless.
     {
@@ -145,10 +149,16 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
                 .get_nation(target_id)
                 .map(|n| n.name.clone())
                 .unwrap_or_default();
-            actions.push(format!(
-                "{} made peace with {} (no provinces remaining)",
-                nation_name, target_name
-            ));
+            actions.push(super::AiAction {
+                text: format!(
+                    "{} made peace with {} (no provinces remaining)",
+                    nation_name, target_name
+                ),
+                reason: format!(
+                    "{} has 0 provinces left; nothing to fight over",
+                    target_name
+                ),
+            });
         }
     }
 
@@ -265,7 +275,13 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
                     "{} signed a non-aggression pact with {}",
                     nation_name, mn_name
                 );
-                actions.push(pact_text.clone());
+                actions.push(super::AiAction {
+                    text: pact_text.clone(),
+                    reason: format!(
+                        "{:?} personality favors non-aggression pacts with embassy partners",
+                        personality
+                    ),
+                });
                 let turn = game.turn;
                 if !game
                     .history
@@ -379,10 +395,13 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
                         .get_nation(gp_id)
                         .map(|n| n.name.clone())
                         .unwrap_or_default();
-                    actions.push(format!(
-                        "{} proposes an alliance with {}",
-                        nation_name, gp_name
-                    ));
+                    actions.push(super::AiAction {
+                        text: format!("{} proposes an alliance with {}", nation_name, gp_name),
+                        reason: format!(
+                            "{:?} personality; relationship score {} and partner standing {}",
+                            personality, score, partner_standing
+                        ),
+                    });
                 }
             }
         } // end else (existing_alliances < 2)
@@ -455,7 +474,7 @@ pub fn ai_manage_diplomacy(game: &mut GameState, nation_id: NationId, actions: &
 pub fn ai_pre_election_strategy(
     game: &mut GameState,
     nation_id: NationId,
-    actions: &mut Vec<String>,
+    actions: &mut Vec<super::AiAction>,
 ) {
     // Only activate within 4 turns of a decade election
     if !game.turn.is_near_decade_election(4) {
@@ -566,10 +585,16 @@ pub fn ai_pre_election_strategy(
                     .get_nation(*mn_id)
                     .map(|n| n.name.clone())
                     .unwrap_or_default();
-                actions.push(format!(
-                    "{} built an embassy in {} ahead of the election",
-                    nation_name, mn_name
-                ));
+                actions.push(super::AiAction {
+                    text: format!(
+                        "{} built an embassy in {} ahead of the election",
+                        nation_name, mn_name
+                    ),
+                    reason: format!(
+                        "election approaching at turn {}; {:?} personality building influence",
+                        game.turn.0, personality
+                    ),
+                });
             }
         }
     }
@@ -870,7 +895,9 @@ mod tests {
             "Diplomatic AI should propose pact with Minor Nation it has embassy with"
         );
         assert!(
-            actions.iter().any(|a| a.contains("non-aggression pact")),
+            actions
+                .iter()
+                .any(|a| a.text.contains("non-aggression pact")),
             "Should report pact in actions"
         );
     }

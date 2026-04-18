@@ -406,7 +406,11 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
 
 /// The AI keeps a reserve of each good (Lua-configurable) and sells excess when treasury is low.
 #[allow(unused_variables)] // personality used only with cfg(feature = "lua")
-pub fn ai_manage_resources(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
+pub fn ai_manage_resources(
+    game: &mut GameState,
+    nation_id: NationId,
+    actions: &mut Vec<super::AiAction>,
+) {
     let personality = get_personality(game, nation_id);
 
     // ── Read Lua config (feature-gated) ──────────────────────
@@ -476,11 +480,18 @@ pub fn ai_manage_resources(game: &mut GameState, nation_id: NationId, actions: &
     }
 
     if total_revenue > Money::ZERO {
-        actions.push(format!(
-            "{} sold excess goods for ${}",
-            nation_name,
-            total_revenue.as_dollars()
-        ));
+        actions.push(super::AiAction {
+            text: format!(
+                "{} sold excess goods for ${}",
+                nation_name,
+                total_revenue.as_dollars()
+            ),
+            reason: format!(
+                "Treasury below ${} sell threshold; liquidated surplus goods for ${}",
+                goods_sell_threshold,
+                total_revenue.as_dollars()
+            ),
+        });
     }
 }
 

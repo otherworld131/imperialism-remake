@@ -165,7 +165,11 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
 /// - If at war and AI has naval superiority: report blockade capability
 /// - Estimate enemy strength (provinces × 4 for garrison + known army size)
 /// - Prefer coastal attack targets when AI has naval superiority
-pub fn ai_naval_strategy(game: &mut GameState, nation_id: NationId, actions: &mut Vec<String>) {
+pub fn ai_naval_strategy(
+    game: &mut GameState,
+    nation_id: NationId,
+    actions: &mut Vec<super::AiAction>,
+) {
     let _personality = get_personality(game, nation_id);
 
     // ── Read Lua config (feature-gated) ──────────────────────
@@ -264,10 +268,16 @@ pub fn ai_naval_strategy(game: &mut GameState, nation_id: NationId, actions: &mu
             nation.consume_material(MaterialType::Lumber, 5);
             nation.consume_material(MaterialType::Arms, 2);
             nation.warships.push(ship);
-            actions.push(format!(
-                "{} is building warships to counter enemy naval superiority",
-                nation_name
-            ));
+            actions.push(super::AiAction {
+                text: format!(
+                    "{} is building warships to counter enemy naval superiority",
+                    nation_name
+                ),
+                reason: format!(
+                    "Enemy naval firepower {} vs our {}; building frigates to close the gap",
+                    max_enemy_naval_fp, our_naval_fp
+                ),
+            });
         }
         return; // Focus on shipbuilding when outmatched
     }
@@ -335,10 +345,16 @@ pub fn ai_naval_strategy(game: &mut GameState, nation_id: NationId, actions: &mu
                             );
                         }
                     }
-                    actions.push(format!(
-                        "{} launches amphibious invasion targeting {}",
-                        nation_name, target_prov_name
-                    ));
+                    actions.push(super::AiAction {
+                        text: format!(
+                            "{} launches amphibious invasion targeting {}",
+                            nation_name, target_prov_name
+                        ),
+                        reason: format!(
+                            "Naval superiority ({} vs enemy {}) and no land-adjacent provinces to attack; launching amphibious assault",
+                            our_naval_fp, max_enemy_naval_fp
+                        ),
+                    });
 
                     if game.ai_debug {
                         eprintln!(

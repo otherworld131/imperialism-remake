@@ -86,6 +86,7 @@ export interface TileData {
 export interface Headline {
   text: string;
   category: 'war' | 'battle' | 'diplomacy' | 'growth' | 'trade' | 'crisis' | 'politics' | 'military' | 'default';
+  reason?: string;
 }
 
 export interface ArchivedNewspaper {

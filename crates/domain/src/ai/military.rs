@@ -20,7 +20,7 @@ use super::common::{AiPersonality, get_personality};
 pub(crate) fn ai_build_military(
     game: &mut GameState,
     nation_id: NationId,
-    actions: &mut Vec<String>,
+    actions: &mut Vec<super::AiAction>,
 ) {
     let personality = get_personality(game, nation_id);
     let turn_number = game.turn.0;
@@ -155,10 +155,16 @@ pub(crate) fn ai_build_military(
             nation.treasury -= cost;
             let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
             nation.army.push(unit);
-            actions.push(format!(
-                "{} has been expanding its military forces",
-                nation_name
-            ));
+            actions.push(super::AiAction {
+                text: format!("{} has been expanding its military forces", nation_name),
+                reason: format!(
+                    "Tier 1 build: army={}/{} cap, treasury=${}, personality={}",
+                    army_count + 1,
+                    tier1_max,
+                    treasury.as_dollars(),
+                    personality
+                ),
+            });
         }
     } else if army_count < tier2_max && treasury > tier2_treasury {
         // Tier 2: mix of grenadiers and artillery with personality + variety
@@ -194,10 +200,15 @@ pub(crate) fn ai_build_military(
             nation.treasury -= build_cost;
             let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
             nation.army.push(unit);
-            actions.push(format!(
-                "{} has been expanding its military forces",
-                nation_name
-            ));
+            actions.push(super::AiAction {
+                text: format!("{} has been expanding its military forces", nation_name),
+                reason: format!(
+                    "Tier 2 build: army={}/{} cap, treasury=${}",
+                    army_count + 1,
+                    tier2_max,
+                    treasury.as_dollars()
+                ),
+            });
         }
     } else if army_count >= tier2_max && treasury > tier3_treasury {
         // Tier 3: advanced units with some variety
@@ -248,10 +259,15 @@ pub(crate) fn ai_build_military(
                     let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
                     nation.army.push(unit);
                     if i == 0 {
-                        actions.push(format!(
-                            "{} has been expanding its military forces",
-                            nation_name
-                        ));
+                        actions.push(super::AiAction {
+                            text: format!("{} has been expanding its military forces", nation_name),
+                            reason: format!(
+                                "Tier 3 advanced build: army={}/{} cap, building {:?}",
+                                nation.army.len(),
+                                tier3_max,
+                                unit_type
+                            ),
+                        });
                     }
                 } else {
                     break;
@@ -274,10 +290,14 @@ pub(crate) fn ai_build_military(
                     nation.treasury = remaining;
                     let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
                     nation.army.push(unit);
-                    actions.push(format!(
-                        "{} has been expanding its military forces",
-                        nation_name
-                    ));
+                    actions.push(super::AiAction {
+                        text: format!("{} has been expanding its military forces", nation_name),
+                        reason: format!(
+                            "Tier 4 uncapped expansion: army={}, treasury=${}",
+                            nation.army.len(),
+                            treasury.as_dollars()
+                        ),
+                    });
                 }
             }
         }
@@ -379,7 +399,7 @@ fn estimate_target_defense(game: &GameState, attacker_id: NationId, target_id: N
 pub(crate) fn ai_declare_wars(
     game: &mut GameState,
     ai_nation_ids: &[NationId],
-    actions: &mut Vec<String>,
+    actions: &mut Vec<super::AiAction>,
 ) {
     let turn_number = game.turn.0;
 
@@ -815,10 +835,16 @@ pub(crate) fn ai_declare_wars(
         game.diplomacy.declare_war(ai_id, target_id);
         game.pending_attacks.push((ai_id, attack_province));
         targeted_this_round.push(target_id);
-        actions.push(format!(
-            "{} has declared war on {}!",
-            attacker_name, target_name
-        ));
+        actions.push(super::AiAction {
+            text: format!("{} has declared war on {}!", attacker_name, target_name),
+            reason: format!(
+                "need={:.2}, opportunity={:.2}, combined={:.2} > threshold={:.2}",
+                candidate.need_score,
+                candidate.opportunity_score,
+                candidate.combined_score,
+                war_threshold
+            ),
+        });
         let turn = game.turn;
         game.history.push((
             turn,
@@ -836,7 +862,7 @@ pub(crate) fn ai_declare_wars(
 pub(crate) fn ai_military_strategy(
     game: &mut GameState,
     nation_id: NationId,
-    _actions: &mut Vec<String>,
+    _actions: &mut Vec<super::AiAction>,
 ) {
     // Phase 1: Upgrade units if possible
     ai_upgrade_units(game, nation_id);
