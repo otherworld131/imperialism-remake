@@ -240,3 +240,8 @@ All implementation checklists live in `plan/`:
 | 27 | [Build, CI/CD & Release](./plan/27-build-release.md) | Delivery |
 | 28 | [Documentation](./plan/28-documentation.md) | Delivery |
 | 29 | [Web Frontend: UI, Accessibility & Localization](./plan/29-web-frontend.md) | Presentation |
+
+## Workflow
+
+- After every implementation, run `/adversarial-review` before considering the task complete
+- After committing and pushing, run `./web/restart-web-server.sh` to rebuild WASM and restart the dev server
