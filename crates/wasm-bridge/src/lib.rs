@@ -201,28 +201,48 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
     }
 
     // ── Fog of war: compute visible hexes ──
+    // A hex is visible if:
+    //   1. It belongs to one of the player's provinces, OR
+    //   2. It belongs to a province that shares any hex edge with the player's
+    //      territory (whole neighboring province lights up), OR
+    //   3. It's a non-province hex (sea, empty) directly adjacent to the player.
     let visible_hexes: std::collections::HashSet<domain::hex::HexCoord> = if disable_fog {
         std::collections::HashSet::new() // unused when fog disabled
     } else {
         let mut visible: std::collections::HashSet<domain::hex::HexCoord> =
             std::collections::HashSet::new();
-        // Player's provinces are visible
+
+        // Collect hexes adjacent to any player tile (one-ring border)
+        let mut border_ring: std::collections::HashSet<domain::hex::HexCoord> =
+            std::collections::HashSet::new();
         for province in &game.provinces {
             if province.owner == human_nation_id {
+                for &coord in &province.tiles {
+                    visible.insert(coord);
+                    for nb in coord.neighbors() {
+                        border_ring.insert(nb);
+                    }
+                }
+            }
+        }
+
+        // Any province that intersects the border ring → entirely visible
+        for province in &game.provinces {
+            if province.owner == human_nation_id {
+                continue;
+            }
+            if province.tiles.iter().any(|t| border_ring.contains(t)) {
                 for &coord in &province.tiles {
                     visible.insert(coord);
                 }
             }
         }
-        // One ring of neighbors around visible tiles
-        let border: Vec<domain::hex::HexCoord> = visible
-            .iter()
-            .flat_map(|c| c.neighbors())
-            .filter(|c| !visible.contains(c))
-            .collect();
-        for coord in border {
-            visible.insert(coord);
+
+        // Non-province hexes (sea, empty) in the border ring are also visible
+        for coord in &border_ring {
+            visible.insert(*coord);
         }
+
         visible
     };
 
