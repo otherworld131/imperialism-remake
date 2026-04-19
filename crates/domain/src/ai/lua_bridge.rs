@@ -62,6 +62,7 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         trade_relation_improvement_cap: table
             .get("trade_relation_improvement_cap")
             .unwrap_or(2),
+        trade_relation_turn_interval: table.get("trade_relation_turn_interval").unwrap_or(3),
         starting_freight_cars: table.get("starting_freight_cars").unwrap_or(5),
         lumber_price: table.get("lumber_price").unwrap_or(150),
         steel_price: table.get("steel_price").unwrap_or(200),
@@ -103,6 +104,7 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         embassy_cost: cfg.embassy_cost.clamp(0, 1_000_000),
         voluntary_incorporation_threshold: cfg.voluntary_incorporation_threshold.clamp(-100, 100),
         trade_relation_improvement_cap: cfg.trade_relation_improvement_cap.max(0),
+        trade_relation_turn_interval: cfg.trade_relation_turn_interval.max(1),
         starting_freight_cars: cfg.starting_freight_cars,
         lumber_price: cfg.lumber_price.clamp(1, 1_000_000),
         steel_price: cfg.steel_price.clamp(1, 1_000_000),

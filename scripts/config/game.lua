@@ -70,6 +70,10 @@ game_config = {
     -- The raw improvement is the number of distinct resources traded;
     -- capping prevents broad trade portfolios from trivially maxing relations.
     trade_relation_improvement_cap = 2,
+    -- Only apply the trade relationship improvement once every N turns.
+    -- Combined with the cap above, this controls how fast a GP can befriend
+    -- a minor nation through passive trade alone. Set to 1 for every turn.
+    trade_relation_turn_interval = 3,
 
     -- AI trade behaviour
     ai_consulate_target = 4,                  -- AI GPs aim for this many consulates in minor nations

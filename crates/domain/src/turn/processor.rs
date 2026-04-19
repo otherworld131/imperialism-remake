@@ -1860,16 +1860,20 @@ fn resolve_trade_session(
             .or_default()
             .insert(txn.resource);
     }
-    // Cap sourced from scripts/config/game.lua — unscaled improvement let minors
-    // voluntarily join an empire in only ~5 years of passive trade.
+    // Cap + interval sourced from scripts/config/game.lua — unscaled improvement
+    // let minors voluntarily join an empire in only ~5 years of passive trade.
     let trade_cap = game.game_data.game_config.trade_relation_improvement_cap;
-    for ((buyer, seller), resources) in &trade_pairs {
-        // Only improve relations if a trade consulate exists between the nations.
-        if game.diplomacy.has_consulate(*buyer, *seller) {
-            let improvement = (resources.len() as i32).min(trade_cap);
-            let rel = game.diplomacy.ensure_relation(*buyer, *seller);
-            rel.improve_score(improvement);
-            report.trade_diplomacy.push((*buyer, *seller, improvement));
+    let trade_interval = game.game_data.game_config.trade_relation_turn_interval;
+    let apply_trade_improvement = trade_interval > 0 && game.turn.0.is_multiple_of(trade_interval);
+    if apply_trade_improvement {
+        for ((buyer, seller), resources) in &trade_pairs {
+            // Only improve relations if a trade consulate exists between the nations.
+            if game.diplomacy.has_consulate(*buyer, *seller) {
+                let improvement = (resources.len() as i32).min(trade_cap);
+                let rel = game.diplomacy.ensure_relation(*buyer, *seller);
+                rel.improve_score(improvement);
+                report.trade_diplomacy.push((*buyer, *seller, improvement));
+            }
         }
     }
 

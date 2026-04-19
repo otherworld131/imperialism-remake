@@ -52,6 +52,7 @@ pub struct GameConfig {
     // Diplomatic relationship tuning
     pub voluntary_incorporation_threshold: i32,
     pub trade_relation_improvement_cap: i32,
+    pub trade_relation_turn_interval: u32,
     // Starting conditions
     pub starting_freight_cars: u32,
     // Trade prices — materials (first-level processed)
@@ -102,6 +103,7 @@ impl Default for GameConfig {
             embassy_cost: 5000,
             voluntary_incorporation_threshold: 90,
             trade_relation_improvement_cap: 2,
+            trade_relation_turn_interval: 3,
             starting_freight_cars: 5,
             lumber_price: 150,
             steel_price: 200,
