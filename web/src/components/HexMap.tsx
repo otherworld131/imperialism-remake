@@ -23,7 +23,7 @@ const NATION_COLORS: Record<string, string> = {
   Maroon: '#8c001a', Navy: '#00008c', Cyan: '#00cccc',
   Lime: '#73d900', Coral: '#ff8059', Lavender: '#b380e6',
   Tan: '#ccb380', Salmon: '#ff8c73', Khaki: '#bfb366',
-  Indigo: '#4d0080',
+  Indigo: '#4d0080', Beige: '#e8d8b0',
 };
 
 const DIPLO_STATUS_COLORS: Record<string, string> = {
@@ -66,6 +66,13 @@ function politicalFill(nationHex: string): string {
   const c = parseInt(nationHex.slice(1), 16);
   const r = (c >> 16) & 0xff, g = (c >> 8) & 0xff, b = c & 0xff;
   return `rgb(${Math.min(255, r + Math.round((255 - r) * 0.45))},${Math.min(255, g + Math.round((255 - g) * 0.45))},${Math.min(255, b + Math.round((255 - b) * 0.45))})`;
+}
+
+/** Lighter shade for incorporated minor nation provinces (blends 65% toward white). */
+function incorporatedFill(nationHex: string): string {
+  const c = parseInt(nationHex.slice(1), 16);
+  const r = (c >> 16) & 0xff, g = (c >> 8) & 0xff, b = c & 0xff;
+  return `rgb(${Math.min(255, r + Math.round((255 - r) * 0.65))},${Math.min(255, g + Math.round((255 - g) * 0.65))},${Math.min(255, b + Math.round((255 - b) * 0.65))})`;
 }
 
 function hexToPixel(q: number, r: number): [number, number] {
@@ -206,6 +213,7 @@ interface Props {
   isMovementMode?: boolean;
   isDeployMode?: boolean;
   deployableTiles?: Set<string>;
+  disableFogOfWar?: boolean;
   scale?: number;
   offset?: { x: number; y: number };
   onScaleChange?: (scale: number) => void;
@@ -226,7 +234,7 @@ export default function HexMap({
   tiles, mapMode, diplomacyOverlay, militaryOverlay,
   onMapModeChange, onTileClick, onTileHover, showHiddenResources = false, showAiCivilians = false,
   selectedUnit, pendingMoves = [], validMoveTargets, isMovementMode = false,
-  isDeployMode = false, deployableTiles,
+  isDeployMode = false, deployableTiles, disableFogOfWar = false,
   scale: scaleProp, offset: offsetProp, onScaleChange, onOffsetChange,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -316,14 +324,16 @@ export default function HexMap({
   }, [mapMode, diplomacyOverlay, militaryOverlay]);
 
   // Memoize nation label BFS — only recompute when tiles change, not on pan/zoom
+  // Uses visual_group so incorporated minor nations get their own label
   const nationLabels = useMemo(() => {
     const labels: { name: string; cx: number; cy: number; size: number }[] = [];
     const nationTiles = new Map<string, Set<string>>();
     for (const tile of tiles) {
       if (tile.terrain === 'Sea' || !tile.owner) continue;
       const key = `${tile.q},${tile.r}`;
-      let s = nationTiles.get(tile.owner);
-      if (!s) { s = new Set(); nationTiles.set(tile.owner, s); }
+      const groupName = tile.visual_group || tile.owner;
+      let s = nationTiles.get(groupName);
+      if (!s) { s = new Set(); nationTiles.set(groupName, s); }
       s.add(key);
     }
 
@@ -382,6 +392,14 @@ export default function HexMap({
     ctx.translate(offset.x, offset.y);
     ctx.scale(scale, scale);
 
+    // Helper: pick the right political fill based on incorporated status
+    const pickPoliticalColor = (tile: TileData): string => {
+      if (!tile.owner_color) return TERRAIN_COLORS[tile.terrain] || '#666';
+      const nc = NATION_COLORS[tile.owner_color];
+      if (!nc) return TERRAIN_COLORS[tile.terrain] || '#666';
+      return tile.is_incorporated_minor ? incorporatedFill(nc) : politicalFill(nc);
+    };
+
     // ── Pass 1: Fill all hexagons ──
     for (const tile of tiles) {
       const [px, py] = hexToPixel(tile.q, tile.r);
@@ -394,43 +412,39 @@ export default function HexMap({
         color = TERRAIN_COLORS[tile.terrain] || '#666';
         if (tile.owner_color) {
           const nc = NATION_COLORS[tile.owner_color];
-          if (nc) color = tintColor(color, nc, 0.15);
+          if (nc) color = tintColor(color, nc, tile.is_incorporated_minor ? 0.10 : 0.15);
         }
       } else if (mapMode === 'diplomatic' || mapMode === 'relationship') {
         // Overlay modes: use nationFillMap colors, fall back to political fill
         const overlayColor = tile.owner ? nationFillMap.get(tile.owner) : null;
         if (overlayColor) {
           color = overlayColor;
-        } else if (tile.owner_color) {
-          const nc = NATION_COLORS[tile.owner_color];
-          color = nc ? politicalFill(nc) : (TERRAIN_COLORS[tile.terrain] || '#666');
         } else {
-          color = TERRAIN_COLORS[tile.terrain] || '#666';
+          color = pickPoliticalColor(tile);
         }
       } else if (mapMode === 'military' || mapMode === 'naval') {
         // Military/Naval: political base with strength tint from nationFillMap
         const overlayColor = tile.owner ? nationFillMap.get(tile.owner) : null;
         if (overlayColor) {
           color = overlayColor;
-        } else if (tile.owner_color) {
-          const nc = NATION_COLORS[tile.owner_color];
-          color = nc ? politicalFill(nc) : (TERRAIN_COLORS[tile.terrain] || '#666');
         } else {
-          color = TERRAIN_COLORS[tile.terrain] || '#666';
+          color = pickPoliticalColor(tile);
         }
       } else {
         // Political mode
-        if (tile.owner_color) {
-          const nc = NATION_COLORS[tile.owner_color];
-          color = nc ? politicalFill(nc) : (TERRAIN_COLORS[tile.terrain] || '#666');
-        } else {
-          color = TERRAIN_COLORS[tile.terrain] || '#666';
-        }
+        color = pickPoliticalColor(tile);
       }
 
       drawHexagon(ctx, px, py, HEX_SIZE);
       ctx.fillStyle = color;
       ctx.fill();
+
+      // Fog of war overlay: gray out non-visible tiles
+      if (!tile.visible && !disableFogOfWar) {
+        drawHexagon(ctx, px, py, HEX_SIZE);
+        ctx.fillStyle = 'rgba(128, 128, 128, 0.35)';
+        ctx.fill();
+      }
     }
 
     // ── Pass 2: Draw each hex side with appropriate thickness ──
@@ -448,7 +462,11 @@ export default function HexMap({
         const neighbor = tileMap.get(`${nq},${nr}`);
 
         // Determine border type for THIS side
+        // Use visual_group for border grouping: incorporated minor provinces
+        // keep separate country-level borders from their overlord GP
         let borderType: 0 | 1 | 2; // 0=normal, 1=province, 2=country
+        const tileVG = tile.visual_group || tile.owner;
+        const neighborVG = neighbor ? (neighbor.visual_group || neighbor.owner) : '';
 
         if (tile.terrain === 'Sea') {
           // Sea tiles: only draw if neighbor is land (coastline from land side handles it)
@@ -456,14 +474,14 @@ export default function HexMap({
         } else if (!neighbor || neighbor.terrain === 'Sea') {
           // Edge of map or coast: country border if owned
           borderType = tile.owner ? 2 : 0;
-        } else if (tile.owner !== neighbor.owner) {
-          // Different countries
+        } else if (tileVG !== neighborVG) {
+          // Different visual groups (different nations, or GP vs incorporated minor)
           borderType = 2;
         } else if (tile.owner && tile.province !== neighbor.province) {
-          // Same country, different province
+          // Same visual group, different province
           borderType = 1;
         } else {
-          // Same country, same province: normal thin edge
+          // Same visual group, same province: normal thin edge
           borderType = 0;
         }
 
@@ -851,7 +869,7 @@ export default function HexMap({
 
     ctx.restore();
   }, [tiles, offset, scale, showPoliticalColors, showHiddenResources, showAiCivilians, mapMode, nationFillMap,
-      isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves, nationLabels]);
+      isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves, nationLabels, disableFogOfWar]);
 
   useEffect(() => { render(); }, [render]);
 

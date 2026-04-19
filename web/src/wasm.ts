@@ -83,6 +83,10 @@ export interface TileData {
   naval_firepower: number;
   naval_ship_count: number;
   civilian_on_tile: { id: number; type: string; working: boolean; turns_remaining: number; owner: string; owner_color: string; is_human: boolean } | null;
+  is_minor: boolean;
+  is_incorporated_minor: boolean;
+  visual_group: string | null;
+  visible: boolean;
 }
 
 export interface Headline {
@@ -374,8 +378,8 @@ export function processTurn(gameJson: string): any {
   return JSON.parse(result);
 }
 
-export function getMapData(gameJson: string): TileData[] {
-  return JSON.parse(wasm_get_map_data(gameJson));
+export function getMapData(gameJson: string, disableFog: boolean = false): TileData[] {
+  return JSON.parse(wasm_get_map_data(gameJson, disableFog));
 }
 
 export function getAvailableTechs(gameJson: string): any[] {

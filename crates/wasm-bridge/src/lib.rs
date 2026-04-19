@@ -112,12 +112,15 @@ pub fn wasm_process_turn(game_json: &str) -> String {
 }
 
 /// Get map data for rendering. Returns JSON array of tile objects.
+/// `disable_fog` — when true, all tiles are visible and enemy data is not filtered.
 #[wasm_bindgen]
-pub fn wasm_get_map_data(game_json: &str) -> String {
+pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
     let game: GameState = match serde_json::from_str(game_json) {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
+
+    let human_nation_id = game.human_player_nation;
 
     // Build province→nation lookup using Province.owner (the ground truth)
     // and identify country capitals
@@ -126,6 +129,8 @@ pub fn wasm_get_map_data(game_json: &str) -> String {
         .iter()
         .map(|n| (n.id, (n.name.as_str(), format!("{:?}", n.color))))
         .collect();
+    let nation_type_lookup: std::collections::HashMap<NationId, NationType> =
+        game.nations.iter().map(|n| (n.id, n.nation_type)).collect();
     let mut province_nation: std::collections::HashMap<ProvinceId, (String, String, NationId)> =
         std::collections::HashMap::new();
     for prov in &game.provinces {
@@ -133,6 +138,13 @@ pub fn wasm_get_map_data(game_json: &str) -> String {
             province_nation.insert(prov.id, (name.to_string(), color.clone(), prov.owner));
         }
     }
+    // Build province → incorporated_from lookup
+    let province_incorporated: std::collections::HashMap<ProvinceId, Option<NationId>> = game
+        .provinces
+        .iter()
+        .map(|p| (p.id, p.incorporated_from))
+        .collect();
+
     let mut country_capital_provinces: std::collections::HashSet<ProvinceId> =
         std::collections::HashSet::new();
     for nation in &game.nations {
@@ -165,7 +177,7 @@ pub fn wasm_get_map_data(game_json: &str) -> String {
             .get(&nation.id)
             .map(|(name, color)| (*name, color.as_str()))
             .unwrap_or(("", ""));
-        let is_human = nation.id == game.human_player_nation;
+        let is_human = nation.id == human_nation_id;
         for civ in &nation.civilians {
             if let Some(pos) = civ.position {
                 // If tile already has a civilian, only overwrite if this is the human player
@@ -188,12 +200,40 @@ pub fn wasm_get_map_data(game_json: &str) -> String {
         }
     }
 
+    // ── Fog of war: compute visible hexes ──
+    let visible_hexes: std::collections::HashSet<domain::hex::HexCoord> = if disable_fog {
+        std::collections::HashSet::new() // unused when fog disabled
+    } else {
+        let mut visible: std::collections::HashSet<domain::hex::HexCoord> =
+            std::collections::HashSet::new();
+        // Player's provinces are visible
+        for province in &game.provinces {
+            if province.owner == human_nation_id {
+                for &coord in &province.tiles {
+                    visible.insert(coord);
+                }
+            }
+        }
+        // One ring of neighbors around visible tiles
+        let border: Vec<domain::hex::HexCoord> = visible
+            .iter()
+            .flat_map(|c| c.neighbors())
+            .filter(|c| !visible.contains(c))
+            .collect();
+        for coord in border {
+            visible.insert(coord);
+        }
+        visible
+    };
+
     let map_width = game.hex_map.width();
 
     let tiles: Vec<serde_json::Value> = game
         .hex_map
         .all_tiles()
         .map(|(coord, tile)| {
+            let is_visible = disable_fog || visible_hexes.contains(&coord);
+
             let (owner_name, owner_color, owner_nation_id) = tile
                 .province_id
                 .and_then(|pid| province_nation.get(&pid))
@@ -206,6 +246,34 @@ pub fn wasm_get_map_data(game_json: &str) -> String {
                 .map(|p| p.name.as_str())
                 .unwrap_or("");
 
+            // Minor nation / incorporated status
+            let owner_nid = NationId(owner_nation_id);
+            let is_minor = owner_nation_id != 0
+                && nation_type_lookup
+                    .get(&owner_nid)
+                    .copied()
+                    .unwrap_or(NationType::GreatPower)
+                    == NationType::MinorNation;
+            let incorporated_from_id = tile
+                .province_id
+                .and_then(|pid| province_incorporated.get(&pid).copied().flatten());
+            let is_incorporated_minor = incorporated_from_id.is_some();
+
+            // Visual group: for incorporated provinces, use the minor nation's name;
+            // otherwise use the owner name. Controls border grouping.
+            let visual_group: Option<&str> = if let Some(inc_nid) = incorporated_from_id {
+                nation_lookup.get(&inc_nid).map(|(name, _)| *name)
+            } else {
+                None
+            };
+
+            // For independent minor nations, override display color to Beige
+            let display_color = if is_minor && !is_incorporated_minor && !owner_color.is_empty() {
+                "Beige"
+            } else {
+                owner_color
+            };
+
             // A tile is a country capital if it's marked as capital AND is in
             // the nation's capital province
             let is_country_capital = tile.is_capital
@@ -213,8 +281,8 @@ pub fn wasm_get_map_data(game_json: &str) -> String {
                     .province_id
                     .is_some_and(|pid| country_capital_provinces.contains(&pid));
 
-            // Strength data — only populated on capital tiles to keep payload small
-            let (army_fp, army_count) = if tile.is_capital {
+            // Strength data — only on capital tiles, filtered by fog of war
+            let (army_fp, army_count) = if tile.is_capital && is_visible {
                 tile.province_id
                     .and_then(|pid| province_army.get(&pid))
                     .copied()
@@ -223,13 +291,20 @@ pub fn wasm_get_map_data(game_json: &str) -> String {
                 (0.0, 0)
             };
 
-            let (naval_fp, naval_count) = if is_country_capital {
+            let (naval_fp, naval_count) = if is_country_capital && is_visible {
                 nation_naval
                     .get(&NationId(owner_nation_id))
                     .copied()
                     .unwrap_or((0, 0))
             } else {
                 (0, 0)
+            };
+
+            // Civilian data — hidden on fogged tiles
+            let civ_data = if is_visible {
+                civilian_on_tile.get(&coord)
+            } else {
+                None
             };
 
             serde_json::json!({
@@ -242,7 +317,7 @@ pub fn wasm_get_map_data(game_json: &str) -> String {
                 "is_country_capital": is_country_capital,
                 "improvement_level": tile.improvement_level(),
                 "owner": owner_name,
-                "owner_color": owner_color,
+                "owner_color": display_color,
                 "province": province_name,
                 "province_id": tile.province_id.map(|pid| pid.0),
                 "has_railroad": tile.infrastructure.has_railroad,
@@ -256,7 +331,11 @@ pub fn wasm_get_map_data(game_json: &str) -> String {
                 "army_unit_count": army_count,
                 "naval_firepower": naval_fp,
                 "naval_ship_count": naval_count,
-                "civilian_on_tile": civilian_on_tile.get(&coord),
+                "civilian_on_tile": civ_data,
+                "is_minor": is_minor,
+                "is_incorporated_minor": is_incorporated_minor,
+                "visual_group": visual_group,
+                "visible": is_visible,
             })
         })
         .collect();
@@ -3946,11 +4025,8 @@ mod tests {
             attacker_origin_provinces: vec![ProvinceId(2), ProvinceId(3)],
         };
 
-        game.battle_archive.push((
-            TurnNumber::new(1),
-            vec![battle],
-            Vec::new(),
-        ));
+        game.battle_archive
+            .push((TurnNumber::new(1), vec![battle], Vec::new()));
 
         let game_json = serde_json::to_string(&game).unwrap();
         let result_json = wasm_get_battle_data(&game_json);
@@ -3964,7 +4040,9 @@ mod tests {
         assert_eq!(entry["year"].as_u64(), Some(1815));
         assert_eq!(entry["quarter"].as_u64(), Some(1));
 
-        let battles = entry["battles"].as_array().expect("should have battles array");
+        let battles = entry["battles"]
+            .as_array()
+            .expect("should have battles array");
         assert_eq!(battles.len(), 1);
 
         let b = &battles[0];
@@ -3981,16 +4059,26 @@ mod tests {
         assert_eq!(b["terrain"].as_str(), Some("Hills"));
 
         // Check origin_tiles are populated (two origin provinces)
-        let origin_tiles = b["origin_tiles"].as_array().expect("should have origin_tiles");
-        assert_eq!(origin_tiles.len(), 2, "should have two origin tiles for two origin provinces");
+        let origin_tiles = b["origin_tiles"]
+            .as_array()
+            .expect("should have origin_tiles");
+        assert_eq!(
+            origin_tiles.len(),
+            2,
+            "should have two origin tiles for two origin provinces"
+        );
 
         // Check medal awards
-        let medals = b["medal_awards"].as_array().expect("should have medal_awards");
+        let medals = b["medal_awards"]
+            .as_array()
+            .expect("should have medal_awards");
         assert_eq!(medals.len(), 1);
         assert_eq!(medals[0]["medals"].as_u64(), Some(2));
 
         // Naval battles should be empty
-        let naval = entry["naval_battles"].as_array().expect("should have naval_battles");
+        let naval = entry["naval_battles"]
+            .as_array()
+            .expect("should have naval_battles");
         assert!(naval.is_empty());
     }
 
@@ -4000,7 +4088,10 @@ mod tests {
         let result_json = wasm_get_battle_data(&game_json);
         let parsed: serde_json::Value = serde_json::from_str(&result_json).unwrap();
         let archive = parsed.as_array().expect("should be array");
-        assert!(archive.is_empty(), "new game should have empty battle archive");
+        assert!(
+            archive.is_empty(),
+            "new game should have empty battle archive"
+        );
     }
 
     #[test]
@@ -4028,11 +4119,8 @@ mod tests {
             defender_survivors: Vec::new(),
         };
 
-        game.battle_archive.push((
-            TurnNumber::new(2),
-            Vec::new(),
-            vec![naval],
-        ));
+        game.battle_archive
+            .push((TurnNumber::new(2), Vec::new(), vec![naval]));
 
         let game_json = serde_json::to_string(&game).unwrap();
         let result_json = wasm_get_battle_data(&game_json);

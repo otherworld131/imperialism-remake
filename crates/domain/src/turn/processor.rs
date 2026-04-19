@@ -2376,8 +2376,7 @@ fn resolve_combat(
 
         // Track unit IDs by cohort so post-battle relocation can send land
         // survivors to the conquered province and keep naval survivors at origin.
-        let land_unit_ids: HashSet<crate::map::UnitId> =
-            land_cohort.iter().map(|u| u.id).collect();
+        let land_unit_ids: HashSet<crate::map::UnitId> = land_cohort.iter().map(|u| u.id).collect();
 
         let mut attacker_units: Vec<ArmyUnit> = land_cohort;
         attacker_units.extend(naval_cohort);
@@ -2430,6 +2429,7 @@ fn resolve_combat(
             // Naval attacks: units return to origin (no position change).
             if let Some(province) = game.get_province_mut(province_id) {
                 province.owner = attacker_id;
+                province.incorporated_from = None;
             }
             if let Some(defender_nation) = game.get_nation_mut(defender_id) {
                 defender_nation
@@ -2579,6 +2579,7 @@ fn resolve_combat(
             // Change province owner and reset garrison (conquering nation has no garrison)
             if let Some(province) = game.get_province_mut(province_id) {
                 province.owner = attacker_id;
+                province.incorporated_from = None;
                 province.garrison_count = 0;
             }
 
@@ -2881,6 +2882,7 @@ fn resolve_combat(
             // Counter-attack succeeds: province returns to original defender
             if let Some(province) = game.get_province_mut(target_province_id) {
                 province.owner = counter_attacker_id;
+                province.incorporated_from = None;
             }
             if let Some(occ_nation) = game.get_nation_mut(new_owner_id) {
                 occ_nation
@@ -4122,10 +4124,7 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
         new_wars.retain(|(ally, _, _, _)| !conflicted_allies.contains(ally));
         report.newspaper_headlines.retain(|h| {
             !conflicted_allies.iter().any(|&cid| {
-                let name = game
-                    .get_nation(cid)
-                    .map(|n| n.name.as_str())
-                    .unwrap_or("");
+                let name = game.get_nation(cid).map(|n| n.name.as_str()).unwrap_or("");
                 !name.is_empty()
                     && h.text.starts_with(name)
                     && h.text.contains("honors its alliance")
@@ -4180,10 +4179,11 @@ fn incorporate_minor_into_empire(
         .map(|n| n.province_ids.clone())
         .unwrap_or_default();
 
-    // Update province owners
+    // Update province owners (mark as diplomatically incorporated for map rendering)
     for pid in &provinces_to_transfer {
         if let Some(prov) = game.get_province_mut(*pid) {
             prov.owner = gp_id;
+            prov.incorporated_from = Some(minor_id);
         }
     }
 
@@ -10138,7 +10138,9 @@ mod tests {
             "attacker_origin_provinces should be populated"
         );
         assert!(
-            first_battle.attacker_origin_provinces.contains(&ProvinceId(1)),
+            first_battle
+                .attacker_origin_provinces
+                .contains(&ProvinceId(1)),
             "origin should include Province 1 where attacker units are stationed"
         );
 
@@ -10172,10 +10174,7 @@ mod tests {
         );
 
         // Verify Province 2 is now owned by attacker
-        assert_eq!(
-            game.get_province(ProvinceId(2)).unwrap().owner,
-            NationId(1)
-        );
+        assert_eq!(game.get_province(ProvinceId(2)).unwrap().owner, NationId(1));
 
         // Verify surviving attacker units are now positioned in the conquered province
         let attacker = game.get_nation(NationId(1)).unwrap();
@@ -10353,13 +10352,43 @@ mod tests {
         let coord10 = HexCoord::new(5, 5); // far away — Nation 1's capital
 
         let mut hex_map = HexMap::new(20, 20);
-        hex_map.set_tile(coord1, Tile::with_province(TerrainType::Grassland, ProvinceId(1)));
-        hex_map.set_tile(coord2, Tile::with_province(TerrainType::Grassland, ProvinceId(2)));
-        hex_map.set_tile(coord10, Tile::with_province(TerrainType::Grassland, ProvinceId(10)));
+        hex_map.set_tile(
+            coord1,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        hex_map.set_tile(
+            coord2,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+        hex_map.set_tile(
+            coord10,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(10)),
+        );
 
-        let p1 = Province::new(ProvinceId(1), "P1".into(), NationId(1), coord1, vec![coord1], 4);
-        let p2 = Province::new(ProvinceId(2), "P2".into(), NationId(2), coord2, vec![coord2], 3);
-        let p10 = Province::new(ProvinceId(10), "Capital".into(), NationId(1), coord10, vec![coord10], 4);
+        let p1 = Province::new(
+            ProvinceId(1),
+            "P1".into(),
+            NationId(1),
+            coord1,
+            vec![coord1],
+            4,
+        );
+        let p2 = Province::new(
+            ProvinceId(2),
+            "P2".into(),
+            NationId(2),
+            coord2,
+            vec![coord2],
+            3,
+        );
+        let p10 = Province::new(
+            ProvinceId(10),
+            "Capital".into(),
+            NationId(1),
+            coord10,
+            vec![coord10],
+            4,
+        );
 
         let mut nation1 = Nation::new(
             NationId(1),
@@ -10427,7 +10456,11 @@ mod tests {
 
         // Verify Nation 1's units from adjacent P1 are now in P2
         let attacker = game.get_nation(NationId(1)).unwrap();
-        let units_in_p2 = attacker.army.iter().filter(|u| u.position == ProvinceId(2)).count();
+        let units_in_p2 = attacker
+            .army
+            .iter()
+            .filter(|u| u.position == ProvinceId(2))
+            .count();
         assert!(
             units_in_p2 > 0,
             "Adjacent units should relocate to auto-conquered P2, got {} units there",
@@ -10436,7 +10469,8 @@ mod tests {
 
         // Defender test not strictly needed — just verify no battle report (auto-conquer = no battle)
         assert!(
-            report.battles.is_empty() || !report.battles.iter().any(|b| b.province == ProvinceId(2)),
+            report.battles.is_empty()
+                || !report.battles.iter().any(|b| b.province == ProvinceId(2)),
             "Auto-conquer should not produce a battle report"
         );
     }
@@ -10514,12 +10548,32 @@ mod tests {
         let coord2 = HexCoord::new(5, 0); // far from P1 — not adjacent
 
         let mut hex_map = HexMap::new(20, 20);
-        hex_map.set_tile(coord1, Tile::with_province(TerrainType::Grassland, ProvinceId(1)));
-        hex_map.set_tile(coord2, Tile::with_province(TerrainType::Grassland, ProvinceId(2)));
+        hex_map.set_tile(
+            coord1,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        hex_map.set_tile(
+            coord2,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
 
-        let mut p1 = Province::new(ProvinceId(1), "Home".into(), NationId(1), coord1, vec![coord1], 4);
+        let mut p1 = Province::new(
+            ProvinceId(1),
+            "Home".into(),
+            NationId(1),
+            coord1,
+            vec![coord1],
+            4,
+        );
         p1.coastal = true;
-        let mut p2 = Province::new(ProvinceId(2), "Target".into(), NationId(2), coord2, vec![coord2], 3);
+        let mut p2 = Province::new(
+            ProvinceId(2),
+            "Target".into(),
+            NationId(2),
+            coord2,
+            vec![coord2],
+            3,
+        );
         p2.coastal = true;
 
         let mut nation1 = Nation::new(
@@ -10637,12 +10691,16 @@ mod tests {
         // After moving, the unit moved_unit_ids. Then P2 gets attacked and
         // conquered. Counter-attack force assembly in phase 7 should exclude
         // moved units.
-        let moved_uid = game.get_nation(NationId(2)).unwrap().army
+        let moved_uid = game
+            .get_nation(NationId(2))
+            .unwrap()
+            .army
             .iter()
             .find(|u| u.position == ProvinceId(3))
             .unwrap()
             .id;
-        game.pending_moves.push((NationId(2), moved_uid, ProvinceId(2)));
+        game.pending_moves
+            .push((NationId(2), moved_uid, ProvinceId(2)));
 
         game.pending_attacks.push((NationId(1), ProvinceId(2)));
         game.diplomacy.declare_war(NationId(1), NationId(2));
@@ -10690,17 +10748,57 @@ mod tests {
         let coord_p4 = HexCoord::new(0, 3); // inland, not coastal
 
         let mut hex_map = HexMap::new(20, 20);
-        hex_map.set_tile(coord_p1, Tile::with_province(TerrainType::Grassland, ProvinceId(1)));
-        hex_map.set_tile(coord_p2, Tile::with_province(TerrainType::Grassland, ProvinceId(2)));
-        hex_map.set_tile(coord_p3, Tile::with_province(TerrainType::Grassland, ProvinceId(3)));
-        hex_map.set_tile(coord_p4, Tile::with_province(TerrainType::Grassland, ProvinceId(4)));
+        hex_map.set_tile(
+            coord_p1,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        hex_map.set_tile(
+            coord_p2,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+        hex_map.set_tile(
+            coord_p3,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(3)),
+        );
+        hex_map.set_tile(
+            coord_p4,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(4)),
+        );
 
-        let mut p1 = Province::new(ProvinceId(1), "Port".into(), NationId(1), coord_p1, vec![coord_p1], 4);
+        let mut p1 = Province::new(
+            ProvinceId(1),
+            "Port".into(),
+            NationId(1),
+            coord_p1,
+            vec![coord_p1],
+            4,
+        );
         p1.coastal = true;
-        let mut p2 = Province::new(ProvinceId(2), "Target".into(), NationId(2), coord_p2, vec![coord_p2], 3);
+        let mut p2 = Province::new(
+            ProvinceId(2),
+            "Target".into(),
+            NationId(2),
+            coord_p2,
+            vec![coord_p2],
+            3,
+        );
         p2.coastal = true;
-        let p3 = Province::new(ProvinceId(3), "Border".into(), NationId(1), coord_p3, vec![coord_p3], 4);
-        let p4 = Province::new(ProvinceId(4), "Inland".into(), NationId(1), coord_p4, vec![coord_p4], 4);
+        let p3 = Province::new(
+            ProvinceId(3),
+            "Border".into(),
+            NationId(1),
+            coord_p3,
+            vec![coord_p3],
+            4,
+        );
+        let p4 = Province::new(
+            ProvinceId(4),
+            "Inland".into(),
+            NationId(1),
+            coord_p4,
+            vec![coord_p4],
+            4,
+        );
 
         let mut nation1 = Nation::new(
             NationId(1),
@@ -10714,14 +10812,29 @@ mod tests {
         nation1.treasury = Money::dollars(20000);
         // 3 Guards in P1 (port)
         for i in 0..3 {
-            nation1.army.push(ArmyUnit::new(UnitId(100 + i), ArmyUnitType::Guards, NationId(1), ProvinceId(1)));
+            nation1.army.push(ArmyUnit::new(
+                UnitId(100 + i),
+                ArmyUnitType::Guards,
+                NationId(1),
+                ProvinceId(1),
+            ));
         }
         // 2 Guards in P3 (land adjacent)
         for i in 0..2 {
-            nation1.army.push(ArmyUnit::new(UnitId(200 + i), ArmyUnitType::Guards, NationId(1), ProvinceId(3)));
+            nation1.army.push(ArmyUnit::new(
+                UnitId(200 + i),
+                ArmyUnitType::Guards,
+                NationId(1),
+                ProvinceId(3),
+            ));
         }
         // 1 Guard in P4 (inland non-port)
-        nation1.army.push(ArmyUnit::new(UnitId(300), ArmyUnitType::Guards, NationId(1), ProvinceId(4)));
+        nation1.army.push(ArmyUnit::new(
+            UnitId(300),
+            ArmyUnitType::Guards,
+            NationId(1),
+            ProvinceId(4),
+        ));
 
         // ShipOfTheLine: arms_cost = 5 → beachhead_cap = 5 (room for 3 P1 + 2 P3 = 5 but
         // land cohort doesn't consume beachhead, so naval cap only affects P1 units: 3 <= 5)
@@ -10791,7 +10904,9 @@ mod tests {
         let attacker = game.get_nation(NationId(1)).unwrap();
 
         // Land cohort (from P3, IDs 200-201) should be in P2 (conquered)
-        let land_in_p2 = attacker.army.iter()
+        let land_in_p2 = attacker
+            .army
+            .iter()
             .filter(|u| u.id.0 >= 200 && u.id.0 < 202)
             .filter(|u| u.position == ProvinceId(2))
             .count();
@@ -10802,7 +10917,9 @@ mod tests {
         );
 
         // Naval cohort (from P1, IDs 100-102) should still be at P1 (origin)
-        let naval_still_at_port = attacker.army.iter()
+        let naval_still_at_port = attacker
+            .army
+            .iter()
             .filter(|u| u.id.0 >= 100 && u.id.0 < 103)
             .filter(|u| u.position == ProvinceId(1))
             .count();
@@ -10813,7 +10930,9 @@ mod tests {
         );
 
         // Inland unit (ID 300 at P4) must NOT have participated — still at P4
-        let inland_still_at_p4 = attacker.army.iter()
+        let inland_still_at_p4 = attacker
+            .army
+            .iter()
             .find(|u| u.id.0 == 300)
             .map(|u| u.position == ProvinceId(4))
             .unwrap_or(false);
@@ -10834,8 +10953,7 @@ mod tests {
         hex_map.set_tile(coord, tile);
 
         let mut nations = Vec::new();
-        for (id, name, prov_id) in [(1, "Alphaland", 1), (2, "Betaland", 2), (3, "Gammaland", 3)]
-        {
+        for (id, name, prov_id) in [(1, "Alphaland", 1), (2, "Betaland", 2), (3, "Gammaland", 3)] {
             let mut n = Nation::new(
                 NationId(id),
                 name.to_string(),
@@ -10869,8 +10987,12 @@ mod tests {
         diplomacy.initialize_great_powers(&gps);
 
         // C(3) allied with both A(1) and B(2)
-        diplomacy.propose_alliance(NationId(3), NationId(1)).unwrap();
-        diplomacy.propose_alliance(NationId(3), NationId(2)).unwrap();
+        diplomacy
+            .propose_alliance(NationId(3), NationId(1))
+            .unwrap();
+        diplomacy
+            .propose_alliance(NationId(3), NationId(2))
+            .unwrap();
 
         // A(1) declares war on B(2)
         diplomacy.declare_war(NationId(1), NationId(2));

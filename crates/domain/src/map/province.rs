@@ -50,6 +50,13 @@ pub struct Province {
     /// by naval landings (beachhead operations).
     #[serde(default)]
     pub coastal: bool,
+    /// If this province was diplomatically incorporated from a minor nation,
+    /// tracks the original minor nation's ID. Used for map rendering only:
+    /// incorporated provinces keep separate borders and show a lighter shade
+    /// of the overlord's color. `None` for native GP provinces, independent
+    /// minor provinces, and militarily conquered provinces.
+    #[serde(default)]
+    pub incorporated_from: Option<NationId>,
 }
 
 impl Province {
@@ -82,6 +89,7 @@ impl Province {
             industrialization_turns_remaining: None,
             town_countdown: None,
             coastal: false,
+            incorporated_from: None,
         }
     }
 

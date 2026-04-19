@@ -110,6 +110,7 @@ function App() {
   const [showAiCivilians, setShowAiCivilians] = useState(false);
   const [showAiReasoning, setShowAiReasoning] = useState(false);
   const [showAiNonActions, setShowAiNonActions] = useState(false);
+  const [disableFogOfWar, setDisableFogOfWar] = useState(false);
   const [newsFilterCategory, setNewsFilterCategory] = useState<string>('all');
   const [newsFilterCountry, setNewsFilterCountry] = useState<string>('all');
   const [mapMode, setMapMode] = useState<MapMode>('terrain');
@@ -192,7 +193,7 @@ function App() {
     }
     setGameJson(json);
     setGameState(state);
-    setTiles(getMapData(json));
+    setTiles(getMapData(json, disableFogOfWar));
     setTechs(getAvailableTechs(json));
     const nid = state.human_player_nation;
     setCivilians(getCivilians(json, nid));
@@ -205,7 +206,14 @@ function App() {
     setLedgerData(getLedgerData(json, nid));
     setGpLedgerData(getAllGPLedgerData(json));
     return true;
-  }, [showError]);
+  }, [showError, disableFogOfWar]);
+
+  // Re-fetch tiles when fog of war toggle changes
+  useEffect(() => {
+    if (gameJson) {
+      setTiles(getMapData(gameJson, disableFogOfWar));
+    }
+  }, [disableFogOfWar, gameJson]);
 
   const handleGameStart = (json: string) => {
     if (!applyGameJson(json)) return;
@@ -706,6 +714,7 @@ function App() {
             isMovementMode={isMovementMode}
             isDeployMode={isDeployMode}
             deployableTiles={deployableTiles}
+            disableFogOfWar={disableFogOfWar}
             scale={mapScale}
             offset={mapOffset}
             onScaleChange={setMapScale}
@@ -995,6 +1004,10 @@ function App() {
                 <label>
                   <input type="checkbox" checked={showAiNonActions} onChange={e => setShowAiNonActions(e.target.checked)} />
                   {' '}Show AI non-actions
+                </label>
+                <label>
+                  <input type="checkbox" checked={disableFogOfWar} onChange={e => setDisableFogOfWar(e.target.checked)} />
+                  {' '}Disable fog of war
                 </label>
               </div>
 
