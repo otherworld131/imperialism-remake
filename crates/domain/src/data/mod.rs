@@ -49,6 +49,9 @@ pub struct GameConfig {
     // Diplomacy costs
     pub consulate_cost: i64,
     pub embassy_cost: i64,
+    // Diplomatic relationship tuning
+    pub voluntary_incorporation_threshold: i32,
+    pub trade_relation_improvement_cap: i32,
     // Starting conditions
     pub starting_freight_cars: u32,
     // Trade prices — materials (first-level processed)
@@ -97,6 +100,8 @@ impl Default for GameConfig {
             use_tier_expansion: true,
             consulate_cost: 500,
             embassy_cost: 5000,
+            voluntary_incorporation_threshold: 90,
+            trade_relation_improvement_cap: 2,
             starting_freight_cars: 5,
             lumber_price: 150,
             steel_price: 200,

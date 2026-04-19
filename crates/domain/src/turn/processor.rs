@@ -1860,10 +1860,13 @@ fn resolve_trade_session(
             .or_default()
             .insert(txn.resource);
     }
+    // Cap sourced from scripts/config/game.lua — unscaled improvement let minors
+    // voluntarily join an empire in only ~5 years of passive trade.
+    let trade_cap = game.game_data.game_config.trade_relation_improvement_cap;
     for ((buyer, seller), resources) in &trade_pairs {
-        // Only improve relations if a trade consulate exists between the nations
+        // Only improve relations if a trade consulate exists between the nations.
         if game.diplomacy.has_consulate(*buyer, *seller) {
-            let improvement = resources.len() as i32;
+            let improvement = (resources.len() as i32).min(trade_cap);
             let rel = game.diplomacy.ensure_relation(*buyer, *seller);
             rel.improve_score(improvement);
             report.trade_diplomacy.push((*buyer, *seller, improvement));
@@ -4238,7 +4241,9 @@ fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnRepor
         .map(|n| n.id)
         .collect();
 
-    let threshold = 75;
+    // Threshold sourced from scripts/config/game.lua — voluntary incorporation
+    // should be a rare, late-game event requiring near-max relationship.
+    let threshold = game.game_data.game_config.voluntary_incorporation_threshold;
 
     for minor_id in &minor_ids {
         if game
@@ -7177,9 +7182,9 @@ mod tests {
     fn voluntary_incorporation_at_threshold() {
         let mut game = test_game_state_with_minor_nation();
 
-        // Set diplomacy score to exactly 75
+        // Set diplomacy score to exactly 90 (incorporation threshold)
         let rel = game.diplomacy.ensure_relation(NationId(2), NationId(1));
-        rel.score = 75;
+        rel.score = 90;
 
         let mut report = TurnReport {
             turn: game.turn,
@@ -7243,9 +7248,9 @@ mod tests {
     fn no_incorporation_below_threshold() {
         let mut game = test_game_state_with_minor_nation();
 
-        // Set diplomacy score to 74 (just below threshold)
+        // Set diplomacy score to 89 (just below threshold of 90)
         let rel = game.diplomacy.ensure_relation(NationId(2), NationId(1));
-        rel.score = 74;
+        rel.score = 89;
 
         let mut report = TurnReport {
             turn: game.turn,
@@ -9020,9 +9025,9 @@ mod tests {
     fn no_reincorporation_of_already_incorporated_minor() {
         let mut game = test_game_state_with_minor_nation();
 
-        // Set diplomacy score to 80 (above threshold)
+        // Set diplomacy score to 95 (above threshold)
         let rel = game.diplomacy.ensure_relation(NationId(2), NationId(1));
-        rel.score = 80;
+        rel.score = 95;
 
         // Simulate that the minor nation was already incorporated (0 provinces)
         let minor = game.get_nation_mut(NationId(2)).unwrap();

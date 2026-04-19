@@ -56,6 +56,12 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         use_tier_expansion: table.get("use_tier_expansion").unwrap_or(true),
         consulate_cost: table.get("consulate_cost").unwrap_or(500),
         embassy_cost: table.get("embassy_cost").unwrap_or(5000),
+        voluntary_incorporation_threshold: table
+            .get("voluntary_incorporation_threshold")
+            .unwrap_or(90),
+        trade_relation_improvement_cap: table
+            .get("trade_relation_improvement_cap")
+            .unwrap_or(2),
         starting_freight_cars: table.get("starting_freight_cars").unwrap_or(5),
         lumber_price: table.get("lumber_price").unwrap_or(150),
         steel_price: table.get("steel_price").unwrap_or(200),
@@ -95,6 +101,8 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         gems_value: cfg.gems_value.clamp(0, 1_000_000),
         consulate_cost: cfg.consulate_cost.clamp(0, 1_000_000),
         embassy_cost: cfg.embassy_cost.clamp(0, 1_000_000),
+        voluntary_incorporation_threshold: cfg.voluntary_incorporation_threshold.clamp(-100, 100),
+        trade_relation_improvement_cap: cfg.trade_relation_improvement_cap.max(0),
         starting_freight_cars: cfg.starting_freight_cars,
         lumber_price: cfg.lumber_price.clamp(1, 1_000_000),
         steel_price: cfg.steel_price.clamp(1, 1_000_000),

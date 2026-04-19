@@ -62,6 +62,15 @@ game_config = {
     consulate_cost = 500,
     embassy_cost = 5000,
 
+    -- Diplomatic relationship tuning
+    -- Minor nations voluntarily join a Great Power's empire when their relation
+    -- score reaches this value. Range is [-100, 100], so 90 = near-max trust.
+    voluntary_incorporation_threshold = 90,
+    -- Per-turn cap on relationship improvement from trade with a consulate.
+    -- The raw improvement is the number of distinct resources traded;
+    -- capping prevents broad trade portfolios from trivially maxing relations.
+    trade_relation_improvement_cap = 2,
+
     -- AI trade behaviour
     ai_consulate_target = 4,                  -- AI GPs aim for this many consulates in minor nations
     ai_consulate_priority_score = 30.0,        -- scoring weight per missing consulate below target
