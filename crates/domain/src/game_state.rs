@@ -64,6 +64,10 @@ pub struct GameState {
     /// When true, AI functions print detailed decision traces to stderr.
     #[serde(skip, default)]
     pub ai_debug: bool,
+    /// When true, all 7 Great Powers are controlled by AI and the human player
+    /// only observes. `human_player_nation` remains set as the "viewpoint" nation.
+    #[serde(default)]
+    pub observer_mode: bool,
 }
 
 impl GameState {
@@ -445,6 +449,7 @@ pub fn new_game_with_seed(
         newspaper_archive: Vec::new(),
         battle_archive: Vec::new(),
         ai_debug: false,
+        observer_mode: false,
     };
 
     // Give minor nation capitals a level 1 fort (original Imperialism defensive mechanic).
@@ -505,6 +510,39 @@ pub fn new_game_with_seed(
     }
 
     game_state
+}
+
+/// Create a new game in observer mode — all 7 Great Powers play as AI.
+///
+/// The `viewpoint_index` determines the default nation used for ledger / diplomacy
+/// screens; it can be switched in-game. Observer mode does not exempt any nation
+/// from AI control, and the Hard/NOI difficulty starting-cash bonus is applied to
+/// all 7 GPs (since there is no human player to exempt).
+pub fn new_observer_game(map_key: &str, difficulty: Difficulty) -> GameState {
+    let personality_seed = {
+        let mut h: u64 = 5381;
+        for b in map_key.bytes() {
+            h = h.wrapping_mul(33).wrapping_add(b as u64);
+        }
+        h ^ 0xA1CA_FE42
+    };
+    // Build base game with nation 0 as the placeholder "human" seat.
+    let mut game = new_game_with_seed(map_key, difficulty, 0, personality_seed);
+
+    // Assign an AI personality + difficulty bonus to the placeholder seat so
+    // all 7 GPs are on equal footing.
+    let human_id = game.human_player_nation;
+    let extra = random_personalities(personality_seed ^ 0xDEAD_BEEF, 1)[0];
+    if let Some(nation) = game.get_nation_mut(human_id) {
+        nation.ai_personality = Some(extra);
+        match difficulty {
+            Difficulty::Hard => nation.treasury += Money::dollars(1000),
+            Difficulty::NighOnImpossible => nation.treasury += Money::dollars(5000),
+            _ => {}
+        }
+    }
+    game.observer_mode = true;
+    game
 }
 
 #[cfg(test)]
@@ -570,6 +608,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         }
     }
 

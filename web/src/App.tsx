@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  initWasm, processTurn, getMapData, getAvailableTechs, researchTech,
+  initWasm, processTurn, processTurns, setHumanPlayer,
+  getMapData, getAvailableTechs, researchTech,
   getDiplomacyOverlay, getMilitaryOverlay,
   getUnitsInProvince, getCivilians, getShips, getValidMoveTargets, getBuildableUnits,
   queueUnitMove, cancelUnitMove, deployCivilian, recallCivilian,
@@ -157,6 +158,16 @@ function App() {
   const [mapScale, setMapScale] = useState(0.7);
   const [mapOffset, setMapOffset] = useState({ x: -200, y: -100 });
 
+  // Observer mode state
+  const [skipN, setSkipN] = useState<number>(5);
+  const isObserver = gameState?.observer_mode === true;
+  const observerGps: { id: number; name: string; color: string }[] = useMemo(
+    () => (gameState?.nations || [])
+      .filter((n: any) => n.nation_type === 'GreatPower')
+      .map((n: any) => ({ id: n.id, name: n.name, color: n.color })),
+    [gameState],
+  );
+
   useEffect(() => {
     (async () => {
       try {
@@ -256,6 +267,36 @@ function App() {
       setShowProposals(true);
     }
   }, [proposalData]);
+
+  const handleSkipTurns = useCallback(() => {
+    const n = Math.max(1, Math.min(50, skipN | 0));
+    const result = processTurns(gameJson, n);
+    if ((result as any).error) { alert((result as any).error); return; }
+    const newJson = JSON.stringify(result.game);
+    if (!applyGameJson(newJson)) return;
+    const allHeadlines = result.reports.flatMap(r => r.headlines);
+    const allBattles = result.reports.flatMap(r => r.battles);
+    const allNavalBattles = result.reports.flatMap(r => r.naval_battles);
+    setHeadlines(allHeadlines);
+    setCurrentBattles(allBattles);
+    setCurrentNavalBattles(allNavalBattles);
+    setActiveScreen('newspaper');
+    setProvinceUnits(null);
+    setSelectedUnitIds([]);
+    setIsMovementMode(false);
+    setValidMoveTargets(null);
+    setIsDeployMode(false);
+    setDeployingCivilian(null);
+  }, [gameJson, applyGameJson, skipN]);
+
+  const handleChangeViewpoint = useCallback((nationId: number) => {
+    const idx = observerGps.findIndex(g => g.id === nationId);
+    if (idx < 0) return;
+    const newJson = setHumanPlayer(gameJson, idx);
+    const parsed = JSON.parse(newJson);
+    if (parsed.error) { alert(parsed.error); return; }
+    applyGameJson(newJson);
+  }, [gameJson, applyGameJson, observerGps]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -487,6 +528,7 @@ function App() {
   }, [gameJson, applyGameJson, showError]);
 
   const handleRecruit = useCallback((unitType: string) => {
+    if (isObserver) return;
     const cmd = recruitArmyUnit(gameJson, playerNationId, unitType);
     if (cmd.ok && cmd.gameJson && applyGameJson(cmd.gameJson)) {
       if (selectedTile?.province_id != null) {
@@ -498,6 +540,7 @@ function App() {
   }, [gameJson, playerNationId, applyGameJson, selectedTile, showError]);
 
   const handleDeployCivilian = useCallback((civ: CivilianDetail) => {
+    if (isObserver) return;
     setDeployingCivilian(civ);
     setIsDeployMode(true);
     // Compute deployable tiles — tiles owned by player where civilian type can work
@@ -524,18 +567,21 @@ function App() {
   }, [tiles, playerNationId]);
 
   const handleRecallCivilian = useCallback((civilianId: number) => {
+    if (isObserver) return;
     const cmd = recallCivilian(gameJson, civilianId);
     if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Recall failed: ${cmd.error}`);
   }, [gameJson, applyGameJson, showError]);
 
   const handleHireCivilian = useCallback((civType: string) => {
+    if (isObserver) return;
     const cmd = hireCivilian(gameJson, playerNationId, civType);
     if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Hire failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
   const handleBuildShip = useCallback((shipType: string) => {
+    if (isObserver) return;
     const cmd = buildShip(gameJson, playerNationId, shipType);
     if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Build failed: ${cmd.error}`);
@@ -544,36 +590,42 @@ function App() {
   // ── New screen handlers ──────────────────────────────────────────
 
   const handleBuildFreightCar = useCallback(() => {
+    if (isObserver) return;
     const cmd = buildFreightCar(gameJson, playerNationId);
     if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Build failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
   const handleSetAllocation = useCallback((resource: string, percentage: number) => {
+    if (isObserver) return;
     const cmd = setTransportAllocation(gameJson, playerNationId, resource, percentage);
     if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Allocation failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
   const handleExpandBuilding = useCallback((buildingType: string) => {
+    if (isObserver) return;
     const cmd = expandBuilding(gameJson, playerNationId, buildingType);
     if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Expand failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
   const handleSetSubsidy = useCallback((targetNationId: number, amount: number) => {
+    if (isObserver) return;
     const cmd = setTradeSubsidy(gameJson, playerNationId, targetNationId, amount);
     if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Subsidy failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
   const handleSetSellOrder = useCallback((commodityType: string, commodityName: string, quantity: number) => {
+    if (isObserver) return;
     const cmd = setPlayerSellOrder(gameJson, playerNationId, commodityType, commodityName, quantity);
     if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Sell order failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
   const handleSetBuyOrder = useCallback((resource: string, quantity: number, maxPrice: number) => {
+    if (isObserver) return;
     const cmd = setPlayerBuyOrder(gameJson, playerNationId, resource, quantity, maxPrice);
     if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Buy order failed: ${cmd.error}`);
@@ -582,6 +634,7 @@ function App() {
   // Diplomacy screen handlers
   const makeDiploHandler = useCallback((fn: (gj: string, nid: number, tid: number) => any, label: string) =>
     (targetId: number) => {
+      if (isObserver) return;
       const cmd = fn(gameJson, playerNationId, targetId);
       if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
       else if (cmd.error) showError(`${label}: ${cmd.error}`);
@@ -601,6 +654,7 @@ function App() {
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
   const handleDiploBreakTreaty = useCallback((targetId: number, treatyType: string) => {
+    if (isObserver) return;
     const cmd = diplomacyBreakTreaty(gameJson, playerNationId, targetId, treatyType);
     if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Break treaty failed: ${cmd.error}`);
@@ -608,6 +662,7 @@ function App() {
 
   // Proposal modal handlers
   const handleAcceptProposal = useCallback((index: number) => {
+    if (isObserver) return;
     const cmd = acceptProposal(gameJson, playerNationId, index);
     if (cmd.ok && cmd.gameJson) {
       applyGameJson(cmd.gameJson);
@@ -618,6 +673,7 @@ function App() {
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
   const handleRejectProposal = useCallback((index: number) => {
+    if (isObserver) return;
     const cmd = rejectProposal(gameJson, playerNationId, index);
     if (cmd.ok && cmd.gameJson) {
       applyGameJson(cmd.gameJson);
@@ -642,6 +698,7 @@ function App() {
   }, [militaryOverlay]);
 
   const handleResearch = (techName: string) => {
+    if (isObserver) return;
     const result = researchTech(gameJson, techName);
     try {
       const parsed = JSON.parse(result);
@@ -671,12 +728,40 @@ function App() {
     <main style={styles.container}>
       {/* Top bar */}
       <div style={styles.topBar} className="top-bar-responsive">
-        <span style={styles.title} className="title-text">Empire of {playerName}</span>
+        <span style={styles.title} className="title-text">
+          {isObserver ? `Observing: ${playerName}` : `Empire of ${playerName}`}
+        </span>
         <span>Turn {turnNumber} ({year} Q{quarter})</span>
         <span>Treasury: ${player?.treasury?.[0] ? player.treasury[0] / 100 : 0}</span>
         <span>Provinces: {player?.province_ids?.length || 0}</span>
-        <button onClick={() => setShowTech(!showTech)} style={styles.btn}>Tech</button>
+        {isObserver && (
+          <select
+            value={player?.id ?? ''}
+            onChange={e => handleChangeViewpoint(Number(e.target.value))}
+            style={styles.viewpointSelect}
+            title="Viewpoint nation"
+          >
+            {observerGps.map(gp => (
+              <option key={gp.id} value={gp.id}>{gp.name}</option>
+            ))}
+          </select>
+        )}
+        {!isObserver && <button onClick={() => setShowTech(!showTech)} style={styles.btn}>Tech</button>}
         <button onClick={() => { setArchiveData(getNewspaperArchive(gameJson)); setActiveScreen('newspaper'); }} style={styles.btn}>History</button>
+        {isObserver && (
+          <>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={skipN}
+              onChange={e => setSkipN(Number(e.target.value))}
+              style={styles.skipInput}
+              title="Number of turns to skip (each turn is fully processed)"
+            />
+            <button onClick={handleSkipTurns} style={styles.btn}>Skip</button>
+          </>
+        )}
         <button onClick={handleEndTurn} style={styles.endTurnBtn}>End Turn</button>
       </div>
 
@@ -1132,6 +1217,8 @@ const styles: Record<string, React.CSSProperties> = {
   nationItem: { display: 'flex', justifyContent: 'space-between', padding: '2px 0' },
   btn: { padding: '4px 12px', background: '#3a3520', color: '#e0d8c0', border: '1px solid #5a5030', cursor: 'pointer', fontFamily: 'Georgia, serif' },
   endTurnBtn: { padding: '6px 20px', background: '#8b4513', color: '#fff', border: '1px solid #a0522d', cursor: 'pointer', fontWeight: 'bold', fontFamily: 'Georgia, serif' },
+  skipInput: { width: 48, padding: '4px 6px', background: '#1a1a2e', color: '#e0d8c0', border: '1px solid #5a5030', fontFamily: 'Georgia, serif' },
+  viewpointSelect: { padding: '4px 8px', background: '#3a3520', color: '#e0d8c0', border: '1px solid #5a5030', fontFamily: 'Georgia, serif', cursor: 'pointer' },
   modal: { position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 100 },
   modalContent: { background: '#1a1a2e', border: '2px solid #daa520', padding: 24, maxWidth: 500, maxHeight: '80vh', overflowY: 'auto' as const },
   headline: { margin: '6px 0', fontSize: 14 },

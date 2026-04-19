@@ -164,6 +164,7 @@ pub(crate) mod test_helpers {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         }
     }
 
@@ -250,6 +251,7 @@ pub(crate) mod test_helpers {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         }
     }
 
@@ -366,6 +368,7 @@ pub(crate) mod test_helpers {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         }
     }
 }

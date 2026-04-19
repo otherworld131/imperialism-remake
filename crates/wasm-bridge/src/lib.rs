@@ -9,7 +9,8 @@ use domain::economy::production::{
 use domain::economy::trade::{Commodity, base_price, commodity_price};
 use domain::economy::transport::TransportSystem;
 use domain::events::TreatyType;
-use domain::game_state::{GameState, new_game};
+use domain::ai::common::{AiPersonality, personality_for_nation_index};
+use domain::game_state::{GameState, new_game, new_observer_game};
 use domain::hex::HexCoord;
 use domain::military::combat::BattleResult;
 use domain::military::naval::NavalBattleResult;
@@ -50,6 +51,173 @@ pub fn wasm_new_scenario_game(scenario_id: &str, difficulty: u8, nation_index: u
         }
         Err(e) => format!("{{\"error\":\"{}\"}}", e),
     }
+}
+
+fn difficulty_from_u8(d: u8) -> Difficulty {
+    match d {
+        0 => Difficulty::Introductory,
+        1 => Difficulty::Easy,
+        2 => Difficulty::Normal,
+        3 => Difficulty::Hard,
+        4 => Difficulty::NighOnImpossible,
+        _ => Difficulty::Normal,
+    }
+}
+
+/// Create a new game in observer mode. All 7 Great Powers are AI-controlled;
+/// the human only observes. The nation at index 0 is the default viewpoint.
+#[wasm_bindgen]
+pub fn wasm_new_observer_game(map_key: &str, difficulty: u8) -> String {
+    let game = new_observer_game(map_key, difficulty_from_u8(difficulty));
+    serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+}
+
+/// Create a new observer-mode scenario game.
+#[wasm_bindgen]
+pub fn wasm_new_observer_scenario_game(scenario_id: &str, difficulty: u8) -> String {
+    let diff = difficulty_from_u8(difficulty);
+    match new_scenario_game(scenario_id, diff, 0) {
+        Ok(mut game) => {
+            // Promote to observer mode: give seat 0 an AI personality + bonus.
+            let human_id = game.human_player_nation;
+            let gp_index = game
+                .nations
+                .iter()
+                .filter(|n| n.is_great_power())
+                .position(|n| n.id == human_id)
+                .unwrap_or(0);
+            let personality = personality_for_nation_index(gp_index);
+            if let Some(nation) = game.get_nation_mut(human_id) {
+                nation.ai_personality = Some(personality);
+                match diff {
+                    Difficulty::Hard => nation.treasury += Money::dollars(1000),
+                    Difficulty::NighOnImpossible => nation.treasury += Money::dollars(5000),
+                    _ => {}
+                }
+            }
+            game.observer_mode = true;
+            serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+        }
+        Err(e) => format!("{{\"error\":\"{}\"}}", e),
+    }
+}
+
+/// Switch which nation is the "viewpoint" (a.k.a. human player).
+/// In normal mode this swaps the human and the picked nation's AI personality
+/// and starting-cash bonus. In observer mode it just moves the viewpoint — every
+/// GP is already AI-controlled.
+#[wasm_bindgen]
+pub fn wasm_set_human_player(game_json: &str, nation_index: usize) -> String {
+    let mut game: GameState = match serde_json::from_str(game_json) {
+        Ok(g) => g,
+        Err(e) => return format!("{{\"error\":\"deserialize: {}\"}}", e),
+    };
+    game.game_data = domain::data::GameData::default();
+
+    // Identify GP nation ids by their index ordering in `nations`.
+    let gp_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+    if nation_index >= gp_ids.len() {
+        return format!("{{\"error\":\"nation_index out of range\"}}");
+    }
+    let new_human_id = gp_ids[nation_index];
+    let old_human_id = game.human_player_nation;
+
+    if new_human_id == old_human_id {
+        // no-op
+        return serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e));
+    }
+
+    if game.observer_mode {
+        // Just move the viewpoint. All personalities and bonuses stay intact.
+        game.human_player_nation = new_human_id;
+        return serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e));
+    }
+
+    // Normal mode: swap personality + Hard/NOI bonus.
+    let old_gp_idx = gp_ids.iter().position(|&id| id == old_human_id).unwrap_or(0);
+    let old_personality: AiPersonality = personality_for_nation_index(old_gp_idx);
+    let difficulty = game.difficulty;
+    let bonus = match difficulty {
+        Difficulty::Hard => Money::dollars(1000),
+        Difficulty::NighOnImpossible => Money::dollars(5000),
+        _ => Money::dollars(0),
+    };
+
+    if let Some(nation) = game.get_nation_mut(old_human_id) {
+        nation.ai_personality = Some(old_personality);
+        nation.treasury += bonus;
+    }
+    if let Some(nation) = game.get_nation_mut(new_human_id) {
+        nation.ai_personality = None;
+        nation.treasury -= bonus;
+    }
+    game.human_player_nation = new_human_id;
+
+    serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+}
+
+/// Process N turns in a row. Clamped to 1..=50.
+/// Returns JSON `{game, reports, stopped_early}` where `reports` is an array of
+/// per-turn report summaries in chronological order.
+#[wasm_bindgen]
+pub fn wasm_process_turns(game_json: &str, count: u32) -> String {
+    let mut game: GameState = match serde_json::from_str(game_json) {
+        Ok(g) => g,
+        Err(e) => return serde_json::json!({"error": format!("deserialize: {e}")}).to_string(),
+    };
+    game.game_data = domain::data::GameData::default();
+
+    let n = count.clamp(1, 50);
+    let mut reports: Vec<serde_json::Value> = Vec::with_capacity(n as usize);
+    let mut stopped_early = false;
+
+    for _ in 0..n {
+        if game.is_game_over() {
+            stopped_early = true;
+            break;
+        }
+        let report = process_turn(&mut game);
+        let entry = serde_json::json!({
+            "turn": format!("{}", report.turn),
+            "year": report.year,
+            "quarter": report.quarter,
+            "headlines": report.newspaper_headlines.iter()
+                .map(|h| {
+                    let mut obj = serde_json::json!({"text": &h.text, "category": &h.category});
+                    if let Some(ref reason) = h.reason {
+                        obj["reason"] = serde_json::json!(reason);
+                    }
+                    if h.is_non_action {
+                        obj["is_non_action"] = serde_json::json!(true);
+                    }
+                    obj
+                })
+                .collect::<Vec<_>>(),
+            "battles": report.battles.iter()
+                .map(|b| serialize_battle(b, &game))
+                .collect::<Vec<_>>(),
+            "naval_battles": report.naval_battles.iter()
+                .map(|nb| serialize_naval_battle(nb, &game))
+                .collect::<Vec<_>>(),
+            "scores": report.scores,
+        });
+        reports.push(entry);
+    }
+
+    let response = serde_json::json!({
+        "game": match serde_json::to_value(&game) {
+            Ok(v) => v,
+            Err(e) => return serde_json::json!({"error": format!("serialize game: {e}")}).to_string(),
+        },
+        "reports": reports,
+        "stopped_early": stopped_early,
+    });
+    response.to_string()
 }
 
 /// Process one turn. Accepts game state JSON, returns JSON with updated state + turn report.

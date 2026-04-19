@@ -1,6 +1,10 @@
 import init, {
   wasm_new_game,
   wasm_new_scenario_game,
+  wasm_new_observer_game,
+  wasm_new_observer_scenario_game,
+  wasm_set_human_player,
+  wasm_process_turns,
   wasm_process_turn,
   wasm_get_map_data,
   wasm_get_available_techs,
@@ -396,6 +400,38 @@ export function getScenarios(): any[] {
 
 export function newScenarioGame(scenarioId: string, difficulty: number, nationIndex: number): string {
   return wasm_new_scenario_game(scenarioId, difficulty, nationIndex);
+}
+
+export function newObserverGame(mapKey: string, difficulty: number): string {
+  return wasm_new_observer_game(mapKey, difficulty);
+}
+
+export function newObserverScenarioGame(scenarioId: string, difficulty: number): string {
+  return wasm_new_observer_scenario_game(scenarioId, difficulty);
+}
+
+export function setHumanPlayer(gameJson: string, nationIndex: number): string {
+  return wasm_set_human_player(gameJson, nationIndex);
+}
+
+export interface BulkTurnReport {
+  turn: string;
+  year: number;
+  quarter: number;
+  headlines: Headline[];
+  battles: LandBattleData[];
+  naval_battles: NavalBattleData[];
+  scores: Record<string, number>;
+}
+
+export interface BulkTurnResult {
+  game: any;
+  reports: BulkTurnReport[];
+  stopped_early: boolean;
+}
+
+export function processTurns(gameJson: string, count: number): BulkTurnResult {
+  return JSON.parse(wasm_process_turns(gameJson, count));
 }
 
 export function getDiplomacyOverlay(gameJson: string, nationId: number): DiplomacyOverlay | null {

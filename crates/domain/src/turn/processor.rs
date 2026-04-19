@@ -4810,6 +4810,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         }
     }
 
@@ -4862,6 +4863,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         }
     }
 
@@ -5196,6 +5198,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         let report = process_turn(&mut game);
@@ -5295,6 +5298,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         }
     }
 
@@ -5916,6 +5920,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         let report = process_turn(&mut game);
@@ -6179,6 +6184,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         // Process 7 turns: 1 turn to start countdown (set to 6), then 6 turns to count down
@@ -6248,6 +6254,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         for _ in 0..10 {
@@ -6386,6 +6393,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         }
     }
 
@@ -6490,6 +6498,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         let report = process_turn(&mut game);
@@ -6666,6 +6675,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         // Process 12 turns to count down the town_countdown
@@ -6738,6 +6748,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         // Process only 11 turns — not enough
@@ -6811,6 +6822,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         // 7 turns: Hamlet → Village (1 to start countdown + 6 to count down)
@@ -7130,6 +7142,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         }
     }
 
@@ -7501,6 +7514,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         // Verify pact exists
@@ -7628,6 +7642,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         let mut report = TurnReport {
@@ -7793,6 +7808,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         let report = process_turn(&mut game);
@@ -7901,6 +7917,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         let report = process_turn(&mut game);
@@ -8146,6 +8163,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         }
     }
 
@@ -8401,6 +8419,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         let mut game = game_state;
@@ -8535,6 +8554,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         let connected = connected_provinces(&game, NationId(1));
@@ -8746,6 +8766,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         // Process several turns
@@ -8842,6 +8863,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         process_turn(&mut game);
@@ -8957,6 +8979,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         process_turn(&mut game);
@@ -9123,6 +9146,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         process_turn(&mut game);
@@ -9468,6 +9492,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         assert!(
@@ -9540,6 +9565,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         assert!(
@@ -9605,6 +9631,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         assert!(
@@ -9670,6 +9697,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         assert!(
@@ -9792,6 +9820,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         }
     }
 
@@ -10400,6 +10429,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         game.pending_attacks.push((NationId(1), ProvinceId(2)));
@@ -10585,6 +10615,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
         game.pending_attacks.push((NationId(1), ProvinceId(2)));
         game.diplomacy.declare_war(NationId(1), NationId(2));
@@ -10836,6 +10867,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
         game.pending_attacks.push((NationId(1), ProvinceId(2)));
         game.diplomacy.declare_war(NationId(1), NationId(2));
@@ -10976,6 +11008,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         let mut report = TurnReport::empty();

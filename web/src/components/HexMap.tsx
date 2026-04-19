@@ -218,6 +218,7 @@ interface Props {
   offset?: { x: number; y: number };
   onScaleChange?: (scale: number) => void;
   onOffsetChange?: (offset: { x: number; y: number }) => void;
+  highlightedNationId?: number | null;
 }
 
 const CIVILIAN_EMOJI: Record<string, string> = {
@@ -236,6 +237,7 @@ export default function HexMap({
   selectedUnit, pendingMoves = [], validMoveTargets, isMovementMode = false,
   isDeployMode = false, deployableTiles, disableFogOfWar = false,
   scale: scaleProp, offset: offsetProp, onScaleChange, onOffsetChange,
+  highlightedNationId = null,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Use props if provided (controlled mode), otherwise use local state (uncontrolled)
@@ -533,6 +535,20 @@ export default function HexMap({
       ctx.lineTo(countryEdges[i + 2], countryEdges[i + 3]);
     }
     ctx.stroke();
+
+    // ── Pass 2.5: Highlight selected nation's tiles (setup preview) ──
+    if (highlightedNationId != null) {
+      ctx.strokeStyle = '#ffd700';
+      ctx.lineWidth = 2.5;
+      ctx.lineCap = 'butt';
+      ctx.lineJoin = 'miter';
+      for (const tile of tiles) {
+        if (tile.nation_id !== highlightedNationId) continue;
+        const [px, py] = hexToPixel(tile.q, tile.r);
+        drawHexagon(ctx, px, py, HEX_SIZE * 0.95);
+        ctx.stroke();
+      }
+    }
 
     // ── Pass 3: Capitals ──
     for (const tile of tiles) {

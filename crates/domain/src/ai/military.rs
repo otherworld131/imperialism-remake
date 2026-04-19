@@ -1690,6 +1690,7 @@ mod tests {
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
             ai_debug: false,
+            observer_mode: false,
         };
 
         // Put AI at war with minor

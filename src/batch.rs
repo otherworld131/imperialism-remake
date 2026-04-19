@@ -296,7 +296,9 @@ pub(crate) fn run_batch(n: u32) {
             // Record current war state before processing
             let current_wars = get_war_pairs(&game);
 
-            auto_manage_human(&mut game);
+            if !game.observer_mode {
+                auto_manage_human(&mut game);
+            }
             let _report = process_turn(&mut game);
 
             // Detect new wars
@@ -632,7 +634,9 @@ pub(crate) fn cmd_auto(game: &mut GameState, turns: u32) {
             game_ended = true;
             break;
         }
-        auto_manage_human(game);
+        if !game.observer_mode {
+            auto_manage_human(game);
+        }
         process_turn(game);
 
         if i % 10 == 0 || i == turns || game.is_game_over() {

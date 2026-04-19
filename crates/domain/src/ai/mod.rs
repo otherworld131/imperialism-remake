@@ -40,11 +40,16 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<AiAction> {
     let human_id = game.human_player_nation;
     let current_year = game.turn.year();
 
-    // Collect AI nation IDs
+    // Collect AI nation IDs. In observer mode, all 7 Great Powers are AI-controlled
+    // (the human seat is just a viewpoint; it also gets an AI personality at setup).
     let ai_nation_ids: Vec<NationId> = game
         .nations
         .iter()
-        .filter(|n| n.id != human_id && n.is_great_power() && !n.is_in_anarchy)
+        .filter(|n| {
+            (game.observer_mode || n.id != human_id)
+                && n.is_great_power()
+                && !n.is_in_anarchy
+        })
         .map(|n| n.id)
         .collect();
 
