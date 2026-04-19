@@ -1113,7 +1113,13 @@ pub(crate) fn cmd_war(game: &mut GameState, query: &str) {
     let target_id = target.id;
     let target_name = target.name.clone();
 
-    // Check if already at war
+    // Check if already at war with anyone
+    if game.diplomacy.is_at_war_with_anyone(player_id) {
+        println!("  You are already at war. You cannot declare another war while fighting.");
+        return;
+    }
+
+    // Check if already at war with this target
     if let Some(rel) = game.diplomacy.get_relation(player_id, target_id)
         && rel.at_war
     {

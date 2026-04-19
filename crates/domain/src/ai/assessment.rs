@@ -214,15 +214,26 @@ fn compute_momentum(
     (momentum, captured, lost)
 }
 
-/// Find the turn when war started between two nations by scanning history.
+/// Find the turn when the *current* war started between two nations by scanning history.
+/// Uses the most recent war declaration (not the first ever) so that province counts
+/// are scoped to the current conflict when nations have fought multiple wars.
+/// Matches anchored patterns to avoid false positives from entries like
+/// "X declared war on Y to protect Z" when looking for pair (Y, Z).
 pub fn find_war_start_turn(game: &GameState, name_a: &str, name_b: &str) -> Option<u32> {
+    let declared_a_on_b = format!("{} declared war on {}", name_a, name_b);
+    let declared_b_on_a = format!("{} declared war on {}", name_b, name_a);
+    let joined_a_vs_b = format!("{} joined war against {}", name_a, name_b);
+    let joined_b_vs_a = format!("{} joined war against {}", name_b, name_a);
     game.history
         .iter()
         .filter(|(_, desc)| {
-            desc.contains("declared war") && desc.contains(name_a) && desc.contains(name_b)
+            desc.starts_with(&declared_a_on_b)
+                || desc.starts_with(&declared_b_on_a)
+                || desc.starts_with(&joined_a_vs_b)
+                || desc.starts_with(&joined_b_vs_a)
         })
         .map(|(turn, _)| turn.0)
-        .min()
+        .max()
 }
 
 // ── Core assessment functions ─────────────────────────────────────
@@ -1028,5 +1039,50 @@ mod tests {
         // sigmoid(large negative, 3) should approach 0.0
         let weak = sigmoid(-2.0, 3.0);
         assert!(weak < 0.05);
+    }
+
+    #[test]
+    fn find_war_start_returns_most_recent_war() {
+        let mut game = test_game_with_adjacent_provinces();
+        // Simulate war→peace→war: two war declarations between same nations
+        game.history.push((
+            TurnNumber(5),
+            "Alphaland declared war on Betaland".to_string(),
+        ));
+        game.history.push((
+            TurnNumber(15),
+            "Alphaland declared war on Betaland".to_string(),
+        ));
+        // Should return the most recent (turn 15), not the first (turn 5)
+        let start = find_war_start_turn(&game, "Alphaland", "Betaland");
+        assert_eq!(start, Some(15));
+    }
+
+    #[test]
+    fn find_war_start_matches_alliance_join() {
+        let mut game = test_game_with_adjacent_provinces();
+        game.history.push((
+            TurnNumber(10),
+            "Gammaland joined war against Deltaland (alliance obligation)".to_string(),
+        ));
+        let start = find_war_start_turn(&game, "Gammaland", "Deltaland");
+        assert_eq!(start, Some(10));
+    }
+
+    #[test]
+    fn find_war_start_ignores_pact_defense_false_positive() {
+        let mut game = test_game_with_adjacent_provinces();
+        // "A declared war on B to protect C" should NOT match pair (B, C)
+        game.history.push((
+            TurnNumber(8),
+            "Alphaland declared war on Betaland to protect Gammaland".to_string(),
+        ));
+        // No direct war between Betaland and Gammaland
+        let start = find_war_start_turn(&game, "Betaland", "Gammaland");
+        assert_eq!(start, None, "pact defense entry should not match (B, C) pair");
+
+        // But it SHOULD match the (A, B) pair
+        let start_ab = find_war_start_turn(&game, "Alphaland", "Betaland");
+        assert_eq!(start_ab, Some(8));
     }
 }

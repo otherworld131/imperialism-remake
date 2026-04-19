@@ -4093,6 +4093,59 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
         }
     }
 
+    // Graph-based conflict detection: build a map of each ally's obligations
+    // (who they would fight against), then detect any ally that would end up
+    // on both sides of the same war.
+    let mut obligations: std::collections::HashMap<NationId, Vec<NationId>> =
+        std::collections::HashMap::new();
+    for (ally, enemy, _, _) in &new_wars {
+        obligations.entry(*ally).or_default().push(*enemy);
+    }
+
+    let mut conflicted_allies: Vec<NationId> = Vec::new();
+    for (ally, enemies) in &obligations {
+        // If the ally must fight multiple enemies, check whether any pair of
+        // those enemies are on opposite sides of the same war. If so, the
+        // ally is being pulled to both sides and must stay neutral.
+        for i in 0..enemies.len() {
+            for j in (i + 1)..enemies.len() {
+                if game.diplomacy.is_at_war(enemies[i], enemies[j])
+                    && !conflicted_allies.contains(ally)
+                {
+                    conflicted_allies.push(*ally);
+                }
+            }
+        }
+    }
+
+    if !conflicted_allies.is_empty() {
+        new_wars.retain(|(ally, _, _, _)| !conflicted_allies.contains(ally));
+        report.newspaper_headlines.retain(|h| {
+            !conflicted_allies.iter().any(|&cid| {
+                let name = game
+                    .get_nation(cid)
+                    .map(|n| n.name.as_str())
+                    .unwrap_or("");
+                !name.is_empty()
+                    && h.text.starts_with(name)
+                    && h.text.contains("honors its alliance")
+            })
+        });
+        for &cid in &conflicted_allies {
+            let name = game
+                .get_nation(cid)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            report.newspaper_headlines.push(Headline::new(
+                format!(
+                    "{} remains neutral due to conflicting alliance obligations",
+                    name
+                ),
+                HeadlineCategory::Diplomacy,
+            ));
+        }
+    }
+
     // Actually declare the new wars (done after collecting to avoid borrow issues)
     for (ally, enemy, ally_name, enemy_name) in &new_wars {
         game.diplomacy.declare_war(*ally, *enemy);
@@ -10767,6 +10820,103 @@ mod tests {
         assert!(
             inland_still_at_p4,
             "Inland non-port unit must not participate in naval attack, should remain at P4"
+        );
+    }
+
+    #[test]
+    fn conflicting_alliance_obligations_produce_neutrality() {
+        // Setup: 3 Great Powers — A(1), B(2), C(3)
+        // C is allied with both A and B. A declares war on B.
+        // C should remain neutral (not fight both sides).
+        let coord = HexCoord::new(0, 0);
+        let mut hex_map = HexMap::new(10, 10);
+        let tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        hex_map.set_tile(coord, tile);
+
+        let mut nations = Vec::new();
+        for (id, name, prov_id) in [(1, "Alphaland", 1), (2, "Betaland", 2), (3, "Gammaland", 3)]
+        {
+            let mut n = Nation::new(
+                NationId(id),
+                name.to_string(),
+                NationColor::Blue,
+                NationType::GreatPower,
+                ProvinceId(prov_id),
+            );
+            n.ai_personality = Some(crate::ai::common::AiPersonality::Balanced);
+            n.province_ids = vec![ProvinceId(prov_id)];
+            nations.push(n);
+        }
+        // Human player is nation 1 (but personality is set, so alliance logic treats as AI)
+        // Actually, make nation 1 human so it doesn't auto-join
+        nations[0].ai_personality = None;
+
+        let provinces: Vec<Province> = (1..=3)
+            .map(|i| {
+                Province::new(
+                    ProvinceId(i),
+                    format!("Province{}", i),
+                    NationId(i),
+                    coord,
+                    vec![coord],
+                    4,
+                )
+            })
+            .collect();
+
+        let mut diplomacy = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2), NationId(3)];
+        diplomacy.initialize_great_powers(&gps);
+
+        // C(3) allied with both A(1) and B(2)
+        diplomacy.propose_alliance(NationId(3), NationId(1)).unwrap();
+        diplomacy.propose_alliance(NationId(3), NationId(2)).unwrap();
+
+        // A(1) declares war on B(2)
+        diplomacy.declare_war(NationId(1), NationId(2));
+
+        let mut game = GameState {
+            turn: TurnNumber::new(5),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces,
+            nations,
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy,
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
+            ai_debug: false,
+        };
+
+        let mut report = TurnReport::empty();
+        resolve_alliance_obligations(&mut game, &mut report);
+
+        // C(3) should NOT be at war with either A(1) or B(2)
+        assert!(
+            !game.diplomacy.is_at_war(NationId(3), NationId(1)),
+            "Gammaland should not be at war with Alphaland (conflicting obligation)"
+        );
+        assert!(
+            !game.diplomacy.is_at_war(NationId(3), NationId(2)),
+            "Gammaland should not be at war with Betaland (conflicting obligation)"
+        );
+
+        // Should have a neutrality headline
+        let has_neutrality = report
+            .newspaper_headlines
+            .iter()
+            .any(|h| h.text.contains("remains neutral"));
+        assert!(
+            has_neutrality,
+            "Should produce a neutrality headline for Gammaland"
         );
     }
 }

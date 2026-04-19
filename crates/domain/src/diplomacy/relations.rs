@@ -612,6 +612,13 @@ impl DiplomacyState {
             .map(|rel| rel.at_war)
             .unwrap_or(false)
     }
+
+    /// Check whether a nation is at war with any other nation.
+    pub fn is_at_war_with_anyone(&self, nation: NationId) -> bool {
+        self.relations.values().any(|rel| {
+            rel.at_war && (rel.nation_a == nation || rel.nation_b == nation)
+        })
+    }
 }
 
 impl Default for DiplomacyState {
@@ -1290,5 +1297,28 @@ mod tests {
         // Further reduction should not go below -100
         state.reduce_standing(NationId(1), 50);
         assert_eq!(state.get_standing(NationId(1)), -100);
+    }
+
+    // ── At war with anyone ──────────────────────────────────────
+
+    #[test]
+    fn is_at_war_with_anyone_returns_false_when_peaceful() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2), NationId(3)];
+        state.initialize_great_powers(&gps);
+
+        assert!(!state.is_at_war_with_anyone(NationId(1)));
+    }
+
+    #[test]
+    fn is_at_war_with_anyone_returns_true_when_at_war() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2), NationId(3)];
+        state.initialize_great_powers(&gps);
+
+        state.declare_war(NationId(1), NationId(2));
+        assert!(state.is_at_war_with_anyone(NationId(1)));
+        assert!(state.is_at_war_with_anyone(NationId(2)));
+        assert!(!state.is_at_war_with_anyone(NationId(3)));
     }
 }

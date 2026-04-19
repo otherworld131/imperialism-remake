@@ -521,6 +521,16 @@ pub(crate) fn ai_declare_wars(
             continue;
         }
 
+        // ── 3b. Already at war check ──────────────────────────
+        if game.diplomacy.is_at_war_with_anyone(ai_id) {
+            actions.push(super::AiAction {
+                text: format!("{} did not declare war this turn", attacker_name),
+                reason: "already at war — cannot open a second front".to_string(),
+                is_non_action: true,
+            });
+            continue;
+        }
+
         // ── 4. Target evaluation ───────────────────────────────
         let ai_provinces = game
             .get_nation(ai_id)
