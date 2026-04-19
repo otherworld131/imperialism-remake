@@ -768,69 +768,20 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
 ///      this ensures early-game settlement progression before railroads
 ///      are built.
 fn update_province_connectivity(game: &mut GameState) {
-    let nation_capitals: Vec<(NationId, ProvinceId, crate::hex::HexCoord)> = game
+    let nation_ids: Vec<NationId> = game
         .nations
         .iter()
         .filter(|n| n.is_great_power() && !n.is_in_anarchy)
-        .map(|n| {
-            let cap_tile = game
-                .provinces
-                .iter()
-                .find(|p| p.id == n.capital_province_id)
-                .map(|p| p.capital_tile)
-                .unwrap_or(crate::hex::HexCoord::new(0, 0));
-            (n.id, n.capital_province_id, cap_tile)
-        })
+        .map(|n| n.id)
         .collect();
 
-    for &(nation_id, capital_province_id, capital_tile) in &nation_capitals {
-        // The capital province is always connected to itself
-        if let Some(cap_prov) = game
-            .provinces
-            .iter_mut()
-            .find(|p| p.id == capital_province_id)
-        {
-            cap_prov.connected_to_capital = true;
-        }
-
-        // Collect province IDs for this nation (excluding capital itself)
-        let province_ids: Vec<ProvinceId> = game
-            .provinces
-            .iter()
-            .filter(|p| p.owner == nation_id && p.id != capital_province_id)
-            .map(|p| p.id)
-            .collect();
-
-        // Capital province tiles for adjacency check
-        let capital_tiles: Vec<crate::hex::HexCoord> = game
-            .provinces
-            .iter()
-            .find(|p| p.id == capital_province_id)
-            .map(|p| p.tiles.clone())
-            .unwrap_or_default();
-        let capital_neighbors: std::collections::HashSet<crate::hex::HexCoord> =
-            capital_tiles.iter().flat_map(|t| t.neighbors()).collect();
-
-        for pid in province_ids {
-            let infra_connected =
-                is_province_connected(&game.hex_map, capital_tile, pid, &game.provinces);
-
-            // Adjacency: at least one tile of the province is a neighbor of a capital tile
-            let adjacent = game
-                .provinces
-                .iter()
-                .find(|p| p.id == pid)
-                .map(|p| p.tiles.iter().any(|t| capital_neighbors.contains(t)))
-                .unwrap_or(false);
-
-            let connected = infra_connected || adjacent;
-
-            if let Some(prov) = game.provinces.iter_mut().find(|p| p.id == pid) {
-                // Only upgrade connectivity (false → true), never downgrade.
-                // Full disconnection tracking will be added with the transport system.
-                if connected {
-                    prov.connected_to_capital = true;
-                }
+    for nation_id in nation_ids {
+        let connected = connected_provinces(game, nation_id);
+        for prov in game.provinces.iter_mut() {
+            // Only upgrade connectivity (false → true), never downgrade.
+            // Full disconnection tracking will be added with the transport system.
+            if prov.owner == nation_id && connected.contains(&prov.id) {
+                prov.connected_to_capital = true;
             }
         }
     }

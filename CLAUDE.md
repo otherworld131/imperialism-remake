@@ -192,6 +192,7 @@ Requires PyMuPDF (`pip install pymupdf`).
 - Application crate depends only on domain
 - Frontend and infrastructure never leak into domain
 - Lua scripts are sandboxed — no file I/O, no network, no OS calls from Lua
+- **All AI and game-mechanics variables live in Lua** — tunables for AI behavior (thresholds, weights, personality knobs) and game mechanics (economic rates, combat modifiers, diplomatic thresholds, tech effects, balance parameters) belong in Lua scripts or data files loaded by Lua, not as Rust constants. Rust holds the engine (turn pipeline, hex math, pathfinding, resolution); Lua holds the numbers. If you find a magic number in Rust that controls game feel or AI choices, move it to Lua.
 - Every checklist item in `plan/` has a verification strategy runnable from the command line
 - **No backward compatibility**: Old saves are not supported. Do not write migration code, save-version fallback paths, or compatibility shims. If you encounter existing backward-compat code, remove it.
 
