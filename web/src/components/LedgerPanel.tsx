@@ -230,7 +230,7 @@ function MilitaryTable({ entries, expanded, onExpand }: { entries: GPLedgerEntry
       <thead>
         <tr>
           <Th text="Nation" align="left" />
-          <Th text="Army" />
+          <Th text="Army (field + militia)" />
           <Th text="Firepower" />
           <Th text="Warships" />
           <Th text="Merchants" />
@@ -246,7 +246,7 @@ function MilitaryTable({ entries, expanded, onExpand }: { entries: GPLedgerEntry
             onClick={() => onExpand(expanded === e.nation_id ? null : e.nation_id)}
           >
             <td style={styles.tdName}><NationCell entry={e} /></td>
-            <Td value={String(e.military.total_army_count)} />
+            <Td value={`${e.military.field_army_count} + ${e.military.militia_count}m`} />
             <Td value={String(e.military.total_army_fp)} highlight={e.military.total_army_fp === Math.max(...entries.map(x => x.military.total_army_fp))} />
             <Td value={String(e.military.total_warship_count)} />
             <Td value={String(e.military.merchant_ships)} />

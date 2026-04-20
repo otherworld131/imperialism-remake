@@ -3646,6 +3646,8 @@ pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
             "army_by_type": army_by_type,
             "total_army_fp": total_army_fp,
             "total_army_count": nation.army.len(),
+            "field_army_count": nation.field_army_count(),
+            "militia_count": nation.army.len() - nation.field_army_count(),
             "warships_by_type": warships_by_type,
             "total_warship_count": nation.warships.len(),
             "merchant_ships": nation.merchant_fleet.len(),
@@ -3796,6 +3798,8 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
                 "military": {
                     "total_army_count": total_army_count,
                     "total_army_fp": total_army_fp,
+                    "field_army_count": nation.field_army_count(),
+                    "militia_count": total_army_count - nation.field_army_count(),
                     "total_warship_count": total_warship_count,
                     "merchant_ships": merchant_ships,
                     "generals_earned": nation.generals_earned,

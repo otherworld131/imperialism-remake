@@ -306,9 +306,53 @@ impl Nation {
             .collect()
     }
 
-    /// Sum of effective_firepower() for all army units.
+    /// Sum of effective_firepower() for all **projectable** army units
+    /// (field army only — excludes Militia and GarrisonArtillery which are
+    /// locked to their home province). Used by the coalition-strength
+    /// assessment where "can I project force?" is the relevant question.
     pub fn total_military_firepower(&self) -> f64 {
+        self.field_army_iter().map(|u| u.effective_firepower()).sum()
+    }
+
+    /// Sum of effective_firepower() across every army unit, including
+    /// garrison (Militia + GarrisonArtillery). Used where full defensive
+    /// strength matters.
+    pub fn total_firepower_including_garrison(&self) -> f64 {
         self.army.iter().map(|u| u.effective_firepower()).sum()
+    }
+
+    /// Number of **field army** units (excludes stationary garrison units:
+    /// Militia and GarrisonArtillery). Use this wherever the semantic is
+    /// "units available to attack / move", not "raw entries in nation.army".
+    pub fn field_army_count(&self) -> usize {
+        self.army
+            .iter()
+            .filter(|u| u.unit_type.can_move())
+            .count()
+    }
+
+    /// Iterator over field army units (movable — excludes garrison).
+    pub fn field_army_iter(&self) -> impl Iterator<Item = &ArmyUnit> + '_ {
+        self.army.iter().filter(|u| u.unit_type.can_move())
+    }
+
+    /// Count of Militia units stationed at a given province.
+    pub fn militia_at(&self, province: ProvinceId) -> usize {
+        self.army
+            .iter()
+            .filter(|u| {
+                u.position == province
+                    && u.unit_type == crate::military::units::ArmyUnitType::Militia
+            })
+            .count()
+    }
+
+    /// Whether the given province has this nation's GarrisonArtillery unit.
+    pub fn has_garrison_artillery_at(&self, province: ProvinceId) -> bool {
+        self.army.iter().any(|u| {
+            u.position == province
+                && u.unit_type == crate::military::units::ArmyUnitType::GarrisonArtillery
+        })
     }
 
     /// Total cargo capacity of all merchant ships in the fleet.

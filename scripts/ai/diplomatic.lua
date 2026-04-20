@@ -80,6 +80,18 @@ diplomatic = {
     peace_province_loss_ratio = 0.30,
     fort_strategy = "capital",
 
+    -- Field-army distribution (cards #5, #9)
+    capital_reserve_normal = 3,       -- keeps more at capital
+    capital_reserve_threatened = 8,   -- heavy garrison when threatened
+    max_redeploys_per_turn = 3,
+
+    -- Retreat (card #18)
+    retreat_prebattle_ratio = 1.5,    -- quick to retreat rather than lose units
+    retreat_postbattle_fp_loss = 0.50,
+
+    -- Naval landing gate (card #7)
+    naval_min_adjacent_strength_ratio = 2.0, -- very reluctant amphibious unless overland is hopeless
+
     -- Coalition assessment weights
     coalition_mil_weight = 0.4,
     coalition_prov_weight = 0.3,

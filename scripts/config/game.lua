@@ -196,6 +196,17 @@ game_config = {
     -- Map generation
     min_food_tile_percent = 20,  -- at least 20% of land tiles must produce food
     food_cluster_chance = 40,    -- % chance food terrain spreads to adjacent tile
+
+    -- Garrison militia (per-province local defence — manual page 36)
+    -- Default size of a Great Power province's garrison; fresh provinces and
+    -- provinces that lose militia regenerate up to this cap.
+    default_garrison_per_province = 4,
+    -- Default garrison size for minor-nation provinces.
+    minor_default_garrison = 3,
+    -- Hard upper bound after retreats pile overflow into neighbors.
+    max_garrison_per_province = 8,
+    -- Turn cadence at which each under-strength province spawns +1 militia.
+    garrison_regen_interval_turns = 2,
 }
 
 return game_config

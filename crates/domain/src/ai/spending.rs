@@ -426,13 +426,14 @@ fn is_military_priority(game: &GameState, nation_id: NationId) -> bool {
             return true;
         }
     }
-    // (b) Falling behind: my army is < 60% of strongest rival GP's army.
-    let my_army = nation.army.len() as f64;
+    // (b) Falling behind: my field army is < 60% of strongest rival GP's.
+    // Garrison militia stay home and are excluded from the comparison.
+    let my_army = nation.field_army_count() as f64;
     let strongest_rival = game
         .nations
         .iter()
         .filter(|n| n.id != nation_id && n.is_great_power())
-        .map(|n| n.army.len() as f64)
+        .map(|n| n.field_army_count() as f64)
         .fold(0.0f64, f64::max);
     my_army < strongest_rival * 0.6
 }
@@ -443,7 +444,10 @@ fn score_military(
     weights: &SpendingWeights,
 ) -> Option<ScoredAction> {
     let nation = game.get_nation(nation_id)?;
-    let army_count = nation.army.len() as f64;
+    // Military scoring uses *field army* (projectable) counts throughout —
+    // garrison militia never leave their home and shouldn't inflate the
+    // "do I need more units?" signal.
+    let army_count = nation.field_army_count() as f64;
     let province_count = nation.province_count() as f64;
 
     // Threat: based on relative military strength vs other Great Powers
@@ -453,16 +457,16 @@ fn score_military(
         if other.id == nation_id || !other.is_great_power() {
             continue;
         }
-        strongest_rival_army = strongest_rival_army.max(other.army.len());
+        strongest_rival_army = strongest_rival_army.max(other.field_army_count());
         let at_war = game
             .diplomacy
             .get_relation(nation_id, other.id)
             .is_some_and(|r| r.at_war);
         if at_war {
-            threat += 20.0 + other.army.len() as f64 * 2.0;
+            threat += 20.0 + other.field_army_count() as f64 * 2.0;
         } else {
             // Rivals with larger armies are a latent threat
-            let their_army = other.army.len() as f64;
+            let their_army = other.field_army_count() as f64;
             if their_army > army_count {
                 threat += (their_army - army_count) * 1.5;
             }
@@ -887,7 +891,9 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
     let capital = nation.capital_province_id;
     let nation_name = nation.name.clone();
     let variety_seed = (turn_number as usize).wrapping_mul(nation_id.0 as usize + 7);
-    let army_count = nation.army.len();
+    // Field army count — ignore garrison militia so early-game recruit
+    // choices aren't skewed by the always-present home garrison.
+    let army_count = nation.field_army_count();
 
     // Pick unit type based on army composition and variety
     let unit_type = if army_count < 3 {

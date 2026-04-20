@@ -373,6 +373,20 @@ pub fn new_game_with_seed(
             setup.capital_province,
         ));
 
+        // Persistent Militia in every owned province (manual page 36:
+        // "local defence forces exist in all countries and in all provinces").
+        // Uses the Lua-configurable default — the map generator's hardcoded
+        // `garrison_count` is refreshed after seeding below.
+        let default_garrison = game_data.game_config.default_garrison_per_province as usize;
+        for &pid in &setup.province_ids {
+            for _ in 0..default_garrison {
+                nation.army.push(crate::military::combat::spawn_militia_unit(
+                    setup.nation_id,
+                    pid,
+                ));
+            }
+        }
+
         // Assign AI personality for non-human Great Powers
         if i != human_idx {
             nation.ai_personality = Some(personalities[ai_personality_idx]);
@@ -422,6 +436,24 @@ pub fn new_game_with_seed(
             setup.capital_province,
         ));
 
+        // Persistent Militia in every owned province (minor-nation cap).
+        let minor_default_garrison = game_data.game_config.minor_default_garrison as usize;
+        for &pid in &setup.province_ids {
+            for _ in 0..minor_default_garrison {
+                nation.army.push(crate::military::combat::spawn_militia_unit(
+                    setup.nation_id,
+                    pid,
+                ));
+            }
+        }
+        // A single GarrisonArtillery at the minor nation's capital.
+        nation
+            .army
+            .push(crate::military::combat::spawn_garrison_artillery_unit(
+                setup.nation_id,
+                setup.capital_province,
+            ));
+
         nations.push(nation);
     }
 
@@ -458,6 +490,29 @@ pub fn new_game_with_seed(
         ai_debug: false,
         observer_mode: false,
     };
+
+    // Refresh the per-province `garrison_count` cache now that militia have
+    // been seeded. The map generator seeds provinces with a hardcoded 4/3
+    // default; if the Lua tunable differs, the cache would drift without
+    // this step. Each province's cache is recomputed from the authoritative
+    // live militia count in the owning nation's army.
+    {
+        let snapshot: Vec<ProvinceId> = game_state.provinces.iter().map(|p| p.id).collect();
+        for pid in snapshot {
+            let owner = match game_state.get_province(pid) {
+                Some(p) => p.owner,
+                None => continue,
+            };
+            let count = game_state
+                .get_nation(owner)
+                .map(|n| n.militia_at(pid))
+                .unwrap_or(0)
+                .min(u8::MAX as usize) as u8;
+            if let Some(prov) = game_state.get_province_mut(pid) {
+                prov.garrison_count = count;
+            }
+        }
+    }
 
     // Pre-build a depot at every nation's capital tile (Great Powers and minor
     // nations alike). Capitals act as implicit depots so the capital province is

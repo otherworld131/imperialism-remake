@@ -80,6 +80,18 @@ economic = {
     peace_province_loss_ratio = 0.50,
     fort_strategy = "border",
 
+    -- Field-army distribution (cards #5, #9)
+    capital_reserve_normal = 2,
+    capital_reserve_threatened = 6,
+    max_redeploys_per_turn = 4,
+
+    -- Retreat (card #18)
+    retreat_prebattle_ratio = 2.0,
+    retreat_postbattle_fp_loss = 0.55,
+
+    -- Naval landing gate (card #7)
+    naval_min_adjacent_strength_ratio = 1.8,
+
     -- Coalition assessment weights (economy-heavy)
     coalition_mil_weight = 0.4,
     coalition_prov_weight = 0.3,

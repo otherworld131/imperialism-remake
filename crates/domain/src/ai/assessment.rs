@@ -487,10 +487,11 @@ pub fn evaluate_war_worthiness(
     // Count unique resources in captured provinces (approximate via enemy's remaining tiles)
     let resources_gained = 0usize; // TODO: track captured province resources
 
-    // Ongoing cost proxy
+    // Ongoing cost proxy — militia are free per manual; only field army
+    // and warships generate upkeep pressure.
     let ongoing_cost = game
         .get_nation(nation_id)
-        .map(|n| n.army.len() as f64 * 500.0 + n.warships.len() as f64 * 300.0)
+        .map(|n| n.field_army_count() as f64 * 500.0 + n.warships.len() as f64 * 300.0)
         .unwrap_or(0.0);
 
     // Marginal value: how much is left to gain?

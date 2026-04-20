@@ -193,8 +193,16 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
             .unwrap_or(4.0),
         min_food_tile_percent: table.get("min_food_tile_percent").unwrap_or(20),
         food_cluster_chance: table.get("food_cluster_chance").unwrap_or(40),
+        default_garrison_per_province: table.get("default_garrison_per_province").unwrap_or(4),
+        minor_default_garrison: table.get("minor_default_garrison").unwrap_or(3),
+        max_garrison_per_province: table.get("max_garrison_per_province").unwrap_or(8),
+        garrison_regen_interval_turns: table
+            .get("garrison_regen_interval_turns")
+            .unwrap_or(2),
     };
     // Sanitize: ensure no zero-or-negative values for fields used as divisors/multipliers
+    let sanitized_default_garrison = cfg.default_garrison_per_province.clamp(0, 20);
+    let sanitized_minor_default = cfg.minor_default_garrison.clamp(0, 20);
     GameConfig {
         untrained_labor: cfg.untrained_labor.max(1),
         trained_labor: cfg.trained_labor.max(1),
@@ -266,6 +274,19 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         },
         min_food_tile_percent: cfg.min_food_tile_percent.clamp(0, 100),
         food_cluster_chance: cfg.food_cluster_chance.clamp(0, 100),
+        // Garrison tunables: sanitize defaults first, then bound the cap
+        // using those sanitized values. Using the raw pre-clamp values as
+        // the lower bound can panic (min > max) when Lua sets defaults
+        // above 20.
+        default_garrison_per_province: sanitized_default_garrison,
+        minor_default_garrison: sanitized_minor_default,
+        max_garrison_per_province: cfg.max_garrison_per_province.clamp(
+            sanitized_default_garrison.max(sanitized_minor_default),
+            20,
+        ),
+        // `0` keeps its "disabled" semantic — the regen phase early-returns
+        // on zero and also guards against modulo-by-zero.
+        garrison_regen_interval_turns: cfg.garrison_regen_interval_turns.min(200),
         ..cfg
     }
 }
@@ -391,6 +412,18 @@ pub struct LuaAiConfig {
     pub alliance_rival_penalty: Option<f64>,
     pub alliance_overcommit_penalty: Option<f64>,
     pub treaty_personality_bias: Option<f64>,
+
+    // Field-army distribution (cards #5, #9)
+    pub capital_reserve_normal: Option<usize>,
+    pub capital_reserve_threatened: Option<usize>,
+    pub max_redeploys_per_turn: Option<usize>,
+
+    // Retreat (card #18)
+    pub retreat_prebattle_ratio: Option<f64>,
+    pub retreat_postbattle_fp_loss: Option<f64>,
+
+    // Naval landing gate (card #7)
+    pub naval_min_adjacent_strength_ratio: Option<f64>,
 }
 
 /// Clamp an f64 to a finite range, replacing NaN/inf with the default.
@@ -557,6 +590,21 @@ impl LuaAiConfig {
             sanitize_opt_f64(self.alliance_overcommit_penalty, 0.0, 10.0);
         self.treaty_personality_bias = sanitize_opt_f64(self.treaty_personality_bias, -5.0, 5.0);
 
+        // Field-army distribution
+        self.capital_reserve_normal = sanitize_opt_usize(self.capital_reserve_normal, 0, 50);
+        self.capital_reserve_threatened =
+            sanitize_opt_usize(self.capital_reserve_threatened, 0, 50);
+        self.max_redeploys_per_turn = sanitize_opt_usize(self.max_redeploys_per_turn, 0, 50);
+
+        // Retreat
+        self.retreat_prebattle_ratio = sanitize_opt_f64(self.retreat_prebattle_ratio, 1.0, 10.0);
+        self.retreat_postbattle_fp_loss =
+            sanitize_opt_f64(self.retreat_postbattle_fp_loss, 0.0, 1.0);
+
+        // Naval gate
+        self.naval_min_adjacent_strength_ratio =
+            sanitize_opt_f64(self.naval_min_adjacent_strength_ratio, 0.5, 10.0);
+
         self
     }
 }
@@ -662,6 +710,15 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             alliance_rival_penalty: table.get("alliance_rival_penalty").ok(),
             alliance_overcommit_penalty: table.get("alliance_overcommit_penalty").ok(),
             treaty_personality_bias: table.get("treaty_personality_bias").ok(),
+            // Field-army distribution (cards #5, #9)
+            capital_reserve_normal: table.get::<usize>("capital_reserve_normal").ok(),
+            capital_reserve_threatened: table.get::<usize>("capital_reserve_threatened").ok(),
+            max_redeploys_per_turn: table.get::<usize>("max_redeploys_per_turn").ok(),
+            // Retreat (card #18)
+            retreat_prebattle_ratio: table.get("retreat_prebattle_ratio").ok(),
+            retreat_postbattle_fp_loss: table.get("retreat_postbattle_fp_loss").ok(),
+            // Naval landing gate (card #7)
+            naval_min_adjacent_strength_ratio: table.get("naval_min_adjacent_strength_ratio").ok(),
         }
         .sanitize(),
     )
@@ -1041,6 +1098,12 @@ mod tests {
             alliance_rival_penalty: None,
             alliance_overcommit_penalty: None,
             treaty_personality_bias: None,
+            capital_reserve_normal: None,
+            capital_reserve_threatened: None,
+            max_redeploys_per_turn: None,
+            retreat_prebattle_ratio: None,
+            retreat_postbattle_fp_loss: None,
+            naval_min_adjacent_strength_ratio: None,
         };
 
         let sanitized = cfg.sanitize();
@@ -1129,6 +1192,12 @@ mod tests {
             alliance_rival_penalty: None,
             alliance_overcommit_penalty: None,
             treaty_personality_bias: None,
+            capital_reserve_normal: None,
+            capital_reserve_threatened: None,
+            max_redeploys_per_turn: None,
+            retreat_prebattle_ratio: None,
+            retreat_postbattle_fp_loss: None,
+            naval_min_adjacent_strength_ratio: None,
         };
 
         let sanitized = cfg.sanitize();
@@ -1256,6 +1325,12 @@ mod tests {
             alliance_rival_penalty: None,
             alliance_overcommit_penalty: None,
             treaty_personality_bias: None,
+            capital_reserve_normal: None,
+            capital_reserve_threatened: None,
+            max_redeploys_per_turn: None,
+            retreat_prebattle_ratio: None,
+            retreat_postbattle_fp_loss: None,
+            naval_min_adjacent_strength_ratio: None,
         };
 
         let sanitized = cfg.sanitize();

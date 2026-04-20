@@ -1,3 +1,4 @@
+use crate::map::UnitId;
 use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::types::*;
 
@@ -10,6 +11,51 @@ pub enum TargetingPriority {
     WeakestFirst,
     /// Damage strongest units first (highest effective firepower / most dangerous).
     StrongestFirst,
+}
+
+/// Configuration for battle resolution, including retreat rules (card #18).
+///
+/// `*_retreat_ratio` fields use `f64::INFINITY` as "disabled": pre-battle
+/// retreat never triggers for that side. Similarly `*_postbattle_fp_loss = 1.0`
+/// effectively disables mid-battle retreat for that side.
+#[derive(Debug, Clone, Copy)]
+pub struct BattleConfig {
+    pub targeting: TargetingPriority,
+    /// Whether the attacker has any eligible retreat destination.
+    pub attacker_can_retreat: bool,
+    /// Whether the defender has any eligible retreat destination.
+    /// False when the defender is the nation's capital or is landlocked with
+    /// no owned neighboring province.
+    pub defender_can_retreat: bool,
+    /// If `defender_fp / attacker_fp > this`, the attacker declines the battle
+    /// before any damage is dealt. `INFINITY` disables.
+    pub attacker_retreat_ratio: f64,
+    /// If `attacker_fp / defender_fp > this`, the defender evacuates the
+    /// province before any damage is dealt.
+    pub defender_retreat_ratio: f64,
+    /// Fraction of attacker starting firepower lost to trigger mid-battle
+    /// retreat (0.60 is the legacy default). Set to `1.0` or greater to
+    /// disable.
+    pub attacker_postbattle_fp_loss: f64,
+    /// Fraction of defender starting firepower lost to trigger mid-battle
+    /// retreat by the defender.
+    pub defender_postbattle_fp_loss: f64,
+}
+
+impl BattleConfig {
+    /// Legacy behavior: only the attacker retreats, at 60% FP loss, no
+    /// pre-battle retreat.
+    pub fn legacy(targeting: TargetingPriority) -> Self {
+        Self {
+            targeting,
+            attacker_can_retreat: true,
+            defender_can_retreat: false,
+            attacker_retreat_ratio: f64::INFINITY,
+            defender_retreat_ratio: f64::INFINITY,
+            attacker_postbattle_fp_loss: 0.60,
+            defender_postbattle_fp_loss: 2.0, // disabled
+        }
+    }
 }
 
 /// Calculate defense bonus percentage from terrain type.
@@ -39,7 +85,62 @@ pub fn fort_defense_bonus(fort_level: u8) -> f64 {
 }
 
 /// Global counter for generating unique UnitIds in garrison creation.
-static GARRISON_ID_COUNTER: AtomicU32 = AtomicU32::new(1_000_000);
+///
+/// Starts at 5_000_000 so persistent militia IDs never collide with the
+/// 1_000_000 / 1_100_000 / 1_500_000 / 2_000_000 / 2_500_000 / 3_000_000 /
+/// 4_000_000 bands used by initial GP/MN army, merchants, warships,
+/// AI-built units, generals, and admirals.
+static GARRISON_ID_COUNTER: AtomicU32 = AtomicU32::new(5_000_000);
+
+/// Spawn a single Militia `ArmyUnit` tagged to the given owner and position.
+/// Used both by persistent-garrison seeding and by the garrison regeneration
+/// tick.
+pub fn spawn_militia_unit(owner: NationId, position: ProvinceId) -> ArmyUnit {
+    use crate::map::UnitId;
+    let id = GARRISON_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    ArmyUnit::new(UnitId(id), ArmyUnitType::Militia, owner, position)
+}
+
+/// Spawn a single `GarrisonArtillery` unit tagged to the given owner/position.
+/// Only produced for a minor nation's capital at map generation time.
+pub fn spawn_garrison_artillery_unit(owner: NationId, position: ProvinceId) -> ArmyUnit {
+    use crate::map::UnitId;
+    let id = GARRISON_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    ArmyUnit::new(UnitId(id), ArmyUnitType::GarrisonArtillery, owner, position)
+}
+
+/// Backfill persistent militia in every province based on each province's
+/// cached `garrison_count`. Used by test fixtures that construct `GameState`
+/// manually (bypassing `new_game`), and by scenarios that need to refresh
+/// garrison units after populating province ownership. Existing Militia
+/// units at a province are preserved — this function only tops up to the
+/// cached count.
+pub fn seed_militia_from_garrison_count(game: &mut crate::game_state::GameState) {
+    let snapshots: Vec<(NationId, ProvinceId, u8)> = game
+        .provinces
+        .iter()
+        .map(|p| (p.owner, p.id, p.garrison_count))
+        .collect();
+    for (owner, pid, target) in snapshots {
+        if target == 0 {
+            continue;
+        }
+        let Some(nation) = game.get_nation_mut(owner) else {
+            continue;
+        };
+        let existing = nation
+            .army
+            .iter()
+            .filter(|u| u.position == pid && u.unit_type == ArmyUnitType::Militia)
+            .count();
+        if existing >= target as usize {
+            continue;
+        }
+        for _ in existing..(target as usize) {
+            nation.army.push(spawn_militia_unit(owner, pid));
+        }
+    }
+}
 
 /// Represents a force in combat.
 #[derive(Debug, Clone)]
@@ -71,8 +172,20 @@ pub struct BattleResult {
     pub attacker_initial_count: usize,
     /// Number of defender units at start.
     pub defender_initial_count: usize,
-    /// Whether the attacker retreated (lost >60% of initial firepower).
+    /// Whether the attacker retreated (pre-battle bailout or >=60% initial
+    /// firepower loss mid-combat). Alias: `attacker_retreated`.
     pub retreated: bool,
+    /// Whether the defender retreated (evacuated the province), either
+    /// pre-battle or mid-combat after heavy losses. Mutually exclusive with
+    /// `attacker_won = false`. When true, `attacker_won` is also true: the
+    /// attacker takes the province without fully destroying the defender.
+    pub defender_retreated: bool,
+    /// Placements chosen by the caller for surviving attacker units when
+    /// `retreated` is set. Empty otherwise.
+    pub attacker_retreated_to: Vec<(UnitId, ProvinceId)>,
+    /// Placements chosen by the caller for surviving defender units when
+    /// `defender_retreated` is set. Empty otherwise.
+    pub defender_retreated_to: Vec<(UnitId, ProvinceId)>,
     /// Whether siege artillery reduced the fort's defense bonus.
     pub siege_reduced_fort: bool,
     /// Medal awards for surviving units on the winning side: (unit_type, new_medal_count).
@@ -169,6 +282,10 @@ pub fn resolve_battle(
 
 /// Resolve a battle with an explicit targeting priority.
 ///
+/// Legacy entry point: uses the pre-card-#18 retreat model (attacker-only
+/// retreat at 60% firepower loss, no pre-battle bailout, no defender
+/// retreat). Use [`resolve_battle_with_config`] for full control.
+///
 /// See [`resolve_battle`] for full combat resolution details.
 pub fn resolve_battle_with_targeting(
     attacker: &CombatForce,
@@ -177,6 +294,39 @@ pub fn resolve_battle_with_targeting(
     terrain: Option<TerrainType>,
     fort_level: u8,
     targeting: TargetingPriority,
+) -> BattleResult {
+    resolve_battle_with_config(
+        attacker,
+        defender,
+        province,
+        terrain,
+        fort_level,
+        BattleConfig::legacy(targeting),
+    )
+}
+
+/// Resolve a battle with a full [`BattleConfig`], including retreat rules.
+///
+/// Adds (card #18) two retreat paths beyond the legacy attacker-only model:
+///   * Pre-battle retreat: a side whose opponent's firepower exceeds its own
+///     by more than the retreat-ratio bails before any damage is dealt,
+///     provided `*_can_retreat` is true.
+///   * Mid-battle retreat: the existing "lost more than X% of starting FP"
+///     break triggers for either side, gated by the corresponding
+///     `*_postbattle_fp_loss` threshold and `*_can_retreat` flag.
+///
+/// Retreat placements (where survivors go) are the caller's responsibility:
+/// this function just sets `retreated` / `defender_retreated` flags and
+/// returns the surviving units. The caller consumes those flags and writes
+/// into `attacker_retreated_to` / `defender_retreated_to` as part of post-
+/// battle state updates.
+pub fn resolve_battle_with_config(
+    attacker: &CombatForce,
+    defender: &CombatForce,
+    province: ProvinceId,
+    terrain: Option<TerrainType>,
+    fort_level: u8,
+    config: BattleConfig,
 ) -> BattleResult {
     let mut atk_units = attacker.units.clone();
     let mut def_units = defender.units.clone();
@@ -213,6 +363,9 @@ pub fn resolve_battle_with_targeting(
             attacker_initial_count,
             defender_initial_count,
             retreated: false,
+            defender_retreated: false,
+            attacker_retreated_to: Vec::new(),
+            defender_retreated_to: Vec::new(),
             siege_reduced_fort: false,
             medal_awards: Vec::new(),
             attacker_origin_provinces: Vec::new(),
@@ -237,6 +390,9 @@ pub fn resolve_battle_with_targeting(
             attacker_initial_count,
             defender_initial_count,
             retreated: false,
+            defender_retreated: false,
+            attacker_retreated_to: Vec::new(),
+            defender_retreated_to: Vec::new(),
             siege_reduced_fort: false,
             medal_awards: Vec::new(),
             attacker_origin_provinces: Vec::new(),
@@ -268,14 +424,97 @@ pub fn resolve_battle_with_targeting(
             attacker_initial_count,
             defender_initial_count,
             retreated: false,
+            defender_retreated: false,
+            attacker_retreated_to: Vec::new(),
+            defender_retreated_to: Vec::new(),
             siege_reduced_fort,
             medal_awards,
             attacker_origin_provinces: Vec::new(),
         };
     }
 
+    // ── Pre-battle retreat (card #18) ───────────────────────────────
+    // Pick the more extreme ratio: if both sides are dominated, the side
+    // that is more dominated retreats. If only one side meets its
+    // threshold, that side retreats.
+    let attacker_ratio = if attacker_initial_fp > 0.0 {
+        defender_initial_fp / attacker_initial_fp
+    } else {
+        f64::INFINITY
+    };
+    let defender_ratio = if defender_initial_fp > 0.0 {
+        attacker_initial_fp / defender_initial_fp
+    } else {
+        f64::INFINITY
+    };
+    let attacker_would_bail =
+        config.attacker_can_retreat && attacker_ratio > config.attacker_retreat_ratio;
+    let defender_would_bail =
+        config.defender_can_retreat && defender_ratio > config.defender_retreat_ratio;
+
+    if attacker_would_bail || defender_would_bail {
+        // Decide which side actually bails (the more-dominated one, or
+        // attacker by tie-breaker).
+        let attacker_bails = if attacker_would_bail && defender_would_bail {
+            attacker_ratio >= defender_ratio
+        } else {
+            attacker_would_bail
+        };
+        if attacker_bails {
+            return BattleResult {
+                attacker: attacker.nation,
+                defender: defender.nation,
+                province,
+                attacker_won: false,
+                attacker_casualties,
+                defender_casualties,
+                attacker_survivors: atk_units,
+                defender_survivors: def_units,
+                terrain,
+                fort_level,
+                attacker_initial_fp,
+                defender_initial_fp,
+                attacker_initial_count,
+                defender_initial_count,
+                retreated: true,
+                defender_retreated: false,
+                attacker_retreated_to: Vec::new(),
+                defender_retreated_to: Vec::new(),
+                siege_reduced_fort,
+                medal_awards: Vec::new(),
+                attacker_origin_provinces: Vec::new(),
+            };
+        } else {
+            // Defender evacuates; attacker takes the province unopposed.
+            return BattleResult {
+                attacker: attacker.nation,
+                defender: defender.nation,
+                province,
+                attacker_won: true,
+                attacker_casualties,
+                defender_casualties,
+                attacker_survivors: atk_units,
+                defender_survivors: def_units,
+                terrain,
+                fort_level,
+                attacker_initial_fp,
+                defender_initial_fp,
+                attacker_initial_count,
+                defender_initial_count,
+                retreated: false,
+                defender_retreated: true,
+                attacker_retreated_to: Vec::new(),
+                defender_retreated_to: Vec::new(),
+                siege_reduced_fort,
+                medal_awards: Vec::new(),
+                attacker_origin_provinces: Vec::new(),
+            };
+        }
+    }
+
     // Combat rounds (up to 10)
     let mut retreated = false;
+    let mut defender_retreated = false;
     // Track damage dealt by each unit (keyed by UnitId) for medal eligibility
     let mut atk_damage_dealt: std::collections::HashMap<crate::map::UnitId, f64> =
         std::collections::HashMap::new();
@@ -298,7 +537,7 @@ pub fn resolve_battle_with_targeting(
         if !def_units.is_empty() {
             let damage_per_unit = atk_fp / def_units.len() as f64;
             // Sort defender units by targeting priority
-            match targeting {
+            match config.targeting {
                 TargetingPriority::WeakestFirst => {
                     def_units.sort_by(|a, b| {
                         a.effective_firepower()
@@ -329,7 +568,7 @@ pub fn resolve_battle_with_targeting(
         if !atk_units.is_empty() {
             let damage_per_unit = def_fp / atk_units.len() as f64;
             // Sort attacker units by targeting priority
-            match targeting {
+            match config.targeting {
                 TargetingPriority::WeakestFirst => {
                     atk_units.sort_by(|a, b| {
                         a.effective_firepower()
@@ -367,11 +606,14 @@ pub fn resolve_battle_with_targeting(
         }
         atk_units.retain(|u| u.is_alive());
 
-        // Check for retreat: if attacker has lost >60% of initial firepower
-        if attacker_initial_fp > 0.0 && !atk_units.is_empty() {
+        // Check for attacker retreat
+        if config.attacker_can_retreat
+            && attacker_initial_fp > 0.0
+            && !atk_units.is_empty()
+        {
             let current_atk_fp = total_firepower(&atk_units);
             let fp_lost_ratio = 1.0 - (current_atk_fp / attacker_initial_fp);
-            if fp_lost_ratio > 0.60 {
+            if fp_lost_ratio > config.attacker_postbattle_fp_loss {
                 retreated = true;
                 // Retreating units suffer 10% additional damage on remaining health
                 for unit in &mut atk_units {
@@ -380,7 +622,6 @@ pub fn resolve_battle_with_targeting(
                         unit.take_damage(retreat_damage);
                     }
                 }
-                // Remove any units killed by retreat damage
                 for unit in atk_units.iter().filter(|u| !u.is_alive()) {
                     attacker_casualties.push(unit.unit_type);
                 }
@@ -388,19 +629,47 @@ pub fn resolve_battle_with_targeting(
                 break;
             }
         }
+
+        // Check for defender retreat (card #18): symmetric to attacker.
+        if config.defender_can_retreat
+            && defender_initial_fp > 0.0
+            && !def_units.is_empty()
+        {
+            // Compare raw unit firepower for loss-ratio — terrain/fort bonuses
+            // inflate `defender_initial_fp` artificially, so we use the raw
+            // comparison against the un-bonused baseline.
+            let raw_def_initial =
+                total_firepower(&defender.units).max(f64::EPSILON);
+            let current_def_fp = total_firepower(&def_units);
+            let fp_lost_ratio = 1.0 - (current_def_fp / raw_def_initial);
+            if fp_lost_ratio > config.defender_postbattle_fp_loss {
+                defender_retreated = true;
+                for unit in &mut def_units {
+                    let retreat_damage = (unit.health as f64 * 0.10) as u8;
+                    if retreat_damage > 0 {
+                        unit.take_damage(retreat_damage);
+                    }
+                }
+                for unit in def_units.iter().filter(|u| !u.is_alive()) {
+                    defender_casualties.push(unit.unit_type);
+                }
+                def_units.retain(|u| u.is_alive());
+                break;
+            }
+        }
     }
 
-    // Determine winner: if one side eliminated, the other wins.
-    // If attacker retreated, defender wins.
-    // If both survive, the side with more remaining firepower wins.
+    // Determine winner: retreat flags take priority, then eliminations, then
+    // surviving firepower.
     let attacker_won = if retreated {
         false
+    } else if defender_retreated {
+        true
     } else if def_units.is_empty() && !atk_units.is_empty() {
         true
     } else if atk_units.is_empty() {
         false
     } else {
-        // Both sides survive: compare remaining firepower
         let atk_remaining = total_firepower(&atk_units);
         let def_remaining = total_firepower(&def_units);
         atk_remaining > def_remaining
@@ -445,6 +714,9 @@ pub fn resolve_battle_with_targeting(
         attacker_initial_count,
         defender_initial_count,
         retreated,
+        defender_retreated,
+        attacker_retreated_to: Vec::new(),
+        defender_retreated_to: Vec::new(),
         siege_reduced_fort,
         medal_awards,
         attacker_origin_provinces: Vec::new(),
@@ -1406,5 +1678,155 @@ mod tests {
         // Siege artillery reduces fort bonus by 50%
         let effective = effective_fort_bonus(3, true);
         assert!((effective - 0.30).abs() < f64::EPSILON);
+    }
+
+    // ── Card #18: retreat mechanic tests ─────────────────────────
+
+    #[test]
+    fn defender_retreats_pre_battle_when_overmatched() {
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+        let attacker = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Guards, atk_nation),
+                make_unit(2, ArmyUnitType::Guards, atk_nation),
+                make_unit(3, ArmyUnitType::Guards, atk_nation),
+                make_unit(4, ArmyUnitType::Guards, atk_nation),
+                make_unit(5, ArmyUnitType::Guards, atk_nation),
+            ],
+        );
+        let defender = make_force(
+            def_nation,
+            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+        );
+
+        let cfg = BattleConfig {
+            targeting: TargetingPriority::StrongestFirst,
+            attacker_can_retreat: true,
+            defender_can_retreat: true,
+            attacker_retreat_ratio: 2.0,
+            defender_retreat_ratio: 2.0,
+            attacker_postbattle_fp_loss: 0.60,
+            defender_postbattle_fp_loss: 0.60,
+        };
+        let result =
+            resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg);
+        assert!(
+            result.defender_retreated,
+            "defender should evacuate before a hopeless battle"
+        );
+        assert!(result.attacker_won, "attacker takes the province uncontested");
+        assert!(
+            result.defender_casualties.is_empty(),
+            "pre-battle retreat: no casualties on either side"
+        );
+        assert_eq!(result.defender_survivors.len(), 1);
+    }
+
+    #[test]
+    fn defender_fights_to_destruction_when_cannot_retreat() {
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+        let attacker = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Guards, atk_nation),
+                make_unit(2, ArmyUnitType::Guards, atk_nation),
+                make_unit(3, ArmyUnitType::Guards, atk_nation),
+                make_unit(4, ArmyUnitType::Guards, atk_nation),
+                make_unit(5, ArmyUnitType::Guards, atk_nation),
+            ],
+        );
+        let defender = make_force(
+            def_nation,
+            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+        );
+        // can_retreat=false simulates capital defense or no neighbors.
+        let cfg = BattleConfig {
+            targeting: TargetingPriority::StrongestFirst,
+            attacker_can_retreat: true,
+            defender_can_retreat: false,
+            attacker_retreat_ratio: 2.0,
+            defender_retreat_ratio: 2.0,
+            attacker_postbattle_fp_loss: 0.60,
+            defender_postbattle_fp_loss: 0.60,
+        };
+        let result =
+            resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg);
+        assert!(
+            !result.defender_retreated,
+            "defender with no retreat option must fight"
+        );
+        assert!(result.attacker_won);
+        assert!(
+            !result.defender_casualties.is_empty(),
+            "defender should take casualties fighting to destruction"
+        );
+    }
+
+    #[test]
+    fn attacker_pre_battle_retreats_when_defender_dominates() {
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+        // Small attacker, large defender.
+        let attacker = make_force(
+            atk_nation,
+            vec![make_unit(1, ArmyUnitType::Regulars, atk_nation)],
+        );
+        let defender = make_force(
+            def_nation,
+            vec![
+                make_unit(10, ArmyUnitType::Guards, def_nation),
+                make_unit(11, ArmyUnitType::Guards, def_nation),
+                make_unit(12, ArmyUnitType::Guards, def_nation),
+                make_unit(13, ArmyUnitType::Guards, def_nation),
+                make_unit(14, ArmyUnitType::Guards, def_nation),
+            ],
+        );
+        let cfg = BattleConfig {
+            targeting: TargetingPriority::StrongestFirst,
+            attacker_can_retreat: true,
+            defender_can_retreat: true,
+            attacker_retreat_ratio: 2.0,
+            defender_retreat_ratio: 2.0,
+            attacker_postbattle_fp_loss: 0.60,
+            defender_postbattle_fp_loss: 0.60,
+        };
+        let result =
+            resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg);
+        assert!(result.retreated, "attacker should bail pre-battle");
+        assert!(!result.attacker_won);
+        assert!(
+            result.attacker_casualties.is_empty(),
+            "pre-battle retreat: attacker takes no damage"
+        );
+    }
+
+    #[test]
+    fn legacy_resolve_preserves_attacker_only_retreat() {
+        // Sanity check: the legacy entry point still behaves like the
+        // pre-card-#18 model — defender never retreats.
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+        let attacker = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Guards, atk_nation),
+                make_unit(2, ArmyUnitType::Guards, atk_nation),
+                make_unit(3, ArmyUnitType::Guards, atk_nation),
+                make_unit(4, ArmyUnitType::Guards, atk_nation),
+                make_unit(5, ArmyUnitType::Guards, atk_nation),
+            ],
+        );
+        let defender = make_force(
+            def_nation,
+            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+        );
+        let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 0);
+        assert!(
+            !result.defender_retreated,
+            "legacy resolve never flags defender retreat"
+        );
     }
 }

@@ -28,7 +28,7 @@ pub(crate) fn ai_build_military(
     if game.ai_debug {
         let n = game.get_nation(nation_id);
         let nation_name = n.map(|n| n.name.as_str()).unwrap_or("?");
-        let army_count = n.map(|n| n.army.len()).unwrap_or(0);
+        let army_count = n.map(|n| n.field_army_count()).unwrap_or(0);
         let treasury = n.map(|n| n.treasury.as_dollars()).unwrap_or(0);
         eprintln!(
             "[AI:{}:military] army={}, treasury=${}, personality={}",
@@ -52,7 +52,10 @@ pub(crate) fn ai_build_military(
         None => return,
     };
 
-    let army_count = nation.army.len();
+    // "Army count" for tier-based build decisions is the *field army* —
+    // garrison militia do not count toward tier caps (they can't project
+    // power anyway).
+    let army_count = nation.field_army_count();
     let treasury = nation.treasury;
     let capital = nation.capital_province_id;
     let nation_name = nation.name.clone();
@@ -247,7 +250,7 @@ pub(crate) fn ai_build_military(
                 1
             };
             for i in 0..units_to_build {
-                if nation.army.len() >= tier3_max {
+                if nation.field_army_count() >= tier3_max {
                     break;
                 }
                 let unit_type = tier3_options[(variety_seed.wrapping_add(i)) % tier3_options.len()];
@@ -265,7 +268,7 @@ pub(crate) fn ai_build_military(
                             text: format!("{} has been expanding its military forces", nation_name),
                             reason: format!(
                                 "Tier 3 advanced build: army={}/{} cap, building {:?}",
-                                nation.army.len(),
+                                nation.field_army_count(),
                                 tier3_max,
                                 unit_type
                             ),
@@ -297,7 +300,7 @@ pub(crate) fn ai_build_military(
                         text: format!("{} has been expanding its military forces", nation_name),
                         reason: format!(
                             "Tier 4 uncapped expansion: army={}, treasury=${}",
-                            nation.army.len(),
+                            nation.field_army_count(),
                             treasury.as_dollars()
                         ),
                         is_non_action: false,
@@ -494,7 +497,11 @@ pub(crate) fn ai_declare_wars(
         }
 
         // ── 2. Military readiness ──────────────────────────────
-        let ai_army = game.get_nation(ai_id).map(|n| n.army.len()).unwrap_or(0);
+        // Only field units count for war readiness — garrisons stay home.
+        let ai_army = game
+            .get_nation(ai_id)
+            .map(|n| n.field_army_count())
+            .unwrap_or(0);
         if ai_army < army_min_for_war {
             actions.push(super::AiAction {
                 text: format!("{} did not declare war this turn", attacker_name),
@@ -987,7 +994,8 @@ pub(crate) fn ai_military_strategy(
         None => return,
     };
 
-    let army_size = nation.army.len();
+    // Only count field-army units for attack-readiness — militia stay home.
+    let army_size = nation.field_army_count();
 
     // Find nations we are at war with, plus anarchic nations (free to invade)
     let enemies: Vec<NationId> = game
@@ -1020,11 +1028,15 @@ pub(crate) fn ai_military_strategy(
                 .get_nation(enemy_id)
                 .map(|n| n.is_great_power())
                 .unwrap_or(false);
-            // Count enemy army units in each province
+            // Count enemy **field army** units per province. We deliberately
+            // exclude Militia / GarrisonArtillery here because the
+            // province-level `garrison_count` cache is added separately
+            // below; counting stationary garrison units twice would double
+            // defender strength and suppress valid attacks.
             let enemy_army: Vec<(ProvinceId, usize)> = {
                 let mut counts: Vec<(ProvinceId, usize)> = Vec::new();
                 if let Some(en) = game.get_nation(enemy_id) {
-                    for unit in &en.army {
+                    for unit in en.field_army_iter() {
                         if let Some(entry) = counts.iter_mut().find(|(p, _)| *p == unit.position) {
                             entry.1 += 1;
                         } else {
@@ -1060,13 +1072,20 @@ pub(crate) fn ai_military_strategy(
                     let tile_count = prov.tiles.len();
                     // Use actual garrison count from the province
                     let garrison_size = prov.garrison_count as usize;
-                    // Estimated defender strength: garrison + stationed army
+                    // Estimated defender strength: militia garrison + stationed
+                    // field army + 1 for GarrisonArtillery if present at a
+                    // minor-nation capital (it's a real unit that adds combat
+                    // strength; `field_army_iter()` excludes it).
                     let stationed = enemy_army
                         .iter()
                         .find(|(p, _)| *p == prov.id)
                         .map(|(_, c)| *c)
                         .unwrap_or(0);
-                    let total_defenders = garrison_size + stationed;
+                    let artillery = game
+                        .get_nation(enemy_id)
+                        .map(|n| n.has_garrison_artillery_at(prov.id))
+                        .unwrap_or(false) as usize;
+                    let total_defenders = garrison_size + stationed + artillery;
 
                     // For GP enemies, be more aggressive: attack if we have at
                     // least 2/3 of their defenders (wars stagnate otherwise
@@ -1193,15 +1212,23 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.treasury = Money::dollars(3000);
-        // AI starts with 0 army units
+        // AI starts with 0 FIELD army units (only starting garrison militia).
 
         run_ai_turns(&mut game);
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(ai.army.len(), 1, "AI should build 1 Regulars unit");
-        assert_eq!(ai.army[0].unit_type, ArmyUnitType::Regulars);
-        assert_eq!(ai.army[0].owner, NationId(2));
-        assert_eq!(ai.army[0].position, ProvinceId(2)); // capital
+        assert_eq!(
+            ai.field_army_count(),
+            1,
+            "AI should build 1 Regulars unit (militia excluded)"
+        );
+        let built = ai
+            .field_army_iter()
+            .next()
+            .expect("one field unit expected");
+        assert_eq!(built.unit_type, ArmyUnitType::Regulars);
+        assert_eq!(built.owner, NationId(2));
+        assert_eq!(built.position, ProvinceId(2)); // capital
         assert_eq!(
             ai.treasury,
             Money::dollars(2500),
@@ -1218,9 +1245,10 @@ mod tests {
         run_ai_turns(&mut game);
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert!(
-            ai.army.is_empty(),
-            "AI should not build army units when treasury <= $2,000"
+        assert_eq!(
+            ai.field_army_count(),
+            0,
+            "AI should not build field army units when treasury <= $2,000"
         );
     }
 

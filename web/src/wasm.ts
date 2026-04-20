@@ -184,6 +184,8 @@ export interface LedgerData {
     army_by_type: { unit_type: string; count: number; firepower: number }[];
     total_army_fp: number;
     total_army_count: number;
+    field_army_count: number;
+    militia_count: number;
     warships_by_type: { ship_type: string; count: number }[];
     total_warship_count: number;
     merchant_ships: number;
@@ -228,6 +230,8 @@ export interface GPLedgerEntry {
   military: {
     total_army_count: number;
     total_army_fp: number;
+    field_army_count: number;
+    militia_count: number;
     total_warship_count: number;
     merchant_ships: number;
     generals_earned: number;

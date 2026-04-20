@@ -80,6 +80,18 @@ aggressive = {
     peace_province_loss_ratio = 0.50,
     fort_strategy = "offensive",
 
+    -- Field-army distribution (cards #5, #9)
+    capital_reserve_normal = 1,       -- aggressive: fewer units sit at capital
+    capital_reserve_threatened = 5,
+    max_redeploys_per_turn = 6,       -- push more units forward per turn
+
+    -- Retreat (card #18)
+    retreat_prebattle_ratio = 3.0,    -- aggressive: less likely to decline a fight
+    retreat_postbattle_fp_loss = 0.70, -- fights harder before breaking
+
+    -- Naval landing gate (card #7)
+    naval_min_adjacent_strength_ratio = 1.2,
+
     -- Coalition assessment weights (military-heavy)
     coalition_mil_weight = 0.6,
     coalition_prov_weight = 0.25,

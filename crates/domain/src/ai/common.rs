@@ -145,7 +145,7 @@ pub(crate) mod test_helpers {
             ));
         }
 
-        GameState {
+        let mut game = GameState {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
@@ -165,7 +165,9 @@ pub(crate) mod test_helpers {
             battle_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
-        }
+        };
+        crate::military::combat::seed_militia_from_garrison_count(&mut game);
+        game
     }
 
     /// Build a game state that includes a minor nation for war tests.
@@ -232,7 +234,7 @@ pub(crate) mod test_helpers {
             ProvinceId(3),
         );
 
-        GameState {
+        let mut game = GameState {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
@@ -252,7 +254,9 @@ pub(crate) mod test_helpers {
             battle_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
-        }
+        };
+        crate::military::combat::seed_militia_from_garrison_count(&mut game);
+        game
     }
 
     /// Build a game state with two adjacent provinces for border tests.
@@ -349,7 +353,7 @@ pub(crate) mod test_helpers {
         // Declare war between AI and enemy
         diplomacy.declare_war(NationId(2), NationId(3));
 
-        GameState {
+        let mut game = GameState {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
@@ -369,7 +373,9 @@ pub(crate) mod test_helpers {
             battle_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
-        }
+        };
+        crate::military::combat::seed_militia_from_garrison_count(&mut game);
+        game
     }
 }
 

@@ -159,6 +159,11 @@ pub struct GameConfig {
     // Map generation
     pub min_food_tile_percent: u32,
     pub food_cluster_chance: u32,
+    // Garrison (per-province militia) — see manual page 36.
+    pub default_garrison_per_province: u32,
+    pub minor_default_garrison: u32,
+    pub max_garrison_per_province: u32,
+    pub garrison_regen_interval_turns: u32,
 }
 
 impl Default for GameConfig {
@@ -270,6 +275,10 @@ impl Default for GameConfig {
             ai_consulate_beyond_target_decay: 4.0,
             min_food_tile_percent: 20,
             food_cluster_chance: 40,
+            default_garrison_per_province: 4,
+            minor_default_garrison: 3,
+            max_garrison_per_province: 8,
+            garrison_regen_interval_turns: 2,
         }
     }
 }

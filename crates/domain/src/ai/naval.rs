@@ -158,6 +158,62 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
     }
 }
 
+/// Clear `NavalOperation::Beachhead` assignments whose target is no longer
+/// enemy-owned (or is now reachable overland, making the landing redundant).
+///
+/// Called every turn at the top of `ai_naval_strategy` so the decision can
+/// rerun from a clean slate — including on turns when the AI is outmatched
+/// at sea and returns early.
+fn clear_stale_beachheads(game: &mut GameState, nation_id: NationId, enemies: &[NationId]) {
+    let our_province_ids: Vec<ProvinceId> = game
+        .get_nation(nation_id)
+        .map(|n| n.province_ids.clone())
+        .unwrap_or_default();
+    let beachhead_targets: Vec<ProvinceId> = game
+        .get_nation(nation_id)
+        .map(|n| {
+            n.warships
+                .iter()
+                .filter_map(|s| match s.operation {
+                    Some(crate::military::naval::NavalOperation::Beachhead(pid)) => Some(pid),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if beachhead_targets.is_empty() {
+        return;
+    }
+    let mut stale_targets: Vec<ProvinceId> = Vec::new();
+    for target_pid in beachhead_targets {
+        let Some(target_prov) = game.get_province(target_pid) else {
+            stale_targets.push(target_pid);
+            continue;
+        };
+        let still_hostile = enemies.contains(&target_prov.owner);
+        let reachable_overland = our_province_ids.iter().any(|&our_pid| {
+            game.get_province(our_pid).is_some_and(|our_p| {
+                crate::map::provinces_are_adjacent(&game.hex_map, our_p, target_prov)
+            })
+        });
+        if !still_hostile || reachable_overland {
+            stale_targets.push(target_pid);
+        }
+    }
+    if stale_targets.is_empty() {
+        return;
+    }
+    if let Some(nation) = game.get_nation_mut(nation_id) {
+        for ship in &mut nation.warships {
+            if let Some(crate::military::naval::NavalOperation::Beachhead(pid)) = ship.operation
+                && stale_targets.contains(&pid)
+            {
+                ship.operation = None;
+            }
+        }
+    }
+}
+
 /// AI naval strategy: build warships when outmatched, plan blockades, evaluate
 /// beachhead viability for coastal attacks.
 ///
@@ -212,6 +268,15 @@ pub fn ai_naval_strategy(
         })
         .map(|n| n.id)
         .collect();
+
+    // ── Clear stale Beachhead operations from previous turns ────────
+    // Must run BEFORE both the peacetime `enemies.is_empty()` return AND
+    // the "outmatched at sea" shipbuilding branch below; otherwise stale
+    // ops persist indefinitely when the AI has no active war or is
+    // rebuilding its fleet. When `enemies` is empty, every Beachhead is
+    // stale by definition (target province has no hostile owner), so
+    // `clear_stale_beachheads` will wipe them all.
+    clear_stale_beachheads(game, nation_id, &enemies);
 
     if enemies.is_empty() {
         return;
@@ -286,8 +351,10 @@ pub fn ai_naval_strategy(
     // If AI has naval superiority, consider beachhead operations
     if our_naval_fp > 0 && our_naval_fp > max_enemy_naval_fp {
         // Blockade is applied automatically by the game engine.
-        // Check if we should establish naval landing sites for enemies
-        // we can't reach by land.
+        // Launch amphibious landings only when overland attack is not a
+        // practical option — that is, when every land-adjacent enemy
+        // province is defended more heavily than our field army can
+        // overcome (card #7).
 
         // Load min army size for naval invasion from Lua config
         #[cfg(feature = "lua")]
@@ -298,9 +365,21 @@ pub fn ai_naval_strategy(
         #[cfg(not(feature = "lua"))]
         let min_army_for_invasion: usize = 4;
 
+        // Lua-tunable "too hard" ratio: an adjacent enemy province counts as
+        // a viable overland target if its defenders are <= army * ratio.
+        #[cfg(feature = "lua")]
+        let adj_strength_ratio: f64 = lua_cfg
+            .as_ref()
+            .and_then(|c| c.naval_min_adjacent_strength_ratio)
+            .unwrap_or(1.5);
+        #[cfg(not(feature = "lua"))]
+        let adj_strength_ratio: f64 = 1.5;
+
+        // Only movable field-army units can embark for a naval invasion —
+        // garrison militia are locked to their home province.
         let our_army_size = game
             .get_nation(nation_id)
-            .map(|n| n.army.len())
+            .map(|n| n.field_army_count())
             .unwrap_or(0);
         let our_province_ids: Vec<ProvinceId> = game
             .get_nation(nation_id)
@@ -317,53 +396,110 @@ pub fn ai_naval_strategy(
                 continue;
             }
 
-            // Check if we have any land-adjacent enemy provinces
-            let has_land_adjacent_target = game.provinces.iter().any(|enemy_prov| {
-                enemy_prov.owner == enemy_id
-                    && our_province_ids.iter().any(|&our_pid| {
-                        game.get_province(our_pid).is_some_and(|our_prov| {
-                            crate::map::provinces_are_adjacent(&game.hex_map, our_prov, enemy_prov)
-                        })
-                    })
-            });
-
-            // If we can't reach the enemy by land, use naval invasion
-            if !has_land_adjacent_target {
-                // Find coastal enemy province to target
-                let coastal_target = game
-                    .provinces
-                    .iter()
-                    .find(|p| p.owner == enemy_id && p.coastal);
-
-                if let Some(target_prov) = coastal_target {
-                    // Assign warships to beachhead operation targeting the specific province
-                    let target_pid = target_prov.id;
-                    let target_prov_name = target_prov.name.clone();
-                    if let Some(nation) = game.get_nation_mut(nation_id) {
-                        for ship in &mut nation.warships {
-                            ship.operation = Some(
-                                crate::military::naval::NavalOperation::Beachhead(target_pid),
-                            );
+            // Count enemy **field army** units stationed per province
+            // (for the strength check). Militia / GarrisonArtillery are
+            // excluded because `enemy_prov.garrison_count` is added
+            // separately below — counting them here would double-count
+            // defenders and over-trigger beachheads.
+            let enemy_army_per_prov: Vec<(ProvinceId, usize)> = {
+                let mut counts: Vec<(ProvinceId, usize)> = Vec::new();
+                if let Some(en) = game.get_nation(enemy_id) {
+                    for u in en.field_army_iter() {
+                        if let Some(entry) = counts.iter_mut().find(|(p, _)| *p == u.position) {
+                            entry.1 += 1;
+                        } else {
+                            counts.push((u.position, 1));
                         }
                     }
-                    actions.push(super::AiAction {
-                        text: format!(
-                            "{} launches amphibious invasion targeting {}",
-                            nation_name, target_prov_name
-                        ),
-                        reason: format!(
-                            "Naval superiority ({} vs enemy {}) and no land-adjacent provinces to attack; launching amphibious assault",
-                            our_naval_fp, max_enemy_naval_fp
-                        ),
-                        is_non_action: false,
-                    });
+                }
+                counts
+            };
 
-                    if game.ai_debug {
-                        eprintln!(
-                            "[AI:{}:naval] Assigning warships to beachhead against {} (no land-adjacent targets)",
-                            nation_name, enemy_id.0
+            // Gather land-adjacent enemy provinces and check how many of
+            // them are "soft" (total defenders within our reach).
+            let mut any_land_adjacent = false;
+            let mut any_soft_land_target = false;
+            let strength_cap = (our_army_size as f64 * adj_strength_ratio).ceil() as usize;
+            for enemy_prov in game.provinces.iter().filter(|p| p.owner == enemy_id) {
+                let is_land_adj = our_province_ids.iter().any(|&our_pid| {
+                    game.get_province(our_pid).is_some_and(|our_prov| {
+                        crate::map::provinces_are_adjacent(&game.hex_map, our_prov, enemy_prov)
+                    })
+                });
+                if !is_land_adj {
+                    continue;
+                }
+                any_land_adjacent = true;
+
+                let garrison = enemy_prov.garrison_count as usize;
+                let stationed = enemy_army_per_prov
+                    .iter()
+                    .find(|(pid, _)| *pid == enemy_prov.id)
+                    .map(|(_, c)| *c)
+                    .unwrap_or(0);
+                // Minor-nation capital has an extra GarrisonArtillery unit
+                // that `field_army_iter()` skips; add it back explicitly.
+                let artillery = game
+                    .get_nation(enemy_id)
+                    .map(|n| n.has_garrison_artillery_at(enemy_prov.id))
+                    .unwrap_or(false) as usize;
+                let defenders = garrison + stationed + artillery;
+                if defenders <= strength_cap {
+                    any_soft_land_target = true;
+                    break;
+                }
+            }
+
+            // Use naval invasion only when overland has either no reach
+            // (every enemy prov is across water) OR every reachable prov
+            // is defended more heavily than our field army can overcome.
+            let need_naval = !any_land_adjacent || !any_soft_land_target;
+            if !need_naval {
+                continue;
+            }
+
+            // Find coastal enemy province to target
+            let coastal_target = game
+                .provinces
+                .iter()
+                .find(|p| p.owner == enemy_id && p.coastal);
+
+            if let Some(target_prov) = coastal_target {
+                // Assign warships to beachhead operation targeting the specific province
+                let target_pid = target_prov.id;
+                let target_prov_name = target_prov.name.clone();
+                if let Some(nation) = game.get_nation_mut(nation_id) {
+                    for ship in &mut nation.warships {
+                        ship.operation = Some(
+                            crate::military::naval::NavalOperation::Beachhead(target_pid),
                         );
                     }
+                }
+                let reason_text = if !any_land_adjacent {
+                    format!(
+                        "Naval superiority ({} vs enemy {}) and no land-adjacent provinces; launching amphibious assault",
+                        our_naval_fp, max_enemy_naval_fp
+                    )
+                } else {
+                    format!(
+                        "Naval superiority ({} vs enemy {}); every land-adjacent enemy province outstrips army size {} * {:.1}",
+                        our_naval_fp, max_enemy_naval_fp, our_army_size, adj_strength_ratio
+                    )
+                };
+                actions.push(super::AiAction {
+                    text: format!(
+                        "{} launches amphibious invasion targeting {}",
+                        nation_name, target_prov_name
+                    ),
+                    reason: reason_text,
+                    is_non_action: false,
+                });
+
+                if game.ai_debug {
+                    eprintln!(
+                        "[AI:{}:naval] Assigning warships to beachhead against {} (any_land_adj={}, any_soft={})",
+                        nation_name, enemy_id.0, any_land_adjacent, any_soft_land_target,
+                    );
                 }
             }
         }
@@ -614,6 +750,241 @@ mod tests {
                 .iter()
                 .any(|a| a.text.contains("warships") || a.text.contains("naval")),
             "Should report shipbuilding action"
+        );
+    }
+
+    #[test]
+    fn ai_does_not_launch_beachhead_when_soft_overland_target_exists() {
+        // AI shares a land border with a weakly-defended enemy province.
+        // Even with naval superiority, it should not set Beachhead — the
+        // overland attack is preferable.
+        use crate::ai::common::test_helpers::test_game_with_adjacent_provinces;
+        use crate::military::units::{ArmyUnit, ArmyUnitType};
+
+        let mut game = test_game_with_adjacent_provinces();
+        // Mark the AI's border province coastal so "we_have_coast" is true.
+        game.provinces.iter_mut().for_each(|p| {
+            if p.id == ProvinceId(2) {
+                p.coastal = true;
+            }
+        });
+        // Make the enemy province coastal too, so it would be a viable beachhead.
+        game.provinces.iter_mut().for_each(|p| {
+            if p.id == ProvinceId(3) {
+                p.coastal = true;
+            }
+        });
+
+        // Give AI 5 army units and 3 warships (naval superiority).
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        for i in 0..5 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(9100 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        for i in 0..3 {
+            ai.warships.push(Ship::new(
+                UnitId(9200 + i),
+                ShipType::Frigate,
+                NationId(2),
+            ));
+        }
+        // Enemy has no warships and a small garrison (garrison_count=3 by default).
+
+        let mut actions = Vec::new();
+        ai_naval_strategy(&mut game, NationId(2), &mut actions);
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert!(
+            ai.warships
+                .iter()
+                .all(|s| !matches!(
+                    s.operation,
+                    Some(crate::military::naval::NavalOperation::Beachhead(_))
+                )),
+            "AI should not assign Beachhead when a soft overland target is available"
+        );
+        assert!(
+            actions
+                .iter()
+                .all(|a| !a.text.contains("amphibious invasion")),
+            "AI should not announce amphibious invasion"
+        );
+    }
+
+    #[test]
+    fn ai_launches_beachhead_when_all_adjacent_too_hard() {
+        // AI has a small army, naval superiority, and a coastal enemy
+        // province. The only land-adjacent enemy province is heavily
+        // defended — bigger than army * naval_min_adjacent_strength_ratio.
+        // Expect: Beachhead assigned against a coastal target.
+        use crate::ai::common::test_helpers::test_game_with_adjacent_provinces;
+        use crate::military::units::{ArmyUnit, ArmyUnitType};
+
+        let mut game = test_game_with_adjacent_provinces();
+        // Make the AI's border province coastal (required for embark).
+        game.provinces.iter_mut().for_each(|p| {
+            if p.id == ProvinceId(2) {
+                p.coastal = true;
+            }
+            if p.id == ProvinceId(3) {
+                // The land-adjacent enemy province is ALSO coastal — that
+                // keeps it as the beachhead candidate, and we over-garrison
+                // it so it fails the strength check.
+                p.coastal = true;
+                p.garrison_count = 20;
+            }
+        });
+
+        // AI: small army (5), naval superiority.
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        for i in 0..5 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(9500 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        for i in 0..3 {
+            ai.warships.push(Ship::new(
+                UnitId(9600 + i),
+                ShipType::Frigate,
+                NationId(2),
+            ));
+        }
+        // Enemy stacked with a fat garrison already (20). Attacker army=5,
+        // ratio 1.5 → cap = 8; defenders (20) > 8 → too hard.
+
+        let mut actions = Vec::new();
+        ai_naval_strategy(&mut game, NationId(2), &mut actions);
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert!(
+            ai.warships.iter().any(|s| matches!(
+                s.operation,
+                Some(crate::military::naval::NavalOperation::Beachhead(_))
+            )),
+            "AI should assign Beachhead when every land-adjacent target is too heavily defended"
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.text.contains("amphibious invasion")),
+            "AI should announce amphibious invasion"
+        );
+    }
+
+    #[test]
+    fn ai_clears_stale_beachhead_in_peacetime() {
+        // Regression for F-008: when the nation has no active wars, a
+        // leftover Beachhead op from a prior war must still be cleared.
+        use crate::ai::common::test_helpers::test_game_with_adjacent_provinces;
+        let mut game = test_game_with_adjacent_provinces();
+        // End the war seeded by the test helper.
+        game.diplomacy.make_peace(NationId(2), NationId(3));
+
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        let mut stale_ship = Ship::new(UnitId(9800), ShipType::Frigate, NationId(2));
+        stale_ship.operation =
+            Some(crate::military::naval::NavalOperation::Beachhead(ProvinceId(3)));
+        ai.warships.push(stale_ship);
+
+        let mut actions = Vec::new();
+        ai_naval_strategy(&mut game, NationId(2), &mut actions);
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert!(
+            ai.warships.iter().all(|s| !matches!(
+                s.operation,
+                Some(crate::military::naval::NavalOperation::Beachhead(_))
+            )),
+            "peacetime stale Beachhead ops must be cleared"
+        );
+    }
+
+    #[test]
+    fn ai_clears_stale_beachhead_when_outmatched_at_sea() {
+        // Regression for F-001: stale clearing must run even when the AI
+        // returns early to build more ships.
+        use crate::ai::common::test_helpers::test_game_with_adjacent_provinces;
+        let mut game = test_game_with_adjacent_provinces();
+        game.provinces.iter_mut().for_each(|p| {
+            if p.id == ProvinceId(2) {
+                p.coastal = true;
+            }
+        });
+
+        // AI has a stale Beachhead op and zero warship firepower.
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        let mut stale_ship = Ship::new(UnitId(9700), ShipType::Frigate, NationId(2));
+        stale_ship.operation =
+            Some(crate::military::naval::NavalOperation::Beachhead(ProvinceId(3)));
+        ai.warships.push(stale_ship);
+
+        // Give enemy several strong warships so max_enemy_naval_fp > our_naval_fp.
+        let enemy = game.get_nation_mut(NationId(3)).unwrap();
+        for i in 0..3 {
+            enemy.warships.push(Ship::new(
+                UnitId(9700 + 100 + i),
+                ShipType::ShipOfTheLine,
+                NationId(3),
+            ));
+        }
+
+        let mut actions = Vec::new();
+        ai_naval_strategy(&mut game, NationId(2), &mut actions);
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert!(
+            ai.warships
+                .iter()
+                .all(|s| !matches!(
+                    s.operation,
+                    Some(crate::military::naval::NavalOperation::Beachhead(_))
+                )),
+            "Stale Beachhead must be cleared even on outmatched-at-sea turns"
+        );
+    }
+
+    #[test]
+    fn ai_clears_stale_beachhead_when_target_becomes_land_adjacent() {
+        // Previous turn queued Beachhead on prov 3. This turn prov 3 is
+        // land-adjacent to our territory — the op should be cleared.
+        use crate::ai::common::test_helpers::test_game_with_adjacent_provinces;
+        let mut game = test_game_with_adjacent_provinces();
+        game.provinces.iter_mut().for_each(|p| {
+            if p.id == ProvinceId(2) {
+                p.coastal = true;
+            }
+        });
+
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        let mut stale_ship = Ship::new(UnitId(9300), ShipType::Frigate, NationId(2));
+        stale_ship.operation =
+            Some(crate::military::naval::NavalOperation::Beachhead(ProvinceId(3)));
+        ai.warships.push(stale_ship);
+
+        let mut actions = Vec::new();
+        ai_naval_strategy(&mut game, NationId(2), &mut actions);
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert!(
+            ai.warships
+                .iter()
+                .all(|s| !matches!(
+                    s.operation,
+                    Some(crate::military::naval::NavalOperation::Beachhead(_))
+                )),
+            "stale Beachhead against a now-reachable target must be cleared"
         );
     }
 

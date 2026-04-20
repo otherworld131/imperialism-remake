@@ -80,6 +80,18 @@ balanced = {
     peace_province_loss_ratio = 0.50,
     fort_strategy = "border",
 
+    -- Field-army distribution (cards #5, #9)
+    capital_reserve_normal = 2,       -- units kept at capital when safe
+    capital_reserve_threatened = 6,   -- units concentrated at capital under imminent threat
+    max_redeploys_per_turn = 4,       -- cap on units moved per turn to prevent thrash
+
+    -- Retreat (card #18)
+    retreat_prebattle_ratio = 2.0,    -- opponent-to-own FP ratio that triggers pre-battle retreat
+    retreat_postbattle_fp_loss = 0.60, -- fraction of FP lost at which a side retreats mid-battle
+
+    -- Naval landing gate (card #7)
+    naval_min_adjacent_strength_ratio = 1.5, -- adjacent prov is "too hard" if defenders > army * this ratio
+
     -- Coalition assessment weights (defaults)
     coalition_mil_weight = 0.5,
     coalition_prov_weight = 0.3,
