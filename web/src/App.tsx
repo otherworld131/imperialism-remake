@@ -4,7 +4,8 @@ import {
   getMapData, getAvailableTechs, researchTech,
   getDiplomacyOverlay, getMilitaryOverlay,
   getUnitsInProvince, getCivilians, getShips, getValidMoveTargets, getBuildableUnits,
-  queueUnitMove, cancelUnitMove, deployCivilian, recallCivilian,
+  queueUnitMove, cancelUnitMove, deployCivilian, recallCivilian, engineerBuild,
+  type EngineerBuildKind,
   recruitArmyUnit, hireCivilian, buildShip,
   // New screen queries
   getTransportData, buildFreightCar, setTransportAllocation,
@@ -573,6 +574,13 @@ function App() {
     else if (cmd.error) showError(`Recall failed: ${cmd.error}`);
   }, [gameJson, applyGameJson, showError]);
 
+  const handleEngineerBuild = useCallback((civilianId: number, kind: EngineerBuildKind) => {
+    if (isObserver) return;
+    const cmd = engineerBuild(gameJson, civilianId, kind);
+    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    else if (cmd.error) showError(`Engineer build failed: ${cmd.error}`);
+  }, [gameJson, applyGameJson, showError]);
+
   const handleHireCivilian = useCallback((civType: string) => {
     if (isObserver) return;
     const cmd = hireCivilian(gameJson, playerNationId, civType);
@@ -1057,6 +1065,7 @@ function App() {
                     onDeploy={handleDeployCivilian}
                     onRecall={handleRecallCivilian}
                     onHire={handleHireCivilian}
+                    onEngineerBuild={handleEngineerBuild}
                   />
                 </div>
               )}

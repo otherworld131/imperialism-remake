@@ -1,8 +1,38 @@
+use crate::data::GameConfig;
 use crate::hex::HexCoord;
 use crate::map::UnitId;
 use crate::types::*;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Engineer work tasks — kinds of infrastructure an Engineer civilian can build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BuildTask {
+    Railroad,
+    Depot,
+    Port,
+}
+
+impl BuildTask {
+    /// Number of turns required to complete, read from Lua `game_config`.
+    pub fn turns_required(self, cfg: &GameConfig) -> u8 {
+        match self {
+            BuildTask::Railroad => cfg.build_turns_railroad,
+            BuildTask::Depot => cfg.build_turns_depot,
+            BuildTask::Port => cfg.build_turns_port,
+        }
+    }
+}
+
+impl std::fmt::Display for BuildTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BuildTask::Railroad => write!(f, "Railroad"),
+            BuildTask::Depot => write!(f, "Depot"),
+            BuildTask::Port => write!(f, "Port"),
+        }
+    }
+}
 
 /// Global counter for generating unique civilian UnitIds.
 /// Range starts at 3_000_000 to avoid collision with army unit IDs (2_000_000+).
@@ -35,17 +65,18 @@ pub enum CivilianType {
 }
 
 impl CivilianType {
-    /// The cost in money to hire this civilian type.
-    pub fn creation_cost(self) -> Money {
-        match self {
-            CivilianType::Prospector => Money::dollars(100),
-            CivilianType::Miner => Money::dollars(1500),
-            CivilianType::Engineer => Money::dollars(500),
-            CivilianType::Farmer => Money::dollars(100),
-            CivilianType::Rancher => Money::dollars(100),
-            CivilianType::Forester => Money::dollars(100),
-            CivilianType::Driller => Money::dollars(2000),
-        }
+    /// The cost in money to hire this civilian type. Reads from Lua `game_config`.
+    pub fn creation_cost(self, cfg: &crate::data::GameConfig) -> Money {
+        let dollars = match self {
+            CivilianType::Prospector => cfg.prospector_cost,
+            CivilianType::Miner => cfg.miner_cost,
+            CivilianType::Engineer => cfg.engineer_cost,
+            CivilianType::Farmer => cfg.farmer_cost,
+            CivilianType::Rancher => cfg.rancher_cost,
+            CivilianType::Forester => cfg.forester_cost,
+            CivilianType::Driller => cfg.driller_cost,
+        };
+        Money::dollars(dollars)
     }
 
     /// Whether this civilian type can improve the given terrain/resource combination.
@@ -116,6 +147,10 @@ pub struct Civilian {
     pub working: bool,
     /// Turns remaining until the current improvement completes (0 = idle).
     pub turns_remaining: u8,
+    /// Engineer-only: the build task that completes when this civilian finishes.
+    /// `None` for non-engineer civilians and for engineers not currently building.
+    #[serde(default)]
+    pub build_task: Option<BuildTask>,
 }
 
 impl Civilian {
@@ -128,6 +163,7 @@ impl Civilian {
             position: None,
             working: false,
             turns_remaining: 0,
+            build_task: None,
         }
     }
 
@@ -144,6 +180,14 @@ impl Civilian {
         }
         self.working = true;
         self.turns_remaining = turns;
+    }
+
+    /// Engineer-only: start a build task on the current hex. Clears any previous
+    /// task and begins a timer of `task.turns_required(cfg)`.
+    pub fn start_build(&mut self, task: BuildTask, cfg: &GameConfig) {
+        let turns = task.turns_required(cfg);
+        self.build_task = Some(task);
+        self.start_work(turns);
     }
 
     /// Advance the work timer by one turn.
@@ -199,16 +243,35 @@ mod tests {
 
     #[test]
     fn creation_costs() {
+        let cfg = crate::data::GameConfig::default();
         assert_eq!(
-            CivilianType::Prospector.creation_cost(),
+            CivilianType::Prospector.creation_cost(&cfg),
             Money::dollars(100)
         );
-        assert_eq!(CivilianType::Miner.creation_cost(), Money::dollars(1500));
-        assert_eq!(CivilianType::Engineer.creation_cost(), Money::dollars(500));
-        assert_eq!(CivilianType::Farmer.creation_cost(), Money::dollars(100));
-        assert_eq!(CivilianType::Rancher.creation_cost(), Money::dollars(100));
-        assert_eq!(CivilianType::Forester.creation_cost(), Money::dollars(100));
-        assert_eq!(CivilianType::Driller.creation_cost(), Money::dollars(2000));
+        assert_eq!(
+            CivilianType::Miner.creation_cost(&cfg),
+            Money::dollars(1500)
+        );
+        assert_eq!(
+            CivilianType::Engineer.creation_cost(&cfg),
+            Money::dollars(500)
+        );
+        assert_eq!(
+            CivilianType::Farmer.creation_cost(&cfg),
+            Money::dollars(100)
+        );
+        assert_eq!(
+            CivilianType::Rancher.creation_cost(&cfg),
+            Money::dollars(100)
+        );
+        assert_eq!(
+            CivilianType::Forester.creation_cost(&cfg),
+            Money::dollars(100)
+        );
+        assert_eq!(
+            CivilianType::Driller.creation_cost(&cfg),
+            Money::dollars(2000)
+        );
     }
 
     // ── Terrain matching ──────────────────────────────────────
@@ -400,5 +463,36 @@ mod tests {
         let id1 = next_civilian_id();
         let id2 = next_civilian_id();
         assert_ne!(id1, id2);
+    }
+
+    // ── BuildTask ─────────────────────────────────────────────
+
+    #[test]
+    fn build_task_turns_from_config() {
+        let cfg = crate::data::GameConfig::default();
+        assert_eq!(BuildTask::Railroad.turns_required(&cfg), 1);
+        assert_eq!(BuildTask::Depot.turns_required(&cfg), 2);
+        assert_eq!(BuildTask::Port.turns_required(&cfg), 3);
+    }
+
+    #[test]
+    fn start_build_sets_task_and_timer() {
+        let cfg = crate::data::GameConfig::default();
+        let mut c = Civilian::new(UnitId(1), CivilianType::Engineer, NationId(0));
+        c.start_build(BuildTask::Depot, &cfg);
+        assert_eq!(c.build_task, Some(BuildTask::Depot));
+        assert!(c.working);
+        assert_eq!(c.turns_remaining, cfg.build_turns_depot);
+    }
+
+    #[test]
+    fn engineer_tick_completes_and_keeps_task_until_consumed_by_turn_processor() {
+        let cfg = crate::data::GameConfig::default();
+        let mut c = Civilian::new(UnitId(1), CivilianType::Engineer, NationId(0));
+        c.start_build(BuildTask::Railroad, &cfg);
+        assert!(c.tick()); // 1-turn task completes
+        assert!(!c.working);
+        // build_task persists on the civilian until the turn processor takes it.
+        assert_eq!(c.build_task, Some(BuildTask::Railroad));
     }
 }

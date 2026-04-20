@@ -76,6 +76,14 @@ pub struct Tile {
 
     /// Whether this tile is the capital of its province.
     pub is_capital: bool,
+
+    /// Whether this tile is (or was originally) a country/nation capital.
+    /// Distinct from `is_capital` — that flag marks every province's centroid.
+    /// Set once at game setup and never cleared, so captured foreign capitals
+    /// continue to function as implicit depots and rail-network seeds even
+    /// after they change hands.
+    #[serde(default)]
+    pub is_country_capital: bool,
 }
 
 impl Tile {
@@ -90,6 +98,7 @@ impl Tile {
             assigned_civilian: None,
             province_id: None,
             is_capital: false,
+            is_country_capital: false,
         }
     }
 

@@ -8,7 +8,7 @@ use crate::economy::trade::{self, TradeTransaction};
 use crate::events::*;
 use crate::game_state::GameState;
 use crate::map::SettlementLevel;
-use crate::map::infrastructure::is_province_connected;
+use crate::map::infrastructure::is_province_connected_multi;
 use crate::military::combat::{BattleResult, CombatForce, create_garrison, resolve_battle};
 use crate::military::naval::{NavalBattleResult, calculate_blockade_effect, resolve_naval_battle};
 use crate::military::units::{ArmyUnit, ArmyUnitType};
@@ -402,13 +402,32 @@ pub fn connected_provinces(game: &GameState, nation_id: NationId) -> HashSet<Pro
         .flat_map(|t| t.neighbors())
         .collect();
 
+    // Collect every owned country-capital tile — each is an independent hub
+    // for rail/port connectivity (captured foreign capitals included).
+    let mut seed_tiles: Vec<crate::hex::HexCoord> = vec![capital_tile];
+    for &pid in &nation.province_ids {
+        if let Some(prov) = game.get_province(pid) {
+            for &t in &prov.tiles {
+                if t == capital_tile {
+                    continue;
+                }
+                if let Some(tile) = game.hex_map.get_tile(t)
+                    && tile.is_country_capital
+                {
+                    seed_tiles.push(t);
+                }
+            }
+        }
+    }
+
     for &pid in &nation.province_ids {
         if pid == capital_pid {
             continue;
         }
 
-        // Infrastructure connection (railroad/depot/port)
-        if is_province_connected(&game.hex_map, capital_tile, pid, &game.provinces) {
+        // Infrastructure connection (railroad/depot/port) seeded from every
+        // owned country-capital tile.
+        if is_province_connected_multi(&game.hex_map, &seed_tiles, pid, &game.provinces) {
             connected.insert(pid);
             continue;
         }
@@ -438,6 +457,33 @@ fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
         .map(|&nid| (nid, connected_provinces(game, nid)))
         .collect();
 
+    // Phase 0b: precompute per-nation collectable-hex sets (capital province
+    // plus a 1-hex radius around every connected depot).
+    let collectable_by_nation: Vec<(NationId, HashSet<crate::hex::HexCoord>)> = nation_ids
+        .iter()
+        .map(|&nid| {
+            let nation = match game.get_nation(nid) {
+                Some(n) => n,
+                None => return (nid, HashSet::new()),
+            };
+            let capital_pid = nation.capital_province_id;
+            let owned: Vec<&crate::map::Province> =
+                game.provinces.iter().filter(|p| p.owner == nid).collect();
+            let connected = connected_map
+                .iter()
+                .find(|(id, _)| *id == nid)
+                .map(|(_, s)| s.clone())
+                .unwrap_or_default();
+            let set = crate::map::infrastructure::collectable_hexes(
+                &game.hex_map,
+                capital_pid,
+                &owned,
+                &connected,
+            );
+            (nid, set)
+        })
+        .collect();
+
     // Phase 1: collect production data using immutable borrows
     let mut production_data: Vec<(NationId, ResourceType, u32)> = Vec::new();
     let mut disconnected_data: Vec<(NationId, ResourceType, u32)> = Vec::new();
@@ -457,17 +503,29 @@ fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
             .map(|(_, set)| set.contains(&province.id))
             .unwrap_or(false);
 
+        let collectable = collectable_by_nation
+            .iter()
+            .find(|(nid, _)| *nid == province.owner)
+            .map(|(_, s)| s);
+
         for tile_coord in &province.tiles {
             if let Some(tile) = game.hex_map.get_tile(*tile_coord)
                 && let Some(yield_amount) = tile.calculate_yield()
             {
-                if is_connected {
+                let tile_collectable = collectable.map(|s| s.contains(tile_coord)).unwrap_or(false);
+                // A connected hex yields only if inside a connected depot's
+                // radius (or the capital province). Disconnected reporting
+                // keeps the whole province's yields — the player needs to see
+                // what's out there to decide where to place a depot, so we
+                // don't filter those by depot geometry (there is no depot
+                // geometry yet when a province is disconnected).
+                if is_connected && tile_collectable {
                     production_data.push((
                         province.owner,
                         yield_amount.resource,
                         yield_amount.quantity,
                     ));
-                } else {
+                } else if !is_connected {
                     disconnected_data.push((
                         province.owner,
                         yield_amount.resource,
@@ -907,11 +965,51 @@ fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
 /// - Farmer/Rancher/Forester/Miner/Driller: improve the tile (increment improvement_level)
 /// - Prospector: reveal the tile's hidden resource deposit (simplified: always reveals coal/iron/oil)
 fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
+    // Phase 0: cancel in-flight engineer tasks whose tile is no longer owned
+    // (province lost mid-build). Report each cancellation so it's not silent.
+    let owned_by_nation: std::collections::HashMap<NationId, HashSet<crate::hex::HexCoord>> = {
+        let mut map: std::collections::HashMap<NationId, HashSet<crate::hex::HexCoord>> =
+            std::collections::HashMap::new();
+        for p in &game.provinces {
+            map.entry(p.owner)
+                .or_default()
+                .extend(p.tiles.iter().copied());
+        }
+        map
+    };
+    let mut stranded_reports: Vec<(NationId, String)> = Vec::new();
+    for nation in &mut game.nations {
+        let empty_set: HashSet<crate::hex::HexCoord> = HashSet::new();
+        let owned = owned_by_nation.get(&nation.id).unwrap_or(&empty_set);
+        for civilian in &mut nation.civilians {
+            if civilian.civilian_type != CivilianType::Engineer {
+                continue;
+            }
+            if let Some(pos) = civilian.position
+                && !owned.contains(&pos)
+                && civilian.working
+            {
+                stranded_reports.push((
+                    nation.id,
+                    format!(
+                        "Engineer's build at ({}, {}) cancelled — territory lost.",
+                        pos.q, pos.r
+                    ),
+                ));
+                civilian.working = false;
+                civilian.turns_remaining = 0;
+                civilian.build_task = None;
+            }
+        }
+    }
+    report.civilian_completions.extend(stranded_reports);
+
     // Phase 1: collect completed work info using immutable borrows on nations,
     // then apply tile mutations separately.
     struct CompletedWork {
         nation_id: NationId,
         civilian_type: CivilianType,
+        build_task: Option<crate::economy::civilians::BuildTask>,
         position: crate::hex::HexCoord,
         description: String,
     }
@@ -928,6 +1026,7 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
             }
             let just_finished = civilian.tick();
             if just_finished && let Some(pos) = civilian.position {
+                let task = civilian.build_task.take();
                 let desc = format!(
                     "{} completed work at ({}, {})",
                     civilian.civilian_type, pos.q, pos.r
@@ -935,6 +1034,7 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
                 completed.push(CompletedWork {
                     nation_id: nation.id,
                     civilian_type: civilian.civilian_type,
+                    build_task: task,
                     position: pos,
                     description: desc,
                 });
@@ -944,6 +1044,94 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
 
     // Phase 2: apply tile improvements
     for work in &completed {
+        // Engineer builds take a different, borrow-heavy path (they need
+        // provinces + game_config + a mutable hex_map), so handle those first.
+        if work.civilian_type == CivilianType::Engineer {
+            if let Some(task) = work.build_task {
+                let provinces_snapshot = game.provinces.clone();
+                let cfg = game.game_data.game_config.clone();
+                let researched: Vec<crate::events::TechId> = game
+                    .get_nation(work.nation_id)
+                    .map(|n| n.researched_techs.clone())
+                    .unwrap_or_default();
+                let result: Result<Money, String> = match task {
+                    crate::economy::civilians::BuildTask::Railroad => {
+                        crate::map::infrastructure::build_railroad(
+                            &mut game.hex_map,
+                            work.position,
+                            work.nation_id,
+                            &researched,
+                            &provinces_snapshot,
+                            &game.game_data,
+                            &cfg,
+                        )
+                    }
+                    crate::economy::civilians::BuildTask::Depot => {
+                        crate::map::infrastructure::build_depot(
+                            &mut game.hex_map,
+                            work.position,
+                            work.nation_id,
+                            &provinces_snapshot,
+                            &cfg,
+                        )
+                    }
+                    crate::economy::civilians::BuildTask::Port => {
+                        crate::map::infrastructure::build_port(
+                            &mut game.hex_map,
+                            work.position,
+                            work.nation_id,
+                            &provinces_snapshot,
+                            &cfg,
+                        )
+                    }
+                };
+                match result {
+                    Ok(cost) => {
+                        if let Some(nation) = game.get_nation_mut(work.nation_id) {
+                            // Debit the treasury. It is allowed to go negative —
+                            // build orders are issued synchronously with funds
+                            // at order time, but a treasury drop between order
+                            // and completion would otherwise leave us unable
+                            // to stop the build. Report the charge either way.
+                            nation.treasury -= cost;
+                        }
+                        report.civilian_completions.push((
+                            work.nation_id,
+                            format!(
+                                "{} built at ({}, {}) — cost {}",
+                                task, work.position.q, work.position.r, cost
+                            ),
+                        ));
+                    }
+                    Err(err) => {
+                        // Build failed at completion time (territory lost, tile
+                        // state changed, etc.). Surface the failure so it is
+                        // not silently dropped.
+                        report.civilian_completions.push((
+                            work.nation_id,
+                            format!(
+                                "{} build at ({}, {}) failed: {}",
+                                task, work.position.q, work.position.r, err
+                            ),
+                        ));
+                    }
+                }
+            }
+            // Engineers are reusable — clear the tile's assigned_civilian so
+            // they can be redeployed next turn by the AI / player.
+            if let Some(tile) = game.hex_map.get_tile_mut(work.position)
+                && let Some(nation) = game.nations.iter().find(|n| n.id == work.nation_id)
+                && let Some(civ) = nation
+                    .civilians
+                    .iter()
+                    .find(|c| c.position == Some(work.position))
+                && tile.assigned_civilian == Some(civ.id)
+            {
+                tile.assigned_civilian = None;
+            }
+            continue;
+        }
+
         if let Some(tile) = game.hex_map.get_tile_mut(work.position) {
             match work.civilian_type {
                 CivilianType::Farmer
@@ -981,9 +1169,7 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
                         }
                     }
                 }
-                CivilianType::Engineer => {
-                    // Engineers build infrastructure, not tile improvements — handled separately
-                }
+                CivilianType::Engineer => {}
             }
         }
         report
@@ -11033,5 +11219,163 @@ mod tests {
             has_neutrality,
             "Should produce a neutrality headline for Gammaland"
         );
+    }
+
+    // ── Engineer build tasks ─────────────────────────────────────
+
+    #[test]
+    fn engineer_completes_railroad_build_in_one_turn() {
+        use crate::economy::{BuildTask, Civilian, CivilianType};
+
+        let mut game = test_game_state();
+        let target = HexCoord::new(1, 0); // the "forest" tile, land & owned
+
+        // Add an Engineer already deployed to the target tile with a Railroad task.
+        let mut eng = Civilian::new(
+            crate::map::UnitId(3_900_000),
+            CivilianType::Engineer,
+            NationId(1),
+        );
+        eng.deploy(target);
+        eng.start_build(BuildTask::Railroad, &game.game_data.game_config);
+        game.nations[0].civilians.push(eng);
+        if let Some(tile) = game.hex_map.get_tile_mut(target) {
+            tile.assigned_civilian = Some(crate::map::UnitId(3_900_000));
+        }
+
+        // Before: no railroad.
+        assert!(
+            !game
+                .hex_map
+                .get_tile(target)
+                .unwrap()
+                .infrastructure
+                .has_railroad
+        );
+
+        let _ = process_turn(&mut game);
+
+        // After one turn: railroad built, engineer is idle and freed from the tile.
+        assert!(
+            game.hex_map
+                .get_tile(target)
+                .unwrap()
+                .infrastructure
+                .has_railroad,
+            "railroad should have been built after engineer's 1-turn task"
+        );
+        let eng = game
+            .nations
+            .iter()
+            .flat_map(|n| n.civilians.iter())
+            .find(|c| c.civilian_type == CivilianType::Engineer)
+            .unwrap();
+        assert!(!eng.working);
+        assert_eq!(eng.build_task, None);
+        assert_eq!(
+            game.hex_map.get_tile(target).unwrap().assigned_civilian,
+            None,
+            "engineer should be released from the tile after completion"
+        );
+    }
+
+    #[test]
+    fn depot_harvest_radius_gates_yield() {
+        // Build the setup twice: once with a "far" iron hex that IS outside
+        // the depot's 1-hex radius, once without. The iron yield should be
+        // identical — the far tile must not contribute.
+        fn run(include_far: bool) -> u32 {
+            let mut game = test_game_state();
+            let cap = HexCoord::new(0, 0);
+            if let Some(t) = game.hex_map.get_tile_mut(cap) {
+                t.is_capital = true;
+                t.infrastructure.has_depot = true;
+            }
+            let rail_mid = HexCoord::new(1, 0);
+            let mut rail_mid_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+            rail_mid_tile.infrastructure.has_railroad = true;
+            game.hex_map.set_tile(rail_mid, rail_mid_tile);
+
+            let depot_hex = HexCoord::new(2, 0);
+            let mut depot_tile = Tile::with_province(TerrainType::Hills, ProvinceId(2));
+            depot_tile.infrastructure.has_railroad = true;
+            depot_tile.infrastructure.has_depot = true;
+            depot_tile.reveal_deposit(ResourceType::Iron);
+            depot_tile.set_improvement_level(1);
+            game.hex_map.set_tile(depot_hex, depot_tile);
+
+            let mut tiles = vec![depot_hex];
+
+            if include_far {
+                let far = HexCoord::new(5, 5);
+                let mut far_tile = Tile::with_province(TerrainType::Hills, ProvinceId(2));
+                far_tile.reveal_deposit(ResourceType::Iron);
+                far_tile.set_improvement_level(1);
+                game.hex_map.set_tile(far, far_tile);
+                tiles.push(far);
+            }
+
+            game.provinces.push(Province::new(
+                ProvinceId(2),
+                "Remote".to_string(),
+                NationId(1),
+                depot_hex,
+                tiles,
+                4,
+            ));
+            game.nations[0].add_province(ProvinceId(2));
+            game.nations[0].transport.build_freight_cars(50);
+
+            let before = game.nations[0].resource_amount(ResourceType::Iron);
+            let _ = process_turn(&mut game);
+            let after = game.nations[0].resource_amount(ResourceType::Iron);
+            after.saturating_sub(before)
+        }
+
+        let with_far = run(true);
+        let without_far = run(false);
+        assert!(without_far > 0, "depot hex must yield some iron");
+        assert_eq!(
+            with_far, without_far,
+            "far iron tile is outside the depot's 1-hex radius and must not contribute"
+        );
+    }
+
+    #[test]
+    fn engineer_in_flight_build_cancels_on_province_loss() {
+        use crate::economy::{BuildTask, Civilian, CivilianType};
+
+        let mut game = test_game_state();
+        let target = HexCoord::new(1, 0); // owned "forest" tile in province 1
+
+        // 2-turn build so we catch the cancellation before completion.
+        let mut eng = Civilian::new(
+            crate::map::UnitId(3_900_001),
+            CivilianType::Engineer,
+            NationId(1),
+        );
+        eng.deploy(target);
+        eng.start_build(BuildTask::Depot, &game.game_data.game_config); // 2 turns
+        game.nations[0].civilians.push(eng);
+        if let Some(tile) = game.hex_map.get_tile_mut(target) {
+            tile.assigned_civilian = Some(crate::map::UnitId(3_900_001));
+        }
+
+        // Simulate losing the province: transfer ownership away from the nation.
+        let pid = game.provinces[0].id;
+        game.provinces[0].owner = NationId(99);
+        game.nations[0].province_ids.retain(|p| *p != pid);
+
+        let _ = process_turn(&mut game);
+
+        // The in-flight engineer should have been cancelled — not "working" any more.
+        let eng = game.nations[0]
+            .civilians
+            .iter()
+            .find(|c| c.civilian_type == CivilianType::Engineer)
+            .expect("engineer still exists");
+        assert!(!eng.working, "stranded engineer should stop working");
+        assert_eq!(eng.build_task, None);
+        assert_eq!(eng.turns_remaining, 0);
     }
 }

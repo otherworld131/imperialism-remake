@@ -615,9 +615,9 @@ impl DiplomacyState {
 
     /// Check whether a nation is at war with any other nation.
     pub fn is_at_war_with_anyone(&self, nation: NationId) -> bool {
-        self.relations.values().any(|rel| {
-            rel.at_war && (rel.nation_a == nation || rel.nation_b == nation)
-        })
+        self.relations
+            .values()
+            .any(|rel| rel.at_war && (rel.nation_a == nation || rel.nation_b == nation))
     }
 }
 

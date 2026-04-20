@@ -75,12 +75,22 @@ fn take_snapshot(
         let mut depots = 0u32;
         let mut railroads = 0u32;
         let mut forts = 0u32;
+        // Only count depots that are actually producing yield (connected to
+        // the national rail/port network, or sitting on a country-capital
+        // tile which is an implicit hub). Orphan depots inherited from
+        // conquered capitals without a rail connection are *not* counted.
+        let connected = domain::turn::connected_provinces(game, nation.id);
         for &pid in &nation.province_ids {
             if let Some(province) = game.get_province(pid) {
                 for &coord in &province.tiles {
                     if let Some(tile) = game.hex_map.get_tile(coord) {
                         if tile.infrastructure.has_depot {
-                            depots += 1;
+                            let counts = pid == nation.capital_province_id
+                                || tile.is_country_capital
+                                || connected.contains(&pid);
+                            if counts {
+                                depots += 1;
+                            }
                         }
                         if tile.infrastructure.has_railroad {
                             railroads += 1;
@@ -261,6 +271,23 @@ pub(crate) fn run_batch(n: u32) {
         let map_key = format!("batch_{}", game_idx);
         let personality_seed = game_idx as u64 * 6_364_136_223_846_793_005 + 1;
         let mut game = new_game_with_seed(&map_key, Difficulty::Normal, 0, personality_seed);
+        // Batch mode: promote the human slot to fully AI-managed so every GP
+        // develops. Without this the slot-0 nation has no personality and is
+        // skipped by `run_ai_turns`, so it never grows its army/infra.
+        let human_id = game.human_player_nation;
+        if let Some(nation) = game.get_nation_mut(human_id)
+            && nation.ai_personality.is_none()
+        {
+            let extra =
+                domain::ai::common::random_personalities(personality_seed ^ 0xDEAD_BEEF, 1)[0];
+            nation.ai_personality = Some(extra);
+            let count = domain::ai::priority_target_count(&game.game_data.game_config, extra);
+            let targets = domain::ai::pick_priority_minor_targets(&game, human_id, count, &[]);
+            if let Some(nation) = game.get_nation_mut(human_id) {
+                nation.ai_priority_state.priority_minor_targets = targets;
+            }
+        }
+        game.observer_mode = true;
         game.ai_debug = ai_debug;
 
         // Record personality assignments
@@ -442,35 +469,64 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
             .get_province(capital_pid)
             .map(|p| p.tiles.clone())
             .unwrap_or_default();
+        // Build railroads first, then depot (depot now requires railroad or capital tile)
+        let provinces_snapshot = game.provinces.clone();
+        let cfg_snapshot = game.game_data.game_config.clone();
+        let researched: Vec<domain::events::TechId> = game
+            .get_nation(player_id)
+            .map(|n| n.researched_techs.clone())
+            .unwrap_or_default();
+        for &tile_coord in &capital_tiles {
+            let terrain = match game.hex_map.get_tile(tile_coord) {
+                Some(t) if !t.infrastructure.has_railroad => t.terrain(),
+                _ => continue,
+            };
+            let rr_cost = match infrastructure::railroad_cost(terrain, &cfg_snapshot) {
+                Some(c) => c,
+                None => continue,
+            };
+            // Verify funds BEFORE mutating the map.
+            let can_afford = game
+                .get_nation(player_id)
+                .is_some_and(|n| n.treasury.checked_sub(rr_cost).is_some());
+            if !can_afford {
+                continue;
+            }
+            if let Ok(cost) = infrastructure::build_railroad(
+                &mut game.hex_map,
+                tile_coord,
+                player_id,
+                &researched,
+                &provinces_snapshot,
+                &game.game_data,
+                &cfg_snapshot,
+            ) && let Some(nation) = game.get_nation_mut(player_id)
+            {
+                nation.treasury -= cost;
+            }
+        }
         // Build depot on first capital tile if affordable
         if let Some(&tile_coord) = capital_tiles.first() {
             let has_depot = game
                 .hex_map
                 .get_tile(tile_coord)
                 .is_some_and(|t| t.infrastructure.has_depot);
+            let depot_cost = Money::dollars(cfg_snapshot.depot_cost);
             let can_afford = game
                 .get_nation(player_id)
-                .is_some_and(|n| n.treasury >= Money::dollars(2000));
+                .is_some_and(|n| n.treasury >= depot_cost);
             if !has_depot
                 && can_afford
-                && let Ok(cost) = infrastructure::build_depot(&mut game.hex_map, tile_coord)
+                && let Ok(cost) = infrastructure::build_depot(
+                    &mut game.hex_map,
+                    tile_coord,
+                    player_id,
+                    &provinces_snapshot,
+                    &cfg_snapshot,
+                )
                 && let Some(nation) = game.get_nation_mut(player_id)
             {
                 nation.treasury -= cost;
-            }
-        }
-        // Build railroads on capital tiles
-        for &tile_coord in &capital_tiles {
-            let needs_rr = game
-                .hex_map
-                .get_tile(tile_coord)
-                .is_some_and(|t| !t.infrastructure.has_railroad);
-            if needs_rr
-                && let Ok(cost) = infrastructure::build_railroad(&mut game.hex_map, tile_coord)
-                && let Some(nation) = game.get_nation_mut(player_id)
-                && let Some(remaining) = nation.treasury.checked_sub(cost)
-            {
-                nation.treasury = remaining;
             }
         }
     }
@@ -490,9 +546,14 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
             if pid == capital_pid {
                 continue;
             }
+            let cfg_snapshot = game.game_data.game_config.clone();
+            // Gate on the cheapest railroad cost (grassland/forest) to decide if
+            // we should keep trying for this province. Using the grassland cost
+            // as the floor — if we can't afford that, we can't afford any.
+            let floor_cost = Money::dollars(cfg_snapshot.railroad_cost_grassland);
             let can_afford = game
                 .get_nation(player_id)
-                .is_some_and(|n| n.treasury >= Money::dollars(500));
+                .is_some_and(|n| n.treasury >= floor_cost);
             if !can_afford {
                 break;
             }
@@ -500,41 +561,69 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
                 .get_province(pid)
                 .map(|p| p.tiles.clone())
                 .unwrap_or_default();
-            // Build depot on first tile
-            if let Some(&tile_coord) = tiles.first() {
-                let has_depot = game
-                    .hex_map
-                    .get_tile(tile_coord)
-                    .is_some_and(|t| t.infrastructure.has_depot);
-                let depot_affordable = game
-                    .get_nation(player_id)
-                    .is_some_and(|n| n.treasury >= Money::dollars(2000));
-                if !has_depot
-                    && depot_affordable
-                    && let Ok(cost) = infrastructure::build_depot(&mut game.hex_map, tile_coord)
-                    && let Some(nation) = game.get_nation_mut(player_id)
-                {
-                    nation.treasury -= cost;
-                }
-            }
-            // Build railroads on tiles
+            let provinces_snapshot = game.provinces.clone();
+            let researched: Vec<domain::events::TechId> = game
+                .get_nation(player_id)
+                .map(|n| n.researched_techs.clone())
+                .unwrap_or_default();
+            // Build railroads on tiles first (depot needs a railroad hex now)
             for &tile_coord in &tiles {
+                let terrain = match game.hex_map.get_tile(tile_coord) {
+                    Some(t) => t.terrain(),
+                    None => continue,
+                };
+                let rr_cost = match infrastructure::railroad_cost(terrain, &cfg_snapshot) {
+                    Some(c) => c,
+                    None => continue,
+                };
                 let can_afford_rr = game
                     .get_nation(player_id)
-                    .is_some_and(|n| n.treasury >= Money::dollars(200));
+                    .is_some_and(|n| n.treasury >= rr_cost);
                 if !can_afford_rr {
-                    break;
+                    continue;
                 }
                 let needs_rr = game
                     .hex_map
                     .get_tile(tile_coord)
                     .is_some_and(|t| !t.infrastructure.has_railroad);
                 if needs_rr
-                    && let Ok(cost) = infrastructure::build_railroad(&mut game.hex_map, tile_coord)
+                    && let Ok(cost) = infrastructure::build_railroad(
+                        &mut game.hex_map,
+                        tile_coord,
+                        player_id,
+                        &researched,
+                        &provinces_snapshot,
+                        &game.game_data,
+                        &cfg_snapshot,
+                    )
                     && let Some(nation) = game.get_nation_mut(player_id)
                     && let Some(remaining) = nation.treasury.checked_sub(cost)
                 {
                     nation.treasury = remaining;
+                }
+            }
+            // Build depot on first tile
+            if let Some(&tile_coord) = tiles.first() {
+                let has_depot = game
+                    .hex_map
+                    .get_tile(tile_coord)
+                    .is_some_and(|t| t.infrastructure.has_depot);
+                let depot_cost = Money::dollars(cfg_snapshot.depot_cost);
+                let depot_affordable = game
+                    .get_nation(player_id)
+                    .is_some_and(|n| n.treasury >= depot_cost);
+                if !has_depot
+                    && depot_affordable
+                    && let Ok(cost) = infrastructure::build_depot(
+                        &mut game.hex_map,
+                        tile_coord,
+                        player_id,
+                        &provinces_snapshot,
+                        &cfg_snapshot,
+                    )
+                    && let Some(nation) = game.get_nation_mut(player_id)
+                {
+                    nation.treasury -= cost;
                 }
             }
         }

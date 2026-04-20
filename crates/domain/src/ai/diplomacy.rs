@@ -193,12 +193,10 @@ pub fn ai_manage_diplomacy(
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.propose_pacts) {
             break 'val v;
         }
-        match personality {
-            AiPersonality::Diplomatic => true,
-            AiPersonality::Economic => true,
-            AiPersonality::Aggressive => false,
-            AiPersonality::Balanced => true,
-        }
+        // All personalities propose NAPs with minor nations where they have an
+        // embassy. Aggression is reserved for Great Powers; minor-nation NAPs
+        // protect trade partners from poaching.
+        true
     };
     let propose_alliance_chance: bool = 'val: {
         #[cfg(feature = "lua")]
@@ -1024,31 +1022,52 @@ mod tests {
     }
 
     #[test]
-    fn aggressive_ai_does_not_propose_treaties() {
+    fn aggressive_ai_proposes_nap_with_embassy_minor() {
+        // Aggressive personalities still sign NAPs with minor nations where
+        // they have an embassy — the aggression is reserved for Great Powers,
+        // and minor-nation NAPs protect their trade partners from poaching.
         let mut game = test_game_with_ai_and_minor();
         let ai_id = NationId(2);
         let mn_id = NationId(3);
 
-        // Set AI to Aggressive personality
         game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Aggressive);
 
-        // Build consulate and embassy
         game.diplomacy.build_consulate(ai_id, mn_id).unwrap();
         game.diplomacy.build_embassy(ai_id, mn_id).unwrap();
 
         let mut actions = Vec::new();
         ai_manage_diplomacy(&mut game, ai_id, &mut actions);
 
-        // Aggressive AI should NOT propose pacts
         assert!(
-            !game
-                .diplomacy
+            game.diplomacy
                 .has_treaty(ai_id, mn_id, crate::events::TreatyType::NonAggressionPact),
-            "Aggressive AI should not propose pacts"
+            "Aggressive AI should propose NAP with embassy minor nation"
         );
-        assert!(
-            !actions.iter().any(|a| !a.is_non_action),
-            "Aggressive AI should not take diplomatic actions (non-actions allowed)"
+    }
+
+    #[test]
+    fn aggressive_ai_does_not_propose_alliances_or_grants() {
+        // Aggressive still refuses alliances and grants (unchanged behaviour).
+        let mut game = test_game_with_ai_and_minor();
+        let ai_id = NationId(2);
+        let mn_id = NationId(3);
+
+        game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Aggressive);
+        game.diplomacy.build_consulate(ai_id, mn_id).unwrap();
+        game.diplomacy.build_embassy(ai_id, mn_id).unwrap();
+
+        let score_before = game.diplomacy.get_relation(ai_id, mn_id).unwrap().score;
+
+        let mut actions = Vec::new();
+        ai_manage_diplomacy(&mut game, ai_id, &mut actions);
+
+        let score_after = game.diplomacy.get_relation(ai_id, mn_id).unwrap().score;
+        // NAP adds +10 to relationship; grants would add another +5. Assert
+        // only the NAP increment occurred (no grants).
+        assert_eq!(
+            score_after - score_before,
+            10,
+            "Aggressive AI should gain +10 from NAP but not +5 from a grant"
         );
     }
 

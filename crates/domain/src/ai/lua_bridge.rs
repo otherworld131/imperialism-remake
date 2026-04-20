@@ -59,11 +59,121 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         voluntary_incorporation_threshold: table
             .get("voluntary_incorporation_threshold")
             .unwrap_or(90),
-        trade_relation_improvement_cap: table
-            .get("trade_relation_improvement_cap")
-            .unwrap_or(2),
+        trade_relation_improvement_cap: table.get("trade_relation_improvement_cap").unwrap_or(2),
         trade_relation_turn_interval: table.get("trade_relation_turn_interval").unwrap_or(3),
-        starting_freight_cars: table.get("starting_freight_cars").unwrap_or(5),
+        starting_freight_cars: table.get("starting_freight_cars").unwrap_or(15),
+        starting_engineers: table.get("starting_engineers").unwrap_or(1),
+        engineer_cost: table.get("engineer_cost").unwrap_or(500),
+        prospector_cost: table.get("prospector_cost").unwrap_or(100),
+        miner_cost: table.get("miner_cost").unwrap_or(1500),
+        farmer_cost: table.get("farmer_cost").unwrap_or(100),
+        rancher_cost: table.get("rancher_cost").unwrap_or(100),
+        forester_cost: table.get("forester_cost").unwrap_or(100),
+        driller_cost: table.get("driller_cost").unwrap_or(2000),
+        depot_cost: table.get("depot_cost").unwrap_or(2000),
+        port_cost: table.get("port_cost").unwrap_or(3000),
+        railroad_cost_grassland: table.get("railroad_cost_grassland").unwrap_or(100),
+        railroad_cost_forest: table.get("railroad_cost_forest").unwrap_or(100),
+        railroad_cost_desert: table.get("railroad_cost_desert").unwrap_or(150),
+        railroad_cost_tundra: table.get("railroad_cost_tundra").unwrap_or(150),
+        railroad_cost_swamp: table.get("railroad_cost_swamp").unwrap_or(300),
+        railroad_cost_hills: table.get("railroad_cost_hills").unwrap_or(200),
+        railroad_cost_mountain: table.get("railroad_cost_mountain").unwrap_or(500),
+        fort_cost_level_1: table.get("fort_cost_level_1").unwrap_or(5000),
+        fort_cost_level_2: table.get("fort_cost_level_2").unwrap_or(7500),
+        fort_cost_level_3: table.get("fort_cost_level_3").unwrap_or(10000),
+        build_turns_railroad: table
+            .get::<u32>("build_turns_railroad")
+            .unwrap_or(1)
+            .min(255) as u8,
+        build_turns_depot: table.get::<u32>("build_turns_depot").unwrap_or(2).min(255) as u8,
+        build_turns_port: table.get::<u32>("build_turns_port").unwrap_or(3).min(255) as u8,
+        railroad_tech_grassland: table.get("railroad_tech_grassland").ok(),
+        railroad_tech_forest: table.get("railroad_tech_forest").ok(),
+        railroad_tech_desert: table.get("railroad_tech_desert").ok(),
+        railroad_tech_tundra: table.get("railroad_tech_tundra").ok(),
+        railroad_tech_hills: table.get("railroad_tech_hills").ok(),
+        railroad_tech_swamp: table
+            .get("railroad_tech_swamp")
+            .ok()
+            .or_else(|| Some("Iron Railroad Bridge".to_string())),
+        railroad_tech_mountain: table
+            .get("railroad_tech_mountain")
+            .ok()
+            .or_else(|| Some("Compound Steam Engine".to_string())),
+        infrastructure_horizon_turns: table.get("infrastructure_horizon_turns").unwrap_or(50),
+        engineer_hire_max: table.get("engineer_hire_max").unwrap_or(3),
+        engineer_hire_base: table.get("engineer_hire_base").unwrap_or(100),
+        engineer_hire_path_coeff: table.get("engineer_hire_path_coeff").unwrap_or(30),
+        engineer_hire_cap: table.get("engineer_hire_cap").unwrap_or(250),
+        civilian_target_tiles_per_worker: table
+            .get("civilian_target_tiles_per_worker")
+            .unwrap_or(3),
+        civilian_coverage_per_unmet: table.get("civilian_coverage_per_unmet").unwrap_or(3.0),
+        civilian_hire_bootstrap: table.get("civilian_hire_bootstrap").unwrap_or(15.0),
+        civilian_idle_penalty: table.get("civilian_idle_penalty").unwrap_or(8.0),
+        backlog_weight_aggressive_military: table
+            .get("backlog_weight_aggressive_military")
+            .unwrap_or(50),
+        backlog_weight_aggressive_infra: table.get("backlog_weight_aggressive_infra").unwrap_or(25),
+        backlog_weight_aggressive_diplomacy: table
+            .get("backlog_weight_aggressive_diplomacy")
+            .unwrap_or(5),
+        backlog_weight_aggressive_hire_engineer: table
+            .get("backlog_weight_aggressive_hire_engineer")
+            .unwrap_or(20),
+        backlog_weight_aggressive_hire_improver: table
+            .get("backlog_weight_aggressive_hire_improver")
+            .unwrap_or(15),
+        backlog_weight_balanced_military: table
+            .get("backlog_weight_balanced_military")
+            .unwrap_or(30),
+        backlog_weight_balanced_infra: table.get("backlog_weight_balanced_infra").unwrap_or(30),
+        backlog_weight_balanced_diplomacy: table
+            .get("backlog_weight_balanced_diplomacy")
+            .unwrap_or(20),
+        backlog_weight_balanced_hire_engineer: table
+            .get("backlog_weight_balanced_hire_engineer")
+            .unwrap_or(25),
+        backlog_weight_balanced_hire_improver: table
+            .get("backlog_weight_balanced_hire_improver")
+            .unwrap_or(20),
+        backlog_weight_economic_military: table
+            .get("backlog_weight_economic_military")
+            .unwrap_or(15),
+        backlog_weight_economic_infra: table.get("backlog_weight_economic_infra").unwrap_or(50),
+        backlog_weight_economic_diplomacy: table
+            .get("backlog_weight_economic_diplomacy")
+            .unwrap_or(20),
+        backlog_weight_economic_hire_engineer: table
+            .get("backlog_weight_economic_hire_engineer")
+            .unwrap_or(30),
+        backlog_weight_economic_hire_improver: table
+            .get("backlog_weight_economic_hire_improver")
+            .unwrap_or(25),
+        backlog_weight_diplomatic_military: table
+            .get("backlog_weight_diplomatic_military")
+            .unwrap_or(10),
+        backlog_weight_diplomatic_infra: table.get("backlog_weight_diplomatic_infra").unwrap_or(35),
+        backlog_weight_diplomatic_diplomacy: table
+            .get("backlog_weight_diplomatic_diplomacy")
+            .unwrap_or(40),
+        backlog_weight_diplomatic_hire_engineer: table
+            .get("backlog_weight_diplomatic_hire_engineer")
+            .unwrap_or(25),
+        backlog_weight_diplomatic_hire_improver: table
+            .get("backlog_weight_diplomatic_hire_improver")
+            .unwrap_or(20),
+        backlog_initial_cap: table.get("backlog_initial_cap").unwrap_or(20),
+        priority_minor_target_score: table.get("priority_minor_target_score").unwrap_or(1000.0),
+        priority_minor_targets_aggressive: table
+            .get("priority_minor_targets_aggressive")
+            .unwrap_or(3),
+        priority_minor_targets_balanced: table.get("priority_minor_targets_balanced").unwrap_or(4),
+        priority_minor_targets_economic: table.get("priority_minor_targets_economic").unwrap_or(4),
+        priority_minor_targets_diplomatic: table
+            .get("priority_minor_targets_diplomatic")
+            .unwrap_or(5),
         lumber_price: table.get("lumber_price").unwrap_or(150),
         steel_price: table.get("steel_price").unwrap_or(200),
         fabric_price: table.get("fabric_price").unwrap_or(150),
@@ -106,6 +216,29 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         trade_relation_improvement_cap: cfg.trade_relation_improvement_cap.max(0),
         trade_relation_turn_interval: cfg.trade_relation_turn_interval.max(1),
         starting_freight_cars: cfg.starting_freight_cars,
+        starting_engineers: cfg.starting_engineers,
+        engineer_cost: cfg.engineer_cost.clamp(0, 1_000_000),
+        prospector_cost: cfg.prospector_cost.clamp(0, 1_000_000),
+        miner_cost: cfg.miner_cost.clamp(0, 1_000_000),
+        farmer_cost: cfg.farmer_cost.clamp(0, 1_000_000),
+        rancher_cost: cfg.rancher_cost.clamp(0, 1_000_000),
+        forester_cost: cfg.forester_cost.clamp(0, 1_000_000),
+        driller_cost: cfg.driller_cost.clamp(0, 1_000_000),
+        depot_cost: cfg.depot_cost.clamp(0, 1_000_000),
+        port_cost: cfg.port_cost.clamp(0, 1_000_000),
+        railroad_cost_grassland: cfg.railroad_cost_grassland.clamp(0, 1_000_000),
+        railroad_cost_forest: cfg.railroad_cost_forest.clamp(0, 1_000_000),
+        railroad_cost_desert: cfg.railroad_cost_desert.clamp(0, 1_000_000),
+        railroad_cost_tundra: cfg.railroad_cost_tundra.clamp(0, 1_000_000),
+        railroad_cost_swamp: cfg.railroad_cost_swamp.clamp(0, 1_000_000),
+        railroad_cost_hills: cfg.railroad_cost_hills.clamp(0, 1_000_000),
+        railroad_cost_mountain: cfg.railroad_cost_mountain.clamp(0, 1_000_000),
+        fort_cost_level_1: cfg.fort_cost_level_1.clamp(0, 1_000_000),
+        fort_cost_level_2: cfg.fort_cost_level_2.clamp(0, 1_000_000),
+        fort_cost_level_3: cfg.fort_cost_level_3.clamp(0, 1_000_000),
+        build_turns_railroad: cfg.build_turns_railroad.max(1),
+        build_turns_depot: cfg.build_turns_depot.max(1),
+        build_turns_port: cfg.build_turns_port.max(1),
         lumber_price: cfg.lumber_price.clamp(1, 1_000_000),
         steel_price: cfg.steel_price.clamp(1, 1_000_000),
         fabric_price: cfg.fabric_price.clamp(1, 1_000_000),

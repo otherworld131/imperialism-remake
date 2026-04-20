@@ -231,6 +231,23 @@ const CIVILIAN_EMOJI: Record<string, string> = {
   Prospector: '\u{1F50D}',   // 🔍
 };
 
+// Construction-in-progress emoji shown next to a working civilian. Engineer
+// build tasks get a specific glyph; other civilians show a generic marker.
+const IN_PROGRESS_EMOJI_BY_TASK: Record<string, string> = {
+  Railroad: '\u{1F6A7}',     // 🚧
+  Depot: '\u{1F3D7}\uFE0F',  // 🏗️
+  Port: '\u{2693}\uFE0F',    // ⚓
+};
+const IN_PROGRESS_EMOJI_BY_CIV: Record<string, string> = {
+  Farmer: '\u{1F33E}',       // 🌾
+  Rancher: '\u{1F33E}',      // 🌾
+  Forester: '\u{1FAA3}',     // 🪓
+  Miner: '\u2692\uFE0F',     // ⚒️
+  Driller: '\u2692\uFE0F',   // ⚒️
+  Prospector: '\u{1F50D}',   // 🔍
+};
+const IN_PROGRESS_FALLBACK = '\u231B'; // ⌛
+
 export default function HexMap({
   tiles, mapMode, diplomacyOverlay, militaryOverlay,
   onMapModeChange, onTileClick, onTileHover, showHiddenResources = false, showAiCivilians = false,
@@ -796,8 +813,21 @@ export default function HexMap({
 
         ctx.fillText(emoji, cx, cy);
 
-        // Turns remaining badge
+        // Turns remaining badge + construction-in-progress emoji
         if (tile.civilian_on_tile.working && tile.civilian_on_tile.turns_remaining > 0) {
+          // In-progress emoji (left of the civilian icon)
+          const task = tile.civilian_on_tile.build_task;
+          const civType = tile.civilian_on_tile.type;
+          const progressEmoji = (task && IN_PROGRESS_EMOJI_BY_TASK[task])
+            || IN_PROGRESS_EMOJI_BY_CIV[civType]
+            || IN_PROGRESS_FALLBACK;
+          const progX = cx - civFontSize * 0.7;
+          const progY = cy;
+          ctx.font = `${civFontSize * 0.85}px sans-serif`;
+          ctx.fillText(progressEmoji, progX, progY);
+          ctx.font = `${civFontSize}px sans-serif`;
+
+          // Turns-remaining badge (upper-right of civilian icon)
           const badgeX = cx + civFontSize * 0.5;
           const badgeY = cy - civFontSize * 0.4;
           ctx.fillStyle = 'rgba(0,0,0,0.7)';

@@ -328,11 +328,18 @@ pub fn new_game_with_seed(
         let starting_cars = game_data.game_config.starting_freight_cars;
         nation.transport.build_freight_cars(starting_cars);
 
-        // Starting civilians: 1 Farmer + 1 Forester for each Great Power
+        // Starting civilians: 1 Farmer + 1 Forester + N Engineers for each Great Power
         let farmer = Civilian::new(next_civilian_id(), CivilianType::Farmer, setup.nation_id);
         let forester = Civilian::new(next_civilian_id(), CivilianType::Forester, setup.nation_id);
         nation.civilians.push(farmer);
         nation.civilians.push(forester);
+        for _ in 0..game_data.game_config.starting_engineers {
+            nation.civilians.push(Civilian::new(
+                next_civilian_id(),
+                CivilianType::Engineer,
+                setup.nation_id,
+            ));
+        }
 
         // Starting merchant fleet: 1 Trader for each Great Power
         let trader = Ship::new(
@@ -452,6 +459,30 @@ pub fn new_game_with_seed(
         observer_mode: false,
     };
 
+    // Pre-build a depot at every nation's capital tile (Great Powers and minor
+    // nations alike). Capitals act as implicit depots so the capital province is
+    // always harvesting from turn 1 without requiring the player to build one.
+    let capital_tiles: Vec<crate::hex::HexCoord> = game_state
+        .nations
+        .iter()
+        .filter_map(|n| {
+            game_state
+                .provinces
+                .iter()
+                .find(|p| p.id == n.capital_province_id)
+                .map(|p| p.capital_tile)
+        })
+        .collect();
+    for cap_tile in capital_tiles {
+        let _ =
+            crate::map::infrastructure::place_depot_unchecked(&mut game_state.hex_map, cap_tile);
+        // Persistent "this tile was a country capital" flag. Survives conquest
+        // so captured foreign capitals keep acting as implicit depots.
+        if let Some(tile) = game_state.hex_map.get_tile_mut(cap_tile) {
+            tile.is_country_capital = true;
+        }
+    }
+
     // Give minor nation capitals a level 1 fort (original Imperialism defensive mechanic).
     // This makes minor nations harder to conquer early, requiring real military buildup.
     for nation in &game_state.nations {
@@ -465,6 +496,30 @@ pub fn new_game_with_seed(
                 tile.infrastructure.has_fort = true;
                 tile.infrastructure.fort_level = 1;
             }
+        }
+    }
+
+    // Seed each AI-controlled Great Power's priority minor-nation diplomacy targets.
+    // The picker scores every minor by its visible tradeable-export match against
+    // the GP's resource demand, and takes the top N (personality-dependent).
+    // Human-slot nations (no personality yet at this point) are skipped; the
+    // observer-mode promotion in batch.rs reassigns them before the first turn.
+    let gp_ids_for_targets: Vec<(NationId, crate::ai::AiPersonality)> = game_state
+        .nations
+        .iter()
+        .filter_map(|n| n.ai_personality.map(|p| (n.id, p)))
+        .filter(|(id, _)| {
+            game_state
+                .get_nation(*id)
+                .is_some_and(|n| n.is_great_power())
+        })
+        .collect();
+    for (gp_id, personality) in gp_ids_for_targets {
+        let count =
+            crate::ai::priority_target_count(&game_state.game_data.game_config, personality);
+        let targets = crate::ai::pick_priority_minor_targets(&game_state, gp_id, count, &[]);
+        if let Some(nation) = game_state.get_nation_mut(gp_id) {
+            nation.ai_priority_state.priority_minor_targets = targets;
         }
     }
 
@@ -540,6 +595,13 @@ pub fn new_observer_game(map_key: &str, difficulty: Difficulty) -> GameState {
             Difficulty::NighOnImpossible => nation.treasury += Money::dollars(5000),
             _ => {}
         }
+    }
+    // The observer-seat nation now has a personality; pick its priority minor
+    // targets (`new_game_with_seed` skipped it because its personality was None).
+    let count = crate::ai::priority_target_count(&game.game_data.game_config, extra);
+    let targets = crate::ai::pick_priority_minor_targets(&game, human_id, count, &[]);
+    if let Some(nation) = game.get_nation_mut(human_id) {
+        nation.ai_priority_state.priority_minor_targets = targets;
     }
     game.observer_mode = true;
     game
@@ -1044,12 +1106,14 @@ mod tests {
     #[test]
     fn new_game_great_powers_have_starting_civilians() {
         let gs = new_game("test", Difficulty::Normal, 0);
+        let expected = 2 + gs.game_data.game_config.starting_engineers as usize;
         for nation in gs.great_powers() {
             assert_eq!(
                 nation.civilians.len(),
-                2,
-                "Great Power {} should start with 2 civilians",
-                nation.name
+                expected,
+                "Great Power {} should start with {} civilians",
+                nation.name,
+                expected
             );
             // First should be a Farmer
             assert_eq!(
@@ -1065,6 +1129,16 @@ mod tests {
                 "{} should have a Forester as second civilian",
                 nation.name
             );
+            // Remaining should be Engineers
+            for (i, civ) in nation.civilians.iter().enumerate().skip(2) {
+                assert_eq!(
+                    civ.civilian_type,
+                    CivilianType::Engineer,
+                    "{} civilian {} should be an Engineer",
+                    nation.name,
+                    i
+                );
+            }
         }
     }
 

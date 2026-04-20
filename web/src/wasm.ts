@@ -21,6 +21,7 @@ import init, {
   wasm_cancel_unit_move,
   wasm_deploy_civilian,
   wasm_recall_civilian,
+  wasm_engineer_build,
   wasm_recruit_army_unit,
   wasm_hire_civilian,
   wasm_build_ship,
@@ -86,7 +87,7 @@ export interface TileData {
   army_unit_count: number;
   naval_firepower: number;
   naval_ship_count: number;
-  civilian_on_tile: { id: number; type: string; working: boolean; turns_remaining: number; owner: string; owner_color: string; is_human: boolean } | null;
+  civilian_on_tile: { id: number; type: string; working: boolean; turns_remaining: number; build_task: string | null; owner: string; owner_color: string; is_human: boolean } | null;
   is_minor: boolean;
   is_incorporated_minor: boolean;
   visual_group: string | null;
@@ -304,6 +305,7 @@ export interface CivilianDetail {
   position: { q: number; r: number } | null;
   working: boolean;
   turns_remaining: number;
+  build_task?: string | null;
   tile_terrain?: string;
   tile_resource?: string | null;
 }
@@ -536,6 +538,12 @@ export function deployCivilian(gameJson: string, civilianId: number, q: number, 
 
 export function recallCivilian(gameJson: string, civilianId: number): CommandResult {
   return executeCommand(wasm_recall_civilian(gameJson, civilianId));
+}
+
+export type EngineerBuildKind = 'railroad' | 'depot' | 'port';
+
+export function engineerBuild(gameJson: string, civilianId: number, kind: EngineerBuildKind): CommandResult {
+  return executeCommand(wasm_engineer_build(gameJson, civilianId, kind));
 }
 
 export function recruitArmyUnit(gameJson: string, nationId: number, unitType: string): CommandResult {

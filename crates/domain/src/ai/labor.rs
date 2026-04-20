@@ -128,6 +128,7 @@ pub(crate) fn ai_manage_civilians(game: &mut GameState, nation_id: NationId) {
 /// Hire new civilian units if the nation can afford them.
 #[cfg(test)]
 fn ai_hire_civilians(game: &mut GameState, nation_id: NationId) {
+    let cfg = game.game_data.game_config.clone();
     let nation = match game.get_nation_mut(nation_id) {
         Some(n) => n,
         None => return,
@@ -138,7 +139,7 @@ fn ai_hire_civilians(game: &mut GameState, nation_id: NationId) {
 
     // Rule 1: If < 2 civilians and treasury > $1,000, hire a Farmer
     if civilian_count < 2 && treasury > Money::dollars(1000) {
-        let cost = CivilianType::Farmer.creation_cost();
+        let cost = CivilianType::Farmer.creation_cost(&cfg);
         nation.treasury -= cost;
         let farmer = Civilian::new(next_civilian_id(), CivilianType::Farmer, nation_id);
         nation.civilians.push(farmer);
@@ -158,7 +159,7 @@ fn ai_hire_civilians(game: &mut GameState, nation_id: NationId) {
             CivilianType::Forester
         };
 
-        let cost = civ_type.creation_cost();
+        let cost = civ_type.creation_cost(&cfg);
         if let Some(remaining) = nation.treasury.checked_sub(cost) {
             nation.treasury = remaining;
             let civilian = Civilian::new(next_civilian_id(), civ_type, nation_id);
@@ -173,6 +174,30 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
     let province_ids: Vec<ProvinceId> = match game.get_nation(nation_id) {
         Some(n) => n.province_ids.clone(),
         None => return,
+    };
+
+    // Precompute the set of tiles currently harvesting to the capital. We
+    // prefer deploying civilians onto these (their improvements turn into
+    // real yield), but we still allow speculative improvement of other tiles
+    // if nothing in `collectable` is available — the AI's rail planner is
+    // expected to catch up and connect them within a few turns.
+    let collectable: std::collections::HashSet<crate::hex::HexCoord> = {
+        let nation = match game.get_nation(nation_id) {
+            Some(n) => n,
+            None => return,
+        };
+        let connected = super::super::turn::connected_provinces(game, nation_id);
+        let owned_provinces: Vec<&crate::map::Province> = game
+            .provinces
+            .iter()
+            .filter(|p| p.owner == nation_id)
+            .collect();
+        crate::map::infrastructure::collectable_hexes(
+            &game.hex_map,
+            nation.capital_province_id,
+            &owned_provinces,
+            &connected,
+        )
     };
 
     // Find all improvable tiles across the nation's provinces.
@@ -204,28 +229,39 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
         }
     }
 
-    // Get idle civilian indices and their types
+    // Get idle civilian indices and their types. Engineers are excluded —
+    // they are driven by `ai/spending.rs::execute_infrastructure` (AI) and
+    // `wasm_engineer_build` (player); deploying them here would start a
+    // generic `start_work` with no `build_task`, producing a no-op completion.
     let idle_civilians: Vec<(usize, CivilianType)> = match game.get_nation(nation_id) {
         Some(n) => n
             .civilians
             .iter()
             .enumerate()
-            .filter(|(_, c)| !c.working && c.turns_remaining == 0)
+            .filter(|(_, c)| {
+                !c.working && c.turns_remaining == 0 && c.civilian_type != CivilianType::Engineer
+            })
             .map(|(i, c)| (i, c.civilian_type))
             .collect(),
         None => return,
     };
 
-    // For each idle civilian, try to find a matching tile
+    // For each idle civilian, try to find a matching tile. Preference order:
+    // (a) tiles currently in `collectable` (so the improvement immediately
+    //     produces yield), then
+    // (b) lowest current improvement level (ramp weakest tiles first).
     for (civ_idx, civ_type) in idle_civilians {
-        // Find the best tile: matching terrain/resource, not already assigned, lowest improvement level first
         let best_tile = improvable_tiles
             .iter()
             .enumerate()
             .filter(|(_, (_, terrain, resource, _, _, has_assigned))| {
                 !has_assigned && civ_type.can_improve(*terrain, *resource)
             })
-            .min_by_key(|(_, (_, _, _, improvement, _, _))| *improvement);
+            .min_by_key(|(_, (coord, _, _, improvement, _, _))| {
+                // `false` (0) sorts before `true` (1), so collectable tiles
+                // come first; within each bucket, lowest improvement_level wins.
+                (!collectable.contains(coord), *improvement)
+            });
 
         if let Some((tile_idx, &(coord, _, _, _, _, _))) = best_tile {
             // Mark the tile as assigned in our working list

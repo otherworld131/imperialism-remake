@@ -15,6 +15,7 @@ pub use common::{AiPersonality, personality_for_nation_index};
 pub use diplomacy::{ai_manage_diplomacy, ai_pre_election_strategy, minor_nation_bonus_trade};
 pub use economy::ai_manage_resources;
 pub use naval::ai_naval_strategy;
+pub use spending::{SpendingCategory, pick_priority_minor_targets, priority_target_count};
 pub use tactical::ai_tactical_decisions;
 
 use crate::game_state::GameState;
@@ -46,9 +47,7 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<AiAction> {
         .nations
         .iter()
         .filter(|n| {
-            (game.observer_mode || n.id != human_id)
-                && n.is_great_power()
-                && !n.is_in_anarchy
+            (game.observer_mode || n.id != human_id) && n.is_great_power() && !n.is_in_anarchy
         })
         .map(|n| n.id)
         .collect();

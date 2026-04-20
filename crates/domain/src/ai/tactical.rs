@@ -184,7 +184,7 @@ fn ai_build_forts(
 
     // Build the fort
     let new_level = current_level + 1;
-    let cost = match crate::map::infrastructure::fort_cost(new_level) {
+    let cost = match crate::map::infrastructure::fort_cost(new_level, &game.game_data.game_config) {
         Ok(c) => c,
         Err(_) => return,
     };
@@ -198,7 +198,7 @@ fn ai_build_forts(
         return;
     }
 
-    if build_fort(&mut game.hex_map, fort_coord).is_ok() {
+    if build_fort(&mut game.hex_map, fort_coord, &game.game_data.game_config).is_ok() {
         let Some(nation) = game.get_nation_mut(nation_id) else {
             return;
         };

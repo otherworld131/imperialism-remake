@@ -40,7 +40,7 @@ aggressive = {
 
     -- Diplomacy
     consulate_max_per_turn = 2,
-    propose_pacts = false,
+    propose_pacts = true,   -- NAPs with minor nations protect trade partners
     propose_alliances = false,
     grant_amount = 0,
     grant_interval = 0,

@@ -1,4 +1,4 @@
-import type { CiviliansData, CivilianDetail, BuildableUnit } from '../wasm';
+import type { CiviliansData, CivilianDetail, BuildableUnit, EngineerBuildKind } from '../wasm';
 
 const CIVILIAN_EMOJI: Record<string, string> = {
   Farmer: '\u{1F33E}',
@@ -17,11 +17,12 @@ interface Props {
   onDeploy: (civilian: CivilianDetail) => void;
   onRecall: (civilianId: number) => void;
   onHire: (civilianType: string) => void;
+  onEngineerBuild: (civilianId: number, kind: EngineerBuildKind) => void;
 }
 
 export default function CivilianPanel({
   civilians, buildableCivilians, treasury,
-  onDeploy, onRecall, onHire,
+  onDeploy, onRecall, onHire, onEngineerBuild,
 }: Props) {
   const { deployed, undeployed } = civilians;
 
@@ -96,6 +97,20 @@ export default function CivilianPanel({
               {!civ.working && (
                 <div style={{ fontSize: 10, color: '#999', fontStyle: 'italic' }}>Idle</div>
               )}
+              {/* Engineer-specific build actions (shown when idle) */}
+              {civ.type === 'Engineer' && !civ.working && (
+                <div style={{ marginTop: 4, display: 'flex', gap: 4 }}>
+                  <EngineerBuildButton label="Railroad" onClick={() => onEngineerBuild(civ.id, 'railroad')} />
+                  <EngineerBuildButton label="Depot" onClick={() => onEngineerBuild(civ.id, 'depot')} />
+                  <EngineerBuildButton label="Port" onClick={() => onEngineerBuild(civ.id, 'port')} />
+                </div>
+              )}
+              {/* Current engineer build task label */}
+              {civ.type === 'Engineer' && civ.working && civ.build_task && (
+                <div style={{ fontSize: 10, color: '#8c8', fontStyle: 'italic' }}>
+                  Building {civ.build_task}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -147,5 +162,24 @@ function ProgressBar({ turns, maxTurns }: { turns: number; maxTurns: number }) {
     <div style={{ width: 50, height: 5, background: 'rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
       <div style={{ width: `${pct}%`, height: '100%', background: '#4a8' }} />
     </div>
+  );
+}
+
+function EngineerBuildButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        background: '#364',
+        color: '#fff',
+        border: 'none',
+        borderRadius: 3,
+        padding: '1px 6px',
+        fontSize: 10,
+        cursor: 'pointer',
+      }}
+    >
+      {label}
+    </button>
   );
 }

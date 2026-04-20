@@ -178,6 +178,10 @@ fn no_general_earned_below_6_arms() {
     let player_id = game.human_player_nation;
     let capital = game.get_nation(player_id).unwrap().capital_province_id;
 
+    // Clear starting army so we control the exact arms count
+    let player = game.get_nation_mut(player_id).unwrap();
+    player.army.clear();
+
     // Add 2 Regulars (1 arm each) = 2 arms total (below threshold of 6)
     for i in 0..2 {
         let unit = ArmyUnit::new(
@@ -399,8 +403,13 @@ fn expert_worker_reward_at_10_experts() {
     let mut game = minimal_game();
     let player_id = game.human_player_nation;
 
-    // Add 10 expert workers to the labor pool
+    // Reset labor pool so we control the exact expert count
     let player = game.get_nation_mut(player_id).unwrap();
+    player.labor.untrained = 0;
+    player.labor.trained = 0;
+    player.labor.expert = 0;
+
+    // Add 10 expert workers to the labor pool
     for _ in 0..10 {
         player.labor.untrained += 1;
         player.labor.train_worker();
@@ -431,8 +440,13 @@ fn expert_worker_reward_at_30_experts() {
     let mut game = minimal_game();
     let player_id = game.human_player_nation;
 
-    // Add 30 expert workers to the labor pool
+    // Reset labor pool so we control the exact expert count
     let player = game.get_nation_mut(player_id).unwrap();
+    player.labor.untrained = 0;
+    player.labor.trained = 0;
+    player.labor.expert = 0;
+
+    // Add 30 expert workers to the labor pool
     for _ in 0..30 {
         player.labor.untrained += 1;
         player.labor.train_worker();

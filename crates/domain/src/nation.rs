@@ -120,6 +120,26 @@ pub struct Nation {
     /// Player buy orders for this turn (cleared after turn resolution).
     #[serde(default)]
     pub player_buy_orders: Vec<crate::economy::trade::PlayerBuyOrder>,
+    /// Per-nation AI scratch state for the scored-spending loop.
+    /// Tracks early-game priority diplomacy targets and per-category
+    /// "turns since last invested" backlog counters used to prevent any
+    /// spending category from being neglected forever.
+    #[serde(default)]
+    pub ai_priority_state: AiPriorityState,
+}
+
+/// Persistent per-nation AI state used by the scored-spending loop.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct AiPriorityState {
+    /// Minor-nation IDs the AI has selected as high-priority diplomacy
+    /// targets (consulate + embassy). Picked once at game init based on
+    /// trade complementarity with the GP's resource deficits.
+    pub priority_minor_targets: Vec<NationId>,
+    /// `last_invest_turn[Category]` — the absolute turn number we last
+    /// picked this category in `ai_scored_spending`. Missing key means
+    /// the category has never been picked; the backlog scorer treats
+    /// that as "very stale" so it climbs the priority ladder fast.
+    pub last_invest_turn: HashMap<crate::ai::SpendingCategory, u32>,
 }
 
 impl Nation {
@@ -164,6 +184,7 @@ impl Nation {
             goods_sales_revenue_dollars: 0,
             player_sell_orders: Vec::new(),
             player_buy_orders: Vec::new(),
+            ai_priority_state: AiPriorityState::default(),
         }
     }
 

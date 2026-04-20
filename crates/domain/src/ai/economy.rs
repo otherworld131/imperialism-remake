@@ -52,17 +52,31 @@ fn ai_build_infrastructure(game: &mut GameState, nation_id: NationId) {
 
 /// BFS from the capital tile to find all tiles reachable via the connected
 /// railroad/depot network. Mirrors the traversal logic in `is_province_connected`.
+#[allow(dead_code)]
 pub(super) fn get_railroad_network(hex_map: &HexMap, capital_tile: HexCoord) -> HashSet<HexCoord> {
+    get_rail_network_for_nation(hex_map, &[capital_tile])
+}
+
+/// Multi-source railroad BFS. Seeds from every tile in `capital_tiles` (which
+/// should be the nation's own capital plus every owned country-capital tile —
+/// captured foreign capitals act as independent rail-network anchors).
+pub(super) fn get_rail_network_for_nation(
+    hex_map: &HexMap,
+    capital_tiles: &[HexCoord],
+) -> HashSet<HexCoord> {
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
-    queue.push_back(capital_tile);
-    visited.insert(capital_tile);
+    let capital_set: HashSet<HexCoord> = capital_tiles.iter().copied().collect();
+    for &c in capital_tiles {
+        queue.push_back(c);
+        visited.insert(c);
+    }
 
     while let Some(current) = queue.pop_front() {
         if let Some(tile) = hex_map.get_tile(current)
             && (tile.infrastructure.has_railroad
                 || tile.infrastructure.has_depot
-                || current == capital_tile)
+                || capital_set.contains(&current))
         {
             for neighbor in current.neighbors() {
                 if !visited.contains(&neighbor)
@@ -83,21 +97,21 @@ pub(super) fn get_railroad_network(hex_map: &HexMap, capital_tile: HexCoord) -> 
 /// Considers mill input deficits, treasury needs, and current warehouse surplus.
 /// A province producing Coal when the SteelMill is starving for input scores
 /// far higher than one producing Timber the nation already has 20 of.
-pub(super) fn score_province(hex_map: &HexMap, province: &Province, nation: &Nation) -> u32 {
-    // Calculate per-resource demand weight based on mill deficits
+/// Per-resource demand weights for this nation based on mill deficits,
+/// money urgency, and food security. Used by both `score_province` and
+/// the depot-placement planner to value resource tiles consistently.
+pub(super) fn compute_resource_demand(nation: &Nation) -> HashMap<ResourceType, f64> {
     let mut demand: HashMap<ResourceType, f64> = HashMap::new();
 
     for building in &nation.buildings {
         match building.building_type {
             BuildingType::LumberMill => {
-                // 2 Timber → 1 Lumber; deficit = capacity*2 - warehouse
                 let need = building.effective_capacity() * 2;
                 let have = nation.resource_amount(ResourceType::Timber);
                 let deficit = need.saturating_sub(have);
                 *demand.entry(ResourceType::Timber).or_default() += deficit as f64;
             }
             BuildingType::SteelMill => {
-                // 1 Coal + 1 Iron → 1 Steel
                 let cap = building.effective_capacity();
                 let coal_deficit = cap.saturating_sub(nation.resource_amount(ResourceType::Coal));
                 let iron_deficit = cap.saturating_sub(nation.resource_amount(ResourceType::Iron));
@@ -105,12 +119,10 @@ pub(super) fn score_province(hex_map: &HexMap, province: &Province, nation: &Nat
                 *demand.entry(ResourceType::Iron).or_default() += iron_deficit as f64;
             }
             BuildingType::TextileMill => {
-                // 2 Cotton/Wool → 1 Fabric
                 let need = building.effective_capacity() * 2;
                 let have = nation.resource_amount(ResourceType::Cotton)
                     + nation.resource_amount(ResourceType::Wool);
                 let deficit = need.saturating_sub(have);
-                // Split demand across both fibre types
                 *demand.entry(ResourceType::Cotton).or_default() += deficit as f64 / 2.0;
                 *demand.entry(ResourceType::Wool).or_default() += deficit as f64 / 2.0;
             }
@@ -118,7 +130,6 @@ pub(super) fn score_province(hex_map: &HexMap, province: &Province, nation: &Nat
         }
     }
 
-    // Money-generating resources scale with how badly money is needed
     let money_urgency = if nation.treasury < Money::dollars(3000) {
         4.0
     } else if nation.treasury < Money::dollars(8000) {
@@ -130,17 +141,16 @@ pub(super) fn score_province(hex_map: &HexMap, province: &Province, nation: &Nat
     *demand.entry(ResourceType::Gems).or_default() += 10.0 * money_urgency;
     *demand.entry(ResourceType::Oil).or_default() += 2.0 * money_urgency;
 
-    // Food demand scales with food security — starving nations prioritize food provinces
     let total_food = nation.resource_amount(ResourceType::Grain)
         + nation.resource_amount(ResourceType::Fruit)
         + nation.resource_amount(ResourceType::Livestock);
     let workers = nation.labor.total_workers();
     let food_urgency = if total_food <= workers {
-        10.0 // starving — food is critical
+        10.0
     } else if total_food <= workers * 2 {
-        5.0 // tight — prioritize food
+        5.0
     } else {
-        1.0 // comfortable
+        1.0
     };
     for r in [
         ResourceType::Grain,
@@ -151,27 +161,280 @@ pub(super) fn score_province(hex_map: &HexMap, province: &Province, nation: &Nat
         demand.entry(r).or_insert(food_urgency);
     }
 
-    // Score each tile's yield weighted by demand
+    demand
+}
+
+/// Demand-weighted yield for a single tile (≥1 per producing tile).
+pub(super) fn score_tile_for_demand(
+    hex_map: &HexMap,
+    coord: HexCoord,
+    demand: &HashMap<ResourceType, f64>,
+) -> u32 {
+    if let Some(tile) = hex_map.get_tile(coord)
+        && let Some(yield_info) = tile.calculate_yield()
+    {
+        let weight = demand.get(&yield_info.resource).copied().unwrap_or(1.0);
+        return (yield_info.quantity as f64 * weight).max(1.0) as u32;
+    }
+    0
+}
+
+#[allow(dead_code)]
+pub(super) fn score_province(hex_map: &HexMap, province: &Province, nation: &Nation) -> u32 {
+    let demand = compute_resource_demand(nation);
     let mut score = 0u32;
     for &coord in &province.tiles {
-        if let Some(tile) = hex_map.get_tile(coord)
-            && let Some(yield_info) = tile.calculate_yield()
-        {
-            let weight = demand.get(&yield_info.resource).copied().unwrap_or(1.0);
-            // Ensure at least 1 point per producing tile so no resource province scores 0
-            score += (yield_info.quantity as f64 * weight).max(1.0) as u32;
-        }
+        score += score_tile_for_demand(hex_map, coord, &demand);
     }
     score
+}
+
+/// A single planned depot placement.
+pub(super) struct DepotPlan {
+    /// Where the depot will go.
+    pub candidate: HexCoord,
+    /// Unbuilt hexes from the existing network to `candidate`, in build order.
+    /// Empty when the candidate is already reached by rail.
+    pub path: Vec<HexCoord>,
+    /// Total $ to lay every hex in `path`. Kept for debugging / test inspection.
+    #[allow(dead_code)]
+    pub path_cost: Money,
+    /// Demand-weighted yield unlocked by the new depot's 1-hex radius
+    /// (tiles already covered by another connected depot are excluded).
+    /// Kept for debugging / test inspection.
+    #[allow(dead_code)]
+    pub coverage_value: u32,
+    /// `coverage_value * horizon - path_cost - depot_cost`, used as the priority.
+    pub net_score: f64,
+}
+
+/// Plan the single best depot placement for `nation_id` under the current
+/// tech/ownership/rail network state, or `None` if nothing is worth building.
+///
+/// Strategy:
+/// 1. Enumerate every owned land hex without a depot as a candidate.
+/// 2. Score each candidate by the demand-weighted yield of tiles within its
+///    1-hex radius (minus hexes already covered by another connected depot).
+/// 3. Drop candidates unreachable by tech-enabled rail on owned hexes.
+/// 4. Compute `net_score = coverage * horizon - path_cost - depot_cost` and
+///    return the argmax (if positive).
+pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> Option<DepotPlan> {
+    use crate::map::infrastructure::{collectable_hexes, is_province_connected, railroad_cost};
+    use crate::turn::connected_provinces;
+
+    let nation = game.get_nation(nation_id)?;
+    let cfg = &game.game_data.game_config;
+    let capital_tile = game.get_province(nation.capital_province_id)?.capital_tile;
+
+    let connected = connected_provinces(game, nation_id);
+    let owned_provinces: Vec<&Province> = game
+        .provinces
+        .iter()
+        .filter(|p| p.owner == nation_id)
+        .collect();
+    let already_covered = collectable_hexes(
+        &game.hex_map,
+        nation.capital_province_id,
+        &owned_provinces,
+        &connected,
+    );
+
+    let owned_hexes: HashSet<HexCoord> = owned_provinces
+        .iter()
+        .flat_map(|p| p.tiles.iter().copied())
+        .collect();
+
+    // Rail network seeds: the nation's own capital PLUS every owned
+    // country-capital tile. Captured foreign capitals are independent hubs.
+    let mut seeds: Vec<HexCoord> = vec![capital_tile];
+    for &h in &owned_hexes {
+        if h == capital_tile {
+            continue;
+        }
+        if let Some(tile) = game.hex_map.get_tile(h)
+            && tile.is_country_capital
+        {
+            seeds.push(h);
+        }
+    }
+    let network = get_rail_network_for_nation(&game.hex_map, &seeds);
+    let demand = compute_resource_demand(nation);
+    let horizon = cfg.infrastructure_horizon_turns as f64;
+    let depot_cost = Money::dollars(cfg.depot_cost);
+
+    // Single multi-source Dijkstra from the network → distance + prev map for
+    // every reachable owned hex. Avoids running one Dijkstra per candidate.
+    let (dist, prev) = dijkstra_from_network(
+        &game.hex_map,
+        &network,
+        &owned_hexes,
+        cfg,
+        &nation.researched_techs,
+        &game.game_data,
+    );
+
+    let mut best: Option<DepotPlan> = None;
+
+    for &candidate in &owned_hexes {
+        let tile = match game.hex_map.get_tile(candidate) {
+            Some(t) => t,
+            None => continue,
+        };
+        if !tile.terrain().is_land() || tile.infrastructure.has_depot {
+            continue;
+        }
+
+        let mut coverage_value: u32 = 0;
+        let radius: Vec<HexCoord> = std::iter::once(candidate)
+            .chain(candidate.neighbors().iter().copied())
+            .collect();
+        for r_hex in &radius {
+            if !owned_hexes.contains(r_hex) {
+                continue;
+            }
+            if already_covered.contains(r_hex) {
+                continue;
+            }
+            coverage_value += score_tile_for_demand(&game.hex_map, *r_hex, &demand);
+        }
+        if coverage_value == 0 {
+            continue;
+        }
+
+        // Skip unreachable candidates (no path recorded by the multi-source run).
+        if !network.contains(&candidate) && !dist.contains_key(&candidate) {
+            continue;
+        }
+
+        // Reconstruct the path from network to candidate (tiles NOT in network).
+        let mut path: Vec<HexCoord> = Vec::new();
+        let mut c = candidate;
+        while let Some(&p) = prev.get(&c) {
+            if !network.contains(&c) {
+                path.push(c);
+            }
+            c = p;
+        }
+        path.reverse();
+
+        let path_cost_cents: i64 = path
+            .iter()
+            .filter_map(|c| game.hex_map.get_tile(*c))
+            .filter(|t| !t.infrastructure.has_railroad && !t.infrastructure.has_depot)
+            .filter_map(|t| railroad_cost(t.terrain(), cfg).map(|m| m.cents()))
+            .sum();
+        let path_cost = Money::from_cents(path_cost_cents);
+
+        // Net score is used for ranking candidates (higher = better). We do
+        // *not* gate on `> 0`: a nation should always be developing something
+        // if an opportunity exists — depots are long-lived and coverage
+        // compounds beyond any finite horizon, so even a "break-even" depot is
+        // worth building over hoarding treasury.
+        let net_score = coverage_value as f64 * horizon
+            - path_cost.as_dollars() as f64
+            - depot_cost.as_dollars() as f64;
+
+        let plan = DepotPlan {
+            candidate,
+            path,
+            path_cost,
+            coverage_value,
+            net_score,
+        };
+        match &best {
+            None => best = Some(plan),
+            Some(b) if plan.net_score > b.net_score => best = Some(plan),
+            _ => {}
+        }
+    }
+
+    let _ = is_province_connected; // silence unused-import warning in some builds
+    best
+}
+
+/// Single multi-source Dijkstra from every tile in `network` out to every
+/// reachable owned land hex (respecting tech constraints). Returns the cost
+/// map and a predecessor map so callers can reconstruct paths to any hex
+/// without re-running Dijkstra per target.
+fn dijkstra_from_network(
+    hex_map: &HexMap,
+    network: &HashSet<HexCoord>,
+    owned_hexes: &HashSet<HexCoord>,
+    cfg: &crate::data::GameConfig,
+    researched_techs: &[crate::events::TechId],
+    game_data: &crate::data::GameData,
+) -> (HashMap<HexCoord, i64>, HashMap<HexCoord, HexCoord>) {
+    let mut dist: HashMap<HexCoord, i64> = HashMap::new();
+    let mut prev: HashMap<HexCoord, HexCoord> = HashMap::new();
+    let mut heap: BinaryHeap<Reverse<(i64, HexCoord)>> = BinaryHeap::new();
+
+    for &coord in network {
+        dist.insert(coord, 0);
+        heap.push(Reverse((0, coord)));
+    }
+
+    while let Some(Reverse((cost, current))) = heap.pop() {
+        if cost > *dist.get(&current).unwrap_or(&i64::MAX) {
+            continue;
+        }
+        for neighbor in current.neighbors() {
+            let tile = match hex_map.get_tile(neighbor) {
+                Some(t) => t,
+                None => continue,
+            };
+            if !tile.terrain().is_land() {
+                continue;
+            }
+            if !owned_hexes.contains(&neighbor) && !network.contains(&neighbor) {
+                continue;
+            }
+            let has_existing = tile.infrastructure.has_railroad || tile.infrastructure.has_depot;
+            if !has_existing
+                && !crate::map::infrastructure::rail_terrain_enabled(
+                    tile.terrain(),
+                    researched_techs,
+                    game_data,
+                    cfg,
+                )
+            {
+                continue;
+            }
+            let edge_cost = if has_existing {
+                0i64
+            } else {
+                match railroad_cost(tile.terrain(), cfg) {
+                    Some(m) => m.cents(),
+                    None => continue,
+                }
+            };
+            let new_cost = cost + edge_cost;
+            if new_cost < *dist.get(&neighbor).unwrap_or(&i64::MAX) {
+                dist.insert(neighbor, new_cost);
+                prev.insert(neighbor, current);
+                heap.push(Reverse((new_cost, neighbor)));
+            }
+        }
+    }
+    (dist, prev)
 }
 
 /// Dijkstra from the existing railroad network to a target tile.
 /// Returns the list of tiles (not yet in the network) that need railroads built,
 /// ordered from closest-to-network to target.
+///
+/// `owned_hexes` constrains the path to tiles the AI's nation actually owns —
+/// railroads cannot be built on foreign territory, so routing through it would
+/// produce an unbuildable path. The network tiles themselves are allowed as
+/// seeds even if not owned (they already exist).
+#[allow(dead_code)]
 pub(super) fn find_cheapest_path(
     hex_map: &HexMap,
     network: &HashSet<HexCoord>,
     target: HexCoord,
+    cfg: &crate::data::GameConfig,
+    owned_hexes: &HashSet<HexCoord>,
+    researched_techs: &[crate::events::TechId],
+    game_data: &crate::data::GameData,
 ) -> Option<Vec<HexCoord>> {
     let mut dist: HashMap<HexCoord, i64> = HashMap::new();
     let mut prev: HashMap<HexCoord, HexCoord> = HashMap::new();
@@ -207,11 +470,30 @@ pub(super) fn find_cheapest_path(
                 if !tile.terrain().is_land() {
                     continue;
                 }
-                let edge_cost = if tile.infrastructure.has_railroad || tile.infrastructure.has_depot
+                // Only traverse owned hexes (or existing network tiles, which
+                // may be seeded even if the ownership map has drifted).
+                if !owned_hexes.contains(&neighbor) && !network.contains(&neighbor) {
+                    continue;
+                }
+                // Skip terrain we don't have tech to lay rail on (unless it
+                // already has rail/depot — existing infrastructure is always
+                // traversable even if the current nation couldn't rebuild it).
+                let has_existing_rail =
+                    tile.infrastructure.has_railroad || tile.infrastructure.has_depot;
+                if !has_existing_rail
+                    && !crate::map::infrastructure::rail_terrain_enabled(
+                        tile.terrain(),
+                        researched_techs,
+                        game_data,
+                        cfg,
+                    )
                 {
+                    continue;
+                }
+                let edge_cost = if has_existing_rail {
                     0i64
                 } else {
-                    match railroad_cost(tile.terrain()) {
+                    match railroad_cost(tile.terrain(), cfg) {
                         Some(money) => money.cents(),
                         None => continue,
                     }
@@ -318,8 +600,15 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
     });
 
     if !capital_has_depot {
-        if let Ok(cost) = build_depot(&mut game.hex_map, capital_tile)
-            && let Some(nation) = game.get_nation_mut(nation_id)
+        let provinces_snapshot = game.provinces.clone();
+        let cfg = game.game_data.game_config.clone();
+        if let Ok(cost) = build_depot(
+            &mut game.hex_map,
+            capital_tile,
+            nation_id,
+            &provinces_snapshot,
+            &cfg,
+        ) && let Some(nation) = game.get_nation_mut(nation_id)
         {
             nation.treasury -= cost;
         }
@@ -366,9 +655,17 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
             .get_tile(target_depot_tile)
             .is_some_and(|t| t.infrastructure.has_depot);
 
+        let provinces_snapshot = game.provinces.clone();
+        let cfg = game.game_data.game_config.clone();
         if !has_depot
             && budget - spent >= Money::dollars(2000)
-            && let Ok(cost) = build_depot(&mut game.hex_map, target_depot_tile)
+            && let Ok(cost) = build_depot(
+                &mut game.hex_map,
+                target_depot_tile,
+                nation_id,
+                &provinces_snapshot,
+                &cfg,
+            )
         {
             if let Some(nation) = game.get_nation_mut(nation_id) {
                 nation.treasury -= cost;
@@ -376,14 +673,39 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
             spent += cost;
         }
 
-        // Find cheapest path from network to target depot
+        // Find cheapest path from network to target depot (owned hexes only).
+        let owned_hexes: HashSet<HexCoord> = provinces_snapshot
+            .iter()
+            .filter(|p| p.owner == nation_id)
+            .flat_map(|p| p.tiles.iter().copied())
+            .collect();
         let network = get_railroad_network(&game.hex_map, capital_tile);
-        if let Some(path) = find_cheapest_path(&game.hex_map, &network, target_depot_tile) {
+        let researched: Vec<crate::events::TechId> = game
+            .get_nation(nation_id)
+            .map(|n| n.researched_techs.clone())
+            .unwrap_or_default();
+        if let Some(path) = find_cheapest_path(
+            &game.hex_map,
+            &network,
+            target_depot_tile,
+            &cfg,
+            &owned_hexes,
+            &researched,
+            &game.game_data,
+        ) {
             for &coord in &path {
                 if spent >= budget {
                     break;
                 }
-                if let Ok(cost) = build_railroad(&mut game.hex_map, coord) {
+                if let Ok(cost) = build_railroad(
+                    &mut game.hex_map,
+                    coord,
+                    nation_id,
+                    &researched,
+                    &provinces_snapshot,
+                    &game.game_data,
+                    &cfg,
+                ) {
                     if let Some(nation) = game.get_nation_mut(nation_id) {
                         nation.treasury -= cost;
                     }

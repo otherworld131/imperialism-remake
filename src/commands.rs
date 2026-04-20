@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use domain::economy::buildings::{Building, BuildingType};
-use domain::economy::civilians::{next_civilian_id, parse_civilian_type};
+use domain::economy::civilians::{BuildTask, CivilianType, next_civilian_id, parse_civilian_type};
 use domain::game_state::GameState;
 use domain::hex::HexCoord;
 use domain::map::{UnitId, infrastructure};
@@ -814,7 +814,7 @@ pub(crate) fn cmd_hire_civilian(game: &mut GameState, type_name: &str) {
         }
     };
 
-    let cost = civ_type.creation_cost();
+    let cost = civ_type.creation_cost(&game.game_data.game_config);
     let player_id = game.human_player_nation;
     let civilian_costs_expert = game.game_data.game_config.civilian_costs_expert;
     let player = game.get_nation(player_id).unwrap();
@@ -1673,32 +1673,157 @@ pub(crate) fn build_freight_car(game: &mut GameState) {
     );
 }
 
+/// Assign the player's first Engineer civilian to `coord` and start `task`.
+/// Prints an actionable message on success/failure. Matches the player-facing
+/// engineer contract (no instant builds from the CLI).
+fn assign_engineer_task(
+    game: &mut GameState,
+    player_id: NationId,
+    coord: HexCoord,
+    task: BuildTask,
+    kind_label: &str,
+) {
+    let cfg = game.game_data.game_config.clone();
+
+    // Pre-flight: the target tile must be owned by the player.
+    let owns_target = game
+        .hex_map
+        .get_tile(coord)
+        .and_then(|t| t.province_id)
+        .and_then(|pid| game.get_province(pid))
+        .is_some_and(|p| p.owner == player_id);
+    if !owns_target {
+        println!(
+            "  Cannot build {}: ({},{}) is not owned by your nation.",
+            kind_label, coord.q, coord.r
+        );
+        return;
+    }
+
+    // Find an Engineer.
+    let (engineer_idx, engineer_id, engineer_busy) = {
+        let nation = match game.get_nation(player_id) {
+            Some(n) => n,
+            None => return,
+        };
+        let idx = nation
+            .civilians
+            .iter()
+            .position(|c| c.civilian_type == CivilianType::Engineer);
+        match idx {
+            Some(i) => (i, nation.civilians[i].id, nation.civilians[i].working),
+            None => {
+                println!(
+                    "  Cannot build {}: your nation has no Engineer civilian. Hire one first.",
+                    kind_label
+                );
+                return;
+            }
+        }
+    };
+
+    if engineer_busy {
+        println!("  Your Engineer is already working. Wait until the current task completes.");
+        return;
+    }
+
+    // Check treasury against the task's cost so we don't start work we can't pay for.
+    let cost = match task {
+        BuildTask::Railroad => {
+            let terrain = match game.hex_map.get_tile(coord) {
+                Some(t) => t.terrain(),
+                None => {
+                    println!("  Invalid tile at ({},{}).", coord.q, coord.r);
+                    return;
+                }
+            };
+            // Tech pre-flight: some terrains require a researched tech.
+            let researched = &game.get_nation(player_id).unwrap().researched_techs;
+            if !infrastructure::rail_terrain_enabled(terrain, researched, &game.game_data, &cfg) {
+                let tech = infrastructure::railroad_required_tech(terrain, &cfg).unwrap_or("?");
+                println!(
+                    "  Cannot build railroad on {:?}: requires tech \"{}\".",
+                    terrain, tech
+                );
+                return;
+            }
+            match infrastructure::railroad_cost(terrain, &cfg) {
+                Some(c) => c,
+                None => {
+                    println!("  Cannot build railroad on {:?}.", terrain);
+                    return;
+                }
+            }
+        }
+        BuildTask::Depot => Money::dollars(cfg.depot_cost),
+        BuildTask::Port => Money::dollars(cfg.port_cost),
+    };
+    let treasury = game.get_nation(player_id).unwrap().treasury;
+    if treasury.checked_sub(cost).is_none() {
+        println!(
+            "  Cannot afford {} (cost: {}, treasury: {}).",
+            kind_label, cost, treasury
+        );
+        return;
+    }
+
+    // Free the engineer's old tile, claim the new one, start the build.
+    let old_pos = game
+        .get_nation(player_id)
+        .and_then(|n| n.civilians[engineer_idx].position);
+    if let Some(old) = old_pos
+        && let Some(tile) = game.hex_map.get_tile_mut(old)
+        && tile.assigned_civilian == Some(engineer_id)
+    {
+        tile.assigned_civilian = None;
+    }
+    if let Some(tile) = game.hex_map.get_tile(coord)
+        && tile.assigned_civilian.is_some()
+        && tile.assigned_civilian != Some(engineer_id)
+    {
+        println!(
+            "  Target tile ({},{}) already has another civilian assigned.",
+            coord.q, coord.r
+        );
+        return;
+    }
+    if let Some(tile) = game.hex_map.get_tile_mut(coord) {
+        tile.assigned_civilian = Some(engineer_id);
+    }
+    if let Some(nation) = game.get_nation_mut(player_id) {
+        let civ = &mut nation.civilians[engineer_idx];
+        civ.deploy(coord);
+        civ.start_build(task, &cfg);
+    }
+    println!(
+        "  Engineer assigned to build {} at ({},{}); completes in {} turn(s).",
+        kind_label,
+        coord.q,
+        coord.r,
+        task.turns_required(&cfg)
+    );
+}
+
+/// Queue a railroad-build task for the player's Engineer on the first rail-less
+/// land tile in the capital province. The engineer will complete it on turn end.
 pub(crate) fn cmd_build_railroad(game: &mut GameState) {
     if check_bankrupt(game) {
         return;
     }
-
     let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
-    let capital_province_id = player.capital_province_id;
+    let capital_province_id = game.get_nation(player_id).unwrap().capital_province_id;
+    let tiles: Vec<HexCoord> = game
+        .get_province(capital_province_id)
+        .map(|p| p.tiles.clone())
+        .unwrap_or_default();
 
-    // Find the capital province to get its tiles
-    let province = game.get_province(capital_province_id).unwrap();
-    let tiles: Vec<HexCoord> = province.tiles.clone();
-
-    // Find the first tile in the capital province that does not have a railroad
-    let mut target_coord = None;
-    for coord in &tiles {
-        if let Some(tile) = game.hex_map.get_tile(*coord)
-            && tile.terrain().is_land()
-            && !tile.infrastructure.has_railroad
-        {
-            target_coord = Some(*coord);
-            break;
-        }
-    }
-
-    let coord = match target_coord {
+    // First rail-less land tile in the capital province.
+    let coord = tiles.iter().copied().find(|c| {
+        game.hex_map
+            .get_tile(*c)
+            .is_some_and(|t| t.terrain().is_land() && !t.infrastructure.has_railroad)
+    });
+    let coord = match coord {
         Some(c) => c,
         None => {
             println!("  All land tiles in your capital province already have railroads.");
@@ -1706,108 +1831,56 @@ pub(crate) fn cmd_build_railroad(game: &mut GameState) {
         }
     };
 
-    let terrain = game.hex_map.get_tile(coord).unwrap().terrain();
-    let cost = match infrastructure::railroad_cost(terrain) {
-        Some(c) => c,
-        None => {
-            println!("  Cannot build railroad on {:?}.", terrain);
-            return;
-        }
-    };
-
-    let treasury = game.get_nation(player_id).unwrap().treasury;
-    if treasury.checked_sub(cost).is_none() {
-        println!(
-            "  Cannot afford railroad on {:?} at ({},{}) (cost: {}, treasury: {}).",
-            terrain, coord.q, coord.r, cost, treasury
-        );
-        return;
-    }
-
-    match infrastructure::build_railroad(&mut game.hex_map, coord) {
-        Ok(cost) => {
-            let player = game.get_nation_mut(player_id).unwrap();
-            player.treasury -= cost;
-            println!(
-                "  Railroad built on {:?} at ({},{})! Cost: {}, treasury now: {}.",
-                terrain, coord.q, coord.r, cost, player.treasury
-            );
-        }
-        Err(e) => {
-            println!("  Cannot build railroad: {}", e);
-        }
-    }
+    assign_engineer_task(game, player_id, coord, BuildTask::Railroad, "railroad");
 }
 
+/// Queue a depot-build task for the player's Engineer on the capital tile (or
+/// first rail tile in the capital province).
 pub(crate) fn cmd_build_depot(game: &mut GameState) {
     if check_bankrupt(game) {
         return;
     }
-
     let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
-    let capital_province_id = player.capital_province_id;
-    let treasury = player.treasury;
+    let capital_province_id = game.get_nation(player_id).unwrap().capital_province_id;
+    let capital_tile_coord = game.get_province(capital_province_id).unwrap().capital_tile;
 
-    let province = game.get_province(capital_province_id).unwrap();
-    let capital_tile_coord = province.capital_tile;
-
-    let depot_cost = Money::dollars(2000);
-    if treasury.checked_sub(depot_cost).is_none() {
-        println!(
-            "  Cannot afford depot (cost: {}, treasury: {}).",
-            depot_cost, treasury
-        );
-        return;
-    }
-
-    match infrastructure::build_depot(&mut game.hex_map, capital_tile_coord) {
-        Ok(cost) => {
-            let player = game.get_nation_mut(player_id).unwrap();
-            player.treasury -= cost;
-            println!(
-                "  Depot built at capital ({},{})! Cost: {}, treasury now: {}.",
-                capital_tile_coord.q, capital_tile_coord.r, cost, player.treasury
-            );
-        }
-        Err(e) => {
-            println!("  Cannot build depot: {}", e);
-        }
-    }
+    assign_engineer_task(
+        game,
+        player_id,
+        capital_tile_coord,
+        BuildTask::Depot,
+        "depot",
+    );
 }
 
+/// Queue a port-build task for the player's Engineer on the first coastal
+/// rail-less port-less tile in the capital province.
 pub(crate) fn cmd_build_port(game: &mut GameState) {
     if check_bankrupt(game) {
         return;
     }
-
     let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
-    let capital_province_id = player.capital_province_id;
+    let capital_province_id = game.get_nation(player_id).unwrap().capital_province_id;
+    let tiles: Vec<HexCoord> = game
+        .get_province(capital_province_id)
+        .map(|p| p.tiles.clone())
+        .unwrap_or_default();
 
-    let province = game.get_province(capital_province_id).unwrap();
-    let tiles: Vec<HexCoord> = province.tiles.clone();
-
-    // Find the first coastal tile in the capital province without a port
-    let mut target_coord = None;
-    for coord in &tiles {
-        if let Some(tile) = game.hex_map.get_tile(*coord)
-            && tile.terrain().is_land()
-            && !tile.infrastructure.has_port
-        {
-            let is_coastal = coord.neighbors().iter().any(|n| {
-                game.hex_map
-                    .get_tile(*n)
-                    .is_some_and(|t| !t.terrain().is_land())
-            });
-            if is_coastal {
-                target_coord = Some(*coord);
-                break;
-            }
+    let coord = tiles.iter().copied().find(|c| {
+        let tile = match game.hex_map.get_tile(*c) {
+            Some(t) => t,
+            None => return false,
+        };
+        if !tile.terrain().is_land() || tile.infrastructure.has_port {
+            return false;
         }
-    }
-
-    let coord = match target_coord {
+        c.neighbors().iter().any(|n| {
+            game.hex_map
+                .get_tile(*n)
+                .is_some_and(|t| !t.terrain().is_land())
+        })
+    });
+    let coord = match coord {
         Some(c) => c,
         None => {
             println!("  No coastal tile without a port found in your capital province.");
@@ -1815,29 +1888,7 @@ pub(crate) fn cmd_build_port(game: &mut GameState) {
         }
     };
 
-    let port_cost = Money::dollars(3000);
-    let treasury = game.get_nation(player_id).unwrap().treasury;
-    if treasury.checked_sub(port_cost).is_none() {
-        println!(
-            "  Cannot afford port (cost: {}, treasury: {}).",
-            port_cost, treasury
-        );
-        return;
-    }
-
-    match infrastructure::build_port(&mut game.hex_map, coord) {
-        Ok(cost) => {
-            let player = game.get_nation_mut(player_id).unwrap();
-            player.treasury -= cost;
-            println!(
-                "  Port built at ({},{})! Cost: {}, treasury now: {}.",
-                coord.q, coord.r, cost, player.treasury
-            );
-        }
-        Err(e) => {
-            println!("  Cannot build port: {}", e);
-        }
-    }
+    assign_engineer_task(game, player_id, coord, BuildTask::Port, "port");
 }
 
 pub(crate) fn cmd_build_fort(game: &mut GameState, province_query: Option<&str>) {
@@ -1888,7 +1939,7 @@ pub(crate) fn cmd_build_fort(game: &mut GameState, province_query: Option<&str>)
         return;
     }
 
-    let cost = domain::map::fort_cost(next_level).unwrap();
+    let cost = domain::map::fort_cost(next_level, &game.game_data.game_config).unwrap();
     let treasury = game.get_nation(player_id).unwrap().treasury;
     if treasury.checked_sub(cost).is_none() {
         println!(
@@ -1898,7 +1949,8 @@ pub(crate) fn cmd_build_fort(game: &mut GameState, province_query: Option<&str>)
         return;
     }
 
-    match domain::map::build_fort(&mut game.hex_map, capital_tile_coord) {
+    let cfg_snapshot = game.game_data.game_config.clone();
+    match domain::map::build_fort(&mut game.hex_map, capital_tile_coord, &cfg_snapshot) {
         Ok((level, cost)) => {
             let player = game.get_nation_mut(player_id).unwrap();
             player.treasury -= cost;

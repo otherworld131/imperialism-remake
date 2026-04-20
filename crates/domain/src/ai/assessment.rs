@@ -1079,7 +1079,10 @@ mod tests {
         ));
         // No direct war between Betaland and Gammaland
         let start = find_war_start_turn(&game, "Betaland", "Gammaland");
-        assert_eq!(start, None, "pact defense entry should not match (B, C) pair");
+        assert_eq!(
+            start, None,
+            "pact defense entry should not match (B, C) pair"
+        );
 
         // But it SHOULD match the (A, B) pair
         let start_ab = find_war_start_turn(&game, "Alphaland", "Betaland");
