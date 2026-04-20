@@ -242,6 +242,10 @@ All implementation checklists live in `plan/`:
 | 28 | [Documentation](./plan/28-documentation.md) | Delivery |
 | 29 | [Web Frontend: UI, Accessibility & Localization](./plan/29-web-frontend.md) | Presentation |
 
+## Project Management
+
+- **Trello board**: [Imperialism Remake](https://trello.com/b/WNTZdorA/imperialism-remake) (board id `69e37a93adccb0352eda9d18`). All follow-up cards, backlog items, and cross-cutting tickets belong here — never create cards on a different board. Lists include: AI, UI, Warfare, Economy & Production, Diplomacy, Performance, UI + Mechanics, General, Flavor, Later ideas, Done To Verify.
+
 ## Workflow
 
 - After every implementation, run `/adversarial-review` before considering the task complete
