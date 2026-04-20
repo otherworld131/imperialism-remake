@@ -79,6 +79,7 @@ export default function NewspaperScreen({
   const [selectedArchiveTurn, setSelectedArchiveTurn] = useState<number | null>(null);
   const [localCategory, setLocalCategory] = useState(newsFilterCategory);
   const [localCountry, setLocalCountry] = useState(newsFilterCountry);
+  const [localText, setLocalText] = useState('');
 
   const handleCategoryChange = (cat: string) => { setLocalCategory(cat); onCategoryChange(cat); };
   const handleCountryChange = (country: string) => { setLocalCountry(country); onCountryChange(country); };
@@ -89,11 +90,16 @@ export default function NewspaperScreen({
     return entry?.headlines || [];
   })();
 
+  const q = localText.trim().toLowerCase();
   const visible = applyNewsFilters(currentHeadlines, {
     showNonActions: showAiNonActions,
     category: localCategory,
     country: localCountry,
-  });
+  }).filter(h =>
+    !q ||
+    h.text.toLowerCase().includes(q) ||
+    (h.reason || '').toLowerCase().includes(q)
+  );
   const playerNews = visible.filter(h => h.text.includes(playerName));
   const worldNews = visible.filter(h => !h.text.includes(playerName));
 
@@ -141,6 +147,13 @@ export default function NewspaperScreen({
               <option value="all">All countries</option>
               {countryOptions.map(n => <option key={n} value={n}>{n}</option>)}
             </select>
+            <input
+              type="text"
+              value={localText}
+              onChange={e => setLocalText(e.target.value)}
+              placeholder="Search…"
+              style={styles.searchInput}
+            />
           </div>
         </div>
 
@@ -277,6 +290,11 @@ const styles: Record<string, React.CSSProperties> = {
   select: {
     padding: '4px 8px', fontFamily: "'Georgia', serif", fontSize: 12,
     border: '1px solid #999', background: '#fff', color: '#333',
+  },
+  searchInput: {
+    padding: '4px 8px', fontFamily: "'Georgia', serif", fontSize: 12,
+    border: '1px solid #999', background: '#fff', color: '#333',
+    minWidth: 160,
   },
   contentArea: {
     display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden',

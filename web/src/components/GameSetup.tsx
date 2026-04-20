@@ -15,8 +15,16 @@ const NATION_COLORS: Record<string, string> = {
 
 const DIFFICULTIES = ['Introductory', 'Easy', 'Normal', 'Hard', 'NOI'];
 
+export interface GameStartParams {
+  mapKey: string;
+  observerMode: boolean;
+  scenario: string | null;
+  difficulty: number;
+  nationIdx: number;
+}
+
 interface Props {
-  onStartGame: (gameJson: string) => void;
+  onStartGame: (gameJson: string, params: GameStartParams) => void;
 }
 
 interface GpInfo {
@@ -114,7 +122,13 @@ export default function GameSetup({ onStartGame }: Props) {
         gameJson = setHumanPlayer(gameJson, idx);
       }
     }
-    onStartGame(gameJson);
+    onStartGame(gameJson, {
+      mapKey: effectiveMapKey,
+      observerMode,
+      scenario: selectedScenario,
+      difficulty,
+      nationIdx: idx,
+    });
   };
 
   const pickedGp = pickedNationIdx != null ? previewGps[pickedNationIdx] : null;

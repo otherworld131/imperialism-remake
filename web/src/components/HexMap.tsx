@@ -600,9 +600,7 @@ export default function HexMap({
     // ── Pass 4: Resource icons on producing tiles (terrain view only) ──
     if (scale > 0.6 && mapMode === 'terrain') {
       const rSize = Math.max(10, HEX_SIZE * 0.7);
-      ctx.font = `${rSize}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
+      const badgeFont = Math.max(7, HEX_SIZE * 0.32);
       for (const tile of tiles) {
         if (tile.terrain === 'Sea' || !tile.owner) continue;
         if (tile.is_capital || tile.is_country_capital) continue;
@@ -611,8 +609,29 @@ export default function HexMap({
         const icon = getResourceIcon(tile);
         if (!icon) continue;
         const [px, py] = hexToPixel(tile.q, tile.r);
+
+        ctx.font = `${rSize}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
         ctx.globalAlpha = tile.resource_hidden ? 0.4 : 0.75;
         ctx.fillText(icon, px, py);
+        ctx.globalAlpha = 1.0;
+
+        // Improvement-level badge (e.g. "2/3"), gold when fully improved
+        if (tile.improvement_level > 0 && tile.max_improvement_level > 0) {
+          ctx.font = `bold ${badgeFont}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          const fully = tile.improvement_level >= tile.max_improvement_level;
+          const text = `${tile.improvement_level}/${tile.max_improvement_level}`;
+          const bx = px + HEX_SIZE * 0.5;
+          const by = py + HEX_SIZE * 0.55;
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+          ctx.strokeText(text, bx, by);
+          ctx.fillStyle = fully ? '#ffd700' : '#fff';
+          ctx.fillText(text, bx, by);
+        }
       }
       ctx.globalAlpha = 1.0;
     }

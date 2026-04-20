@@ -513,6 +513,7 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
                 "is_capital": tile.is_capital,
                 "is_country_capital": is_country_capital,
                 "improvement_level": tile.improvement_level(),
+                "max_improvement_level": tile.resource_deposit().map(|r| r.max_improvement_level()).unwrap_or(0),
                 "owner": owner_name,
                 "owner_color": display_color,
                 "province": province_name,

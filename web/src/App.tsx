@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   initWasm, processTurn, processTurns, setHumanPlayer,
+  newGame, newScenarioGame, newObserverGame, newObserverScenarioGame,
   getMapData, getAvailableTechs, researchTech,
   getDiplomacyOverlay, getMilitaryOverlay,
   getUnitsInProvince, getCivilians, getShips, getValidMoveTargets, getBuildableUnits,
@@ -82,7 +83,7 @@ function applyNewsFilters(
 
 
 import HexMap from './components/HexMap';
-import GameSetup from './components/GameSetup';
+import GameSetup, { type GameStartParams } from './components/GameSetup';
 import UnitPanel from './components/UnitPanel';
 import CivilianPanel from './components/CivilianPanel';
 import NavalPanel from './components/NavalPanel';
@@ -159,6 +160,10 @@ function App() {
   const [mapScale, setMapScale] = useState(0.7);
   const [mapOffset, setMapOffset] = useState({ x: -200, y: -100 });
 
+  // Game-start params captured from GameSetup (used for Restart and header chip)
+  const [gameStartParams, setGameStartParams] = useState<GameStartParams | null>(null);
+  const [copiedKey, setCopiedKey] = useState(false);
+
   // Observer mode state
   const [skipN, setSkipN] = useState<number>(5);
   const isObserver = gameState?.observer_mode === true;
@@ -227,8 +232,9 @@ function App() {
     }
   }, [disableFogOfWar, gameJson]);
 
-  const handleGameStart = (json: string) => {
+  const handleGameStart = (json: string, params: GameStartParams) => {
     if (!applyGameJson(json)) return;
+    setGameStartParams(params);
     setGameStarted(true);
     try {
       const state = JSON.parse(json);
@@ -238,6 +244,50 @@ function App() {
       // applyGameJson already succeeded, so game state is valid — this parse is for the nation name only
     }
   };
+
+  const handleRestart = useCallback(() => {
+    if (!gameStartParams) return;
+    if (!confirm('Restart this map from turn 1?')) return;
+    const p = gameStartParams;
+    // Restart with the nation currently being viewed, not the one picked at game start —
+    // the player may have changed viewpoint during observer mode.
+    const currentIdx = observerGps.findIndex(g => g.id === gameState?.human_player_nation);
+    const idx = currentIdx >= 0 ? currentIdx : p.nationIdx;
+    let json: string;
+    if (p.observerMode) {
+      json = p.scenario
+        ? newObserverScenarioGame(p.scenario, p.difficulty)
+        : newObserverGame(p.mapKey, p.difficulty);
+      if (idx !== 0) {
+        json = setHumanPlayer(json, idx);
+      }
+    } else {
+      json = p.scenario
+        ? newScenarioGame(p.scenario, p.difficulty, idx)
+        : newGame(p.mapKey, p.difficulty, idx);
+    }
+    const parsed = JSON.parse(json);
+    if (parsed.error) { alert(parsed.error); return; }
+    if (!applyGameJson(json)) return;
+    setGameStartParams({ ...p, nationIdx: idx });
+    setActiveScreen('map');
+    setProvinceUnits(null);
+    setSelectedUnitIds([]);
+    setIsMovementMode(false);
+    setValidMoveTargets(null);
+    setIsDeployMode(false);
+    setDeployingCivilian(null);
+    setDeployableTiles(new Set());
+    setHeadlines([]);
+    setCurrentBattles([]);
+    setCurrentNavalBattles([]);
+    setProposalData(null);
+    setShowProposals(false);
+    setArchiveData([]);
+    setSelectedTile(null);
+    setHoveredTile(null);
+    setStatusMessage('');
+  }, [gameStartParams, gameState, observerGps, applyGameJson]);
 
   const handleEndTurn = useCallback(() => {
     const result = processTurn(gameJson);
@@ -281,7 +331,6 @@ function App() {
     setHeadlines(allHeadlines);
     setCurrentBattles(allBattles);
     setCurrentNavalBattles(allNavalBattles);
-    setActiveScreen('newspaper');
     setProvinceUnits(null);
     setSelectedUnitIds([]);
     setIsMovementMode(false);
@@ -739,8 +788,32 @@ function App() {
         <span style={styles.title} className="title-text">
           {isObserver ? `Observing: ${playerName}` : `Empire of ${playerName}`}
         </span>
+        {gameStartParams?.scenario ? (
+          <span
+            style={{ ...styles.mapKeyChip, cursor: 'default' }}
+            title={`Scenario: ${gameStartParams.scenario}`}
+          >
+            📖 {gameStartParams.scenario}
+          </span>
+        ) : gameStartParams?.mapKey ? (
+          <span
+            style={styles.mapKeyChip}
+            title={copiedKey ? 'Copied!' : 'Click to copy map key'}
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(gameStartParams.mapKey);
+                setCopiedKey(true);
+                setTimeout(() => setCopiedKey(false), 1200);
+              } catch {
+                /* clipboard blocked — title attribute reflects current state */
+              }
+            }}
+          >
+            🗺 {gameStartParams.mapKey}{copiedKey ? ' ✓' : ''}
+          </span>
+        ) : null}
         <span>Turn {turnNumber} ({year} Q{quarter})</span>
-        <span>Treasury: ${player?.treasury?.[0] ? player.treasury[0] / 100 : 0}</span>
+        <span>Treasury: ${player?.treasury != null ? Math.floor(player.treasury / 100) : 0}</span>
         <span>Provinces: {player?.province_ids?.length || 0}</span>
         {isObserver && (
           <select
@@ -771,6 +844,9 @@ function App() {
           </>
         )}
         <button onClick={handleEndTurn} style={styles.endTurnBtn}>End Turn</button>
+        {gameStartParams && (
+          <button onClick={handleRestart} style={styles.btn} title="Restart this map from turn 1">↻</button>
+        )}
       </div>
 
       {/* Screen tabs */}
@@ -892,7 +968,7 @@ function App() {
                     <p><b>{selectedTile.terrain}{selectedTile.resource && (!selectedTile.resource_hidden || showHiddenResources) ? ` — ${selectedTile.resource}` : ''}</b></p>
                     <p>Province: {selectedTile.province || 'None'}</p>
                     <p>Owner: {selectedTile.owner || 'None'}</p>
-                    {selectedTile.resource && (!selectedTile.resource_hidden || showHiddenResources) && <p>Level: {selectedTile.improvement_level}</p>}
+                    {selectedTile.resource && (!selectedTile.resource_hidden || showHiddenResources) && <p>Level: {selectedTile.improvement_level}/{selectedTile.max_improvement_level}</p>}
                     {selectedTile.is_capital && <p>{'\u2605'} Capital</p>}
                     {selectedTile.has_railroad && <p>Railroad</p>}
                     {selectedTile.has_fort && <p>Fort L{selectedTile.fort_level}</p>}
@@ -906,7 +982,7 @@ function App() {
                     <p><b>{hoveredTile.terrain}{hoveredTile.resource && (!hoveredTile.resource_hidden || showHiddenResources) ? ` — ${hoveredTile.resource}` : ''}</b></p>
                     <p>Province: {hoveredTile.province || 'None'}</p>
                     <p>Owner: {hoveredTile.owner || 'None'}</p>
-                    {hoveredTile.resource && (!hoveredTile.resource_hidden || showHiddenResources) && <p>Level: {hoveredTile.improvement_level}</p>}
+                    {hoveredTile.resource && (!hoveredTile.resource_hidden || showHiddenResources) && <p>Level: {hoveredTile.improvement_level}/{hoveredTile.max_improvement_level}</p>}
                     {hoveredTile.is_capital && <p>{'\u2605'} Capital</p>}
                     {hoveredTile.has_railroad && <p>Railroad</p>}
                     {hoveredTile.has_fort && <p>Fort L{hoveredTile.fort_level}</p>}
@@ -1228,6 +1304,7 @@ const styles: Record<string, React.CSSProperties> = {
   endTurnBtn: { padding: '6px 20px', background: '#8b4513', color: '#fff', border: '1px solid #a0522d', cursor: 'pointer', fontWeight: 'bold', fontFamily: 'Georgia, serif' },
   skipInput: { width: 48, padding: '4px 6px', background: '#1a1a2e', color: '#e0d8c0', border: '1px solid #5a5030', fontFamily: 'Georgia, serif' },
   viewpointSelect: { padding: '4px 8px', background: '#3a3520', color: '#e0d8c0', border: '1px solid #5a5030', fontFamily: 'Georgia, serif', cursor: 'pointer' },
+  mapKeyChip: { padding: '2px 8px', background: '#1a1a2e', color: '#9a9a9a', border: '1px solid #3a3520', fontFamily: 'monospace', fontSize: 12, cursor: 'pointer', userSelect: 'none' as const },
   modal: { position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 100 },
   modalContent: { background: '#1a1a2e', border: '2px solid #daa520', padding: 24, maxWidth: 500, maxHeight: '80vh', overflowY: 'auto' as const },
   headline: { margin: '6px 0', fontSize: 14 },

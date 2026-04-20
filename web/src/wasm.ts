@@ -77,6 +77,7 @@ export interface TileData {
   is_capital: boolean;
   is_country_capital: boolean;
   improvement_level: number;
+  max_improvement_level: number;
   owner: string; owner_color: string; province: string;
   province_id: number | null;
   has_railroad: boolean; has_depot: boolean; has_port: boolean;
