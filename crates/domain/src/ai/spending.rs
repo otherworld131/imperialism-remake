@@ -1189,7 +1189,7 @@ fn execute_consulate(game: &mut GameState, nation_id: NationId) {
             .iter()
             .find(|mn_id| {
                 game.get_nation(**mn_id)
-                    .is_some_and(|m| !m.province_ids.is_empty())
+                    .is_some_and(|m| !m.province_ids.is_empty() && !m.is_in_anarchy)
                     && game
                         .diplomacy
                         .get_relation(nation_id, **mn_id)
@@ -1202,7 +1202,7 @@ fn execute_consulate(game: &mut GameState, nation_id: NationId) {
         let mut best: Option<NationId> = None;
         let mut best_potential = 0u32;
         for n in &game.nations {
-            if n.is_great_power() || n.province_ids.is_empty() {
+            if n.is_great_power() || n.province_ids.is_empty() || n.is_in_anarchy {
                 continue;
             }
             if game
@@ -1252,7 +1252,7 @@ fn execute_embassy(game: &mut GameState, nation_id: NationId) {
             .iter()
             .find(|mn_id| {
                 game.get_nation(**mn_id)
-                    .is_some_and(|m| !m.province_ids.is_empty())
+                    .is_some_and(|m| !m.province_ids.is_empty() && !m.is_in_anarchy)
                     && game
                         .diplomacy
                         .get_relation(nation_id, **mn_id)
@@ -1265,7 +1265,7 @@ fn execute_embassy(game: &mut GameState, nation_id: NationId) {
         let mut best: Option<NationId> = None;
         let mut best_relation = i32::MIN;
         for n in &game.nations {
-            if n.is_great_power() || n.province_ids.is_empty() {
+            if n.is_great_power() || n.province_ids.is_empty() || n.is_in_anarchy {
                 continue;
             }
             if let Some(rel) = game.diplomacy.get_relation(nation_id, n.id)

@@ -302,6 +302,11 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
         .collect();
     let nation_type_lookup: std::collections::HashMap<NationId, NationType> =
         game.nations.iter().map(|n| (n.id, n.nation_type)).collect();
+    let nation_anarchy_lookup: std::collections::HashMap<NationId, bool> = game
+        .nations
+        .iter()
+        .map(|n| (n.id, n.is_in_anarchy))
+        .collect();
     let mut province_nation: std::collections::HashMap<ProvinceId, (String, String, NationId)> =
         std::collections::HashMap::new();
     for prov in &game.provinces {
@@ -526,6 +531,7 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
                 "civilian_on_tile": civ_data,
                 "is_minor": is_minor,
                 "is_incorporated_minor": is_incorporated_minor,
+                "is_anarchic": nation_anarchy_lookup.get(&owner_nid).copied().unwrap_or(false),
                 "visual_group": visual_group,
                 "visible": is_visible,
             })
@@ -642,6 +648,9 @@ pub fn wasm_get_diplomacy_overlay(game_json: &str, nation_id: u32) -> String {
         .get_nation(selected_nid)
         .map(|n| n.name.as_str())
         .unwrap_or("Unknown");
+    let selected_in_anarchy = game
+        .get_nation(selected_nid)
+        .is_some_and(|n| n.is_in_anarchy);
 
     let relations: Vec<serde_json::Value> = game
         .nations
@@ -649,9 +658,16 @@ pub fn wasm_get_diplomacy_overlay(game_json: &str, nation_id: u32) -> String {
         .filter(|n| n.id != selected_nid)
         .map(|n| {
             let rel = game.diplomacy.get_relation(selected_nid, n.id);
+            // Card #31: a nation in anarchy is displayed as at war with
+            // everyone regardless of the underlying relation record. This
+            // must match the diplomacy-screen override so the two surfaces
+            // agree. Either side being anarchic forces "At War".
+            let target_in_anarchy = n.is_in_anarchy;
+            let raw_at_war = rel.map(|r| r.at_war).unwrap_or(false);
+            let at_war = raw_at_war || target_in_anarchy || selected_in_anarchy;
             let (status, score) = match rel {
                 Some(r) => {
-                    let s = if r.at_war {
+                    let s = if at_war {
                         "At War"
                     } else if r.has_treaty(domain::events::TreatyType::Alliance) {
                         "Alliance"
@@ -662,7 +678,7 @@ pub fn wasm_get_diplomacy_overlay(game_json: &str, nation_id: u32) -> String {
                     };
                     (s, r.score)
                 }
-                None => ("Neutral", 0),
+                None => (if at_war { "At War" } else { "Neutral" }, 0),
             };
             let treaties: Vec<String> = rel
                 .map(|r| {
@@ -672,7 +688,6 @@ pub fn wasm_get_diplomacy_overlay(game_json: &str, nation_id: u32) -> String {
                         .collect()
                 })
                 .unwrap_or_default();
-            let at_war = rel.map(|r| r.at_war).unwrap_or(false);
             let has_consulate = rel.map(|r| r.has_consulate).unwrap_or(false);
             let has_embassy = rel.map(|r| r.has_embassy).unwrap_or(false);
 
@@ -785,6 +800,20 @@ fn deserialize_game(game_json: &str) -> Result<GameState, String> {
 fn serialize_game(game: &GameState) -> String {
     serde_json::to_string(game)
         .unwrap_or_else(|e| serde_json::json!({"error": format!("serialize: {e}")}).to_string())
+}
+
+/// Returns an error JSON string if the target nation is in anarchy — no
+/// diplomatic interaction (proposals, grants, declarations, peace, treaties)
+/// is permitted with a country whose government has collapsed (card #81).
+fn reject_if_target_in_anarchy(game: &GameState, target: NationId) -> Option<String> {
+    if game
+        .get_nation(target)
+        .is_some_and(|n| n.is_in_anarchy)
+    {
+        Some("{\"error\":\"target nation is in anarchy\"}".to_string())
+    } else {
+        None
+    }
 }
 
 /// Check if a nation has researched a tech by its display name.
@@ -2832,6 +2861,7 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
     let treasury = nation.treasury.as_dollars();
     let player_is_gp = nation.nation_type == NationType::GreatPower;
     let player_already_at_war = game.diplomacy.is_at_war_with_anyone(nid);
+    let player_in_anarchy = nation.is_in_anarchy;
 
     let relations: Vec<serde_json::Value> = game
         .nations
@@ -2840,7 +2870,7 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
         .map(|n| {
             let rel = game.diplomacy.get_relation(nid, n.id);
             let score = rel.map(|r| r.score).unwrap_or(0);
-            let at_war = rel.map(|r| r.at_war).unwrap_or(false);
+            let raw_at_war = rel.map(|r| r.at_war).unwrap_or(false);
             let has_consulate = rel.map(|r| r.has_consulate).unwrap_or(false);
             let has_embassy = rel.map(|r| r.has_embassy).unwrap_or(false);
             let treaties: Vec<String> = rel
@@ -2858,7 +2888,17 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
                 .map(|r| r.has_treaty(TreatyType::Alliance))
                 .unwrap_or(false);
 
-            let status = if at_war {
+            // A nation in anarchy is displayed as at war with everyone regardless
+            // of the underlying relation record (card #31). Either side being
+            // anarchic forces the "At War" presentation. `display_at_war` is
+            // used only for the `at_war` / `status` fields the UI reads;
+            // `raw_at_war` remains authoritative for every action-gating
+            // decision so button availability stays aligned with what the
+            // backend commands will actually accept.
+            let target_in_anarchy = n.is_in_anarchy;
+            let display_at_war = raw_at_war || target_in_anarchy || player_in_anarchy;
+
+            let status = if display_at_war {
                 "At War"
             } else if has_alliance {
                 "Alliance"
@@ -2898,26 +2938,35 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
                     p.proposal_type == TreatyType::PeaceTreaty && p.from == n.id && p.to == nid
                 });
 
-            // Pre-compute available actions
-            let can_build_consulate = !has_consulate && treasury >= 500;
-            let can_build_embassy = has_consulate && !has_embassy && treasury >= 5000;
-            let can_propose_nap = has_embassy
-                && !at_war
+            // Pre-compute available actions. No diplomatic interaction is
+            // possible with a nation in anarchy (card #81); every action is
+            // gated on `!target_in_anarchy`. Gating uses `raw_at_war` (the
+            // actual backend relation) rather than the anarchy-inflated
+            // `display_at_war` so button availability never contradicts
+            // what the command handlers will accept.
+            let can_build_consulate =
+                !target_in_anarchy && !has_consulate && treasury >= 500;
+            let can_build_embassy =
+                !target_in_anarchy && has_consulate && !has_embassy && treasury >= 5000;
+            let can_propose_nap = !target_in_anarchy
+                && has_embassy
+                && !raw_at_war
                 && !has_nap
                 && !has_alliance
                 && !any_pending_nap
                 && player_standing >= 30;
-            let can_propose_alliance = has_embassy
-                && !at_war
+            let can_propose_alliance = !target_in_anarchy
+                && has_embassy
+                && !raw_at_war
                 && !has_alliance
                 && !any_pending_alliance
                 && player_standing >= 30
                 && player_is_gp
                 && target_is_gp;
-            let can_declare_war = !at_war && !player_already_at_war;
-            let can_send_grant = !at_war && treasury > 0;
+            let can_declare_war = !target_in_anarchy && !raw_at_war && !player_already_at_war;
+            let can_send_grant = !target_in_anarchy && !raw_at_war && treasury > 0;
             let can_break_treaty = !treaties.is_empty();
-            let can_propose_peace = at_war && !any_pending_peace;
+            let can_propose_peace = !target_in_anarchy && raw_at_war && !any_pending_peace;
 
             serde_json::json!({
                 "nation_id": n.id.0,
@@ -2925,7 +2974,7 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
                 "nation_color": format!("{:?}", n.color),
                 "nation_type": format!("{:?}", n.nation_type),
                 "score": score,
-                "at_war": at_war,
+                "at_war": display_at_war,
                 "status": status,
                 "treaties": treaties,
                 "has_consulate": has_consulate,
@@ -2978,6 +3027,9 @@ pub fn wasm_diplomacy_build_consulate(
     if game.get_nation(target).is_none() {
         return "{\"error\":\"target nation not found\"}".to_string();
     }
+    if let Some(err) = reject_if_target_in_anarchy(&game, target) {
+        return err;
+    }
 
     // Validate actor nation exists
     if game.get_nation(nid).is_none() {
@@ -3025,6 +3077,9 @@ pub fn wasm_diplomacy_build_embassy(
     }
     if game.get_nation(target).is_none() {
         return "{\"error\":\"target nation not found\"}".to_string();
+    }
+    if let Some(err) = reject_if_target_in_anarchy(&game, target) {
+        return err;
     }
 
     // Validate actor nation exists
@@ -3077,6 +3132,9 @@ pub fn wasm_diplomacy_propose_nap(
     if game.get_nation(target).is_none() {
         return "{\"error\":\"target nation not found\"}".to_string();
     }
+    if let Some(err) = reject_if_target_in_anarchy(&game, target) {
+        return err;
+    }
 
     let turn = game.turn;
     match game
@@ -3113,6 +3171,9 @@ pub fn wasm_diplomacy_propose_alliance(
     if game.get_nation(target).is_none() {
         return "{\"error\":\"target nation not found\"}".to_string();
     }
+    if let Some(err) = reject_if_target_in_anarchy(&game, target) {
+        return err;
+    }
 
     let turn = game.turn;
     match game
@@ -3148,6 +3209,9 @@ pub fn wasm_diplomacy_declare_war(
     }
     if game.get_nation(target).is_none() {
         return "{\"error\":\"target nation not found\"}".to_string();
+    }
+    if let Some(err) = reject_if_target_in_anarchy(&game, target) {
+        return err;
     }
 
     if game.diplomacy.is_at_war(nid, target) {
@@ -3189,6 +3253,9 @@ pub fn wasm_diplomacy_send_grant(
     // Validate target exists
     if game.get_nation(target).is_none() {
         return "{\"error\":\"target nation not found\"}".to_string();
+    }
+    if let Some(err) = reject_if_target_in_anarchy(&game, target) {
+        return err;
     }
 
     // Check treasury
@@ -3261,6 +3328,9 @@ pub fn wasm_diplomacy_propose_peace(
     }
     if game.get_nation(target).is_none() {
         return "{\"error\":\"target nation not found\"}".to_string();
+    }
+    if let Some(err) = reject_if_target_in_anarchy(&game, target) {
+        return err;
     }
 
     let turn = game.turn;
@@ -4496,5 +4566,56 @@ mod tests {
         assert_eq!(nb["defender_ships_lost"].as_array().unwrap().len(), 2);
         assert_eq!(nb["attacker_survivors_count"].as_u64(), Some(1));
         assert_eq!(nb["defender_survivors_count"].as_u64(), Some(0));
+    }
+
+    // ── Card #31 + F-010: diplomacy screen at-war display vs action gating ──
+
+    /// When the player's own nation is in anarchy, every relation must be
+    /// *displayed* as "At War" (card #31) but the action booleans must stay
+    /// aligned with the raw backend relation — the peace button is not
+    /// meaningfully available against a non-war target, even if presentation
+    /// says "At War" because the player is in anarchy.
+    #[test]
+    fn diplomacy_screen_anarchy_splits_display_from_gating() {
+        let json = make_game_json();
+        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        let player_id = game.human_player_nation;
+
+        // Force the player into anarchy without touching relations.
+        if let Some(player) = game.get_nation_mut(player_id) {
+            player.is_in_anarchy = true;
+        }
+        // Pick another nation as the counterparty.
+        let target_id = game
+            .nations
+            .iter()
+            .find(|n| n.id != player_id)
+            .unwrap()
+            .id;
+        // Ensure raw_at_war is false for the pair.
+        assert!(!game.diplomacy.is_at_war(player_id, target_id));
+
+        let json = serde_json::to_string(&game).unwrap();
+        let out = wasm_get_diplomacy_screen_data(&json, player_id.0);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let relations = parsed["relations"].as_array().unwrap();
+        let rel = relations
+            .iter()
+            .find(|r| r["nation_id"].as_u64() == Some(target_id.0 as u64))
+            .expect("counterparty relation present");
+
+        // Display: anarchy forces At War.
+        assert_eq!(rel["at_war"].as_bool(), Some(true));
+        assert_eq!(rel["status"].as_str(), Some("At War"));
+
+        // Gating: peace is NOT offered because the underlying relation is
+        // not at war — the backend would reject a propose_peace command,
+        // so the UI must not advertise it.
+        let actions = &rel["actions"];
+        assert_eq!(
+            actions["can_propose_peace"].as_bool(),
+            Some(false),
+            "peace must not be gated by anarchy-inflated at_war"
+        );
     }
 }

@@ -345,20 +345,23 @@ export default function HexMap({
   // Memoize nation label BFS — only recompute when tiles change, not on pan/zoom
   // Uses visual_group so incorporated minor nations get their own label
   const nationLabels = useMemo(() => {
-    const labels: { name: string; cx: number; cy: number; size: number }[] = [];
-    const nationTiles = new Map<string, Set<string>>();
+    const labels: { name: string; cx: number; cy: number; size: number; is_anarchic: boolean }[] = [];
+    const nationTiles = new Map<string, { tiles: Set<string>; is_anarchic: boolean }>();
     for (const tile of tiles) {
       if (tile.terrain === 'Sea' || !tile.owner) continue;
       const key = `${tile.q},${tile.r}`;
       const groupName = tile.visual_group || tile.owner;
-      let s = nationTiles.get(groupName);
-      if (!s) { s = new Set(); nationTiles.set(groupName, s); }
-      s.add(key);
+      let entry = nationTiles.get(groupName);
+      if (!entry) {
+        entry = { tiles: new Set(), is_anarchic: tile.is_anarchic };
+        nationTiles.set(groupName, entry);
+      }
+      entry.tiles.add(key);
     }
 
-    for (const [name, tileKeys] of nationTiles) {
+    for (const [name, entry] of nationTiles) {
       const visited = new Set<string>();
-      for (const startKey of tileKeys) {
+      for (const startKey of entry.tiles) {
         if (visited.has(startKey)) continue;
         const component: string[] = [];
         const queue: string[] = [startKey];
@@ -371,7 +374,7 @@ export default function HexMap({
           const nbrs = hexNeighbors(cq, cr);
           for (const [nq, nr] of nbrs) {
             const nk = `${nq},${nr}`;
-            if (!visited.has(nk) && tileKeys.has(nk)) {
+            if (!visited.has(nk) && entry.tiles.has(nk)) {
               visited.add(nk);
               queue.push(nk);
             }
@@ -389,6 +392,7 @@ export default function HexMap({
           cx: sx / component.length,
           cy: sy / component.length,
           size: component.length,
+          is_anarchic: entry.is_anarchic,
         });
       }
     }
@@ -715,9 +719,15 @@ export default function HexMap({
         const fontSize = Math.max(12, Math.min(28, Math.sqrt(label.size) * 3));
         ctx.font = `bold ${fontSize}px Georgia, serif`;
         ctx.lineWidth = 3;
-        ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-        ctx.strokeText(label.name.toUpperCase(), label.cx, label.cy);
-        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        if (label.is_anarchic) {
+          ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+          ctx.strokeText(label.name.toUpperCase(), label.cx, label.cy);
+          ctx.fillStyle = 'rgba(0,0,0,0.95)';
+        } else {
+          ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+          ctx.strokeText(label.name.toUpperCase(), label.cx, label.cy);
+          ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        }
         ctx.fillText(label.name.toUpperCase(), label.cx, label.cy);
       }
     }

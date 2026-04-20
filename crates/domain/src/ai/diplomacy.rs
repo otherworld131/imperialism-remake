@@ -47,7 +47,7 @@ pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
     let mut candidates: Vec<(NationId, u32)> = game
         .nations
         .iter()
-        .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
+        .filter(|n| !n.is_great_power() && !n.province_ids.is_empty() && !n.is_in_anarchy)
         .filter(|n| {
             !game
                 .diplomacy
@@ -120,6 +120,7 @@ pub fn ai_manage_diplomacy(
             .iter()
             .filter(|n| {
                 n.id != nation_id
+                    && !n.is_in_anarchy
                     && n.province_ids.is_empty()
                     && game
                         .diplomacy
@@ -241,7 +242,7 @@ pub fn ai_manage_diplomacy(
         let minor_ids: Vec<NationId> = game
             .nations
             .iter()
-            .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
+            .filter(|n| !n.is_great_power() && !n.province_ids.is_empty() && !n.is_in_anarchy)
             .map(|n| n.id)
             .collect();
 
@@ -390,7 +391,10 @@ pub fn ai_manage_diplomacy(
                 .nations
                 .iter()
                 .filter(|n| {
-                    n.is_great_power() && n.id != nation_id && n.id != game.human_player_nation
+                    n.is_great_power()
+                        && n.id != nation_id
+                        && n.id != game.human_player_nation
+                        && !n.is_in_anarchy
                 })
                 .map(|n| n.id)
                 .collect();
@@ -554,7 +558,7 @@ pub fn ai_manage_diplomacy(
         let minor_ids: Vec<NationId> = game
             .nations
             .iter()
-            .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
+            .filter(|n| !n.is_great_power() && !n.province_ids.is_empty() && !n.is_in_anarchy)
             .map(|n| n.id)
             .collect();
 
@@ -631,7 +635,7 @@ pub fn ai_pre_election_strategy(
     let minor_ids: Vec<NationId> = game
         .nations
         .iter()
-        .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
+        .filter(|n| !n.is_great_power() && !n.province_ids.is_empty() && !n.is_in_anarchy)
         .map(|n| n.id)
         .collect();
 

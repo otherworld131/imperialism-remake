@@ -193,6 +193,14 @@ pub struct NationEnteredAnarchy {
     pub nation: NationId,
 }
 
+/// A previously integrated minor nation regained its independence because
+/// the overlord great power fell into anarchy (card #79).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MinorRegainedIndependence {
+    pub minor: NationId,
+    pub former_overlord: NationId,
+}
+
 // ── Wrapper enum ───────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
@@ -213,6 +221,7 @@ pub enum DomainEvent {
     NationIncorporated(NationIncorporated),
     UnitUpgraded(UnitUpgraded),
     NationEnteredAnarchy(NationEnteredAnarchy),
+    MinorRegainedIndependence(MinorRegainedIndependence),
 }
 
 #[cfg(test)]

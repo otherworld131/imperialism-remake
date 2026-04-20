@@ -1,7 +1,7 @@
 use crate::events::TreatyType;
 use crate::types::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A diplomatic proposal awaiting evaluation by the target nation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +116,37 @@ pub struct DiplomacyState {
     /// peace outcomes for the turn are known.
     #[serde(default)]
     pending_separate_peace_breaks: Vec<BrokenAlliance>,
+    /// (attacker, minor) pairs for which a pact-defense protection request
+    /// has already been raised in the current war. Prevents re-triggering
+    /// the cascade every combat (card #68). Cleared when the attacker/minor
+    /// war ends (peace, incorporation, anarchy).
+    #[serde(default, with = "pact_defense_set_serde")]
+    pact_defense_requested: HashSet<(NationId, NationId)>,
+}
+
+mod pact_defense_set_serde {
+    use super::NationId;
+    use serde::{Deserialize, Serialize};
+    use std::collections::HashSet;
+
+    pub fn serialize<S>(
+        set: &HashSet<(NationId, NationId)>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let v: Vec<(NationId, NationId)> = set.iter().copied().collect();
+        v.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<HashSet<(NationId, NationId)>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let v: Vec<(NationId, NationId)> = Vec::deserialize(deserializer)?;
+        Ok(v.into_iter().collect())
+    }
 }
 
 /// Serialize HashMap<(NationId, NationId), DiplomaticRelation> as a Vec of pairs
@@ -162,7 +193,39 @@ impl DiplomacyState {
             standing: HashMap::new(),
             pending_proposals: Vec::new(),
             pending_separate_peace_breaks: Vec::new(),
+            pact_defense_requested: HashSet::new(),
         }
+    }
+
+    /// Has a pact-defense protection request already been raised for the given
+    /// (attacker, minor) pair in the current war? Card #68.
+    pub fn is_pact_defense_requested(&self, attacker: NationId, minor: NationId) -> bool {
+        self.pact_defense_requested.contains(&(attacker, minor))
+    }
+
+    /// Mark that a pact-defense protection request has been raised for the
+    /// given (attacker, minor) pair. Future attacks by the same attacker on
+    /// the same minor will not re-trigger the cascade until the war ends
+    /// (see `clear_pact_defense_for_war` / `clear_pact_defense_for_nation`).
+    pub fn mark_pact_defense_requested(&mut self, attacker: NationId, minor: NationId) {
+        self.pact_defense_requested.insert((attacker, minor));
+    }
+
+    /// Clear pact-defense dedup entries for any combination of the two
+    /// nations when the war between them ends (peace treaty, mutual peace,
+    /// one side annexed). Handles both role orderings so the caller does not
+    /// need to know which is attacker and which is minor.
+    pub fn clear_pact_defense_for_war(&mut self, a: NationId, b: NationId) {
+        self.pact_defense_requested
+            .retain(|&(att, min)| !((att == a && min == b) || (att == b && min == a)));
+    }
+
+    /// Clear every pact-defense dedup entry involving the given nation.
+    /// Use when the nation is incorporated, destroyed, or enters anarchy —
+    /// any war it was part of has effectively ended for dedup purposes.
+    pub fn clear_pact_defense_for_nation(&mut self, nation: NationId) {
+        self.pact_defense_requested
+            .retain(|&(att, min)| att != nation && min != nation);
     }
 
     /// Initialize relations between all Great Power pairs with embassies already established.
@@ -371,6 +434,10 @@ impl DiplomacyState {
                 self.pending_separate_peace_breaks.push(broken);
             }
         }
+
+        // Peace between a and b ends any ongoing pact-defense dedup for this
+        // pair so a fresh request can be raised in a future war (card #68).
+        self.clear_pact_defense_for_war(a, b);
     }
 
     /// Finalize any alliance breaks caused by separate peace after all peace

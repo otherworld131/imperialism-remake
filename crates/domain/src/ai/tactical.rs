@@ -76,11 +76,14 @@ fn ai_build_forts(
         return;
     }
 
-    // Find enemies we are at war with
+    // Find enemies we are at war with.
+    // Anarchic enemies are excluded: you cannot sue for peace with a country
+    // whose government has collapsed (card #81).
     let enemies: Vec<NationId> = game
         .nations
         .iter()
         .filter(|n| n.id != nation_id)
+        .filter(|n| !n.is_in_anarchy)
         .filter(|n| {
             game.diplomacy
                 .get_relation(nation_id, n.id)
@@ -358,11 +361,14 @@ fn ai_propose_peace(
         }
     };
 
-    // Find enemies we are at war with
+    // Find enemies we are at war with.
+    // Anarchic enemies are excluded: you cannot sue for peace with a country
+    // whose government has collapsed (card #81).
     let enemies: Vec<NationId> = game
         .nations
         .iter()
         .filter(|n| n.id != nation_id)
+        .filter(|n| !n.is_in_anarchy)
         .filter(|n| {
             game.diplomacy
                 .get_relation(nation_id, n.id)

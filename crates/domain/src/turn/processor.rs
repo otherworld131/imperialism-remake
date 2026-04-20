@@ -2571,9 +2571,23 @@ fn resolve_combat(
             // For land attacks, participating units (those in adjacent provinces
             // that didn't move this turn) move into the conquered province.
             // Naval attacks: units return to origin (no position change).
+            let defender_is_minor = game
+                .get_nation(defender_id)
+                .is_some_and(|n| !n.is_great_power());
             if let Some(province) = game.get_province_mut(province_id) {
-                province.owner = attacker_id;
+                let origin_input = province.incorporated_from.or(province.conquest_origin);
+                province.conquest_origin = attribute_conquest_origin(
+                    origin_input,
+                    attacker_id,
+                    defender_id,
+                    defender_is_minor,
+                );
+                // Conquest ends any diplomatic-incorporation relationship
+                // for this province — `incorporated_from` drives map visuals
+                // and should only reflect diplomatic integration, not spoils
+                // of war (card #79 + reviewer F-008).
                 province.incorporated_from = None;
+                province.owner = attacker_id;
             }
             if let Some(defender_nation) = game.get_nation_mut(defender_id) {
                 defender_nation
@@ -2721,9 +2735,19 @@ fn resolve_combat(
             }
 
             // Change province owner and reset garrison (conquering nation has no garrison)
+            let defender_is_minor = game
+                .get_nation(defender_id)
+                .is_some_and(|n| !n.is_great_power());
             if let Some(province) = game.get_province_mut(province_id) {
-                province.owner = attacker_id;
+                let origin_input = province.incorporated_from.or(province.conquest_origin);
+                province.conquest_origin = attribute_conquest_origin(
+                    origin_input,
+                    attacker_id,
+                    defender_id,
+                    defender_is_minor,
+                );
                 province.incorporated_from = None;
+                province.owner = attacker_id;
                 province.garrison_count = 0;
             }
 
@@ -3023,10 +3047,23 @@ fn resolve_combat(
         }
 
         if result.attacker_won {
-            // Counter-attack succeeds: province returns to original defender
+            // Counter-attack succeeds: province returns to original defender.
+            // The dispossessed party here is the occupier (`new_owner_id`) —
+            // preserve minor-origin attribution so the province can still be
+            // released under card #79 even after changing hands multiple times.
+            let occupier_is_minor = game
+                .get_nation(new_owner_id)
+                .is_some_and(|n| !n.is_great_power());
             if let Some(province) = game.get_province_mut(target_province_id) {
-                province.owner = counter_attacker_id;
+                let origin_input = province.incorporated_from.or(province.conquest_origin);
+                province.conquest_origin = attribute_conquest_origin(
+                    origin_input,
+                    counter_attacker_id,
+                    new_owner_id,
+                    occupier_is_minor,
+                );
                 province.incorporated_from = None;
+                province.owner = counter_attacker_id;
             }
             if let Some(occ_nation) = game.get_nation_mut(new_owner_id) {
                 occ_nation
@@ -3088,6 +3125,31 @@ fn resolve_combat(
     }
 }
 
+/// Compute the `conquest_origin` field for a province that just changed
+/// hands via military conquest, so that card #79 can restore minor
+/// provinces to their original owner even if they were taken purely
+/// militarily. `current_origin` is the ancestor-minor attribution pulled
+/// in from either `incorporated_from` (if the province was previously
+/// diplomatically incorporated from a minor) or `conquest_origin` (if it
+/// was already conquered from a minor earlier in the chain).
+///
+/// - Preserve an existing attribution across further conquests.
+/// - If none and the dispossessed defender is a minor, stamp the defender.
+/// - If the new owner IS the origin minor reclaiming their own land, drop
+///   the attribution — a nation is not "conquered from itself".
+fn attribute_conquest_origin(
+    current_origin: Option<NationId>,
+    new_owner: NationId,
+    defender_id: NationId,
+    defender_is_minor: bool,
+) -> Option<NationId> {
+    let origin = current_origin.or_else(|| defender_is_minor.then_some(defender_id));
+    match origin {
+        Some(id) if id == new_owner => None,
+        other => other,
+    }
+}
+
 /// Check if a nation just lost its capital province and should enter anarchy.
 /// Returns true if anarchy was triggered.
 fn check_and_apply_anarchy(
@@ -3111,6 +3173,15 @@ fn check_and_apply_anarchy(
     if let Some(n) = game.get_nation_mut(nation_id) {
         n.is_in_anarchy = true;
     }
+    // Card #68: anarchy ends all wars involving this nation for dedup
+    // purposes — clear any pact-defense requests so fresh cascades can run
+    // if this nation ever recovers (future feature) or if any remaining
+    // state queries consult the set.
+    game.diplomacy.clear_pact_defense_for_nation(nation_id);
+    // Card #79: integrated minors regain their independence when the
+    // overlord falls into anarchy. Runs before the NationEnteredAnarchy
+    // event so consumers that snapshot state see the newly-released minors.
+    release_integrated_minors(game, nation_id, report);
     report
         .events
         .push(DomainEvent::NationEnteredAnarchy(NationEnteredAnarchy {
@@ -3128,6 +3199,126 @@ fn check_and_apply_anarchy(
     true
 }
 
+/// Release every minor nation whose provinces (either by diplomatic
+/// incorporation or by straight military conquest) are currently held by
+/// `overlord_id` and originate from the minor. Provinces marked
+/// `incorporated_from = Some(minor_id)` and still owned by the anarchic
+/// overlord are removed from the overlord and reassigned to the minor,
+/// who resumes as an independent nation. Implements card #79: "when a
+/// great power loses its capital, any diplomatically integrated country
+/// regains its independence."
+fn release_integrated_minors(
+    game: &mut GameState,
+    overlord_id: NationId,
+    report: &mut TurnReport,
+) {
+    // Every minor is a candidate: the eligibility decision is made per
+    // minor by checking whether the overlord is currently sitting on any
+    // of that minor's origin-marked provinces. Iterating by province flags
+    // alone covers both the "fully absorbed" path (integrated_by set) and
+    // the "partially conquered militarily" path (integrated_by stays None
+    // because the minor still has independent territory elsewhere).
+    let minor_ids: Vec<NationId> = game
+        .nations
+        .iter()
+        .filter(|n| !n.is_great_power())
+        .map(|n| n.id)
+        .collect();
+
+    for minor_id in minor_ids {
+        // Collect the overlord-owned provinces that were originally the
+        // minor's — either by diplomatic incorporation (incorporated_from)
+        // or by military conquest (conquest_origin).
+        let provinces_to_restore: Vec<ProvinceId> = game
+            .provinces
+            .iter()
+            .filter(|p| {
+                p.owner == overlord_id
+                    && (p.incorporated_from == Some(minor_id)
+                        || p.conquest_origin == Some(minor_id))
+            })
+            .map(|p| p.id)
+            .collect();
+
+        if provinces_to_restore.is_empty() {
+            // This minor had nothing to reclaim from the collapsing overlord.
+            // Only clear `integrated_by` if it specifically pointed at the
+            // now-anarchic overlord — otherwise the minor is integrated by
+            // a different great power and must not be touched.
+            if let Some(minor) = game.get_nation_mut(minor_id)
+                && minor.integrated_by == Some(overlord_id)
+            {
+                minor.integrated_by = None;
+            }
+            continue;
+        }
+
+        // Transfer provinces back to the minor and drop both origin
+        // markers so the map renders them as plain independent territory.
+        for pid in &provinces_to_restore {
+            if let Some(prov) = game.get_province_mut(*pid) {
+                prov.owner = minor_id;
+                prov.incorporated_from = None;
+                prov.conquest_origin = None;
+            }
+        }
+
+        // Remove those provinces from the overlord's list and add them to
+        // the minor's.
+        if let Some(overlord) = game.get_nation_mut(overlord_id) {
+            overlord
+                .province_ids
+                .retain(|p| !provinces_to_restore.contains(p));
+        }
+        if let Some(minor) = game.get_nation_mut(minor_id) {
+            for pid in &provinces_to_restore {
+                minor.add_province(*pid);
+            }
+            minor.integrated_by = None;
+            // Anarchy invariant: the minor is only functional if its original
+            // capital province came back with it. If a third power captured
+            // that province before the overlord fell, the released minor is
+            // structurally anarchic on return.
+            minor.is_in_anarchy = !minor.province_ids.contains(&minor.capital_province_id);
+        }
+
+        let minor_name = game
+            .get_nation(minor_id)
+            .map(|n| n.name.clone())
+            .unwrap_or_default();
+        let overlord_name = game
+            .get_nation(overlord_id)
+            .map(|n| n.name.clone())
+            .unwrap_or_default();
+        report.events.push(DomainEvent::MinorRegainedIndependence(
+            crate::events::MinorRegainedIndependence {
+                minor: minor_id,
+                former_overlord: overlord_id,
+            },
+        ));
+        report.newspaper_headlines.push(Headline::with_reason(
+            format!(
+                "{} regains its independence as {} collapses into chaos",
+                minor_name, overlord_name
+            ),
+            HeadlineCategory::Diplomacy,
+            format!(
+                "{} fell into anarchy; {} reclaimed {} province(s)",
+                overlord_name,
+                minor_name,
+                provinces_to_restore.len()
+            ),
+        ));
+        game.history.push((
+            game.turn,
+            format!(
+                "{} regained independence after {} fell into anarchy",
+                minor_name, overlord_name
+            ),
+        ));
+    }
+}
+
 /// Pact defense: when a minor nation with NAPs is attacked, eligible protectors
 /// are asked to intervene in priority order (highest relationship score first).
 /// AI protectors make a strategic evaluation; human players receive a proposal.
@@ -3143,6 +3334,17 @@ fn trigger_pact_defense(
         .get_nation(defender_nation_id)
         .is_some_and(|n| !n.is_great_power());
     if !is_minor {
+        return;
+    }
+
+    // Card #68: protection requests for the same (attacker, minor) pair fire
+    // only once per ongoing war. Subsequent combats between the same attacker
+    // and minor skip the cascade entirely. The entry is cleared when the war
+    // ends (peace, incorporation, anarchy).
+    if game
+        .diplomacy
+        .is_pact_defense_requested(attacker_nation_id, defender_nation_id)
+    {
         return;
     }
 
@@ -3199,6 +3401,19 @@ fn trigger_pact_defense(
         &attacker_name,
         report,
     );
+
+    // Card #68: mark the (attacker, minor) pair so later combats in the same
+    // war skip the cascade. Cleared when the war ends. Skip if the minor was
+    // just absorbed by a protector during the cascade — incorporation already
+    // cleared its dedup entries and the minor is no longer an independent
+    // war party.
+    let minor_still_independent = game
+        .get_nation(defender_nation_id)
+        .is_some_and(|n| !n.province_ids.is_empty());
+    if minor_still_independent {
+        game.diplomacy
+            .mark_pact_defense_requested(attacker_nation_id, defender_nation_id);
+    }
 }
 
 /// Run the pact defense cascade: evaluate each candidate in order,
@@ -4334,6 +4549,9 @@ fn incorporate_minor_into_empire(
     // Remove provinces from minor nation
     if let Some(minor) = game.get_nation_mut(minor_id) {
         minor.province_ids.clear();
+        // Card #79: back-pointer used when the overlord falls into anarchy
+        // and integrated minors regain their independence.
+        minor.integrated_by = Some(gp_id);
     }
 
     // Add provinces to great power
@@ -4342,6 +4560,10 @@ fn incorporate_minor_into_empire(
             gp.add_province(*pid);
         }
     }
+
+    // Card #68: once absorbed, the minor is no longer an independent war
+    // party; any pact-defense dedup entry involving it is stale.
+    game.diplomacy.clear_pact_defense_for_nation(minor_id);
 
     let minor_name = game
         .get_nation(minor_id)
@@ -11377,5 +11599,240 @@ mod tests {
         assert!(!eng.working, "stranded engineer should stop working");
         assert_eq!(eng.build_task, None);
         assert_eq!(eng.turns_remaining, 0);
+    }
+
+    // ── Card #79: release integrated minors on overlord anarchy ──────────
+
+    /// Build a minimal two-province GP + one-province minor game where the
+    /// minor has already been "absorbed": its province is owned by the GP
+    /// and carries `incorporated_from = Some(minor_id)`.
+    fn absorbed_minor_scenario() -> (GameState, NationId, NationId, ProvinceId, ProvinceId) {
+        let gp_capital_coord = HexCoord::new(0, 0);
+        let minor_capital_coord = HexCoord::new(2, 0);
+        let mut hex_map = HexMap::new(10, 10);
+        hex_map.set_tile(
+            gp_capital_coord,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        hex_map.set_tile(
+            minor_capital_coord,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+
+        let gp_prov = Province::new(
+            ProvinceId(1),
+            "GPHome".into(),
+            NationId(1),
+            gp_capital_coord,
+            vec![gp_capital_coord],
+            4,
+        );
+        // The minor's original capital province — already in the GP's hands,
+        // stamped with the absorption marker.
+        let mut minor_prov = Province::new(
+            ProvinceId(2),
+            "MinorHome".into(),
+            NationId(1), // owned by the GP at absorption
+            minor_capital_coord,
+            vec![minor_capital_coord],
+            4,
+        );
+        minor_prov.incorporated_from = Some(NationId(2));
+
+        let mut gp = Nation::new(
+            NationId(1),
+            "Overlord".into(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        gp.province_ids = vec![ProvinceId(1), ProvinceId(2)];
+
+        let mut minor = Nation::new(
+            NationId(2),
+            "Vassal".into(),
+            NationColor::Yellow,
+            NationType::MinorNation,
+            ProvinceId(2),
+        );
+        minor.province_ids.clear(); // absorbed: no provinces
+        minor.integrated_by = Some(NationId(1));
+
+        let game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".into(),
+            hex_map,
+            provinces: vec![gp_prov, minor_prov],
+            nations: vec![gp, minor],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
+            ai_debug: false,
+            observer_mode: false,
+        };
+
+        (game, NationId(1), NationId(2), ProvinceId(1), ProvinceId(2))
+    }
+
+    #[test]
+    fn release_integrated_minors_restores_capital() {
+        let (mut game, overlord_id, minor_id, _, minor_cap_pid) = absorbed_minor_scenario();
+        let mut report = TurnReport::empty();
+
+        release_integrated_minors(&mut game, overlord_id, &mut report);
+
+        // The minor's capital province now belongs to the minor again.
+        let prov = game.get_province(minor_cap_pid).unwrap();
+        assert_eq!(prov.owner, minor_id);
+        assert_eq!(prov.incorporated_from, None);
+
+        let minor = game.get_nation(minor_id).unwrap();
+        assert!(minor.province_ids.contains(&minor_cap_pid));
+        assert_eq!(minor.integrated_by, None);
+        assert!(
+            !minor.is_in_anarchy,
+            "minor with its capital back is not anarchic"
+        );
+
+        let overlord = game.get_nation(overlord_id).unwrap();
+        assert!(!overlord.province_ids.contains(&minor_cap_pid));
+
+        // An event was recorded.
+        assert!(
+            report.events.iter().any(|e| matches!(
+                e,
+                DomainEvent::MinorRegainedIndependence(ev) if ev.minor == minor_id
+            )),
+            "MinorRegainedIndependence event should be emitted"
+        );
+    }
+
+    #[test]
+    fn release_integrated_minors_keeps_anarchy_if_capital_was_taken_by_third_party() {
+        let (mut game, overlord_id, minor_id, _, minor_cap_pid) = absorbed_minor_scenario();
+        // Simulate a third party (a new GP) holding the minor's capital at
+        // the moment the overlord collapses. The overlord never owned it,
+        // so release cannot restore it.
+        {
+            let prov = game.get_province_mut(minor_cap_pid).unwrap();
+            prov.owner = NationId(99);
+            // Keep the origin marker — it still traces back to the minor,
+            // just not held by the anarchic overlord any longer.
+        }
+        let mut report = TurnReport::empty();
+
+        release_integrated_minors(&mut game, overlord_id, &mut report);
+
+        let minor = game.get_nation(minor_id).unwrap();
+        assert!(
+            !minor.province_ids.contains(&minor_cap_pid),
+            "minor cannot reclaim a province held by a third party"
+        );
+        // Without the capital, the minor is structurally anarchic on return.
+        assert!(
+            minor.is_in_anarchy
+                || minor.province_ids.is_empty(),
+            "released minor without its capital must be anarchic, not a functioning ghost nation"
+        );
+    }
+
+    // ── Card #68: pact-defense dedup lifecycle ──────────────────────────
+
+    #[test]
+    fn pact_defense_clears_on_peace() {
+        let mut dip = DiplomacyState::new();
+        dip.mark_pact_defense_requested(NationId(1), NationId(2));
+        assert!(dip.is_pact_defense_requested(NationId(1), NationId(2)));
+
+        // Peace between the same two nations — even in reversed order — wipes
+        // the entry so a future war can raise a fresh cascade.
+        dip.declare_war(NationId(1), NationId(2));
+        dip.make_peace(NationId(2), NationId(1));
+
+        assert!(!dip.is_pact_defense_requested(NationId(1), NationId(2)));
+    }
+
+    #[test]
+    fn pact_defense_clear_for_nation_purges_all_involving() {
+        let mut dip = DiplomacyState::new();
+        dip.mark_pact_defense_requested(NationId(10), NationId(5));
+        dip.mark_pact_defense_requested(NationId(5), NationId(20));
+        dip.mark_pact_defense_requested(NationId(7), NationId(8));
+
+        dip.clear_pact_defense_for_nation(NationId(5));
+
+        assert!(!dip.is_pact_defense_requested(NationId(10), NationId(5)));
+        assert!(!dip.is_pact_defense_requested(NationId(5), NationId(20)));
+        assert!(dip.is_pact_defense_requested(NationId(7), NationId(8)));
+    }
+
+    #[test]
+    fn release_does_not_touch_minors_integrated_by_other_overlords() {
+        // GP A collapses. A second minor "Ally", integrated by unrelated GP B,
+        // must not have its `integrated_by` back-pointer altered by A's anarchy.
+        let (mut game, overlord_a, _minor_a, _, _) = absorbed_minor_scenario();
+        let overlord_b = NationId(99);
+        // Insert the unrelated overlord and a minor integrated by them.
+        let mut gp_b = Nation::new(
+            overlord_b,
+            "OtherOverlord".into(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(42),
+        );
+        gp_b.province_ids = vec![ProvinceId(42)];
+        game.nations.push(gp_b);
+
+        let unrelated_minor = NationId(77);
+        let mut minor_b = Nation::new(
+            unrelated_minor,
+            "AlliedVassal".into(),
+            NationColor::Green,
+            NationType::MinorNation,
+            ProvinceId(99),
+        );
+        minor_b.province_ids.clear();
+        minor_b.integrated_by = Some(overlord_b);
+        game.nations.push(minor_b);
+
+        let mut report = TurnReport::empty();
+        release_integrated_minors(&mut game, overlord_a, &mut report);
+
+        let ally = game.get_nation(unrelated_minor).unwrap();
+        assert_eq!(
+            ally.integrated_by,
+            Some(overlord_b),
+            "release on overlord A must not clear integrated_by for minors of overlord B"
+        );
+    }
+
+    #[test]
+    fn military_conquest_records_conquest_origin_not_incorporated_from() {
+        // A minor's province conquered militarily should record its origin
+        // in `conquest_origin` (mechanics-only) while leaving
+        // `incorporated_from` untouched (UI-only). The reverse would make
+        // the conquered province render as a diplomatic incorporation on
+        // the map, which is a UI regression.
+        let input = None;
+        let result = attribute_conquest_origin(input, NationId(1), NationId(99), true);
+        assert_eq!(result, Some(NationId(99)));
+
+        // Preserved across further conquests by third parties.
+        let later = attribute_conquest_origin(result, NationId(2), NationId(1), false);
+        assert_eq!(later, Some(NationId(99)));
+
+        // If the origin minor reclaims their own province, the attribution
+        // is dropped.
+        let reclaimed = attribute_conquest_origin(result, NationId(99), NationId(1), false);
+        assert_eq!(reclaimed, None);
     }
 }

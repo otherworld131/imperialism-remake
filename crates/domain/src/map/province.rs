@@ -57,6 +57,13 @@ pub struct Province {
     /// minor provinces, and militarily conquered provinces.
     #[serde(default)]
     pub incorporated_from: Option<NationId>,
+    /// If this province was originally owned by a minor nation that later
+    /// lost it purely through military conquest (no diplomatic integration),
+    /// tracks that original minor. Purely mechanical — used by card #79 to
+    /// restore the province when the current overlord falls into anarchy.
+    /// Does NOT affect map rendering (unlike `incorporated_from`).
+    #[serde(default)]
+    pub conquest_origin: Option<NationId>,
 }
 
 impl Province {
@@ -90,6 +97,7 @@ impl Province {
             town_countdown: None,
             coastal: false,
             incorporated_from: None,
+            conquest_origin: None,
         }
     }
 

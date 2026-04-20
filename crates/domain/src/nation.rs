@@ -111,6 +111,12 @@ pub struct Nation {
     /// An anarchic nation has no economy, diplomacy, or offensive military capability.
     #[serde(default)]
     pub is_in_anarchy: bool,
+    /// For a minor nation that has been absorbed into a great power: the id
+    /// of the overlord GP. `None` for independent minors and great powers.
+    /// Set in `incorporate_minor_into_empire` and cleared when the minor
+    /// regains its independence (card #79).
+    #[serde(default)]
+    pub integrated_by: Option<NationId>,
     /// Cumulative revenue from auto-sold materials/goods on world market (dollars).
     #[serde(default)]
     pub goods_sales_revenue_dollars: i64,
@@ -181,6 +187,7 @@ impl Nation {
             has_colony: false,
             expert_rewards_earned: 0,
             is_in_anarchy: false,
+            integrated_by: None,
             goods_sales_revenue_dollars: 0,
             player_sell_orders: Vec::new(),
             player_buy_orders: Vec::new(),
