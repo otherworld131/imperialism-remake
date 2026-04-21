@@ -20,24 +20,24 @@ interface Props {
   selectedUnitIds: number[];
   onToggleUnit: (unitId: number, shiftKey: boolean) => void;
   onSelectAll: () => void;
-  onMoveSelected: () => void;
-  onMoveUnit: (unitId: number) => void;
   onCancelMove: (unitId: number) => void;
+  onCancelSelectedMoves: () => void;
   onRecruit: (unitType: string) => void;
 }
 
 export default function UnitPanel({
   provinceUnits, buildableArmy, treasury, arms, pendingMoves,
   isPlayerCapital, isPlayerProvince,
-  selectedUnitIds, onToggleUnit, onSelectAll, onMoveSelected,
-  onMoveUnit, onCancelMove, onRecruit,
+  selectedUnitIds, onToggleUnit, onSelectAll,
+  onCancelMove, onCancelSelectedMoves, onRecruit,
 }: Props) {
   const { army_units, garrison_count, province_name } = provinceUnits;
 
-  const movableUnits = army_units.filter(
-    u => u.category !== 'Garrison' && !pendingMoves.some(m => m.unit_id === u.id)
-  );
+  const selectableUnits = army_units.filter(u => u.category !== 'Garrison');
   const hasSelection = selectedUnitIds.length > 0;
+  const selectedWithPendingMove = selectedUnitIds.filter(
+    id => pendingMoves.some(m => m.unit_id === id)
+  ).length;
 
   return (
     <div style={{ fontSize: 13 }}>
@@ -55,31 +55,36 @@ export default function UnitPanel({
             <span style={{ color: '#ccc', fontWeight: 'bold' }}>
               Army Units ({army_units.length})
             </span>
-            {isPlayerProvince && movableUnits.length > 1 && (
-              <button onClick={onSelectAll} style={btnStyle('#456')}>
-                {selectedUnitIds.length === movableUnits.length ? 'Deselect' : 'Select All'}
-              </button>
-            )}
+            <div style={{ display: 'flex', gap: 4 }}>
+              {isPlayerProvince && hasSelection && selectedWithPendingMove > 0 && (
+                <button onClick={onCancelSelectedMoves} style={btnStyle('#a33')}>
+                  Cancel Moves
+                </button>
+              )}
+              {isPlayerProvince && hasSelection && (
+                <button onClick={onSelectAll} style={btnStyle('#456')}>
+                  {selectedUnitIds.length === selectableUnits.length ? 'Deselect' : 'Select All'}
+                </button>
+              )}
+              {isPlayerProvince && !hasSelection && selectableUnits.length > 1 && (
+                <button onClick={onSelectAll} style={btnStyle('#456')}>
+                  Select All
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Move Selected button */}
           {hasSelection && isPlayerProvince && (
-            <button
-              onClick={onMoveSelected}
-              style={{
-                ...btnStyle('#a85'),
-                width: '100%', marginBottom: 4, padding: '3px 6px',
-              }}
-            >
-              Move {selectedUnitIds.length} Unit{selectedUnitIds.length > 1 ? 's' : ''}
-            </button>
+            <div style={{ fontSize: 10, color: '#aaa', marginBottom: 4, fontStyle: 'italic' }}>
+              Click a highlighted hex to move {selectedUnitIds.length} unit{selectedUnitIds.length > 1 ? 's' : ''} {'\u00b7'} Esc to cancel
+            </div>
           )}
 
           {army_units.map(unit => {
             const pending = pendingMoves.find(m => m.unit_id === unit.id);
             const icon = CATEGORY_ICONS[unit.category] || '';
             const stars = '\u2605'.repeat(unit.medals);
-            const isMovable = unit.category !== 'Garrison' && !pending;
+            const isSelectable = unit.category !== 'Garrison';
             const isSelected = selectedUnitIds.includes(unit.id);
             return (
               <div key={unit.id} style={{
@@ -88,15 +93,15 @@ export default function UnitPanel({
                 padding: '4px 6px',
                 marginBottom: 3,
                 border: isSelected ? '1px solid rgba(218,165,32,0.4)' : '1px solid transparent',
-                cursor: isMovable && isPlayerProvince ? 'pointer' : 'default',
+                cursor: isSelectable && isPlayerProvince ? 'pointer' : 'default',
               }}
                 onClick={(e) => {
-                  if (isMovable && isPlayerProvince) onToggleUnit(unit.id, e.shiftKey);
+                  if (isSelectable && isPlayerProvince) onToggleUnit(unit.id, e.shiftKey);
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span>
-                    {isMovable && isPlayerProvince && (
+                    {isSelectable && isPlayerProvince && (
                       <span style={{
                         display: 'inline-block', width: 12, height: 12,
                         border: '1px solid #888', borderRadius: 2, marginRight: 4,
@@ -117,7 +122,7 @@ export default function UnitPanel({
                   <HealthBar health={unit.health} />
                   <span style={{ fontSize: 10, color: '#888' }}>{unit.health}%</span>
                 </div>
-                {pending ? (
+                {pending && (
                   <div style={{ marginTop: 3, fontSize: 11 }}>
                     <span style={{ color: '#ffd700' }}>
                       \u2192 {pending.destination_name}
@@ -126,12 +131,6 @@ export default function UnitPanel({
                       Cancel
                     </button>
                   </div>
-                ) : (
-                  !hasSelection && isPlayerProvince && unit.category !== 'Garrison' && (
-                    <button onClick={(e) => { e.stopPropagation(); onMoveUnit(unit.id); }} style={{ ...btnStyle('#456'), marginTop: 3 }}>
-                      Move
-                    </button>
-                  )
                 )}
               </div>
             );

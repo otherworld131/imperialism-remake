@@ -64,15 +64,26 @@ export function computeNationLabels(tiles: TileData[], minSize = 3): NationLabel
       }
       if (component.length < minSize) continue;
       let sx = 0, sy = 0;
+      const pixels: [number, number][] = [];
       for (const k of component) {
         const [cq, cr] = k.split(',').map(Number);
         const [px, py] = hexToPixel(cq, cr);
+        pixels.push([px, py]);
         sx += px; sy += py;
+      }
+      const centroidX = sx / component.length;
+      const centroidY = sy / component.length;
+      let bestPx = pixels[0][0], bestPy = pixels[0][1];
+      let bestDist = Infinity;
+      for (const [px, py] of pixels) {
+        const dx = px - centroidX, dy = py - centroidY;
+        const d = dx * dx + dy * dy;
+        if (d < bestDist) { bestDist = d; bestPx = px; bestPy = py; }
       }
       labels.push({
         name,
-        cx: sx / component.length,
-        cy: sy / component.length,
+        cx: bestPx,
+        cy: bestPy,
         size: component.length,
         is_anarchic: entry.is_anarchic,
       });

@@ -160,8 +160,6 @@ function App() {
   const [shipsData, setShipsData] = useState<ShipsData | null>(null);
   const [buildable, setBuildable] = useState<BuildableUnits | null>(null);
   const [selectedUnitIds, setSelectedUnitIds] = useState<number[]>([]);
-  const [isMovementMode, setIsMovementMode] = useState(false);
-  const [validMoveTargets, setValidMoveTargets] = useState<ValidMoveTargets | null>(null);
   const [isDeployMode, setIsDeployMode] = useState(false);
   const [deployingCivilian, setDeployingCivilian] = useState<CivilianDetail | null>(null);
   const [deployableTiles, setDeployableTiles] = useState<Set<string>>(new Set());
@@ -296,8 +294,6 @@ function App() {
     setActiveScreen('map');
     setProvinceUnits(null);
     setSelectedUnitIds([]);
-    setIsMovementMode(false);
-    setValidMoveTargets(null);
     setIsDeployMode(false);
     setDeployingCivilian(null);
     setDeployableTiles(new Set());
@@ -330,8 +326,6 @@ function App() {
     // Clear interaction state
     setProvinceUnits(null);
     setSelectedUnitIds([]);
-    setIsMovementMode(false);
-    setValidMoveTargets(null);
     setIsDeployMode(false);
     setDeployingCivilian(null);
   }, [gameJson, applyGameJson]);
@@ -357,8 +351,6 @@ function App() {
     setCurrentNavalBattles(allNavalBattles);
     setProvinceUnits(null);
     setSelectedUnitIds([]);
-    setIsMovementMode(false);
-    setValidMoveTargets(null);
     setIsDeployMode(false);
     setDeployingCivilian(null);
   }, [gameJson, applyGameJson, skipN]);
@@ -383,7 +375,7 @@ function App() {
         }
       }
       if (e.code === 'Escape') {
-        if (isMovementMode) { setIsMovementMode(false); setValidMoveTargets(null); setSelectedUnitIds([]); }
+        if (selectedUnitIds.length > 0) { setSelectedUnitIds([]); }
         else if (isDeployMode) { setIsDeployMode(false); setDeployingCivilian(null); setDeployableTiles(new Set()); }
         else if (showProposals) setShowProposals(false);
         else if (activeScreen === 'newspaper') dismissNewspaper();
@@ -402,7 +394,7 @@ function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeScreen, showTech, showProposals, handleEndTurn, dismissNewspaper, isMovementMode, isDeployMode]);
+  }, [activeScreen, showTech, showProposals, handleEndTurn, dismissNewspaper, selectedUnitIds, isDeployMode]);
 
   // Fetch overlay data when map mode or selected nation changes
   useEffect(() => {
@@ -426,42 +418,54 @@ function App() {
 
   const playerNationId = gameState?.human_player_nation ?? 0;
 
+  // Having a non-empty selection implicitly arms movement mode.
+  // Valid move targets are the intersection of each selected unit's legal destinations.
+  const validMoveTargets = useMemo<ValidMoveTargets | null>(() => {
+    if (selectedUnitIds.length === 0 || !gameJson) return null;
+    const allTargets = selectedUnitIds.map(id => getValidMoveTargets(gameJson, playerNationId, id));
+    if (allTargets.some(t => !t)) return null;
+    const first = allTargets[0]!;
+    const friendly = first.friendly.filter(t =>
+      allTargets.every(targets => targets!.friendly.some(f => f.province_id === t.province_id))
+    );
+    const hostile = first.hostile.filter(t =>
+      allTargets.every(targets => targets!.hostile.some(h => h.province_id === t.province_id))
+    );
+    return { friendly, hostile };
+  }, [selectedUnitIds, gameJson, playerNationId]);
+  const isMovementMode = selectedUnitIds.length > 0 && validMoveTargets !== null;
+
   const handleTileClick = useCallback((tile: TileData) => {
-    // Movement mode: clicking a tile executes the move for all selected units
-    if (isMovementMode && selectedUnitIds.length > 0 && tile.province_id != null) {
-      // F-002: Validate target is in valid move targets
-      const isValidTarget = validMoveTargets && (
+    // Implicit movement mode: if units are selected and the clicked tile is a valid target, move them.
+    if (validMoveTargets && selectedUnitIds.length > 0 && tile.province_id != null) {
+      const isValidTarget = (
         validMoveTargets.friendly.some(t => t.province_id === tile.province_id) ||
         validMoveTargets.hostile.some(t => t.province_id === tile.province_id)
       );
-      if (!isValidTarget) return;
-
-      // Move all selected units — prevalidate then apply all-or-nothing
-      let currentJson = gameJson;
-      const results: string[] = [];
-      for (const unitId of selectedUnitIds) {
-        const cmd = queueUnitMove(currentJson, playerNationId, unitId, tile.province_id);
-        if (cmd.ok && cmd.gameJson) {
-          currentJson = cmd.gameJson;
-          results.push(cmd.gameJson);
-        } else {
-          // Rollback: don't apply any partial state
-          showError(`Move failed: ${cmd.error}. No units moved.`);
-          currentJson = gameJson; // reset to original
-          results.length = 0;
-          break;
+      if (isValidTarget) {
+        let currentJson = gameJson;
+        let ok = true;
+        for (const unitId of selectedUnitIds) {
+          const cmd = queueUnitMove(currentJson, playerNationId, unitId, tile.province_id);
+          if (cmd.ok && cmd.gameJson) {
+            currentJson = cmd.gameJson;
+          } else {
+            showError(`Move failed: ${cmd.error}. No units moved.`);
+            currentJson = gameJson;
+            ok = false;
+            break;
+          }
         }
-      }
-      if (results.length > 0) {
-        applyGameJson(currentJson);
-        if (provinceUnits) {
-          setProvinceUnits(getUnitsInProvince(currentJson, tile.province_id));
+        if (ok) {
+          applyGameJson(currentJson);
+          if (provinceUnits) {
+            setProvinceUnits(getUnitsInProvince(currentJson, tile.province_id));
+          }
         }
+        setSelectedUnitIds([]);
+        return;
       }
-      setIsMovementMode(false);
-      setValidMoveTargets(null);
-      setSelectedUnitIds([]);
-      return;
+      // Invalid target: fall through to normal tile navigation (clears selection below).
     }
 
     // Deploy mode: clicking a tile deploys the civilian
@@ -495,7 +499,7 @@ function App() {
       setProvinceUnits(null);
       setSelectedUnitIds([]);
     }
-  }, [mapMode, gameJson, playerNationId, isMovementMode, selectedUnitIds, validMoveTargets, isDeployMode, deployingCivilian, deployableTiles, applyGameJson, provinceUnits, showError]);
+  }, [mapMode, gameJson, playerNationId, selectedUnitIds, validMoveTargets, isDeployMode, deployingCivilian, deployableTiles, applyGameJson, provinceUnits, showError]);
 
   const handleNavyMarkerClick = useCallback((marker: NavyMarker | null) => {
     if (!marker) {
@@ -562,14 +566,6 @@ function App() {
   const isPlayerProvince = selectedTile?.nation_id === playerNationId && playerNationId != null;
   const isPlayerCapital = isPlayerProvince && selectedTile?.is_country_capital === true;
 
-  // Unit interaction handlers
-  const handleMoveUnit = useCallback((unitId: number) => {
-    const targets = getValidMoveTargets(gameJson, playerNationId, unitId);
-    setValidMoveTargets(targets);
-    setSelectedUnitIds([unitId]);
-    setIsMovementMode(true);
-  }, [gameJson, playerNationId]);
-
   // Multi-unit selection handlers
   const handleToggleUnit = useCallback((unitId: number, shiftKey: boolean) => {
     setSelectedUnitIds(prev => {
@@ -586,37 +582,40 @@ function App() {
 
   const handleSelectAll = useCallback(() => {
     if (!provinceUnits) return;
-    const movableIds = provinceUnits.army_units
-      .filter(u => u.category !== 'Garrison' && !pendingMovesDisplay.some(m => m.unit_id === u.id))
+    const selectableIds = provinceUnits.army_units
+      .filter(u => u.category !== 'Garrison')
       .map(u => u.id);
     setSelectedUnitIds(prev =>
-      prev.length === movableIds.length ? [] : movableIds
+      prev.length === selectableIds.length ? [] : selectableIds
     );
-  }, [provinceUnits, pendingMovesDisplay]);
-
-  const handleMoveSelected = useCallback(() => {
-    if (selectedUnitIds.length === 0) return;
-    // Compute intersection of valid targets for all selected units
-    const allTargets = selectedUnitIds.map(id => getValidMoveTargets(gameJson, playerNationId, id));
-    if (allTargets.some(t => !t)) { showError('Could not compute move targets'); return; }
-
-    const firstTargets = allTargets[0]!;
-    const friendly = firstTargets.friendly.filter(t =>
-      allTargets.every(targets => targets!.friendly.some(f => f.province_id === t.province_id))
-    );
-    const hostile = firstTargets.hostile.filter(t =>
-      allTargets.every(targets => targets!.hostile.some(h => h.province_id === t.province_id))
-    );
-
-    setValidMoveTargets({ friendly, hostile });
-    setIsMovementMode(true);
-  }, [selectedUnitIds, gameJson, playerNationId, showError]);
+  }, [provinceUnits]);
 
   const handleCancelMove = useCallback((unitId: number) => {
     const cmd = cancelUnitMove(gameJson, unitId);
     if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Cancel failed: ${cmd.error}`);
   }, [gameJson, applyGameJson, showError]);
+
+  const handleCancelSelectedMoves = useCallback(() => {
+    const cancelable = selectedUnitIds.filter(
+      id => pendingMovesDisplay.some(m => m.unit_id === id)
+    );
+    if (cancelable.length === 0) return;
+    let currentJson = gameJson;
+    let succeeded = 0;
+    let failed = 0;
+    for (const unitId of cancelable) {
+      const cmd = cancelUnitMove(currentJson, unitId);
+      if (cmd.ok && cmd.gameJson) {
+        currentJson = cmd.gameJson;
+        succeeded++;
+      } else {
+        failed++;
+      }
+    }
+    if (succeeded > 0) applyGameJson(currentJson);
+    if (failed > 0) showError(`Canceled ${succeeded} of ${cancelable.length} moves \u2014 ${failed} failed`);
+  }, [selectedUnitIds, pendingMovesDisplay, gameJson, applyGameJson, showError]);
 
   const handleRecruit = useCallback((unitType: string) => {
     if (isObserver) return;
@@ -723,7 +722,6 @@ function App() {
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
   const handleSetBuyOrder = useCallback((resource: string, quantity: number, maxPrice: number) => {
-    if (isObserver) return;
     const cmd = setPlayerBuyOrder(gameJson, playerNationId, resource, quantity, maxPrice);
     if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Buy order failed: ${cmd.error}`);
@@ -732,7 +730,6 @@ function App() {
   // Diplomacy screen handlers
   const makeDiploHandler = useCallback((fn: (gj: string, nid: number, tid: number) => any, label: string) =>
     (targetId: number) => {
-      if (isObserver) return;
       const cmd = fn(gameJson, playerNationId, targetId);
       if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
       else if (cmd.error) showError(`${label}: ${cmd.error}`);
@@ -752,7 +749,6 @@ function App() {
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
   const handleDiploBreakTreaty = useCallback((targetId: number, treatyType: string) => {
-    if (isObserver) return;
     const cmd = diplomacyBreakTreaty(gameJson, playerNationId, targetId, treatyType);
     if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Break treaty failed: ${cmd.error}`);
@@ -760,7 +756,6 @@ function App() {
 
   // Proposal modal handlers
   const handleAcceptProposal = useCallback((index: number) => {
-    if (isObserver) return;
     const cmd = acceptProposal(gameJson, playerNationId, index);
     if (cmd.ok && cmd.gameJson) {
       applyGameJson(cmd.gameJson);
@@ -771,7 +766,6 @@ function App() {
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
   const handleRejectProposal = useCallback((index: number) => {
-    if (isObserver) return;
     const cmd = rejectProposal(gameJson, playerNationId, index);
     if (cmd.ok && cmd.gameJson) {
       applyGameJson(cmd.gameJson);
@@ -1248,9 +1242,8 @@ function App() {
                     selectedUnitIds={selectedUnitIds}
                     onToggleUnit={handleToggleUnit}
                     onSelectAll={handleSelectAll}
-                    onMoveSelected={handleMoveSelected}
-                    onMoveUnit={handleMoveUnit}
                     onCancelMove={handleCancelMove}
+                    onCancelSelectedMoves={handleCancelSelectedMoves}
                     onRecruit={handleRecruit}
                   />
                 </div>
