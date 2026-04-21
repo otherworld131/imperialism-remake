@@ -120,6 +120,13 @@ export interface MedalAward {
   medals: number;
 }
 
+export interface BattleUnit {
+  unit_type: string;
+  health: number;
+  medals: number;
+  effective_firepower: number;
+}
+
 export interface LandBattleData {
   type: 'land';
   attacker: string;
@@ -132,6 +139,8 @@ export interface LandBattleData {
   retreated: boolean;
   attacker_casualties: string[];
   defender_casualties: string[];
+  attacker_survivors: BattleUnit[];
+  defender_survivors: BattleUnit[];
   terrain: string | null;
   fort_level: number;
   siege_reduced_fort: boolean;
@@ -782,6 +791,7 @@ export interface DiplomacyScreenRelation {
   has_pending_nap: boolean;
   has_pending_alliance: boolean;
   has_pending_peace: boolean;
+  is_in_anarchy: boolean;
   actions: DiplomacyRelationActions;
 }
 

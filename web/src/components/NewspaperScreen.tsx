@@ -199,7 +199,7 @@ export default function NewspaperScreen({
                   }}>
                     {h.text}
                     {showAiReasoning && h.reason && (
-                      <div style={{ fontSize: 12, color: '#888', marginTop: 2, fontStyle: 'italic' }}>{h.reason}</div>
+                      <div style={{ fontSize: 12, color: '#888', marginTop: 2, fontStyle: 'italic', whiteSpace: 'pre-wrap' }}>{h.reason}</div>
                     )}
                   </div>
                 ))}
@@ -218,7 +218,7 @@ export default function NewspaperScreen({
                       {tag && <span style={styles.nationTag}>{tag}</span>}
                       {h.text}
                       {showAiReasoning && h.reason && (
-                        <div style={{ fontSize: 12, color: '#888', marginTop: 2, fontStyle: 'italic' }}>{h.reason}</div>
+                        <div style={{ fontSize: 12, color: '#888', marginTop: 2, fontStyle: 'italic', whiteSpace: 'pre-wrap' }}>{h.reason}</div>
                       )}
                     </div>
                   );

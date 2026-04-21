@@ -1,4 +1,5 @@
 import type { ArmyUnitDetail, ProvinceUnits, BuildableUnit, PendingMove } from '../wasm';
+import { HealthBar } from './UnitRow';
 
 const CATEGORY_ICONS: Record<string, string> = {
   Infantry: '\u2694\uFE0F',   // ⚔️
@@ -177,15 +178,6 @@ export default function UnitPanel({
           })}
         </div>
       )}
-    </div>
-  );
-}
-
-function HealthBar({ health }: { health: number }) {
-  const color = health > 60 ? '#2a2' : health > 30 ? '#ca2' : '#a22';
-  return (
-    <div style={{ width: 60, height: 5, background: 'rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
-      <div style={{ width: `${health}%`, height: '100%', background: color }} />
     </div>
   );
 }

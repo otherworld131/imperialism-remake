@@ -15,6 +15,7 @@ interface Props {
 
 const STATUS_COLORS: Record<string, string> = {
   'At War': '#e44',
+  'Anarchy': '#a0a',
   'Alliance': '#4a4',
   'NAP': '#4aa',
   'Neutral': '#888',
@@ -59,7 +60,7 @@ export default function DiplomacyPanel({
           <NationRow
             key={rel.nation_id}
             rel={rel}
-            isExpanded={expandedNation === rel.nation_id}
+            isExpanded={expandedNation === rel.nation_id && !rel.is_in_anarchy}
             confirmWar={confirmWar === rel.nation_id}
             onToggle={() => setExpandedNation(expandedNation === rel.nation_id ? null : rel.nation_id)}
             onBuildConsulate={() => onBuildConsulate(rel.nation_id)}
@@ -116,7 +117,10 @@ function NationRow({
       padding: '4px 5px', marginBottom: 3,
       borderLeft: `3px solid ${STATUS_COLORS[rel.status] || '#555'}`,
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer' }} onClick={onToggle}>
+      <div
+        style={{ display: 'flex', justifyContent: 'space-between', cursor: rel.is_in_anarchy ? 'default' : 'pointer' }}
+        onClick={rel.is_in_anarchy ? undefined : onToggle}
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <span style={{ fontSize: 12, fontWeight: 'bold' }}>{rel.nation_name}</span>
           <span style={{ fontSize: 9, color: '#888', background: 'rgba(255,255,255,0.06)', borderRadius: 2, padding: '0 3px' }}>

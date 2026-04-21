@@ -828,12 +828,24 @@ pub(crate) fn ai_declare_wars(
                         attacker_name
                     ),
                     reason: format!(
-                        "best candidate {} scored combined={:.2} (need={:.2}, opp={:.2}) < threshold {:.2}; relationship_penalty={:.2}",
+                        "best candidate {} scored combined {:.2} < threshold {:.2}\n  \
+                         need {:.2} = base_need {:.2} (target provinces / 5) + resource_bonus {:.2} ({} missing resources)\n  \
+                         opportunity {:.2} = army_ratio {:.2} + province_bonus {:.2} + at_war_bonus {:.2}\n  \
+                         combined = need + opportunity \u{00d7} opportunism_weight {:.2} \u{00d7} coalition_factor {:.2} \u{2212} relationship_penalty {:.2}\n  \
+                         \u{2192} combined below threshold, war not declared",
                         target_name,
                         c.combined_score,
-                        c.need_score,
-                        c.opportunity_score,
                         war_threshold,
+                        c.need_score,
+                        c.base_need,
+                        c.resource_bonus,
+                        c.missing_count,
+                        c.opportunity_score,
+                        c.army_ratio,
+                        c.province_bonus,
+                        c.at_war_bonus,
+                        opportunism_weight,
+                        c.coalition_factor,
                         c.relationship_penalty,
                     ),
                     is_non_action: true,
@@ -947,10 +959,10 @@ pub(crate) fn ai_declare_wars(
         actions.push(super::AiAction {
             text: format!("{} has declared war on {}!", attacker_name, target_name),
             reason: format!(
-                "combined={:.2} > threshold={:.2}. \
-                 need={:.2} = base_need {:.2} (target provinces/5) + resource_bonus {:.2} ({} missing resources). \
-                 opportunity={:.2} = army_ratio {:.2} (firepower advantage) + province_bonus {:.2} (larger empire) + at_war_bonus {:.2} (target already at war). \
-                 opportunism_weight={:.2}, coalition_factor={:.2} (ally power ratio), relationship_penalty={:.2} (standing/treaties/pact-defense risk).",
+                "combined {:.2} > threshold {:.2}\n  \
+                 need {:.2} = base_need {:.2} (target provinces / 5) + resource_bonus {:.2} ({} missing resources)\n  \
+                 opportunity {:.2} = army_ratio {:.2} (firepower advantage) + province_bonus {:.2} (larger empire) + at_war_bonus {:.2} (target already at war)\n  \
+                 combined = need + opportunity \u{00d7} opportunism_weight {:.2} \u{00d7} coalition_factor {:.2} (ally power ratio) \u{2212} relationship_penalty {:.2} (standing / treaties / pact-defense risk)",
                 candidate.combined_score,
                 war_threshold,
                 candidate.need_score,

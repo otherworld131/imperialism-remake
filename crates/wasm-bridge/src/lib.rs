@@ -2889,17 +2889,17 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
                 .map(|r| r.has_treaty(TreatyType::Alliance))
                 .unwrap_or(false);
 
-            // A nation in anarchy is displayed as at war with everyone regardless
-            // of the underlying relation record (card #31). Either side being
-            // anarchic forces the "At War" presentation. `display_at_war` is
-            // used only for the `at_war` / `status` fields the UI reads;
-            // `raw_at_war` remains authoritative for every action-gating
-            // decision so button availability stays aligned with what the
-            // backend commands will actually accept.
+            // Anarchy takes precedence in the status label; otherwise either
+            // side being anarchic forces "At War" presentation for the boolean
+            // `at_war` flag the UI reads. `raw_at_war` remains authoritative
+            // for every action-gating decision so button availability stays
+            // aligned with what the backend commands will accept.
             let target_in_anarchy = n.is_in_anarchy;
             let display_at_war = raw_at_war || target_in_anarchy || player_in_anarchy;
 
-            let status = if display_at_war {
+            let status = if target_in_anarchy {
+                "Anarchy"
+            } else if display_at_war {
                 "At War"
             } else if has_alliance {
                 "Alliance"
@@ -2983,6 +2983,7 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
                 "has_pending_nap": has_pending_nap,
                 "has_pending_alliance": has_pending_alliance,
                 "has_pending_peace": has_pending_peace,
+                "is_in_anarchy": target_in_anarchy,
                 "actions": {
                     "can_build_consulate": can_build_consulate,
                     "consulate_cost": 500,
@@ -3900,6 +3901,20 @@ fn serialize_battle(b: &BattleResult, game: &GameState) -> serde_json::Value {
         })
         .collect();
 
+    let serialize_units = |units: &[ArmyUnit]| -> Vec<serde_json::Value> {
+        units
+            .iter()
+            .map(|u| {
+                serde_json::json!({
+                    "unit_type": format!("{:?}", u.unit_type),
+                    "health": u.health,
+                    "medals": u.medals,
+                    "effective_firepower": u.effective_firepower(),
+                })
+            })
+            .collect()
+    };
+
     serde_json::json!({
         "type": "land",
         "attacker": attacker_name,
@@ -3914,6 +3929,8 @@ fn serialize_battle(b: &BattleResult, game: &GameState) -> serde_json::Value {
             .map(|c| format!("{:?}", c)).collect::<Vec<_>>(),
         "defender_casualties": b.defender_casualties.iter()
             .map(|c| format!("{:?}", c)).collect::<Vec<_>>(),
+        "attacker_survivors": serialize_units(&b.attacker_survivors),
+        "defender_survivors": serialize_units(&b.defender_survivors),
         "terrain": b.terrain.map(|t| format!("{:?}", t)),
         "fort_level": b.fort_level,
         "siege_reduced_fort": b.siege_reduced_fort,

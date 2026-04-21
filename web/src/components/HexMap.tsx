@@ -1,5 +1,6 @@
 import { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
 import type { TileData, MapMode, DiplomacyOverlay, MilitaryOverlayEntry, ArmyUnitDetail, ValidMoveTargets } from '../wasm';
+import { computeNationLabels } from '../lib/nationLabels';
 
 const HEX_SIZE = 18;
 const SQRT3 = Math.sqrt(3);
@@ -344,60 +345,7 @@ export default function HexMap({
 
   // Memoize nation label BFS — only recompute when tiles change, not on pan/zoom
   // Uses visual_group so incorporated minor nations get their own label
-  const nationLabels = useMemo(() => {
-    const labels: { name: string; cx: number; cy: number; size: number; is_anarchic: boolean }[] = [];
-    const nationTiles = new Map<string, { tiles: Set<string>; is_anarchic: boolean }>();
-    for (const tile of tiles) {
-      if (tile.terrain === 'Sea' || !tile.owner) continue;
-      const key = `${tile.q},${tile.r}`;
-      const groupName = tile.visual_group || tile.owner;
-      let entry = nationTiles.get(groupName);
-      if (!entry) {
-        entry = { tiles: new Set(), is_anarchic: tile.is_anarchic };
-        nationTiles.set(groupName, entry);
-      }
-      entry.tiles.add(key);
-    }
-
-    for (const [name, entry] of nationTiles) {
-      const visited = new Set<string>();
-      for (const startKey of entry.tiles) {
-        if (visited.has(startKey)) continue;
-        const component: string[] = [];
-        const queue: string[] = [startKey];
-        let head = 0;
-        visited.add(startKey);
-        while (head < queue.length) {
-          const cur = queue[head++];
-          component.push(cur);
-          const [cq, cr] = cur.split(',').map(Number);
-          const nbrs = hexNeighbors(cq, cr);
-          for (const [nq, nr] of nbrs) {
-            const nk = `${nq},${nr}`;
-            if (!visited.has(nk) && entry.tiles.has(nk)) {
-              visited.add(nk);
-              queue.push(nk);
-            }
-          }
-        }
-        if (component.length < 3) continue;
-        let sx = 0, sy = 0;
-        for (const k of component) {
-          const [cq, cr] = k.split(',').map(Number);
-          const [px, py] = hexToPixel(cq, cr);
-          sx += px; sy += py;
-        }
-        labels.push({
-          name,
-          cx: sx / component.length,
-          cy: sy / component.length,
-          size: component.length,
-          is_anarchic: entry.is_anarchic,
-        });
-      }
-    }
-    return labels;
-  }, [tiles]);
+  const nationLabels = useMemo(() => computeNationLabels(tiles), [tiles]);
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;

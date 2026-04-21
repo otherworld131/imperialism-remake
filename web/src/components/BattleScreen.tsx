@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import type { TileData, LandBattleData, NavalBattleData, BattleData, ArchivedBattleTurn, BattleTile } from '../wasm';
+import type { TileData, LandBattleData, NavalBattleData, BattleData, ArchivedBattleTurn, BattleTile, BattleUnit } from '../wasm';
+import { UnitRow } from './UnitRow';
+import { computeNationLabels } from '../lib/nationLabels';
 
 // ── Hex rendering constants (mirror HexMap.tsx) ─────────────────
 const HEX_SIZE = 18;
@@ -144,8 +146,8 @@ export default function BattleScreen({
       battle.province_tiles.map((t: BattleTile) => `${t.q},${t.r}`)
     );
 
-    // Filter tiles within rendering radius (~6 hexes from center)
-    const RADIUS = 6;
+    // Filter tiles within rendering radius — wider than 6 so country names fit
+    const RADIUS = 15;
     const nearbyTiles = tiles.filter(t => {
       const dq = t.q - centerQ;
       const dr = t.r - centerR;
@@ -217,6 +219,28 @@ export default function BattleScreen({
           ctx.arc(midX, midY, 1, 0, Math.PI * 2);
           ctx.stroke();
         }
+      }
+    }
+
+    // Pass 3b: Country name labels (political map)
+    {
+      const labels = computeNationLabels(nearbyTiles, 5);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const label of labels) {
+        const fontSize = Math.max(11, Math.min(22, Math.sqrt(label.size) * 3));
+        ctx.font = `bold ${fontSize}px Georgia, serif`;
+        ctx.lineWidth = 3;
+        if (label.is_anarchic) {
+          ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+          ctx.strokeText(label.name.toUpperCase(), label.cx + offsetX, label.cy + offsetY);
+          ctx.fillStyle = 'rgba(0,0,0,0.95)';
+        } else {
+          ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+          ctx.strokeText(label.name.toUpperCase(), label.cx + offsetX, label.cy + offsetY);
+          ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        }
+        ctx.fillText(label.name.toUpperCase(), label.cx + offsetX, label.cy + offsetY);
       }
     }
 
@@ -403,50 +427,7 @@ function LandBattleDetails({ battle }: { battle: LandBattleData }) {
         </div>
       </div>
 
-      {/* Forces summary */}
-      <div style={styles.detailSection}>
-        <div style={styles.sectionTitle}>Forces</div>
-        <div style={styles.forcesGrid}>
-          <div style={styles.forceCol}>
-            <div style={styles.forceHeader}>
-              {battle.attacker}
-              <span style={styles.roleTag}> (Attacker)</span>
-            </div>
-            <div style={styles.forceStats}>
-              {battle.attacker_initial_count} units engaged
-            </div>
-            <div style={styles.forceStats}>
-              {battle.attacker_survivors_count} survived
-            </div>
-            {battle.attacker_casualties.length > 0 && (
-              <div style={styles.casualties}>
-                <span style={styles.casualtyLabel}>Lost: </span>
-                {formatCasualties(battle.attacker_casualties)}
-              </div>
-            )}
-          </div>
-          <div style={styles.forceCol}>
-            <div style={styles.forceHeader}>
-              {battle.defender}
-              <span style={styles.roleTag}> (Defender)</span>
-            </div>
-            <div style={styles.forceStats}>
-              {battle.defender_initial_count} units engaged
-            </div>
-            <div style={styles.forceStats}>
-              {battle.defender_survivors_count} survived
-            </div>
-            {battle.defender_casualties.length > 0 && (
-              <div style={styles.casualties}>
-                <span style={styles.casualtyLabel}>Lost: </span>
-                {formatCasualties(battle.defender_casualties)}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Terrain & Fort */}
+      {/* Terrain & Fort — shown above Forces so the setting reads first */}
       <div style={styles.detailSection}>
         <div style={styles.sectionTitle}>Battlefield</div>
         <div style={styles.fieldGrid}>
@@ -462,6 +443,29 @@ function LandBattleDetails({ battle }: { battle: LandBattleData }) {
         </div>
       </div>
 
+      {/* Forces — per-unit cards (main-map sidebar style) */}
+      <div style={styles.detailSection}>
+        <div style={styles.sectionTitle}>Forces</div>
+        <div style={styles.forcesGrid}>
+          <ForceColumn
+            side={battle.attacker}
+            role="Attacker"
+            initial={battle.attacker_initial_count}
+            survivedCount={battle.attacker_survivors_count}
+            survivors={battle.attacker_survivors}
+            casualties={battle.attacker_casualties}
+          />
+          <ForceColumn
+            side={battle.defender}
+            role="Defender"
+            initial={battle.defender_initial_count}
+            survivedCount={battle.defender_survivors_count}
+            survivors={battle.defender_survivors}
+            casualties={battle.defender_casualties}
+          />
+        </div>
+      </div>
+
       {/* Medal awards */}
       {battle.medal_awards.length > 0 && (
         <div style={styles.detailSection}>
@@ -473,6 +477,54 @@ function LandBattleDetails({ battle }: { battle: LandBattleData }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Per-side force column for LandBattleDetails ─────────────────
+function ForceColumn({
+  side, role, initial, survivedCount, survivors, casualties,
+}: {
+  side: string;
+  role: 'Attacker' | 'Defender';
+  initial: number;
+  survivedCount: number;
+  survivors: BattleUnit[];
+  casualties: string[];
+}) {
+  return (
+    <div style={styles.forceCol}>
+      <div style={styles.forceHeader}>
+        {side}
+        <span style={styles.roleTag}> ({role})</span>
+      </div>
+      <div style={styles.forceStats}>
+        {initial} engaged &middot; {survivedCount} survived &middot; {casualties.length} lost
+      </div>
+      <div style={{ marginTop: 4 }}>
+        {survivors.map((u, i) => (
+          <UnitRow
+            key={`s${i}`}
+            unit_type={u.unit_type}
+            medals={u.medals}
+            health={u.health}
+            effective_firepower={u.effective_firepower}
+          />
+        ))}
+        {casualties.map((t, i) => (
+          <UnitRow
+            key={`c${i}`}
+            unit_type={t}
+            medals={0}
+            health={0}
+            effective_firepower={0}
+            destroyed
+          />
+        ))}
+        {survivors.length === 0 && casualties.length === 0 && (
+          <div style={{ color: '#888', fontStyle: 'italic', fontSize: 11 }}>No units recorded</div>
+        )}
+      </div>
     </div>
   );
 }

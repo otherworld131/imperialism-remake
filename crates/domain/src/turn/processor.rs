@@ -345,24 +345,12 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         .push((game.turn, report.newspaper_headlines.clone()));
 
     // 11c. Archive battle results for history browsing
-    // Strip heavyweight survivor vectors (ArmyUnit/Ship structs) — the archive
-    // only needs counts, which are already stored as initial_count fields.
     if !report.battles.is_empty() || !report.naval_battles.is_empty() {
-        let archived_battles: Vec<BattleResult> = report
-            .battles
-            .iter()
-            .map(|b| {
-                let mut archived = b.clone();
-                archived.attacker_survivors = Vec::new();
-                archived.defender_survivors = Vec::new();
-                archived
-            })
-            .collect();
-        // Naval battles keep survivors (Ship is lightweight, and NavalBattleResult
-        // has no initial_count field so we can't derive counts from casualties alone)
-        let archived_naval: Vec<NavalBattleResult> = report.naval_battles.clone();
-        game.battle_archive
-            .push((game.turn, archived_battles, archived_naval));
+        game.battle_archive.push((
+            game.turn,
+            report.battles.clone(),
+            report.naval_battles.clone(),
+        ));
     }
 
     // 12. Advance turn
@@ -5440,18 +5428,17 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
     // Non-actions ("considered but declined") flow through with is_non_action=true
     // so the UI can filter them behind a debug toggle.
     for action in &report.ai_actions {
-        let headline = if action.is_non_action {
-            Headline::non_action(
-                action.text.clone(),
-                HeadlineCategory::Default,
-                action.reason.clone(),
-            )
+        let category = if action.text.contains("declared war on")
+            || action.text.contains("did not declare war")
+        {
+            HeadlineCategory::War
         } else {
-            Headline::with_reason(
-                action.text.clone(),
-                HeadlineCategory::Default,
-                action.reason.clone(),
-            )
+            HeadlineCategory::Default
+        };
+        let headline = if action.is_non_action {
+            Headline::non_action(action.text.clone(), category, action.reason.clone())
+        } else {
+            Headline::with_reason(action.text.clone(), category, action.reason.clone())
         };
         report.newspaper_headlines.push(headline);
     }
@@ -11050,14 +11037,19 @@ mod tests {
             "origin should include Province 1 where attacker units are stationed"
         );
 
-        // Verify survivors are stripped from archived battles (lightweight archive)
-        assert!(
-            first_battle.attacker_survivors.is_empty(),
-            "archived battles should have stripped attacker survivors"
+        // Survivors are retained in the archive so the Battle Archive UI
+        // can render the same per-unit Forces view as the current-turn view.
+        let total_units = first_battle.attacker_survivors.len()
+            + first_battle.attacker_casualties.len();
+        assert_eq!(
+            total_units, first_battle.attacker_initial_count,
+            "attacker survivors + casualties should sum to initial count"
         );
-        assert!(
-            first_battle.defender_survivors.is_empty(),
-            "archived battles should have stripped defender survivors"
+        let total_def_units = first_battle.defender_survivors.len()
+            + first_battle.defender_casualties.len();
+        assert_eq!(
+            total_def_units, first_battle.defender_initial_count,
+            "defender survivors + casualties should sum to initial count"
         );
     }
 
