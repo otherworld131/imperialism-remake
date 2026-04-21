@@ -470,9 +470,9 @@ pub fn ai_naval_strategy(
                 let target_prov_name = target_prov.name.clone();
                 if let Some(nation) = game.get_nation_mut(nation_id) {
                     for ship in &mut nation.warships {
-                        ship.operation = Some(
-                            crate::military::naval::NavalOperation::Beachhead(target_pid),
-                        );
+                        ship.operation = Some(crate::military::naval::NavalOperation::Beachhead(
+                            target_pid,
+                        ));
                     }
                 }
                 let reason_text = if !any_land_adjacent {
@@ -787,11 +787,8 @@ mod tests {
             ));
         }
         for i in 0..3 {
-            ai.warships.push(Ship::new(
-                UnitId(9200 + i),
-                ShipType::Frigate,
-                NationId(2),
-            ));
+            ai.warships
+                .push(Ship::new(UnitId(9200 + i), ShipType::Frigate, NationId(2)));
         }
         // Enemy has no warships and a small garrison (garrison_count=3 by default).
 
@@ -800,12 +797,10 @@ mod tests {
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert!(
-            ai.warships
-                .iter()
-                .all(|s| !matches!(
-                    s.operation,
-                    Some(crate::military::naval::NavalOperation::Beachhead(_))
-                )),
+            ai.warships.iter().all(|s| !matches!(
+                s.operation,
+                Some(crate::military::naval::NavalOperation::Beachhead(_))
+            )),
             "AI should not assign Beachhead when a soft overland target is available"
         );
         assert!(
@@ -852,11 +847,8 @@ mod tests {
             ));
         }
         for i in 0..3 {
-            ai.warships.push(Ship::new(
-                UnitId(9600 + i),
-                ShipType::Frigate,
-                NationId(2),
-            ));
+            ai.warships
+                .push(Ship::new(UnitId(9600 + i), ShipType::Frigate, NationId(2)));
         }
         // Enemy stacked with a fat garrison already (20). Attacker army=5,
         // ratio 1.5 → cap = 8; defenders (20) > 8 → too hard.
@@ -892,8 +884,9 @@ mod tests {
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Balanced);
         let mut stale_ship = Ship::new(UnitId(9800), ShipType::Frigate, NationId(2));
-        stale_ship.operation =
-            Some(crate::military::naval::NavalOperation::Beachhead(ProvinceId(3)));
+        stale_ship.operation = Some(crate::military::naval::NavalOperation::Beachhead(
+            ProvinceId(3),
+        ));
         ai.warships.push(stale_ship);
 
         let mut actions = Vec::new();
@@ -925,8 +918,9 @@ mod tests {
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Balanced);
         let mut stale_ship = Ship::new(UnitId(9700), ShipType::Frigate, NationId(2));
-        stale_ship.operation =
-            Some(crate::military::naval::NavalOperation::Beachhead(ProvinceId(3)));
+        stale_ship.operation = Some(crate::military::naval::NavalOperation::Beachhead(
+            ProvinceId(3),
+        ));
         ai.warships.push(stale_ship);
 
         // Give enemy several strong warships so max_enemy_naval_fp > our_naval_fp.
@@ -944,12 +938,10 @@ mod tests {
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert!(
-            ai.warships
-                .iter()
-                .all(|s| !matches!(
-                    s.operation,
-                    Some(crate::military::naval::NavalOperation::Beachhead(_))
-                )),
+            ai.warships.iter().all(|s| !matches!(
+                s.operation,
+                Some(crate::military::naval::NavalOperation::Beachhead(_))
+            )),
             "Stale Beachhead must be cleared even on outmatched-at-sea turns"
         );
     }
@@ -969,8 +961,9 @@ mod tests {
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Balanced);
         let mut stale_ship = Ship::new(UnitId(9300), ShipType::Frigate, NationId(2));
-        stale_ship.operation =
-            Some(crate::military::naval::NavalOperation::Beachhead(ProvinceId(3)));
+        stale_ship.operation = Some(crate::military::naval::NavalOperation::Beachhead(
+            ProvinceId(3),
+        ));
         ai.warships.push(stale_ship);
 
         let mut actions = Vec::new();
@@ -978,12 +971,10 @@ mod tests {
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert!(
-            ai.warships
-                .iter()
-                .all(|s| !matches!(
-                    s.operation,
-                    Some(crate::military::naval::NavalOperation::Beachhead(_))
-                )),
+            ai.warships.iter().all(|s| !matches!(
+                s.operation,
+                Some(crate::military::naval::NavalOperation::Beachhead(_))
+            )),
             "stale Beachhead against a now-reachable target must be cleared"
         );
     }

@@ -390,9 +390,7 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
             let e = province_army.entry(unit.position).or_insert((0.0, 0));
             e.0 += unit.effective_firepower();
             e.1 += 1;
-            let bucket = province_army_composition
-                .entry(unit.position)
-                .or_default();
+            let bucket = province_army_composition.entry(unit.position).or_default();
             *bucket.entry(format!("{:?}", unit.unit_type)).or_insert(0) += 1;
         }
     }

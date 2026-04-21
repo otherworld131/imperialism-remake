@@ -29,6 +29,13 @@ economic = {
     opportunism_weight = 0.4,   -- modest exploitation of weakness
     min_artillery_for_minor_war = 3, -- need 3 artillery to breach minor defenses
 
+    -- Opportunity gate (card #97)
+    min_opportunity_start = 0.40,
+    min_opportunity_end = 0.15,
+    min_opportunity_decay_turns = 25,
+    resource_bonus_per_missing = 0.08,
+    resource_bonus_cap = 0.15,
+
     -- Army building tiers
     tier1_army_max = 3,
     tier2_army_max = 5,

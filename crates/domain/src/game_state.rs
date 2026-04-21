@@ -380,10 +380,12 @@ pub fn new_game_with_seed(
         let default_garrison = game_data.game_config.default_garrison_per_province as usize;
         for &pid in &setup.province_ids {
             for _ in 0..default_garrison {
-                nation.army.push(crate::military::combat::spawn_militia_unit(
-                    setup.nation_id,
-                    pid,
-                ));
+                nation
+                    .army
+                    .push(crate::military::combat::spawn_militia_unit(
+                        setup.nation_id,
+                        pid,
+                    ));
             }
         }
 
@@ -440,10 +442,12 @@ pub fn new_game_with_seed(
         let minor_default_garrison = game_data.game_config.minor_default_garrison as usize;
         for &pid in &setup.province_ids {
             for _ in 0..minor_default_garrison {
-                nation.army.push(crate::military::combat::spawn_militia_unit(
-                    setup.nation_id,
-                    pid,
-                ));
+                nation
+                    .army
+                    .push(crate::military::combat::spawn_militia_unit(
+                        setup.nation_id,
+                        pid,
+                    ));
             }
         }
         // A single GarrisonArtillery at the minor nation's capital.

@@ -426,6 +426,26 @@ pub(crate) fn ai_declare_wars(
                 AiPersonality::Diplomatic => (20, 8, 0.9, 0.6),
             };
 
+        // Opportunity-gate defaults (decaying minimum opportunity required
+        // to declare war: high early game, relaxes over `decay_turns`).
+        // Mirrors the values in scripts/ai/*.lua; Lua is authoritative when
+        // the feature is enabled.
+        let (default_opp_start, default_opp_end, default_opp_decay_turns) = match personality {
+            AiPersonality::Aggressive => (0.25f64, 0.05f64, 15u32),
+            AiPersonality::Balanced => (0.35, 0.10, 20),
+            AiPersonality::Economic => (0.40, 0.15, 25),
+            AiPersonality::Diplomatic => (0.50, 0.20, 30),
+        };
+
+        // Resource-bonus defaults (reduced from the old 0.15 / 0.4 — trade
+        // satisfies most resource desires without bloodshed).
+        let (default_res_per_missing, default_res_cap) = match personality {
+            AiPersonality::Aggressive => (0.12f64, 0.25f64),
+            AiPersonality::Balanced => (0.10, 0.20),
+            AiPersonality::Economic => (0.08, 0.15),
+            AiPersonality::Diplomatic => (0.06, 0.15),
+        };
+
         // ── Read Lua overrides (feature-gated) ─────────────────
         #[cfg(feature = "lua")]
         let lua_cfg = game
@@ -467,6 +487,54 @@ pub(crate) fn ai_declare_wars(
             .unwrap_or(default_opportunism);
         #[cfg(not(feature = "lua"))]
         let opportunism_weight = default_opportunism;
+
+        // Opportunity gate + resource-bonus tunables (Lua-overridable)
+        #[cfg(feature = "lua")]
+        let min_opp_start = lua_cfg
+            .as_ref()
+            .and_then(|c| c.min_opportunity_start)
+            .unwrap_or(default_opp_start);
+        #[cfg(feature = "lua")]
+        let min_opp_end = lua_cfg
+            .as_ref()
+            .and_then(|c| c.min_opportunity_end)
+            .unwrap_or(default_opp_end);
+        #[cfg(feature = "lua")]
+        let opp_decay_turns = lua_cfg
+            .as_ref()
+            .and_then(|c| c.min_opportunity_decay_turns)
+            .unwrap_or(default_opp_decay_turns);
+        #[cfg(feature = "lua")]
+        let resource_bonus_per_missing = lua_cfg
+            .as_ref()
+            .and_then(|c| c.resource_bonus_per_missing)
+            .unwrap_or(default_res_per_missing);
+        #[cfg(feature = "lua")]
+        let resource_bonus_cap = lua_cfg
+            .as_ref()
+            .and_then(|c| c.resource_bonus_cap)
+            .unwrap_or(default_res_cap);
+        #[cfg(not(feature = "lua"))]
+        let (min_opp_start, min_opp_end, opp_decay_turns) =
+            (default_opp_start, default_opp_end, default_opp_decay_turns);
+        #[cfg(not(feature = "lua"))]
+        let (resource_bonus_per_missing, resource_bonus_cap) =
+            (default_res_per_missing, default_res_cap);
+
+        // Linear decay of the opportunity gate. Turns are 1-based (turn 1 is
+        // the first turn of the game), so subtract 1 to make turn 1 = start
+        // and turn (1 + decay_turns) = end. Attacking a peer is a risky bet
+        // early on; later the bar relaxes as real power imbalances emerge.
+        //
+        // Defensively clamp `end <= start` here too. `LuaAiConfig::sanitize`
+        // enforces this when both fields are set in Lua, but a script that
+        // overrides only `end` (letting `start` fall back to the per-personality
+        // default) can still produce an inverted pair after fallback. This
+        // second clamp guarantees the floor is monotonically non-increasing.
+        let min_opp_end = min_opp_end.min(min_opp_start);
+        let effective_turn = turn_number.saturating_sub(1);
+        let decay_t = (effective_turn as f64 / opp_decay_turns.max(1) as f64).min(1.0);
+        let min_opportunity_for_war = min_opp_start - (min_opp_start - min_opp_end) * decay_t;
 
         let attacker_name = game
             .get_nation(ai_id)
@@ -573,6 +641,10 @@ pub(crate) fn ai_declare_wars(
         }
 
         let mut best: Option<Candidate> = None;
+        // Best candidate that *failed* the early-game opportunity gate.
+        // If no eligible candidate survives, we surface this one in the
+        // news feed so the player understands why nobody is attacking yet.
+        let mut best_gated: Option<Candidate> = None;
 
         // Snapshot nation IDs and info to avoid borrow issues
         let nation_infos: Vec<(NationId, String, usize, usize, ProvinceId)> = game
@@ -686,7 +758,8 @@ pub(crate) fn ai_declare_wars(
                 .iter()
                 .filter(|r| !ai_resources.contains(r))
                 .count();
-            let resource_bonus = (missing_count as f64 * 0.15).min(0.4);
+            let resource_bonus =
+                (missing_count as f64 * resource_bonus_per_missing).min(resource_bonus_cap);
             let need_score = (base_need + resource_bonus).min(1.0);
 
             // ── opportunity_score ──────────────────────────────
@@ -696,13 +769,24 @@ pub(crate) fn ai_declare_wars(
                 .map(|n| n.total_military_firepower())
                 .unwrap_or(0.0);
             let target_defense = estimate_target_defense(game, ai_id, target_id);
-            let army_ratio = if target_defense > 0.0 {
-                (1.0 - (target_defense / (ai_fp + 1.0))).clamp(0.0, 1.0)
+            // Symmetric advantage ratio: 0 for parity, 1 for unopposed, clamps
+            // to 0 when defender is stronger. Scales smoothly regardless of
+            // absolute army sizes (the old `1 - td/(fp+1)` form collapsed to
+            // ~0 at parity when armies were large). When both sides have zero
+            // firepower, treat as parity (0.0) rather than unopposed — a
+            // force with no army has no "opportunity" to attack anyone.
+            let army_ratio = if ai_fp + target_defense > 0.0 {
+                ((ai_fp - target_defense) / (ai_fp + target_defense)).clamp(0.0, 1.0)
             } else {
-                1.0
+                0.0
             };
+            // Scaled province advantage: "much larger empire" now scores more
+            // than "one more province". Excess provinces / target's size gives
+            // a 1-to-1 ratio at 2x size (0.2), capped at 0.4 (5x+ size).
             let province_bonus = if ai_provinces > target_provinces {
-                0.2
+                let excess = (ai_provinces - target_provinces) as f64;
+                let base = target_provinces.max(1) as f64;
+                ((excess / base) * 0.2).min(0.4)
             } else {
                 0.0
             };
@@ -789,25 +873,41 @@ pub(crate) fn ai_declare_wars(
                 + opportunity_score * opportunism_weight * coalition_factor
                 - relationship_penalty;
 
+            let candidate_snapshot = Candidate {
+                target_id,
+                combined_score,
+                need_score,
+                opportunity_score,
+                base_need,
+                resource_bonus,
+                missing_count,
+                army_ratio,
+                province_bonus,
+                at_war_bonus,
+                coalition_factor,
+                relationship_penalty,
+            };
+
+            // Early-game opportunity gate: an attacker at military parity
+            // and equal empire size has no realistic path to victory —
+            // skip regardless of need. Trade covers resource shortages.
+            if opportunity_score < min_opportunity_for_war {
+                if best_gated
+                    .as_ref()
+                    .map(|b| combined_score > b.combined_score)
+                    .unwrap_or(true)
+                {
+                    best_gated = Some(candidate_snapshot);
+                }
+                continue;
+            }
+
             if best
                 .as_ref()
                 .map(|b| combined_score > b.combined_score)
                 .unwrap_or(true)
             {
-                best = Some(Candidate {
-                    target_id,
-                    combined_score,
-                    need_score,
-                    opportunity_score,
-                    base_need,
-                    resource_bonus,
-                    missing_count,
-                    army_ratio,
-                    province_bonus,
-                    at_war_bonus,
-                    coalition_factor,
-                    relationship_penalty,
-                });
+                best = Some(candidate_snapshot);
             }
         }
 
@@ -853,15 +953,57 @@ pub(crate) fn ai_declare_wars(
                 continue;
             }
             None => {
-                // No eligible candidates (all at war, allied, anarchic, dogpiled, or no targets)
-                actions.push(super::AiAction {
-                    text: format!(
-                        "{} did not declare war this turn",
-                        attacker_name
-                    ),
-                    reason: "no eligible targets (already at war, allied, anarchic, or dogpile-prevented)".to_string(),
-                    is_non_action: true,
-                });
+                // No candidate cleared the opportunity gate — surface the
+                // strongest gated candidate so the player understands why
+                // nobody is attacking yet.
+                if let Some(c) = best_gated {
+                    let target_name = nation_infos
+                        .iter()
+                        .find(|(id, _, _, _, _)| *id == c.target_id)
+                        .map(|(_, name, _, _, _)| name.clone())
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    // Card #97: surface this explanation in the default
+                    // news feed so the player understands why day-1
+                    // declarations are rare. Non-actions are hidden by
+                    // default in the UI; this headline is elevated to a
+                    // regular visible event by setting is_non_action=false.
+                    actions.push(super::AiAction {
+                        text: format!(
+                            "{} held back from war with {} this turn",
+                            attacker_name, target_name
+                        ),
+                        reason: format!(
+                            "blocked by early-game opportunity floor: \
+                             opportunity {:.2} < floor {:.2} (decays {:.2} \u{2192} {:.2} over {} turns)\n  \
+                             need {:.2} = base_need {:.2} + resource_bonus {:.2} ({} missing resources)\n  \
+                             opportunity = army_ratio {:.2} + province_bonus {:.2} + at_war_bonus {:.2}\n  \
+                             \u{2192} attacking a peer at parity is too risky; trade fulfills resources without war",
+                            c.opportunity_score,
+                            min_opportunity_for_war,
+                            min_opp_start,
+                            min_opp_end,
+                            opp_decay_turns,
+                            c.need_score,
+                            c.base_need,
+                            c.resource_bonus,
+                            c.missing_count,
+                            c.army_ratio,
+                            c.province_bonus,
+                            c.at_war_bonus,
+                        ),
+                        is_non_action: false,
+                    });
+                } else {
+                    // No eligible candidates (all at war, allied, anarchic, dogpiled, or no targets)
+                    actions.push(super::AiAction {
+                        text: format!(
+                            "{} did not declare war this turn",
+                            attacker_name
+                        ),
+                        reason: "no eligible targets (already at war, allied, anarchic, or dogpile-prevented)".to_string(),
+                        is_non_action: true,
+                    });
+                }
                 continue;
             }
         };
@@ -1050,9 +1192,7 @@ pub(crate) fn ai_military_strategy(
             cfg.as_ref()
                 .and_then(|c| c.attack_fp_vs_minor)
                 .unwrap_or(0.8),
-            cfg.as_ref()
-                .and_then(|c| c.attack_fp_vs_gp)
-                .unwrap_or(1.0),
+            cfg.as_ref().and_then(|c| c.attack_fp_vs_gp).unwrap_or(1.0),
         )
     };
     #[cfg(not(feature = "lua"))]
@@ -1145,8 +1285,9 @@ pub(crate) fn ai_military_strategy(
                     } else {
                         0.0
                     };
-                    let militia_base_fp =
-                        crate::military::units::ArmyUnitType::Militia.stats().firepower as f64;
+                    let militia_base_fp = crate::military::units::ArmyUnitType::Militia
+                        .stats()
+                        .firepower as f64;
                     let their_local_fp = stationed_fp
                         + garrison_artillery_fp
                         + (garrison_size as f64) * militia_base_fp;
@@ -1183,33 +1324,30 @@ pub(crate) fn ai_military_strategy(
                             attacker_province_ids
                                 .iter()
                                 .copied()
-                                .filter(|&pid| {
-                                    game.get_province(pid).is_some_and(|p| p.coastal)
-                                })
+                                .filter(|&pid| game.get_province(pid).is_some_and(|p| p.coastal))
                                 .collect();
-                        let beachhead_cap: usize = game
-                            .get_nation(nation_id)
-                            .map(|n| {
-                                use crate::military::naval::NavalOperation;
-                                let assigned: Vec<_> = n
-                                    .warships
-                                    .iter()
-                                    .filter(|s| {
-                                        s.operation == Some(NavalOperation::Beachhead(prov.id))
-                                    })
-                                    .cloned()
-                                    .collect();
-                                crate::military::naval::beachhead_force_size(&assigned)
-                            })
-                            .unwrap_or(0) as usize;
+                        let beachhead_cap: usize =
+                            game.get_nation(nation_id)
+                                .map(|n| {
+                                    use crate::military::naval::NavalOperation;
+                                    let assigned: Vec<_> = n
+                                        .warships
+                                        .iter()
+                                        .filter(|s| {
+                                            s.operation == Some(NavalOperation::Beachhead(prov.id))
+                                        })
+                                        .cloned()
+                                        .collect();
+                                    crate::military::naval::beachhead_force_size(&assigned)
+                                })
+                                .unwrap_or(0) as usize;
                         let mut eligible: Vec<f64> = naval_candidates
                             .into_iter()
                             .filter(|(_, pos)| coastal_attacker_pids.contains(pos))
                             .map(|(fp, _)| fp)
                             .collect();
-                        eligible.sort_by(|a, b| {
-                            b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)
-                        });
+                        eligible
+                            .sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
                         eligible.truncate(beachhead_cap);
                         eligible.iter().sum()
                     } else {
@@ -1604,7 +1742,9 @@ mod tests {
                 ProvinceId(2),
             ));
         }
-        game.turn = TurnNumber::new(5);
+        // Past the early-game opportunity floor decay (Aggressive decays by
+        // turn 15): with marginal firepower advantage the gate is permissive.
+        game.turn = TurnNumber::new(20);
 
         let mut actions = Vec::new();
         ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
@@ -1652,6 +1792,250 @@ mod tests {
         assert!(
             !at_war,
             "Diplomatic AI should not declare war when relationship penalty is high"
+        );
+    }
+
+    // ── Card #97: early-game opportunity gate ────────────────
+
+    #[test]
+    fn opportunity_gate_blocks_day_one_war_at_parity() {
+        // On day 1 with equal-strength armies and equal empires, the
+        // early-game opportunity floor should block the war declaration and
+        // emit a non-action citing the gate.
+        let mut game = test_game_with_ai_and_minor();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Balanced);
+        // Match the minor's garrison FP so opportunity = 0.
+        for i in 0..4 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(5000 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        for i in 0..2 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(5100 + i),
+                ArmyUnitType::LightArtillery,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        game.turn = TurnNumber::new(1);
+
+        let mut actions = Vec::new();
+        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
+
+        let at_war = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .map(|r| r.at_war)
+            .unwrap_or(false);
+        assert!(
+            !at_war,
+            "Balanced AI at turn 1 with no firepower advantage must not declare war"
+        );
+        // After review fix for card #97, the gate-blocked explanation is a
+        // visible headline (is_non_action=false). Check that *some* action
+        // reason cites the gate. Both predicates are wrapped in parentheses
+        // so the && binds tightly and the || is explicit.
+        assert!(
+            actions.iter().any(|a| {
+                a.reason.contains("early-game opportunity floor")
+                    || a.reason.contains("peer at parity")
+            }),
+            "action reason should cite the early-game opportunity gate: {:?}",
+            actions.iter().map(|a| &a.reason).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn opportunity_gate_permits_war_with_overwhelming_advantage_early() {
+        // Even on turn 0, overwhelming firepower clears the gate.
+        let mut game = test_game_with_ai_and_minor();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.ai_personality = Some(AiPersonality::Aggressive);
+        // Stack a huge army so army_ratio is near 1.0 and easily clears
+        // Aggressive's turn-0 floor of 0.25.
+        for i in 0..40 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(5000 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        for i in 0..20 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(5200 + i),
+                ArmyUnitType::LightArtillery,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        game.turn = TurnNumber::new(1);
+
+        let mut actions = Vec::new();
+        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
+
+        let at_war = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .map(|r| r.at_war)
+            .unwrap_or(false);
+        assert!(
+            at_war,
+            "Aggressive AI with overwhelming firepower should clear the gate even on turn 0"
+        );
+    }
+
+    // ── Card #107: army_ratio and province_bonus scaling ─────
+
+    #[test]
+    fn province_bonus_scales_with_size_advantage() {
+        // Verify the scaled formula by checking the non-action reason text
+        // for two different size gaps: marginal (2 vs 1) vs large (5 vs 1).
+        // The reason string exposes the province_bonus value, letting us
+        // assert scaling without extracting the formula into a helper.
+        use crate::hex::HexCoord;
+        use crate::map::Province;
+        use crate::map::tile::Tile;
+
+        // Build: AI (NationId 2) with 5 provinces vs target minor with 1.
+        let mut hex_map = crate::map::HexMap::new(20, 20);
+        hex_map.set_tile(
+            HexCoord::new(0, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+        for i in 0..5 {
+            let coord = HexCoord::new(1 + i, 0);
+            hex_map.set_tile(
+                coord,
+                Tile::with_province(TerrainType::Grassland, ProvinceId(10 + i as u32)),
+            );
+        }
+        hex_map.set_tile(
+            HexCoord::new(8, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(3)),
+        );
+
+        use crate::nation::{Nation, NationColor};
+        use crate::types::NationType;
+        let ai_cap = Province::new(
+            ProvinceId(2),
+            "AI".into(),
+            NationId(2),
+            HexCoord::new(0, 0),
+            vec![HexCoord::new(0, 0)],
+            4,
+        );
+        let mut provinces = vec![ai_cap];
+        for i in 0..5 {
+            let coord = HexCoord::new(1 + i, 0);
+            provinces.push(Province::new(
+                ProvinceId(10 + i as u32),
+                format!("AIExtra{}", i),
+                NationId(2),
+                coord,
+                vec![coord],
+                4,
+            ));
+        }
+        provinces.push(Province::new(
+            ProvinceId(3),
+            "MinorLand".into(),
+            NationId(3),
+            HexCoord::new(8, 0),
+            vec![HexCoord::new(8, 0)],
+            4,
+        ));
+
+        let mut ai = Nation::new(
+            NationId(2),
+            "AI".into(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(2),
+        );
+        ai.ai_personality = Some(AiPersonality::Aggressive);
+        ai.province_ids = vec![
+            ProvinceId(2),
+            ProvinceId(10),
+            ProvinceId(11),
+            ProvinceId(12),
+            ProvinceId(13),
+            ProvinceId(14),
+        ];
+        for i in 0..6 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(5000 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        for i in 0..3 {
+            ai.army.push(ArmyUnit::new(
+                UnitId(5100 + i),
+                ArmyUnitType::LightArtillery,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+
+        let mut minor = Nation::new(
+            NationId(3),
+            "Minor".into(),
+            NationColor::Green,
+            NationType::MinorNation,
+            ProvinceId(3),
+        );
+        minor.province_ids = vec![ProvinceId(3)];
+
+        let mut human = Nation::new(
+            NationId(1),
+            "Human".into(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(2),
+        );
+        human.province_ids = vec![];
+
+        let game = crate::game_state::GameState {
+            turn: TurnNumber::new(20),
+            difficulty: crate::types::Difficulty::Normal,
+            map_key: "test".into(),
+            hex_map,
+            provinces,
+            nations: vec![human, ai, minor],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: crate::data::GameData::default(),
+            diplomacy: crate::diplomacy::DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
+            ai_debug: false,
+            observer_mode: false,
+        };
+        let mut game = game;
+
+        let mut actions = Vec::new();
+        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
+
+        // Formula: excess=5, base=1, (5/1)*0.2 = 1.0, capped at 0.4.
+        let reason_has_scaled_bonus = actions.iter().any(|a| {
+            a.reason.contains("province_bonus 0.40") || a.reason.contains("province_bonus 0.4")
+        });
+        assert!(
+            reason_has_scaled_bonus,
+            "large empire-size gap should yield capped province_bonus=0.40. Reasons: {:?}",
+            actions.iter().map(|a| &a.reason).collect::<Vec<_>>()
         );
     }
 

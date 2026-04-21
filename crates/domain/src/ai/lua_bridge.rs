@@ -331,6 +331,12 @@ pub struct LuaAiConfig {
     pub army_min_for_war: Option<usize>,
     pub opportunism_weight: Option<f64>,
     pub min_artillery_for_minor_war: Option<usize>,
+    // Decaying opportunity gate + resource-bonus knobs (card #97)
+    pub min_opportunity_start: Option<f64>,
+    pub min_opportunity_end: Option<f64>,
+    pub min_opportunity_decay_turns: Option<u32>,
+    pub resource_bonus_per_missing: Option<f64>,
+    pub resource_bonus_cap: Option<f64>,
 
     // Army building tiers
     pub tier1_army_max: Option<usize>,
@@ -500,6 +506,21 @@ impl LuaAiConfig {
         self.opportunism_weight = sanitize_opt_f64(self.opportunism_weight, 0.0, 10.0);
         self.min_artillery_for_minor_war =
             sanitize_opt_usize(self.min_artillery_for_minor_war, 0, 20);
+        // Opportunity gate + resource-bonus (card #97)
+        self.min_opportunity_start = sanitize_opt_f64(self.min_opportunity_start, 0.0, 1.0);
+        self.min_opportunity_end = sanitize_opt_f64(self.min_opportunity_end, 0.0, 1.0);
+        // Enforce monotonic decay: end must not exceed start, otherwise the
+        // "decay" would become an "increase" as the game progresses.
+        if let (Some(start), Some(end)) = (self.min_opportunity_start, self.min_opportunity_end)
+            && end > start
+        {
+            self.min_opportunity_end = Some(start);
+        }
+        self.min_opportunity_decay_turns =
+            sanitize_opt_u32(self.min_opportunity_decay_turns, 1, 100);
+        self.resource_bonus_per_missing =
+            sanitize_opt_f64(self.resource_bonus_per_missing, 0.0, 1.0);
+        self.resource_bonus_cap = sanitize_opt_f64(self.resource_bonus_cap, 0.0, 1.0);
 
         // Army tiers (usize)
         self.tier1_army_max = sanitize_opt_usize(self.tier1_army_max, 0, 100);
@@ -651,6 +672,12 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             army_min_for_war: table.get::<usize>("army_min_for_war").ok(),
             opportunism_weight: table.get("opportunism_weight").ok(),
             min_artillery_for_minor_war: table.get::<usize>("min_artillery_for_minor_war").ok(),
+            // Opportunity gate + resource-bonus (card #97)
+            min_opportunity_start: table.get("min_opportunity_start").ok(),
+            min_opportunity_end: table.get("min_opportunity_end").ok(),
+            min_opportunity_decay_turns: table.get("min_opportunity_decay_turns").ok(),
+            resource_bonus_per_missing: table.get("resource_bonus_per_missing").ok(),
+            resource_bonus_cap: table.get("resource_bonus_cap").ok(),
             // Army tiers
             tier1_army_max: table.get::<usize>("tier1_army_max").ok(),
             tier2_army_max: table.get::<usize>("tier2_army_max").ok(),
@@ -1055,6 +1082,11 @@ mod tests {
             army_min_for_war: None,
             opportunism_weight: Some(f64::NEG_INFINITY),
             min_artillery_for_minor_war: None,
+            min_opportunity_start: None,
+            min_opportunity_end: None,
+            min_opportunity_decay_turns: None,
+            resource_bonus_per_missing: None,
+            resource_bonus_cap: None,
             tier1_army_max: None,
             tier2_army_max: None,
             tier3_army_max: None,
@@ -1151,6 +1183,11 @@ mod tests {
             army_min_for_war: None,
             opportunism_weight: Some(50.0), // should clamp to 10.0
             min_artillery_for_minor_war: None,
+            min_opportunity_start: None,
+            min_opportunity_end: None,
+            min_opportunity_decay_turns: None,
+            resource_bonus_per_missing: None,
+            resource_bonus_cap: None,
             tier1_army_max: None,
             tier2_army_max: None,
             tier3_army_max: None,
@@ -1286,6 +1323,11 @@ mod tests {
             army_min_for_war: None,
             opportunism_weight: None,
             min_artillery_for_minor_war: None,
+            min_opportunity_start: None,
+            min_opportunity_end: None,
+            min_opportunity_decay_turns: None,
+            resource_bonus_per_missing: None,
+            resource_bonus_cap: None,
             tier1_army_max: None,
             tier2_army_max: None,
             tier3_army_max: None,

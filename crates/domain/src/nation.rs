@@ -311,7 +311,9 @@ impl Nation {
     /// locked to their home province). Used by the coalition-strength
     /// assessment where "can I project force?" is the relevant question.
     pub fn total_military_firepower(&self) -> f64 {
-        self.field_army_iter().map(|u| u.effective_firepower()).sum()
+        self.field_army_iter()
+            .map(|u| u.effective_firepower())
+            .sum()
     }
 
     /// Sum of effective_firepower() across every army unit, including
@@ -325,10 +327,7 @@ impl Nation {
     /// Militia and GarrisonArtillery). Use this wherever the semantic is
     /// "units available to attack / move", not "raw entries in nation.army".
     pub fn field_army_count(&self) -> usize {
-        self.army
-            .iter()
-            .filter(|u| u.unit_type.can_move())
-            .count()
+        self.army.iter().filter(|u| u.unit_type.can_move()).count()
     }
 
     /// Iterator over field army units (movable — excludes garrison).

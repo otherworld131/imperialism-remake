@@ -29,6 +29,14 @@ balanced = {
     opportunism_weight = 0.5,   -- moderate exploitation of weakness
     min_artillery_for_minor_war = 2, -- need 2 artillery to breach minor defenses
 
+    -- Opportunity gate (card #97): decaying minimum firepower/province
+    -- advantage required before declaring war.
+    min_opportunity_start = 0.35,
+    min_opportunity_end = 0.10,
+    min_opportunity_decay_turns = 20,
+    resource_bonus_per_missing = 0.10,
+    resource_bonus_cap = 0.20,
+
     -- Army building tiers
     tier1_army_max = 3,
     tier2_army_max = 5,

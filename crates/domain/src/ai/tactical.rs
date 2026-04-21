@@ -161,11 +161,7 @@ pub(crate) fn capital_threat_level(game: &GameState, nation_id: NationId) -> Cap
 ///      border provinces toward the capital.
 ///   2. **Spread** — push surplus units (capital beyond its reserve, or any
 ///      over-stocked interior province) to undefended border provinces.
-fn ai_distribute_field_army(
-    game: &mut GameState,
-    nation_id: NationId,
-    personality: AiPersonality,
-) {
+fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personality: AiPersonality) {
     // ── Load Lua tunables (feature-gated) ───────────────────────────
     #[cfg(feature = "lua")]
     let lua_cfg = game
@@ -236,8 +232,7 @@ fn ai_distribute_field_army(
     // Militia/GarrisonArtillery (movement = 0) cannot redeploy — counting
     // them inflates both capital surplus and the deficit-satisfied tally.
     let unit_counts: std::collections::HashMap<ProvinceId, usize> = {
-        let mut m: std::collections::HashMap<ProvinceId, usize> =
-            std::collections::HashMap::new();
+        let mut m: std::collections::HashMap<ProvinceId, usize> = std::collections::HashMap::new();
         if let Some(n) = game.get_nation(nation_id) {
             for u in &n.army {
                 if u.unit_type.can_move() {
@@ -294,11 +289,8 @@ fn ai_distribute_field_army(
             // Precompute the set of already-pending unit ids ONCE and update
             // it incrementally as we push moves. Rebuilding per iteration
             // made the whole distribution O(N²) in the number of moves.
-            let mut already_pending: std::collections::HashSet<crate::map::UnitId> = game
-                .pending_moves
-                .iter()
-                .map(|(_, uid, _)| *uid)
-                .collect();
+            let mut already_pending: std::collections::HashSet<crate::map::UnitId> =
+                game.pending_moves.iter().map(|(_, uid, _)| *uid).collect();
 
             let mut pulled = 0;
             for src_pid in pull_sources {
@@ -375,9 +367,8 @@ fn ai_distribute_field_army(
                 continue;
             };
             let is_staging = pending_attack_targets.iter().any(|&tpid| {
-                game.get_province(tpid).is_some_and(|tp| {
-                    crate::map::provinces_are_adjacent(&game.hex_map, prov, tp)
-                })
+                game.get_province(tpid)
+                    .is_some_and(|tp| crate::map::provinces_are_adjacent(&game.hex_map, prov, tp))
             });
             if is_staging {
                 dest_priority.push(pid);
@@ -407,11 +398,8 @@ fn ai_distribute_field_army(
     // cap — surplus redistributes in one pass. We also bail if every chosen
     // destination equals the current source (otherwise the while loop would
     // spin forever when the only staging province IS the source).
-    let mut already_pending: std::collections::HashSet<crate::map::UnitId> = game
-        .pending_moves
-        .iter()
-        .map(|(_, uid, _)| *uid)
-        .collect();
+    let mut already_pending: std::collections::HashSet<crate::map::UnitId> =
+        game.pending_moves.iter().map(|(_, uid, _)| *uid).collect();
     let mut dest_idx = 0usize;
     for (src_pid, src_surplus) in spread_sources {
         let mut remaining = src_surplus;
@@ -1090,10 +1078,7 @@ mod tests {
         for (coord, pid) in borders.iter() {
             hex_map.set_tile(
                 *coord,
-                crate::map::tile::Tile::with_province(
-                    TerrainType::Grassland,
-                    ProvinceId(*pid),
-                ),
+                crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(*pid)),
             );
         }
         // Enemy provinces adjacent to each border.
@@ -1105,10 +1090,7 @@ mod tests {
         for (coord, pid) in enemies.iter() {
             hex_map.set_tile(
                 *coord,
-                crate::map::tile::Tile::with_province(
-                    TerrainType::Grassland,
-                    ProvinceId(*pid),
-                ),
+                crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(*pid)),
             );
         }
 

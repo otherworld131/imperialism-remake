@@ -29,6 +29,16 @@ aggressive = {
     opportunism_weight = 0.8,   -- strongly exploits weakness
     min_artillery_for_minor_war = 2, -- need 2 artillery to breach minor defenses
 
+    -- Opportunity gate (card #97): decaying minimum firepower/province
+    -- advantage required before declaring war. High early, permissive later.
+    min_opportunity_start = 0.25,      -- turn 0: small edge required
+    min_opportunity_end = 0.05,        -- turn decay_turns+: nearly always open
+    min_opportunity_decay_turns = 15,
+    -- Resource-bonus knobs: trade covers most resource needs, so lacking
+    -- resources is only a weak casus belli.
+    resource_bonus_per_missing = 0.12,
+    resource_bonus_cap = 0.25,
+
     -- Army building tiers
     tier1_army_max = 4,
     tier2_army_max = 7,

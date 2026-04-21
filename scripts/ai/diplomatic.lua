@@ -29,6 +29,13 @@ diplomatic = {
     opportunism_weight = 0.2,   -- barely exploits weakness
     min_artillery_for_minor_war = 3, -- need 3 artillery to breach minor defenses
 
+    -- Opportunity gate (card #97)
+    min_opportunity_start = 0.50,
+    min_opportunity_end = 0.20,
+    min_opportunity_decay_turns = 30,
+    resource_bonus_per_missing = 0.06,
+    resource_bonus_cap = 0.15,
+
     -- Army building tiers
     tier1_army_max = 2,
     tier2_army_max = 4,
