@@ -1,5 +1,6 @@
 pub mod combat;
 pub mod naval;
+pub mod navy_placement;
 pub mod ships;
 pub mod units;
 pub use combat::{

@@ -1,6 +1,8 @@
 import { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
-import type { TileData, MapMode, DiplomacyOverlay, MilitaryOverlayEntry, ArmyUnitDetail, ValidMoveTargets } from '../wasm';
+import type { ReactNode } from 'react';
+import type { TileData, MapMode, DiplomacyOverlay, MilitaryOverlayEntry, ArmyUnitDetail, ValidMoveTargets, NavyMarker } from '../wasm';
 import { computeNationLabels } from '../lib/nationLabels';
+import HexTooltip from './HexTooltip';
 
 const HEX_SIZE = 18;
 const SQRT3 = Math.sqrt(3);
@@ -54,9 +56,9 @@ function getResourceIcon(tile: TileData): string | null {
     case 'Timber':    return '\u{1FAB5}';
     case 'Livestock': return '\u{1F404}';
     case 'Horses':    return '\u{1F434}';
-    case 'Coal':      return '\u26CF\uFE0F';
-    case 'Iron':      return '\u2692\uFE0F';
-    case 'Gold':      return '\u{1F4B0}';
+    case 'Coal':      return '\u26AB';        // ⚫ black circle
+    case 'Iron':      return '\u{1F518}';     // 🔘 radio button (grey ring)
+    case 'Gold':      return '\u{1F4B0}';     // 💰 money bag (original)
     case 'Gems':      return '\u{1F48E}';
     case 'Oil':       return '\u{1F6E2}\uFE0F';
     default:          return null;
@@ -206,6 +208,13 @@ interface Props {
   onMapModeChange: (mode: MapMode) => void;
   onTileClick?: (tile: TileData) => void;
   onTileHover?: (tile: TileData | null) => void;
+  navyMarkers?: NavyMarker[];
+  selectedNavyKey?: string | null;
+  onNavyMarkerClick?: (marker: NavyMarker | null) => void;
+  onNavyMarkerHover?: (marker: NavyMarker | null) => void;
+  /** Optional slot to render mode-specific strips (diplomatic / military) inside
+   *  the tile tooltip. The parent receives the hovered tile and returns a node. */
+  renderTooltipModeExtras?: (tile: TileData) => ReactNode;
   showHiddenResources?: boolean;
   showAiCivilians?: boolean;
   selectedUnit?: ArmyUnitDetail | null;
@@ -249,6 +258,9 @@ const IN_PROGRESS_EMOJI_BY_CIV: Record<string, string> = {
 };
 const IN_PROGRESS_FALLBACK = '\u231B'; // ⌛
 
+export { navyMarkerKey, navyMarkerOffset } from './HexMap.helpers';
+import { NAVY_MARKER_RADIUS, navyMarkerKey, navyMarkerOffset } from './HexMap.helpers';
+
 export default function HexMap({
   tiles, mapMode, diplomacyOverlay, militaryOverlay,
   onMapModeChange, onTileClick, onTileHover, showHiddenResources = false, showAiCivilians = false,
@@ -256,6 +268,8 @@ export default function HexMap({
   isDeployMode = false, deployableTiles, disableFogOfWar = false,
   scale: scaleProp, offset: offsetProp, onScaleChange, onOffsetChange,
   highlightedNationId = null,
+  navyMarkers = [], selectedNavyKey = null, onNavyMarkerClick, onNavyMarkerHover,
+  renderTooltipModeExtras,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Use props if provided (controlled mode), otherwise use local state (uncontrolled)
@@ -281,6 +295,95 @@ export default function HexMap({
       setLocalScale(valOrFn as any);
     }
   };
+
+  // ── Hex tooltip state ──────────────────────────────────────
+  // Timer refs drive the 1 s open / +1.5 s pin thresholds.
+  interface TooltipState {
+    kind: 'tile' | 'marker';
+    tile?: TileData;
+    marker?: NavyMarker;
+    hexQ: number;
+    hexR: number;
+    screenX: number;
+    screenY: number;
+    sticky: boolean;
+  }
+  const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const hoverKeyRef = useRef<string | null>(null);
+  const hoverTargetRef = useRef<{ tile?: TileData; marker?: NavyMarker; hexQ: number; hexR: number } | null>(null);
+  const hoverPosRef = useRef<{ x: number; y: number } | null>(null);
+  const openTimerRef = useRef<number | null>(null);
+  const pinTimerRef = useRef<number | null>(null);
+
+  const clearTooltipTimers = useCallback(() => {
+    if (openTimerRef.current != null) {
+      window.clearTimeout(openTimerRef.current);
+      openTimerRef.current = null;
+    }
+    if (pinTimerRef.current != null) {
+      window.clearTimeout(pinTimerRef.current);
+      pinTimerRef.current = null;
+    }
+  }, []);
+
+  const closeNonStickyTooltip = useCallback(() => {
+    clearTooltipTimers();
+    hoverKeyRef.current = null;
+    hoverTargetRef.current = null;
+    setTooltip(prev => (prev && prev.sticky ? prev : null));
+  }, [clearTooltipTimers]);
+
+  const armTooltipTimer = useCallback((token: string) => {
+    clearTooltipTimers();
+    openTimerRef.current = window.setTimeout(() => {
+      // Validate that the hover target the timer was scheduled for is still
+      // what the cursor is over; discard stale callbacks.
+      if (hoverKeyRef.current !== token) return;
+      const tgt = hoverTargetRef.current;
+      const pos = hoverPosRef.current;
+      if (!tgt || !pos) return;
+      setTooltip(prev => {
+        // A sticky tooltip must never be replaced by a hover-opened one.
+        if (prev?.sticky) return prev;
+        return {
+          kind: tgt.tile ? 'tile' : 'marker',
+          tile: tgt.tile,
+          marker: tgt.marker,
+          hexQ: tgt.hexQ,
+          hexR: tgt.hexR,
+          screenX: pos.x,
+          screenY: pos.y,
+          sticky: false,
+        };
+      });
+      pinTimerRef.current = window.setTimeout(() => {
+        if (hoverKeyRef.current !== token) return;
+        setTooltip(prev => (prev ? { ...prev, sticky: true } : null));
+      }, 1500);
+    }, 1000);
+  }, [clearTooltipTimers]);
+
+  useEffect(() => () => clearTooltipTimers(), [clearTooltipTimers]);
+
+  // Canvas viewport size — updated by the ResizeObserver below so the
+  // off-screen dismissal effect fires on resize too (not just pan/zoom).
+  const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 });
+
+  // If a pinned tooltip's hex has been panned/zoomed (or the canvas resized)
+  // off-screen, dismiss it.
+  useEffect(() => {
+    if (!tooltip) return;
+    const cw = canvasSize.w;
+    const ch = canvasSize.h;
+    if (cw === 0 || ch === 0) return;
+    const [px, py] = hexToPixel(tooltip.hexQ, tooltip.hexR);
+    const sx = px * scale + offset.x;
+    const sy = py * scale + offset.y;
+    const pad = HEX_SIZE * scale;
+    if (sx < -pad || sy < -pad || sx > cw + pad || sy > ch + pad) {
+      setTooltip(null);
+    }
+  }, [tooltip, scale, offset, canvasSize]);
 
   /** Pure zoom-to-point math: returns clamped new scale and adjusted offset. */
   const computeZoom = (cx: number, cy: number, oldScale: number, oldOffset: { x: number; y: number }, newScale: number) => {
@@ -699,62 +802,38 @@ export default function HexMap({
       }
     }
 
-    // ── Pass 7: Strength indicator bars at capitals (all modes) ──
+    // ── Pass 7: Army strength bar at capitals (navy is surfaced via the
+    //             navy markers on the adjacent sea hex, so no naval bar here).
     if (scale > 0.8) {
-      // Find max values for scaling
       let maxArmyFP = 0;
-      let maxNavalFP = 0;
       for (const tile of tiles) {
         if (tile.is_capital && tile.army_firepower > maxArmyFP) maxArmyFP = tile.army_firepower;
-        if (tile.is_country_capital && tile.naval_firepower > maxNavalFP) maxNavalFP = tile.naval_firepower;
       }
       if (maxArmyFP < 1) maxArmyFP = 1;
-      if (maxNavalFP < 1) maxNavalFP = 1;
 
       const maxBarWidth = HEX_SIZE * 0.8;
 
       for (const tile of tiles) {
         if (tile.terrain === 'Sea') continue;
         if (!tile.is_capital) continue;
+        if (tile.army_unit_count === 0) continue;
+
         const [px, py] = hexToPixel(tile.q, tile.r);
+        const barWidth = Math.max(3, (tile.army_firepower / maxArmyFP) * maxBarWidth);
+        const barX = px - barWidth / 2;
+        const barY = py + HEX_SIZE * 0.45;
 
-        // Army strength bar
-        if (tile.army_unit_count > 0) {
-          const barWidth = Math.max(3, (tile.army_firepower / maxArmyFP) * maxBarWidth);
-          const barX = px - barWidth / 2;
-          const barY = py + HEX_SIZE * 0.45;
+        ctx.fillStyle = '#8b0000';
+        ctx.fillRect(barX, barY, barWidth, 2.5);
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(barX, barY, barWidth, 2.5);
 
-          ctx.fillStyle = '#8b0000';
-          ctx.fillRect(barX, barY, barWidth, 2.5);
-          ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-          ctx.lineWidth = 0.5;
-          ctx.strokeRect(barX, barY, barWidth, 2.5);
-
-          ctx.font = '7px sans-serif';
-          ctx.textAlign = 'left';
-          ctx.textBaseline = 'middle';
-          ctx.fillStyle = 'rgba(255,255,255,0.9)';
-          ctx.fillText(`x${tile.army_unit_count}`, barX + barWidth + 2, barY + 1.5);
-        }
-
-        // Naval strength bar (country capital only)
-        if (tile.is_country_capital && tile.naval_ship_count > 0) {
-          const barWidth = Math.max(3, (tile.naval_firepower / maxNavalFP) * maxBarWidth);
-          const barX = px - barWidth / 2;
-          const barY = py + HEX_SIZE * 0.6;
-
-          ctx.fillStyle = '#000080';
-          ctx.fillRect(barX, barY, barWidth, 2.5);
-          ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-          ctx.lineWidth = 0.5;
-          ctx.strokeRect(barX, barY, barWidth, 2.5);
-
-          ctx.font = '7px sans-serif';
-          ctx.textAlign = 'left';
-          ctx.textBaseline = 'middle';
-          ctx.fillStyle = 'rgba(255,255,255,0.9)';
-          ctx.fillText(`x${tile.naval_ship_count}`, barX + barWidth + 2, barY + 1.5);
-        }
+        ctx.font = '7px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.fillText(`x${tile.army_unit_count}`, barX + barWidth + 2, barY + 1.5);
       }
     }
 
@@ -816,6 +895,63 @@ export default function HexMap({
           ctx.fillText(`${tile.civilian_on_tile.turns_remaining}`, badgeX, badgeY);
           ctx.font = `${civFontSize}px sans-serif`;
         }
+      }
+    }
+
+    // ── Pass 8b: Navy markers (one per owner/fleet + per beachhead) ──
+    if (navyMarkers.length > 0) {
+      for (const m of navyMarkers) {
+        const [basePx, basePy] = hexToPixel(m.q, m.r);
+        const [dxo, dyo] = navyMarkerOffset(markerAnchorIndex.get(navyMarkerKey(m)) ?? 0);
+        const px = basePx + dxo;
+        const py = basePy + dyo;
+        const isSelected = selectedNavyKey === navyMarkerKey(m);
+
+        // Beachhead markers get a thin line toward the coast tile.
+        if (m.kind === 'beachhead' && m.target_hex) {
+          const [tx, ty] = hexToPixel(m.target_hex.q, m.target_hex.r);
+          ctx.strokeStyle = 'rgba(230, 38, 38, 0.85)';
+          ctx.lineWidth = 1.4;
+          ctx.setLineDash([2, 2]);
+          ctx.beginPath();
+          ctx.moveTo(px, py);
+          ctx.lineTo(tx, ty);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+
+        // Filled circle colored by owner.
+        ctx.beginPath();
+        ctx.arc(px, py, NAVY_MARKER_RADIUS, 0, Math.PI * 2);
+        const fill = NATION_COLORS[m.owner_color] || '#888';
+        ctx.fillStyle = fill;
+        ctx.fill();
+
+        // Border: red for beachhead, yellow for selected, white otherwise.
+        ctx.lineWidth = isSelected ? 2.5 : 1.5;
+        ctx.strokeStyle = m.kind === 'beachhead'
+          ? '#e62626'
+          : (isSelected ? '#ffd900' : 'rgba(255,255,255,0.9)');
+        ctx.stroke();
+
+        // Anchor glyph.
+        ctx.font = '12px system-ui';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#111';
+        ctx.fillText('\u2693', px, py + 0.5);
+
+        // Ship count badge top-right.
+        const badge = String(m.ship_count);
+        ctx.font = 'bold 10px system-ui';
+        const bx = px + NAVY_MARKER_RADIUS - 2;
+        const by = py - NAVY_MARKER_RADIUS + 2;
+        ctx.fillStyle = '#111';
+        ctx.beginPath();
+        ctx.arc(bx, by, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ffd900';
+        ctx.fillText(badge, bx, by + 0.5);
       }
     }
 
@@ -892,15 +1028,30 @@ export default function HexMap({
 
     ctx.restore();
   }, [tiles, offset, scale, showPoliticalColors, showHiddenResources, showAiCivilians, mapMode, nationFillMap,
-      isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves, nationLabels, disableFogOfWar]);
+      isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves, nationLabels, disableFogOfWar,
+      navyMarkers, selectedNavyKey]);
 
   useEffect(() => { render(); }, [render]);
 
   // Re-render when canvas becomes visible after being hidden (display: none → visible)
+  // and surface the current viewport size so the tooltip off-screen effect
+  // reacts to resizes too.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const observer = new ResizeObserver(() => { render(); });
+    const updateSize = () => {
+      setCanvasSize(prev => {
+        const w = canvas.clientWidth;
+        const h = canvas.clientHeight;
+        if (prev.w === w && prev.h === h) return prev;
+        return { w, h };
+      });
+    };
+    updateSize();
+    const observer = new ResizeObserver(() => {
+      updateSize();
+      render();
+    });
     observer.observe(canvas);
     return () => observer.disconnect();
   }, [render]);
@@ -937,20 +1088,105 @@ export default function HexMap({
   const handleMouseDown = (e: React.MouseEvent) => {
     setDragging(true);
     setDragStart({ x: e.clientX - offset.x, y: e.clientY - offset.y });
+    closeNonStickyTooltip();
   };
+  /** Order-stable index of each marker within its anchor hex. Determines the
+   *  polar offset used to avoid overlap — must be identical in draw and
+   *  hit-test to stay consistent. */
+  const markerAnchorIndex = useMemo(() => {
+    const seen = new Map<string, number>();
+    const out = new Map<string, number>();
+    for (const m of navyMarkers) {
+      const anchorKey = `${m.q},${m.r}`;
+      const n = seen.get(anchorKey) ?? 0;
+      out.set(navyMarkerKey(m), n);
+      seen.set(anchorKey, n + 1);
+    }
+    return out;
+  }, [navyMarkers]);
+
+  const markerAtPoint = (mx: number, my: number): NavyMarker | null => {
+    if (navyMarkers.length === 0) return null;
+    const r2 = NAVY_MARKER_RADIUS * NAVY_MARKER_RADIUS;
+    // Iterate in reverse so markers drawn last (on top) hit-test first.
+    for (let i = navyMarkers.length - 1; i >= 0; i--) {
+      const m = navyMarkers[i];
+      const [px, py] = hexToPixel(m.q, m.r);
+      const [dxo, dyo] = navyMarkerOffset(markerAnchorIndex.get(navyMarkerKey(m)) ?? 0);
+      const dx = mx - (px + dxo);
+      const dy = my - (py + dyo);
+      if (dx * dx + dy * dy <= r2) return m;
+    }
+    return null;
+  };
+
   const handleMouseMove = (e: React.MouseEvent) => {
     if (dragging) {
       setOffset({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
+      // Dragging dismisses a non-sticky tooltip; sticky persists until click /
+      // off-screen.
+      closeNonStickyTooltip();
+      return;
     }
-    if (onTileHover && canvasRef.current) {
-      const rect = canvasRef.current.getBoundingClientRect();
-      const mx = (e.clientX - rect.left - offset.x) / scale;
-      const my = (e.clientY - rect.top - offset.y) / scale;
+    if (!canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const mx = (e.clientX - rect.left - offset.x) / scale;
+    const my = (e.clientY - rect.top - offset.y) / scale;
+    const wrapperX = e.clientX - rect.left;
+    const wrapperY = e.clientY - rect.top;
+
+    const marker = markerAtPoint(mx, my);
+    if (onNavyMarkerHover) onNavyMarkerHover(marker);
+
+    // A sticky tooltip absorbs hover events: we still report hover for side
+    // effects (navy marker outline) but never rearm the open/pin timers.
+    if (tooltip?.sticky) {
+      if (!marker && onTileHover) {
+        const [hq, hr] = pixelToHex(mx, my);
+        onTileHover(tileMap.get(`${hq},${hr}`) || null);
+      } else if (marker && onTileHover) {
+        onTileHover(null);
+      }
+      return;
+    }
+
+    let key: string;
+    let target: { tile?: TileData; marker?: NavyMarker; hexQ: number; hexR: number } | null;
+    if (marker) {
+      key = `m:${navyMarkerKey(marker)}`;
+      target = { marker, hexQ: marker.q, hexR: marker.r };
+      if (onTileHover) onTileHover(null);
+    } else {
       const [hq, hr] = pixelToHex(mx, my);
-      onTileHover(tileMap.get(`${hq},${hr}`) || null);
+      const tile = tileMap.get(`${hq},${hr}`) || null;
+      if (onTileHover) onTileHover(tile);
+      if (!tile) {
+        hoverKeyRef.current = null;
+        hoverTargetRef.current = null;
+        if (tooltip && !tooltip.sticky) closeNonStickyTooltip();
+        return;
+      }
+      key = `t:${hq},${hr}`;
+      target = { tile, hexQ: hq, hexR: hr };
     }
+
+    hoverPosRef.current = { x: wrapperX, y: wrapperY };
+
+    if (hoverKeyRef.current === key) {
+      return;
+    }
+    hoverKeyRef.current = key;
+    hoverTargetRef.current = target;
+    if (tooltip && !tooltip.sticky) {
+      setTooltip(null);
+    }
+    armTooltipTimer(key);
   };
   const handleMouseUp = () => setDragging(false);
+  const handleMouseLeave = () => {
+    setDragging(false);
+    closeNonStickyTooltip();
+  };
 
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
@@ -959,6 +1195,7 @@ export default function HexMap({
     const cx = e.clientX - rect.left;
     const cy = e.clientY - rect.top;
     zoomAt(cx, cy, scale - e.deltaY * 0.001);
+    closeNonStickyTooltip();
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -1012,10 +1249,24 @@ export default function HexMap({
   };
 
   const handleClick = (e: React.MouseEvent) => {
-    if (onTileClick && canvasRef.current) {
-      const rect = canvasRef.current.getBoundingClientRect();
-      const mx = (e.clientX - rect.left - offset.x) / scale;
-      const my = (e.clientY - rect.top - offset.y) / scale;
+    if (!canvasRef.current) return;
+    // Any click dismisses a pinned tooltip (but propagates to selection logic).
+    if (tooltip && tooltip.sticky) {
+      setTooltip(null);
+      clearTooltipTimers();
+      hoverKeyRef.current = null;
+      hoverTargetRef.current = null;
+    }
+    const rect = canvasRef.current.getBoundingClientRect();
+    const mx = (e.clientX - rect.left - offset.x) / scale;
+    const my = (e.clientY - rect.top - offset.y) / scale;
+    const marker = markerAtPoint(mx, my);
+    if (marker) {
+      if (onNavyMarkerClick) onNavyMarkerClick(marker);
+      return;
+    }
+    if (onNavyMarkerClick) onNavyMarkerClick(null);
+    if (onTileClick) {
       const [hq, hr] = pixelToHex(mx, my);
       const tile = tileMap.get(`${hq},${hr}`);
       if (tile) onTileClick(tile);
@@ -1038,13 +1289,24 @@ export default function HexMap({
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
+        onMouseLeave={handleMouseLeave}
         onWheel={handleWheel}
         onClick={handleClick}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       />
+      {tooltip && (
+        <HexTooltip
+          tile={tooltip.tile}
+          marker={tooltip.marker}
+          screenX={tooltip.screenX}
+          screenY={tooltip.screenY}
+          sticky={tooltip.sticky}
+          showHiddenResources={showHiddenResources}
+          modeExtras={tooltip.tile && renderTooltipModeExtras ? renderTooltipModeExtras(tooltip.tile) : null}
+        />
+      )}
       {/* Map controls */}
       <div style={{ position: 'absolute', bottom: 12, right: 12, display: 'flex', gap: 6, alignItems: 'flex-end' }}>
         <button

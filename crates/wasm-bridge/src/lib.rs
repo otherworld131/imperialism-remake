@@ -282,6 +282,55 @@ pub fn wasm_process_turn(game_json: &str) -> String {
     response.to_string()
 }
 
+/// Compute the set of hexes visible to the human player under fog-of-war.
+///
+/// A hex is visible if (a) it belongs to one of the player's provinces,
+/// (b) it belongs to a province that shares any hex edge with the player's
+/// territory, or (c) it's a non-province hex (sea, empty) directly adjacent
+/// to the player. Returns an empty set when `disable_fog` is true (callers
+/// should special-case that).
+fn compute_visible_hexes(
+    game: &GameState,
+    disable_fog: bool,
+) -> std::collections::HashSet<domain::hex::HexCoord> {
+    if disable_fog {
+        return std::collections::HashSet::new();
+    }
+    let human_nation_id = game.human_player_nation;
+    let mut visible: std::collections::HashSet<domain::hex::HexCoord> =
+        std::collections::HashSet::new();
+
+    let mut border_ring: std::collections::HashSet<domain::hex::HexCoord> =
+        std::collections::HashSet::new();
+    for province in &game.provinces {
+        if province.owner == human_nation_id {
+            for &coord in &province.tiles {
+                visible.insert(coord);
+                for nb in coord.neighbors() {
+                    border_ring.insert(nb);
+                }
+            }
+        }
+    }
+
+    for province in &game.provinces {
+        if province.owner == human_nation_id {
+            continue;
+        }
+        if province.tiles.iter().any(|t| border_ring.contains(t)) {
+            for &coord in &province.tiles {
+                visible.insert(coord);
+            }
+        }
+    }
+
+    for coord in &border_ring {
+        visible.insert(*coord);
+    }
+
+    visible
+}
+
 /// Get map data for rendering. Returns JSON array of tile objects.
 /// `disable_fog` — when true, all tiles are visible and enemy data is not filtered.
 #[wasm_bindgen]
@@ -330,11 +379,21 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
     // Build province → (total army FP, unit count) lookup
     let mut province_army: std::collections::HashMap<ProvinceId, (f64, u32)> =
         std::collections::HashMap::new();
+    // Per-province composition breakdown keyed by unit-type name. Used by the
+    // hex tooltip to show "Guards × 2, Regulars × 3" at capitals.
+    let mut province_army_composition: std::collections::HashMap<
+        ProvinceId,
+        std::collections::BTreeMap<String, u32>,
+    > = std::collections::HashMap::new();
     for nation in &game.nations {
         for unit in &nation.army {
             let e = province_army.entry(unit.position).or_insert((0.0, 0));
             e.0 += unit.effective_firepower();
             e.1 += 1;
+            let bucket = province_army_composition
+                .entry(unit.position)
+                .or_default();
+            *bucket.entry(format!("{:?}", unit.unit_type)).or_insert(0) += 1;
         }
     }
 
@@ -377,51 +436,7 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
         }
     }
 
-    // ── Fog of war: compute visible hexes ──
-    // A hex is visible if:
-    //   1. It belongs to one of the player's provinces, OR
-    //   2. It belongs to a province that shares any hex edge with the player's
-    //      territory (whole neighboring province lights up), OR
-    //   3. It's a non-province hex (sea, empty) directly adjacent to the player.
-    let visible_hexes: std::collections::HashSet<domain::hex::HexCoord> = if disable_fog {
-        std::collections::HashSet::new() // unused when fog disabled
-    } else {
-        let mut visible: std::collections::HashSet<domain::hex::HexCoord> =
-            std::collections::HashSet::new();
-
-        // Collect hexes adjacent to any player tile (one-ring border)
-        let mut border_ring: std::collections::HashSet<domain::hex::HexCoord> =
-            std::collections::HashSet::new();
-        for province in &game.provinces {
-            if province.owner == human_nation_id {
-                for &coord in &province.tiles {
-                    visible.insert(coord);
-                    for nb in coord.neighbors() {
-                        border_ring.insert(nb);
-                    }
-                }
-            }
-        }
-
-        // Any province that intersects the border ring → entirely visible
-        for province in &game.provinces {
-            if province.owner == human_nation_id {
-                continue;
-            }
-            if province.tiles.iter().any(|t| border_ring.contains(t)) {
-                for &coord in &province.tiles {
-                    visible.insert(coord);
-                }
-            }
-        }
-
-        // Non-province hexes (sea, empty) in the border ring are also visible
-        for coord in &border_ring {
-            visible.insert(*coord);
-        }
-
-        visible
-    };
+    let visible_hexes = compute_visible_hexes(&game, disable_fog);
 
     let map_width = game.hex_map.width();
 
@@ -488,6 +503,14 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
                 (0.0, 0)
             };
 
+            let army_composition: Option<&std::collections::BTreeMap<String, u32>> =
+                if tile.is_capital && is_visible {
+                    tile.province_id
+                        .and_then(|pid| province_army_composition.get(&pid))
+                } else {
+                    None
+                };
+
             let (naval_fp, naval_count) = if is_country_capital && is_visible {
                 nation_naval
                     .get(&NationId(owner_nation_id))
@@ -527,6 +550,7 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
                 "nation_id": owner_nation_id,
                 "army_firepower": army_fp,
                 "army_unit_count": army_count,
+                "army_composition": army_composition,
                 "naval_firepower": naval_fp,
                 "naval_ship_count": naval_count,
                 "civilian_on_tile": civ_data,
@@ -540,6 +564,185 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
         .collect();
 
     serde_json::to_string(&tiles).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+}
+
+/// Get navy markers for map rendering. One aggregate marker per
+/// (nation, fleet|beachhead-target). Returns a JSON array.
+///
+/// Fog of war: markers belonging to other nations are only returned when their
+/// anchor hex is visible to the human player (same visibility rule as the
+/// map-data call). With `disable_fog = true`, all markers are returned.
+#[wasm_bindgen]
+pub fn wasm_get_navy_markers(game_json: &str, disable_fog: bool) -> String {
+    use domain::military::navy_placement::{beachhead_anchor, beachhead_coast_tile, fleet_anchor};
+
+    let game: GameState = match serde_json::from_str(game_json) {
+        Ok(g) => g,
+        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    };
+
+    let human_nation_id = game.human_player_nation;
+    let visible_hexes = compute_visible_hexes(&game, disable_fog);
+
+    let province_name_by_id: std::collections::HashMap<ProvinceId, &str> = game
+        .provinces
+        .iter()
+        .map(|p| (p.id, p.name.as_str()))
+        .collect();
+
+    let mut markers: Vec<serde_json::Value> = Vec::new();
+
+    for nation in &game.nations {
+        if nation.warships.is_empty() {
+            continue;
+        }
+
+        let owner_name = nation.name.as_str();
+        let owner_color = format!("{:?}", nation.color);
+
+        // Group warships into (a) non-beachhead fleet, (b) per-target beachhead groups.
+        let mut fleet_group: Vec<&Ship> = Vec::new();
+        let mut beachhead_groups: std::collections::BTreeMap<u32, Vec<&Ship>> =
+            std::collections::BTreeMap::new();
+        for ship in &nation.warships {
+            if ship.ship_type.category() != ShipCategory::Warship {
+                continue;
+            }
+            match ship.operation {
+                Some(domain::military::naval::NavalOperation::Beachhead(pid)) => {
+                    beachhead_groups.entry(pid.0).or_default().push(ship);
+                }
+                _ => fleet_group.push(ship),
+            }
+        }
+
+        // ── Fleet marker ─────────────────────────────────────────
+        if !fleet_group.is_empty()
+            && let Some(anchor) = fleet_anchor(nation, &game.hex_map, &game.provinces)
+        {
+            let is_human = nation.id == human_nation_id;
+            let is_visible = disable_fog || is_human || visible_hexes.contains(&anchor);
+            if is_visible
+                && let Some(marker) = build_marker(
+                    anchor,
+                    nation.id,
+                    owner_name,
+                    &owner_color,
+                    "fleet",
+                    None,
+                    None,
+                    &fleet_group,
+                )
+            {
+                markers.push(marker);
+            }
+        }
+
+        // ── Beachhead markers ────────────────────────────────────
+        for (pid_raw, ships) in beachhead_groups {
+            let pid = ProvinceId(pid_raw);
+            let target = match game.get_province(pid) {
+                Some(p) => p,
+                None => continue,
+            };
+            let anchor = match beachhead_anchor(&game.hex_map, target) {
+                Some(a) => a,
+                None => continue,
+            };
+            let is_human = nation.id == human_nation_id;
+            let is_visible = disable_fog || is_human || visible_hexes.contains(&anchor);
+            if !is_visible {
+                continue;
+            }
+            let coast_tile = beachhead_coast_tile(&game.hex_map, target);
+            let target_province_name = province_name_by_id
+                .get(&pid)
+                .copied()
+                .unwrap_or("")
+                .to_string();
+            if let Some(marker) = build_marker(
+                anchor,
+                nation.id,
+                owner_name,
+                &owner_color,
+                "beachhead",
+                Some(target_province_name),
+                coast_tile,
+                &ships,
+            ) {
+                markers.push(marker);
+            }
+        }
+    }
+
+    serde_json::to_string(&markers).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+}
+
+fn build_marker(
+    anchor: domain::hex::HexCoord,
+    nation_id: NationId,
+    owner_name: &str,
+    owner_color: &str,
+    kind: &str,
+    target_province: Option<String>,
+    target_hex: Option<domain::hex::HexCoord>,
+    ships: &[&Ship],
+) -> Option<serde_json::Value> {
+    if ships.is_empty() {
+        return None;
+    }
+
+    let mut by_type: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
+    let mut by_operation: std::collections::BTreeMap<String, u32> =
+        std::collections::BTreeMap::new();
+    let mut total_fp: u32 = 0;
+    let mut total_hull: u32 = 0;
+
+    for ship in ships {
+        let type_key = format!("{:?}", ship.ship_type);
+        *by_type.entry(type_key).or_insert(0) += 1;
+        let op_key = format_operation(ship.operation);
+        *by_operation.entry(op_key).or_insert(0) += 1;
+        total_fp += ship.ship_type.stats().firepower;
+        total_hull += ship.hull_remaining;
+    }
+
+    let mut json = serde_json::json!({
+        "q": anchor.q,
+        "r": anchor.r,
+        "nation_id": nation_id.0,
+        "owner_name": owner_name,
+        "owner_color": owner_color,
+        "kind": kind,
+        "ship_count": ships.len(),
+        "total_fp": total_fp,
+        "total_hull": total_hull,
+        "by_type": by_type,
+        "by_operation": by_operation,
+        // Always true at emission — invisible markers are filtered upstream.
+        // The field is kept in the contract so the frontend never has to
+        // re-derive visibility.
+        "visible": true,
+    });
+    if let Some(name) = target_province {
+        json["target_province"] = serde_json::Value::String(name);
+    }
+    if let Some(hex) = target_hex {
+        json["target_hex"] = serde_json::json!({ "q": hex.q, "r": hex.r });
+    }
+    Some(json)
+}
+
+fn format_operation(op: Option<domain::military::naval::NavalOperation>) -> String {
+    use domain::military::naval::NavalOperation;
+    match op {
+        None => "Idle".to_string(),
+        Some(NavalOperation::Patrol) => "Patrol".to_string(),
+        Some(NavalOperation::Escort) => "Escort".to_string(),
+        Some(NavalOperation::Blockade(n)) => format!("Blockade(n{})", n.0),
+        Some(NavalOperation::Beachhead(p)) => format!("Beachhead(p{})", p.0),
+        Some(NavalOperation::Reconnaissance(n)) => format!("Recon(n{})", n.0),
+    }
 }
 
 /// Get available technologies for the human player.
@@ -807,10 +1010,7 @@ fn serialize_game(game: &GameState) -> String {
 /// diplomatic interaction (proposals, grants, declarations, peace, treaties)
 /// is permitted with a country whose government has collapsed (card #81).
 fn reject_if_target_in_anarchy(game: &GameState, target: NationId) -> Option<String> {
-    if game
-        .get_nation(target)
-        .is_some_and(|n| n.is_in_anarchy)
-    {
+    if game.get_nation(target).is_some_and(|n| n.is_in_anarchy) {
         Some("{\"error\":\"target nation is in anarchy\"}".to_string())
     } else {
         None
@@ -2945,8 +3145,7 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
             // actual backend relation) rather than the anarchy-inflated
             // `display_at_war` so button availability never contradicts
             // what the command handlers will accept.
-            let can_build_consulate =
-                !target_in_anarchy && !has_consulate && treasury >= 500;
+            let can_build_consulate = !target_in_anarchy && !has_consulate && treasury >= 500;
             let can_build_embassy =
                 !target_in_anarchy && has_consulate && !has_embassy && treasury >= 5000;
             let can_propose_nap = !target_in_anarchy
@@ -4045,6 +4244,225 @@ mod tests {
         assert_eq!(parse_ship_type("Submarine"), None);
     }
 
+    // ── wasm_get_navy_markers tests ───────────────────────────
+
+    /// Build a minimal game state where nation 0 owns a coastal province with
+    /// a port, give it two Frigates and one Ironclad, then invoke
+    /// `wasm_get_navy_markers` and parse the result.
+    fn setup_navy_markers_game() -> (GameState, String) {
+        let mut game = new_game("default", Difficulty::Normal, 0);
+        game.game_data = domain::data::GameData::default();
+
+        // Promote the first coastal province of the human player to a port and
+        // put some warships on it. The map generator already sets `coastal`
+        // for coastal provinces.
+        let human = game.human_player_nation;
+        let coastal_pid: Option<ProvinceId> = game
+            .provinces
+            .iter()
+            .find(|p| p.owner == human && p.is_coastal())
+            .map(|p| p.id);
+        let pid = coastal_pid.expect("test map must have at least one coastal GP province");
+
+        // Pick a tile in that province and mark it as a port.
+        let tile_coord = {
+            let prov = game.get_province(pid).unwrap();
+            prov.tiles.first().copied().unwrap()
+        };
+        if let Some(t) = game.hex_map.get_tile_mut(tile_coord) {
+            t.infrastructure.has_port = true;
+        }
+
+        // Give the human nation three warships: two Frigates on Patrol and
+        // one Ironclad on Escort.
+        let nation = game.get_nation_mut(human).unwrap();
+        let mk_ship =
+            |id: u32, ship_type: ShipType, op: Option<domain::military::naval::NavalOperation>| {
+                let mut s = Ship::new(domain::map::UnitId(id), ship_type, human);
+                s.operation = op;
+                s
+            };
+        nation.warships.clear();
+        nation.warships.push(mk_ship(
+            9000,
+            ShipType::Frigate,
+            Some(domain::military::naval::NavalOperation::Patrol),
+        ));
+        nation.warships.push(mk_ship(
+            9001,
+            ShipType::Frigate,
+            Some(domain::military::naval::NavalOperation::Patrol),
+        ));
+        nation.warships.push(mk_ship(
+            9002,
+            ShipType::Ironclad,
+            Some(domain::military::naval::NavalOperation::Escort),
+        ));
+
+        let json = serde_json::to_string(&game).unwrap();
+        (game, json)
+    }
+
+    #[test]
+    fn navy_markers_emits_fleet_marker_for_human() {
+        let (_, json) = setup_navy_markers_game();
+        let result = wasm_get_navy_markers(&json, false);
+        let markers: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+
+        let human_markers: Vec<_> = markers
+            .iter()
+            .filter(|m| m.get("nation_id").and_then(|v| v.as_u64()) == Some(0))
+            .collect();
+        assert_eq!(
+            human_markers.len(),
+            1,
+            "human player should have exactly one fleet marker"
+        );
+
+        let m = human_markers[0];
+        assert_eq!(m["kind"], "fleet");
+        assert_eq!(m["ship_count"], 3);
+        assert_eq!(m["visible"], true);
+        // 2 Frigates + 1 Ironclad grouped into by_type.
+        let by_type = m["by_type"].as_object().unwrap();
+        assert_eq!(by_type.get("Frigate").and_then(|v| v.as_u64()), Some(2));
+        assert_eq!(by_type.get("Ironclad").and_then(|v| v.as_u64()), Some(1));
+        // by_operation reports Patrol × 2 + Escort × 1.
+        let by_op = m["by_operation"].as_object().unwrap();
+        assert_eq!(by_op.get("Patrol").and_then(|v| v.as_u64()), Some(2));
+        assert_eq!(by_op.get("Escort").and_then(|v| v.as_u64()), Some(1));
+    }
+
+    #[test]
+    fn navy_markers_splits_beachhead_into_its_own_marker() {
+        let (mut game, _) = setup_navy_markers_game();
+        // Re-assign the Ironclad to Beachhead a hostile coastal province.
+        let human = game.human_player_nation;
+        let beachhead_pid: ProvinceId = game
+            .provinces
+            .iter()
+            .find(|p| p.owner != human && p.is_coastal())
+            .map(|p| p.id)
+            .expect("need a hostile coastal province for beachhead");
+        let nation = game.get_nation_mut(human).unwrap();
+        nation.warships[2].operation = Some(domain::military::naval::NavalOperation::Beachhead(
+            beachhead_pid,
+        ));
+        let json = serde_json::to_string(&game).unwrap();
+
+        let result = wasm_get_navy_markers(&json, false);
+        let markers: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        let human_markers: Vec<_> = markers
+            .iter()
+            .filter(|m| m.get("nation_id").and_then(|v| v.as_u64()) == Some(0))
+            .collect();
+        assert_eq!(
+            human_markers.len(),
+            2,
+            "one fleet marker + one beachhead marker"
+        );
+        assert!(human_markers.iter().any(|m| m["kind"] == "fleet"));
+        let beachhead = human_markers
+            .iter()
+            .find(|m| m["kind"] == "beachhead")
+            .expect("beachhead marker present");
+        assert_eq!(beachhead["ship_count"], 1);
+        assert!(beachhead.get("target_province").is_some());
+        assert!(beachhead.get("target_hex").is_some());
+    }
+
+    #[test]
+    fn navy_markers_fog_hides_invisible_enemy_fleets() {
+        // Positive-case fog test. We build a game where a specific non-human
+        // nation has a warship, then confirm that its marker is present
+        // WITHOUT fog but absent WITH fog (because its anchor hex is not
+        // visible to the human player).
+        let (mut game, _) = setup_navy_markers_game();
+
+        // Pick an enemy GP whose capital province has been generated as
+        // coastal. Some enemies may be inland; skip those.
+        let human = game.human_player_nation;
+        let enemy_id: NationId = {
+            let enemy = game
+                .nations
+                .iter()
+                .find(|n| {
+                    n.id != human
+                        && n.nation_type == NationType::GreatPower
+                        && game
+                            .provinces
+                            .iter()
+                            .any(|p| p.owner == n.id && p.is_coastal())
+                })
+                .expect("need a coastal enemy GP for the fog test");
+            enemy.id
+        };
+
+        // Give the enemy one Frigate on Patrol.
+        let mut enemy_ship = Ship::new(domain::map::UnitId(9500), ShipType::Frigate, enemy_id);
+        enemy_ship.operation = Some(domain::military::naval::NavalOperation::Patrol);
+        let enemy = game.get_nation_mut(enemy_id).unwrap();
+        enemy.warships.clear();
+        enemy.warships.push(enemy_ship);
+
+        // Compute where that fleet marker would land and confirm the anchor
+        // is outside the human's visible set, so the fog filter is the only
+        // thing keeping the marker hidden.
+        let enemy_nation = game.get_nation(enemy_id).unwrap();
+        let anchor = domain::military::navy_placement::fleet_anchor(
+            enemy_nation,
+            &game.hex_map,
+            &game.provinces,
+        )
+        .expect("enemy should have a fleet anchor");
+        let visible_hexes = compute_visible_hexes(&game, false);
+        assert!(
+            !visible_hexes.contains(&anchor),
+            "enemy anchor hex must be outside human visibility for this test to be meaningful",
+        );
+
+        let json = serde_json::to_string(&game).unwrap();
+
+        // Fogged: enemy marker must be absent.
+        let fogged = wasm_get_navy_markers(&json, false);
+        let fogged_markers: Vec<serde_json::Value> = serde_json::from_str(&fogged).unwrap();
+        assert!(
+            !fogged_markers
+                .iter()
+                .any(|m| m.get("nation_id").and_then(|v| v.as_u64()) == Some(enemy_id.0 as u64)),
+            "fogged call must NOT include the enemy's marker",
+        );
+
+        // Unfogged: enemy marker must be present.
+        let unfogged = wasm_get_navy_markers(&json, true);
+        let unfogged_markers: Vec<serde_json::Value> = serde_json::from_str(&unfogged).unwrap();
+        assert!(
+            unfogged_markers
+                .iter()
+                .any(|m| m.get("nation_id").and_then(|v| v.as_u64()) == Some(enemy_id.0 as u64)),
+            "unfogged call must include the enemy's marker",
+        );
+
+        // Invariant: emitted markers are always marked visible.
+        for m in &fogged_markers {
+            assert_eq!(
+                m["visible"], true,
+                "wasm_get_navy_markers must never emit visible:false",
+            );
+        }
+    }
+
+    #[test]
+    fn navy_markers_deterministic_across_runs() {
+        let (_, json) = setup_navy_markers_game();
+        let a = wasm_get_navy_markers(&json, false);
+        let b = wasm_get_navy_markers(&json, false);
+        assert_eq!(
+            a, b,
+            "marker output must be byte-identical for the same game state"
+        );
+    }
+
     // ── Move validation tests ─────────────────────────────────
 
     #[test]
@@ -4464,6 +4882,9 @@ mod tests {
             siege_reduced_fort: true,
             medal_awards: vec![(ArmyUnitType::Guards, 2)],
             attacker_origin_provinces: vec![ProvinceId(2), ProvinceId(3)],
+            defender_retreated: false,
+            attacker_retreated_to: Vec::new(),
+            defender_retreated_to: Vec::new(),
         };
 
         game.battle_archive
@@ -4608,12 +5029,7 @@ mod tests {
             player.is_in_anarchy = true;
         }
         // Pick another nation as the counterparty.
-        let target_id = game
-            .nations
-            .iter()
-            .find(|n| n.id != player_id)
-            .unwrap()
-            .id;
+        let target_id = game.nations.iter().find(|n| n.id != player_id).unwrap().id;
         // Ensure raw_at_war is false for the pair.
         assert!(!game.diplomacy.is_at_war(player_id, target_id));
 

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   initWasm, processTurn, processTurns, setHumanPlayer,
   newGame, newScenarioGame, newObserverGame, newObserverScenarioGame,
-  getMapData, getAvailableTechs, researchTech,
+  getMapData, getNavyMarkers, getAvailableTechs, researchTech,
   getDiplomacyOverlay, getMilitaryOverlay,
   getUnitsInProvince, getCivilians, getShips, getValidMoveTargets, getBuildableUnits,
   queueUnitMove, cancelUnitMove, deployCivilian, recallCivilian, engineerBuild,
@@ -23,7 +23,7 @@ import {
   getAllGPLedgerData,
 } from './wasm';
 import type {
-  TileData, Headline, MapMode, DiplomacyOverlay, DiplomacyOverlayRelation, MilitaryOverlayEntry,
+  TileData, NavyMarker, Headline, MapMode, DiplomacyOverlay, DiplomacyOverlayRelation, MilitaryOverlayEntry,
   ArmyUnitDetail, ProvinceUnits, CiviliansData, CivilianDetail, ShipsData,
   ValidMoveTargets, BuildableUnits, PendingMove,
   TransportData, IndustryData, TradeData, DiplomacyScreenData, ProposalData,
@@ -82,7 +82,7 @@ function applyNewsFilters(
 }
 
 
-import HexMap from './components/HexMap';
+import HexMap, { navyMarkerKey } from './components/HexMap';
 import GameSetup, { type GameStartParams } from './components/GameSetup';
 import UnitPanel from './components/UnitPanel';
 import CivilianPanel from './components/CivilianPanel';
@@ -101,9 +101,30 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [gameJson, setGameJson] = useState<string>('');
   const [tiles, setTiles] = useState<TileData[]>([]);
+  const [navyMarkers, setNavyMarkers] = useState<NavyMarker[]>([]);
+  // Selection/hover are stored as *keys*, not snapshots, so a stale object
+  // cannot linger after the marker list is refreshed at end-of-turn or on a
+  // fog/viewpoint change. Derived live markers below (`selectedNavyMarker`,
+  // `hoveredNavyMarker`) resolve the key against the current `navyMarkers`.
+  const [selectedNavyKey, setSelectedNavyKey] = useState<string | null>(null);
+  const [hoveredNavyKey, setHoveredNavyKey] = useState<string | null>(null);
+  const selectedNavyMarker = useMemo<NavyMarker | null>(
+    () => (selectedNavyKey ? navyMarkers.find(m => navyMarkerKey(m) === selectedNavyKey) ?? null : null),
+    [selectedNavyKey, navyMarkers],
+  );
+  const hoveredNavyMarker = useMemo<NavyMarker | null>(
+    () => (hoveredNavyKey ? navyMarkers.find(m => navyMarkerKey(m) === hoveredNavyKey) ?? null : null),
+    [hoveredNavyKey, navyMarkers],
+  );
+  // If a refresh drops the selected key, clear it so the panel doesn't render
+  // against a phantom marker.
+  useEffect(() => {
+    if (selectedNavyKey && !navyMarkers.some(m => navyMarkerKey(m) === selectedNavyKey)) {
+      setSelectedNavyKey(null);
+    }
+  }, [navyMarkers, selectedNavyKey]);
   const [gameState, setGameState] = useState<any>(null);
   const [selectedTile, setSelectedTile] = useState<TileData | null>(null);
-  const [hoveredTile, setHoveredTile] = useState<TileData | null>(null);
   const [headlines, setHeadlines] = useState<Headline[]>([]);
   const [techs, setTechs] = useState<any[]>([]);
   const [showTech, setShowTech] = useState(false);
@@ -211,6 +232,7 @@ function App() {
     setGameJson(json);
     setGameState(state);
     setTiles(getMapData(json, disableFogOfWar));
+    setNavyMarkers(getNavyMarkers(json, disableFogOfWar));
     setTechs(getAvailableTechs(json));
     const nid = state.human_player_nation;
     setCivilians(getCivilians(json, nid));
@@ -229,6 +251,7 @@ function App() {
   useEffect(() => {
     if (gameJson) {
       setTiles(getMapData(gameJson, disableFogOfWar));
+      setNavyMarkers(getNavyMarkers(gameJson, disableFogOfWar));
     }
   }, [disableFogOfWar, gameJson]);
 
@@ -285,7 +308,8 @@ function App() {
     setShowProposals(false);
     setArchiveData([]);
     setSelectedTile(null);
-    setHoveredTile(null);
+    setSelectedNavyKey(null);
+    setHoveredNavyKey(null);
     setStatusMessage('');
   }, [gameStartParams, gameState, observerGps, applyGameJson]);
 
@@ -458,6 +482,7 @@ function App() {
     }
 
     setSelectedTile(tile);
+    setSelectedNavyKey(null);
     if (tile.owner && (mapMode === 'diplomatic' || mapMode === 'relationship')) {
       setSelectedNation(tile.owner);
     }
@@ -471,6 +496,22 @@ function App() {
       setSelectedUnitIds([]);
     }
   }, [mapMode, gameJson, playerNationId, isMovementMode, selectedUnitIds, validMoveTargets, isDeployMode, deployingCivilian, deployableTiles, applyGameJson, provinceUnits, showError]);
+
+  const handleNavyMarkerClick = useCallback((marker: NavyMarker | null) => {
+    if (!marker) {
+      setSelectedNavyKey(null);
+      return;
+    }
+    const key = navyMarkerKey(marker);
+    setSelectedNavyKey(prev => (prev === key ? null : key));
+    setSelectedTile(null);
+    setProvinceUnits(null);
+    setSelectedUnitIds([]);
+  }, []);
+
+  const handleNavyMarkerHover = useCallback((marker: NavyMarker | null) => {
+    setHoveredNavyKey(marker ? navyMarkerKey(marker) : null);
+  }, []);
 
   // Compute pending moves for arrows
   const pendingMoveArrows = useMemo(() => {
@@ -754,6 +795,62 @@ function App() {
     return militaryOverlay.find(m => m.nation_name === tile.owner) || null;
   }, [militaryOverlay]);
 
+  // Build the mode-specific rows shown inside the hex tooltip. This used to
+  // live in the right-hand side panel as a "Hovering" strip; we keep the
+  // "Selected" equivalent in the side panel.
+  const renderTooltipModeExtras = useCallback((tile: TileData) => {
+    if (mapMode === 'diplomatic' || mapMode === 'relationship') {
+      const diploInfo = getDiploInfoForTile(tile);
+      // In observer mode no nation is truly "yours" — the viewpoint nation
+      // is just the one being observed, so suppress the "Your nation" label.
+      const isSelf = !isObserver && tile.owner === selectedNation;
+      return (
+        <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid #3a3520', fontSize: 11 }}>
+          <div style={{ color: '#888', marginBottom: 2 }}>
+            {mapMode === 'diplomatic' ? 'Diplomatic' : 'Relationship'} view {'\u2014'} {selectedNation}
+          </div>
+          {isSelf && tile.owner && <div style={{ color: '#ffd900' }}>Your nation</div>}
+          {diploInfo && (
+            <div>
+              <div><b>{diploInfo.nation_name}</b>: {diploInfo.status} (score: {diploInfo.score >= 0 ? '+' : ''}{diploInfo.score})</div>
+              {diploInfo.treaties.length > 0 && <div style={{ color: '#999' }}>Treaties: {diploInfo.treaties.join(', ')}</div>}
+              {diploInfo.has_embassy && <div style={{ color: '#999' }}>Embassy established</div>}
+              {diploInfo.has_consulate && !diploInfo.has_embassy && <div style={{ color: '#999' }}>Consulate established</div>}
+            </div>
+          )}
+        </div>
+      );
+    }
+    if (mapMode === 'military' || mapMode === 'naval') {
+      const milInfo = getMilitaryInfoForTile(tile);
+      const isMilitary = mapMode === 'military';
+      return (
+        <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid #3a3520', fontSize: 11 }}>
+          <div style={{ color: '#888', marginBottom: 2 }}>
+            {isMilitary ? 'Military' : 'Naval'} strength
+          </div>
+          {isMilitary
+            ? (tile.is_capital && tile.army_unit_count > 0 && (
+                <div>Army: {tile.army_unit_count} units, {tile.army_firepower.toFixed(1)} FP</div>
+              ))
+            : (tile.is_country_capital && tile.naval_ship_count > 0 && (
+                <div>Navy: {tile.naval_ship_count} warships, {tile.naval_firepower} FP</div>
+              ))
+          }
+          {milInfo && (
+            <div style={{ color: '#bbb' }}>
+              {isMilitary
+                ? <span>{milInfo.nation_name}: {milInfo.army_unit_count} total units, {milInfo.total_army_fp.toFixed(1)} total FP</span>
+                : <span>{milInfo.nation_name}: {milInfo.warship_count} warships, {milInfo.total_naval_fp} total FP</span>
+              }
+            </div>
+          )}
+        </div>
+      );
+    }
+    return null;
+  }, [mapMode, selectedNation, isObserver, getDiploInfoForTile, getMilitaryInfoForTile]);
+
   const handleResearch = (techName: string) => {
     if (isObserver) return;
     const result = researchTech(gameJson, techName);
@@ -874,7 +971,6 @@ function App() {
             militaryOverlay={militaryOverlay}
             onMapModeChange={setMapMode}
             onTileClick={handleTileClick}
-            onTileHover={setHoveredTile}
             showHiddenResources={showHiddenResources}
             showAiCivilians={showAiCivilians}
             selectedUnit={null}
@@ -888,6 +984,11 @@ function App() {
             offset={mapOffset}
             onScaleChange={setMapScale}
             onOffsetChange={setMapOffset}
+            navyMarkers={navyMarkers}
+            selectedNavyKey={selectedNavyKey}
+            onNavyMarkerClick={handleNavyMarkerClick}
+            onNavyMarkerHover={handleNavyMarkerHover}
+            renderTooltipModeExtras={renderTooltipModeExtras}
           />
         </div>
 
@@ -975,27 +1076,51 @@ function App() {
                   </div>
                 </div>
               )}
-              {hoveredTile && !(selectedTile && hoveredTile.q === selectedTile.q && hoveredTile.r === selectedTile.r) && (
-                <div style={styles.tileHovered}>
-                  <div style={styles.tileLabelDim}>Hovering</div>
-                  <div style={styles.tileInfo}>
-                    <p><b>{hoveredTile.terrain}{hoveredTile.resource && (!hoveredTile.resource_hidden || showHiddenResources) ? ` — ${hoveredTile.resource}` : ''}</b></p>
-                    <p>Province: {hoveredTile.province || 'None'}</p>
-                    <p>Owner: {hoveredTile.owner || 'None'}</p>
-                    {hoveredTile.resource && (!hoveredTile.resource_hidden || showHiddenResources) && <p>Level: {hoveredTile.improvement_level}/{hoveredTile.max_improvement_level}</p>}
-                    {hoveredTile.is_capital && <p>{'\u2605'} Capital</p>}
-                    {hoveredTile.has_railroad && <p>Railroad</p>}
-                    {hoveredTile.has_fort && <p>Fort L{hoveredTile.fort_level}</p>}
-                  </div>
-                </div>
-              )}
-              {!selectedTile && !hoveredTile && (
-                <p style={styles.hint}>Click to pin, hover to preview</p>
+              {!selectedTile && !selectedNavyMarker && !hoveredNavyMarker && (
+                <p style={styles.hint}>Click to pin; hover a hex for a tooltip</p>
               )}
 
-              {/* Mode-specific hover info */}
+              {/* Navy marker composition — selection wins over hover */}
+              {(() => {
+                const marker = selectedNavyMarker ?? hoveredNavyMarker;
+                if (!marker) return null;
+                const isSelected = !!selectedNavyMarker;
+                const title = marker.kind === 'beachhead'
+                  ? `Beachhead \u2192 ${marker.target_province ?? '?'}`
+                  : `Fleet \u2014 ${marker.owner_name}`;
+                const byType = Object.entries(marker.by_type);
+                const byOp = Object.entries(marker.by_operation);
+                return (
+                  <div style={{
+                    fontSize: 13, padding: '8px 0', borderTop: '1px solid #3a3520',
+                    marginTop: 6, opacity: isSelected ? 1 : 0.85,
+                  }}>
+                    <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
+                      {isSelected ? 'Selected navy' : 'Hovering navy'}
+                    </div>
+                    <div style={{ color: marker.kind === 'beachhead' ? '#ff8059' : '#e0d8c0' }}>
+                      <b>{title}</b>
+                    </div>
+                    <div style={{ fontSize: 12, color: '#bbb', marginTop: 4 }}>
+                      {marker.ship_count} ships &middot; {marker.total_fp} FP &middot; {marker.total_hull} hull
+                    </div>
+                    {byType.length > 0 && (
+                      <div style={{ fontSize: 12, color: '#bbb', marginTop: 4 }}>
+                        {byType.map(([t, n]) => `${n} ${t}`).join(', ')}
+                      </div>
+                    )}
+                    {byOp.length > 0 && (
+                      <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
+                        {byOp.map(([op, n]) => `${n} ${op}`).join(' \u00b7 ')}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Mode-specific info for the Selected tile (hover version lives in the hex tooltip) */}
               {(mapMode === 'diplomatic' || mapMode === 'relationship') && (() => {
-                const activeTile = hoveredTile || selectedTile;
+                const activeTile = selectedTile;
                 const diploInfo = getDiploInfoForTile(activeTile);
                 const isSelf = activeTile?.owner === selectedNation;
                 return (
@@ -1016,7 +1141,7 @@ function App() {
                 );
               })()}
               {(mapMode === 'military' || mapMode === 'naval') && (() => {
-                const activeTile = hoveredTile || selectedTile;
+                const activeTile = selectedTile;
                 const milInfo = getMilitaryInfoForTile(activeTile);
                 return (
                   <div style={{ fontSize: 13, padding: '6px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>

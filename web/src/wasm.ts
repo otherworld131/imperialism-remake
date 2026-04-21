@@ -7,6 +7,7 @@ import init, {
   wasm_process_turns,
   wasm_process_turn,
   wasm_get_map_data,
+  wasm_get_navy_markers,
   wasm_get_available_techs,
   wasm_research_tech,
   wasm_get_scenarios,
@@ -86,6 +87,7 @@ export interface TileData {
   nation_id: number;
   army_firepower: number;
   army_unit_count: number;
+  army_composition: Record<string, number> | null;
   naval_firepower: number;
   naval_ship_count: number;
   civilian_on_tile: { id: number; type: string; working: boolean; turns_remaining: number; build_task: string | null; owner: string; owner_color: string; is_human: boolean } | null;
@@ -93,6 +95,23 @@ export interface TileData {
   is_incorporated_minor: boolean;
   is_anarchic: boolean;
   visual_group: string | null;
+  visible: boolean;
+}
+
+export interface NavyMarker {
+  q: number;
+  r: number;
+  nation_id: number;
+  owner_name: string;
+  owner_color: string;
+  kind: 'fleet' | 'beachhead';
+  target_province?: string;
+  target_hex?: { q: number; r: number };
+  ship_count: number;
+  total_fp: number;
+  total_hull: number;
+  by_type: Record<string, number>;
+  by_operation: Record<string, number>;
   visible: boolean;
 }
 
@@ -401,6 +420,10 @@ export function processTurn(gameJson: string): any {
 
 export function getMapData(gameJson: string, disableFog: boolean = false): TileData[] {
   return JSON.parse(wasm_get_map_data(gameJson, disableFog));
+}
+
+export function getNavyMarkers(gameJson: string, disableFog: boolean = false): NavyMarker[] {
+  return JSON.parse(wasm_get_navy_markers(gameJson, disableFog));
 }
 
 export function getAvailableTechs(gameJson: string): any[] {
