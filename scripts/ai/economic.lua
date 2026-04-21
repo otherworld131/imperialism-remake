@@ -89,6 +89,10 @@ economic = {
     retreat_prebattle_ratio = 2.0,
     retreat_postbattle_fp_loss = 0.55,
 
+    -- Attack acceptance (card #99 phase 2): FP-based.
+    attack_fp_vs_minor = 0.8,
+    attack_fp_vs_gp = 1.0,
+
     -- Naval landing gate (card #7)
     naval_min_adjacent_strength_ratio = 1.8,
 

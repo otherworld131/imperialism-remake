@@ -437,13 +437,24 @@ pub fn resolve_battle_with_config(
     // Pick the more extreme ratio: if both sides are dominated, the side
     // that is more dominated retreats. If only one side meets its
     // threshold, that side retreats.
-    let attacker_ratio = if attacker_initial_fp > 0.0 {
-        defender_initial_fp / attacker_initial_fp
+    //
+    // Uses raw firepower (defender's 1.2× + terrain + fort multipliers
+    // included, but **not** the +8/militia flat entrenchment bonus from
+    // `defender_initial_fp`). The flat bonus is a combat damage abstraction
+    // that wouldn't faithfully predict a 10-round grind outcome —
+    // applying it here makes the AI bail from fights it would win.
+    // Mirrors the existing `total_firepower(&defender.units)` baseline used
+    // by the defender's post-battle retreat check below.
+    let atk_fp_raw = total_firepower(&atk_units);
+    let def_fp_raw =
+        total_firepower(&def_units) * 1.2 * (1.0 + terrain_bonus_init) * (1.0 + fort_bonus_init);
+    let attacker_ratio = if atk_fp_raw > 0.0 {
+        def_fp_raw / atk_fp_raw
     } else {
         f64::INFINITY
     };
-    let defender_ratio = if defender_initial_fp > 0.0 {
-        attacker_initial_fp / defender_initial_fp
+    let defender_ratio = if def_fp_raw > 0.0 {
+        atk_fp_raw / def_fp_raw
     } else {
         f64::INFINITY
     };
@@ -607,10 +618,7 @@ pub fn resolve_battle_with_config(
         atk_units.retain(|u| u.is_alive());
 
         // Check for attacker retreat
-        if config.attacker_can_retreat
-            && attacker_initial_fp > 0.0
-            && !atk_units.is_empty()
-        {
+        if config.attacker_can_retreat && attacker_initial_fp > 0.0 && !atk_units.is_empty() {
             let current_atk_fp = total_firepower(&atk_units);
             let fp_lost_ratio = 1.0 - (current_atk_fp / attacker_initial_fp);
             if fp_lost_ratio > config.attacker_postbattle_fp_loss {
@@ -631,15 +639,11 @@ pub fn resolve_battle_with_config(
         }
 
         // Check for defender retreat (card #18): symmetric to attacker.
-        if config.defender_can_retreat
-            && defender_initial_fp > 0.0
-            && !def_units.is_empty()
-        {
+        if config.defender_can_retreat && defender_initial_fp > 0.0 && !def_units.is_empty() {
             // Compare raw unit firepower for loss-ratio — terrain/fort bonuses
             // inflate `defender_initial_fp` artificially, so we use the raw
             // comparison against the un-bonused baseline.
-            let raw_def_initial =
-                total_firepower(&defender.units).max(f64::EPSILON);
+            let raw_def_initial = total_firepower(&defender.units).max(f64::EPSILON);
             let current_def_fp = total_firepower(&def_units);
             let fp_lost_ratio = 1.0 - (current_def_fp / raw_def_initial);
             if fp_lost_ratio > config.defender_postbattle_fp_loss {
@@ -1710,13 +1714,15 @@ mod tests {
             attacker_postbattle_fp_loss: 0.60,
             defender_postbattle_fp_loss: 0.60,
         };
-        let result =
-            resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg);
+        let result = resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg);
         assert!(
             result.defender_retreated,
             "defender should evacuate before a hopeless battle"
         );
-        assert!(result.attacker_won, "attacker takes the province uncontested");
+        assert!(
+            result.attacker_won,
+            "attacker takes the province uncontested"
+        );
         assert!(
             result.defender_casualties.is_empty(),
             "pre-battle retreat: no casualties on either side"
@@ -1752,8 +1758,7 @@ mod tests {
             attacker_postbattle_fp_loss: 0.60,
             defender_postbattle_fp_loss: 0.60,
         };
-        let result =
-            resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg);
+        let result = resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg);
         assert!(
             !result.defender_retreated,
             "defender with no retreat option must fight"
@@ -1793,13 +1798,89 @@ mod tests {
             attacker_postbattle_fp_loss: 0.60,
             defender_postbattle_fp_loss: 0.60,
         };
-        let result =
-            resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg);
+        let result = resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg);
         assert!(result.retreated, "attacker should bail pre-battle");
         assert!(!result.attacker_won);
         assert!(
             result.attacker_casualties.is_empty(),
             "pre-battle retreat: attacker takes no damage"
+        );
+    }
+
+    // Card #99: pre-battle retreat must use raw strength (defender's 1.2× +
+    // terrain + fort multipliers), NOT the in-combat militia +8 flat bonus.
+    // With 8 Regulars (atk_fp = 16) vs 4 Militia (raw def_fp = 4.8), the
+    // ratio is 0.3 — well under 2.0 — so the attacker engages. Simulated
+    // through 10 rounds the attacker wins on surviving raw firepower even
+    // though the in-combat militia bonus inflates defender per-round damage.
+    #[test]
+    fn attacker_presses_eight_regulars_against_four_militia() {
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+        let attacker = make_force(
+            atk_nation,
+            (0..8)
+                .map(|i| make_unit(i, ArmyUnitType::Regulars, atk_nation))
+                .collect(),
+        );
+        let defender = make_force(
+            def_nation,
+            (10..14)
+                .map(|i| make_unit(i, ArmyUnitType::Militia, def_nation))
+                .collect(),
+        );
+        let cfg = BattleConfig {
+            targeting: TargetingPriority::StrongestFirst,
+            attacker_can_retreat: true,
+            defender_can_retreat: false,
+            attacker_retreat_ratio: 2.0,
+            defender_retreat_ratio: 2.0,
+            attacker_postbattle_fp_loss: 0.60,
+            defender_postbattle_fp_loss: 0.60,
+        };
+        let result = resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg);
+        assert!(
+            !result.retreated,
+            "raw-strength ratio should keep a clearly superior attacker in the fight"
+        );
+        assert!(
+            result.attacker_won,
+            "8 Regulars should beat 4 Militia once the battle actually runs"
+        );
+    }
+
+    // Complementary check: a genuinely outmatched attacker still retreats —
+    // the fix is not "retreat never fires". 2 Regulars (atk_fp = 4) vs 8
+    // Militia (raw def_fp = 9.6) yields a ratio of 2.4 > 2.0.
+    #[test]
+    fn attacker_still_retreats_when_genuinely_outmatched() {
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+        let attacker = make_force(
+            atk_nation,
+            (0..2)
+                .map(|i| make_unit(i, ArmyUnitType::Regulars, atk_nation))
+                .collect(),
+        );
+        let defender = make_force(
+            def_nation,
+            (10..18)
+                .map(|i| make_unit(i, ArmyUnitType::Militia, def_nation))
+                .collect(),
+        );
+        let cfg = BattleConfig {
+            targeting: TargetingPriority::StrongestFirst,
+            attacker_can_retreat: true,
+            defender_can_retreat: false,
+            attacker_retreat_ratio: 2.0,
+            defender_retreat_ratio: 2.0,
+            attacker_postbattle_fp_loss: 0.60,
+            defender_postbattle_fp_loss: 0.60,
+        };
+        let result = resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg);
+        assert!(
+            result.retreated,
+            "outmatched attacker should still bail pre-battle"
         );
     }
 

@@ -1006,8 +1006,13 @@ pub(crate) fn ai_military_strategy(
         None => return,
     };
 
-    // Only count field-army units for attack-readiness — militia stay home.
-    let army_size = nation.field_army_count();
+    // Count only FP-contributing field army (filters out Generals/FP-0 support
+    // units). The nation-level gate below uses this to avoid queueing attacks
+    // from an army that looks populous on paper but has no combat weight.
+    let combat_unit_count = nation
+        .field_army_iter()
+        .filter(|u| u.unit_type.stats().firepower > 0)
+        .count();
 
     // Find nations we are at war with, plus anarchic nations (free to invade)
     let enemies: Vec<NationId> = game
@@ -1025,38 +1030,72 @@ pub(crate) fn ai_military_strategy(
         .map(|n| n.id)
         .collect();
 
-    // If at war and has >= 4 army units, attack enemy's weakest province
-    // Smarter targeting: prefer provinces with fewer defenders, valuable resources,
-    // and avoid attacking when outnumbered.
-    if !enemies.is_empty() && army_size >= 4 {
+    // Phase 2: the attack decision is FP-based, not unit-count-based. For
+    // each candidate province we compare *our forward FP* (units positioned
+    // in, or being moved to, provinces adjacent to the target) to *their
+    // local FP* (stationed field army + militia garrison + garrison
+    // artillery, using raw FP without the 1.2× defender or +8 militia
+    // entrenchment bonuses). Generals drop out of both sides because their
+    // FP is zero. Aggressive personalities use a lower ratio (willing to
+    // engage at less than 1:1 raw FP).
+    let personality = get_personality(game, nation_id);
+    #[cfg(feature = "lua")]
+    let (attack_fp_vs_minor, attack_fp_vs_gp) = {
+        let cfg = game
+            .game_data
+            .lua_engine
+            .as_ref()
+            .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+        (
+            cfg.as_ref()
+                .and_then(|c| c.attack_fp_vs_minor)
+                .unwrap_or(0.8),
+            cfg.as_ref()
+                .and_then(|c| c.attack_fp_vs_gp)
+                .unwrap_or(1.0),
+        )
+    };
+    #[cfg(not(feature = "lua"))]
+    let (attack_fp_vs_minor, attack_fp_vs_gp) = {
+        let _ = personality;
+        (0.8f64, 1.0f64)
+    };
+
+    // Attack only when we actually have a meaningful combat force.
+    if !enemies.is_empty() && combat_unit_count >= 4 {
         // Score each enemy province — lower score = better target
         let mut candidates: Vec<(ProvinceId, i32)> = Vec::new();
         let attacker_province_ids: Vec<ProvinceId> = game
             .get_nation(nation_id)
             .map(|n| n.province_ids.clone())
             .unwrap_or_default();
+        // F-006: we used to count pending_move destinations toward forward
+        // FP, but `resolve_combat` excludes moved units from the attacker
+        // cohort the same turn they move (see `moved_unit_ids` filter in
+        // `processor.rs`), so redistributed units cannot actually fight
+        // this turn. Forward FP now uses only current position — units
+        // redistributed this turn will count in the NEXT turn's decision.
         for &enemy_id in &enemies {
             let enemy_is_gp = game
                 .get_nation(enemy_id)
                 .map(|n| n.is_great_power())
                 .unwrap_or(false);
-            // Count enemy **field army** units per province. We deliberately
-            // exclude Militia / GarrisonArtillery here because the
-            // province-level `garrison_count` cache is added separately
-            // below; counting stationary garrison units twice would double
-            // defender strength and suppress valid attacks.
-            let enemy_army: Vec<(ProvinceId, usize)> = {
-                let mut counts: Vec<(ProvinceId, usize)> = Vec::new();
+            // Stationed FP per enemy province from field-army units. We use
+            // `effective_firepower` so damaged units contribute less — same
+            // metric used everywhere else.
+            let enemy_stationed_fp: Vec<(ProvinceId, f64)> = {
+                let mut sums: Vec<(ProvinceId, f64)> = Vec::new();
                 if let Some(en) = game.get_nation(enemy_id) {
                     for unit in en.field_army_iter() {
-                        if let Some(entry) = counts.iter_mut().find(|(p, _)| *p == unit.position) {
-                            entry.1 += 1;
+                        let fp = unit.effective_firepower();
+                        if let Some(entry) = sums.iter_mut().find(|(p, _)| *p == unit.position) {
+                            entry.1 += fp;
                         } else {
-                            counts.push((unit.position, 1));
+                            sums.push((unit.position, fp));
                         }
                     }
                 }
-                counts
+                sums
             };
 
             // Pre-compute which of our provinces are adjacent to enemy territory
@@ -1070,49 +1109,132 @@ pub(crate) fn ai_military_strategy(
                 if prov.owner == enemy_id {
                     // Adjacency check: only attack provinces reachable by land
                     // (adjacent to one of our provinces) or via a naval landing site.
-                    let is_adjacent = our_provinces
+                    let adjacent_owned_pids: Vec<ProvinceId> = our_provinces
                         .iter()
-                        .any(|ours| crate::map::provinces_are_adjacent(&game.hex_map, ours, prov));
+                        .filter(|ours| {
+                            crate::map::provinces_are_adjacent(&game.hex_map, ours, prov)
+                        })
+                        .map(|ours| ours.id)
+                        .collect();
                     let has_landing = game
                         .pending_landings
                         .iter()
                         .any(|(nid, pid, _)| *nid == nation_id && *pid == prov.id);
-                    if !is_adjacent && !has_landing {
+                    if adjacent_owned_pids.is_empty() && !has_landing {
                         continue;
                     }
 
                     let tile_count = prov.tiles.len();
-                    // Use actual garrison count from the province
+                    // Defender local FP (raw — matches the retreat decision
+                    // baseline). Militia contribute base FP 1 each;
+                    // GarrisonArtillery contributes its base FP 4. No 1.2×
+                    // defender multiplier, no +8 militia entrenchment bonus.
                     let garrison_size = prov.garrison_count as usize;
-                    // Estimated defender strength: militia garrison + stationed
-                    // field army + 1 for GarrisonArtillery if present at a
-                    // minor-nation capital (it's a real unit that adds combat
-                    // strength; `field_army_iter()` excludes it).
-                    let stationed = enemy_army
+                    let stationed_fp = enemy_stationed_fp
                         .iter()
                         .find(|(p, _)| *p == prov.id)
-                        .map(|(_, c)| *c)
-                        .unwrap_or(0);
-                    let artillery = game
+                        .map(|(_, fp)| *fp)
+                        .unwrap_or(0.0);
+                    let garrison_artillery_fp = if game
                         .get_nation(enemy_id)
-                        .map(|n| n.has_garrison_artillery_at(prov.id))
-                        .unwrap_or(false) as usize;
-                    let total_defenders = garrison_size + stationed + artillery;
-
-                    // For GP enemies, be more aggressive: attack if we have at
-                    // least 2/3 of their defenders (wars stagnate otherwise
-                    // because neither side ever attacks).
-                    // For minor nations, keep the conservative check.
-                    let dominated = if enemy_is_gp {
-                        // Allow attacking GP provinces when we have a reasonable
-                        // force, even if not strictly outnumbering defenders.
-                        total_defenders > army_size + army_size / 2
+                        .is_some_and(|n| n.has_garrison_artillery_at(prov.id))
+                    {
+                        crate::military::units::ArmyUnitType::GarrisonArtillery
+                            .stats()
+                            .firepower as f64
                     } else {
-                        total_defenders > army_size
+                        0.0
                     };
-                    if dominated {
+                    let militia_base_fp =
+                        crate::military::units::ArmyUnitType::Militia.stats().firepower as f64;
+                    let their_local_fp = stationed_fp
+                        + garrison_artillery_fp
+                        + (garrison_size as f64) * militia_base_fp;
+
+                    // Our forward FP: effective_firepower of our movable
+                    // units whose current position is in a province adjacent
+                    // to the target (land cohort). When a naval landing is
+                    // pending, we also add a naval cohort computed the same
+                    // way `resolve_combat` assembles it — units in coastal
+                    // attacker-owned provinces (excluding already-adjacent
+                    // ones) capped by beachhead capacity, highest FP first.
+                    let (our_land_fp, naval_candidates): (f64, Vec<(f64, ProvinceId)>) = game
+                        .get_nation(nation_id)
+                        .map(|n| {
+                            let mut land_fp = 0.0;
+                            let mut naval: Vec<(f64, ProvinceId)> = Vec::new();
+                            for u in &n.army {
+                                if !u.unit_type.can_move() {
+                                    continue;
+                                }
+                                if adjacent_owned_pids.contains(&u.position) {
+                                    land_fp += u.effective_firepower();
+                                } else if has_landing {
+                                    naval.push((u.effective_firepower(), u.position));
+                                }
+                            }
+                            (land_fp, naval)
+                        })
+                        .unwrap_or((0.0, Vec::new()));
+
+                    let our_naval_fp: f64 = if has_landing {
+                        // Filter to coastal ports and cap by beachhead size.
+                        let coastal_attacker_pids: std::collections::HashSet<ProvinceId> =
+                            attacker_province_ids
+                                .iter()
+                                .copied()
+                                .filter(|&pid| {
+                                    game.get_province(pid).is_some_and(|p| p.coastal)
+                                })
+                                .collect();
+                        let beachhead_cap: usize = game
+                            .get_nation(nation_id)
+                            .map(|n| {
+                                use crate::military::naval::NavalOperation;
+                                let assigned: Vec<_> = n
+                                    .warships
+                                    .iter()
+                                    .filter(|s| {
+                                        s.operation == Some(NavalOperation::Beachhead(prov.id))
+                                    })
+                                    .cloned()
+                                    .collect();
+                                crate::military::naval::beachhead_force_size(&assigned)
+                            })
+                            .unwrap_or(0) as usize;
+                        let mut eligible: Vec<f64> = naval_candidates
+                            .into_iter()
+                            .filter(|(_, pos)| coastal_attacker_pids.contains(pos))
+                            .map(|(fp, _)| fp)
+                            .collect();
+                        eligible.sort_by(|a, b| {
+                            b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        eligible.truncate(beachhead_cap);
+                        eligible.iter().sum()
+                    } else {
+                        0.0
+                    };
+
+                    let our_forward_fp = our_land_fp + our_naval_fp;
+
+                    // FP-based attack acceptance (card #99 phase 2).
+                    let ratio = if enemy_is_gp {
+                        attack_fp_vs_gp
+                    } else {
+                        attack_fp_vs_minor
+                    };
+                    if our_forward_fp < their_local_fp * ratio {
                         continue;
                     }
+
+                    // Legacy score uses stationed unit count for tie-breaking;
+                    // recompute a cheap integer proxy from the FP sum.
+                    let stationed = enemy_stationed_fp
+                        .iter()
+                        .find(|(p, _)| *p == prov.id)
+                        .map(|(_, fp)| (*fp as i32).max(0))
+                        .unwrap_or(0);
 
                     // Score: fewer tiles = weaker (lower score = better)
                     // Bonus: check for valuable terrain (mountains/hills may have

@@ -89,6 +89,10 @@ balanced = {
     retreat_prebattle_ratio = 2.0,    -- opponent-to-own FP ratio that triggers pre-battle retreat
     retreat_postbattle_fp_loss = 0.60, -- fraction of FP lost at which a side retreats mid-battle
 
+    -- Attack acceptance (card #99 phase 2): FP-based.
+    attack_fp_vs_minor = 0.8,
+    attack_fp_vs_gp = 1.0,
+
     -- Naval landing gate (card #7)
     naval_min_adjacent_strength_ratio = 1.5, -- adjacent prov is "too hard" if defenders > army * this ratio
 

@@ -13,6 +13,7 @@ use crate::military::combat::{
     BattleConfig, BattleResult, CombatForce, TargetingPriority, resolve_battle_with_config,
 };
 use crate::military::naval::{NavalBattleResult, calculate_blockade_effect, resolve_naval_battle};
+use crate::military::ships::Ship;
 use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::turn::scoring::{CouncilVoteResult, calculate_score, run_council_vote};
 use crate::types::*;
@@ -307,6 +308,12 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
 
     // 7. Resolve combat (pending attacks — units that moved this turn are excluded)
     resolve_combat(game, &mut report, &moved_unit_ids);
+
+    // 7a. Anarchy sweep: after all initial attacks and counter-attacks have
+    // resolved, apply anarchy only to nations that still do not hold their
+    // capital. Prevents a capital captured and then recaptured in the same
+    // turn from leaving the nation in spurious anarchy.
+    apply_end_of_combat_anarchy(game, &mut report);
 
     // 7b. Resolve naval combat (warship engagements between nations at war)
     resolve_naval_combat(game, &mut report);
@@ -2659,7 +2666,7 @@ fn resolve_combat(
                     attacker_name, prov_name, defender_name
                 ),
             ));
-            check_and_apply_anarchy(game, defender_id, report);
+            // Anarchy handled by the end-of-combat sweep.
             continue;
         }
 
@@ -2925,8 +2932,9 @@ fn resolve_combat(
                 ),
             ));
 
-            // Check if the defender lost its capital -> anarchy
-            check_and_apply_anarchy(game, defender_id, report);
+            // Anarchy is evaluated in a single end-of-combat sweep
+            // (`apply_end_of_combat_anarchy`) so a capital captured and then
+            // recaptured within the same turn does not trigger anarchy.
 
             // Check if the defender has been eliminated (lost all provinces)
             let defender_eliminated = game
@@ -3233,8 +3241,7 @@ fn resolve_combat(
                 format!("{} counter-attacks and recaptures {}!", ca_name, prov_name),
                 HeadlineCategory::War,
             ));
-            // The occupier may have lost their capital in this counter-attack
-            check_and_apply_anarchy(game, new_owner_id, report);
+            // Anarchy is evaluated in the end-of-combat sweep.
         } else {
             let occ_name = game
                 .get_nation(new_owner_id)
@@ -3641,6 +3648,17 @@ fn attribute_conquest_origin(
     }
 }
 
+/// Sweep all nations after combat resolves and apply anarchy to any that no
+/// longer hold their capital province. Using the final post-combat state
+/// means a capital captured then recaptured within the same turn does not
+/// leave the original owner in anarchy (card #98).
+fn apply_end_of_combat_anarchy(game: &mut GameState, report: &mut TurnReport) {
+    let nation_ids: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
+    for nation_id in nation_ids {
+        check_and_apply_anarchy(game, nation_id, report);
+    }
+}
+
 /// Check if a nation just lost its capital province and should enter anarchy.
 /// Returns true if anarchy was triggered.
 fn check_and_apply_anarchy(
@@ -3654,6 +3672,15 @@ fn check_and_apply_anarchy(
     };
     if nation.is_in_anarchy {
         return false; // already in anarchy
+    }
+    // Absorbed minors are not sovereign polities: they have no provinces
+    // (ownership is held by the overlord) and no capital to defend. Anarchy
+    // is a property of independent nations that have lost their capital, so
+    // skip them here — the sweep in `apply_end_of_combat_anarchy` otherwise
+    // flags every absorbed minor as anarchic on the same turn of
+    // incorporation.
+    if !nation.is_great_power() && nation.integrated_by.is_some() {
+        return false;
     }
     // Check if the nation still owns its capital province
     if nation.province_ids.contains(&nation.capital_province_id) {
@@ -3755,11 +3782,17 @@ fn release_integrated_minors(
         }
 
         // Remove those provinces from the overlord's list and add them to
-        // the minor's.
+        // the minor's. Also scatter any overlord army units positioned on the
+        // restored provinces — when the empire collapses its occupying
+        // garrison disbands rather than squatting as foreign ghosts on
+        // someone else's territory.
         if let Some(overlord) = game.get_nation_mut(overlord_id) {
             overlord
                 .province_ids
                 .retain(|p| !provinces_to_restore.contains(p));
+            overlord
+                .army
+                .retain(|u| !provinces_to_restore.contains(&u.position));
         }
         if let Some(minor) = game.get_nation_mut(minor_id) {
             for pid in &provinces_to_restore {
@@ -3772,6 +3805,13 @@ fn release_integrated_minors(
             // structurally anarchic on return.
             minor.is_in_anarchy = !minor.province_ids.contains(&minor.capital_province_id);
         }
+
+        // Seed token defenders so the reborn minor isn't immediately overrun
+        // the next turn. Refill each restored province's militia up to
+        // `minor_default_garrison`; if the minor still holds its capital and
+        // has no GarrisonArtillery there, spawn one (mirrors the initial minor
+        // garrison layout in `create_garrison`).
+        seed_released_minor_garrison(game, minor_id, &provinces_to_restore);
 
         let minor_name = game
             .get_nation(minor_id)
@@ -3807,6 +3847,57 @@ fn release_integrated_minors(
                 minor_name, overlord_name
             ),
         ));
+    }
+}
+
+/// Give a freshly-released minor token defenders on each restored province so
+/// it is not trivially re-conquerable on turn 1 of independence. Refills each
+/// province's persistent Militia up to `minor_default_garrison` and, if the
+/// minor holds its capital province and has no GarrisonArtillery there, spawns
+/// one — matching the initial minor-nation layout from `create_garrison`.
+fn seed_released_minor_garrison(
+    game: &mut GameState,
+    minor_id: NationId,
+    provinces_to_restore: &[ProvinceId],
+) {
+    let target = game.game_data.game_config.minor_default_garrison as usize;
+    let capital_id = game.get_nation(minor_id).map(|n| n.capital_province_id);
+
+    for pid in provinces_to_restore {
+        let current = game
+            .get_nation(minor_id)
+            .map(|n| n.militia_at(*pid))
+            .unwrap_or(0);
+        let missing = target.saturating_sub(current);
+        if missing > 0 {
+            if let Some(minor) = game.get_nation_mut(minor_id) {
+                for _ in 0..missing {
+                    minor
+                        .army
+                        .push(crate::military::combat::spawn_militia_unit(minor_id, *pid));
+                }
+            }
+            sync_garrison_cache(game, *pid);
+        }
+    }
+
+    if let Some(capital_pid) = capital_id
+        && provinces_to_restore.contains(&capital_pid)
+    {
+        let needs_artillery = game
+            .get_nation(minor_id)
+            .map(|n| !n.has_garrison_artillery_at(capital_pid))
+            .unwrap_or(false);
+        if needs_artillery
+            && let Some(minor) = game.get_nation_mut(minor_id)
+        {
+            minor
+                .army
+                .push(crate::military::combat::spawn_garrison_artillery_unit(
+                    minor_id,
+                    capital_pid,
+                ));
+        }
     }
 }
 
@@ -5037,19 +5128,38 @@ fn incorporate_minor_into_empire(
         }
     }
 
-    // Remove provinces from minor nation
+    // Drain the minor's army and warships; transfer ownership to the overlord
+    // so the WASM move-target query (which looks up a unit in
+    // `nation.army`/`nation.warships` by nation id) can find them for the
+    // annexing player. Positions remain unchanged — units stay on the same
+    // (now overlord-owned) provinces they were standing on.
+    let mut transferred_army: Vec<ArmyUnit> = Vec::new();
+    let mut transferred_warships: Vec<Ship> = Vec::new();
+    let mut transferred_merchants: Vec<Ship> = Vec::new();
     if let Some(minor) = game.get_nation_mut(minor_id) {
+        transferred_army = std::mem::take(&mut minor.army);
+        transferred_warships = std::mem::take(&mut minor.warships);
+        transferred_merchants = std::mem::take(&mut minor.merchant_fleet);
         minor.province_ids.clear();
         // Card #79: back-pointer used when the overlord falls into anarchy
         // and integrated minors regain their independence.
         minor.integrated_by = Some(gp_id);
     }
+    for unit in &mut transferred_army {
+        unit.owner = gp_id;
+    }
+    for ship in transferred_warships.iter_mut().chain(transferred_merchants.iter_mut()) {
+        ship.owner = gp_id;
+    }
 
-    // Add provinces to great power
+    // Add provinces and transferred military to great power
     if let Some(gp) = game.get_nation_mut(gp_id) {
         for pid in &provinces_to_transfer {
             gp.add_province(*pid);
         }
+        gp.army.append(&mut transferred_army);
+        gp.warships.append(&mut transferred_warships);
+        gp.merchant_fleet.append(&mut transferred_merchants);
     }
 
     // Card #68: once absorbed, the minor is no longer an independent war
@@ -12881,6 +12991,197 @@ mod tests {
             ally.integrated_by,
             Some(overlord_b),
             "release on overlord A must not clear integrated_by for minors of overlord B"
+        );
+    }
+
+    // Card #95: voluntary (or forced) incorporation must transfer the minor's
+    // army to the overlord so the UI/move-target queries (which look up a
+    // unit by `nation_id → army`) can find it under the new owner. Before
+    // this fix, units stayed on the minor with `owner = minor_id` and the
+    // player got "Could not compute move targets" when clicking them.
+    #[test]
+    fn incorporation_transfers_minor_army_to_overlord() {
+        let mut game = test_game_state_with_minor_nation();
+
+        // Seed the minor with a field army unit on its own province.
+        let minor = game.get_nation_mut(NationId(2)).unwrap();
+        minor.army.push(crate::military::units::ArmyUnit::new(
+            crate::map::UnitId(999),
+            crate::military::units::ArmyUnitType::Regulars,
+            NationId(2),
+            ProvinceId(2),
+        ));
+
+        // Push the relationship over the voluntary-incorporation threshold.
+        let rel = game.diplomacy.ensure_relation(NationId(2), NationId(1));
+        rel.score = 95;
+
+        let mut report = TurnReport::empty();
+        resolve_voluntary_incorporations(&mut game, &mut report);
+
+        let overlord = game.get_nation(NationId(1)).unwrap();
+        let moved = overlord
+            .army
+            .iter()
+            .find(|u| u.id == crate::map::UnitId(999))
+            .expect("minor's army unit must live on the overlord after annexation");
+        assert_eq!(
+            moved.owner,
+            NationId(1),
+            "unit ownership must flip to the overlord so move-target queries find it"
+        );
+
+        let minor_after = game.get_nation(NationId(2)).unwrap();
+        assert!(
+            minor_after.army.is_empty(),
+            "absorbed minor should have no lingering units on its (empty) roster"
+        );
+    }
+
+    // Card #95 complement: a released minor must get token defenders back so
+    // it isn't immediately re-conquerable on turn 1 of independence.
+    #[test]
+    fn released_minor_receives_token_garrison() {
+        let (mut game, overlord_id, minor_id, _, minor_cap_pid) = absorbed_minor_scenario();
+        // Precondition: absorbed minor has an empty army.
+        assert!(game.get_nation(minor_id).unwrap().army.is_empty());
+
+        let mut report = TurnReport::empty();
+        release_integrated_minors(&mut game, overlord_id, &mut report);
+
+        let minor = game.get_nation(minor_id).unwrap();
+        let militia_at_cap = minor.militia_at(minor_cap_pid);
+        let target = game.game_data.game_config.minor_default_garrison as usize;
+        assert_eq!(
+            militia_at_cap, target,
+            "capital should be seeded up to the minor default militia count"
+        );
+        assert!(
+            minor.has_garrison_artillery_at(minor_cap_pid),
+            "released minor should get a GarrisonArtillery at its restored capital"
+        );
+    }
+
+    // Card #98: a capital captured and then recaptured within the same turn
+    // must not leave the original owner in anarchy. Because the anarchy
+    // sweep only inspects the final post-combat state, mid-turn ownership
+    // churn is invisible to it — which is exactly the fix.
+    #[test]
+    fn capital_recaptured_same_turn_does_not_trigger_anarchy() {
+        let mut game = test_game_state();
+        let capital = game.get_nation(NationId(1)).unwrap().capital_province_id;
+
+        // Simulate a same-turn capture+recapture: an enemy takes the capital,
+        // then the owner retakes it, leaving the final state as "owner holds
+        // its capital" — which is what the end-of-combat sweep sees.
+        {
+            // Capture: flip province owner to enemy and drop it from the
+            // original owner's province list.
+            game.get_province_mut(capital).unwrap().owner = NationId(99);
+            game.get_nation_mut(NationId(1))
+                .unwrap()
+                .province_ids
+                .retain(|p| *p != capital);
+        }
+        {
+            // Recapture: flip back.
+            game.get_province_mut(capital).unwrap().owner = NationId(1);
+            game.get_nation_mut(NationId(1))
+                .unwrap()
+                .add_province(capital);
+        }
+
+        let mut report = TurnReport::empty();
+        apply_end_of_combat_anarchy(&mut game, &mut report);
+
+        assert!(
+            !game.get_nation(NationId(1)).unwrap().is_in_anarchy,
+            "capital captured then recaptured within the turn must not leave the owner anarchic"
+        );
+        assert!(
+            !report
+                .events
+                .iter()
+                .any(|e| matches!(e, DomainEvent::NationEnteredAnarchy(_))),
+            "no NationEnteredAnarchy event should be emitted when the recapture lands"
+        );
+    }
+
+    // Guardrail: F-001. The end-of-combat sweep must never flag absorbed
+    // minors (diplomatically incorporated into a GP) as anarchic, even
+    // though they hold zero provinces and therefore cannot contain their
+    // capital. They are not sovereign polities.
+    #[test]
+    fn absorbed_minor_does_not_enter_anarchy_during_sweep() {
+        let mut game = test_game_state_with_minor_nation();
+        let rel = game.diplomacy.ensure_relation(NationId(2), NationId(1));
+        rel.score = 95;
+
+        let mut report = TurnReport::empty();
+        resolve_voluntary_incorporations(&mut game, &mut report);
+        apply_end_of_combat_anarchy(&mut game, &mut report);
+
+        let absorbed = game.get_nation(NationId(2)).unwrap();
+        assert!(
+            !absorbed.is_in_anarchy,
+            "an absorbed minor must not be flagged anarchic by the end-of-combat sweep"
+        );
+        assert!(
+            !report
+                .events
+                .iter()
+                .any(|e| matches!(e, DomainEvent::NationEnteredAnarchy(ev) if ev.nation == NationId(2))),
+            "no NationEnteredAnarchy event should be emitted for an absorbed minor"
+        );
+    }
+
+    // F-002: when the overlord falls into anarchy and `release_integrated_minors`
+    // restores the minor's provinces, no overlord army units should remain
+    // positioned on those provinces. They scatter with the collapsing empire.
+    #[test]
+    fn released_minor_has_no_overlord_units_on_its_provinces() {
+        let (mut game, overlord_id, _minor_id, _, minor_cap_pid) = absorbed_minor_scenario();
+
+        // Plant an overlord unit on the minor's (now overlord-owned) capital —
+        // representing a unit transferred during incorporation.
+        if let Some(overlord) = game.get_nation_mut(overlord_id) {
+            overlord.army.push(crate::military::units::ArmyUnit::new(
+                crate::map::UnitId(8080),
+                crate::military::units::ArmyUnitType::Regulars,
+                overlord_id,
+                minor_cap_pid,
+            ));
+        }
+
+        let mut report = TurnReport::empty();
+        release_integrated_minors(&mut game, overlord_id, &mut report);
+
+        let overlord = game.get_nation(overlord_id).unwrap();
+        assert!(
+            !overlord.army.iter().any(|u| u.position == minor_cap_pid),
+            "overlord units on restored provinces must be disbanded when the empire collapses"
+        );
+    }
+
+    // Companion: if a nation genuinely does not hold its capital at end of
+    // combat, the sweep still triggers anarchy.
+    #[test]
+    fn end_of_combat_anarchy_fires_when_capital_is_lost() {
+        let mut game = test_game_state();
+        let capital = game.get_nation(NationId(1)).unwrap().capital_province_id;
+        // Simulate: an enemy holds the capital at the moment combat resolves.
+        game.get_province_mut(capital).unwrap().owner = NationId(99);
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .province_ids
+            .retain(|p| *p != capital);
+
+        let mut report = TurnReport::empty();
+        apply_end_of_combat_anarchy(&mut game, &mut report);
+
+        assert!(
+            game.get_nation(NationId(1)).unwrap().is_in_anarchy,
+            "nation without its capital at end of combat must enter anarchy"
         );
     }
 

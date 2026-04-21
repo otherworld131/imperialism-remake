@@ -196,9 +196,7 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         default_garrison_per_province: table.get("default_garrison_per_province").unwrap_or(4),
         minor_default_garrison: table.get("minor_default_garrison").unwrap_or(3),
         max_garrison_per_province: table.get("max_garrison_per_province").unwrap_or(8),
-        garrison_regen_interval_turns: table
-            .get("garrison_regen_interval_turns")
-            .unwrap_or(2),
+        garrison_regen_interval_turns: table.get("garrison_regen_interval_turns").unwrap_or(2),
     };
     // Sanitize: ensure no zero-or-negative values for fields used as divisors/multipliers
     let sanitized_default_garrison = cfg.default_garrison_per_province.clamp(0, 20);
@@ -280,10 +278,9 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         // above 20.
         default_garrison_per_province: sanitized_default_garrison,
         minor_default_garrison: sanitized_minor_default,
-        max_garrison_per_province: cfg.max_garrison_per_province.clamp(
-            sanitized_default_garrison.max(sanitized_minor_default),
-            20,
-        ),
+        max_garrison_per_province: cfg
+            .max_garrison_per_province
+            .clamp(sanitized_default_garrison.max(sanitized_minor_default), 20),
         // `0` keeps its "disabled" semantic — the regen phase early-returns
         // on zero and also guards against modulo-by-zero.
         garrison_regen_interval_turns: cfg.garrison_regen_interval_turns.min(200),
@@ -424,6 +421,14 @@ pub struct LuaAiConfig {
 
     // Naval landing gate (card #7)
     pub naval_min_adjacent_strength_ratio: Option<f64>,
+
+    // Attack acceptance (card #99, phase 2): minimum ratio of our forward
+    // firepower to the defender's local firepower required to attack. A
+    // value of `1.0` means "only attack if our forward FP matches the
+    // defender's raw local FP". Lower values permit more aggressive
+    // engagements. Applied separately to minor and great-power targets.
+    pub attack_fp_vs_minor: Option<f64>,
+    pub attack_fp_vs_gp: Option<f64>,
 }
 
 /// Clamp an f64 to a finite range, replacing NaN/inf with the default.
@@ -605,6 +610,10 @@ impl LuaAiConfig {
         self.naval_min_adjacent_strength_ratio =
             sanitize_opt_f64(self.naval_min_adjacent_strength_ratio, 0.5, 10.0);
 
+        // Attack acceptance (card #99 phase 2)
+        self.attack_fp_vs_minor = sanitize_opt_f64(self.attack_fp_vs_minor, 0.1, 5.0);
+        self.attack_fp_vs_gp = sanitize_opt_f64(self.attack_fp_vs_gp, 0.1, 5.0);
+
         self
     }
 }
@@ -719,6 +728,9 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             retreat_postbattle_fp_loss: table.get("retreat_postbattle_fp_loss").ok(),
             // Naval landing gate (card #7)
             naval_min_adjacent_strength_ratio: table.get("naval_min_adjacent_strength_ratio").ok(),
+            // Attack acceptance (card #99 phase 2)
+            attack_fp_vs_minor: table.get("attack_fp_vs_minor").ok(),
+            attack_fp_vs_gp: table.get("attack_fp_vs_gp").ok(),
         }
         .sanitize(),
     )
@@ -1104,6 +1116,8 @@ mod tests {
             retreat_prebattle_ratio: None,
             retreat_postbattle_fp_loss: None,
             naval_min_adjacent_strength_ratio: None,
+            attack_fp_vs_minor: None,
+            attack_fp_vs_gp: None,
         };
 
         let sanitized = cfg.sanitize();
@@ -1198,6 +1212,8 @@ mod tests {
             retreat_prebattle_ratio: None,
             retreat_postbattle_fp_loss: None,
             naval_min_adjacent_strength_ratio: None,
+            attack_fp_vs_minor: None,
+            attack_fp_vs_gp: None,
         };
 
         let sanitized = cfg.sanitize();
@@ -1331,6 +1347,8 @@ mod tests {
             retreat_prebattle_ratio: None,
             retreat_postbattle_fp_loss: None,
             naval_min_adjacent_strength_ratio: None,
+            attack_fp_vs_minor: None,
+            attack_fp_vs_gp: None,
         };
 
         let sanitized = cfg.sanitize();

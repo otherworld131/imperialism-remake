@@ -89,6 +89,11 @@ aggressive = {
     retreat_prebattle_ratio = 3.0,    -- aggressive: less likely to decline a fight
     retreat_postbattle_fp_loss = 0.70, -- fights harder before breaking
 
+    -- Attack acceptance (card #99 phase 2): minimum ratio of our forward FP
+    -- to the defender's local FP required to attack. Lower = more aggressive.
+    attack_fp_vs_minor = 0.6,         -- attacks minors even at 60% of their FP
+    attack_fp_vs_gp = 0.8,            -- presses GPs even when slightly outgunned
+
     -- Naval landing gate (card #7)
     naval_min_adjacent_strength_ratio = 1.2,
 

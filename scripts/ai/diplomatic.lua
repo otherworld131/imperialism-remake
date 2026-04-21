@@ -89,6 +89,10 @@ diplomatic = {
     retreat_prebattle_ratio = 1.5,    -- quick to retreat rather than lose units
     retreat_postbattle_fp_loss = 0.50,
 
+    -- Attack acceptance (card #99 phase 2): cautious — needs ≥ local FP.
+    attack_fp_vs_minor = 1.0,
+    attack_fp_vs_gp = 1.2,
+
     -- Naval landing gate (card #7)
     naval_min_adjacent_strength_ratio = 2.0, -- very reluctant amphibious unless overland is hopeless
 

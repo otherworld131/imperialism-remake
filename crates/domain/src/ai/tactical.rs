@@ -192,13 +192,12 @@ fn ai_distribute_field_army(
     #[cfg(not(feature = "lua"))]
     let reserve_threatened: usize = 6;
 
+    // Phase 2: `max_redeploys_per_turn` is no longer enforced here. Distribution
+    // moves as many units as needed in a single turn; per-turn movement will
+    // be constrained by transport capacity in a future ticket. The Lua field
+    // is left in `LuaAiConfig` for that future work.
     #[cfg(feature = "lua")]
-    let max_redeploys: usize = lua_cfg
-        .as_ref()
-        .and_then(|c| c.max_redeploys_per_turn)
-        .unwrap_or(4);
-    #[cfg(not(feature = "lua"))]
-    let max_redeploys: usize = 4;
+    let _ = lua_cfg.as_ref().and_then(|c| c.max_redeploys_per_turn);
 
     // ── Snapshot the nation ────────────────────────────────────────
     let Some(nation) = game.get_nation(nation_id) else {
@@ -233,13 +232,17 @@ fn ai_distribute_field_army(
         .map(|p| p.id)
         .collect();
 
-    // Count our units stationed in each province.
+    // Count our MOVABLE field-army units stationed in each province.
+    // Militia/GarrisonArtillery (movement = 0) cannot redeploy — counting
+    // them inflates both capital surplus and the deficit-satisfied tally.
     let unit_counts: std::collections::HashMap<ProvinceId, usize> = {
         let mut m: std::collections::HashMap<ProvinceId, usize> =
             std::collections::HashMap::new();
         if let Some(n) = game.get_nation(nation_id) {
             for u in &n.army {
-                *m.entry(u.position).or_insert(0) += 1;
+                if u.unit_type.can_move() {
+                    *m.entry(u.position).or_insert(0) += 1;
+                }
             }
         }
         m
@@ -275,8 +278,6 @@ fn ai_distribute_field_army(
         CapitalThreat::Nearby | CapitalThreat::Imminent => reserve_threatened,
     };
 
-    let mut redeploys_left = max_redeploys;
-
     // ── Phase A: concentrate toward capital when threatened ─────────
     if matches!(threat, CapitalThreat::Nearby | CapitalThreat::Imminent) {
         let capital_have = *unit_counts.get(&capital_pid).unwrap_or(&0);
@@ -290,39 +291,43 @@ fn ai_distribute_field_army(
                 .copied()
                 .collect();
 
+            // Precompute the set of already-pending unit ids ONCE and update
+            // it incrementally as we push moves. Rebuilding per iteration
+            // made the whole distribution O(N²) in the number of moves.
+            let mut already_pending: std::collections::HashSet<crate::map::UnitId> = game
+                .pending_moves
+                .iter()
+                .map(|(_, uid, _)| *uid)
+                .collect();
+
             let mut pulled = 0;
             for src_pid in pull_sources {
-                if pulled >= deficit || redeploys_left == 0 {
+                if pulled >= deficit {
                     break;
                 }
                 let Some(nation) = game.get_nation(nation_id) else {
                     return;
                 };
-                let already_pending: std::collections::HashSet<crate::map::UnitId> = game
-                    .pending_moves
-                    .iter()
-                    .map(|(_, uid, _)| *uid)
-                    .collect();
                 let candidate_unit_ids: Vec<crate::map::UnitId> = nation
                     .army
                     .iter()
-                    .filter(|u| u.position == src_pid && !already_pending.contains(&u.id))
+                    .filter(|u| {
+                        u.unit_type.can_move()
+                            && u.position == src_pid
+                            && !already_pending.contains(&u.id)
+                    })
                     .map(|u| u.id)
                     .collect();
                 for uid in candidate_unit_ids {
-                    if pulled >= deficit || redeploys_left == 0 {
+                    if pulled >= deficit {
                         break;
                     }
                     game.pending_moves.push((nation_id, uid, capital_pid));
+                    already_pending.insert(uid);
                     pulled += 1;
-                    redeploys_left -= 1;
                 }
             }
         }
-    }
-
-    if redeploys_left == 0 {
-        return;
     }
 
     // ── Phase B: spread to undefended border / forward staging ──────
@@ -330,12 +335,14 @@ fn ai_distribute_field_army(
     // everything else is surplus and should push to the front. When the
     // threat is non-Safe, we still distribute *genuine* surplus beyond the
     // threatened reserve.
+    // Count only movable units at the capital when computing surplus —
+    // static garrison (militia) can't be "spread forward" anyway.
     let capital_have_now: usize = {
         let nation = game.get_nation(nation_id).expect("nation present");
         nation
             .army
             .iter()
-            .filter(|u| u.position == capital_pid)
+            .filter(|u| u.unit_type.can_move() && u.position == capital_pid)
             .count()
     };
     let capital_surplus = capital_have_now.saturating_sub(capital_reserve_target);
@@ -396,11 +403,23 @@ fn ai_distribute_field_army(
         }
     }
 
-    // Round-robin destinations so we balance across the front.
+    // Round-robin destinations so we balance across the front. No per-turn
+    // cap — surplus redistributes in one pass. We also bail if every chosen
+    // destination equals the current source (otherwise the while loop would
+    // spin forever when the only staging province IS the source).
+    let mut already_pending: std::collections::HashSet<crate::map::UnitId> = game
+        .pending_moves
+        .iter()
+        .map(|(_, uid, _)| *uid)
+        .collect();
     let mut dest_idx = 0usize;
-    'outer: for (src_pid, src_surplus) in spread_sources {
+    for (src_pid, src_surplus) in spread_sources {
         let mut remaining = src_surplus;
-        while remaining > 0 && redeploys_left > 0 && !dest_priority.is_empty() {
+        let non_self_dests = dest_priority.iter().any(|&d| d != src_pid);
+        if !non_self_dests {
+            continue;
+        }
+        while remaining > 0 {
             let dest_pid = dest_priority[dest_idx % dest_priority.len()];
             dest_idx += 1;
             if dest_pid == src_pid {
@@ -409,25 +428,21 @@ fn ai_distribute_field_army(
             let Some(nation) = game.get_nation(nation_id) else {
                 return;
             };
-            let already_pending: std::collections::HashSet<crate::map::UnitId> = game
-                .pending_moves
-                .iter()
-                .map(|(_, uid, _)| *uid)
-                .collect();
             let candidate = nation
                 .army
                 .iter()
-                .find(|u| u.position == src_pid && !already_pending.contains(&u.id))
+                .find(|u| {
+                    u.unit_type.can_move()
+                        && u.position == src_pid
+                        && !already_pending.contains(&u.id)
+                })
                 .map(|u| u.id);
             let Some(uid) = candidate else {
                 break; // nothing left to move from this source
             };
             game.pending_moves.push((nation_id, uid, dest_pid));
+            already_pending.insert(uid);
             remaining -= 1;
-            redeploys_left -= 1;
-            if redeploys_left == 0 {
-                break 'outer;
-            }
         }
     }
 }
@@ -1029,8 +1044,18 @@ mod tests {
             .unwrap()
             .add_province(ProvinceId(4));
 
-        // Move the unit to the safe province so it's available to be moved
-        game.get_nation_mut(NationId(2)).unwrap().army[0].position = ProvinceId(4);
+        // Move the Regulars unit to the safe province so it's available to
+        // redeploy. We match by UnitId because `seed_militia_from_garrison_count`
+        // also pushed static militia into `army` — those cannot satisfy a
+        // redeploy deficit (F-007).
+        {
+            let ai = game.get_nation_mut(NationId(2)).unwrap();
+            for u in ai.army.iter_mut() {
+                if u.id == UnitId(9000) {
+                    u.position = ProvinceId(4);
+                }
+            }
+        }
 
         ai_move_units_to_threatened(&mut game, NationId(2));
 
