@@ -5676,16 +5676,6 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
         ));
     }
 
-    // Report nations currently in anarchy
-    for nation in &game.nations {
-        if nation.is_in_anarchy && !nation.province_ids.is_empty() {
-            report.newspaper_headlines.push(Headline::new(
-                format!("{} remains mired in anarchy", nation.name),
-                HeadlineCategory::Crisis,
-            ));
-        }
-    }
-
     // Human player anarchy game-over notice
     if game
         .get_nation(game.human_player_nation)
