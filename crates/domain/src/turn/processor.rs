@@ -2557,6 +2557,7 @@ fn resolve_combat(
         // Track unit IDs by cohort so post-battle relocation can send land
         // survivors to the conquered province and keep naval survivors at origin.
         let land_unit_ids: HashSet<crate::map::UnitId> = land_cohort.iter().map(|u| u.id).collect();
+        let has_naval_cohort = !naval_cohort.is_empty();
 
         let mut attacker_units: Vec<ArmyUnit> = land_cohort;
         attacker_units.extend(naval_cohort);
@@ -2741,8 +2742,10 @@ fn resolve_combat(
             battle_config,
         );
 
-        // Track which provinces the attacking units came from (for battle screen arrows)
-        if !is_naval_attack {
+        // Track which provinces the attacking units came from (for battle screen arrows
+        // and newspaper headlines). For naval landings, this is the embarkation province
+        // of each naval cohort unit (its `position` before boarding ships).
+        {
             let mut origins: Vec<ProvinceId> = attacker_force
                 .units
                 .iter()
@@ -2753,6 +2756,7 @@ fn resolve_combat(
             origins.sort_by_key(|p| p.0);
             result.attacker_origin_provinces = origins;
         }
+        result.is_naval_landing = has_naval_cohort;
 
         // Update attacker's army: remove units that fought, add back survivors
         {
@@ -2809,6 +2813,23 @@ fn resolve_combat(
                 .map(|u| (u.id, u.position))
                 .collect();
         }
+
+        // Headline suffix describing where the attack came from. Used in both the
+        // conquest ("X conquers Y") and repel ("Y repels attack") headlines below.
+        let origin_suffix = {
+            let names: Vec<String> = result
+                .attacker_origin_provinces
+                .iter()
+                .filter_map(|pid| game.get_province(*pid).map(|p| p.name.clone()))
+                .collect();
+            if names.is_empty() {
+                String::new()
+            } else if result.is_naval_landing {
+                format!(" — naval landing from {}", names.join(", "))
+            } else {
+                format!(" — advance from {}", names.join(", "))
+            }
+        };
 
         if result.attacker_won {
             // Move surviving attacker units:
@@ -2946,8 +2967,8 @@ fn resolve_combat(
                 .unwrap_or_else(|| "Unknown".to_string());
             report.newspaper_headlines.push(Headline::new(
                 format!(
-                    "BREAKING: {} conquers {} from {}!",
-                    atk_name, prov_name, def_name_conquest
+                    "BREAKING: {} conquers {} from {}!{}",
+                    atk_name, prov_name, def_name_conquest, origin_suffix
                 ),
                 HeadlineCategory::War,
             ));
@@ -2956,8 +2977,8 @@ fn resolve_combat(
             game.history.push((
                 game.turn,
                 format!(
-                    "{} conquered {} from {}",
-                    atk_name, prov_name, def_name_conquest
+                    "{} conquered {} from {}{}",
+                    atk_name, prov_name, def_name_conquest, origin_suffix
                 ),
             ));
 
@@ -2985,7 +3006,10 @@ fn resolve_combat(
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
             report.newspaper_headlines.push(Headline::new(
-                format!("{} repels attack on {}!", def_name, prov_name),
+                format!(
+                    "{} repels attack on {}!{}",
+                    def_name, prov_name, origin_suffix
+                ),
                 HeadlineCategory::Battle,
             ));
         }

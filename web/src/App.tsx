@@ -5,7 +5,7 @@ import {
   getMapData, getNavyMarkers, getAvailableTechs, researchTech,
   getDiplomacyOverlay, getMilitaryOverlay,
   getUnitsInProvince, getCivilians, getShips, getValidMoveTargets, getBuildableUnits,
-  queueUnitMove, cancelUnitMove, deployCivilian, recallCivilian, engineerBuild,
+  queueUnitMove, cancelUnitMove, disbandUnit, deployCivilian, recallCivilian, engineerBuild,
   type EngineerBuildKind,
   recruitArmyUnit, hireCivilian, buildShip,
   // New screen queries
@@ -358,14 +358,14 @@ function App() {
       if (p.observerMode) {
         json = p.scenario
           ? await newObserverScenarioGame(p.scenario, p.difficulty)
-          : await newObserverGame(p.mapKey, p.difficulty);
+          : await newObserverGame(p.mapKey, p.difficulty, p.mapGenConfig);
         if (idx !== 0) {
           json = await setHumanPlayer(json, idx);
         }
       } else {
         json = p.scenario
           ? await newScenarioGame(p.scenario, p.difficulty, idx)
-          : await newGame(p.mapKey, p.difficulty, idx);
+          : await newGame(p.mapKey, p.difficulty, idx, p.mapGenConfig);
       }
       const parsed = JSON.parse(json);
       if (parsed.error) { alert(parsed.error); return; }
@@ -764,18 +764,10 @@ function App() {
   const isPlayerProvince = selectedTile?.nation_id === playerNationId && playerNationId != null;
   const isPlayerCapital = isPlayerProvince && selectedTile?.is_country_capital === true;
 
-  // Multi-unit selection handlers
-  const handleToggleUnit = useCallback((unitId: number, shiftKey: boolean) => {
-    setSelectedUnitIds(prev => {
-      if (shiftKey) {
-        // Toggle: add or remove
-        return prev.includes(unitId)
-          ? prev.filter(id => id !== unitId)
-          : [...prev, unitId];
-      }
-      // Non-shift: single select/deselect
-      return prev.includes(unitId) && prev.length === 1 ? [] : [unitId];
-    });
+  const handleToggleUnit = useCallback((unitId: number) => {
+    setSelectedUnitIds(prev =>
+      prev.includes(unitId) ? prev.filter(id => id !== unitId) : [...prev, unitId]
+    );
   }, []);
 
   const handleSelectAll = useCallback(() => {
@@ -818,6 +810,32 @@ function App() {
       if (failed > 0) showError(`Canceled ${succeeded} of ${cancelable.length} moves \u2014 ${failed} failed`);
     });
   }, [selectedUnitIds, pendingMovesDisplay, gameJson, applyGameJson, showError, runMutation]);
+
+  const handleDismissSelected = useCallback(async () => {
+    if (isObserver || selectedUnitIds.length === 0) return;
+    const n = selectedUnitIds.length;
+    const ok = window.confirm(`Dismiss ${n} unit${n > 1 ? 's' : ''}? This cannot be undone.`);
+    if (!ok) return;
+    await runMutation(async () => {
+      let currentJson = gameJson;
+      let succeeded = 0;
+      let failed = 0;
+      for (const unitId of selectedUnitIds) {
+        const cmd = await disbandUnit(currentJson, unitId);
+        if (cmd.ok && cmd.gameJson) {
+          currentJson = cmd.gameJson;
+          succeeded++;
+        } else {
+          failed++;
+        }
+      }
+      if (succeeded > 0) {
+        await applyGameJson(currentJson);
+        setSelectedUnitIds([]);
+      }
+      if (failed > 0) showError(`Dismissed ${succeeded} of ${n} units \u2014 ${failed} failed`);
+    });
+  }, [isObserver, selectedUnitIds, gameJson, applyGameJson, showError, runMutation]);
 
   const handleRecruit = useCallback(async (unitType: string) => {
     await runMutation(async () => {
@@ -1508,6 +1526,7 @@ function App() {
                     onSelectAll={handleSelectAll}
                     onCancelMove={handleCancelMove}
                     onCancelSelectedMoves={handleCancelSelectedMoves}
+                    onDismissSelected={handleDismissSelected}
                     onRecruit={handleRecruit}
                   />
                 </div>

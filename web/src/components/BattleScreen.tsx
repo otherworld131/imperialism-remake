@@ -437,6 +437,25 @@ function LandBattleDetails({ battle }: { battle: LandBattleData }) {
           at {battle.province}
           {battle.retreated && ' (attacker retreated)'}
         </div>
+        {(battle.is_naval_landing || battle.origin_province_names.length > 0) && (
+          <div style={{ marginTop: 6, fontSize: 12, color: '#d8d0b8' }}>
+            {battle.is_naval_landing && (
+              <span style={{
+                display: 'inline-block', marginRight: 6, padding: '1px 6px',
+                background: 'rgba(218,165,32,0.15)', border: '1px solid #daa520',
+                color: '#daa520', borderRadius: 3, fontSize: 11,
+              }}>
+                {'\u{1F6A2}'} Naval Landing
+              </span>
+            )}
+            {battle.origin_province_names.length > 0 && (
+              <span>
+                <span style={{ color: '#9a9a9a' }}>Origin:</span>{' '}
+                {battle.origin_province_names.join(', ')}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Terrain & Fort — shown above Forces so the setting reads first */}

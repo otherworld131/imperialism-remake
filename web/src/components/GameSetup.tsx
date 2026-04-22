@@ -2,9 +2,16 @@ import { useState, useEffect, useMemo } from 'react';
 import {
   getScenarios, newGame, newScenarioGame, getMapData,
   newObserverGame, newObserverScenarioGame, setHumanPlayer,
+  DEFAULT_MAP_GEN_CONFIG,
 } from '../wasm';
-import type { TileData } from '../wasm';
+import type { TileData, MapGenConfig } from '../wasm';
 import HexMap from './HexMap';
+
+const MAP_SIZE_PRESETS: Array<{ key: string; label: string; width: number; height: number }> = [
+  { key: 'small', label: 'Small (60×40)', width: 60, height: 40 },
+  { key: 'medium', label: 'Medium (80×50)', width: 80, height: 50 },
+  { key: 'large', label: 'Large (120×70)', width: 120, height: 70 },
+];
 
 const NATION_COLORS: Record<string, string> = {
   Yellow: '#ffd900', Orange: '#ff8c00', LightBlue: '#66b3ff',
@@ -21,6 +28,7 @@ export interface GameStartParams {
   scenario: string | null;
   difficulty: number;
   nationIdx: number;
+  mapGenConfig: MapGenConfig;
 }
 
 interface Props {
@@ -47,6 +55,24 @@ export default function GameSetup({ onStartGame }: Props) {
   const [mapKey, setMapKey] = useState('');
   const [observerMode, setObserverMode] = useState(false);
 
+  // Random-map customization (ignored for historical scenarios).
+  const [mapWidth, setMapWidth] = useState(DEFAULT_MAP_GEN_CONFIG.width);
+  const [mapHeight, setMapHeight] = useState(DEFAULT_MAP_GEN_CONFIG.height);
+  const [numGreatPowers, setNumGreatPowers] = useState(DEFAULT_MAP_GEN_CONFIG.numGreatPowers);
+  const [numMinorNations, setNumMinorNations] = useState(DEFAULT_MAP_GEN_CONFIG.numMinorNations);
+  const [showAdvancedSize, setShowAdvancedSize] = useState(false);
+
+  const mapGenConfig: MapGenConfig = useMemo(
+    () => ({ width: mapWidth, height: mapHeight, numGreatPowers, numMinorNations }),
+    [mapWidth, mapHeight, numGreatPowers, numMinorNations],
+  );
+  const activePreset = MAP_SIZE_PRESETS.find(p => p.width === mapWidth && p.height === mapHeight);
+
+  const applyPreset = (preset: typeof MAP_SIZE_PRESETS[number]) => {
+    setMapWidth(preset.width);
+    setMapHeight(preset.height);
+  };
+
   const [step, setStep] = useState<Step>('config');
   const [previewJson, setPreviewJson] = useState<string>('');
   const [previewTiles, setPreviewTiles] = useState<TileData[]>([]);
@@ -66,7 +92,7 @@ export default function GameSetup({ onStartGame }: Props) {
     try {
       const json = selectedScenario
         ? await newScenarioGame(selectedScenario, difficulty, 0)
-        : await newGame(key, difficulty, 0);
+        : await newGame(key, difficulty, 0, mapGenConfig);
       // Detect error payloads from the bridge.
       const parsed = JSON.parse(json);
       if (parsed.error) {
@@ -101,7 +127,7 @@ export default function GameSetup({ onStartGame }: Props) {
   };
 
   const handleTileClick = (tile: TileData) => {
-    if (!tile.nation_id) return;
+    if (tile.nation_id == null) return;
     const gp = previewGps.find(g => g.id === tile.nation_id);
     if (gp) setPickedNationIdx(gp.idx);
   };
@@ -112,7 +138,7 @@ export default function GameSetup({ onStartGame }: Props) {
     if (observerMode) {
       gameJson = selectedScenario
         ? await newObserverScenarioGame(selectedScenario, difficulty)
-        : await newObserverGame(effectiveMapKey, difficulty);
+        : await newObserverGame(effectiveMapKey, difficulty, mapGenConfig);
       if (idx !== 0) {
         gameJson = await setHumanPlayer(gameJson, idx);
       }
@@ -128,6 +154,7 @@ export default function GameSetup({ onStartGame }: Props) {
       scenario: selectedScenario,
       difficulty,
       nationIdx: idx,
+      mapGenConfig,
     });
   };
 
@@ -199,6 +226,97 @@ export default function GameSetup({ onStartGame }: Props) {
               </div>
             )}
 
+            {!selectedScenario && (
+              <div style={s.group}>
+                <label style={s.label}>Map Size</label>
+                <div style={s.diffRow}>
+                  {MAP_SIZE_PRESETS.map(preset => (
+                    <div
+                      key={preset.key}
+                      style={activePreset?.key === preset.key
+                        ? { ...s.diffBtn, ...s.diffSelected }
+                        : s.diffBtn}
+                      onClick={() => applyPreset(preset)}
+                    >
+                      {preset.label}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: 6, fontSize: 11 }}>
+                  <span
+                    style={{ color: '#daa520', cursor: 'pointer', textDecoration: 'underline' }}
+                    onClick={() => setShowAdvancedSize(v => !v)}
+                  >
+                    {showAdvancedSize ? 'Hide advanced' : 'Advanced size...'}
+                  </span>
+                </div>
+                {showAdvancedSize && (
+                  <div style={{ display: 'flex', gap: 12, marginTop: 8, alignItems: 'center' }}>
+                    <label style={{ fontSize: 12, color: '#9a9a9a' }}>
+                      Width:&nbsp;
+                      <input
+                        type="number"
+                        min={30}
+                        max={200}
+                        step={2}
+                        value={mapWidth}
+                        onChange={e => setMapWidth(Math.max(30, Math.min(200, Number(e.target.value) || 0)))}
+                        style={s.numInput}
+                      />
+                    </label>
+                    <label style={{ fontSize: 12, color: '#9a9a9a' }}>
+                      Height:&nbsp;
+                      <input
+                        type="number"
+                        min={20}
+                        max={150}
+                        step={2}
+                        value={mapHeight}
+                        onChange={e => setMapHeight(Math.max(20, Math.min(150, Number(e.target.value) || 0)))}
+                        style={s.numInput}
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!selectedScenario && (
+              <div style={s.group}>
+                <label style={s.label}>Nations</label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div>
+                    <div style={s.sliderLabelRow}>
+                      <span>Great Powers</span>
+                      <span style={s.sliderValue}>{numGreatPowers}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={1}
+                      max={20}
+                      value={numGreatPowers}
+                      onChange={e => setNumGreatPowers(Number(e.target.value))}
+                      style={s.slider}
+                    />
+                  </div>
+                  <div>
+                    <div style={s.sliderLabelRow}>
+                      <span>Minor Nations</span>
+                      <span style={s.sliderValue}>{numMinorNations}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={32}
+                      value={numMinorNations}
+                      onChange={e => setNumMinorNations(Number(e.target.value))}
+                      style={s.slider}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div style={s.group}>
               <label style={s.observerRow} onClick={() => setObserverMode(!observerMode)}>
                 <span style={observerMode ? { ...s.observerBox, ...s.observerBoxChecked } : s.observerBox}>
@@ -206,7 +324,7 @@ export default function GameSetup({ onStartGame }: Props) {
                 </span>
                 <span>
                   <span style={s.observerLabel}>Observer Mode</span>
-                  <span style={s.observerHint}> — watch AI play all 7 Great Powers</span>
+                  <span style={s.observerHint}> — watch AI play all {selectedScenario ? 7 : numGreatPowers} Great Powers</span>
                 </span>
               </label>
             </div>
@@ -307,6 +425,10 @@ const s: Record<string, React.CSSProperties> = {
   diffSelected: { borderColor: '#daa520', background: 'rgba(218,165,32,0.08)', color: '#daa520' },
   mapKeyRow: { display: 'flex', gap: 10, alignItems: 'center' },
   mapKeyInput: { flex: 1, padding: '6px 10px', background: '#1a1a2e', border: '1px solid #3a3520', color: '#e0d8c0', fontFamily: "'Courier New', monospace", fontSize: 13, borderRadius: 3 },
+  numInput: { width: 70, padding: '4px 6px', background: '#1a1a2e', border: '1px solid #3a3520', color: '#e0d8c0', fontFamily: "'Courier New', monospace", fontSize: 12, borderRadius: 3 },
+  sliderLabelRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 12, color: '#e0d8c0', marginBottom: 4 },
+  sliderValue: { color: '#daa520', fontWeight: 'bold' as const },
+  slider: { width: '100%', accentColor: '#daa520' },
   observerRow: { display: 'flex', alignItems: 'center', cursor: 'pointer', padding: '6px 0', gap: 10 },
   observerBox: { width: 16, height: 16, border: '1px solid #3a3520', background: '#1a1a2e', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: '#daa520' },
   observerBoxChecked: { borderColor: '#daa520', background: 'rgba(218,165,32,0.1)' },

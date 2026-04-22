@@ -18,10 +18,11 @@ interface Props {
   isPlayerCapital: boolean;
   isPlayerProvince: boolean;
   selectedUnitIds: number[];
-  onToggleUnit: (unitId: number, shiftKey: boolean) => void;
+  onToggleUnit: (unitId: number) => void;
   onSelectAll: () => void;
   onCancelMove: (unitId: number) => void;
   onCancelSelectedMoves: () => void;
+  onDismissSelected: () => void;
   onRecruit: (unitType: string) => void;
 }
 
@@ -29,7 +30,7 @@ export default function UnitPanel({
   provinceUnits, buildableArmy, treasury, arms, pendingMoves,
   isPlayerCapital, isPlayerProvince,
   selectedUnitIds, onToggleUnit, onSelectAll,
-  onCancelMove, onCancelSelectedMoves, onRecruit,
+  onCancelMove, onCancelSelectedMoves, onDismissSelected, onRecruit,
 }: Props) {
   const { army_units, garrison_count, province_name } = provinceUnits;
 
@@ -62,6 +63,11 @@ export default function UnitPanel({
                 </button>
               )}
               {isPlayerProvince && hasSelection && (
+                <button onClick={onDismissSelected} style={btnStyle('#a33')}>
+                  Dismiss
+                </button>
+              )}
+              {isPlayerProvince && hasSelection && (
                 <button onClick={onSelectAll} style={btnStyle('#456')}>
                   {selectedUnitIds.length === selectableUnits.length ? 'Deselect' : 'Select All'}
                 </button>
@@ -76,7 +82,7 @@ export default function UnitPanel({
 
           {hasSelection && isPlayerProvince && (
             <div style={{ fontSize: 10, color: '#aaa', marginBottom: 4, fontStyle: 'italic' }}>
-              Click a highlighted hex to move {selectedUnitIds.length} unit{selectedUnitIds.length > 1 ? 's' : ''} {'\u00b7'} Esc to cancel
+              Click a highlighted hex to move {selectedUnitIds.length} unit{selectedUnitIds.length > 1 ? 's' : ''} {'\u00b7'} click units to toggle {'\u00b7'} Esc to cancel
             </div>
           )}
 
@@ -95,8 +101,8 @@ export default function UnitPanel({
                 border: isSelected ? '1px solid rgba(218,165,32,0.4)' : '1px solid transparent',
                 cursor: isSelectable && isPlayerProvince ? 'pointer' : 'default',
               }}
-                onClick={(e) => {
-                  if (isSelectable && isPlayerProvince) onToggleUnit(unit.id, e.shiftKey);
+                onClick={() => {
+                  if (isSelectable && isPlayerProvince) onToggleUnit(unit.id);
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -125,9 +131,9 @@ export default function UnitPanel({
                 {pending && (
                   <div style={{ marginTop: 3, fontSize: 11 }}>
                     <span style={{ color: '#ffd700' }}>
-                      \u2192 {pending.destination_name}
+                      {'\u2192'} {pending.destination_name}
                     </span>
-                    <button onClick={(e) => { e.stopPropagation(); onCancelMove(unit.id); }} style={btnStyle('#a33')}>
+                    <button onClick={(e) => { e.stopPropagation(); onCancelMove(unit.id); }} style={{ ...btnStyle('#a33'), marginLeft: 8 }}>
                       Cancel
                     </button>
                   </div>

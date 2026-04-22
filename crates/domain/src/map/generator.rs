@@ -8,22 +8,67 @@ use super::province::Province;
 
 // ── Constants ──────────────────────────────────────────────────
 
-const MAP_WIDTH: i32 = 80;
-const MAP_HEIGHT: i32 = 50;
+pub const DEFAULT_MAP_WIDTH: i32 = 80;
+pub const DEFAULT_MAP_HEIGHT: i32 = 50;
+pub const DEFAULT_NUM_GREAT_POWERS: usize = 7;
+pub const DEFAULT_NUM_MINOR_NATIONS: usize = 16;
 
-const NUM_GREAT_POWERS: usize = 7;
 const PROVINCES_PER_GREAT_POWER: usize = 8;
-const NUM_MINOR_NATIONS: usize = 16;
 const PROVINCES_PER_MINOR_NATION: usize = 4;
 
-const GREAT_POWER_NAMES: [&str; NUM_GREAT_POWERS] = [
+const GREAT_POWER_NAME_POOL: [&str; 7] = [
     "Deneb", "Devron", "Haxaco", "Kem", "Ordune", "Patagon", "Zimm",
 ];
 
-const MINOR_NATION_NAMES: [&str; NUM_MINOR_NATIONS] = [
+const MINOR_NATION_NAME_POOL: [&str; 16] = [
     "Bruhr", "Dedge", "Hurshen", "Idolon", "Issa", "Kathay", "Kessel", "Loke", "Manx", "Pont",
     "Pram", "Sindel", "Twelt", "Wodan", "Zazi", "Zinlu",
 ];
+
+/// Configuration for map generation. Use `MapGenConfig::default()` for canonical
+/// 80×50 maps with 7 great powers and 16 minor nations.
+#[derive(Debug, Clone, Copy)]
+pub struct MapGenConfig {
+    pub width: i32,
+    pub height: i32,
+    pub num_great_powers: usize,
+    pub num_minor_nations: usize,
+}
+
+impl Default for MapGenConfig {
+    fn default() -> Self {
+        Self {
+            width: DEFAULT_MAP_WIDTH,
+            height: DEFAULT_MAP_HEIGHT,
+            num_great_powers: DEFAULT_NUM_GREAT_POWERS,
+            num_minor_nations: DEFAULT_NUM_MINOR_NATIONS,
+        }
+    }
+}
+
+/// Name for great power at index `i`. Cycles the pool with a `-N` suffix when `i >= pool.len()`.
+fn great_power_name(i: usize) -> String {
+    let pool = &GREAT_POWER_NAME_POOL;
+    let base = pool[i % pool.len()];
+    let suffix = i / pool.len();
+    if suffix == 0 {
+        base.to_string()
+    } else {
+        format!("{}-{}", base, suffix + 1)
+    }
+}
+
+/// Name for minor nation at offset `i` within the minors block (0 = first minor).
+fn minor_nation_name(i: usize) -> String {
+    let pool = &MINOR_NATION_NAME_POOL;
+    let base = pool[i % pool.len()];
+    let suffix = i / pool.len();
+    if suffix == 0 {
+        base.to_string()
+    } else {
+        format!("{}-{}", base, suffix + 1)
+    }
+}
 
 // ── Seeded RNG (xorshift64) ────────────────────────────────────
 
@@ -97,21 +142,31 @@ fn djb2_hash(s: &str) -> u64 {
 
 // ── Main generator ─────────────────────────────────────────────
 
-/// Generate a complete game map from a seed string.
-///
-/// The generated map is deterministic: the same `map_key` always produces the
-/// same map layout, terrain, provinces, and nation assignments.
+/// Generate a canonical map (80×50, 7 GPs, 16 minors). Equivalent to
+/// `generate_map_with_config(map_key, &MapGenConfig::default())`.
 pub fn generate_map(map_key: &str) -> GeneratedMap {
+    generate_map_with_config(map_key, &MapGenConfig::default())
+}
+
+/// Generate a complete game map from a seed string and a config.
+///
+/// The generated map is deterministic: the same `map_key` + `cfg` always produces the
+/// same map layout, terrain, provinces, and nation assignments.
+pub fn generate_map_with_config(map_key: &str, cfg: &MapGenConfig) -> GeneratedMap {
     let seed = djb2_hash(map_key);
     let mut rng = Rng::from_seed(seed);
+    let map_width = cfg.width;
+    let map_height = cfg.height;
+    let num_gp = cfg.num_great_powers;
+    let num_mn = cfg.num_minor_nations;
 
     // Step 1: Create land mask via continent generation
-    let land_mask = generate_land_mass(&mut rng);
+    let land_mask = generate_land_mass(&mut rng, map_width, map_height);
 
     // Step 2: Build hex map and assign terrain to ALL land tiles (no provinces yet)
-    let mut hex_map = HexMap::new(MAP_WIDTH, MAP_HEIGHT);
-    for q in 0..MAP_WIDTH {
-        for r in 0..MAP_HEIGHT {
+    let mut hex_map = HexMap::new(map_width, map_height);
+    for q in 0..map_width {
+        for r in 0..map_height {
             let coord = HexCoord::new(q, r);
             hex_map.set_tile(coord, super::tile::Tile::new(TerrainType::Sea));
         }
@@ -146,12 +201,12 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
     enforce_minimum_food_tiles(&mut hex_map, &land_mask, &mut rng, 20);
 
     // Step 4: Place nation centers (terrain-aware — prefers food-rich, coastal tiles)
-    let total_nations = NUM_GREAT_POWERS + NUM_MINOR_NATIONS;
+    let total_nations = num_gp + num_mn;
     let nation_centers = place_nation_centers(&mut rng, &land_mask, total_nations, &hex_map);
 
     // Step 5: Assign land tiles to nations (weighted Voronoi + normalization)
-    let mut nation_tiles = assign_tiles_to_nations(&land_mask, &nation_centers);
-    normalize_territory_sizes(&mut nation_tiles, &nation_centers, total_nations);
+    let mut nation_tiles = assign_tiles_to_nations(&land_mask, &nation_centers, num_gp);
+    normalize_territory_sizes(&mut nation_tiles, &nation_centers, total_nations, num_gp);
 
     // Step 6: Subdivide each nation's territory into provinces
     let mut province_id_counter: u32 = 0;
@@ -160,7 +215,7 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
 
     #[allow(clippy::needless_range_loop)]
     for nation_idx in 0..total_nations {
-        let num_provinces = if nation_idx < NUM_GREAT_POWERS {
+        let num_provinces = if nation_idx < num_gp {
             PROVINCES_PER_GREAT_POWER
         } else {
             PROVINCES_PER_MINOR_NATION
@@ -233,8 +288,8 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
     select_province_capitals(&mut hex_map, &all_province_data);
 
     // Step 10: Place hidden mineral deposits on prospectable terrain
-    for q in 0..MAP_WIDTH {
-        for r in 0..MAP_HEIGHT {
+    for q in 0..map_width {
+        for r in 0..map_height {
             let coord = HexCoord::new(q, r);
             if let Some(tile) = hex_map.get_tile_mut(coord)
                 && tile.terrain().can_have_deposits()
@@ -254,10 +309,10 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
 
     for pdata in &all_province_data {
         let nation_idx = pdata.nation_idx;
-        let nation_name = if nation_idx < NUM_GREAT_POWERS {
-            GREAT_POWER_NAMES[nation_idx]
+        let nation_name = if nation_idx < num_gp {
+            great_power_name(nation_idx)
         } else {
-            MINOR_NATION_NAMES[nation_idx - NUM_GREAT_POWERS]
+            minor_nation_name(nation_idx - num_gp)
         };
 
         let nation_id = NationId(nation_idx as u32);
@@ -274,7 +329,7 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
             .copied()
             .unwrap_or(pdata.tiles[0]);
 
-        let garrison = if nation_idx < NUM_GREAT_POWERS { 4 } else { 3 };
+        let garrison = if nation_idx < num_gp { 4 } else { 3 };
 
         // Capital province is first in nation_province_map (set by select_country_capitals)
         let province_indices_for_nation = &nation_province_map[nation_idx];
@@ -283,7 +338,7 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
             .is_some_and(|&first| first == pdata.id);
 
         let name = if is_capital_province {
-            Province::capital_city_name(nation_name)
+            Province::capital_city_name(&nation_name)
         } else {
             format!("{} Province {}", nation_name, pdata.id)
         };
@@ -304,18 +359,15 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
     let mut great_power_nations = Vec::new();
     let mut minor_nations_out = Vec::new();
 
-    for nation_idx in 0..total_nations {
+    for (nation_idx, pids) in nation_province_map.iter().enumerate().take(total_nations) {
         let nation_id = NationId(nation_idx as u32);
-        let name = if nation_idx < NUM_GREAT_POWERS {
-            GREAT_POWER_NAMES[nation_idx].to_string()
+        let name = if nation_idx < num_gp {
+            great_power_name(nation_idx)
         } else {
-            MINOR_NATION_NAMES[nation_idx - NUM_GREAT_POWERS].to_string()
+            minor_nation_name(nation_idx - num_gp)
         };
 
-        let province_ids: Vec<ProvinceId> = nation_province_map[nation_idx]
-            .iter()
-            .map(|&pid| ProvinceId(pid))
-            .collect();
+        let province_ids: Vec<ProvinceId> = pids.iter().map(|&pid| ProvinceId(pid)).collect();
 
         let capital_province = province_ids[0];
 
@@ -326,7 +378,7 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
             capital_province,
         };
 
-        if nation_idx < NUM_GREAT_POWERS {
+        if nation_idx < num_gp {
             great_power_nations.push(setup);
         } else {
             minor_nations_out.push(setup);
@@ -344,7 +396,7 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
 /// Validate that a generated map satisfies game invariants.
 ///
 /// Checks:
-/// - Province count: 7 * 8 + 16 * 4 = 120
+/// - Province count matches `num_great_powers * 8 + num_minor_nations * 4`
 /// - Each Great Power has exactly 8 provinces
 /// - Each Minor Nation has exactly 4 provinces
 /// - Every province has at least 1 tile
@@ -352,9 +404,8 @@ pub fn generate_map(map_key: &str) -> GeneratedMap {
 pub fn validate_map(map: &GeneratedMap) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
 
-    // Check province count: should be 7*8 + 16*4 = 120
-    let expected = NUM_GREAT_POWERS * PROVINCES_PER_GREAT_POWER
-        + NUM_MINOR_NATIONS * PROVINCES_PER_MINOR_NATION;
+    let expected = map.great_power_nations.len() * PROVINCES_PER_GREAT_POWER
+        + map.minor_nations.len() * PROVINCES_PER_MINOR_NATION;
     if map.provinces.len() != expected {
         errors.push(format!(
             "Expected {} provinces, got {}",
@@ -420,7 +471,7 @@ struct ProvinceData {
 
 /// Generate a land mask: a set of hex coordinates that are land.
 /// Uses continent seeds that grow outward to create landmasses.
-fn generate_land_mass(rng: &mut Rng) -> HashSet<HexCoord> {
+fn generate_land_mass(rng: &mut Rng, map_width: i32, map_height: i32) -> HashSet<HexCoord> {
     let mut land = HashSet::new();
 
     // Place 5-8 continent seeds spread across the map
@@ -429,10 +480,10 @@ fn generate_land_mass(rng: &mut Rng) -> HashSet<HexCoord> {
 
     // Divide the map into regions to ensure spread
     for i in 0..num_continents {
-        let region_width = MAP_WIDTH / num_continents as i32;
+        let region_width = map_width / num_continents as i32;
         let q = region_width * i as i32 + rng.range(3, region_width.max(4) - 1);
-        let r = rng.range(4, MAP_HEIGHT - 5);
-        let seed = HexCoord::new(q.min(MAP_WIDTH - 4), r);
+        let r = rng.range(4, map_height - 5);
+        let seed = HexCoord::new(q.min(map_width - 4), r);
         seeds.push(seed);
     }
 
@@ -457,9 +508,9 @@ fn generate_land_mass(rng: &mut Rng) -> HashSet<HexCoord> {
                 }
                 // Stay within map bounds (with margin)
                 if neighbor.q < 1
-                    || neighbor.q >= MAP_WIDTH - 1
+                    || neighbor.q >= map_width - 1
                     || neighbor.r < 1
-                    || neighbor.r >= MAP_HEIGHT - 1
+                    || neighbor.r >= map_height - 1
                 {
                     continue;
                 }
@@ -572,6 +623,7 @@ fn place_nation_centers(
 fn assign_tiles_to_nations(
     land: &HashSet<HexCoord>,
     centers: &[HexCoord],
+    num_great_powers: usize,
 ) -> HashMap<HexCoord, usize> {
     let mut assignments = HashMap::new();
 
@@ -582,7 +634,7 @@ fn assign_tiles_to_nations(
         for (idx, &center) in centers.iter().enumerate() {
             let raw_dist = coord.distance(center) as f64;
             // Minor nations have inflated distance → claim less territory
-            let effective_dist = if idx >= NUM_GREAT_POWERS {
+            let effective_dist = if idx >= num_great_powers {
                 raw_dist * std::f64::consts::SQRT_2
             } else {
                 raw_dist
@@ -608,15 +660,19 @@ fn normalize_territory_sizes(
     assignments: &mut HashMap<HexCoord, usize>,
     _centers: &[HexCoord],
     total_nations: usize,
+    num_great_powers: usize,
 ) {
     let total_land = assignments.len();
     // Target: GP gets 2 shares, MN gets 1 share
-    // Total shares = 7*2 + 16*1 = 30
-    let total_shares = NUM_GREAT_POWERS * 2 + (total_nations - NUM_GREAT_POWERS);
-    let share_size = total_land as f64 / total_shares as f64;
+    let total_shares = num_great_powers * 2 + (total_nations - num_great_powers);
+    let share_size = if total_shares == 0 {
+        0.0
+    } else {
+        total_land as f64 / total_shares as f64
+    };
 
     let target_size = |nation_idx: usize| -> usize {
-        if nation_idx < NUM_GREAT_POWERS {
+        if nation_idx < num_great_powers {
             (share_size * 2.0) as usize
         } else {
             share_size as usize
@@ -876,8 +932,8 @@ fn cluster_terrain(
 ) {
     // Snapshot all tiles of the target terrain
     let mut source_tiles: Vec<HexCoord> = Vec::new();
-    for q in 0..MAP_WIDTH {
-        for r in 0..MAP_HEIGHT {
+    for q in 0..hex_map.width() {
+        for r in 0..hex_map.height() {
             let coord = HexCoord::new(q, r);
             if let Some(tile) = hex_map.get_tile(coord)
                 && tile.terrain() == target_terrain
@@ -914,8 +970,8 @@ fn cluster_food_terrain(
 ) {
     // Collect all current food tiles (snapshot before mutation)
     let mut food_tiles: Vec<(HexCoord, TerrainType, Option<ResourceType>)> = Vec::new();
-    for q in 0..MAP_WIDTH {
-        for r in 0..MAP_HEIGHT {
+    for q in 0..hex_map.width() {
+        for r in 0..hex_map.height() {
             let coord = HexCoord::new(q, r);
             if let Some(tile) = hex_map.get_tile(coord)
                 && is_food_terrain(tile)
@@ -1044,7 +1100,7 @@ fn select_country_capitals(
     province_data: &[ProvinceData],
     nation_province_map: &mut [Vec<u32>],
 ) {
-    let total_nations = NUM_GREAT_POWERS + NUM_MINOR_NATIONS;
+    let total_nations = nation_province_map.len();
     for nation_idx in 0..total_nations {
         if nation_idx >= nation_province_map.len() {
             continue;
@@ -1183,15 +1239,15 @@ mod tests {
         let result = generate_map("test");
         assert!(result.hex_map.tile_count() > 0);
         assert!(!result.provinces.is_empty());
-        assert_eq!(result.great_power_nations.len(), NUM_GREAT_POWERS);
-        assert_eq!(result.minor_nations.len(), NUM_MINOR_NATIONS);
+        assert_eq!(result.great_power_nations.len(), DEFAULT_NUM_GREAT_POWERS);
+        assert_eq!(result.minor_nations.len(), DEFAULT_NUM_MINOR_NATIONS);
     }
 
     #[test]
     fn map_has_correct_number_of_provinces() {
         let result = generate_map("test");
-        let expected = NUM_GREAT_POWERS * PROVINCES_PER_GREAT_POWER
-            + NUM_MINOR_NATIONS * PROVINCES_PER_MINOR_NATION;
+        let expected = DEFAULT_NUM_GREAT_POWERS * PROVINCES_PER_GREAT_POWER
+            + DEFAULT_NUM_MINOR_NATIONS * PROVINCES_PER_MINOR_NATION;
         assert_eq!(result.provinces.len(), expected);
         assert_eq!(result.provinces.len(), 120);
     }

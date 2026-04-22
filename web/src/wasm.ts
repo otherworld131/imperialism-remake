@@ -129,6 +129,8 @@ export interface LandBattleData {
   capital_tile: BattleTile | null;
   province_tiles: BattleTile[];
   origin_tiles: BattleTile[];
+  origin_province_names: string[];
+  is_naval_landing: boolean;
 }
 
 export interface NavalBattleData {
@@ -367,8 +369,36 @@ export interface PendingMove {
 
 // ── Existing wrapper functions ───────────────────────────────────────
 
-export async function newGame(mapKey: string, difficulty: number, nationIndex: number): Promise<string> {
-  return call<string>('wasm_new_game', mapKey, difficulty, nationIndex);
+export interface MapGenConfig {
+  width: number;
+  height: number;
+  numGreatPowers: number;
+  numMinorNations: number;
+}
+
+export const DEFAULT_MAP_GEN_CONFIG: MapGenConfig = {
+  width: 80,
+  height: 50,
+  numGreatPowers: 7,
+  numMinorNations: 16,
+};
+
+export async function newGame(
+  mapKey: string,
+  difficulty: number,
+  nationIndex: number,
+  cfg: MapGenConfig = DEFAULT_MAP_GEN_CONFIG,
+): Promise<string> {
+  return call<string>(
+    'wasm_new_game',
+    mapKey,
+    difficulty,
+    nationIndex,
+    cfg.width,
+    cfg.height,
+    cfg.numGreatPowers,
+    cfg.numMinorNations,
+  );
 }
 
 export async function processTurn(gameJson: string): Promise<any> {
@@ -400,8 +430,20 @@ export async function newScenarioGame(scenarioId: string, difficulty: number, na
   return call<string>('wasm_new_scenario_game', scenarioId, difficulty, nationIndex);
 }
 
-export async function newObserverGame(mapKey: string, difficulty: number): Promise<string> {
-  return call<string>('wasm_new_observer_game', mapKey, difficulty);
+export async function newObserverGame(
+  mapKey: string,
+  difficulty: number,
+  cfg: MapGenConfig = DEFAULT_MAP_GEN_CONFIG,
+): Promise<string> {
+  return call<string>(
+    'wasm_new_observer_game',
+    mapKey,
+    difficulty,
+    cfg.width,
+    cfg.height,
+    cfg.numGreatPowers,
+    cfg.numMinorNations,
+  );
 }
 
 export async function newObserverScenarioGame(scenarioId: string, difficulty: number): Promise<string> {
@@ -536,6 +578,10 @@ export async function queueUnitMove(gameJson: string, nationId: number, unitId: 
 
 export async function cancelUnitMove(gameJson: string, unitId: number): Promise<CommandResult> {
   return runCmd('wasm_cancel_unit_move', gameJson, unitId);
+}
+
+export async function disbandUnit(gameJson: string, unitId: number): Promise<CommandResult> {
+  return runCmd('wasm_disband_unit', gameJson, unitId);
 }
 
 export async function deployCivilian(gameJson: string, civilianId: number, q: number, r: number): Promise<CommandResult> {

@@ -172,7 +172,7 @@ impl GameState {
 
 // ── Great Power colors (matched to original game) ───────────────
 
-const GP_COLORS: [NationColor; 7] = [
+const GP_COLORS: &[NationColor] = &[
     NationColor::Yellow,    // Deneb
     NationColor::Orange,    // Devron
     NationColor::LightBlue, // Haxaco
@@ -182,7 +182,7 @@ const GP_COLORS: [NationColor; 7] = [
     NationColor::Blue,      // Zimm
 ];
 
-const MN_COLORS: [NationColor; 16] = [
+const MN_COLORS: &[NationColor] = &[
     NationColor::Gray,
     NationColor::Brown,
     NationColor::Pink,
@@ -198,12 +198,26 @@ const MN_COLORS: [NationColor; 16] = [
     NationColor::Salmon,
     NationColor::Khaki,
     NationColor::Indigo,
-    NationColor::Gray, // reuse for 16th
 ];
 
-/// Create a new game from a map key and difficulty.
+/// Create a new game from a map key and difficulty (canonical 80×50, 7 GPs, 16 minors).
 /// This is the main entry point for starting a game.
 pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize) -> GameState {
+    new_game_with_config(
+        map_key,
+        difficulty,
+        human_nation_index,
+        crate::map::MapGenConfig::default(),
+    )
+}
+
+/// Create a new game with a custom map-generation config.
+pub fn new_game_with_config(
+    map_key: &str,
+    difficulty: Difficulty,
+    human_nation_index: usize,
+    cfg: crate::map::MapGenConfig,
+) -> GameState {
     // Derive personality seed from map key (XOR with constant to decouple from map gen)
     let personality_seed = {
         let mut h: u64 = 5381;
@@ -212,10 +226,10 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
         }
         h ^ 0xA1CA_FE42
     };
-    new_game_with_seed(map_key, difficulty, human_nation_index, personality_seed)
+    new_game_with_seed_and_config(map_key, difficulty, human_nation_index, personality_seed, cfg)
 }
 
-/// Create a new game with an explicit personality seed.
+/// Create a new game with an explicit personality seed (canonical map config).
 /// Used by batch mode to produce different personality assignments per game.
 pub fn new_game_with_seed(
     map_key: &str,
@@ -223,11 +237,35 @@ pub fn new_game_with_seed(
     human_nation_index: usize,
     personality_seed: u64,
 ) -> GameState {
-    let generated = crate::map::generate_map(map_key);
+    new_game_with_seed_and_config(
+        map_key,
+        difficulty,
+        human_nation_index,
+        personality_seed,
+        crate::map::MapGenConfig::default(),
+    )
+}
+
+/// Create a new game with an explicit personality seed and custom map config.
+pub fn new_game_with_seed_and_config(
+    map_key: &str,
+    difficulty: Difficulty,
+    human_nation_index: usize,
+    personality_seed: u64,
+    cfg: crate::map::MapGenConfig,
+) -> GameState {
+    let generated = crate::map::generate_map_with_config(map_key, &cfg);
+
+    assert!(
+        !generated.great_power_nations.is_empty(),
+        "MapGenConfig must have at least 1 great power (num_great_powers was {})",
+        cfg.num_great_powers
+    );
 
     // Pre-generate random personalities for all AI nations
-    let human_idx = human_nation_index.min(generated.great_power_nations.len() - 1);
-    let ai_count = generated.great_power_nations.len() - 1; // minus human
+    let gp_count = generated.great_power_nations.len();
+    let human_idx = human_nation_index.min(gp_count - 1);
+    let ai_count = gp_count - 1; // minus human
     let personalities = random_personalities(personality_seed, ai_count);
 
     let game_data = GameData::default();
@@ -247,7 +285,7 @@ pub fn new_game_with_seed(
         let mut nation = Nation::new(
             setup.nation_id,
             setup.name.clone(),
-            GP_COLORS[i],
+            GP_COLORS[i % GP_COLORS.len()],
             NationType::GreatPower,
             setup.capital_province,
         );
@@ -437,7 +475,7 @@ pub fn new_game_with_seed(
         let mut nation = Nation::new(
             setup.nation_id,
             setup.name.clone(),
-            MN_COLORS[i],
+            MN_COLORS[i % MN_COLORS.len()],
             NationType::MinorNation,
             setup.capital_province,
         );
@@ -485,7 +523,7 @@ pub fn new_game_with_seed(
     }
 
     let human_nation_id = generated.great_power_nations
-        [human_nation_index.min(generated.great_power_nations.len() - 1)]
+        [human_idx]
     .nation_id;
 
     let mut diplomacy = DiplomacyState::new();
@@ -657,6 +695,15 @@ pub fn new_game_with_seed(
 /// from AI control, and the Hard/NOI difficulty starting-cash bonus is applied to
 /// all 7 GPs (since there is no human player to exempt).
 pub fn new_observer_game(map_key: &str, difficulty: Difficulty) -> GameState {
+    new_observer_game_with_config(map_key, difficulty, crate::map::MapGenConfig::default())
+}
+
+/// Like [`new_observer_game`] but accepts a custom map-generation config.
+pub fn new_observer_game_with_config(
+    map_key: &str,
+    difficulty: Difficulty,
+    cfg: crate::map::MapGenConfig,
+) -> GameState {
     let personality_seed = {
         let mut h: u64 = 5381;
         for b in map_key.bytes() {
@@ -665,7 +712,8 @@ pub fn new_observer_game(map_key: &str, difficulty: Difficulty) -> GameState {
         h ^ 0xA1CA_FE42
     };
     // Build base game with nation 0 as the placeholder "human" seat.
-    let mut game = new_game_with_seed(map_key, difficulty, 0, personality_seed);
+    let mut game =
+        new_game_with_seed_and_config(map_key, difficulty, 0, personality_seed, cfg);
 
     // Assign an AI personality + difficulty bonus to the placeholder seat so
     // all 7 GPs are on equal footing.

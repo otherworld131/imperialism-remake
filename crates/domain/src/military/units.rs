@@ -498,6 +498,33 @@ impl ArmyUnit {
     }
 }
 
+/// Disband (dismiss) a player's army unit.
+///
+/// Returns `Err` if the unit isn't found in the given nation's army or if it is a
+/// `Garrison` unit (militia / garrison artillery — those are tied to province defense
+/// and cannot be dismissed by the player). Removes the unit from the nation's army
+/// and clears any pending move targeting it.
+pub fn disband_unit(
+    game: &mut crate::game_state::GameState,
+    nation_id: NationId,
+    unit_id: UnitId,
+) -> Result<(), String> {
+    let nation = game
+        .get_nation_mut(nation_id)
+        .ok_or_else(|| "nation not found".to_string())?;
+    let pos = nation
+        .army
+        .iter()
+        .position(|u| u.id == unit_id)
+        .ok_or_else(|| "unit not found".to_string())?;
+    if nation.army[pos].unit_type.category() == UnitCategory::Garrison {
+        return Err("garrison units cannot be dismissed".to_string());
+    }
+    nation.army.remove(pos);
+    game.pending_moves.retain(|(nid, id, _)| *nid != nation_id || *id != unit_id);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

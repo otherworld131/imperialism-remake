@@ -10,7 +10,10 @@ use domain::economy::production::{
 use domain::economy::trade::{Commodity, base_price, commodity_price};
 use domain::economy::transport::TransportSystem;
 use domain::events::TreatyType;
-use domain::game_state::{GameState, new_game, new_observer_game};
+use domain::game_state::{
+    GameState, new_game, new_game_with_config, new_observer_game, new_observer_game_with_config,
+};
+use domain::map::MapGenConfig;
 use domain::hex::HexCoord;
 use domain::military::combat::BattleResult;
 use domain::military::naval::NavalBattleResult;
@@ -20,18 +23,35 @@ use domain::scenarios::{list_scenarios, new_scenario_game};
 use domain::turn::process_turn;
 use domain::types::*;
 
+/// Build a `MapGenConfig` from raw frontend values, clamped to safe ranges.
+fn build_map_config(
+    map_width: i32,
+    map_height: i32,
+    num_great_powers: u32,
+    num_minor_nations: u32,
+) -> MapGenConfig {
+    MapGenConfig {
+        width: map_width.clamp(30, 200),
+        height: map_height.clamp(20, 150),
+        num_great_powers: (num_great_powers as usize).clamp(1, 20),
+        num_minor_nations: (num_minor_nations as usize).min(32),
+    }
+}
+
 /// Create a new game. Returns JSON string of the full game state.
 #[wasm_bindgen]
-pub fn wasm_new_game(map_key: &str, difficulty: u8, nation_index: usize) -> String {
-    let diff = match difficulty {
-        0 => Difficulty::Introductory,
-        1 => Difficulty::Easy,
-        2 => Difficulty::Normal,
-        3 => Difficulty::Hard,
-        4 => Difficulty::NighOnImpossible,
-        _ => Difficulty::Normal,
-    };
-    let game = new_game(map_key, diff, nation_index);
+pub fn wasm_new_game(
+    map_key: &str,
+    difficulty: u8,
+    nation_index: usize,
+    map_width: i32,
+    map_height: i32,
+    num_great_powers: u32,
+    num_minor_nations: u32,
+) -> String {
+    let diff = difficulty_from_u8(difficulty);
+    let cfg = build_map_config(map_width, map_height, num_great_powers, num_minor_nations);
+    let game = new_game_with_config(map_key, diff, nation_index, cfg);
     serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
 }
 
@@ -64,11 +84,19 @@ fn difficulty_from_u8(d: u8) -> Difficulty {
     }
 }
 
-/// Create a new game in observer mode. All 7 Great Powers are AI-controlled;
+/// Create a new game in observer mode. All Great Powers are AI-controlled;
 /// the human only observes. The nation at index 0 is the default viewpoint.
 #[wasm_bindgen]
-pub fn wasm_new_observer_game(map_key: &str, difficulty: u8) -> String {
-    let game = new_observer_game(map_key, difficulty_from_u8(difficulty));
+pub fn wasm_new_observer_game(
+    map_key: &str,
+    difficulty: u8,
+    map_width: i32,
+    map_height: i32,
+    num_great_powers: u32,
+    num_minor_nations: u32,
+) -> String {
+    let cfg = build_map_config(map_width, map_height, num_great_powers, num_minor_nations);
+    let game = new_observer_game_with_config(map_key, difficulty_from_u8(difficulty), cfg);
     serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
 }
 
@@ -1483,7 +1511,14 @@ pub fn wasm_queue_unit_move(
         Err(e) => return e,
     };
 
+    if game.observer_mode {
+        return "{\"error\":\"moves not allowed in observer mode\"}".to_string();
+    }
+
     let nid = NationId(nation_id);
+    if nid != game.human_player_nation {
+        return "{\"error\":\"cannot queue moves for another nation\"}".to_string();
+    }
     let uid = domain::map::UnitId(unit_id);
     let dest = ProvinceId(dest_province_id);
 
@@ -1532,9 +1567,36 @@ pub fn wasm_cancel_unit_move(game_json: &str, unit_id: u32) -> String {
         Err(e) => return e,
     };
 
+    if game.observer_mode {
+        return "{\"error\":\"moves not allowed in observer mode\"}".to_string();
+    }
     let uid = domain::map::UnitId(unit_id);
-    game.pending_moves.retain(|(_, id, _)| *id != uid);
+    let player = game.human_player_nation;
+    game.pending_moves.retain(|(nid, id, _)| !(*nid == player && *id == uid));
     serialize_game(&game)
+}
+
+// ── Command: Disband Unit ────────────────────────────────────────────
+
+/// Dismiss (disband) one of the player's army units.
+///
+/// Validates the unit belongs to the human player nation and is not a Garrison
+/// (militia / garrison artillery). Removes the unit and any pending move for it.
+#[wasm_bindgen]
+pub fn wasm_disband_unit(game_json: &str, unit_id: u32) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    if game.observer_mode {
+        return "{\"error\":\"disband not allowed in observer mode\"}".to_string();
+    }
+    let uid = domain::map::UnitId(unit_id);
+    let player_nation = game.human_player_nation;
+    match domain::military::units::disband_unit(&mut game, player_nation, uid) {
+        Ok(()) => serialize_game(&game),
+        Err(e) => format!("{{\"error\":\"{}\"}}", e),
+    }
 }
 
 // ── Command: Deploy Civilian ─────────────────────────────────────────
@@ -4039,10 +4101,7 @@ pub fn wasm_get_political_snapshot(game_json: &str, turn: u32) -> String {
 
     let target = TurnNumber::new(turn);
     let Some((_, snapshot)) = game.political_archive.iter().find(|(t, _)| *t == target) else {
-        return format!(
-            "{{\"error\":\"no political snapshot for turn {}\"}}",
-            turn
-        );
+        return format!("{{\"error\":\"no political snapshot for turn {}\"}}", turn);
     };
 
     // Rebuild province_id → (owner NationId, incorporated_from) at that turn.
@@ -4055,7 +4114,12 @@ pub fn wasm_get_political_snapshot(game_json: &str, turn: u32) -> String {
     let nation_lookup: std::collections::HashMap<NationId, (&str, String, NationType)> = game
         .nations
         .iter()
-        .map(|n| (n.id, (n.name.as_str(), format!("{:?}", n.color), n.nation_type)))
+        .map(|n| {
+            (
+                n.id,
+                (n.name.as_str(), format!("{:?}", n.color), n.nation_type),
+            )
+        })
         .collect();
 
     // Capital provinces at the archived turn (not current). Capital can move
@@ -4080,26 +4144,24 @@ pub fn wasm_get_political_snapshot(game_json: &str, turn: u32) -> String {
                 .province_id
                 .and_then(|pid| prov_state.get(&pid).copied())
                 .and_then(|(owner, inc)| {
-                    nation_lookup
-                        .get(&owner)
-                        .map(|(name, color, ntype)| {
-                            let incorporated = inc.is_some();
-                            let is_minor = *ntype == NationType::MinorNation;
-                            // Independent minors always render as Beige; incorporated
-                            // minors keep the overlord color but lighter.
-                            let display_color = if is_minor && !incorporated && !color.is_empty() {
-                                "Beige".to_string()
-                            } else {
-                                color.clone()
-                            };
-                            // Visual group: incorporated minors keep a separate
-                            // border group keyed on the original minor's name, so
-                            // they read as distinct countries in the political view.
-                            let vg: Option<String> = inc
-                                .and_then(|nid| nation_lookup.get(&nid))
-                                .map(|(n, _, _)| (*n).to_string());
-                            (*name, display_color, is_minor, incorporated, vg)
-                        })
+                    nation_lookup.get(&owner).map(|(name, color, ntype)| {
+                        let incorporated = inc.is_some();
+                        let is_minor = *ntype == NationType::MinorNation;
+                        // Independent minors always render as Beige; incorporated
+                        // minors keep the overlord color but lighter.
+                        let display_color = if is_minor && !incorporated && !color.is_empty() {
+                            "Beige".to_string()
+                        } else {
+                            color.clone()
+                        };
+                        // Visual group: incorporated minors keep a separate
+                        // border group keyed on the original minor's name, so
+                        // they read as distinct countries in the political view.
+                        let vg: Option<String> = inc
+                            .and_then(|nid| nation_lookup.get(&nid))
+                            .map(|(n, _, _)| (*n).to_string());
+                        (*name, display_color, is_minor, incorporated, vg)
+                    })
                 })
                 .unwrap_or(("", String::new(), false, false, None));
 
@@ -4211,6 +4273,11 @@ fn serialize_battle(b: &BattleResult, game: &GameState) -> serde_json::Value {
                 .map(|p| serde_json::json!({"q": p.capital_tile.q, "r": p.capital_tile.r}))
         })
         .collect();
+    let origin_province_names: Vec<String> = b
+        .attacker_origin_provinces
+        .iter()
+        .filter_map(|pid| game.get_province(*pid).map(|p| p.name.clone()))
+        .collect();
 
     let serialize_units = |units: &[ArmyUnit]| -> Vec<serde_json::Value> {
         units
@@ -4255,6 +4322,8 @@ fn serialize_battle(b: &BattleResult, game: &GameState) -> serde_json::Value {
         "capital_tile": capital_tile,
         "province_tiles": province_tiles,
         "origin_tiles": origin_tiles,
+        "origin_province_names": origin_province_names,
+        "is_naval_landing": b.is_naval_landing,
     })
 }
 
@@ -4994,6 +5063,7 @@ mod tests {
             siege_reduced_fort: true,
             medal_awards: vec![(ArmyUnitType::Guards, 2)],
             attacker_origin_provinces: vec![ProvinceId(2), ProvinceId(3)],
+            is_naval_landing: false,
             defender_retreated: false,
             attacker_retreated_to: Vec::new(),
             defender_retreated_to: Vec::new(),
@@ -5192,7 +5262,10 @@ mod tests {
             .collect();
         game.political_archive.push((
             TurnNumber::new(5),
-            PoliticalSnapshot { provinces, capitals },
+            PoliticalSnapshot {
+                provinces,
+                capitals,
+            },
         ));
 
         let game_json = serde_json::to_string(&game).unwrap();
@@ -5204,12 +5277,16 @@ mod tests {
         assert_eq!(tiles.len() as i64, game.hex_map.tile_count() as i64);
         // At least one tile must show a non-empty owner for a normal game.
         assert!(
-            tiles.iter().any(|t| t["owner"].as_str().unwrap_or("") != ""),
+            tiles
+                .iter()
+                .any(|t| t["owner"].as_str().unwrap_or("") != ""),
             "at least one tile should have an owner"
         );
         // At least one country capital should be flagged.
         assert!(
-            tiles.iter().any(|t| t["is_country_capital"].as_bool() == Some(true)),
+            tiles
+                .iter()
+                .any(|t| t["is_country_capital"].as_bool() == Some(true)),
             "at least one tile should be flagged as country capital"
         );
     }
@@ -5249,7 +5326,10 @@ mod tests {
             capitals.iter().map(|&(_, pid)| pid).collect();
         game.political_archive.push((
             TurnNumber::new(5),
-            PoliticalSnapshot { provinces, capitals },
+            PoliticalSnapshot {
+                provinces,
+                capitals,
+            },
         ));
 
         // Mutate live state AFTER archiving: swap every nation's capital to a
@@ -5298,9 +5378,12 @@ mod tests {
         // applied AFTER the snapshot was taken.
         // Live mutation of province.incorporated_from must not leak into the
         // archived rendering.
-        let leaked = tiles
-            .iter()
-            .any(|t| t["visual_group"].as_str().map(|s| !s.is_empty()).unwrap_or(false));
+        let leaked = tiles.iter().any(|t| {
+            t["visual_group"]
+                .as_str()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false)
+        });
         // The starter map has no incorporated provinces at turn 1, so the
         // archive (captured with all `incorporated_from = None`) must still
         // render all visual_group fields as null/empty.

@@ -192,7 +192,13 @@ pub struct BattleResult {
     pub medal_awards: Vec<(ArmyUnitType, u8)>,
     /// Province IDs where attacking units originated (for battle screen arrows).
     /// Multiple provinces when army units are spread across different locations.
+    /// Populated for both land attacks and naval landings (the latter records the
+    /// embarkation provinces of the landing force).
     pub attacker_origin_provinces: Vec<ProvinceId>,
+    /// True when the battle was an amphibious assault (units arrived via warship
+    /// landing). False for land attacks across an adjacent border.
+    #[serde(default)]
+    pub is_naval_landing: bool,
 }
 
 /// Calculate the General bonus multiplier for a force.
@@ -370,6 +376,7 @@ pub fn resolve_battle_with_config(
             siege_reduced_fort: false,
             medal_awards: Vec::new(),
             attacker_origin_provinces: Vec::new(),
+            is_naval_landing: false,
         };
     }
 
@@ -397,6 +404,7 @@ pub fn resolve_battle_with_config(
             siege_reduced_fort: false,
             medal_awards: Vec::new(),
             attacker_origin_provinces: Vec::new(),
+            is_naval_landing: false,
         };
     }
 
@@ -431,6 +439,7 @@ pub fn resolve_battle_with_config(
             siege_reduced_fort,
             medal_awards,
             attacker_origin_provinces: Vec::new(),
+            is_naval_landing: false,
         };
     }
 
@@ -495,6 +504,7 @@ pub fn resolve_battle_with_config(
                 siege_reduced_fort,
                 medal_awards: Vec::new(),
                 attacker_origin_provinces: Vec::new(),
+                is_naval_landing: false,
             };
         } else {
             // Defender evacuates; attacker takes the province unopposed.
@@ -520,6 +530,7 @@ pub fn resolve_battle_with_config(
                 siege_reduced_fort,
                 medal_awards: Vec::new(),
                 attacker_origin_provinces: Vec::new(),
+                is_naval_landing: false,
             };
         }
     }
@@ -723,6 +734,7 @@ pub fn resolve_battle_with_config(
         siege_reduced_fort,
         medal_awards,
         attacker_origin_provinces: Vec::new(),
+        is_naval_landing: false,
     }
 }
 
