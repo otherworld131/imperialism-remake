@@ -423,7 +423,8 @@ function App() {
   const handleSkipTurns = useCallback(async () => {
     await runMutation(async () => {
       const n = Math.max(1, Math.min(50, skipN | 0));
-      setBusyMessage(`Skipping ${n} turn${n > 1 ? 's' : ''}…`);
+      const startTurn = gameState?.turn?.[0] ?? gameState?.turn ?? 1;
+      setBusyMessage(`Processing turns ${startTurn}–${startTurn + n - 1}…`);
       try {
         const result = await processTurns(gameJson, n);
         if ((result as any).error) { alert((result as any).error); return; }
@@ -443,13 +444,14 @@ function App() {
         setBusyMessage(null);
       }
     });
-  }, [gameJson, applyGameJson, skipN, runMutation]);
+  }, [gameJson, gameState, applyGameJson, skipN, runMutation]);
 
   const handleSkipUntil = useCallback(async () => {
     if (skipUntilRunning || mutationLockRef.current) return;
     mutationLockRef.current = true;
     setSkipUntilRunning(true);
-    setBusyMessage('Skipping turns…');
+    const startTurn = gameState?.turn?.[0] ?? gameState?.turn ?? 1;
+    setBusyMessage(`Processing turn ${startTurn}…`);
     try {
       const needle = skipUntilText.trim().toLowerCase();
       // When looking for a text match, process one turn at a time so we can
@@ -471,6 +473,8 @@ function App() {
         if ((result as any).error) { alert((result as any).error); return; }
         currentJson = JSON.stringify(result.game);
         processed += result.reports.length;
+        const currentTurn = result.game?.turn?.[0] ?? result.game?.turn ?? (startTurn + processed);
+        setBusyMessage(`Processing turn ${currentTurn}…`);
 
         for (const r of result.reports) {
           allHeadlines.push(...r.headlines);
@@ -513,7 +517,7 @@ function App() {
       setBusyMessage(null);
       mutationLockRef.current = false;
     }
-  }, [gameJson, applyGameJson, skipUntilText, skipUntilRunning, showError]);
+  }, [gameJson, gameState, applyGameJson, skipUntilText, skipUntilRunning, showError]);
 
   const handleChangeViewpoint = useCallback(async (nationId: number) => {
     await runMutation(async () => {
