@@ -55,18 +55,18 @@ export default function GameSetup({ onStartGame }: Props) {
   const [previewError, setPreviewError] = useState<string | null>(null);
 
   useEffect(() => {
-    try { setScenarios(getScenarios()); } catch { /* no scenarios available */ }
+    getScenarios().then(setScenarios).catch(() => { /* no scenarios available */ });
   }, []);
 
   const effectiveMapKey = useMemo(() => mapKey || 'imperialism', [mapKey]);
 
-  const buildPreview = (keyOverride?: string) => {
+  const buildPreview = async (keyOverride?: string) => {
     setPreviewError(null);
     const key = keyOverride ?? effectiveMapKey;
     try {
       const json = selectedScenario
-        ? newScenarioGame(selectedScenario, difficulty, 0)
-        : newGame(key, difficulty, 0);
+        ? await newScenarioGame(selectedScenario, difficulty, 0)
+        : await newGame(key, difficulty, 0);
       // Detect error payloads from the bridge.
       const parsed = JSON.parse(json);
       if (parsed.error) {
@@ -76,7 +76,7 @@ export default function GameSetup({ onStartGame }: Props) {
       const gps: GpInfo[] = (parsed.nations as any[])
         .filter(n => n.nation_type === 'GreatPower')
         .map((n, idx) => ({ idx, id: n.id, name: n.name, color: n.color }));
-      const tiles = getMapData(json, true);
+      const tiles = await getMapData(json, true);
       setPreviewJson(json);
       setPreviewTiles(tiles);
       setPreviewGps(gps);
@@ -106,20 +106,20 @@ export default function GameSetup({ onStartGame }: Props) {
     if (gp) setPickedNationIdx(gp.idx);
   };
 
-  const handleBegin = () => {
+  const handleBegin = async () => {
     const idx = pickedNationIdx ?? 0;
     let gameJson: string;
     if (observerMode) {
       gameJson = selectedScenario
-        ? newObserverScenarioGame(selectedScenario, difficulty)
-        : newObserverGame(effectiveMapKey, difficulty);
+        ? await newObserverScenarioGame(selectedScenario, difficulty)
+        : await newObserverGame(effectiveMapKey, difficulty);
       if (idx !== 0) {
-        gameJson = setHumanPlayer(gameJson, idx);
+        gameJson = await setHumanPlayer(gameJson, idx);
       }
     } else {
       gameJson = previewJson;
       if (idx !== 0) {
-        gameJson = setHumanPlayer(gameJson, idx);
+        gameJson = await setHumanPlayer(gameJson, idx);
       }
     }
     onStartGame(gameJson, {

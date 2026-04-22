@@ -98,9 +98,11 @@ import TradeScreen from './components/TradeScreen';
 import BattleScreen from './components/BattleScreen';
 import LegendScreen from './components/LegendScreen';
 import ProposalModal from './components/ProposalModal';
+import BusyOverlay from './components/BusyOverlay';
 
 function App() {
   const [loading, setLoading] = useState(true);
+  const [busyMessage, setBusyMessage] = useState<string | null>(null);
   const [gameJson, setGameJson] = useState<string>('');
   const [tiles, setTiles] = useState<TileData[]>([]);
   const [navyMarkers, setNavyMarkers] = useState<NavyMarker[]>([]);
@@ -152,10 +154,25 @@ function App() {
   // Battle state
   const [currentBattles, setCurrentBattles] = useState<LandBattleData[]>([]);
   const [currentNavalBattles, setCurrentNavalBattles] = useState<NavalBattleData[]>([]);
-  const battleArchive = useMemo(
-    () => activeScreen === 'battle' && gameJson ? getBattleArchive(gameJson) : [],
-    [activeScreen, gameJson],
-  );
+  const [battleArchive, setBattleArchive] = useState<ArchivedBattleTurn[]>([]);
+  useEffect(() => {
+    (async () => {
+      if (activeScreen === 'battle' && gameJson) {
+        setBattleArchive(await getBattleArchive(gameJson));
+      } else {
+        setBattleArchive([]);
+      }
+    })();
+  }, [activeScreen, gameJson]);
+
+  // Ensure newspaper archive data is populated when the newspaper screen is active.
+  useEffect(() => {
+    (async () => {
+      if (activeScreen === 'newspaper' && gameJson && archiveData.length === 0) {
+        setArchiveData(await getNewspaperArchive(gameJson));
+      }
+    })();
+  }, [activeScreen, gameJson, archiveData.length]);
 
   // Unit interaction state
   const [provinceUnits, setProvinceUnits] = useState<ProvinceUnits | null>(null);
@@ -219,7 +236,7 @@ function App() {
 
   // Helper to update all derived state from a new game JSON.
   // Returns true on success, false on error (state unchanged on failure).
-  const applyGameJson = useCallback((json: string): boolean => {
+  const applyGameJson = useCallback(async (json: string): Promise<boolean> => {
     let state;
     try {
       state = JSON.parse(json);
@@ -234,32 +251,34 @@ function App() {
     }
     setGameJson(json);
     setGameState(state);
-    setTiles(getMapData(json, disableFogOfWar));
-    setNavyMarkers(getNavyMarkers(json, disableFogOfWar));
-    setTechs(getAvailableTechs(json));
+    setTiles(await getMapData(json, disableFogOfWar));
+    setNavyMarkers(await getNavyMarkers(json, disableFogOfWar));
+    setTechs(await getAvailableTechs(json));
     const nid = state.human_player_nation;
-    setCivilians(getCivilians(json, nid));
-    setShipsData(getShips(json, nid));
-    setBuildable(getBuildableUnits(json, nid));
-    setTransportData(getTransportData(json, nid));
-    setIndustryData(getIndustryData(json, nid));
-    setTradeData(getTradeData(json, nid));
-    setDiplomacyScreenData(getDiplomacyScreenData(json, nid));
-    setLedgerData(getLedgerData(json, nid));
-    setGpLedgerData(getAllGPLedgerData(json));
+    setCivilians(await getCivilians(json, nid));
+    setShipsData(await getShips(json, nid));
+    setBuildable(await getBuildableUnits(json, nid));
+    setTransportData(await getTransportData(json, nid));
+    setIndustryData(await getIndustryData(json, nid));
+    setTradeData(await getTradeData(json, nid));
+    setDiplomacyScreenData(await getDiplomacyScreenData(json, nid));
+    setLedgerData(await getLedgerData(json, nid));
+    setGpLedgerData(await getAllGPLedgerData(json));
     return true;
   }, [showError, disableFogOfWar]);
 
   // Re-fetch tiles when fog of war toggle changes
   useEffect(() => {
-    if (gameJson) {
-      setTiles(getMapData(gameJson, disableFogOfWar));
-      setNavyMarkers(getNavyMarkers(gameJson, disableFogOfWar));
-    }
+    (async () => {
+      if (gameJson) {
+        setTiles(await getMapData(gameJson, disableFogOfWar));
+        setNavyMarkers(await getNavyMarkers(gameJson, disableFogOfWar));
+      }
+    })();
   }, [disableFogOfWar, gameJson]);
 
-  const handleGameStart = (json: string, params: GameStartParams) => {
-    if (!applyGameJson(json)) return;
+  const handleGameStart = async (json: string, params: GameStartParams) => {
+    if (!(await applyGameJson(json))) return;
     setGameStartParams(params);
     setGameStarted(true);
     try {
@@ -271,7 +290,7 @@ function App() {
     }
   };
 
-  const handleRestart = useCallback(() => {
+  const handleRestart = useCallback(async () => {
     if (!gameStartParams) return;
     if (!confirm('Restart this map from turn 1?')) return;
     const p = gameStartParams;
@@ -282,19 +301,19 @@ function App() {
     let json: string;
     if (p.observerMode) {
       json = p.scenario
-        ? newObserverScenarioGame(p.scenario, p.difficulty)
-        : newObserverGame(p.mapKey, p.difficulty);
+        ? await newObserverScenarioGame(p.scenario, p.difficulty)
+        : await newObserverGame(p.mapKey, p.difficulty);
       if (idx !== 0) {
-        json = setHumanPlayer(json, idx);
+        json = await setHumanPlayer(json, idx);
       }
     } else {
       json = p.scenario
-        ? newScenarioGame(p.scenario, p.difficulty, idx)
-        : newGame(p.mapKey, p.difficulty, idx);
+        ? await newScenarioGame(p.scenario, p.difficulty, idx)
+        : await newGame(p.mapKey, p.difficulty, idx);
     }
     const parsed = JSON.parse(json);
     if (parsed.error) { alert(parsed.error); return; }
-    if (!applyGameJson(json)) return;
+    if (!(await applyGameJson(json))) return;
     setGameStartParams({ ...p, nationIdx: idx });
     setActiveScreen('map');
     setProvinceUnits(null);
@@ -314,25 +333,30 @@ function App() {
     setStatusMessage('');
   }, [gameStartParams, gameState, observerGps, applyGameJson]);
 
-  const handleEndTurn = useCallback(() => {
-    const result = processTurn(gameJson);
-    if (result.error) { alert(result.error); return; }
-    const newJson = JSON.stringify(result.game);
-    if (!applyGameJson(newJson)) return;
-    setHeadlines(result.report?.headlines || []);
-    setCurrentBattles(result.report?.battles || []);
-    setCurrentNavalBattles(result.report?.naval_battles || []);
-    setActiveScreen('newspaper');
-    // Check for pending proposals
-    const newState = JSON.parse(newJson);
-    const nid = newState.human_player_nation;
-    const proposals = getPendingProposals(newJson, nid);
-    setProposalData(proposals);
-    // Clear interaction state
-    setProvinceUnits(null);
-    setSelectedUnitIds([]);
-    setIsDeployMode(false);
-    setDeployingCivilian(null);
+  const handleEndTurn = useCallback(async () => {
+    setBusyMessage('Processing turn…');
+    try {
+      const result = await processTurn(gameJson);
+      if (result.error) { alert(result.error); return; }
+      const newJson = JSON.stringify(result.game);
+      if (!(await applyGameJson(newJson))) return;
+      setHeadlines(result.report?.headlines || []);
+      setCurrentBattles(result.report?.battles || []);
+      setCurrentNavalBattles(result.report?.naval_battles || []);
+      setActiveScreen('newspaper');
+      // Check for pending proposals
+      const newState = JSON.parse(newJson);
+      const nid = newState.human_player_nation;
+      const proposals = await getPendingProposals(newJson, nid);
+      setProposalData(proposals);
+      // Clear interaction state
+      setProvinceUnits(null);
+      setSelectedUnitIds([]);
+      setIsDeployMode(false);
+      setDeployingCivilian(null);
+    } finally {
+      setBusyMessage(null);
+    }
   }, [gameJson, applyGameJson]);
 
   const dismissNewspaper = useCallback(() => {
@@ -342,27 +366,33 @@ function App() {
     }
   }, [proposalData]);
 
-  const handleSkipTurns = useCallback(() => {
+  const handleSkipTurns = useCallback(async () => {
     const n = Math.max(1, Math.min(50, skipN | 0));
-    const result = processTurns(gameJson, n);
-    if ((result as any).error) { alert((result as any).error); return; }
-    const newJson = JSON.stringify(result.game);
-    if (!applyGameJson(newJson)) return;
-    const allHeadlines = result.reports.flatMap(r => r.headlines);
-    const allBattles = result.reports.flatMap(r => r.battles);
-    const allNavalBattles = result.reports.flatMap(r => r.naval_battles);
-    setHeadlines(allHeadlines);
-    setCurrentBattles(allBattles);
-    setCurrentNavalBattles(allNavalBattles);
-    setProvinceUnits(null);
-    setSelectedUnitIds([]);
-    setIsDeployMode(false);
-    setDeployingCivilian(null);
+    setBusyMessage(`Skipping ${n} turn${n > 1 ? 's' : ''}…`);
+    try {
+      const result = await processTurns(gameJson, n);
+      if ((result as any).error) { alert((result as any).error); return; }
+      const newJson = JSON.stringify(result.game);
+      if (!(await applyGameJson(newJson))) return;
+      const allHeadlines = result.reports.flatMap(r => r.headlines);
+      const allBattles = result.reports.flatMap(r => r.battles);
+      const allNavalBattles = result.reports.flatMap(r => r.naval_battles);
+      setHeadlines(allHeadlines);
+      setCurrentBattles(allBattles);
+      setCurrentNavalBattles(allNavalBattles);
+      setProvinceUnits(null);
+      setSelectedUnitIds([]);
+      setIsDeployMode(false);
+      setDeployingCivilian(null);
+    } finally {
+      setBusyMessage(null);
+    }
   }, [gameJson, applyGameJson, skipN]);
 
-  const handleSkipUntil = useCallback(() => {
+  const handleSkipUntil = useCallback(async () => {
     if (skipUntilRunning) return;
     setSkipUntilRunning(true);
+    setBusyMessage('Skipping turns…');
     try {
       const needle = skipUntilText.trim().toLowerCase();
       // When looking for a text match, process one turn at a time so we can
@@ -380,7 +410,7 @@ function App() {
       let processed = 0;
 
       while (processed < MAX_TURNS) {
-        const result = processTurns(currentJson, batchSize);
+        const result = await processTurns(currentJson, batchSize);
         if ((result as any).error) { alert((result as any).error); return; }
         currentJson = JSON.stringify(result.game);
         processed += result.reports.length;
@@ -407,7 +437,7 @@ function App() {
         }
       }
 
-      if (!applyGameJson(currentJson)) return;
+      if (!(await applyGameJson(currentJson))) return;
       setHeadlines(allHeadlines);
       setCurrentBattles(allBattles);
       setCurrentNavalBattles(allNavalBattles);
@@ -423,16 +453,17 @@ function App() {
       }
     } finally {
       setSkipUntilRunning(false);
+      setBusyMessage(null);
     }
   }, [gameJson, applyGameJson, skipUntilText, skipUntilRunning, showError]);
 
-  const handleChangeViewpoint = useCallback((nationId: number) => {
+  const handleChangeViewpoint = useCallback(async (nationId: number) => {
     const idx = observerGps.findIndex(g => g.id === nationId);
     if (idx < 0) return;
-    const newJson = setHumanPlayer(gameJson, idx);
+    const newJson = await setHumanPlayer(gameJson, idx);
     const parsed = JSON.parse(newJson);
     if (parsed.error) { alert(parsed.error); return; }
-    applyGameJson(newJson);
+    await applyGameJson(newJson);
   }, [gameJson, applyGameJson, observerGps]);
 
   useEffect(() => {
@@ -469,44 +500,57 @@ function App() {
 
   // Fetch overlay data when map mode or selected nation changes
   useEffect(() => {
-    if (!gameJson || !gameState) return;
-    if (mapMode === 'diplomatic' || mapMode === 'relationship') {
-      const nation = gameState.nations?.find((n: any) => n.name === selectedNation);
-      if (nation) {
-        setDiplomacyOverlay(getDiplomacyOverlay(gameJson, nation.id));
+    (async () => {
+      if (!gameJson || !gameState) return;
+      if (mapMode === 'diplomatic' || mapMode === 'relationship') {
+        const nation = gameState.nations?.find((n: any) => n.name === selectedNation);
+        if (nation) {
+          setDiplomacyOverlay(await getDiplomacyOverlay(gameJson, nation.id));
+        } else {
+          setDiplomacyOverlay(null);
+        }
       } else {
         setDiplomacyOverlay(null);
       }
-    } else {
-      setDiplomacyOverlay(null);
-    }
-    if (mapMode === 'military' || mapMode === 'naval') {
-      setMilitaryOverlay(getMilitaryOverlay(gameJson));
-    } else {
-      setMilitaryOverlay(null);
-    }
+      if (mapMode === 'military' || mapMode === 'naval') {
+        setMilitaryOverlay(await getMilitaryOverlay(gameJson));
+      } else {
+        setMilitaryOverlay(null);
+      }
+    })();
   }, [mapMode, selectedNation, gameJson, gameState]);
 
   const playerNationId = gameState?.human_player_nation ?? 0;
 
   // Having a non-empty selection implicitly arms movement mode.
   // Valid move targets are the intersection of each selected unit's legal destinations.
-  const validMoveTargets = useMemo<ValidMoveTargets | null>(() => {
-    if (selectedUnitIds.length === 0 || !gameJson) return null;
-    const allTargets = selectedUnitIds.map(id => getValidMoveTargets(gameJson, playerNationId, id));
-    if (allTargets.some(t => !t)) return null;
-    const first = allTargets[0]!;
-    const friendly = first.friendly.filter(t =>
-      allTargets.every(targets => targets!.friendly.some(f => f.province_id === t.province_id))
-    );
-    const hostile = first.hostile.filter(t =>
-      allTargets.every(targets => targets!.hostile.some(h => h.province_id === t.province_id))
-    );
-    return { friendly, hostile };
+  const [validMoveTargets, setValidMoveTargets] = useState<ValidMoveTargets | null>(null);
+  useEffect(() => {
+    (async () => {
+      if (selectedUnitIds.length === 0 || !gameJson) {
+        setValidMoveTargets(null);
+        return;
+      }
+      const allTargets = await Promise.all(
+        selectedUnitIds.map(id => getValidMoveTargets(gameJson, playerNationId, id))
+      );
+      if (allTargets.some(t => !t)) {
+        setValidMoveTargets(null);
+        return;
+      }
+      const first = allTargets[0]!;
+      const friendly = first.friendly.filter(t =>
+        allTargets.every(targets => targets!.friendly.some(f => f.province_id === t.province_id))
+      );
+      const hostile = first.hostile.filter(t =>
+        allTargets.every(targets => targets!.hostile.some(h => h.province_id === t.province_id))
+      );
+      setValidMoveTargets({ friendly, hostile });
+    })();
   }, [selectedUnitIds, gameJson, playerNationId]);
   const isMovementMode = selectedUnitIds.length > 0 && validMoveTargets !== null;
 
-  const handleTileClick = useCallback((tile: TileData) => {
+  const handleTileClick = useCallback(async (tile: TileData) => {
     // Implicit movement mode: if units are selected and the clicked tile is a valid target, move them.
     if (validMoveTargets && selectedUnitIds.length > 0 && tile.province_id != null) {
       const isValidTarget = (
@@ -517,7 +561,7 @@ function App() {
         let currentJson = gameJson;
         let ok = true;
         for (const unitId of selectedUnitIds) {
-          const cmd = queueUnitMove(currentJson, playerNationId, unitId, tile.province_id);
+          const cmd = await queueUnitMove(currentJson, playerNationId, unitId, tile.province_id);
           if (cmd.ok && cmd.gameJson) {
             currentJson = cmd.gameJson;
           } else {
@@ -528,9 +572,9 @@ function App() {
           }
         }
         if (ok) {
-          applyGameJson(currentJson);
+          await applyGameJson(currentJson);
           if (provinceUnits) {
-            setProvinceUnits(getUnitsInProvince(currentJson, tile.province_id));
+            setProvinceUnits(await getUnitsInProvince(currentJson, tile.province_id));
           }
         }
         setSelectedUnitIds([]);
@@ -545,8 +589,8 @@ function App() {
       const tileKey = `${tile.q},${tile.r}`;
       if (!deployableTiles.has(tileKey)) return; // Ignore click on invalid tile, keep mode active
 
-      const cmd = deployCivilian(gameJson, deployingCivilian.id, tile.q, tile.r);
-      if (cmd.ok && cmd.gameJson && applyGameJson(cmd.gameJson)) {
+      const cmd = await deployCivilian(gameJson, deployingCivilian.id, tile.q, tile.r);
+      if (cmd.ok && cmd.gameJson && (await applyGameJson(cmd.gameJson))) {
         setIsDeployMode(false);
         setDeployingCivilian(null);
         setDeployableTiles(new Set());
@@ -564,7 +608,7 @@ function App() {
 
     // Load province units when clicking a capital tile; clear multi-selection on context switch
     if (tile.is_capital && tile.province_id != null) {
-      setProvinceUnits(getUnitsInProvince(gameJson, tile.province_id));
+      setProvinceUnits(await getUnitsInProvince(gameJson, tile.province_id));
       setSelectedUnitIds([]);
     } else {
       setProvinceUnits(null);
@@ -661,13 +705,13 @@ function App() {
     );
   }, [provinceUnits]);
 
-  const handleCancelMove = useCallback((unitId: number) => {
-    const cmd = cancelUnitMove(gameJson, unitId);
-    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+  const handleCancelMove = useCallback(async (unitId: number) => {
+    const cmd = await cancelUnitMove(gameJson, unitId);
+    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Cancel failed: ${cmd.error}`);
   }, [gameJson, applyGameJson, showError]);
 
-  const handleCancelSelectedMoves = useCallback(() => {
+  const handleCancelSelectedMoves = useCallback(async () => {
     const cancelable = selectedUnitIds.filter(
       id => pendingMovesDisplay.some(m => m.unit_id === id)
     );
@@ -676,7 +720,7 @@ function App() {
     let succeeded = 0;
     let failed = 0;
     for (const unitId of cancelable) {
-      const cmd = cancelUnitMove(currentJson, unitId);
+      const cmd = await cancelUnitMove(currentJson, unitId);
       if (cmd.ok && cmd.gameJson) {
         currentJson = cmd.gameJson;
         succeeded++;
@@ -684,16 +728,16 @@ function App() {
         failed++;
       }
     }
-    if (succeeded > 0) applyGameJson(currentJson);
+    if (succeeded > 0) await applyGameJson(currentJson);
     if (failed > 0) showError(`Canceled ${succeeded} of ${cancelable.length} moves \u2014 ${failed} failed`);
   }, [selectedUnitIds, pendingMovesDisplay, gameJson, applyGameJson, showError]);
 
-  const handleRecruit = useCallback((unitType: string) => {
+  const handleRecruit = useCallback(async (unitType: string) => {
     if (isObserver) return;
-    const cmd = recruitArmyUnit(gameJson, playerNationId, unitType);
-    if (cmd.ok && cmd.gameJson && applyGameJson(cmd.gameJson)) {
+    const cmd = await recruitArmyUnit(gameJson, playerNationId, unitType);
+    if (cmd.ok && cmd.gameJson && (await applyGameJson(cmd.gameJson))) {
       if (selectedTile?.province_id != null) {
-        setProvinceUnits(getUnitsInProvince(cmd.gameJson, selectedTile.province_id));
+        setProvinceUnits(await getUnitsInProvince(cmd.gameJson, selectedTile.province_id));
       }
     } else if (cmd.error) {
       showError(`Recruit failed: ${cmd.error}`);
@@ -727,82 +771,82 @@ function App() {
     setDeployableTiles(validTiles);
   }, [tiles, playerNationId]);
 
-  const handleRecallCivilian = useCallback((civilianId: number) => {
+  const handleRecallCivilian = useCallback(async (civilianId: number) => {
     if (isObserver) return;
-    const cmd = recallCivilian(gameJson, civilianId);
-    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    const cmd = await recallCivilian(gameJson, civilianId);
+    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Recall failed: ${cmd.error}`);
   }, [gameJson, applyGameJson, showError]);
 
-  const handleEngineerBuild = useCallback((civilianId: number, kind: EngineerBuildKind) => {
+  const handleEngineerBuild = useCallback(async (civilianId: number, kind: EngineerBuildKind) => {
     if (isObserver) return;
-    const cmd = engineerBuild(gameJson, civilianId, kind);
-    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    const cmd = await engineerBuild(gameJson, civilianId, kind);
+    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Engineer build failed: ${cmd.error}`);
   }, [gameJson, applyGameJson, showError]);
 
-  const handleHireCivilian = useCallback((civType: string) => {
+  const handleHireCivilian = useCallback(async (civType: string) => {
     if (isObserver) return;
-    const cmd = hireCivilian(gameJson, playerNationId, civType);
-    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    const cmd = await hireCivilian(gameJson, playerNationId, civType);
+    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Hire failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
-  const handleBuildShip = useCallback((shipType: string) => {
+  const handleBuildShip = useCallback(async (shipType: string) => {
     if (isObserver) return;
-    const cmd = buildShip(gameJson, playerNationId, shipType);
-    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    const cmd = await buildShip(gameJson, playerNationId, shipType);
+    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Build failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
   // ── New screen handlers ──────────────────────────────────────────
 
-  const handleBuildFreightCar = useCallback(() => {
+  const handleBuildFreightCar = useCallback(async () => {
     if (isObserver) return;
-    const cmd = buildFreightCar(gameJson, playerNationId);
-    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    const cmd = await buildFreightCar(gameJson, playerNationId);
+    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Build failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
-  const handleSetAllocation = useCallback((resource: string, percentage: number) => {
+  const handleSetAllocation = useCallback(async (resource: string, percentage: number) => {
     if (isObserver) return;
-    const cmd = setTransportAllocation(gameJson, playerNationId, resource, percentage);
-    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    const cmd = await setTransportAllocation(gameJson, playerNationId, resource, percentage);
+    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Allocation failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
-  const handleExpandBuilding = useCallback((buildingType: string) => {
+  const handleExpandBuilding = useCallback(async (buildingType: string) => {
     if (isObserver) return;
-    const cmd = expandBuilding(gameJson, playerNationId, buildingType);
-    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    const cmd = await expandBuilding(gameJson, playerNationId, buildingType);
+    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Expand failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
-  const handleSetSubsidy = useCallback((targetNationId: number, amount: number) => {
+  const handleSetSubsidy = useCallback(async (targetNationId: number, amount: number) => {
     if (isObserver) return;
-    const cmd = setTradeSubsidy(gameJson, playerNationId, targetNationId, amount);
-    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    const cmd = await setTradeSubsidy(gameJson, playerNationId, targetNationId, amount);
+    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Subsidy failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
-  const handleSetSellOrder = useCallback((commodityType: string, commodityName: string, quantity: number) => {
+  const handleSetSellOrder = useCallback(async (commodityType: string, commodityName: string, quantity: number) => {
     if (isObserver) return;
-    const cmd = setPlayerSellOrder(gameJson, playerNationId, commodityType, commodityName, quantity);
-    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+    const cmd = await setPlayerSellOrder(gameJson, playerNationId, commodityType, commodityName, quantity);
+    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Sell order failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
-  const handleSetBuyOrder = useCallback((resource: string, quantity: number, maxPrice: number) => {
-    const cmd = setPlayerBuyOrder(gameJson, playerNationId, resource, quantity, maxPrice);
-    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+  const handleSetBuyOrder = useCallback(async (resource: string, quantity: number, maxPrice: number) => {
+    const cmd = await setPlayerBuyOrder(gameJson, playerNationId, resource, quantity, maxPrice);
+    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Buy order failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
   // Diplomacy screen handlers
-  const makeDiploHandler = useCallback((fn: (gj: string, nid: number, tid: number) => any, label: string) =>
-    (targetId: number) => {
-      const cmd = fn(gameJson, playerNationId, targetId);
-      if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+  const makeDiploHandler = useCallback((fn: (gj: string, nid: number, tid: number) => Promise<any>, label: string) =>
+    async (targetId: number) => {
+      const cmd = await fn(gameJson, playerNationId, targetId);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
       else if (cmd.error) showError(`${label}: ${cmd.error}`);
     }, [gameJson, playerNationId, applyGameJson, showError]);
 
@@ -813,34 +857,34 @@ function App() {
   const handleDiploDeclareWar = useCallback((tid: number) => makeDiploHandler(diplomacyDeclareWar, 'Declare War')(tid), [makeDiploHandler]);
   const handleDiploProposePeace = useCallback((tid: number) => makeDiploHandler(diplomacyProposePeace, 'Peace')(tid), [makeDiploHandler]);
 
-  const handleDiploSendGrant = useCallback((targetId: number, amount: number) => {
-    const cmd = diplomacySendGrant(gameJson, playerNationId, targetId, amount);
-    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+  const handleDiploSendGrant = useCallback(async (targetId: number, amount: number) => {
+    const cmd = await diplomacySendGrant(gameJson, playerNationId, targetId, amount);
+    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Grant failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
-  const handleDiploBreakTreaty = useCallback((targetId: number, treatyType: string) => {
-    const cmd = diplomacyBreakTreaty(gameJson, playerNationId, targetId, treatyType);
-    if (cmd.ok && cmd.gameJson) applyGameJson(cmd.gameJson);
+  const handleDiploBreakTreaty = useCallback(async (targetId: number, treatyType: string) => {
+    const cmd = await diplomacyBreakTreaty(gameJson, playerNationId, targetId, treatyType);
+    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
     else if (cmd.error) showError(`Break treaty failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
   // Proposal modal handlers
-  const handleAcceptProposal = useCallback((index: number) => {
-    const cmd = acceptProposal(gameJson, playerNationId, index);
+  const handleAcceptProposal = useCallback(async (index: number) => {
+    const cmd = await acceptProposal(gameJson, playerNationId, index);
     if (cmd.ok && cmd.gameJson) {
-      applyGameJson(cmd.gameJson);
-      const updated = getPendingProposals(cmd.gameJson, playerNationId);
+      await applyGameJson(cmd.gameJson);
+      const updated = await getPendingProposals(cmd.gameJson, playerNationId);
       setProposalData(updated);
       if (!updated || updated.proposals.length === 0) setShowProposals(false);
     } else if (cmd.error) showError(`Accept failed: ${cmd.error}`);
   }, [gameJson, playerNationId, applyGameJson, showError]);
 
-  const handleRejectProposal = useCallback((index: number) => {
-    const cmd = rejectProposal(gameJson, playerNationId, index);
+  const handleRejectProposal = useCallback(async (index: number) => {
+    const cmd = await rejectProposal(gameJson, playerNationId, index);
     if (cmd.ok && cmd.gameJson) {
-      applyGameJson(cmd.gameJson);
-      const updated = getPendingProposals(cmd.gameJson, playerNationId);
+      await applyGameJson(cmd.gameJson);
+      const updated = await getPendingProposals(cmd.gameJson, playerNationId);
       setProposalData(updated);
       if (!updated || updated.proposals.length === 0) setShowProposals(false);
     } else if (cmd.error) showError(`Reject failed: ${cmd.error}`);
@@ -916,14 +960,14 @@ function App() {
     return null;
   }, [mapMode, selectedNation, isObserver, getDiploInfoForTile, getMilitaryInfoForTile]);
 
-  const handleResearch = (techName: string) => {
+  const handleResearch = async (techName: string) => {
     if (isObserver) return;
-    const result = researchTech(gameJson, techName);
+    const result = await researchTech(gameJson, techName);
     try {
       const parsed = JSON.parse(result);
       if (parsed.error) { alert(parsed.error); return; }
     } catch { /* applyGameJson will handle parse errors */ }
-    if (!applyGameJson(result)) return;
+    if (!(await applyGameJson(result))) return;
     setShowTech(false);
   };
 
@@ -990,7 +1034,7 @@ function App() {
           </select>
         )}
         {!isObserver && <button onClick={() => setShowTech(!showTech)} style={styles.btn}>Tech</button>}
-        <button onClick={() => { setArchiveData(getNewspaperArchive(gameJson)); setActiveScreen('newspaper'); }} style={styles.btn}>History</button>
+        <button onClick={async () => { setArchiveData(await getNewspaperArchive(gameJson)); setActiveScreen('newspaper'); }} style={styles.btn}>History</button>
         {isObserver && (
           <>
             <input
@@ -1089,8 +1133,8 @@ function App() {
           });
           const playerNews = visible.filter(h => h.text.includes(playerName));
           const worldNews = visible.filter(h => !h.text.includes(playerName));
-          // Ensure archive data is available
-          const archive = archiveData.length > 0 ? archiveData : getNewspaperArchive(gameJson);
+          // Ensure archive data is available (populated by effect when entering newspaper screen)
+          const archive = archiveData;
           return (
             <NewspaperScreen
               playerName={playerName}
@@ -1111,8 +1155,8 @@ function App() {
               onCountryChange={setNewsFilterCountry}
               onDismiss={dismissNewspaper}
               onClose={() => setActiveScreen('map')}
-              onShowMap={(turn) => {
-                const snap = getPoliticalSnapshot(gameJson, turn);
+              onShowMap={async (turn) => {
+                const snap = await getPoliticalSnapshot(gameJson, turn);
                 if (snap) setPoliticalSnapshot(snap);
                 else alert(`No political snapshot available for turn ${turn}.`);
               }}
@@ -1491,6 +1535,8 @@ function App() {
           onClose={() => setShowProposals(false)}
         />
       )}
+
+      <BusyOverlay busy={busyMessage !== null} message={busyMessage ?? undefined} />
     </main>
   );
 }

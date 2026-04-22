@@ -1,74 +1,9 @@
-import init, {
-  wasm_new_game,
-  wasm_new_scenario_game,
-  wasm_new_observer_game,
-  wasm_new_observer_scenario_game,
-  wasm_set_human_player,
-  wasm_process_turns,
-  wasm_process_turn,
-  wasm_get_map_data,
-  wasm_get_navy_markers,
-  wasm_get_available_techs,
-  wasm_research_tech,
-  wasm_get_scenarios,
-  wasm_get_diplomacy_overlay,
-  wasm_get_military_overlay,
-  wasm_get_units_in_province,
-  wasm_get_civilians,
-  wasm_get_ships,
-  wasm_get_valid_move_targets,
-  wasm_get_buildable_units,
-  wasm_queue_unit_move,
-  wasm_cancel_unit_move,
-  wasm_deploy_civilian,
-  wasm_recall_civilian,
-  wasm_engineer_build,
-  wasm_recruit_army_unit,
-  wasm_hire_civilian,
-  wasm_build_ship,
-  // Transport
-  wasm_get_transport_data,
-  wasm_build_freight_car,
-  wasm_set_transport_allocation,
-  // Industry
-  wasm_get_industry_data,
-  wasm_expand_building,
-  // Trade
-  wasm_get_trade_data,
-  wasm_set_trade_subsidy,
-  wasm_set_player_sell_order,
-  wasm_set_player_buy_order,
-  // Diplomacy
-  wasm_get_diplomacy_screen_data,
-  wasm_diplomacy_build_consulate,
-  wasm_diplomacy_build_embassy,
-  wasm_diplomacy_propose_nap,
-  wasm_diplomacy_propose_alliance,
-  wasm_diplomacy_declare_war,
-  wasm_diplomacy_send_grant,
-  wasm_diplomacy_break_treaty,
-  wasm_diplomacy_propose_peace,
-  // Proposals
-  wasm_get_pending_proposals,
-  wasm_accept_proposal,
-  wasm_reject_proposal,
-  // Newspaper archive
-  wasm_get_newspaper_archive,
-  wasm_get_political_snapshot,
-  // Battle archive
-  wasm_get_battle_data,
-  // Ledger
-  wasm_get_ledger_data,
-  wasm_get_all_gp_ledger_data,
-} from '../../crates/wasm-bridge/pkg/wasm_bridge.js';
+import { call } from './workers/gameClient';
 
-let initialized = false;
-
-export async function initWasm() {
-  if (!initialized) {
-    await init();
-    initialized = true;
-  }
+// initWasm is a no-op retained for API compatibility. The dedicated worker
+// initializes the wasm module lazily on its first RPC call.
+export async function initWasm(): Promise<void> {
+  await call<string>('wasm_get_scenarios');
 }
 
 export type MapMode = 'terrain' | 'political' | 'diplomatic' | 'relationship' | 'military' | 'naval';
@@ -432,49 +367,49 @@ export interface PendingMove {
 
 // ── Existing wrapper functions ───────────────────────────────────────
 
-export function newGame(mapKey: string, difficulty: number, nationIndex: number): string {
-  return wasm_new_game(mapKey, difficulty, nationIndex);
+export async function newGame(mapKey: string, difficulty: number, nationIndex: number): Promise<string> {
+  return call<string>('wasm_new_game', mapKey, difficulty, nationIndex);
 }
 
-export function processTurn(gameJson: string): any {
-  const result = wasm_process_turn(gameJson);
+export async function processTurn(gameJson: string): Promise<any> {
+  const result = await call<string>('wasm_process_turn', gameJson);
   return JSON.parse(result);
 }
 
-export function getMapData(gameJson: string, disableFog: boolean = false): TileData[] {
-  return JSON.parse(wasm_get_map_data(gameJson, disableFog));
+export async function getMapData(gameJson: string, disableFog: boolean = false): Promise<TileData[]> {
+  return JSON.parse(await call<string>('wasm_get_map_data', gameJson, disableFog));
 }
 
-export function getNavyMarkers(gameJson: string, disableFog: boolean = false): NavyMarker[] {
-  return JSON.parse(wasm_get_navy_markers(gameJson, disableFog));
+export async function getNavyMarkers(gameJson: string, disableFog: boolean = false): Promise<NavyMarker[]> {
+  return JSON.parse(await call<string>('wasm_get_navy_markers', gameJson, disableFog));
 }
 
-export function getAvailableTechs(gameJson: string): any[] {
-  return JSON.parse(wasm_get_available_techs(gameJson));
+export async function getAvailableTechs(gameJson: string): Promise<any[]> {
+  return JSON.parse(await call<string>('wasm_get_available_techs', gameJson));
 }
 
-export function researchTech(gameJson: string, techName: string): string {
-  return wasm_research_tech(gameJson, techName);
+export async function researchTech(gameJson: string, techName: string): Promise<string> {
+  return call<string>('wasm_research_tech', gameJson, techName);
 }
 
-export function getScenarios(): any[] {
-  return JSON.parse(wasm_get_scenarios());
+export async function getScenarios(): Promise<any[]> {
+  return JSON.parse(await call<string>('wasm_get_scenarios'));
 }
 
-export function newScenarioGame(scenarioId: string, difficulty: number, nationIndex: number): string {
-  return wasm_new_scenario_game(scenarioId, difficulty, nationIndex);
+export async function newScenarioGame(scenarioId: string, difficulty: number, nationIndex: number): Promise<string> {
+  return call<string>('wasm_new_scenario_game', scenarioId, difficulty, nationIndex);
 }
 
-export function newObserverGame(mapKey: string, difficulty: number): string {
-  return wasm_new_observer_game(mapKey, difficulty);
+export async function newObserverGame(mapKey: string, difficulty: number): Promise<string> {
+  return call<string>('wasm_new_observer_game', mapKey, difficulty);
 }
 
-export function newObserverScenarioGame(scenarioId: string, difficulty: number): string {
-  return wasm_new_observer_scenario_game(scenarioId, difficulty);
+export async function newObserverScenarioGame(scenarioId: string, difficulty: number): Promise<string> {
+  return call<string>('wasm_new_observer_scenario_game', scenarioId, difficulty);
 }
 
-export function setHumanPlayer(gameJson: string, nationIndex: number): string {
-  return wasm_set_human_player(gameJson, nationIndex);
+export async function setHumanPlayer(gameJson: string, nationIndex: number): Promise<string> {
+  return call<string>('wasm_set_human_player', gameJson, nationIndex);
 }
 
 export interface BulkTurnReport {
@@ -493,80 +428,80 @@ export interface BulkTurnResult {
   stopped_early: boolean;
 }
 
-export function processTurns(gameJson: string, count: number): BulkTurnResult {
-  return JSON.parse(wasm_process_turns(gameJson, count));
+export async function processTurns(gameJson: string, count: number): Promise<BulkTurnResult> {
+  return JSON.parse(await call<string>('wasm_process_turns', gameJson, count));
 }
 
-export function getDiplomacyOverlay(gameJson: string, nationId: number): DiplomacyOverlay | null {
-  const parsed = JSON.parse(wasm_get_diplomacy_overlay(gameJson, nationId));
+export async function getDiplomacyOverlay(gameJson: string, nationId: number): Promise<DiplomacyOverlay | null> {
+  const parsed = JSON.parse(await call<string>('wasm_get_diplomacy_overlay', gameJson, nationId));
   if (parsed.error || !parsed.relations) return null;
   return parsed;
 }
 
-export function getNewspaperArchive(gameJson: string): ArchivedNewspaper[] {
-  const parsed = JSON.parse(wasm_get_newspaper_archive(gameJson));
+export async function getNewspaperArchive(gameJson: string): Promise<ArchivedNewspaper[]> {
+  const parsed = JSON.parse(await call<string>('wasm_get_newspaper_archive', gameJson));
   if (parsed.error || !Array.isArray(parsed)) return [];
   return parsed;
 }
 
-export function getPoliticalSnapshot(gameJson: string, turn: number): PoliticalSnapshot | null {
-  const parsed = JSON.parse(wasm_get_political_snapshot(gameJson, turn));
+export async function getPoliticalSnapshot(gameJson: string, turn: number): Promise<PoliticalSnapshot | null> {
+  const parsed = JSON.parse(await call<string>('wasm_get_political_snapshot', gameJson, turn));
   if (parsed.error) return null;
   return parsed;
 }
 
-export function getBattleArchive(gameJson: string): ArchivedBattleTurn[] {
-  const parsed = JSON.parse(wasm_get_battle_data(gameJson));
+export async function getBattleArchive(gameJson: string): Promise<ArchivedBattleTurn[]> {
+  const parsed = JSON.parse(await call<string>('wasm_get_battle_data', gameJson));
   if (parsed.error || !Array.isArray(parsed)) return [];
   return parsed;
 }
 
-export function getAllGPLedgerData(gameJson: string): GPLedgerEntry[] {
-  const parsed = JSON.parse(wasm_get_all_gp_ledger_data(gameJson));
+export async function getAllGPLedgerData(gameJson: string): Promise<GPLedgerEntry[]> {
+  const parsed = JSON.parse(await call<string>('wasm_get_all_gp_ledger_data', gameJson));
   if (parsed.error || !Array.isArray(parsed)) return [];
   return parsed;
 }
 
-export function getLedgerData(gameJson: string, nationId: number): LedgerData | null {
-  const parsed = JSON.parse(wasm_get_ledger_data(gameJson, nationId));
+export async function getLedgerData(gameJson: string, nationId: number): Promise<LedgerData | null> {
+  const parsed = JSON.parse(await call<string>('wasm_get_ledger_data', gameJson, nationId));
   if (parsed.error) return null;
   return parsed;
 }
 
-export function getMilitaryOverlay(gameJson: string): MilitaryOverlayEntry[] {
-  const parsed = JSON.parse(wasm_get_military_overlay(gameJson));
+export async function getMilitaryOverlay(gameJson: string): Promise<MilitaryOverlayEntry[]> {
+  const parsed = JSON.parse(await call<string>('wasm_get_military_overlay', gameJson));
   if (!Array.isArray(parsed)) return [];
   return parsed;
 }
 
 // ── New query functions ──────────────────────────────────────────────
 
-export function getUnitsInProvince(gameJson: string, provinceId: number): ProvinceUnits | null {
-  const parsed = JSON.parse(wasm_get_units_in_province(gameJson, provinceId));
+export async function getUnitsInProvince(gameJson: string, provinceId: number): Promise<ProvinceUnits | null> {
+  const parsed = JSON.parse(await call<string>('wasm_get_units_in_province', gameJson, provinceId));
   if (parsed.error) return null;
   return parsed;
 }
 
-export function getCivilians(gameJson: string, nationId: number): CiviliansData | null {
-  const parsed = JSON.parse(wasm_get_civilians(gameJson, nationId));
+export async function getCivilians(gameJson: string, nationId: number): Promise<CiviliansData | null> {
+  const parsed = JSON.parse(await call<string>('wasm_get_civilians', gameJson, nationId));
   if (parsed.error) return null;
   return parsed;
 }
 
-export function getShips(gameJson: string, nationId: number): ShipsData | null {
-  const parsed = JSON.parse(wasm_get_ships(gameJson, nationId));
+export async function getShips(gameJson: string, nationId: number): Promise<ShipsData | null> {
+  const parsed = JSON.parse(await call<string>('wasm_get_ships', gameJson, nationId));
   if (parsed.error) return null;
   return parsed;
 }
 
-export function getValidMoveTargets(gameJson: string, nationId: number, unitId: number): ValidMoveTargets | null {
-  const parsed = JSON.parse(wasm_get_valid_move_targets(gameJson, nationId, unitId));
+export async function getValidMoveTargets(gameJson: string, nationId: number, unitId: number): Promise<ValidMoveTargets | null> {
+  const parsed = JSON.parse(await call<string>('wasm_get_valid_move_targets', gameJson, nationId, unitId));
   if (parsed.error) return null;
   return parsed;
 }
 
-export function getBuildableUnits(gameJson: string, nationId: number): BuildableUnits | null {
-  const parsed = JSON.parse(wasm_get_buildable_units(gameJson, nationId));
+export async function getBuildableUnits(gameJson: string, nationId: number): Promise<BuildableUnits | null> {
+  const parsed = JSON.parse(await call<string>('wasm_get_buildable_units', gameJson, nationId));
   if (parsed.error) return null;
   return parsed;
 }
@@ -591,38 +526,42 @@ function executeCommand(result: string): CommandResult {
   return { ok: true, gameJson: result };
 }
 
-export function queueUnitMove(gameJson: string, nationId: number, unitId: number, destProvinceId: number): CommandResult {
-  return executeCommand(wasm_queue_unit_move(gameJson, nationId, unitId, destProvinceId));
+async function runCmd(fn: string, ...args: any[]): Promise<CommandResult> {
+  return executeCommand(await call<string>(fn, ...args));
 }
 
-export function cancelUnitMove(gameJson: string, unitId: number): CommandResult {
-  return executeCommand(wasm_cancel_unit_move(gameJson, unitId));
+export async function queueUnitMove(gameJson: string, nationId: number, unitId: number, destProvinceId: number): Promise<CommandResult> {
+  return runCmd('wasm_queue_unit_move', gameJson, nationId, unitId, destProvinceId);
 }
 
-export function deployCivilian(gameJson: string, civilianId: number, q: number, r: number): CommandResult {
-  return executeCommand(wasm_deploy_civilian(gameJson, civilianId, q, r));
+export async function cancelUnitMove(gameJson: string, unitId: number): Promise<CommandResult> {
+  return runCmd('wasm_cancel_unit_move', gameJson, unitId);
 }
 
-export function recallCivilian(gameJson: string, civilianId: number): CommandResult {
-  return executeCommand(wasm_recall_civilian(gameJson, civilianId));
+export async function deployCivilian(gameJson: string, civilianId: number, q: number, r: number): Promise<CommandResult> {
+  return runCmd('wasm_deploy_civilian', gameJson, civilianId, q, r);
+}
+
+export async function recallCivilian(gameJson: string, civilianId: number): Promise<CommandResult> {
+  return runCmd('wasm_recall_civilian', gameJson, civilianId);
 }
 
 export type EngineerBuildKind = 'railroad' | 'depot' | 'port';
 
-export function engineerBuild(gameJson: string, civilianId: number, kind: EngineerBuildKind): CommandResult {
-  return executeCommand(wasm_engineer_build(gameJson, civilianId, kind));
+export async function engineerBuild(gameJson: string, civilianId: number, kind: EngineerBuildKind): Promise<CommandResult> {
+  return runCmd('wasm_engineer_build', gameJson, civilianId, kind);
 }
 
-export function recruitArmyUnit(gameJson: string, nationId: number, unitType: string): CommandResult {
-  return executeCommand(wasm_recruit_army_unit(gameJson, nationId, unitType));
+export async function recruitArmyUnit(gameJson: string, nationId: number, unitType: string): Promise<CommandResult> {
+  return runCmd('wasm_recruit_army_unit', gameJson, nationId, unitType);
 }
 
-export function hireCivilian(gameJson: string, nationId: number, civilianType: string): CommandResult {
-  return executeCommand(wasm_hire_civilian(gameJson, nationId, civilianType));
+export async function hireCivilian(gameJson: string, nationId: number, civilianType: string): Promise<CommandResult> {
+  return runCmd('wasm_hire_civilian', gameJson, nationId, civilianType);
 }
 
-export function buildShip(gameJson: string, nationId: number, shipType: string): CommandResult {
-  return executeCommand(wasm_build_ship(gameJson, nationId, shipType));
+export async function buildShip(gameJson: string, nationId: number, shipType: string): Promise<CommandResult> {
+  return runCmd('wasm_build_ship', gameJson, nationId, shipType);
 }
 
 // ── Transport types & functions ─────────────────────────────────────
@@ -651,18 +590,18 @@ export interface TransportData {
   deliveries: TransportDelivery[];
 }
 
-export function getTransportData(gameJson: string, nationId: number): TransportData | null {
-  const parsed = JSON.parse(wasm_get_transport_data(gameJson, nationId));
+export async function getTransportData(gameJson: string, nationId: number): Promise<TransportData | null> {
+  const parsed = JSON.parse(await call<string>('wasm_get_transport_data', gameJson, nationId));
   if (parsed.error) return null;
   return parsed;
 }
 
-export function buildFreightCar(gameJson: string, nationId: number): CommandResult {
-  return executeCommand(wasm_build_freight_car(gameJson, nationId));
+export async function buildFreightCar(gameJson: string, nationId: number): Promise<CommandResult> {
+  return runCmd('wasm_build_freight_car', gameJson, nationId);
 }
 
-export function setTransportAllocation(gameJson: string, nationId: number, resource: string, percentage: number): CommandResult {
-  return executeCommand(wasm_set_transport_allocation(gameJson, nationId, resource, percentage));
+export async function setTransportAllocation(gameJson: string, nationId: number, resource: string, percentage: number): Promise<CommandResult> {
+  return runCmd('wasm_set_transport_allocation', gameJson, nationId, resource, percentage);
 }
 
 // ── Industry types & functions ──────────────────────────────────────
@@ -707,14 +646,14 @@ export interface IndustryData {
   can_expand: Record<string, boolean>;
 }
 
-export function getIndustryData(gameJson: string, nationId: number): IndustryData | null {
-  const parsed = JSON.parse(wasm_get_industry_data(gameJson, nationId));
+export async function getIndustryData(gameJson: string, nationId: number): Promise<IndustryData | null> {
+  const parsed = JSON.parse(await call<string>('wasm_get_industry_data', gameJson, nationId));
   if (parsed.error) return null;
   return parsed;
 }
 
-export function expandBuilding(gameJson: string, nationId: number, buildingType: string): CommandResult {
-  return executeCommand(wasm_expand_building(gameJson, nationId, buildingType));
+export async function expandBuilding(gameJson: string, nationId: number, buildingType: string): Promise<CommandResult> {
+  return runCmd('wasm_expand_building', gameJson, nationId, buildingType);
 }
 
 // ── Trade types & functions ─────────────────────────────────────────
@@ -795,22 +734,22 @@ export interface TradeData {
   sellable_goods: SellableItem[];
 }
 
-export function getTradeData(gameJson: string, nationId: number): TradeData | null {
-  const parsed = JSON.parse(wasm_get_trade_data(gameJson, nationId));
+export async function getTradeData(gameJson: string, nationId: number): Promise<TradeData | null> {
+  const parsed = JSON.parse(await call<string>('wasm_get_trade_data', gameJson, nationId));
   if (parsed.error) return null;
   return parsed;
 }
 
-export function setTradeSubsidy(gameJson: string, nationId: number, targetNationId: number, amount: number): CommandResult {
-  return executeCommand(wasm_set_trade_subsidy(gameJson, nationId, targetNationId, BigInt(amount)));
+export async function setTradeSubsidy(gameJson: string, nationId: number, targetNationId: number, amount: number): Promise<CommandResult> {
+  return runCmd('wasm_set_trade_subsidy', gameJson, nationId, targetNationId, BigInt(amount));
 }
 
-export function setPlayerSellOrder(gameJson: string, nationId: number, commodityType: string, commodityName: string, quantity: number): CommandResult {
-  return executeCommand(wasm_set_player_sell_order(gameJson, nationId, commodityType, commodityName, quantity));
+export async function setPlayerSellOrder(gameJson: string, nationId: number, commodityType: string, commodityName: string, quantity: number): Promise<CommandResult> {
+  return runCmd('wasm_set_player_sell_order', gameJson, nationId, commodityType, commodityName, quantity);
 }
 
-export function setPlayerBuyOrder(gameJson: string, nationId: number, resource: string, quantity: number, maxPrice: number): CommandResult {
-  return executeCommand(wasm_set_player_buy_order(gameJson, nationId, resource, quantity, BigInt(maxPrice)));
+export async function setPlayerBuyOrder(gameJson: string, nationId: number, resource: string, quantity: number, maxPrice: number): Promise<CommandResult> {
+  return runCmd('wasm_set_player_buy_order', gameJson, nationId, resource, quantity, BigInt(maxPrice));
 }
 
 // ── Diplomacy Screen types & functions ──────────────────────────────
@@ -854,42 +793,42 @@ export interface DiplomacyScreenData {
   relations: DiplomacyScreenRelation[];
 }
 
-export function getDiplomacyScreenData(gameJson: string, nationId: number): DiplomacyScreenData | null {
-  const parsed = JSON.parse(wasm_get_diplomacy_screen_data(gameJson, nationId));
+export async function getDiplomacyScreenData(gameJson: string, nationId: number): Promise<DiplomacyScreenData | null> {
+  const parsed = JSON.parse(await call<string>('wasm_get_diplomacy_screen_data', gameJson, nationId));
   if (parsed.error) return null;
   return parsed;
 }
 
-export function diplomacyBuildConsulate(gameJson: string, nationId: number, targetId: number): CommandResult {
-  return executeCommand(wasm_diplomacy_build_consulate(gameJson, nationId, targetId));
+export async function diplomacyBuildConsulate(gameJson: string, nationId: number, targetId: number): Promise<CommandResult> {
+  return runCmd('wasm_diplomacy_build_consulate', gameJson, nationId, targetId);
 }
 
-export function diplomacyBuildEmbassy(gameJson: string, nationId: number, targetId: number): CommandResult {
-  return executeCommand(wasm_diplomacy_build_embassy(gameJson, nationId, targetId));
+export async function diplomacyBuildEmbassy(gameJson: string, nationId: number, targetId: number): Promise<CommandResult> {
+  return runCmd('wasm_diplomacy_build_embassy', gameJson, nationId, targetId);
 }
 
-export function diplomacyProposeNap(gameJson: string, nationId: number, targetId: number): CommandResult {
-  return executeCommand(wasm_diplomacy_propose_nap(gameJson, nationId, targetId));
+export async function diplomacyProposeNap(gameJson: string, nationId: number, targetId: number): Promise<CommandResult> {
+  return runCmd('wasm_diplomacy_propose_nap', gameJson, nationId, targetId);
 }
 
-export function diplomacyProposeAlliance(gameJson: string, nationId: number, targetId: number): CommandResult {
-  return executeCommand(wasm_diplomacy_propose_alliance(gameJson, nationId, targetId));
+export async function diplomacyProposeAlliance(gameJson: string, nationId: number, targetId: number): Promise<CommandResult> {
+  return runCmd('wasm_diplomacy_propose_alliance', gameJson, nationId, targetId);
 }
 
-export function diplomacyDeclareWar(gameJson: string, nationId: number, targetId: number): CommandResult {
-  return executeCommand(wasm_diplomacy_declare_war(gameJson, nationId, targetId));
+export async function diplomacyDeclareWar(gameJson: string, nationId: number, targetId: number): Promise<CommandResult> {
+  return runCmd('wasm_diplomacy_declare_war', gameJson, nationId, targetId);
 }
 
-export function diplomacySendGrant(gameJson: string, nationId: number, targetId: number, amount: number): CommandResult {
-  return executeCommand(wasm_diplomacy_send_grant(gameJson, nationId, targetId, BigInt(amount)));
+export async function diplomacySendGrant(gameJson: string, nationId: number, targetId: number, amount: number): Promise<CommandResult> {
+  return runCmd('wasm_diplomacy_send_grant', gameJson, nationId, targetId, BigInt(amount));
 }
 
-export function diplomacyBreakTreaty(gameJson: string, nationId: number, targetId: number, treatyType: string): CommandResult {
-  return executeCommand(wasm_diplomacy_break_treaty(gameJson, nationId, targetId, treatyType));
+export async function diplomacyBreakTreaty(gameJson: string, nationId: number, targetId: number, treatyType: string): Promise<CommandResult> {
+  return runCmd('wasm_diplomacy_break_treaty', gameJson, nationId, targetId, treatyType);
 }
 
-export function diplomacyProposePeace(gameJson: string, nationId: number, targetId: number): CommandResult {
-  return executeCommand(wasm_diplomacy_propose_peace(gameJson, nationId, targetId));
+export async function diplomacyProposePeace(gameJson: string, nationId: number, targetId: number): Promise<CommandResult> {
+  return runCmd('wasm_diplomacy_propose_peace', gameJson, nationId, targetId);
 }
 
 // ── Proposal Modal types & functions ────────────────────────────────
@@ -909,16 +848,16 @@ export interface ProposalData {
   proposals: PendingProposal[];
 }
 
-export function getPendingProposals(gameJson: string, nationId: number): ProposalData | null {
-  const parsed = JSON.parse(wasm_get_pending_proposals(gameJson, nationId));
+export async function getPendingProposals(gameJson: string, nationId: number): Promise<ProposalData | null> {
+  const parsed = JSON.parse(await call<string>('wasm_get_pending_proposals', gameJson, nationId));
   if (parsed.error) return null;
   return parsed;
 }
 
-export function acceptProposal(gameJson: string, nationId: number, proposalIndex: number): CommandResult {
-  return executeCommand(wasm_accept_proposal(gameJson, nationId, proposalIndex));
+export async function acceptProposal(gameJson: string, nationId: number, proposalIndex: number): Promise<CommandResult> {
+  return runCmd('wasm_accept_proposal', gameJson, nationId, proposalIndex);
 }
 
-export function rejectProposal(gameJson: string, nationId: number, proposalIndex: number): CommandResult {
-  return executeCommand(wasm_reject_proposal(gameJson, nationId, proposalIndex));
+export async function rejectProposal(gameJson: string, nationId: number, proposalIndex: number): Promise<CommandResult> {
+  return runCmd('wasm_reject_proposal', gameJson, nationId, proposalIndex);
 }
