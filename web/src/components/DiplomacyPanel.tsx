@@ -60,6 +60,7 @@ export default function DiplomacyPanel({
           <NationRow
             key={rel.nation_id}
             rel={rel}
+            playerAlreadyAtWar={diplomacy.player_already_at_war}
             isExpanded={expandedNation === rel.nation_id && !rel.is_in_anarchy}
             confirmWar={confirmWar === rel.nation_id}
             onToggle={() => setExpandedNation(expandedNation === rel.nation_id ? null : rel.nation_id)}
@@ -88,6 +89,7 @@ export default function DiplomacyPanel({
 
 interface NationRowProps {
   rel: DiplomacyScreenRelation;
+  playerAlreadyAtWar: boolean;
   isExpanded: boolean;
   confirmWar: boolean;
   onToggle: () => void;
@@ -103,7 +105,7 @@ interface NationRowProps {
 }
 
 function NationRow({
-  rel, isExpanded, confirmWar, onToggle,
+  rel, playerAlreadyAtWar, isExpanded, confirmWar, onToggle,
   onBuildConsulate, onBuildEmbassy, onProposeNap, onProposeAlliance,
   onDeclareWar, onCancelWar, onSendGrant, onBreakTreaty, onProposePeace,
 }: NationRowProps) {
@@ -191,6 +193,9 @@ function NationRow({
             {actions.can_declare_war && !confirmWar && (
               <ActionBtn label="Declare War" onClick={onDeclareWar} color="#a33" />
             )}
+            {!actions.can_declare_war && !confirmWar && !rel.at_war && !rel.is_in_anarchy && playerAlreadyAtWar && (
+              <ActionBtn label="Declare War" onClick={() => {}} color="#a33" disabled title="Already at war with another nation — make peace first" />
+            )}
             {confirmWar && (
               <div style={{ width: '100%', fontSize: 11, color: '#e44', marginTop: 2 }}>
                 Breaks all treaties. Sure?
@@ -205,13 +210,17 @@ function NationRow({
   );
 }
 
-function ActionBtn({ label, onClick, color }: { label: string; onClick: () => void; color?: string }) {
+function ActionBtn({ label, onClick, color, disabled, title }: { label: string; onClick: () => void; color?: string; disabled?: boolean; title?: string }) {
   return (
     <button
-      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      onClick={(e) => { e.stopPropagation(); if (!disabled) onClick(); }}
+      disabled={disabled}
+      title={title}
       style={{
         background: color || '#3a3520', color: '#e0d8c0', border: 'none',
-        borderRadius: 2, padding: '2px 5px', fontSize: 10, cursor: 'pointer',
+        borderRadius: 2, padding: '2px 5px', fontSize: 10,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.4 : 1,
       }}
     >
       {label}

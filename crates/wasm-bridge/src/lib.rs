@@ -3201,6 +3201,7 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
     serde_json::json!({
         "player_standing": player_standing,
         "treasury": treasury,
+        "player_already_at_war": player_already_at_war,
         "relations": relations,
     })
     .to_string()

@@ -850,6 +850,7 @@ export interface DiplomacyScreenRelation {
 export interface DiplomacyScreenData {
   player_standing: number;
   treasury: number;
+  player_already_at_war: boolean;
   relations: DiplomacyScreenRelation[];
 }
 
