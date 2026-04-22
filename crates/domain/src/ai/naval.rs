@@ -65,6 +65,7 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
         nation.consume_material(MaterialType::Lumber, lumber_need);
         nation.consume_material(MaterialType::Arms, arms_need);
         nation.warships.push(ship);
+        nation.warships_built += 1;
         return true;
     }
     false

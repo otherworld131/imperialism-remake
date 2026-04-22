@@ -4358,12 +4358,14 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
             .map(|n| n.name.clone())
             .unwrap_or_else(|| "Unknown".to_string());
 
-        // Update surviving fleets
+        // Update surviving fleets and record losses
         if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
             attacker_nation.warships = result.attacker_survivors.clone();
+            attacker_nation.warships_lost += result.attacker_ships_lost.len() as u32;
         }
         if let Some(defender_nation) = game.get_nation_mut(defender_id) {
             defender_nation.warships = result.defender_survivors.clone();
+            defender_nation.warships_lost += result.defender_ships_lost.len() as u32;
         }
 
         // Add headline

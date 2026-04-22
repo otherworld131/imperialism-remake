@@ -95,6 +95,12 @@ pub struct Nation {
     /// Number of Generals already earned (tracks reward thresholds).
     #[serde(default)]
     pub generals_earned: u32,
+    /// Total warships built (debug telemetry — tracks AI naval investment).
+    #[serde(default)]
+    pub warships_built: u32,
+    /// Total warships lost in combat (debug telemetry).
+    #[serde(default)]
+    pub warships_lost: u32,
     /// Total Ships-of-the-Line built (tracked for Admiral rewards).
     #[serde(default)]
     pub total_ships_of_the_line_built: u32,
@@ -182,6 +188,8 @@ impl Nation {
             capitol_bonus_capacity: 0,
             total_arms_built: 0,
             generals_earned: 0,
+            warships_built: 0,
+            warships_lost: 0,
             total_ships_of_the_line_built: 0,
             admirals_earned: 0,
             has_colony: false,

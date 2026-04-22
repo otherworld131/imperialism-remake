@@ -39,6 +39,8 @@ pub(crate) struct NationSnapshot {
     total_factory_capacity: u32,
     other_buildings: usize,
     warships: usize,
+    warships_built: u32,
+    warships_lost: u32,
     merchant_ships: usize,
     freight_cars: u32,
     tech_count: usize,
@@ -49,6 +51,12 @@ pub(crate) struct NationSnapshot {
     naps: usize,
     active_wars: usize,
     provinces_gained: i32,
+    // Material stockpiles for naval debug (fabric+lumber+arms needed to build a frigate;
+    // steel can be converted to arms so it's included too)
+    fabric: u32,
+    lumber: u32,
+    arms: u32,
+    steel: u32,
 }
 
 #[derive(serde::Serialize)]
@@ -174,6 +182,8 @@ fn take_snapshot(
                 total_factory_capacity,
                 other_buildings,
                 warships: nation.warships.len(),
+                warships_built: nation.warships_built,
+                warships_lost: nation.warships_lost,
                 merchant_ships: nation.merchant_fleet.len(),
                 freight_cars: nation.transport.freight_cars,
                 tech_count: nation.researched_techs.len(),
@@ -185,6 +195,10 @@ fn take_snapshot(
                 active_wars,
                 provinces_gained: nation.province_count() as i32
                     - *starting_provinces.get(&nation.id).unwrap_or(&0) as i32,
+                fabric: nation.material_amount(domain::types::MaterialType::Fabric),
+                lumber: nation.material_amount(domain::types::MaterialType::Lumber),
+                arms: nation.material_amount(domain::types::MaterialType::Arms),
+                steel: nation.material_amount(domain::types::MaterialType::Steel),
             },
         );
     }
