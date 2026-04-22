@@ -139,7 +139,7 @@ function App() {
   const [disableFogOfWar, setDisableFogOfWar] = useState(false);
   const [newsFilterCategory, setNewsFilterCategory] = useState<string>('all');
   const [newsFilterCountry, setNewsFilterCountry] = useState<string>('all');
-  const [mapMode, setMapMode] = useState<MapMode>('terrain');
+  const [mapMode, setMapMode] = useState<MapMode>('political');
   const [selectedNation, setSelectedNation] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<string>('');
   const [diplomacyOverlay, setDiplomacyOverlay] = useState<DiplomacyOverlay | null>(null);
