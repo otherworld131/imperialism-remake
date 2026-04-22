@@ -28,6 +28,12 @@ pub struct DiplomaticRelation {
     pub has_embassy: bool,   // embassy established (GP->MN, costs $5000)
     pub active_treaties: Vec<TreatyType>,
     pub at_war: bool,
+    /// Turn the current war was declared, if any. Used to grant a one-turn
+    /// grace period before naval combat begins (card #104). `None` means
+    /// either there is no war, or the war is older than the just-declared
+    /// turn — combat resolves normally.
+    #[serde(default)]
+    pub turn_war_declared: Option<TurnNumber>,
 }
 
 /// Records an alliance that was broken because one side made separate peace.
@@ -49,7 +55,16 @@ impl DiplomaticRelation {
             has_embassy: false,
             active_treaties: Vec::new(),
             at_war: false,
+            turn_war_declared: None,
         }
+    }
+
+    /// Whether hostile actions (naval combat, blockade, …) should apply on
+    /// `current_turn` for this war. Returns false during the one-turn grace
+    /// period after declaration (card #104): the defender always gets one
+    /// turn before any enemy action takes effect.
+    pub fn hostilities_active_on(&self, current_turn: TurnNumber) -> bool {
+        self.at_war && self.turn_war_declared != Some(current_turn)
     }
 
     /// Improve the diplomatic score by the given amount, clamping to [-100, 100].
@@ -376,6 +391,12 @@ impl DiplomacyState {
     /// Declare war between attacker and defender.
     /// Sets at_war flag, reduces the diplomatic score to minimum,
     /// and breaks all active treaties between the two nations.
+    ///
+    /// Production callers should prefer [`declare_war_at`] to record the
+    /// declaration turn and enable the one-turn naval combat grace period.
+    /// This 2-arg variant leaves `turn_war_declared = None`, so naval
+    /// combat begins immediately — appropriate for tests that don't want
+    /// to model the grace period.
     pub fn declare_war(&mut self, attacker: NationId, defender: NationId) {
         // Break all treaties first
         let treaties_to_break: Vec<TreatyType> = self
@@ -395,6 +416,26 @@ impl DiplomacyState {
         let rel = self.ensure_relation(attacker, defender);
         rel.at_war = true;
         rel.score = -100;
+        // Explicitly clear any stale grace-period stamp left over from a
+        // prior war on this same relation. Production callers should use
+        // `declare_war_at` to re-stamp; this keeps the legacy 2-arg form
+        // deterministic for tests that do not care about the grace turn.
+        rel.turn_war_declared = None;
+    }
+
+    /// Declare war and stamp the current turn so naval combat is deferred
+    /// by one turn (card #104). Production callers should always use this
+    /// variant; tests that don't care about the grace period may use the
+    /// 2-arg [`declare_war`].
+    pub fn declare_war_at(
+        &mut self,
+        attacker: NationId,
+        defender: NationId,
+        current_turn: TurnNumber,
+    ) {
+        self.declare_war(attacker, defender);
+        let rel = self.ensure_relation(attacker, defender);
+        rel.turn_war_declared = Some(current_turn);
     }
 
     /// Queue peace between two nations without finalizing any same-turn
@@ -427,6 +468,10 @@ impl DiplomacyState {
 
         let rel = self.ensure_relation(a, b);
         rel.at_war = false;
+        // Clear the declaration timestamp so a future war (which will be
+        // declared via `declare_war_at` again) doesn't inherit a stale
+        // grace-period stamp from the prior conflict.
+        rel.turn_war_declared = None;
 
         for broken in broken_alliances {
             let already_pending = self.pending_separate_peace_breaks.contains(&broken);
@@ -685,6 +730,24 @@ impl DiplomacyState {
         self.relations
             .values()
             .any(|rel| rel.at_war && (rel.nation_a == nation || rel.nation_b == nation))
+    }
+
+    /// Check whether `nation` is at war with someone other than `excluded`.
+    /// Used to detect target-side allies that are tied up in another conflict.
+    pub fn is_at_war_with_anyone_except(&self, nation: NationId, excluded: NationId) -> bool {
+        self.relations.values().any(|rel| {
+            if !rel.at_war {
+                return false;
+            }
+            let other = if rel.nation_a == nation {
+                Some(rel.nation_b)
+            } else if rel.nation_b == nation {
+                Some(rel.nation_a)
+            } else {
+                None
+            };
+            matches!(other, Some(o) if o != excluded)
+        })
     }
 }
 

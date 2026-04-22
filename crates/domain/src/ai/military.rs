@@ -311,90 +311,46 @@ pub(crate) fn ai_build_military(
     }
 }
 
-/// Estimate the defensive firepower the AI would face attacking the target's
-/// strongest province. Approximates `resolve_battle_with_targeting()` formula:
-///
-///   defender_fp = total_fp(units) * 1.2 * (1 + terrain) * (1 + effective_fort) + militia_count * 8
-///
-/// Uses the **strongest single province garrison** (not sum of all provinces),
-/// since the AI attacks one province at a time. The field army is combined with
-/// garrison base FP before applying multipliers (matching combat).
-///
-/// Note: General force-level bonus (5% per medal) is intentionally omitted —
-/// it requires knowing the defending force composition and is a minor effect.
-fn estimate_target_defense(game: &GameState, attacker_id: NationId, target_id: NationId) -> f64 {
-    let target = match game.get_nation(target_id) {
-        Some(n) => n,
-        None => return 0.0,
-    };
+/// Compute the (attacker, target) coalition firepower used by the war-decision
+/// `army_ratio`. Both sides include allies; for minor targets the defending
+/// coalition also includes NAP pact-defense holders. Cards #115/#116:
+/// target-side allies that are currently at war with someone other than the
+/// attacker are half-credited (tied up in another conflict). Anarchic nations
+/// are excluded from both coalitions — an anarchic state has no offensive
+/// military capability and cannot reinforce or be reinforced. The target
+/// itself contributes its raw firepower regardless (anarchy on the target is
+/// rare and the loop above already gates anarchic targets out).
+pub(crate) fn coalition_firepower_for_war_decision(
+    game: &GameState,
+    attacker: NationId,
+    target: NationId,
+) -> (f64, f64) {
+    let is_anarchic = |id: NationId| game.get_nation(id).is_some_and(|n| n.is_in_anarchy);
 
-    // Check if attacker has siege artillery (reduces fort bonus by 50%)
-    let attacker_has_siege = game
-        .get_nation(attacker_id)
-        .map(|n| {
-            n.army.iter().any(|u| {
-                u.unit_type == ArmyUnitType::SiegeArtillery
-                    || u.unit_type == ArmyUnitType::RailroadGun
-            })
+    let our_coalition = super::assessment::collect_hypothetical_coalition(game, attacker, target);
+    let target_coalition =
+        super::assessment::collect_target_hypothetical_coalition(game, attacker, target);
+    let our_military: f64 = our_coalition
+        .iter()
+        .filter(|&&id| id == attacker || !is_anarchic(id))
+        .map(|&id| super::assessment::nation_military_score(game, id, 0.0))
+        .sum();
+    let target_military: f64 = target_coalition
+        .iter()
+        .filter(|&&id| id == target || !is_anarchic(id))
+        .map(|&id| {
+            let raw = super::assessment::nation_military_score(game, id, 0.0);
+            if id == target {
+                return raw;
+            }
+            if game.diplomacy.is_at_war_with_anyone_except(id, attacker) {
+                raw * 0.5
+            } else {
+                raw
+            }
         })
-        .unwrap_or(false);
-
-    // Field army base firepower (defenders concentrate in the attacked province,
-    // so the full field army participates in combat alongside the garrison)
-    let army_fp: f64 = target.total_military_firepower();
-
-    // Evaluate each province and find the strongest defensive position.
-    // In combat, all defending units (field army + garrison) are combined into
-    // one force, then: total_fp * 1.2 * (1 + terrain) * (1 + fort) + militia * 8
-    let is_minor = !target.is_great_power();
-    let mut best_defense = 0.0f64;
-    for &pid in &target.province_ids {
-        if let Some(prov) = game.get_province(pid) {
-            let militia_count = prov.garrison_count as f64;
-
-            // Garrison base FP: militia (FP 1 each) + garrison artillery (FP 4)
-            let mut garrison_base = militia_count * 1.0;
-            if is_minor && pid == target.capital_province_id {
-                garrison_base += 4.0; // GarrisonArtillery
-            }
-
-            // Combined base FP (field army + garrison, as in combat)
-            let combined_base = army_fp + garrison_base;
-
-            // Apply multipliers to combined base (mirrors resolve_battle_with_targeting)
-            let mut multiplied = combined_base * 1.2; // 1.2x defender bonus
-
-            // Terrain bonus on capital tile
-            if let Some(tile) = game.hex_map.get_tile(prov.capital_tile) {
-                let terrain_bonus = crate::military::combat::terrain_defense_bonus(tile.terrain());
-                multiplied *= 1.0 + terrain_bonus;
-
-                // Fort bonus (reduced by siege artillery, matching combat)
-                if tile.infrastructure.has_fort {
-                    let fort_bonus = crate::military::combat::effective_fort_bonus(
-                        tile.infrastructure.fort_level,
-                        attacker_has_siege,
-                    );
-                    multiplied *= 1.0 + fort_bonus;
-                }
-            }
-
-            // Militia bonus added AFTER multipliers (matches combat formula)
-            let prov_defense = multiplied + militia_count * 8.0;
-
-            if prov_defense > best_defense {
-                best_defense = prov_defense;
-            }
-        }
-    }
-
-    // If target has no provinces tracked in province_ids (test fixtures),
-    // fall back to just the field army with defender bonus
-    if best_defense == 0.0 && army_fp > 0.0 {
-        best_defense = army_fp * 1.2;
-    }
-
-    best_defense
+        .sum();
+    (our_military, target_military)
 }
 
 /// Unified war-declaration logic with cooldown + need/opportunity scoring.
@@ -607,11 +563,6 @@ pub(crate) fn ai_declare_wars(
         }
 
         // ── 4. Target evaluation ───────────────────────────────
-        let ai_provinces = game
-            .get_nation(ai_id)
-            .map(|n| n.province_count())
-            .unwrap_or(0);
-
         // Collect AI warehouse resources for need scoring
         let ai_resources: std::collections::HashSet<ResourceType> = game
             .get_nation(ai_id)
@@ -634,9 +585,7 @@ pub(crate) fn ai_declare_wars(
             resource_bonus: f64,
             missing_count: usize,
             army_ratio: f64,
-            province_bonus: f64,
             at_war_bonus: f64,
-            coalition_factor: f64,
             relationship_penalty: f64,
         }
 
@@ -763,30 +712,20 @@ pub(crate) fn ai_declare_wars(
             let need_score = (base_need + resource_bonus).min(1.0);
 
             // ── opportunity_score ──────────────────────────────
-            // Compare attacker firepower to estimated total defense (including garrison)
-            let ai_fp = game
-                .get_nation(ai_id)
-                .map(|n| n.total_military_firepower())
-                .unwrap_or(0.0);
-            let target_defense = estimate_target_defense(game, ai_id, target_id);
-            // Symmetric advantage ratio: 0 for parity, 1 for unopposed, clamps
-            // to 0 when defender is stronger. Scales smoothly regardless of
-            // absolute army sizes (the old `1 - td/(fp+1)` form collapsed to
-            // ~0 at parity when armies were large). When both sides have zero
-            // firepower, treat as parity (0.0) rather than unopposed — a
-            // force with no army has no "opportunity" to attack anyone.
-            let army_ratio = if ai_fp + target_defense > 0.0 {
-                ((ai_fp - target_defense) / (ai_fp + target_defense)).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            // Scaled province advantage: "much larger empire" now scores more
-            // than "one more province". Excess provinces / target's size gives
-            // a 1-to-1 ratio at 2x size (0.2), capped at 0.4 (5x+ size).
-            let province_bonus = if ai_provinces > target_provinces {
-                let excess = (ai_provinces - target_provinces) as f64;
-                let base = target_provinces.max(1) as f64;
-                ((excess / base) * 0.2).min(0.4)
+            // Card #115/#116: army_ratio compares like-for-like coalition
+            // firepower. Both sides include allies, both sides are raw FP
+            // (no defender bonus, no terrain/fort multipliers — those are
+            // tactical, not strategic, and inflating the defender's score
+            // here was making army_ratio always clamp to 0). For minor
+            // targets, the target coalition also includes NAP pact-defense
+            // holders (any of them might intervene).
+            let (our_military, target_military) =
+                coalition_firepower_for_war_decision(game, ai_id, target_id);
+            // Symmetric advantage ratio: 0 for parity, 1 for unopposed,
+            // clamps to 0 when defender (with allies) is stronger.
+            let army_ratio = if our_military + target_military > 0.0 {
+                ((our_military - target_military) / (our_military + target_military))
+                    .clamp(0.0, 1.0)
             } else {
                 0.0
             };
@@ -801,18 +740,7 @@ pub(crate) fn ai_declare_wars(
                         .unwrap_or(false)
             });
             let at_war_bonus = if target_at_war_with_other { 0.3 } else { 0.0 };
-            let opportunity_score = (army_ratio + province_bonus + at_war_bonus).clamp(0.0, 1.0);
-
-            // ── coalition_factor ────────────────────────────────
-            // Evaluate hypothetical coalition strengths (us+allies vs them+allies)
-            let hypothetical = super::assessment::evaluate_hypothetical_war(
-                game,
-                ai_id,
-                target_id,
-                #[cfg(feature = "lua")]
-                lua_cfg.as_ref(),
-            );
-            let coalition_factor = hypothetical.power_ratio.clamp(0.0, 2.0) / 2.0;
+            let opportunity_score = (army_ratio + at_war_bonus).clamp(0.0, 1.0);
 
             // ── relationship_penalty ──────────────────────────
             let mut relationship_penalty = 0.0f64;
@@ -831,9 +759,24 @@ pub(crate) fn ai_declare_wars(
                 }
             }
 
-            // Conflicting alliance penalty: if any of our allies are also allied with target
-            let our_allies = game.diplomacy.get_allies(ai_id);
-            let target_allies = game.diplomacy.get_allies(target_id);
+            // Conflicting alliance penalty: if any of our (non-anarchic)
+            // allies are also allied with the target. Anarchic shared allies
+            // would not actually intervene, so they should not register as a
+            // diplomatic obstacle either — matches the coalition-firepower
+            // and pact-defense filters.
+            let is_active = |id: NationId| !game.get_nation(id).is_some_and(|n| n.is_in_anarchy);
+            let our_allies: Vec<NationId> = game
+                .diplomacy
+                .get_allies(ai_id)
+                .into_iter()
+                .filter(|&id| is_active(id))
+                .collect();
+            let target_allies: Vec<NationId> = game
+                .diplomacy
+                .get_allies(target_id)
+                .into_iter()
+                .filter(|&id| is_active(id))
+                .collect();
             let conflicted = our_allies.iter().any(|a| target_allies.contains(a));
             if conflicted {
                 relationship_penalty += 0.5;
@@ -843,12 +786,20 @@ pub(crate) fn ai_declare_wars(
             // each pact holder may choose to intervene militarily.
             // Penalty scales with protector's military strength relative to ours —
             // a weak protector is less of a deterrent than a strong one.
+            // Anarchic protectors are skipped: a collapsed government cannot
+            // mount a defense (matches the coalition firepower exclusion).
             if !target_is_gp {
+                let ai_fp = game
+                    .get_nation(ai_id)
+                    .map(|n| n.total_military_firepower())
+                    .unwrap_or(0.0);
                 let protectors: Vec<NationId> = game
                     .diplomacy
                     .get_pact_holders(target_id)
                     .into_iter()
-                    .filter(|&pid| pid != ai_id)
+                    .filter(|&pid| {
+                        pid != ai_id && !game.get_nation(pid).is_some_and(|n| n.is_in_anarchy)
+                    })
                     .collect();
                 for &protector_id in &protectors {
                     let protector_fp = game
@@ -868,10 +819,11 @@ pub(crate) fn ai_declare_wars(
             relationship_penalty = relationship_penalty.clamp(0.0, 2.5);
 
             // ── combined_score ─────────────────────────────────
-            // Coalition factor modulates opportunity: weak coalition dampens opportunity
-            let combined_score = need_score
-                + opportunity_score * opportunism_weight * coalition_factor
-                - relationship_penalty;
+            // Coalition strength is now baked into army_ratio (Fix #115),
+            // so combined_score is a clean weighted sum of need + opportunity
+            // minus relationship penalties.
+            let combined_score =
+                need_score + opportunity_score * opportunism_weight - relationship_penalty;
 
             let candidate_snapshot = Candidate {
                 target_id,
@@ -882,9 +834,7 @@ pub(crate) fn ai_declare_wars(
                 resource_bonus,
                 missing_count,
                 army_ratio,
-                province_bonus,
                 at_war_bonus,
-                coalition_factor,
                 relationship_penalty,
             };
 
@@ -930,8 +880,8 @@ pub(crate) fn ai_declare_wars(
                     reason: format!(
                         "best candidate {} scored combined {:.2} < threshold {:.2}\n  \
                          need {:.2} = base_need {:.2} (target provinces / 5) + resource_bonus {:.2} ({} missing resources)\n  \
-                         opportunity {:.2} = army_ratio {:.2} + province_bonus {:.2} + at_war_bonus {:.2}\n  \
-                         combined = need + opportunity \u{00d7} opportunism_weight {:.2} \u{00d7} coalition_factor {:.2} \u{2212} relationship_penalty {:.2}\n  \
+                         opportunity {:.2} = army_ratio {:.2} + at_war_bonus {:.2}\n  \
+                         combined = need + opportunity \u{00d7} opportunism_weight {:.2} \u{2212} relationship_penalty {:.2}\n  \
                          \u{2192} combined below threshold, war not declared",
                         target_name,
                         c.combined_score,
@@ -942,10 +892,8 @@ pub(crate) fn ai_declare_wars(
                         c.missing_count,
                         c.opportunity_score,
                         c.army_ratio,
-                        c.province_bonus,
                         c.at_war_bonus,
                         opportunism_weight,
-                        c.coalition_factor,
                         c.relationship_penalty,
                     ),
                     is_non_action: true,
@@ -976,7 +924,7 @@ pub(crate) fn ai_declare_wars(
                             "blocked by early-game opportunity floor: \
                              opportunity {:.2} < floor {:.2} (decays {:.2} \u{2192} {:.2} over {} turns)\n  \
                              need {:.2} = base_need {:.2} + resource_bonus {:.2} ({} missing resources)\n  \
-                             opportunity = army_ratio {:.2} + province_bonus {:.2} + at_war_bonus {:.2}\n  \
+                             opportunity = army_ratio {:.2} + at_war_bonus {:.2}\n  \
                              \u{2192} attacking a peer at parity is too risky; trade fulfills resources without war",
                             c.opportunity_score,
                             min_opportunity_for_war,
@@ -988,7 +936,6 @@ pub(crate) fn ai_declare_wars(
                             c.resource_bonus,
                             c.missing_count,
                             c.army_ratio,
-                            c.province_bonus,
                             c.at_war_bonus,
                         ),
                         is_non_action: false,
@@ -1095,7 +1042,8 @@ pub(crate) fn ai_declare_wars(
                 attacker_name, target_name, ai_army, standing, candidate.combined_score,
             );
         }
-        game.diplomacy.declare_war(ai_id, target_id);
+        let turn = game.turn;
+        game.diplomacy.declare_war_at(ai_id, target_id, turn);
         game.pending_attacks.push((ai_id, attack_province));
         targeted_this_round.push(target_id);
         actions.push(super::AiAction {
@@ -1103,8 +1051,8 @@ pub(crate) fn ai_declare_wars(
             reason: format!(
                 "combined {:.2} > threshold {:.2}\n  \
                  need {:.2} = base_need {:.2} (target provinces / 5) + resource_bonus {:.2} ({} missing resources)\n  \
-                 opportunity {:.2} = army_ratio {:.2} (firepower advantage) + province_bonus {:.2} (larger empire) + at_war_bonus {:.2} (target already at war)\n  \
-                 combined = need + opportunity \u{00d7} opportunism_weight {:.2} \u{00d7} coalition_factor {:.2} (ally power ratio) \u{2212} relationship_penalty {:.2} (standing / treaties / pact-defense risk)",
+                 opportunity {:.2} = army_ratio {:.2} (coalition firepower advantage, allies in other wars half-counted) + at_war_bonus {:.2} (target already at war)\n  \
+                 combined = need + opportunity \u{00d7} opportunism_weight {:.2} \u{2212} relationship_penalty {:.2} (standing / treaties / pact-defense risk)",
                 candidate.combined_score,
                 war_threshold,
                 candidate.need_score,
@@ -1113,10 +1061,8 @@ pub(crate) fn ai_declare_wars(
                 candidate.missing_count,
                 candidate.opportunity_score,
                 candidate.army_ratio,
-                candidate.province_bonus,
                 candidate.at_war_bonus,
                 opportunism_weight,
-                candidate.coalition_factor,
                 candidate.relationship_penalty,
             ),
             is_non_action: false,
@@ -1805,7 +1751,8 @@ mod tests {
         let mut game = test_game_with_ai_and_minor();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Balanced);
-        // Match the minor's garrison FP so opportunity = 0.
+        // Match the minor's field army so opportunity ~ 0 (army_ratio
+        // compares raw field firepower like-for-like, no defender bonus).
         for i in 0..4 {
             ai.army.push(ArmyUnit::new(
                 UnitId(5000 + i),
@@ -1820,6 +1767,23 @@ mod tests {
                 ArmyUnitType::LightArtillery,
                 NationId(2),
                 ProvinceId(2),
+            ));
+        }
+        let minor = game.get_nation_mut(NationId(3)).unwrap();
+        for i in 0..4 {
+            minor.army.push(ArmyUnit::new(
+                UnitId(6000 + i),
+                ArmyUnitType::Regulars,
+                NationId(3),
+                ProvinceId(3),
+            ));
+        }
+        for i in 0..2 {
+            minor.army.push(ArmyUnit::new(
+                UnitId(6100 + i),
+                ArmyUnitType::LightArtillery,
+                NationId(3),
+                ProvinceId(3),
             ));
         }
         game.turn = TurnNumber::new(1);
@@ -1890,129 +1854,238 @@ mod tests {
         );
     }
 
-    // ── Card #107: army_ratio and province_bonus scaling ─────
-
     #[test]
-    fn province_bonus_scales_with_size_advantage() {
-        // Verify the scaled formula by checking the non-action reason text
-        // for two different size gaps: marginal (2 vs 1) vs large (5 vs 1).
-        // The reason string exposes the province_bonus value, letting us
-        // assert scaling without extracting the formula into a helper.
+    fn coalition_firepower_includes_allies_and_discounts_busy_ones() {
+        // Card #115: target coalition firepower must include the target's
+        // allies, AND allies tied up in another war must be half-credited.
+        use crate::events::TreatyType;
         use crate::hex::HexCoord;
         use crate::map::Province;
         use crate::map::tile::Tile;
-
-        // Build: AI (NationId 2) with 5 provinces vs target minor with 1.
-        let mut hex_map = crate::map::HexMap::new(20, 20);
-        hex_map.set_tile(
-            HexCoord::new(0, 0),
-            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
-        );
-        for i in 0..5 {
-            let coord = HexCoord::new(1 + i, 0);
-            hex_map.set_tile(
-                coord,
-                Tile::with_province(TerrainType::Grassland, ProvinceId(10 + i as u32)),
-            );
-        }
-        hex_map.set_tile(
-            HexCoord::new(8, 0),
-            Tile::with_province(TerrainType::Grassland, ProvinceId(3)),
-        );
-
         use crate::nation::{Nation, NationColor};
         use crate::types::NationType;
-        let ai_cap = Province::new(
-            ProvinceId(2),
-            "AI".into(),
-            NationId(2),
-            HexCoord::new(0, 0),
-            vec![HexCoord::new(0, 0)],
-            4,
-        );
-        let mut provinces = vec![ai_cap];
-        for i in 0..5 {
-            let coord = HexCoord::new(1 + i, 0);
-            provinces.push(Province::new(
-                ProvinceId(10 + i as u32),
-                format!("AIExtra{}", i),
-                NationId(2),
-                coord,
-                vec![coord],
-                4,
-            ));
-        }
-        provinces.push(Province::new(
-            ProvinceId(3),
-            "MinorLand".into(),
-            NationId(3),
-            HexCoord::new(8, 0),
-            vec![HexCoord::new(8, 0)],
-            4,
-        ));
 
-        let mut ai = Nation::new(
+        fn build_game(ally_at_war_with: Option<NationId>) -> GameState {
+            let mut hex_map = crate::map::HexMap::new(10, 10);
+            for (c, pid) in [
+                (HexCoord::new(0, 0), ProvinceId(1)),
+                (HexCoord::new(1, 0), ProvinceId(2)),
+                (HexCoord::new(2, 0), ProvinceId(3)),
+                (HexCoord::new(3, 0), ProvinceId(4)),
+            ] {
+                hex_map.set_tile(c, Tile::with_province(TerrainType::Grassland, pid));
+            }
+            let mut provinces = Vec::new();
+            for (pid, name, owner, c) in [
+                (ProvinceId(1), "Atk", NationId(1), HexCoord::new(0, 0)),
+                (ProvinceId(2), "Tgt", NationId(2), HexCoord::new(1, 0)),
+                (ProvinceId(3), "Ally", NationId(3), HexCoord::new(2, 0)),
+                (ProvinceId(4), "Other", NationId(4), HexCoord::new(3, 0)),
+            ] {
+                provinces.push(Province::new(pid, name.into(), owner, c, vec![c], 4));
+            }
+            let mut atk = Nation::new(
+                NationId(1),
+                "Atk".into(),
+                NationColor::Blue,
+                NationType::GreatPower,
+                ProvinceId(1),
+            );
+            atk.province_ids = vec![ProvinceId(1)];
+            // Atk firepower is irrelevant for this test.
+            let mut tgt = Nation::new(
+                NationId(2),
+                "Tgt".into(),
+                NationColor::Red,
+                NationType::GreatPower,
+                ProvinceId(2),
+            );
+            tgt.province_ids = vec![ProvinceId(2)];
+            for i in 0..4 {
+                tgt.army.push(ArmyUnit::new(
+                    UnitId(2000 + i),
+                    ArmyUnitType::Regulars,
+                    NationId(2),
+                    ProvinceId(2),
+                ));
+            }
+            let mut ally = Nation::new(
+                NationId(3),
+                "Ally".into(),
+                NationColor::Green,
+                NationType::GreatPower,
+                ProvinceId(3),
+            );
+            ally.province_ids = vec![ProvinceId(3)];
+            for i in 0..10 {
+                ally.army.push(ArmyUnit::new(
+                    UnitId(3000 + i),
+                    ArmyUnitType::Regulars,
+                    NationId(3),
+                    ProvinceId(3),
+                ));
+            }
+            let mut other = Nation::new(
+                NationId(4),
+                "Other".into(),
+                NationColor::Yellow,
+                NationType::GreatPower,
+                ProvinceId(4),
+            );
+            other.province_ids = vec![ProvinceId(4)];
+
+            let mut diplomacy = crate::diplomacy::DiplomacyState::new();
+            diplomacy
+                .ensure_relation(NationId(2), NationId(3))
+                .add_treaty(TreatyType::Alliance);
+            if let Some(opp) = ally_at_war_with {
+                diplomacy.declare_war(NationId(3), opp);
+            }
+
+            GameState {
+                turn: TurnNumber::new(10),
+                difficulty: crate::types::Difficulty::Normal,
+                map_key: "t".into(),
+                hex_map,
+                provinces,
+                nations: vec![atk, tgt, ally, other],
+                human_player_nation: NationId(1),
+                events: Vec::new(),
+                game_data: crate::data::GameData::default(),
+                diplomacy,
+                pending_attacks: Vec::new(),
+                pending_moves: Vec::new(),
+                pending_landings: Vec::new(),
+                history: Vec::new(),
+                high_scores: Vec::new(),
+                newspaper_archive: Vec::new(),
+                battle_archive: Vec::new(),
+                ai_debug: false,
+                observer_mode: false,
+            }
+        }
+
+        let game_full = build_game(None);
+        let (_, tgt_full) =
+            coalition_firepower_for_war_decision(&game_full, NationId(1), NationId(2));
+
+        let game_busy = build_game(Some(NationId(4)));
+        let (_, tgt_busy) =
+            coalition_firepower_for_war_decision(&game_busy, NationId(1), NationId(2));
+
+        // Sanity: target alone is non-trivial (4 Regulars).
+        let tgt_alone =
+            super::super::assessment::nation_military_score(&game_full, NationId(2), 0.0);
+        assert!(tgt_alone > 0.0, "target should have positive firepower");
+
+        // The full-strength coalition adds the ally on top of the target.
+        assert!(
+            tgt_full > tgt_alone,
+            "ally should add firepower: tgt_alone={tgt_alone}, tgt_full={tgt_full}"
+        );
+
+        // Discounted coalition is between target-alone and full-strength
+        // (ally counts as half its firepower).
+        assert!(
+            tgt_busy < tgt_full && tgt_busy > tgt_alone,
+            "busy ally should be half-credited: tgt_alone={tgt_alone}, \
+             tgt_busy={tgt_busy}, tgt_full={tgt_full}"
+        );
+        // Halved-ally formula: tgt + ally*0.5 = (tgt_full + tgt_alone) / 2.
+        let expected = (tgt_full + tgt_alone) / 2.0;
+        assert!(
+            (tgt_busy - expected).abs() < 1e-6,
+            "expected discounted total {expected}, got {tgt_busy}"
+        );
+    }
+
+    #[test]
+    fn coalition_firepower_excludes_anarchic_allies() {
+        // Review F-001: an anarchic state has no offensive military
+        // capability and must not be counted as a coalition reinforcement,
+        // even if the alliance treaty is still on paper.
+        use crate::events::TreatyType;
+        use crate::hex::HexCoord;
+        use crate::map::Province;
+        use crate::map::tile::Tile;
+        use crate::nation::{Nation, NationColor};
+        use crate::types::NationType;
+
+        let mut hex_map = crate::map::HexMap::new(10, 10);
+        for (c, pid) in [
+            (HexCoord::new(0, 0), ProvinceId(1)),
+            (HexCoord::new(1, 0), ProvinceId(2)),
+            (HexCoord::new(2, 0), ProvinceId(3)),
+        ] {
+            hex_map.set_tile(c, Tile::with_province(TerrainType::Grassland, pid));
+        }
+        let mut provinces = Vec::new();
+        for (pid, name, owner, c) in [
+            (ProvinceId(1), "Atk", NationId(1), HexCoord::new(0, 0)),
+            (ProvinceId(2), "Tgt", NationId(2), HexCoord::new(1, 0)),
+            (ProvinceId(3), "Ally", NationId(3), HexCoord::new(2, 0)),
+        ] {
+            provinces.push(Province::new(pid, name.into(), owner, c, vec![c], 4));
+        }
+        let mut atk = Nation::new(
+            NationId(1),
+            "Atk".into(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        atk.province_ids = vec![ProvinceId(1)];
+        let mut tgt = Nation::new(
             NationId(2),
-            "AI".into(),
+            "Tgt".into(),
             NationColor::Red,
             NationType::GreatPower,
             ProvinceId(2),
         );
-        ai.ai_personality = Some(AiPersonality::Aggressive);
-        ai.province_ids = vec![
-            ProvinceId(2),
-            ProvinceId(10),
-            ProvinceId(11),
-            ProvinceId(12),
-            ProvinceId(13),
-            ProvinceId(14),
-        ];
-        for i in 0..6 {
-            ai.army.push(ArmyUnit::new(
-                UnitId(5000 + i),
+        tgt.province_ids = vec![ProvinceId(2)];
+        for i in 0..4 {
+            tgt.army.push(ArmyUnit::new(
+                UnitId(2000 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
                 ProvinceId(2),
             ));
         }
-        for i in 0..3 {
-            ai.army.push(ArmyUnit::new(
-                UnitId(5100 + i),
-                ArmyUnitType::LightArtillery,
-                NationId(2),
-                ProvinceId(2),
+        // Ally has a big army on paper but is anarchic (collapsed).
+        let mut ally = Nation::new(
+            NationId(3),
+            "Ally".into(),
+            NationColor::Green,
+            NationType::GreatPower,
+            ProvinceId(3),
+        );
+        ally.province_ids = vec![ProvinceId(3)];
+        ally.is_in_anarchy = true;
+        for i in 0..10 {
+            ally.army.push(ArmyUnit::new(
+                UnitId(3000 + i),
+                ArmyUnitType::Regulars,
+                NationId(3),
+                ProvinceId(3),
             ));
         }
 
-        let mut minor = Nation::new(
-            NationId(3),
-            "Minor".into(),
-            NationColor::Green,
-            NationType::MinorNation,
-            ProvinceId(3),
-        );
-        minor.province_ids = vec![ProvinceId(3)];
+        let mut diplomacy = crate::diplomacy::DiplomacyState::new();
+        diplomacy
+            .ensure_relation(NationId(2), NationId(3))
+            .add_treaty(TreatyType::Alliance);
 
-        let mut human = Nation::new(
-            NationId(1),
-            "Human".into(),
-            NationColor::Blue,
-            NationType::GreatPower,
-            ProvinceId(2),
-        );
-        human.province_ids = vec![];
-
-        let game = crate::game_state::GameState {
-            turn: TurnNumber::new(20),
+        let game = GameState {
+            turn: TurnNumber::new(10),
             difficulty: crate::types::Difficulty::Normal,
-            map_key: "test".into(),
+            map_key: "t".into(),
             hex_map,
             provinces,
-            nations: vec![human, ai, minor],
+            nations: vec![atk, tgt, ally],
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: crate::data::GameData::default(),
-            diplomacy: crate::diplomacy::DiplomacyState::new(),
+            diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             pending_landings: Vec::new(),
@@ -2023,19 +2096,15 @@ mod tests {
             ai_debug: false,
             observer_mode: false,
         };
-        let mut game = game;
 
-        let mut actions = Vec::new();
-        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
+        let (_, tgt_with_anarchic) =
+            coalition_firepower_for_war_decision(&game, NationId(1), NationId(2));
+        let tgt_alone = super::super::assessment::nation_military_score(&game, NationId(2), 0.0);
 
-        // Formula: excess=5, base=1, (5/1)*0.2 = 1.0, capped at 0.4.
-        let reason_has_scaled_bonus = actions.iter().any(|a| {
-            a.reason.contains("province_bonus 0.40") || a.reason.contains("province_bonus 0.4")
-        });
-        assert!(
-            reason_has_scaled_bonus,
-            "large empire-size gap should yield capped province_bonus=0.40. Reasons: {:?}",
-            actions.iter().map(|a| &a.reason).collect::<Vec<_>>()
+        assert_eq!(
+            tgt_with_anarchic, tgt_alone,
+            "anarchic ally must not contribute to coalition firepower; \
+             tgt_alone={tgt_alone}, tgt_with_anarchic={tgt_with_anarchic}"
         );
     }
 

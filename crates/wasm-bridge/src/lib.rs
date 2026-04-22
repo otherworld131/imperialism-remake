@@ -3421,7 +3421,8 @@ pub fn wasm_diplomacy_declare_war(
         return "{\"error\":\"already at war with another nation\"}".to_string();
     }
 
-    game.diplomacy.declare_war(nid, target);
+    let turn = game.turn;
+    game.diplomacy.declare_war_at(nid, target, turn);
     serialize_game(&game)
 }
 

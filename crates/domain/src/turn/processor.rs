@@ -4064,7 +4064,8 @@ fn run_pact_defense_cascade(
 
             if accepts {
                 // Protector accepts: declare war and incorporate the minor
-                game.diplomacy.declare_war(gp_id, attacker_id);
+                let turn = game.turn;
+                game.diplomacy.declare_war_at(gp_id, attacker_id, turn);
                 report.newspaper_headlines.push(Headline::with_reason(
                     format!(
                         "{} intervenes to protect {} and declares war on {}!",
@@ -4175,7 +4176,9 @@ pub fn accept_pact_defense(
         .map(|n| n.name.clone())
         .unwrap_or_default();
 
-    game.diplomacy.declare_war(protector_id, attacker_id);
+    let turn = game.turn;
+    game.diplomacy
+        .declare_war_at(protector_id, attacker_id, turn);
     report.newspaper_headlines.push(Headline::new(
         format!(
             "{} intervenes to protect {} and declares war on {}!",
@@ -4251,10 +4254,15 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
             let a = gp_ids[i];
             let b = gp_ids[j];
 
-            // Check if at war
-            let at_war = game.diplomacy.get_relation(a, b).is_some_and(|r| r.at_war);
+            // Check if at war AND past the one-turn grace period (card #104:
+            // a war declared this turn defers all hostile actions — naval
+            // combat, blockade — to the next turn).
+            let combat_active = game
+                .diplomacy
+                .get_relation(a, b)
+                .is_some_and(|r| r.hostilities_active_on(game.turn));
 
-            if !at_war {
+            if !combat_active {
                 continue;
             }
 
@@ -4347,17 +4355,19 @@ fn compute_blockade_capacity(game: &GameState) -> std::collections::HashMap<Nati
         };
         let raw_cargo = nation.total_cargo_capacity();
 
-        // Only count warships from active enemy nations
+        // Only count warships from active enemy nations, and only if the war
+        // is past its one-turn grace period (card #104: blockade, like every
+        // other hostile action, doesn't fire on the declaration turn).
         let mut enemy_warship_count: u32 = 0;
         for &other_id in &active_gp_ids {
             if other_id == nation_id {
                 continue;
             }
-            let at_war = game
+            let hostile = game
                 .diplomacy
                 .get_relation(nation_id, other_id)
-                .is_some_and(|r| r.at_war);
-            if at_war && let Some(other) = game.get_nation(other_id) {
+                .is_some_and(|r| r.hostilities_active_on(game.turn));
+            if hostile && let Some(other) = game.get_nation(other_id) {
                 enemy_warship_count += other.warship_count() as u32;
             }
         }
@@ -4399,17 +4409,18 @@ fn apply_blockade_effects(game: &GameState, report: &mut TurnReport) {
             continue;
         }
 
-        // Sum up enemy warship counts
+        // Sum up enemy warship counts, gated by the one-turn grace period
+        // (card #104: blockade effects don't apply on the declaration turn).
         let mut enemy_warship_count: u32 = 0;
         for &other_id in &gp_ids {
             if other_id == nation_id {
                 continue;
             }
-            let at_war = game
+            let hostile = game
                 .diplomacy
                 .get_relation(nation_id, other_id)
-                .is_some_and(|r| r.at_war);
-            if at_war && let Some(other) = game.get_nation(other_id) {
+                .is_some_and(|r| r.hostilities_active_on(game.turn));
+            if hostile && let Some(other) = game.get_nation(other_id) {
                 enemy_warship_count += other.warship_count() as u32;
             }
         }
@@ -5110,8 +5121,8 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
 
     // Actually declare the new wars (done after collecting to avoid borrow issues)
     for (ally, enemy, ally_name, enemy_name) in &new_wars {
-        game.diplomacy.declare_war(*ally, *enemy);
         let turn = game.turn;
+        game.diplomacy.declare_war_at(*ally, *enemy, turn);
         game.history.push((
             turn,
             format!(
@@ -5223,10 +5234,15 @@ fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnRepor
         .map(|n| n.id)
         .collect();
 
+    // Anarchic GPs are excluded: a collapsed great power has no government
+    // capable of accepting a minor's allegiance. Without this filter, a minor
+    // released by an overlord falling into anarchy is re-absorbed into that
+    // same anarchic overlord on the very next turn, since pre-collapse
+    // relations are still near-100.
     let gp_ids: Vec<NationId> = game
         .nations
         .iter()
-        .filter(|n| n.is_great_power())
+        .filter(|n| n.is_great_power() && !n.is_in_anarchy)
         .map(|n| n.id)
         .collect();
 
@@ -8300,6 +8316,198 @@ mod tests {
         // Province owner unchanged
         let prov = game.get_province(ProvinceId(2)).unwrap();
         assert_eq!(prov.owner, NationId(2));
+    }
+
+    #[test]
+    fn naval_combat_skips_declaration_turn() {
+        // Card #104: when war is declared on turn N, naval combat is
+        // deferred until turn N+1. Land combat is unaffected because it
+        // requires moving an army into position (which itself takes a turn).
+        use crate::map::UnitId;
+        use crate::military::ships::{Ship, ShipType};
+
+        let mut game = test_game_state();
+
+        // Add a second GP with warships.
+        let mut gp2 = Nation::new(
+            NationId(2),
+            "Rivalia".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        gp2.treasury = Money::dollars(1000);
+        gp2.warships
+            .push(Ship::new(UnitId(20), ShipType::Frigate, NationId(2)));
+        gp2.warships
+            .push(Ship::new(UnitId(21), ShipType::Frigate, NationId(2)));
+        game.nations.push(gp2);
+
+        // Equip GP1 with warships too.
+        let gp1 = game.get_nation_mut(NationId(1)).unwrap();
+        gp1.warships
+            .push(Ship::new(UnitId(10), ShipType::Frigate, NationId(1)));
+        gp1.warships
+            .push(Ship::new(UnitId(11), ShipType::Frigate, NationId(1)));
+
+        game.diplomacy
+            .initialize_great_powers(&[NationId(1), NationId(2)]);
+
+        // Declare war on the current turn.
+        let turn = game.turn;
+        game.diplomacy
+            .declare_war_at(NationId(1), NationId(2), turn);
+
+        // First turn: no naval battle (grace period).
+        let mut report = TurnReport::empty();
+        resolve_naval_combat(&mut game, &mut report);
+        assert!(
+            report.naval_battles.is_empty(),
+            "naval combat must not fire on the declaration turn"
+        );
+
+        // Advance one turn and re-run: battle fires now.
+        game.advance_turn();
+        let mut report = TurnReport::empty();
+        resolve_naval_combat(&mut game, &mut report);
+        assert!(
+            !report.naval_battles.is_empty(),
+            "naval combat must fire one turn after declaration"
+        );
+    }
+
+    #[test]
+    fn blockade_skips_declaration_turn() {
+        // Card #104: blockade effects, like naval combat, must defer by one
+        // turn after war declaration — all hostile actions share the same
+        // grace rule. Captured as a separate test from naval combat so the
+        // gate can never regress independently.
+        use crate::map::UnitId;
+        use crate::military::ships::{Ship, ShipType};
+
+        let mut game = test_game_state();
+
+        // Add a second GP that will do the blockading (has warships).
+        let mut gp2 = Nation::new(
+            NationId(2),
+            "Blockader".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        gp2.treasury = Money::dollars(1000);
+        for i in 0..4 {
+            gp2.warships
+                .push(Ship::new(UnitId(20 + i), ShipType::Frigate, NationId(2)));
+        }
+        // Give gp2 a real province so it's "active" in the blockade sweep.
+        let extra_province = Province::new(
+            ProvinceId(2),
+            "Blockader Land".to_string(),
+            NationId(2),
+            crate::hex::HexCoord::new(5, 5),
+            vec![crate::hex::HexCoord::new(5, 5)],
+            4,
+        );
+        game.provinces.push(extra_province);
+        gp2.province_ids.push(ProvinceId(2));
+        game.nations.push(gp2);
+
+        // GP1 gets a merchant fleet so there's cargo to blockade.
+        let gp1 = game.get_nation_mut(NationId(1)).unwrap();
+        for i in 0..3 {
+            gp1.merchant_fleet
+                .push(Ship::new(UnitId(100 + i), ShipType::Clipper, NationId(1)));
+        }
+
+        game.diplomacy
+            .initialize_great_powers(&[NationId(1), NationId(2)]);
+
+        let turn = game.turn;
+        game.diplomacy
+            .declare_war_at(NationId(1), NationId(2), turn);
+
+        // Declaration turn: compute_blockade_capacity must return the
+        // victim's raw cargo (no reduction).
+        let raw_cargo = game.get_nation(NationId(1)).unwrap().total_cargo_capacity();
+        assert!(
+            raw_cargo > 0,
+            "victim must have cargo for this test to be meaningful"
+        );
+        let cap_declaration = compute_blockade_capacity(&game);
+        assert_eq!(
+            cap_declaration.get(&NationId(1)).copied(),
+            Some(raw_cargo),
+            "blockade must not reduce cargo on the declaration turn"
+        );
+        let mut report = TurnReport::empty();
+        apply_blockade_effects(&game, &mut report);
+        let had_blockade_headline = report
+            .newspaper_headlines
+            .iter()
+            .any(|h| h.text.starts_with("BLOCKADE:"));
+        assert!(
+            !had_blockade_headline,
+            "no BLOCKADE headline expected on declaration turn"
+        );
+
+        // Next turn: blockade kicks in.
+        game.advance_turn();
+        let cap_next = compute_blockade_capacity(&game);
+        assert!(
+            cap_next.get(&NationId(1)).copied().unwrap_or(raw_cargo) < raw_cargo,
+            "blockade must reduce cargo starting the turn after declaration"
+        );
+    }
+
+    #[test]
+    fn voluntary_incorporation_skips_anarchic_great_powers() {
+        // A minor at the threshold against an anarchic GP must not be
+        // re-absorbed: an anarchic government cannot accept allegiance.
+        // Card #117: prevents a released minor from immediately rejoining
+        // the very overlord that just collapsed into anarchy.
+        let mut game = test_game_state_with_minor_nation();
+
+        // Add a second GP so we can verify the non-anarchic one is selected
+        // when eligible.
+        let mut gp_b = Nation::new(
+            NationId(3),
+            "Healthy Empire".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        gp_b.treasury = Money::dollars(1000);
+        game.nations.push(gp_b);
+        game.diplomacy
+            .initialize_great_powers(&[NationId(1), NationId(3)]);
+
+        // Mark GP A (Testlandia) as anarchic, with maxed score to the minor.
+        game.get_nation_mut(NationId(1)).unwrap().is_in_anarchy = true;
+        let rel_a = game.diplomacy.ensure_relation(NationId(2), NationId(1));
+        rel_a.score = 100;
+        // GP B (Healthy Empire) has a below-threshold score.
+        let rel_b = game.diplomacy.ensure_relation(NationId(2), NationId(3));
+        rel_b.score = 50;
+
+        let mut report = TurnReport::empty();
+        resolve_voluntary_incorporations(&mut game, &mut report);
+
+        assert!(
+            report.incorporations.is_empty(),
+            "anarchic GP must not be picked even at score 100"
+        );
+        let mn = game.get_nation(NationId(2)).unwrap();
+        assert!(mn.province_ids.contains(&ProvinceId(2)));
+
+        // Now raise GP B above threshold: it should win.
+        let rel_b = game.diplomacy.ensure_relation(NationId(2), NationId(3));
+        rel_b.score = 95;
+        let mut report = TurnReport::empty();
+        resolve_voluntary_incorporations(&mut game, &mut report);
+
+        assert_eq!(report.incorporations.len(), 1);
+        assert_eq!(report.incorporations[0], (NationId(2), NationId(3)));
     }
 
     // ── Unit upgrade tests ────────────────────────────────────────

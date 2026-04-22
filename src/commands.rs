@@ -1127,7 +1127,8 @@ pub(crate) fn cmd_war(game: &mut GameState, query: &str) {
         return;
     }
 
-    game.diplomacy.declare_war(player_id, target_id);
+    let turn = game.turn;
+    game.diplomacy.declare_war_at(player_id, target_id, turn);
     let player_name = game
         .get_nation(player_id)
         .map(|n| n.name.clone())
