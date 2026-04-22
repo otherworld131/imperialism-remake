@@ -28,6 +28,18 @@ function hexToPixel(q: number, r: number): [number, number] {
   return [HEX_SIZE * (SQRT3 * q + SQRT3 / 2 * r), HEX_SIZE * (3 / 2 * r)];
 }
 
+function politicalFill(nationHex: string): string {
+  const c = parseInt(nationHex.slice(1), 16);
+  const r = (c >> 16) & 0xff, g = (c >> 8) & 0xff, b = c & 0xff;
+  return `rgb(${Math.min(255, r + Math.round((255 - r) * 0.45))},${Math.min(255, g + Math.round((255 - g) * 0.45))},${Math.min(255, b + Math.round((255 - b) * 0.45))})`;
+}
+
+function incorporatedFill(nationHex: string): string {
+  const c = parseInt(nationHex.slice(1), 16);
+  const r = (c >> 16) & 0xff, g = (c >> 8) & 0xff, b = c & 0xff;
+  return `rgb(${Math.min(255, r + Math.round((255 - r) * 0.65))},${Math.min(255, g + Math.round((255 - g) * 0.65))},${Math.min(255, b + Math.round((255 - b) * 0.65))})`;
+}
+
 function drawHexagon(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number) {
   ctx.beginPath();
   for (let i = 0; i < 6; i++) {
@@ -159,7 +171,7 @@ export default function BattleScreen({
     const offsetX = w / 2 - centerPx;
     const offsetY = h / 2 - centerPy;
 
-    // Pass 1: Fill hexes
+    // Pass 1: Fill hexes — matches HexMap political mode
     for (const tile of nearbyTiles) {
       const [px, py] = hexToPixel(tile.q, tile.r);
       const sx = px + offsetX;
@@ -168,14 +180,14 @@ export default function BattleScreen({
       const key = `${tile.q},${tile.r}`;
       const isBattleTile = provinceTileKeys.has(key);
 
-      let color = TERRAIN_COLORS[tile.terrain] || '#666';
-      if (tile.terrain === 'Sea') color = TERRAIN_COLORS.Sea;
-
-      // Tint owned tiles with nation color
-      if (tile.owner_color && NATION_COLORS[tile.owner_color]) {
+      let color: string;
+      if (tile.terrain === 'Sea') {
+        color = TERRAIN_COLORS.Sea;
+      } else if (tile.owner_color && NATION_COLORS[tile.owner_color]) {
         const nc = NATION_COLORS[tile.owner_color];
-        // Blend: 70% terrain, 30% nation
-        color = blendColors(color, nc, 0.3);
+        color = tile.is_incorporated_minor ? incorporatedFill(nc) : politicalFill(nc);
+      } else {
+        color = TERRAIN_COLORS[tile.terrain] || '#666';
       }
 
       drawHexagon(ctx, sx, sy, HEX_SIZE);
@@ -585,19 +597,6 @@ function formatCasualties(types: string[]): string {
   return Object.entries(counts)
     .map(([t, c]) => c > 1 ? `${c}x ${t}` : t)
     .join(', ');
-}
-
-function blendColors(base: string, overlay: string, amount: number): string {
-  const parseHex = (h: string) => {
-    const c = h.replace('#', '');
-    return [parseInt(c.slice(0, 2), 16), parseInt(c.slice(2, 4), 16), parseInt(c.slice(4, 6), 16)];
-  };
-  const [br, bg, bb] = parseHex(base);
-  const [or, og, ob] = parseHex(overlay);
-  const r = Math.round(br * (1 - amount) + or * amount);
-  const g = Math.round(bg * (1 - amount) + og * amount);
-  const b = Math.round(bb * (1 - amount) + ob * amount);
-  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
 }
 
 // ── Styles ──────────────────────────────────────────────────────
