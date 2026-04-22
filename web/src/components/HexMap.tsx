@@ -664,7 +664,7 @@ export default function HexMap({
         ctx.font = `${rSize}px sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.globalAlpha = tile.resource_hidden ? 0.4 : 0.75;
+        ctx.globalAlpha = tile.resource_hidden ? (showHiddenResources ? 0.85 : 0.4) : 0.75;
         ctx.fillText(icon, px, py);
         ctx.globalAlpha = 1.0;
 
