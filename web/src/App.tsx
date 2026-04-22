@@ -18,6 +18,7 @@ import {
   diplomacyBreakTreaty, diplomacyProposePeace,
   getPendingProposals, acceptProposal, rejectProposal,
   getNewspaperArchive,
+  getPoliticalSnapshot,
   getBattleArchive,
   getLedgerData,
   getAllGPLedgerData,
@@ -27,7 +28,7 @@ import type {
   ArmyUnitDetail, ProvinceUnits, CiviliansData, CivilianDetail, ShipsData,
   ValidMoveTargets, BuildableUnits, PendingMove,
   TransportData, IndustryData, TradeData, DiplomacyScreenData, ProposalData,
-  ArchivedNewspaper, LedgerData, GPLedgerEntry,
+  ArchivedNewspaper, PoliticalSnapshot, LedgerData, GPLedgerEntry,
   LandBattleData, NavalBattleData, ArchivedBattleTurn,
 } from './wasm';
 
@@ -92,6 +93,7 @@ import IndustryPanel from './components/IndustryPanel';
 import DiplomacyPanel from './components/DiplomacyPanel';
 import LedgerPanel from './components/LedgerPanel';
 import NewspaperScreen from './components/NewspaperScreen';
+import PoliticalMapModal from './components/PoliticalMapModal';
 import TradeScreen from './components/TradeScreen';
 import BattleScreen from './components/BattleScreen';
 import LegendScreen from './components/LegendScreen';
@@ -145,6 +147,7 @@ function App() {
 
   // Newspaper archive state
   const [archiveData, setArchiveData] = useState<ArchivedNewspaper[]>([]);
+  const [politicalSnapshot, setPoliticalSnapshot] = useState<PoliticalSnapshot | null>(null);
 
   // Battle state
   const [currentBattles, setCurrentBattles] = useState<LandBattleData[]>([]);
@@ -185,6 +188,8 @@ function App() {
 
   // Observer mode state
   const [skipN, setSkipN] = useState<number>(5);
+  const [skipUntilText, setSkipUntilText] = useState<string>('');
+  const [skipUntilRunning, setSkipUntilRunning] = useState<boolean>(false);
   const isObserver = gameState?.observer_mode === true;
   const observerGps: { id: number; name: string; color: string }[] = useMemo(
     () => (gameState?.nations || [])
@@ -354,6 +359,72 @@ function App() {
     setIsDeployMode(false);
     setDeployingCivilian(null);
   }, [gameJson, applyGameJson, skipN]);
+
+  const handleSkipUntil = useCallback(() => {
+    if (skipUntilRunning) return;
+    setSkipUntilRunning(true);
+    try {
+      const needle = skipUntilText.trim().toLowerCase();
+      // When looking for a text match, process one turn at a time so we can
+      // stop at the exact matched turn rather than overshoot to a batch end.
+      // When the needle is blank, batch-50 is fine since the user is asking
+      // to advance to end-of-game.
+      const MAX_TURNS = 1000;
+      const batchSize = needle ? 1 : 50;
+      let currentJson = gameJson;
+      const allHeadlines: typeof headlines = [];
+      const allBattles: typeof currentBattles = [];
+      const allNavalBattles: typeof currentNavalBattles = [];
+      let matched = false;
+      let stoppedEarly = false;
+      let processed = 0;
+
+      while (processed < MAX_TURNS) {
+        const result = processTurns(currentJson, batchSize);
+        if ((result as any).error) { alert((result as any).error); return; }
+        currentJson = JSON.stringify(result.game);
+        processed += result.reports.length;
+
+        for (const r of result.reports) {
+          allHeadlines.push(...r.headlines);
+          allBattles.push(...r.battles);
+          allNavalBattles.push(...r.naval_battles);
+          if (needle) {
+            for (const h of r.headlines) {
+              if (h.text.toLowerCase().includes(needle) ||
+                  (h.reason || '').toLowerCase().includes(needle)) {
+                matched = true;
+                break;
+              }
+            }
+          }
+          if (matched) break;
+        }
+        if (matched) break;
+        if (result.stopped_early || result.reports.length === 0) {
+          stoppedEarly = true;
+          break;
+        }
+      }
+
+      if (!applyGameJson(currentJson)) return;
+      setHeadlines(allHeadlines);
+      setCurrentBattles(allBattles);
+      setCurrentNavalBattles(allNavalBattles);
+      setActiveScreen('newspaper');
+      setProvinceUnits(null);
+      setSelectedUnitIds([]);
+      setIsDeployMode(false);
+      setDeployingCivilian(null);
+      if (!matched && !stoppedEarly) {
+        showError(needle
+          ? `Skip Until: no match for "${skipUntilText}" after ${processed} turns (cap reached)`
+          : `Skip Until: cap of ${MAX_TURNS} turns reached before game ended`);
+      }
+    } finally {
+      setSkipUntilRunning(false);
+    }
+  }, [gameJson, applyGameJson, skipUntilText, skipUntilRunning, showError]);
 
   const handleChangeViewpoint = useCallback((nationId: number) => {
     const idx = observerGps.findIndex(g => g.id === nationId);
@@ -932,6 +1003,23 @@ function App() {
               title="Number of turns to skip (each turn is fully processed)"
             />
             <button onClick={handleSkipTurns} style={styles.btn}>Skip</button>
+            <input
+              type="text"
+              value={skipUntilText}
+              onChange={e => setSkipUntilText(e.target.value)}
+              placeholder="until…"
+              style={styles.skipUntilInput}
+              title="Skip turns until the game ends, or (if non-empty) until a headline contains this text. Case-insensitive substring match on headline text or AI reason."
+              disabled={skipUntilRunning}
+            />
+            <button
+              onClick={handleSkipUntil}
+              style={styles.btn}
+              disabled={skipUntilRunning}
+              title="Skip until text appears in news, or to end of game if blank"
+            >
+              {skipUntilRunning ? '…' : 'Skip Until'}
+            </button>
           </>
         )}
         <button onClick={handleEndTurn} style={styles.endTurnBtn}>End Turn</button>
@@ -1023,9 +1111,20 @@ function App() {
               onCountryChange={setNewsFilterCountry}
               onDismiss={dismissNewspaper}
               onClose={() => setActiveScreen('map')}
+              onShowMap={(turn) => {
+                const snap = getPoliticalSnapshot(gameJson, turn);
+                if (snap) setPoliticalSnapshot(snap);
+                else alert(`No political snapshot available for turn ${turn}.`);
+              }}
             />
           );
         })()}
+        {politicalSnapshot && (
+          <PoliticalMapModal
+            snapshot={politicalSnapshot}
+            onClose={() => setPoliticalSnapshot(null)}
+          />
+        )}
         {activeScreen === 'trade' && (
           <TradeScreen
             trade={tradeData}
@@ -1421,6 +1520,7 @@ const styles: Record<string, React.CSSProperties> = {
   btn: { padding: '4px 12px', background: '#3a3520', color: '#e0d8c0', border: '1px solid #5a5030', cursor: 'pointer', fontFamily: 'Georgia, serif' },
   endTurnBtn: { padding: '6px 20px', background: '#8b4513', color: '#fff', border: '1px solid #a0522d', cursor: 'pointer', fontWeight: 'bold', fontFamily: 'Georgia, serif' },
   skipInput: { width: 48, padding: '4px 6px', background: '#1a1a2e', color: '#e0d8c0', border: '1px solid #5a5030', fontFamily: 'Georgia, serif' },
+  skipUntilInput: { width: 110, padding: '4px 6px', background: '#1a1a2e', color: '#e0d8c0', border: '1px solid #5a5030', fontFamily: 'Georgia, serif' },
   viewpointSelect: { padding: '4px 8px', background: '#3a3520', color: '#e0d8c0', border: '1px solid #5a5030', fontFamily: 'Georgia, serif', cursor: 'pointer' },
   mapKeyChip: { padding: '2px 8px', background: '#1a1a2e', color: '#9a9a9a', border: '1px solid #3a3520', fontFamily: 'monospace', fontSize: 12, cursor: 'pointer', userSelect: 'none' as const },
   modal: { position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 100 },

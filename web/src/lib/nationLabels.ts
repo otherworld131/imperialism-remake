@@ -1,11 +1,5 @@
-import type { TileData } from '../wasm';
-
-const HEX_SIZE = 18;
+const DEFAULT_HEX_SIZE = 18;
 const SQRT3 = Math.sqrt(3);
-
-function hexToPixel(q: number, r: number): [number, number] {
-  return [HEX_SIZE * (SQRT3 * q + SQRT3 / 2 * r), HEX_SIZE * (3 / 2 * r)];
-}
 
 function hexNeighbors(q: number, r: number): [number, number][] {
   return [
@@ -22,11 +16,27 @@ export interface NationLabel {
   is_anarchic: boolean;
 }
 
+/** Minimal tile shape required by `computeNationLabels`. */
+export interface LabelTile {
+  q: number;
+  r: number;
+  terrain: string;
+  owner: string;
+  visual_group: string | null;
+  is_anarchic?: boolean;
+}
+
 /**
  * Group land tiles into BFS-connected components per visual_group (or owner)
  * and return a label per component large enough to warrant one.
  */
-export function computeNationLabels(tiles: TileData[], minSize = 3): NationLabel[] {
+export function computeNationLabels(
+  tiles: LabelTile[],
+  minSize = 3,
+  hexSize: number = DEFAULT_HEX_SIZE,
+): NationLabel[] {
+  const hexToPixel = (q: number, r: number): [number, number] =>
+    [hexSize * (SQRT3 * q + SQRT3 / 2 * r), hexSize * (3 / 2 * r)];
   const labels: NationLabel[] = [];
   const nationTiles = new Map<string, { tiles: Set<string>; is_anarchic: boolean }>();
   for (const tile of tiles) {
@@ -35,7 +45,7 @@ export function computeNationLabels(tiles: TileData[], minSize = 3): NationLabel
     const groupName = tile.visual_group || tile.owner;
     let entry = nationTiles.get(groupName);
     if (!entry) {
-      entry = { tiles: new Set(), is_anarchic: tile.is_anarchic };
+      entry = { tiles: new Set(), is_anarchic: tile.is_anarchic ?? false };
       nationTiles.set(groupName, entry);
     }
     entry.tiles.add(key);

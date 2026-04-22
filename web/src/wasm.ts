@@ -54,6 +54,7 @@ import init, {
   wasm_reject_proposal,
   // Newspaper archive
   wasm_get_newspaper_archive,
+  wasm_get_political_snapshot,
   // Battle archive
   wasm_get_battle_data,
   // Ledger
@@ -127,6 +128,28 @@ export interface ArchivedNewspaper {
   year: number;
   quarter: number;
   headlines: Headline[];
+}
+
+export interface PoliticalSnapshotTile {
+  q: number; r: number;
+  terrain: string;
+  owner: string;
+  owner_color: string;
+  province: string;
+  is_capital: boolean;
+  is_country_capital: boolean;
+  is_minor: boolean;
+  is_incorporated_minor: boolean;
+  visual_group: string | null;
+}
+
+export interface PoliticalSnapshot {
+  turn: number;
+  year: number;
+  quarter: number;
+  map_width: number;
+  map_height: number;
+  tiles: PoliticalSnapshotTile[];
 }
 
 export interface BattleTile {
@@ -483,6 +506,12 @@ export function getDiplomacyOverlay(gameJson: string, nationId: number): Diploma
 export function getNewspaperArchive(gameJson: string): ArchivedNewspaper[] {
   const parsed = JSON.parse(wasm_get_newspaper_archive(gameJson));
   if (parsed.error || !Array.isArray(parsed)) return [];
+  return parsed;
+}
+
+export function getPoliticalSnapshot(gameJson: string, turn: number): PoliticalSnapshot | null {
+  const parsed = JSON.parse(wasm_get_political_snapshot(gameJson, turn));
+  if (parsed.error) return null;
   return parsed;
 }
 

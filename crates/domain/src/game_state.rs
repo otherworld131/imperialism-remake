@@ -11,6 +11,24 @@ use crate::military::ships::{Ship, ShipType};
 use crate::nation::{Nation, NationColor};
 use crate::types::*;
 
+/// A single entry in a political-map snapshot: (province, owner,
+/// incorporated_from). Stored as a tuple rather than a named struct to keep
+/// the archive payload small — the per-turn archive grows linearly with
+/// `provinces × turns`, and tuple serde output (`[p, o, i]`) is roughly half
+/// the size of object output.
+pub type PoliticalSnapshotEntry = (ProvinceId, NationId, Option<NationId>);
+
+/// A per-turn political-map snapshot: the archived ownership of every
+/// province plus the archived capital province of every nation at the end of
+/// that turn. Capitals are archived separately because they can change during
+/// the game (minor-nation capital reassignment on conquest), and rendering
+/// historical capital markers from current nation state would be wrong.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PoliticalSnapshot {
+    pub provinces: Vec<PoliticalSnapshotEntry>,
+    pub capitals: Vec<(NationId, ProvinceId)>,
+}
+
 /// Top-level aggregate root representing the complete state of a game.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct GameState {
@@ -61,6 +79,11 @@ pub struct GameState {
     /// Archived battle results from past turns: (turn, land battles, naval battles).
     #[serde(default)]
     pub battle_archive: Vec<(TurnNumber, Vec<BattleResult>, Vec<NavalBattleResult>)>,
+    /// Archived political-map snapshots from past turns: province ownership
+    /// and per-nation capitals at the end of each turn. Used to render the
+    /// political map at any past turn from the news archive.
+    #[serde(default)]
+    pub political_archive: Vec<(TurnNumber, PoliticalSnapshot)>,
     /// When true, AI functions print detailed decision traces to stderr.
     #[serde(skip, default)]
     pub ai_debug: bool,
@@ -491,6 +514,7 @@ pub fn new_game_with_seed(
         high_scores: Vec::new(),
         newspaper_archive: Vec::new(),
         battle_archive: Vec::new(),
+        political_archive: Vec::new(),
         ai_debug: false,
         observer_mode: false,
     };
@@ -728,6 +752,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         }

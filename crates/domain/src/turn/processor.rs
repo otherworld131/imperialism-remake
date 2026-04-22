@@ -6,7 +6,7 @@ use crate::economy::production::{
 };
 use crate::economy::trade::{self, TradeTransaction};
 use crate::events::*;
-use crate::game_state::GameState;
+use crate::game_state::{GameState, PoliticalSnapshot, PoliticalSnapshotEntry};
 use crate::map::SettlementLevel;
 use crate::map::infrastructure::is_province_connected_multi;
 use crate::military::combat::{
@@ -359,6 +359,22 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
             report.naval_battles.clone(),
         ));
     }
+
+    // 11d. Snapshot province ownership and capitals for the political-map
+    // history view. Capitals are archived explicitly because minor-nation
+    // capitals can be reassigned during the game.
+    let provinces: Vec<PoliticalSnapshotEntry> = game
+        .provinces
+        .iter()
+        .map(|p| (p.id, p.owner, p.incorporated_from))
+        .collect();
+    let capitals: Vec<(NationId, ProvinceId)> = game
+        .nations
+        .iter()
+        .map(|n| (n.id, n.capital_province_id))
+        .collect();
+    game.political_archive
+        .push((game.turn, PoliticalSnapshot { provinces, capitals }));
 
     // 12. Advance turn
     report
@@ -5859,6 +5875,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         }
@@ -5912,6 +5929,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         }
@@ -5928,6 +5946,32 @@ mod tests {
 
         assert_eq!(report.turn, TurnNumber::new(1)); // report reflects the turn that was processed
         assert_eq!(game.turn, TurnNumber::new(2)); // game has advanced
+    }
+
+    #[test]
+    fn process_turn_appends_political_snapshot() {
+        let mut game = test_game_state();
+        assert!(game.political_archive.is_empty());
+
+        let _ = process_turn(&mut game);
+        assert_eq!(game.political_archive.len(), 1);
+        let (turn, snapshot) = &game.political_archive[0];
+        assert_eq!(*turn, TurnNumber::new(1));
+        assert_eq!(snapshot.provinces.len(), game.provinces.len());
+        for (pid, owner, inc) in &snapshot.provinces {
+            let p = game.get_province(*pid).unwrap();
+            assert_eq!(*owner, p.owner);
+            assert_eq!(*inc, p.incorporated_from);
+        }
+        assert_eq!(snapshot.capitals.len(), game.nations.len());
+        for (nid, cap) in &snapshot.capitals {
+            let n = game.get_nation(*nid).unwrap();
+            assert_eq!(*cap, n.capital_province_id);
+        }
+
+        let _ = process_turn(&mut game);
+        assert_eq!(game.political_archive.len(), 2);
+        assert_eq!(game.political_archive[1].0, TurnNumber::new(2));
     }
 
     // ── Resource collection ───────────────────────────────────
@@ -6247,6 +6291,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -6347,6 +6392,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         }
@@ -6969,6 +7015,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -7233,6 +7280,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -7303,6 +7351,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -7442,6 +7491,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         }
@@ -7547,6 +7597,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -7724,6 +7775,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -7797,6 +7849,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -7871,6 +7924,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -8191,6 +8245,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         }
@@ -8755,6 +8810,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -8883,6 +8939,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -9049,6 +9106,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -9158,6 +9216,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -9404,6 +9463,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -9662,6 +9722,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -9797,6 +9858,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -10009,6 +10071,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -10106,6 +10169,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -10222,6 +10286,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -10393,6 +10458,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -10739,6 +10805,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -10812,6 +10879,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -10878,6 +10946,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -10944,6 +11013,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -11067,6 +11137,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         }
@@ -12235,6 +12306,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -12421,6 +12493,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -12688,6 +12761,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -12829,6 +12903,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -13090,6 +13165,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -13353,6 +13429,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };

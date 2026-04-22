@@ -65,6 +65,7 @@ interface Props {
   onCountryChange: (country: string) => void;
   onDismiss: () => void;
   onClose: () => void;
+  onShowMap?: (turn: number) => void;
 }
 
 export default function NewspaperScreen({
@@ -73,7 +74,7 @@ export default function NewspaperScreen({
   newsFilterCategory, newsFilterCountry,
   showAiReasoning, showAiNonActions,
   onCategoryChange, onCountryChange,
-  onDismiss, onClose,
+  onDismiss, onClose, onShowMap,
 }: Props) {
   const [mode, setMode] = useState<'current' | 'archive'>('current');
   const [selectedArchiveTurn, setSelectedArchiveTurn] = useState<number | null>(null);
@@ -154,6 +155,15 @@ export default function NewspaperScreen({
               placeholder="Search…"
               style={styles.searchInput}
             />
+            {mode === 'archive' && selectedArchiveTurn !== null && onShowMap && (
+              <button
+                onClick={() => onShowMap(selectedArchiveTurn)}
+                style={styles.showMapBtn}
+                title="Show the political map at this turn"
+              >
+                Show Map
+              </button>
+            )}
           </div>
         </div>
 
@@ -295,6 +305,11 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '4px 8px', fontFamily: "'Georgia', serif", fontSize: 12,
     border: '1px solid #999', background: '#fff', color: '#333',
     minWidth: 160,
+  },
+  showMapBtn: {
+    padding: '4px 10px', background: '#8b4513', color: '#fff',
+    border: '1px solid #6b3410', cursor: 'pointer',
+    fontFamily: "'Georgia', serif", fontSize: 12, borderRadius: 3,
   },
   contentArea: {
     display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden',

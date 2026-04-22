@@ -1960,6 +1960,7 @@ mod tests {
                 high_scores: Vec::new(),
                 newspaper_archive: Vec::new(),
                 battle_archive: Vec::new(),
+                political_archive: Vec::new(),
                 ai_debug: false,
                 observer_mode: false,
             }
@@ -2093,6 +2094,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };
@@ -2304,6 +2306,7 @@ mod tests {
             high_scores: Vec::new(),
             newspaper_archive: Vec::new(),
             battle_archive: Vec::new(),
+            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
         };

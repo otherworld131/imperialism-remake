@@ -4027,6 +4027,122 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
     serde_json::to_string(&entries).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
 }
 
+/// Return a political-map snapshot for a specific past turn. Each tile is
+/// annotated with the owning nation at that turn, plus the display flags
+/// needed to render a read-only political view in a modal.
+///
+/// Returns `{"error": "..."}` if the game can't be deserialized or the
+/// requested turn has no snapshot.
+#[wasm_bindgen]
+pub fn wasm_get_political_snapshot(game_json: &str, turn: u32) -> String {
+    let game: GameState = match serde_json::from_str(game_json) {
+        Ok(g) => g,
+        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    };
+
+    let target = TurnNumber::new(turn);
+    let Some((_, snapshot)) = game.political_archive.iter().find(|(t, _)| *t == target) else {
+        return format!(
+            "{{\"error\":\"no political snapshot for turn {}\"}}",
+            turn
+        );
+    };
+
+    // Rebuild province_id → (owner NationId, incorporated_from) at that turn.
+    let prov_state: std::collections::HashMap<ProvinceId, (NationId, Option<NationId>)> = snapshot
+        .provinces
+        .iter()
+        .map(|&(pid, owner, inc)| (pid, (owner, inc)))
+        .collect();
+
+    let nation_lookup: std::collections::HashMap<NationId, (&str, String, NationType)> = game
+        .nations
+        .iter()
+        .map(|n| (n.id, (n.name.as_str(), format!("{:?}", n.color), n.nation_type)))
+        .collect();
+
+    // Capital provinces at the archived turn (not current). Capital can move
+    // during the game — using current state would mis-place historical markers.
+    let country_capital_provinces: std::collections::HashSet<ProvinceId> =
+        snapshot.capitals.iter().map(|&(_, pid)| pid).collect();
+
+    let province_name: std::collections::HashMap<ProvinceId, &str> = game
+        .provinces
+        .iter()
+        .map(|p| (p.id, p.name.as_str()))
+        .collect();
+
+    let map_width = game.hex_map.width();
+    let map_height = game.hex_map.height();
+
+    let tiles: Vec<serde_json::Value> = game
+        .hex_map
+        .all_tiles()
+        .map(|(coord, tile)| {
+            let (owner_name, owner_color, is_minor, is_incorporated_minor, visual_group) = tile
+                .province_id
+                .and_then(|pid| prov_state.get(&pid).copied())
+                .and_then(|(owner, inc)| {
+                    nation_lookup
+                        .get(&owner)
+                        .map(|(name, color, ntype)| {
+                            let incorporated = inc.is_some();
+                            let is_minor = *ntype == NationType::MinorNation;
+                            // Independent minors always render as Beige; incorporated
+                            // minors keep the overlord color but lighter.
+                            let display_color = if is_minor && !incorporated && !color.is_empty() {
+                                "Beige".to_string()
+                            } else {
+                                color.clone()
+                            };
+                            // Visual group: incorporated minors keep a separate
+                            // border group keyed on the original minor's name, so
+                            // they read as distinct countries in the political view.
+                            let vg: Option<String> = inc
+                                .and_then(|nid| nation_lookup.get(&nid))
+                                .map(|(n, _, _)| (*n).to_string());
+                            (*name, display_color, is_minor, incorporated, vg)
+                        })
+                })
+                .unwrap_or(("", String::new(), false, false, None));
+
+            let prov_name = tile
+                .province_id
+                .and_then(|pid| province_name.get(&pid).copied())
+                .unwrap_or("");
+
+            let is_country_capital = tile.is_capital
+                && tile
+                    .province_id
+                    .is_some_and(|pid| country_capital_provinces.contains(&pid));
+
+            serde_json::json!({
+                "q": coord.q,
+                "r": coord.r,
+                "terrain": format!("{:?}", tile.terrain()),
+                "owner": owner_name,
+                "owner_color": owner_color,
+                "province": prov_name,
+                "is_capital": tile.is_capital,
+                "is_country_capital": is_country_capital,
+                "is_minor": is_minor,
+                "is_incorporated_minor": is_incorporated_minor,
+                "visual_group": visual_group,
+            })
+        })
+        .collect();
+
+    let response = serde_json::json!({
+        "turn": target.0,
+        "year": target.year(),
+        "quarter": target.quarter(),
+        "map_width": map_width,
+        "map_height": map_height,
+        "tiles": tiles,
+    });
+    response.to_string()
+}
+
 /// Return the newspaper headline archive for all past turns.
 #[wasm_bindgen]
 pub fn wasm_get_newspaper_archive(game_json: &str) -> String {
@@ -5053,6 +5169,147 @@ mod tests {
             actions["can_propose_peace"].as_bool(),
             Some(false),
             "peace must not be gated by anarchy-inflated at_war"
+        );
+    }
+
+    // ── Political snapshot ─────────────────────────────────────
+
+    #[test]
+    fn political_snapshot_returns_tiles_for_archived_turn() {
+        use domain::game_state::PoliticalSnapshot;
+
+        let json = make_game_json();
+        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        game.game_data = domain::data::GameData::default();
+
+        // Seed a snapshot at turn 5 using current province ownership + capitals.
+        let provinces: Vec<(ProvinceId, NationId, Option<NationId>)> = game
+            .provinces
+            .iter()
+            .map(|p| (p.id, p.owner, p.incorporated_from))
+            .collect();
+        let capitals: Vec<(NationId, ProvinceId)> = game
+            .nations
+            .iter()
+            .map(|n| (n.id, n.capital_province_id))
+            .collect();
+        game.political_archive.push((
+            TurnNumber::new(5),
+            PoliticalSnapshot { provinces, capitals },
+        ));
+
+        let game_json = serde_json::to_string(&game).unwrap();
+        let out = wasm_get_political_snapshot(&game_json, 5);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+
+        assert_eq!(parsed["turn"].as_u64(), Some(5));
+        let tiles = parsed["tiles"].as_array().expect("tiles array");
+        assert_eq!(tiles.len() as i64, game.hex_map.tile_count() as i64);
+        // At least one tile must show a non-empty owner for a normal game.
+        assert!(
+            tiles.iter().any(|t| t["owner"].as_str().unwrap_or("") != ""),
+            "at least one tile should have an owner"
+        );
+        // At least one country capital should be flagged.
+        assert!(
+            tiles.iter().any(|t| t["is_country_capital"].as_bool() == Some(true)),
+            "at least one tile should be flagged as country capital"
+        );
+    }
+
+    #[test]
+    fn political_snapshot_errors_for_missing_turn() {
+        let json = make_game_json();
+        let out = wasm_get_political_snapshot(&json, 999);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(
+            parsed["error"].is_string(),
+            "missing snapshot should return an error object, got: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn political_snapshot_uses_archived_state_not_live_state() {
+        use domain::game_state::PoliticalSnapshot;
+
+        let json = make_game_json();
+        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        game.game_data = domain::data::GameData::default();
+
+        // Archive at turn 5 with the *current* capitals and ownership.
+        let provinces: Vec<(ProvinceId, NationId, Option<NationId>)> = game
+            .provinces
+            .iter()
+            .map(|p| (p.id, p.owner, p.incorporated_from))
+            .collect();
+        let capitals: Vec<(NationId, ProvinceId)> = game
+            .nations
+            .iter()
+            .map(|n| (n.id, n.capital_province_id))
+            .collect();
+        let archived_capitals: std::collections::HashSet<ProvinceId> =
+            capitals.iter().map(|&(_, pid)| pid).collect();
+        game.political_archive.push((
+            TurnNumber::new(5),
+            PoliticalSnapshot { provinces, capitals },
+        ));
+
+        // Mutate live state AFTER archiving: swap every nation's capital to a
+        // province that was not previously a capital, and mark a province as
+        // newly incorporated in live state. The archive must ignore both.
+        let non_capital_pid = game
+            .provinces
+            .iter()
+            .map(|p| p.id)
+            .find(|pid| !archived_capitals.contains(pid))
+            .expect("at least one non-capital province");
+        for n in &mut game.nations {
+            n.capital_province_id = non_capital_pid;
+        }
+        // Pick a province and give it a fake `incorporated_from` in live state;
+        // archive should NOT pick up this change because the archived tuple
+        // was already captured with incorporated=None.
+        let mutated_pid = game
+            .provinces
+            .iter()
+            .map(|p| p.id)
+            .find(|pid| !archived_capitals.contains(pid))
+            .expect("province to mutate");
+        if let Some(p) = game.get_province_mut(mutated_pid) {
+            p.incorporated_from = Some(NationId(999));
+        }
+
+        let game_json = serde_json::to_string(&game).unwrap();
+        let out = wasm_get_political_snapshot(&game_json, 5);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let tiles = parsed["tiles"].as_array().expect("tiles array");
+
+        // Archived capitals should still be flagged on tiles in archived capital
+        // provinces, not on the live non-capital swap target.
+        let capital_tile_count = tiles
+            .iter()
+            .filter(|t| t["is_country_capital"].as_bool() == Some(true))
+            .count();
+        assert!(
+            capital_tile_count > 0,
+            "archived capitals should still be flagged after live mutation"
+        );
+
+        // No tile in the archive output should show visual_group as the
+        // fake NationId(999)-derived name, because that incorporation was
+        // applied AFTER the snapshot was taken.
+        // Live mutation of province.incorporated_from must not leak into the
+        // archived rendering.
+        let leaked = tiles
+            .iter()
+            .any(|t| t["visual_group"].as_str().map(|s| !s.is_empty()).unwrap_or(false));
+        // The starter map has no incorporated provinces at turn 1, so the
+        // archive (captured with all `incorporated_from = None`) must still
+        // render all visual_group fields as null/empty.
+        assert!(
+            !leaked,
+            "archived visual_group must not reflect live-state mutation"
         );
     }
 }
