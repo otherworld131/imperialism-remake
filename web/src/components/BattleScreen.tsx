@@ -21,7 +21,7 @@ const NATION_COLORS: Record<string, string> = {
   Maroon: '#8c001a', Navy: '#00008c', Cyan: '#00cccc',
   Lime: '#73d900', Coral: '#ff8059', Lavender: '#b380e6',
   Tan: '#ccb380', Salmon: '#ff8c73', Khaki: '#bfb366',
-  Indigo: '#4d0080',
+  Indigo: '#4d0080', Beige: '#e8d8b0',
 };
 
 function hexToPixel(q: number, r: number): [number, number] {

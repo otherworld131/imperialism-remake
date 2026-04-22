@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   initWasm, processTurn, processTurns, setHumanPlayer,
   newGame, newScenarioGame, newObserverGame, newObserverScenarioGame,
@@ -103,6 +103,10 @@ import BusyOverlay from './components/BusyOverlay';
 function App() {
   const [loading, setLoading] = useState(true);
   const [busyMessage, setBusyMessage] = useState<string | null>(null);
+  // Any mutating handler (turn, diplomacy, unit commands, civilian builds, trade/industry/transport
+  // settings) acquires this ref to serialize itself against others, preventing overlapping RPCs
+  // that would read the same `gameJson` and then race their `applyGameJson` updates.
+  const mutationLockRef = useRef(false);
   const [gameJson, setGameJson] = useState<string>('');
   const [tiles, setTiles] = useState<TileData[]>([]);
   const [navyMarkers, setNavyMarkers] = useState<NavyMarker[]>([]);
@@ -165,14 +169,17 @@ function App() {
     })();
   }, [activeScreen, gameJson]);
 
-  // Ensure newspaper archive data is populated when the newspaper screen is active.
+  // Refresh newspaper archive whenever the screen is active and the game advances —
+  // the old length-gated version cached the first load forever, so new turns never showed up.
   useEffect(() => {
+    if (activeScreen !== 'newspaper' || !gameJson) return;
+    let cancelled = false;
     (async () => {
-      if (activeScreen === 'newspaper' && gameJson && archiveData.length === 0) {
-        setArchiveData(await getNewspaperArchive(gameJson));
-      }
+      const archive = await getNewspaperArchive(gameJson);
+      if (!cancelled) setArchiveData(archive);
     })();
-  }, [activeScreen, gameJson, archiveData.length]);
+    return () => { cancelled = true; };
+  }, [activeScreen, gameJson]);
 
   // Unit interaction state
   const [provinceUnits, setProvinceUnits] = useState<ProvinceUnits | null>(null);
@@ -229,10 +236,27 @@ function App() {
     })();
   }, []);
 
+  // Serializes mutating handlers: if one is in flight, a second click is ignored.
+  // Prevents two handlers from reading the same `gameJson` and racing their applies.
+  const runMutation = useCallback(async (fn: () => Promise<void>): Promise<void> => {
+    if (mutationLockRef.current) return;
+    mutationLockRef.current = true;
+    try {
+      await fn();
+    } finally {
+      mutationLockRef.current = false;
+    }
+  }, []);
+
   const showError = useCallback((msg: string) => {
     setStatusMessage(msg);
     setTimeout(() => setStatusMessage(''), 4000);
   }, []);
+
+  // Generation counter: every applyGameJson invocation bumps this; derived setState calls
+  // that come back from earlier generations after await are discarded, so an overlapping
+  // end-turn + diplomacy action cannot let a stale fetch overwrite newer state.
+  const applyGenRef = useRef(0);
 
   // Helper to update all derived state from a new game JSON.
   // Returns true on success, false on error (state unchanged on failure).
@@ -249,21 +273,45 @@ function App() {
       showError(state.error);
       return false;
     }
+    const myGen = ++applyGenRef.current;
+    const isCurrent = () => applyGenRef.current === myGen;
+
+    // Fetch everything in parallel, then commit atomically if we're still the latest call.
+    const nid = state.human_player_nation;
+    const [
+      mapData, navyData, techsData,
+      civiliansData, shipsRes, buildableData,
+      transportRes, industryRes, tradeRes,
+      diploRes, ledgerRes, gpLedgerRes,
+    ] = await Promise.all([
+      getMapData(json, disableFogOfWar),
+      getNavyMarkers(json, disableFogOfWar),
+      getAvailableTechs(json),
+      getCivilians(json, nid),
+      getShips(json, nid),
+      getBuildableUnits(json, nid),
+      getTransportData(json, nid),
+      getIndustryData(json, nid),
+      getTradeData(json, nid),
+      getDiplomacyScreenData(json, nid),
+      getLedgerData(json, nid),
+      getAllGPLedgerData(json),
+    ]);
+    if (!isCurrent()) return false;
     setGameJson(json);
     setGameState(state);
-    setTiles(await getMapData(json, disableFogOfWar));
-    setNavyMarkers(await getNavyMarkers(json, disableFogOfWar));
-    setTechs(await getAvailableTechs(json));
-    const nid = state.human_player_nation;
-    setCivilians(await getCivilians(json, nid));
-    setShipsData(await getShips(json, nid));
-    setBuildable(await getBuildableUnits(json, nid));
-    setTransportData(await getTransportData(json, nid));
-    setIndustryData(await getIndustryData(json, nid));
-    setTradeData(await getTradeData(json, nid));
-    setDiplomacyScreenData(await getDiplomacyScreenData(json, nid));
-    setLedgerData(await getLedgerData(json, nid));
-    setGpLedgerData(await getAllGPLedgerData(json));
+    setTiles(mapData);
+    setNavyMarkers(navyData);
+    setTechs(techsData);
+    setCivilians(civiliansData);
+    setShipsData(shipsRes);
+    setBuildable(buildableData);
+    setTransportData(transportRes);
+    setIndustryData(industryRes);
+    setTradeData(tradeRes);
+    setDiplomacyScreenData(diploRes);
+    setLedgerData(ledgerRes);
+    setGpLedgerData(gpLedgerRes);
     return true;
   }, [showError, disableFogOfWar]);
 
@@ -278,86 +326,92 @@ function App() {
   }, [disableFogOfWar, gameJson]);
 
   const handleGameStart = async (json: string, params: GameStartParams) => {
-    if (!(await applyGameJson(json))) return;
-    setGameStartParams(params);
-    setGameStarted(true);
-    try {
-      const state = JSON.parse(json);
-      const p = state?.nations?.find((n: any) => n.id === state.human_player_nation);
-      if (p) setSelectedNation(p.name);
-    } catch {
-      // applyGameJson already succeeded, so game state is valid — this parse is for the nation name only
-    }
+    await runMutation(async () => {
+      if (!(await applyGameJson(json))) return;
+      setGameStartParams(params);
+      setGameStarted(true);
+      try {
+        const state = JSON.parse(json);
+        const p = state?.nations?.find((n: any) => n.id === state.human_player_nation);
+        if (p) setSelectedNation(p.name);
+      } catch {
+        // applyGameJson already succeeded, so game state is valid — this parse is for the nation name only
+      }
+    });
   };
 
   const handleRestart = useCallback(async () => {
-    if (!gameStartParams) return;
-    if (!confirm('Restart this map from turn 1?')) return;
-    const p = gameStartParams;
-    // Restart with the nation currently being viewed, not the one picked at game start —
-    // the player may have changed viewpoint during observer mode.
-    const currentIdx = observerGps.findIndex(g => g.id === gameState?.human_player_nation);
-    const idx = currentIdx >= 0 ? currentIdx : p.nationIdx;
-    let json: string;
-    if (p.observerMode) {
-      json = p.scenario
-        ? await newObserverScenarioGame(p.scenario, p.difficulty)
-        : await newObserverGame(p.mapKey, p.difficulty);
-      if (idx !== 0) {
-        json = await setHumanPlayer(json, idx);
+    await runMutation(async () => {
+      if (!gameStartParams) return;
+      if (!confirm('Restart this map from turn 1?')) return;
+      const p = gameStartParams;
+      // Restart with the nation currently being viewed, not the one picked at game start —
+      // the player may have changed viewpoint during observer mode.
+      const currentIdx = observerGps.findIndex(g => g.id === gameState?.human_player_nation);
+      const idx = currentIdx >= 0 ? currentIdx : p.nationIdx;
+      let json: string;
+      if (p.observerMode) {
+        json = p.scenario
+          ? await newObserverScenarioGame(p.scenario, p.difficulty)
+          : await newObserverGame(p.mapKey, p.difficulty);
+        if (idx !== 0) {
+          json = await setHumanPlayer(json, idx);
+        }
+      } else {
+        json = p.scenario
+          ? await newScenarioGame(p.scenario, p.difficulty, idx)
+          : await newGame(p.mapKey, p.difficulty, idx);
       }
-    } else {
-      json = p.scenario
-        ? await newScenarioGame(p.scenario, p.difficulty, idx)
-        : await newGame(p.mapKey, p.difficulty, idx);
-    }
-    const parsed = JSON.parse(json);
-    if (parsed.error) { alert(parsed.error); return; }
-    if (!(await applyGameJson(json))) return;
-    setGameStartParams({ ...p, nationIdx: idx });
-    setActiveScreen('map');
-    setProvinceUnits(null);
-    setSelectedUnitIds([]);
-    setIsDeployMode(false);
-    setDeployingCivilian(null);
-    setDeployableTiles(new Set());
-    setHeadlines([]);
-    setCurrentBattles([]);
-    setCurrentNavalBattles([]);
-    setProposalData(null);
-    setShowProposals(false);
-    setArchiveData([]);
-    setSelectedTile(null);
-    setSelectedNavyKey(null);
-    setHoveredNavyKey(null);
-    setStatusMessage('');
-  }, [gameStartParams, gameState, observerGps, applyGameJson]);
-
-  const handleEndTurn = useCallback(async () => {
-    setBusyMessage('Processing turn…');
-    try {
-      const result = await processTurn(gameJson);
-      if (result.error) { alert(result.error); return; }
-      const newJson = JSON.stringify(result.game);
-      if (!(await applyGameJson(newJson))) return;
-      setHeadlines(result.report?.headlines || []);
-      setCurrentBattles(result.report?.battles || []);
-      setCurrentNavalBattles(result.report?.naval_battles || []);
-      setActiveScreen('newspaper');
-      // Check for pending proposals
-      const newState = JSON.parse(newJson);
-      const nid = newState.human_player_nation;
-      const proposals = await getPendingProposals(newJson, nid);
-      setProposalData(proposals);
-      // Clear interaction state
+      const parsed = JSON.parse(json);
+      if (parsed.error) { alert(parsed.error); return; }
+      if (!(await applyGameJson(json))) return;
+      setGameStartParams({ ...p, nationIdx: idx });
+      setActiveScreen('map');
       setProvinceUnits(null);
       setSelectedUnitIds([]);
       setIsDeployMode(false);
       setDeployingCivilian(null);
-    } finally {
-      setBusyMessage(null);
-    }
-  }, [gameJson, applyGameJson]);
+      setDeployableTiles(new Set());
+      setHeadlines([]);
+      setCurrentBattles([]);
+      setCurrentNavalBattles([]);
+      setProposalData(null);
+      setShowProposals(false);
+      setArchiveData([]);
+      setSelectedTile(null);
+      setSelectedNavyKey(null);
+      setHoveredNavyKey(null);
+      setStatusMessage('');
+    });
+  }, [gameStartParams, gameState, observerGps, applyGameJson, runMutation]);
+
+  const handleEndTurn = useCallback(async () => {
+    await runMutation(async () => {
+      setBusyMessage('Processing turn…');
+      try {
+        const result = await processTurn(gameJson);
+        if (result.error) { alert(result.error); return; }
+        const newJson = JSON.stringify(result.game);
+        if (!(await applyGameJson(newJson))) return;
+        setHeadlines(result.report?.headlines || []);
+        setCurrentBattles(result.report?.battles || []);
+        setCurrentNavalBattles(result.report?.naval_battles || []);
+        setActiveScreen('newspaper');
+        // Check for pending proposals
+        const newState = JSON.parse(newJson);
+        const nid = newState.human_player_nation;
+        const proposals = await getPendingProposals(newJson, nid);
+        setProposalData(proposals);
+        // Clear interaction state
+        setProvinceUnits(null);
+        setSelectedUnitIds([]);
+        setIsDeployMode(false);
+        setDeployingCivilian(null);
+      } finally {
+        setBusyMessage(null);
+      }
+    });
+  }, [gameJson, applyGameJson, runMutation]);
 
   const dismissNewspaper = useCallback(() => {
     setActiveScreen('map');
@@ -367,30 +421,33 @@ function App() {
   }, [proposalData]);
 
   const handleSkipTurns = useCallback(async () => {
-    const n = Math.max(1, Math.min(50, skipN | 0));
-    setBusyMessage(`Skipping ${n} turn${n > 1 ? 's' : ''}…`);
-    try {
-      const result = await processTurns(gameJson, n);
-      if ((result as any).error) { alert((result as any).error); return; }
-      const newJson = JSON.stringify(result.game);
-      if (!(await applyGameJson(newJson))) return;
-      const allHeadlines = result.reports.flatMap(r => r.headlines);
-      const allBattles = result.reports.flatMap(r => r.battles);
-      const allNavalBattles = result.reports.flatMap(r => r.naval_battles);
-      setHeadlines(allHeadlines);
-      setCurrentBattles(allBattles);
-      setCurrentNavalBattles(allNavalBattles);
-      setProvinceUnits(null);
-      setSelectedUnitIds([]);
-      setIsDeployMode(false);
-      setDeployingCivilian(null);
-    } finally {
-      setBusyMessage(null);
-    }
-  }, [gameJson, applyGameJson, skipN]);
+    await runMutation(async () => {
+      const n = Math.max(1, Math.min(50, skipN | 0));
+      setBusyMessage(`Skipping ${n} turn${n > 1 ? 's' : ''}…`);
+      try {
+        const result = await processTurns(gameJson, n);
+        if ((result as any).error) { alert((result as any).error); return; }
+        const newJson = JSON.stringify(result.game);
+        if (!(await applyGameJson(newJson))) return;
+        const allHeadlines = result.reports.flatMap(r => r.headlines);
+        const allBattles = result.reports.flatMap(r => r.battles);
+        const allNavalBattles = result.reports.flatMap(r => r.naval_battles);
+        setHeadlines(allHeadlines);
+        setCurrentBattles(allBattles);
+        setCurrentNavalBattles(allNavalBattles);
+        setProvinceUnits(null);
+        setSelectedUnitIds([]);
+        setIsDeployMode(false);
+        setDeployingCivilian(null);
+      } finally {
+        setBusyMessage(null);
+      }
+    });
+  }, [gameJson, applyGameJson, skipN, runMutation]);
 
   const handleSkipUntil = useCallback(async () => {
-    if (skipUntilRunning) return;
+    if (skipUntilRunning || mutationLockRef.current) return;
+    mutationLockRef.current = true;
     setSkipUntilRunning(true);
     setBusyMessage('Skipping turns…');
     try {
@@ -454,17 +511,20 @@ function App() {
     } finally {
       setSkipUntilRunning(false);
       setBusyMessage(null);
+      mutationLockRef.current = false;
     }
   }, [gameJson, applyGameJson, skipUntilText, skipUntilRunning, showError]);
 
   const handleChangeViewpoint = useCallback(async (nationId: number) => {
-    const idx = observerGps.findIndex(g => g.id === nationId);
-    if (idx < 0) return;
-    const newJson = await setHumanPlayer(gameJson, idx);
-    const parsed = JSON.parse(newJson);
-    if (parsed.error) { alert(parsed.error); return; }
-    await applyGameJson(newJson);
-  }, [gameJson, applyGameJson, observerGps]);
+    await runMutation(async () => {
+      const idx = observerGps.findIndex(g => g.id === nationId);
+      if (idx < 0) return;
+      const newJson = await setHumanPlayer(gameJson, idx);
+      const parsed = JSON.parse(newJson);
+      if (parsed.error) { alert(parsed.error); return; }
+      await applyGameJson(newJson);
+    });
+  }, [gameJson, applyGameJson, observerGps, runMutation]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -525,15 +585,18 @@ function App() {
   // Having a non-empty selection implicitly arms movement mode.
   // Valid move targets are the intersection of each selected unit's legal destinations.
   const [validMoveTargets, setValidMoveTargets] = useState<ValidMoveTargets | null>(null);
+  const validMoveTargetsGenRef = useRef(0);
   useEffect(() => {
+    const myGen = ++validMoveTargetsGenRef.current;
     (async () => {
       if (selectedUnitIds.length === 0 || !gameJson) {
-        setValidMoveTargets(null);
+        if (validMoveTargetsGenRef.current === myGen) setValidMoveTargets(null);
         return;
       }
       const allTargets = await Promise.all(
         selectedUnitIds.map(id => getValidMoveTargets(gameJson, playerNationId, id))
       );
+      if (validMoveTargetsGenRef.current !== myGen) return;
       if (allTargets.some(t => !t)) {
         setValidMoveTargets(null);
         return;
@@ -558,26 +621,28 @@ function App() {
         validMoveTargets.hostile.some(t => t.province_id === tile.province_id)
       );
       if (isValidTarget) {
-        let currentJson = gameJson;
-        let ok = true;
-        for (const unitId of selectedUnitIds) {
-          const cmd = await queueUnitMove(currentJson, playerNationId, unitId, tile.province_id);
-          if (cmd.ok && cmd.gameJson) {
-            currentJson = cmd.gameJson;
-          } else {
-            showError(`Move failed: ${cmd.error}. No units moved.`);
-            currentJson = gameJson;
-            ok = false;
-            break;
+        await runMutation(async () => {
+          let currentJson = gameJson;
+          let ok = true;
+          for (const unitId of selectedUnitIds) {
+            const cmd = await queueUnitMove(currentJson, playerNationId, unitId, tile.province_id!);
+            if (cmd.ok && cmd.gameJson) {
+              currentJson = cmd.gameJson;
+            } else {
+              showError(`Move failed: ${cmd.error}. No units moved.`);
+              currentJson = gameJson;
+              ok = false;
+              break;
+            }
           }
-        }
-        if (ok) {
-          await applyGameJson(currentJson);
-          if (provinceUnits) {
-            setProvinceUnits(await getUnitsInProvince(currentJson, tile.province_id));
+          if (ok) {
+            await applyGameJson(currentJson);
+            if (provinceUnits) {
+              setProvinceUnits(await getUnitsInProvince(currentJson, tile.province_id!));
+            }
           }
-        }
-        setSelectedUnitIds([]);
+          setSelectedUnitIds([]);
+        });
         return;
       }
       // Invalid target: fall through to normal tile navigation (clears selection below).
@@ -589,14 +654,16 @@ function App() {
       const tileKey = `${tile.q},${tile.r}`;
       if (!deployableTiles.has(tileKey)) return; // Ignore click on invalid tile, keep mode active
 
-      const cmd = await deployCivilian(gameJson, deployingCivilian.id, tile.q, tile.r);
-      if (cmd.ok && cmd.gameJson && (await applyGameJson(cmd.gameJson))) {
-        setIsDeployMode(false);
-        setDeployingCivilian(null);
-        setDeployableTiles(new Set());
-      } else if (cmd.error) {
-        showError(`Deploy failed: ${cmd.error}`);
-      }
+      await runMutation(async () => {
+        const cmd = await deployCivilian(gameJson, deployingCivilian.id, tile.q, tile.r);
+        if (cmd.ok && cmd.gameJson && (await applyGameJson(cmd.gameJson))) {
+          setIsDeployMode(false);
+          setDeployingCivilian(null);
+          setDeployableTiles(new Set());
+        } else if (cmd.error) {
+          showError(`Deploy failed: ${cmd.error}`);
+        }
+      });
       return;
     }
 
@@ -614,7 +681,7 @@ function App() {
       setProvinceUnits(null);
       setSelectedUnitIds([]);
     }
-  }, [mapMode, gameJson, playerNationId, selectedUnitIds, validMoveTargets, isDeployMode, deployingCivilian, deployableTiles, applyGameJson, provinceUnits, showError]);
+  }, [mapMode, gameJson, playerNationId, selectedUnitIds, validMoveTargets, isDeployMode, deployingCivilian, deployableTiles, applyGameJson, provinceUnits, showError, runMutation]);
 
   const handleNavyMarkerClick = useCallback((marker: NavyMarker | null) => {
     if (!marker) {
@@ -706,43 +773,49 @@ function App() {
   }, [provinceUnits]);
 
   const handleCancelMove = useCallback(async (unitId: number) => {
-    const cmd = await cancelUnitMove(gameJson, unitId);
-    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-    else if (cmd.error) showError(`Cancel failed: ${cmd.error}`);
-  }, [gameJson, applyGameJson, showError]);
+    await runMutation(async () => {
+      const cmd = await cancelUnitMove(gameJson, unitId);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Cancel failed: ${cmd.error}`);
+    });
+  }, [gameJson, applyGameJson, showError, runMutation]);
 
   const handleCancelSelectedMoves = useCallback(async () => {
-    const cancelable = selectedUnitIds.filter(
-      id => pendingMovesDisplay.some(m => m.unit_id === id)
-    );
-    if (cancelable.length === 0) return;
-    let currentJson = gameJson;
-    let succeeded = 0;
-    let failed = 0;
-    for (const unitId of cancelable) {
-      const cmd = await cancelUnitMove(currentJson, unitId);
-      if (cmd.ok && cmd.gameJson) {
-        currentJson = cmd.gameJson;
-        succeeded++;
-      } else {
-        failed++;
+    await runMutation(async () => {
+      const cancelable = selectedUnitIds.filter(
+        id => pendingMovesDisplay.some(m => m.unit_id === id)
+      );
+      if (cancelable.length === 0) return;
+      let currentJson = gameJson;
+      let succeeded = 0;
+      let failed = 0;
+      for (const unitId of cancelable) {
+        const cmd = await cancelUnitMove(currentJson, unitId);
+        if (cmd.ok && cmd.gameJson) {
+          currentJson = cmd.gameJson;
+          succeeded++;
+        } else {
+          failed++;
+        }
       }
-    }
-    if (succeeded > 0) await applyGameJson(currentJson);
-    if (failed > 0) showError(`Canceled ${succeeded} of ${cancelable.length} moves \u2014 ${failed} failed`);
-  }, [selectedUnitIds, pendingMovesDisplay, gameJson, applyGameJson, showError]);
+      if (succeeded > 0) await applyGameJson(currentJson);
+      if (failed > 0) showError(`Canceled ${succeeded} of ${cancelable.length} moves \u2014 ${failed} failed`);
+    });
+  }, [selectedUnitIds, pendingMovesDisplay, gameJson, applyGameJson, showError, runMutation]);
 
   const handleRecruit = useCallback(async (unitType: string) => {
-    if (isObserver) return;
-    const cmd = await recruitArmyUnit(gameJson, playerNationId, unitType);
-    if (cmd.ok && cmd.gameJson && (await applyGameJson(cmd.gameJson))) {
-      if (selectedTile?.province_id != null) {
-        setProvinceUnits(await getUnitsInProvince(cmd.gameJson, selectedTile.province_id));
+    await runMutation(async () => {
+      if (isObserver) return;
+      const cmd = await recruitArmyUnit(gameJson, playerNationId, unitType);
+      if (cmd.ok && cmd.gameJson && (await applyGameJson(cmd.gameJson))) {
+        if (selectedTile?.province_id != null) {
+          setProvinceUnits(await getUnitsInProvince(cmd.gameJson, selectedTile.province_id));
+        }
+      } else if (cmd.error) {
+        showError(`Recruit failed: ${cmd.error}`);
       }
-    } else if (cmd.error) {
-      showError(`Recruit failed: ${cmd.error}`);
-    }
-  }, [gameJson, playerNationId, applyGameJson, selectedTile, showError]);
+    });
+  }, [gameJson, playerNationId, applyGameJson, selectedTile, showError, runMutation]);
 
   const handleDeployCivilian = useCallback((civ: CivilianDetail) => {
     if (isObserver) return;
@@ -772,83 +845,105 @@ function App() {
   }, [tiles, playerNationId]);
 
   const handleRecallCivilian = useCallback(async (civilianId: number) => {
-    if (isObserver) return;
-    const cmd = await recallCivilian(gameJson, civilianId);
-    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-    else if (cmd.error) showError(`Recall failed: ${cmd.error}`);
-  }, [gameJson, applyGameJson, showError]);
+    await runMutation(async () => {
+      if (isObserver) return;
+      const cmd = await recallCivilian(gameJson, civilianId);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Recall failed: ${cmd.error}`);
+    });
+  }, [gameJson, applyGameJson, showError, runMutation]);
 
   const handleEngineerBuild = useCallback(async (civilianId: number, kind: EngineerBuildKind) => {
-    if (isObserver) return;
-    const cmd = await engineerBuild(gameJson, civilianId, kind);
-    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-    else if (cmd.error) showError(`Engineer build failed: ${cmd.error}`);
-  }, [gameJson, applyGameJson, showError]);
+    await runMutation(async () => {
+      if (isObserver) return;
+      const cmd = await engineerBuild(gameJson, civilianId, kind);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Engineer build failed: ${cmd.error}`);
+    });
+  }, [gameJson, applyGameJson, showError, runMutation]);
 
   const handleHireCivilian = useCallback(async (civType: string) => {
-    if (isObserver) return;
-    const cmd = await hireCivilian(gameJson, playerNationId, civType);
-    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-    else if (cmd.error) showError(`Hire failed: ${cmd.error}`);
-  }, [gameJson, playerNationId, applyGameJson, showError]);
+    await runMutation(async () => {
+      if (isObserver) return;
+      const cmd = await hireCivilian(gameJson, playerNationId, civType);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Hire failed: ${cmd.error}`);
+    });
+  }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
   const handleBuildShip = useCallback(async (shipType: string) => {
-    if (isObserver) return;
-    const cmd = await buildShip(gameJson, playerNationId, shipType);
-    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-    else if (cmd.error) showError(`Build failed: ${cmd.error}`);
-  }, [gameJson, playerNationId, applyGameJson, showError]);
+    await runMutation(async () => {
+      if (isObserver) return;
+      const cmd = await buildShip(gameJson, playerNationId, shipType);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Build failed: ${cmd.error}`);
+    });
+  }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
   // ── New screen handlers ──────────────────────────────────────────
 
   const handleBuildFreightCar = useCallback(async () => {
-    if (isObserver) return;
-    const cmd = await buildFreightCar(gameJson, playerNationId);
-    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-    else if (cmd.error) showError(`Build failed: ${cmd.error}`);
-  }, [gameJson, playerNationId, applyGameJson, showError]);
+    await runMutation(async () => {
+      if (isObserver) return;
+      const cmd = await buildFreightCar(gameJson, playerNationId);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Build failed: ${cmd.error}`);
+    });
+  }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
   const handleSetAllocation = useCallback(async (resource: string, percentage: number) => {
-    if (isObserver) return;
-    const cmd = await setTransportAllocation(gameJson, playerNationId, resource, percentage);
-    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-    else if (cmd.error) showError(`Allocation failed: ${cmd.error}`);
-  }, [gameJson, playerNationId, applyGameJson, showError]);
+    await runMutation(async () => {
+      if (isObserver) return;
+      const cmd = await setTransportAllocation(gameJson, playerNationId, resource, percentage);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Allocation failed: ${cmd.error}`);
+    });
+  }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
   const handleExpandBuilding = useCallback(async (buildingType: string) => {
-    if (isObserver) return;
-    const cmd = await expandBuilding(gameJson, playerNationId, buildingType);
-    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-    else if (cmd.error) showError(`Expand failed: ${cmd.error}`);
-  }, [gameJson, playerNationId, applyGameJson, showError]);
+    await runMutation(async () => {
+      if (isObserver) return;
+      const cmd = await expandBuilding(gameJson, playerNationId, buildingType);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Expand failed: ${cmd.error}`);
+    });
+  }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
   const handleSetSubsidy = useCallback(async (targetNationId: number, amount: number) => {
-    if (isObserver) return;
-    const cmd = await setTradeSubsidy(gameJson, playerNationId, targetNationId, amount);
-    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-    else if (cmd.error) showError(`Subsidy failed: ${cmd.error}`);
-  }, [gameJson, playerNationId, applyGameJson, showError]);
+    await runMutation(async () => {
+      if (isObserver) return;
+      const cmd = await setTradeSubsidy(gameJson, playerNationId, targetNationId, amount);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Subsidy failed: ${cmd.error}`);
+    });
+  }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
   const handleSetSellOrder = useCallback(async (commodityType: string, commodityName: string, quantity: number) => {
-    if (isObserver) return;
-    const cmd = await setPlayerSellOrder(gameJson, playerNationId, commodityType, commodityName, quantity);
-    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-    else if (cmd.error) showError(`Sell order failed: ${cmd.error}`);
-  }, [gameJson, playerNationId, applyGameJson, showError]);
+    await runMutation(async () => {
+      if (isObserver) return;
+      const cmd = await setPlayerSellOrder(gameJson, playerNationId, commodityType, commodityName, quantity);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Sell order failed: ${cmd.error}`);
+    });
+  }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
   const handleSetBuyOrder = useCallback(async (resource: string, quantity: number, maxPrice: number) => {
-    const cmd = await setPlayerBuyOrder(gameJson, playerNationId, resource, quantity, maxPrice);
-    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-    else if (cmd.error) showError(`Buy order failed: ${cmd.error}`);
-  }, [gameJson, playerNationId, applyGameJson, showError]);
+    await runMutation(async () => {
+      const cmd = await setPlayerBuyOrder(gameJson, playerNationId, resource, quantity, maxPrice);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Buy order failed: ${cmd.error}`);
+    });
+  }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
   // Diplomacy screen handlers
   const makeDiploHandler = useCallback((fn: (gj: string, nid: number, tid: number) => Promise<any>, label: string) =>
     async (targetId: number) => {
-      const cmd = await fn(gameJson, playerNationId, targetId);
-      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-      else if (cmd.error) showError(`${label}: ${cmd.error}`);
-    }, [gameJson, playerNationId, applyGameJson, showError]);
+      await runMutation(async () => {
+        const cmd = await fn(gameJson, playerNationId, targetId);
+        if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+        else if (cmd.error) showError(`${label}: ${cmd.error}`);
+      });
+    }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
   const handleDiploBuildConsulate = useCallback((tid: number) => makeDiploHandler(diplomacyBuildConsulate, 'Consulate')(tid), [makeDiploHandler]);
   const handleDiploBuildEmbassy = useCallback((tid: number) => makeDiploHandler(diplomacyBuildEmbassy, 'Embassy')(tid), [makeDiploHandler]);
@@ -858,37 +953,45 @@ function App() {
   const handleDiploProposePeace = useCallback((tid: number) => makeDiploHandler(diplomacyProposePeace, 'Peace')(tid), [makeDiploHandler]);
 
   const handleDiploSendGrant = useCallback(async (targetId: number, amount: number) => {
-    const cmd = await diplomacySendGrant(gameJson, playerNationId, targetId, amount);
-    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-    else if (cmd.error) showError(`Grant failed: ${cmd.error}`);
-  }, [gameJson, playerNationId, applyGameJson, showError]);
+    await runMutation(async () => {
+      const cmd = await diplomacySendGrant(gameJson, playerNationId, targetId, amount);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Grant failed: ${cmd.error}`);
+    });
+  }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
   const handleDiploBreakTreaty = useCallback(async (targetId: number, treatyType: string) => {
-    const cmd = await diplomacyBreakTreaty(gameJson, playerNationId, targetId, treatyType);
-    if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-    else if (cmd.error) showError(`Break treaty failed: ${cmd.error}`);
-  }, [gameJson, playerNationId, applyGameJson, showError]);
+    await runMutation(async () => {
+      const cmd = await diplomacyBreakTreaty(gameJson, playerNationId, targetId, treatyType);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Break treaty failed: ${cmd.error}`);
+    });
+  }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
   // Proposal modal handlers
   const handleAcceptProposal = useCallback(async (index: number) => {
-    const cmd = await acceptProposal(gameJson, playerNationId, index);
-    if (cmd.ok && cmd.gameJson) {
-      await applyGameJson(cmd.gameJson);
-      const updated = await getPendingProposals(cmd.gameJson, playerNationId);
-      setProposalData(updated);
-      if (!updated || updated.proposals.length === 0) setShowProposals(false);
-    } else if (cmd.error) showError(`Accept failed: ${cmd.error}`);
-  }, [gameJson, playerNationId, applyGameJson, showError]);
+    await runMutation(async () => {
+      const cmd = await acceptProposal(gameJson, playerNationId, index);
+      if (cmd.ok && cmd.gameJson) {
+        await applyGameJson(cmd.gameJson);
+        const updated = await getPendingProposals(cmd.gameJson, playerNationId);
+        setProposalData(updated);
+        if (!updated || updated.proposals.length === 0) setShowProposals(false);
+      } else if (cmd.error) showError(`Accept failed: ${cmd.error}`);
+    });
+  }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
   const handleRejectProposal = useCallback(async (index: number) => {
-    const cmd = await rejectProposal(gameJson, playerNationId, index);
-    if (cmd.ok && cmd.gameJson) {
-      await applyGameJson(cmd.gameJson);
-      const updated = await getPendingProposals(cmd.gameJson, playerNationId);
-      setProposalData(updated);
-      if (!updated || updated.proposals.length === 0) setShowProposals(false);
-    } else if (cmd.error) showError(`Reject failed: ${cmd.error}`);
-  }, [gameJson, playerNationId, applyGameJson, showError]);
+    await runMutation(async () => {
+      const cmd = await rejectProposal(gameJson, playerNationId, index);
+      if (cmd.ok && cmd.gameJson) {
+        await applyGameJson(cmd.gameJson);
+        const updated = await getPendingProposals(cmd.gameJson, playerNationId);
+        setProposalData(updated);
+        if (!updated || updated.proposals.length === 0) setShowProposals(false);
+      } else if (cmd.error) showError(`Reject failed: ${cmd.error}`);
+    });
+  }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
 
   // Look up diplomacy info for a given tile's owner
@@ -961,14 +1064,16 @@ function App() {
   }, [mapMode, selectedNation, isObserver, getDiploInfoForTile, getMilitaryInfoForTile]);
 
   const handleResearch = async (techName: string) => {
-    if (isObserver) return;
-    const result = await researchTech(gameJson, techName);
-    try {
-      const parsed = JSON.parse(result);
-      if (parsed.error) { alert(parsed.error); return; }
-    } catch { /* applyGameJson will handle parse errors */ }
-    if (!(await applyGameJson(result))) return;
-    setShowTech(false);
+    await runMutation(async () => {
+      if (isObserver) return;
+      const result = await researchTech(gameJson, techName);
+      try {
+        const parsed = JSON.parse(result);
+        if (parsed.error) { alert(parsed.error); return; }
+      } catch { /* applyGameJson will handle parse errors */ }
+      if (!(await applyGameJson(result))) return;
+      setShowTech(false);
+    });
   };
 
   if (loading) return <div style={styles.loading}>Loading Imperialism...</div>;
