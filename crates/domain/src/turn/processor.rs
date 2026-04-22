@@ -307,13 +307,17 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     let moved_unit_ids = resolve_military_movement(game, &mut report);
 
     // 7. Resolve combat (pending attacks — units that moved this turn are excluded)
-    resolve_combat(game, &mut report, &moved_unit_ids);
+    let fought_unit_ids = resolve_combat(game, &mut report, &moved_unit_ids);
 
     // 7a. Anarchy sweep: after all initial attacks and counter-attacks have
     // resolved, apply anarchy only to nations that still do not hold their
     // capital. Prevents a capital captured and then recaptured in the same
     // turn from leaving the nation in spurious anarchy.
     apply_end_of_combat_anarchy(game, &mut report);
+
+    // 7a2. Rest heals units (Trello card #20): any living army unit that did
+    // not move and did not participate in combat this turn recovers health.
+    heal_resting_units(game, &moved_unit_ids, &fought_unit_ids);
 
     // 7b. Resolve naval combat (warship engagements between nations at war)
     resolve_naval_combat(game, &mut report);
@@ -373,8 +377,13 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         .iter()
         .map(|n| (n.id, n.capital_province_id))
         .collect();
-    game.political_archive
-        .push((game.turn, PoliticalSnapshot { provinces, capitals }));
+    game.political_archive.push((
+        game.turn,
+        PoliticalSnapshot {
+            provinces,
+            capitals,
+        },
+    ));
 
     // 12. Advance turn
     report
@@ -2364,7 +2373,8 @@ fn resolve_combat(
     game: &mut GameState,
     report: &mut TurnReport,
     moved_unit_ids: &HashSet<crate::map::UnitId>,
-) {
+) -> HashSet<crate::map::UnitId> {
+    let mut fought_unit_ids: HashSet<crate::map::UnitId> = HashSet::new();
     let all_attacks: Vec<(NationId, ProvinceId)> = game.pending_attacks.drain(..).collect();
     // Filter out attacks from anarchic nations (their armies only defend)
     let attacks: Vec<(NationId, ProvinceId)> = all_attacks
@@ -2563,6 +2573,11 @@ fn resolve_combat(
             nation: attacker_id,
             units: attacker_units,
         };
+        // Mark attackers as having participated this turn. Holds for both
+        // the auto-conquer branch (they moved onto the target) and the
+        // battle branch below (they fired). Used by the rest-heals-units
+        // pass to keep resting-only units eligible.
+        fought_unit_ids.extend(attacker_force.units.iter().map(|u| u.id));
 
         // Create defender force: every army unit (field army + persistent
         // militia + garrison artillery) stationed in the province joins the
@@ -2690,6 +2705,7 @@ fn resolve_combat(
             nation: defender_id,
             units: defense_units,
         };
+        fought_unit_ids.extend(defender_force.units.iter().map(|u| u.id));
 
         // Get terrain and fort level from the province's capital tile
         let (battle_terrain, battle_fort_level) = game
@@ -3074,6 +3090,7 @@ fn resolve_combat(
             nation: counter_attacker_id,
             units: counter_units,
         };
+        fought_unit_ids.extend(counter_force.units.iter().map(|u| u.id));
 
         // Defender of counter-attack is the new occupier — use units in the target province
         let occupier_units: Vec<ArmyUnit> = match game.get_nation(new_owner_id) {
@@ -3090,6 +3107,7 @@ fn resolve_combat(
             nation: new_owner_id,
             units: occupier_units,
         };
+        fought_unit_ids.extend(defender_force.units.iter().map(|u| u.id));
 
         let (battle_terrain, battle_fort_level) = game
             .get_province(target_province_id)
@@ -3271,6 +3289,7 @@ fn resolve_combat(
 
         report.battles.push(result);
     }
+    fought_unit_ids
 }
 
 /// Compute the `conquest_origin` field for a province that just changed
@@ -3285,6 +3304,7 @@ fn resolve_combat(
 /// - If none and the dispossessed defender is a minor, stamp the defender.
 /// - If the new owner IS the origin minor reclaiming their own land, drop
 ///   the attribution — a nation is not "conquered from itself".
+///
 /// Owned provinces neighboring a battle province that the defender could
 /// retreat into. The battle province itself is excluded.
 fn defender_retreat_neighbors(
@@ -3366,7 +3386,7 @@ fn retreat_thresholds_for(game: &GameState, nation_id: NationId) -> (f64, f64) {
             .as_ref()
             .and_then(|c| c.retreat_postbattle_fp_loss)
             .unwrap_or(0.60);
-        return (prebattle, postbattle);
+        (prebattle, postbattle)
     }
     #[cfg(not(feature = "lua"))]
     {
@@ -3432,10 +3452,8 @@ fn place_defender_retreat(
         .collect();
 
     // Field army: round-robin, no cap.
-    let mut idx = 0usize;
-    for uid in &field_army {
+    for (idx, uid) in field_army.iter().enumerate() {
         let dest = neighbors[idx % neighbors.len()];
-        idx += 1;
         placements.push((*uid, dest));
     }
 
@@ -3469,7 +3487,7 @@ fn place_defender_retreat(
         }
         let doomed: std::collections::HashSet<crate::map::UnitId> = overflow_militia
             .into_iter()
-            .chain(dying_artillery.into_iter())
+            .chain(dying_artillery)
             .collect();
         nation.army.retain(|u| !doomed.contains(&u.id));
     }
@@ -3583,6 +3601,33 @@ fn rebalance_militia_into(game: &mut GameState, new_owner: NationId, province: P
     }
 }
 
+/// Rest heals units (Trello card #20): any living army unit that did not
+/// move *and* did not participate in combat this turn recovers
+/// `REST_HEAL_AMOUNT` health. Matches the original Imperialism rule
+/// "armies that don't move regain HP". The `heal()` method on `ArmyUnit`
+/// already caps at 100 and applies the medal-based fast-heal multiplier.
+fn heal_resting_units(
+    game: &mut GameState,
+    moved_unit_ids: &HashSet<crate::map::UnitId>,
+    fought_unit_ids: &HashSet<crate::map::UnitId>,
+) {
+    let heal_amount = game.game_data.game_config.rest_heal_amount;
+    for nation in &mut game.nations {
+        for unit in &mut nation.army {
+            if !unit.is_alive() {
+                continue;
+            }
+            if moved_unit_ids.contains(&unit.id) || fought_unit_ids.contains(&unit.id) {
+                continue;
+            }
+            if unit.health >= 100 {
+                continue;
+            }
+            unit.heal(heal_amount);
+        }
+    }
+}
+
 /// Garrison regeneration (manual p. 36): every
 /// `garrison_regen_interval_turns` turns, each province whose current
 /// militia count is below its default gains +1 Militia (spawned into the
@@ -3593,7 +3638,7 @@ fn regenerate_garrisons(game: &mut GameState) {
     if interval == 0 {
         return;
     }
-    if game.turn.0 % interval != 0 {
+    if !game.turn.0.is_multiple_of(interval) {
         return;
     }
     let default_gp = game.game_data.game_config.default_garrison_per_province as usize;
@@ -5387,10 +5432,14 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
             None => continue,
         };
 
-        // Calculate total arms built (sum of arms_required for all army units)
+        // Calculate total arms built. Militia and Generals themselves do not
+        // count toward the General-reward threshold — Militia is raised from
+        // provinces rather than built from arms, and Generals are the reward,
+        // not the input. (Trello card #128.)
         let total_arms: u32 = nation
             .army
             .iter()
+            .filter(|u| !matches!(u.unit_type, ArmyUnitType::Militia | ArmyUnitType::General))
             .map(|u| u.unit_type.stats().arms_required)
             .sum();
 
@@ -13713,5 +13762,370 @@ mod tests {
         // is dropped.
         let reclaimed = attribute_conquest_origin(result, NationId(99), NationId(1), false);
         assert_eq!(reclaimed, None);
+    }
+
+    /// Card #129: an amphibious attack draws its naval cohort from every
+    /// coastal province the attacker currently controls — including
+    /// provinces that were formerly hostile capitals. The total landing
+    /// force is capped by the sum of warship `arms_cost` on the beachhead.
+    #[test]
+    fn amphibious_landing_uses_all_controlled_coastal_provinces_and_respects_cap() {
+        use crate::map::UnitId;
+        use crate::military::naval::NavalOperation;
+        use crate::military::ships::{Ship, ShipType};
+
+        // Fixture: Nation 1 (Attacker) owns P1 (its own capital, coastal) and
+        // P2 (former Nation 2 capital — now "conquered"; coastal). Nation 3
+        // owns P3 (non-adjacent to both P1 and P2; coastal target). Both P1
+        // and P2 are out-of-range overland, so the naval cohort is the only
+        // way to reach P3.
+        //
+        //   Attacker: 2 Guards in P1, 2 Guards in P2.
+        //   Ship: 1 Frigate (arms_cost = 2) → beachhead cap = 2.
+        //
+        // Expectation: the attack succeeds drawing units from P1 and P2
+        // (attacker_owned set includes both), and only 2 units land
+        // (best-FP first, cap = 2). Survivors stay at their origin ports.
+        let coord_p1 = HexCoord::new(0, 0);
+        let coord_p2 = HexCoord::new(2, 0);
+        let coord_p3 = HexCoord::new(10, 0);
+
+        let mut hex_map = HexMap::new(20, 20);
+        hex_map.set_tile(
+            coord_p1,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        hex_map.set_tile(
+            coord_p2,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+        hex_map.set_tile(
+            coord_p3,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(3)),
+        );
+
+        let mut p1 = Province::new(
+            ProvinceId(1),
+            "HomePort".into(),
+            NationId(1),
+            coord_p1,
+            vec![coord_p1],
+            4,
+        );
+        p1.coastal = true;
+        let mut p2 = Province::new(
+            ProvinceId(2),
+            "FormerEnemyCapital".into(),
+            NationId(1),
+            coord_p2,
+            vec![coord_p2],
+            4,
+        );
+        p2.coastal = true;
+        let mut p3 = Province::new(
+            ProvinceId(3),
+            "Target".into(),
+            NationId(3),
+            coord_p3,
+            vec![coord_p3],
+            3,
+        );
+        p3.coastal = true;
+
+        let mut attacker = Nation::new(
+            NationId(1),
+            "Attacker".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        // P2 was conquered from a former enemy — it joins the attacker's
+        // province_ids just like any other owned province. This is precisely
+        // what card #129 wants exercised.
+        attacker.add_province(ProvinceId(2));
+        attacker.treasury = Money::dollars(20000);
+        for i in 0..2 {
+            attacker.army.push(ArmyUnit::new(
+                UnitId(100 + i),
+                ArmyUnitType::Guards,
+                NationId(1),
+                ProvinceId(1),
+            ));
+        }
+        for i in 0..2 {
+            attacker.army.push(ArmyUnit::new(
+                UnitId(200 + i),
+                ArmyUnitType::Guards,
+                NationId(1),
+                ProvinceId(2),
+            ));
+        }
+        // Frigate: arms_cost = 2 → beachhead_cap = 2 (forces the cap to bite).
+        let mut ship = Ship::new(UnitId(500), ShipType::Frigate, NationId(1));
+        ship.operation = Some(NavalOperation::Beachhead(ProvinceId(3)));
+        attacker.warships.push(ship);
+
+        let mut defender = Nation::new(
+            NationId(3),
+            "Defender".to_string(),
+            NationColor::Red,
+            NationType::MinorNation,
+            ProvinceId(99), // fake capital so P3 gets no auto-garrison
+        );
+        defender.army.push(ArmyUnit::new(
+            UnitId(400),
+            ArmyUnitType::Militia,
+            NationId(3),
+            ProvinceId(3),
+        ));
+
+        let mut game = GameState {
+            turn: TurnNumber::new(5),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![p1, p2, p3],
+            nations: vec![attacker, defender],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy: DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: vec![(NationId(1), ProvinceId(3), TurnNumber::new(4))],
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
+            political_archive: Vec::new(),
+            ai_debug: false,
+            observer_mode: false,
+        };
+        game.pending_attacks.push((NationId(1), ProvinceId(3)));
+        game.diplomacy.declare_war(NationId(1), NationId(3));
+
+        let report = process_turn(&mut game);
+
+        assert!(
+            !report.battles.is_empty(),
+            "amphibious attack should produce a battle"
+        );
+        let battle = &report.battles[0];
+        // Cap: only 2 Guards may land (arms_cost = 2). 4 units total owned —
+        // the other 2 stay at their respective ports.
+        assert_eq!(
+            battle.attacker_initial_count, 2,
+            "naval cohort must be capped by beachhead_force_size (arms_cost=2)"
+        );
+
+        // Battle won (defender was a single Militia vs. 2 Guards).
+        assert_eq!(
+            game.get_province(ProvinceId(3)).unwrap().owner,
+            NationId(1),
+            "attacker should conquer target province"
+        );
+
+        // Verify units from BOTH origin provinces remain — proves the naval
+        // cohort was drawn from the full set of coastal attacker provinces,
+        // not just one.
+        let attacker = game.get_nation(NationId(1)).unwrap();
+        let survivors_p1 = attacker
+            .army
+            .iter()
+            .filter(|u| (100..102).contains(&u.id.0) && u.position == ProvinceId(1))
+            .count();
+        let survivors_p2 = attacker
+            .army
+            .iter()
+            .filter(|u| (200..202).contains(&u.id.0) && u.position == ProvinceId(2))
+            .count();
+        assert!(
+            survivors_p1 + survivors_p2 >= 2,
+            "both P1 and P2 should still hold non-participating survivors, got P1={survivors_p1} P2={survivors_p2}",
+        );
+    }
+
+    /// Card #20: a unit that neither moved nor fought recovers health; units
+    /// that moved or fought stay damaged; and units already at full health
+    /// are left alone.
+    #[test]
+    fn rest_heals_idle_units_only() {
+        use crate::map::UnitId;
+        use crate::military::units::{ArmyUnit, ArmyUnitType};
+
+        let mut game = test_game_state();
+
+        let mut wounded_idle = ArmyUnit::new(
+            UnitId(101),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(1),
+        );
+        wounded_idle.health = 60;
+
+        let mut wounded_moved = ArmyUnit::new(
+            UnitId(102),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(1),
+        );
+        wounded_moved.health = 60;
+
+        let mut wounded_fought = ArmyUnit::new(
+            UnitId(103),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(1),
+        );
+        wounded_fought.health = 60;
+
+        let mut healthy_idle = ArmyUnit::new(
+            UnitId(104),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(1),
+        );
+        healthy_idle.health = 100;
+
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation
+            .army
+            .extend([wounded_idle, wounded_moved, wounded_fought, healthy_idle]);
+
+        let mut moved = HashSet::new();
+        moved.insert(UnitId(102));
+        let mut fought = HashSet::new();
+        fought.insert(UnitId(103));
+
+        heal_resting_units(&mut game, &moved, &fought);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        let hp = |uid: u32| {
+            nation
+                .army
+                .iter()
+                .find(|u| u.id == UnitId(uid))
+                .map(|u| u.health)
+                .unwrap()
+        };
+        assert_eq!(hp(101), 70, "idle wounded unit heals by rest_heal_amount");
+        assert_eq!(hp(102), 60, "wounded unit that moved does not heal");
+        assert_eq!(hp(103), 60, "wounded unit that fought does not heal");
+        assert_eq!(hp(104), 100, "fully healthy unit remains at 100");
+    }
+
+    #[test]
+    fn rest_heal_amount_config_drives_heal() {
+        // F-015 regression: non-default rest_heal_amount must change the actual
+        // heal amount applied by heal_resting_units.
+        use crate::map::UnitId;
+        use crate::military::units::{ArmyUnit, ArmyUnitType};
+
+        let mut game = test_game_state();
+        game.game_data.game_config.rest_heal_amount = 5;
+
+        let mut wounded = ArmyUnit::new(
+            UnitId(201),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(1),
+        );
+        wounded.health = 50;
+        game.get_nation_mut(NationId(1)).unwrap().army.push(wounded);
+
+        heal_resting_units(&mut game, &HashSet::new(), &HashSet::new());
+
+        let hp = game
+            .get_nation(NationId(1))
+            .unwrap()
+            .army
+            .iter()
+            .find(|u| u.id == UnitId(201))
+            .unwrap()
+            .health;
+        assert_eq!(
+            hp, 55,
+            "heal amount should reflect game_config.rest_heal_amount = 5"
+        );
+
+        // Verify clamping: unit at 98 hp should reach 100, not 103.
+        let mut near_full = ArmyUnit::new(
+            UnitId(202),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(1),
+        );
+        near_full.health = 98;
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .army
+            .push(near_full);
+
+        heal_resting_units(&mut game, &HashSet::new(), &HashSet::new());
+
+        let hp2 = game
+            .get_nation(NationId(1))
+            .unwrap()
+            .army
+            .iter()
+            .find(|u| u.id == UnitId(202))
+            .unwrap()
+            .health;
+        assert_eq!(hp2, 100, "heal should clamp at 100 HP");
+    }
+
+    #[test]
+    fn militia_and_general_excluded_from_general_reward_threshold() {
+        // Regression for card #128: Militia and Generals must not count toward
+        // the arms total that unlocks a General reward.
+        use crate::map::UnitId;
+        use crate::military::units::{ArmyUnit, ArmyUnitType};
+
+        let mut game = test_game_state();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        // Remove all existing units to start clean
+        nation.army.retain(|_| false);
+        nation.total_arms_built = 0;
+        nation.generals_earned = 0;
+
+        // Add enough Regulars to reach the first general threshold (6 arms)
+        // Regulars cost 1 arm each.
+        for i in 0..6 {
+            nation.army.push(ArmyUnit::new(
+                UnitId(2000 + i),
+                ArmyUnitType::Regulars,
+                NationId(1),
+                ProvinceId(1),
+            ));
+        }
+        // Add militia and a general — these must NOT inflate the arms count
+        for i in 0..10 {
+            nation.army.push(ArmyUnit::new(
+                UnitId(3000 + i),
+                ArmyUnitType::Militia,
+                NationId(1),
+                ProvinceId(1),
+            ));
+        }
+        nation.army.push(ArmyUnit::new(
+            UnitId(4000),
+            ArmyUnitType::General,
+            NationId(1),
+            ProvinceId(1),
+        ));
+
+        let mut report = TurnReport::empty();
+        resolve_rewards(&mut game, &mut report);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        // Exactly 6 arms from Regulars → first general awarded; militia/general ignored
+        assert_eq!(
+            nation.generals_earned, 1,
+            "one general should be awarded at the 6-arms threshold"
+        );
+        assert_eq!(
+            nation.total_arms_built, 6,
+            "militia and generals must not count toward total_arms_built"
+        );
     }
 }

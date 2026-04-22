@@ -1016,21 +1016,7 @@ pub(crate) fn ai_declare_wars(
         }
 
         // ── 8. Declare war ─────────────────────────────────────
-        // Find the target's weakest province (fewest tiles)
-        let target_capital = nation_infos
-            .iter()
-            .find(|(id, _, _, _, _)| *id == target_id)
-            .map(|(_, _, _, _, cap)| *cap)
-            .unwrap_or(ProvinceId(0));
-
-        let attack_province = game
-            .provinces
-            .iter()
-            .filter(|p| p.owner == target_id)
-            .min_by_key(|p| p.tiles.len())
-            .map(|p| p.id)
-            .unwrap_or(target_capital);
-
+        // Find the target's weakest province (fewest tiles). Trello card #8:
         // Final guard: target must still own at least one province
         if game.provinces.iter().all(|p| p.owner != target_id) {
             continue;
@@ -1044,7 +1030,11 @@ pub(crate) fn ai_declare_wars(
         }
         let turn = game.turn;
         game.diplomacy.declare_war_at(ai_id, target_id, turn);
-        game.pending_attacks.push((ai_id, attack_province));
+        // Attack is NOT queued here. ai_declare_wars runs before the per-nation
+        // loop (see ai/mod.rs), so ai_military_strategy will pick up the new
+        // war on the same turn and apply the rest_health_threshold filter when
+        // deciding whether to commit forces. This avoids sending wounded units
+        // into a first-turn attack that bypasses the health gate.
         targeted_this_round.push(target_id);
         actions.push(super::AiAction {
             text: format!("{} has declared war on {}!", attacker_name, target_name),
@@ -1128,7 +1118,7 @@ pub(crate) fn ai_military_strategy(
     // engage at less than 1:1 raw FP).
     let personality = get_personality(game, nation_id);
     #[cfg(feature = "lua")]
-    let (attack_fp_vs_minor, attack_fp_vs_gp) = {
+    let (attack_fp_vs_minor, attack_fp_vs_gp, rest_health_threshold, capital_save_for_last_penalty) = {
         let cfg = game
             .game_data
             .lua_engine
@@ -1139,12 +1129,29 @@ pub(crate) fn ai_military_strategy(
                 .and_then(|c| c.attack_fp_vs_minor)
                 .unwrap_or(0.8),
             cfg.as_ref().and_then(|c| c.attack_fp_vs_gp).unwrap_or(1.0),
+            cfg.as_ref()
+                .and_then(|c| c.rest_health_threshold)
+                .unwrap_or(50),
+            cfg.as_ref()
+                .and_then(|c| c.capital_save_for_last_penalty)
+                .unwrap_or(match personality {
+                    AiPersonality::Aggressive => 10,
+                    _ => 25,
+                }),
         )
     };
     #[cfg(not(feature = "lua"))]
-    let (attack_fp_vs_minor, attack_fp_vs_gp) = {
+    let (attack_fp_vs_minor, attack_fp_vs_gp, rest_health_threshold, capital_save_for_last_penalty) = {
         let _ = personality;
-        (0.8f64, 1.0f64)
+        (
+            0.8f64,
+            1.0f64,
+            50u8,
+            match personality {
+                AiPersonality::Aggressive => 10i32,
+                _ => 25i32,
+            },
+        )
     };
 
     // Attack only when we actually have a meaningful combat force.
@@ -1190,6 +1197,25 @@ pub(crate) fn ai_military_strategy(
                 .iter()
                 .filter(|p| attacker_province_ids.contains(&p.id))
                 .collect();
+
+            // Card #8: does this enemy have at least one reachable non-capital
+            // province? If so, the AI should save the capital for last to
+            // avoid flipping the enemy into anarchy and handing the vacuum
+            // to third parties.
+            let enemy_capital_pid = game.get_nation(enemy_id).map(|n| n.capital_province_id);
+            let has_reachable_non_capital = game.provinces.iter().any(|p| {
+                if p.owner != enemy_id || Some(p.id) == enemy_capital_pid {
+                    return false;
+                }
+                let adjacent = our_provinces
+                    .iter()
+                    .any(|ours| crate::map::provinces_are_adjacent(&game.hex_map, ours, p));
+                let has_landing = game
+                    .pending_landings
+                    .iter()
+                    .any(|(nid, pid, _)| *nid == nation_id && *pid == p.id);
+                adjacent || has_landing
+            });
 
             for prov in &game.provinces {
                 if prov.owner == enemy_id {
@@ -1245,6 +1271,10 @@ pub(crate) fn ai_military_strategy(
                     // way `resolve_combat` assembles it — units in coastal
                     // attacker-owned provinces (excluding already-adjacent
                     // ones) capped by beachhead capacity, highest FP first.
+                    // Card #20: wounded units below `rest_health_threshold`
+                    // are excluded from the attack cohort so they stay in place
+                    // and heal via the end-of-turn rest-heal pass. The AI will
+                    // only commit fresh troops.
                     let (our_land_fp, naval_candidates): (f64, Vec<(f64, ProvinceId)>) = game
                         .get_nation(nation_id)
                         .map(|n| {
@@ -1252,6 +1282,9 @@ pub(crate) fn ai_military_strategy(
                             let mut naval: Vec<(f64, ProvinceId)> = Vec::new();
                             for u in &n.army {
                                 if !u.unit_type.can_move() {
+                                    continue;
+                                }
+                                if u.health < rest_health_threshold {
                                     continue;
                                 }
                                 if adjacent_owned_pids.contains(&u.position) {
@@ -1323,7 +1356,7 @@ pub(crate) fn ai_military_strategy(
                     // Score: fewer tiles = weaker (lower score = better)
                     // Bonus: check for valuable terrain (mountains/hills may have
                     // mineral deposits worth targeting)
-                    let mut score = tile_count as i32 + stationed as i32 * 3;
+                    let mut score = tile_count as i32 + stationed * 3;
 
                     // Penalize terrain defense (mountains are hard to attack)
                     let capital_terrain = game
@@ -1348,6 +1381,19 @@ pub(crate) fn ai_military_strategy(
                     // and wars should not stagnate)
                     if enemy_is_gp {
                         score -= 3;
+                    }
+
+                    // Card #8: save a minor nation's capital for last —
+                    // capturing it triggers anarchy and hands a vacuum to
+                    // third parties. Hard-skip the capital when any reachable
+                    // non-capital exists. For GPs apply only a soft penalty
+                    // (anarchy semantics differ; GPs rarely collapse).
+                    if Some(prov.id) == enemy_capital_pid && has_reachable_non_capital {
+                        if !enemy_is_gp {
+                            continue; // hard skip: pick non-capital instead
+                        } else {
+                            score += capital_save_for_last_penalty;
+                        }
                     }
 
                     candidates.push((prov.id, score));
@@ -1581,7 +1627,10 @@ mod tests {
         game.turn = TurnNumber::new(10);
 
         let mut actions = Vec::new();
+        // War declarations run first, then ai_military_strategy picks up the
+        // new war and queues the attack (matching the production flow in mod.rs).
         ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
+        ai_military_strategy(&mut game, NationId(2), &mut actions);
 
         // AI should declare war on the minor — it has provinces, low army, no relationship
         let rel = game.diplomacy.get_relation(NationId(2), NationId(3));
@@ -2184,6 +2233,163 @@ mod tests {
         assert!(
             !at_war_with_human,
             "AI should never target the human player"
+        );
+    }
+
+    #[test]
+    fn ai_attacks_gp_capital_when_only_reachable_province() {
+        // Regression for card #8: when attacking a GP where only the capital
+        // is reachable (non-capital is landlocked elsewhere), the AI should
+        // still target the capital rather than skipping it. This is the key
+        // difference from minor-nation behavior (which hard-skips the capital
+        // if any non-capital is reachable but can still target it when forced).
+        use crate::hex::HexCoord;
+        use crate::map::Province;
+        use crate::map::tile::Tile;
+        use crate::types::NationType;
+
+        let mut hex_map = crate::map::HexMap::new(20, 20);
+        // AI tile at (0,0)
+        hex_map.set_tile(
+            HexCoord::new(0, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+        // GP capital adjacent to AI at (1,0) — only reachable province
+        hex_map.set_tile(
+            HexCoord::new(1, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(3)),
+        );
+        // GP non-capital at (10,10) — far away, NOT reachable from AI
+        hex_map.set_tile(
+            HexCoord::new(10, 10),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(4)),
+        );
+
+        let ai_prov = Province::new(
+            ProvinceId(2),
+            "AI Land".to_string(),
+            NationId(2),
+            HexCoord::new(0, 0),
+            vec![HexCoord::new(0, 0)],
+            4,
+        );
+        let gp_capital = Province::new(
+            ProvinceId(3),
+            "GP Capital".to_string(),
+            NationId(3),
+            HexCoord::new(1, 0),
+            vec![HexCoord::new(1, 0)],
+            3,
+        );
+        let gp_non_capital = Province::new(
+            ProvinceId(4),
+            "GP Hinterland".to_string(),
+            NationId(3),
+            HexCoord::new(10, 10),
+            vec![HexCoord::new(10, 10)],
+            3,
+        );
+
+        let mut ai_nation = crate::nation::Nation::new(
+            NationId(2),
+            "AILand".to_string(),
+            crate::nation::NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(2),
+        );
+        ai_nation.treasury = Money::dollars(10000);
+        ai_nation.ai_personality = Some(AiPersonality::Aggressive);
+        for i in 0..10 {
+            ai_nation.army.push(ArmyUnit::new(
+                UnitId(5000 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        for i in 0..5 {
+            ai_nation.army.push(ArmyUnit::new(
+                UnitId(5100 + i),
+                ArmyUnitType::LightArtillery,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        for i in 0..4 {
+            ai_nation
+                .civilians
+                .push(crate::economy::civilians::Civilian::new(
+                    UnitId(10000 + i),
+                    crate::economy::civilians::CivilianType::Farmer,
+                    NationId(2),
+                ));
+        }
+
+        let mut gp_nation = crate::nation::Nation::new(
+            NationId(3),
+            "WeakGP".to_string(),
+            crate::nation::NationColor::Gray,
+            NationType::GreatPower,
+            ProvinceId(3),
+        );
+        gp_nation.add_province(ProvinceId(4));
+        gp_nation.treasury = Money::dollars(500);
+
+        let human_nation = crate::nation::Nation::new(
+            NationId(1),
+            "HumanNation".to_string(),
+            crate::nation::NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+
+        let mut game = GameState {
+            turn: TurnNumber::new(10),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map,
+            provinces: vec![ai_prov, gp_capital, gp_non_capital],
+            nations: vec![human_nation, ai_nation, gp_nation],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: crate::data::GameData::default(),
+            diplomacy: crate::diplomacy::DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
+            political_archive: Vec::new(),
+            ai_debug: false,
+            observer_mode: false,
+        };
+        crate::military::combat::seed_militia_from_garrison_count(&mut game);
+
+        let mut actions = Vec::new();
+        // Matching production flow: war declarations then strategy
+        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
+        ai_military_strategy(&mut game, NationId(2), &mut actions);
+
+        let at_war = game
+            .diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .map(|r| r.at_war)
+            .unwrap_or(false);
+        assert!(at_war, "AI should declare war on the weak GP");
+
+        // GP capital is the only reachable province → must be targeted
+        let attack = game.pending_attacks.iter().find(|(a, _)| *a == NationId(2));
+        assert!(
+            attack.is_some(),
+            "AI should queue an attack on the GP capital"
+        );
+        let (_, target) = attack.unwrap();
+        assert_eq!(
+            *target,
+            ProvinceId(3),
+            "GP capital should be targeted when it is the only reachable province"
         );
     }
 

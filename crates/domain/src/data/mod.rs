@@ -164,6 +164,11 @@ pub struct GameConfig {
     pub minor_default_garrison: u32,
     pub max_garrison_per_province: u32,
     pub garrison_regen_interval_turns: u32,
+    pub rest_heal_amount: u8,
+    // Naval scoring coefficients for ai_scored_spending (card #112)
+    pub spending_naval_base: f64,
+    pub spending_naval_war_bonus: f64,
+    pub spending_naval_gap_coeff: f64,
 }
 
 impl Default for GameConfig {
@@ -279,6 +284,10 @@ impl Default for GameConfig {
             minor_default_garrison: 3,
             max_garrison_per_province: 8,
             garrison_regen_interval_turns: 2,
+            rest_heal_amount: 10,
+            spending_naval_base: 2.0,
+            spending_naval_war_bonus: 10.0,
+            spending_naval_gap_coeff: 1.5,
         }
     }
 }

@@ -54,9 +54,9 @@ diplomatic = {
     embassy_treasury_threshold = 5000,
     max_alliances = 2,
 
-    -- Naval
-    max_warships_low_treasury = 2,
-    max_warships_high_treasury = 4,
+    -- Naval. Warship count is no longer capped (card #112) — navy growth
+    -- runs through ai_scored_spending like army growth. Material
+    -- availability is the real throttle.
     max_merchant_ships = 5,
     min_army_naval_invasion = 8,  -- cautious: needs 8+ units for overseas
 
@@ -99,6 +99,11 @@ diplomatic = {
     -- Attack acceptance (card #99 phase 2): cautious — needs ≥ local FP.
     attack_fp_vs_minor = 1.0,
     attack_fp_vs_gp = 1.2,
+
+    -- Rest-heal and capital-save (cards #8, #20)
+    rest_health_threshold = 60,       -- diplomatic: very reluctant to fight with wounded units
+    capital_save_for_last_penalty = 30, -- strong deterrent; prefer diplomatic absorption
+    spending_naval_weight = 1.0,      -- balanced naval investment
 
     -- Naval landing gate (card #7)
     naval_min_adjacent_strength_ratio = 2.0, -- very reluctant amphibious unless overland is hopeless

@@ -54,9 +54,9 @@ economic = {
     embassy_treasury_threshold = 10000,
     max_alliances = 1,
 
-    -- Naval
-    max_warships_low_treasury = 2,
-    max_warships_high_treasury = 4,
+    -- Naval. Warship count is no longer capped (card #112) — navy growth
+    -- runs through ai_scored_spending like army growth. Material
+    -- availability is the real throttle.
     max_merchant_ships = 3,
     min_army_naval_invasion = 6,  -- moderately cautious about overseas ops
 
@@ -99,6 +99,11 @@ economic = {
     -- Attack acceptance (card #99 phase 2): FP-based.
     attack_fp_vs_minor = 0.8,
     attack_fp_vs_gp = 1.0,
+
+    -- Rest-heal and capital-save (cards #8, #20)
+    rest_health_threshold = 50,       -- skip wounded units at half health
+    capital_save_for_last_penalty = 25, -- moderate deterrent for minor capitals
+    spending_naval_weight = 0.8,      -- below military weight (economy first)
 
     -- Naval landing gate (card #7)
     naval_min_adjacent_strength_ratio = 1.8,

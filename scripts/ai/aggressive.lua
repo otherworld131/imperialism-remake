@@ -57,9 +57,9 @@ aggressive = {
     embassy_treasury_threshold = 15000,
     max_alliances = 1,
 
-    -- Naval
-    max_warships_low_treasury = 4,
-    max_warships_high_treasury = 6,
+    -- Naval. Warship count is no longer capped (card #112) — navy growth
+    -- runs through ai_scored_spending like army growth. Material
+    -- availability is the real throttle.
     max_merchant_ships = 1,
     min_army_naval_invasion = 4,  -- attack overseas targets with 4+ units
 
@@ -103,6 +103,11 @@ aggressive = {
     -- to the defender's local FP required to attack. Lower = more aggressive.
     attack_fp_vs_minor = 0.6,         -- attacks minors even at 60% of their FP
     attack_fp_vs_gp = 0.8,            -- presses GPs even when slightly outgunned
+
+    -- Rest-heal and capital-save (cards #8, #20)
+    rest_health_threshold = 30,       -- aggressive: only avoids combat when badly hurt
+    capital_save_for_last_penalty = 10, -- small deterrent; aggression trumps caution
+    spending_naval_weight = 1.2,      -- slightly above military weight (naval wars matter)
 
     -- Naval landing gate (card #7)
     naval_min_adjacent_strength_ratio = 1.2,

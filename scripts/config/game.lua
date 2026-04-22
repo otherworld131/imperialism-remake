@@ -207,6 +207,16 @@ game_config = {
     max_garrison_per_province = 8,
     -- Turn cadence at which each under-strength province spawns +1 militia.
     garrison_regen_interval_turns = 2,
+    -- HP recovered per turn by a unit that neither moved nor fought (card #20).
+    rest_heal_amount = 10,
+
+    -- AI naval scoring coefficients (card #112).
+    -- spending_naval_base: peacetime score floor (even without war, navy drips in).
+    -- spending_naval_war_bonus: bonus when AI is at war with any nation.
+    -- spending_naval_gap_coeff: points per unit of firepower gap vs strongest enemy fleet.
+    spending_naval_base = 2.0,
+    spending_naval_war_bonus = 10.0,
+    spending_naval_gap_coeff = 1.5,
 }
 
 return game_config

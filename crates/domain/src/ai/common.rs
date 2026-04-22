@@ -174,7 +174,18 @@ pub(crate) mod test_helpers {
     /// Build a game state that includes a minor nation for war tests.
     pub(crate) fn test_game_with_ai_and_minor() -> GameState {
         let coord = HexCoord::new(0, 0);
-        let hex_map = HexMap::new(10, 10);
+        let mut hex_map = HexMap::new(10, 10);
+
+        // Configure tiles so provinces 2 and 3 are adjacent (needed for
+        // reachability checks in war-declaration and attack-targeting logic).
+        hex_map.set_tile(
+            HexCoord::new(3, 3),
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+        hex_map.set_tile(
+            HexCoord::new(4, 3),
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(3)),
+        );
 
         let province1 = Province::new(
             ProvinceId(1),
@@ -196,8 +207,8 @@ pub(crate) mod test_helpers {
             ProvinceId(3),
             "Minor Capital".to_string(),
             NationId(3),
-            HexCoord::new(5, 5),
-            vec![HexCoord::new(5, 5)],
+            HexCoord::new(4, 3),
+            vec![HexCoord::new(4, 3)],
             3,
         );
 

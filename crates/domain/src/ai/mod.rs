@@ -71,6 +71,11 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<AiAction> {
         );
     }
 
+    // War declarations run first so that ai_military_strategy (below) can
+    // immediately pick up new wars and apply the rest_health_threshold filter
+    // when choosing whether to queue a same-turn attack.
+    military::ai_declare_wars(game, &ai_ids, &mut actions);
+
     for nation_id in &ai_ids {
         if game.ai_debug {
             let name = game
@@ -93,14 +98,15 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<AiAction> {
         diplomacy::ai_manage_diplomacy(game, *nation_id, &mut actions);
         diplomacy::ai_pre_election_strategy(game, *nation_id, &mut actions);
         naval::ai_build_merchant_ships(game, *nation_id);
-        naval::ai_build_warships(game, *nation_id);
+        // Warship construction now flows through `ai_scored_spending` (card
+        // #112) — the scored rotation picks Warship when backlog + need push
+        // it above other spending categories. `ai_naval_strategy` below still
+        // adds one extra build when the AI is outmatched at sea mid-war.
         naval::ai_naval_strategy(game, *nation_id, &mut actions);
         military::ai_military_strategy(game, *nation_id, &mut actions);
         tactical::ai_tactical_decisions(game, *nation_id, &mut actions);
         labor::ai_train_and_promote_workers(game, *nation_id);
     }
-
-    military::ai_declare_wars(game, &ai_ids, &mut actions);
 
     actions
 }

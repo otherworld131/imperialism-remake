@@ -245,6 +245,7 @@ All implementation checklists live in `plan/`:
 ## Project Management
 
 - **Trello board**: [Imperialism Remake](https://trello.com/b/WNTZdorA/imperialism-remake) (board id `69e37a93adccb0352eda9d18`). All follow-up cards, backlog items, and cross-cutting tickets belong here — never create cards on a different board. Lists include: AI, UI, Warfare, Economy & Production, Diplomacy, Performance, UI + Mechanics, General, Flavor, Later ideas, Done To Verify.
+- **Do not move Trello cards between lists.** The user handles card movement themselves. When you finish implementing a card, leave it where it is; the user will move it. You may leave a comment on the card referencing a new test or verification if helpful.
 
 ## Workflow
 

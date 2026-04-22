@@ -5,94 +5,87 @@ use crate::types::*;
 
 use super::common::{AiPersonality, get_personality, next_unit_id};
 
-/// AI builds warships if it has fewer than the threshold and has the required materials.
+/// Try to build one Frigate for `nation_id`. Returns `true` if a ship was
+/// added to the nation's warships. No cap check — the caller decides when
+/// to invoke this (e.g. the scored-spending rotation in
+/// `ai_scored_spending`, or the "outmatched at sea" branch in
+/// `ai_naval_strategy`). If fabric/lumber are sufficient but arms are
+/// short and steel is available, converts steel → arms first.
 ///
-/// - If AI has < 2 warships and has fabric + lumber + arms materials, build a Frigate.
-/// - Aggressive AI builds up to 4 warships.
-/// - If AI has steel but no arms, it produces arms from steel first.
-pub(crate) fn ai_build_warships(game: &mut GameState, nation_id: NationId) {
-    let personality = get_personality(game, nation_id);
+/// Trello card #112: the hard warship caps were removed. Warship growth
+/// is now driven by the scored-spending alternation (backlog climbs each
+/// turn navy is skipped) and gated by material availability only.
+pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bool {
+    let costs = ShipType::Frigate.stats();
+    let fabric_need = costs.fabric_cost;
+    let lumber_need = costs.lumber_cost;
+    let arms_need = costs.arms_cost;
+
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,
-        None => return,
+        None => return false,
     };
-
-    // ── Read Lua config (feature-gated) ──────────────────────
-    #[cfg(feature = "lua")]
-    let lua_cfg = game
-        .game_data
-        .lua_engine
-        .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
-    #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
-
-    // Wealthy nations invest in larger navies (Lua overrides Rust defaults)
-    let max_warships: usize = if nation.treasury > Money::dollars(8_000) {
-        'val: {
-            #[cfg(feature = "lua")]
-            if let Some(v) = lua_cfg.as_ref().and_then(|c| c.max_warships_high_treasury) {
-                break 'val v;
-            }
-            match personality {
-                AiPersonality::Aggressive => 6,
-                _ => 4,
-            }
-        }
-    } else {
-        'val: {
-            #[cfg(feature = "lua")]
-            if let Some(v) = lua_cfg.as_ref().and_then(|c| c.max_warships_low_treasury) {
-                break 'val v;
-            }
-            match personality {
-                AiPersonality::Aggressive => 4,
-                _ => 2,
-            }
-        }
-    };
-
-    if nation.warship_count() >= max_warships {
-        return;
-    }
 
     let fabric_have = nation.material_amount(MaterialType::Fabric);
     let lumber_have = nation.material_amount(MaterialType::Lumber);
     let arms_have = nation.material_amount(MaterialType::Arms);
     let steel_have = nation.material_amount(MaterialType::Steel);
 
-    // If we have the fabric and lumber but need arms, produce arms from steel
-    if fabric_have >= 2 && lumber_have >= 5 && arms_have < 2 && steel_have > 0 {
-        let arms_needed = 2 - arms_have;
+    // If we have the fabric and lumber but need arms, produce arms from steel.
+    if fabric_have >= fabric_need
+        && lumber_have >= lumber_need
+        && arms_have < arms_need
+        && steel_have > 0
+    {
+        let arms_needed = arms_need - arms_have;
         let arms_to_produce = arms_needed.min(steel_have);
         let Some(nation) = game.get_nation_mut(nation_id) else {
-            return;
+            return false;
         };
         nation.consume_material(MaterialType::Steel, arms_to_produce);
         nation.add_material(MaterialType::Arms, arms_to_produce);
     }
 
-    // Re-check after possible arms production
+    // Re-check after possible arms production.
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,
-        None => return,
+        None => return false,
     };
     let fabric_have = nation.material_amount(MaterialType::Fabric);
     let lumber_have = nation.material_amount(MaterialType::Lumber);
     let arms_have = nation.material_amount(MaterialType::Arms);
 
-    // Try to build a Frigate: 2 fabric + 5 lumber + 2 arms
-    if fabric_have >= 2 && lumber_have >= 5 && arms_have >= 2 {
+    if fabric_have >= fabric_need && lumber_have >= lumber_need && arms_have >= arms_need {
         let uid = next_unit_id();
         let ship = Ship::new(uid, ShipType::Frigate, nation_id);
         let Some(nation) = game.get_nation_mut(nation_id) else {
-            return;
+            return false;
         };
-        nation.consume_material(MaterialType::Fabric, 2);
-        nation.consume_material(MaterialType::Lumber, 5);
-        nation.consume_material(MaterialType::Arms, 2);
+        nation.consume_material(MaterialType::Fabric, fabric_need);
+        nation.consume_material(MaterialType::Lumber, lumber_need);
+        nation.consume_material(MaterialType::Arms, arms_need);
         nation.warships.push(ship);
+        return true;
     }
+    false
+}
+
+/// True if `nation_id` has the raw materials on hand (or can produce the
+/// arms from steel) to build one Frigate right now. Used by the
+/// scored-spending system to gate the Warship category.
+pub(crate) fn can_build_warship(game: &GameState, nation_id: NationId) -> bool {
+    let Some(nation) = game.get_nation(nation_id) else {
+        return false;
+    };
+    let costs = ShipType::Frigate.stats();
+    let fabric_have = nation.material_amount(MaterialType::Fabric);
+    let lumber_have = nation.material_amount(MaterialType::Lumber);
+    let arms_have = nation.material_amount(MaterialType::Arms);
+    let steel_have = nation.material_amount(MaterialType::Steel);
+    if fabric_have < costs.fabric_cost || lumber_have < costs.lumber_cost {
+        return false;
+    }
+    arms_have >= costs.arms_cost || (arms_have + steel_have) >= costs.arms_cost
 }
 
 pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId) {
@@ -290,61 +283,20 @@ pub fn ai_naval_strategy(
         .max()
         .unwrap_or(0);
 
-    // If enemy has more naval firepower: try to build more warships
-    if max_enemy_naval_fp > our_naval_fp {
-        // Build additional warships beyond normal cap
-        let nation = match game.get_nation(nation_id) {
-            Some(n) => n,
-            None => return,
-        };
-
-        let fabric_have = nation.material_amount(MaterialType::Fabric);
-        let lumber_have = nation.material_amount(MaterialType::Lumber);
-        let arms_have = nation.material_amount(MaterialType::Arms);
-        let steel_have = nation.material_amount(MaterialType::Steel);
-
-        // Try producing arms from steel if needed
-        if fabric_have >= 2 && lumber_have >= 5 && arms_have < 2 && steel_have > 0 {
-            let arms_needed = 2 - arms_have;
-            let arms_to_produce = arms_needed.min(steel_have);
-            let Some(nation) = game.get_nation_mut(nation_id) else {
-                return;
-            };
-            nation.consume_material(MaterialType::Steel, arms_to_produce);
-            nation.add_material(MaterialType::Arms, arms_to_produce);
-        }
-
-        // Re-check after possible arms production
-        let nation = match game.get_nation(nation_id) {
-            Some(n) => n,
-            None => return,
-        };
-        let fabric_have = nation.material_amount(MaterialType::Fabric);
-        let lumber_have = nation.material_amount(MaterialType::Lumber);
-        let arms_have = nation.material_amount(MaterialType::Arms);
-
-        if fabric_have >= 2 && lumber_have >= 5 && arms_have >= 2 {
-            let uid = next_unit_id();
-            let ship = Ship::new(uid, ShipType::Frigate, nation_id);
-            let Some(nation) = game.get_nation_mut(nation_id) else {
-                return;
-            };
-            nation.consume_material(MaterialType::Fabric, 2);
-            nation.consume_material(MaterialType::Lumber, 5);
-            nation.consume_material(MaterialType::Arms, 2);
-            nation.warships.push(ship);
-            actions.push(super::AiAction {
-                text: format!(
-                    "{} is building warships to counter enemy naval superiority",
-                    nation_name
-                ),
-                reason: format!(
-                    "Enemy naval firepower {} vs our {}; building frigates to close the gap",
-                    max_enemy_naval_fp, our_naval_fp
-                ),
-                is_non_action: false,
-            });
-        }
+    // If enemy has more naval firepower: try to build another warship right
+    // now on top of whatever the scored-spending rotation already did.
+    if max_enemy_naval_fp > our_naval_fp && build_one_warship(game, nation_id) {
+        actions.push(super::AiAction {
+            text: format!(
+                "{} is building warships to counter enemy naval superiority",
+                nation_name
+            ),
+            reason: format!(
+                "Enemy naval firepower {} vs our {}; building frigates to close the gap",
+                max_enemy_naval_fp, our_naval_fp
+            ),
+            is_non_action: false,
+        });
         return; // Focus on shipbuilding when outmatched
     }
 
@@ -521,7 +473,7 @@ mod tests {
         ai.add_material(MaterialType::Lumber, 10);
         ai.add_material(MaterialType::Arms, 4);
 
-        ai_build_warships(&mut game, NationId(2));
+        assert!(build_one_warship(&mut game, NationId(2)));
         assert_eq!(
             game.get_nation(NationId(2)).unwrap().warship_count(),
             1,
@@ -539,7 +491,7 @@ mod tests {
         ai.add_material(MaterialType::Steel, 5);
         // No arms at all
 
-        ai_build_warships(&mut game, NationId(2));
+        assert!(build_one_warship(&mut game, NationId(2)));
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
             ai.warship_count(),
@@ -557,7 +509,7 @@ mod tests {
         ai.ai_personality = Some(AiPersonality::Balanced);
         // No materials at all
 
-        ai_build_warships(&mut game, NationId(2));
+        assert!(!build_one_warship(&mut game, NationId(2)));
         assert_eq!(
             game.get_nation(NationId(2)).unwrap().warship_count(),
             0,
@@ -566,50 +518,24 @@ mod tests {
     }
 
     #[test]
-    fn aggressive_ai_builds_up_to_four_warships() {
-        let mut game = test_game_with_ai();
-        let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Aggressive);
-        ai.treasury = Money::dollars(5_000); // below $8K threshold: cap is 4
-        ai.add_material(MaterialType::Fabric, 20);
-        ai.add_material(MaterialType::Lumber, 40);
-        ai.add_material(MaterialType::Arms, 20);
-
-        for _ in 0..4 {
-            ai_build_warships(&mut game, NationId(2));
-        }
-        assert_eq!(
-            game.get_nation(NationId(2)).unwrap().warship_count(),
-            4,
-            "Aggressive AI should build up to 4 warships"
-        );
-
-        // Should not build a 5th
-        ai_build_warships(&mut game, NationId(2));
-        assert_eq!(
-            game.get_nation(NationId(2)).unwrap().warship_count(),
-            4,
-            "Aggressive AI should cap at 4 warships"
-        );
-    }
-
-    #[test]
-    fn balanced_ai_caps_at_two_warships() {
+    fn warship_builds_unbounded_while_materials_last() {
+        // Card #112: there is no hard cap. Given sufficient materials,
+        // `build_one_warship` should keep producing Frigates.
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Balanced);
-        ai.treasury = Money::dollars(5_000); // below $8K threshold: cap is 2
+        ai.treasury = Money::dollars(5_000);
         ai.add_material(MaterialType::Fabric, 20);
         ai.add_material(MaterialType::Lumber, 40);
         ai.add_material(MaterialType::Arms, 20);
 
-        for _ in 0..3 {
-            ai_build_warships(&mut game, NationId(2));
+        for _ in 0..5 {
+            assert!(build_one_warship(&mut game, NationId(2)));
         }
         assert_eq!(
             game.get_nation(NationId(2)).unwrap().warship_count(),
-            2,
-            "Balanced AI should cap at 2 warships"
+            5,
+            "Warships should build as long as materials are available"
         );
     }
 
@@ -623,7 +549,7 @@ mod tests {
         ai.add_material(MaterialType::Arms, 1); // have 1, need 2
         ai.add_material(MaterialType::Steel, 1); // can produce 1 more
 
-        ai_build_warships(&mut game, NationId(2));
+        assert!(build_one_warship(&mut game, NationId(2)));
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
             ai.warship_count(),
@@ -642,7 +568,7 @@ mod tests {
         ai.add_material(MaterialType::Lumber, 10);
         // No arms and no steel
 
-        ai_build_warships(&mut game, NationId(2));
+        assert!(!build_one_warship(&mut game, NationId(2)));
         assert_eq!(
             game.get_nation(NationId(2)).unwrap().warship_count(),
             0,

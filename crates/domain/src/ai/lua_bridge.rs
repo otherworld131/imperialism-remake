@@ -197,6 +197,10 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         minor_default_garrison: table.get("minor_default_garrison").unwrap_or(3),
         max_garrison_per_province: table.get("max_garrison_per_province").unwrap_or(8),
         garrison_regen_interval_turns: table.get("garrison_regen_interval_turns").unwrap_or(2),
+        rest_heal_amount: table.get::<u8>("rest_heal_amount").unwrap_or(10),
+        spending_naval_base: table.get::<f64>("spending_naval_base").unwrap_or(2.0),
+        spending_naval_war_bonus: table.get::<f64>("spending_naval_war_bonus").unwrap_or(10.0),
+        spending_naval_gap_coeff: table.get::<f64>("spending_naval_gap_coeff").unwrap_or(1.5),
     };
     // Sanitize: ensure no zero-or-negative values for fields used as divisors/multipliers
     let sanitized_default_garrison = cfg.default_garrison_per_province.clamp(0, 20);
@@ -284,6 +288,22 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         // `0` keeps its "disabled" semantic — the regen phase early-returns
         // on zero and also guards against modulo-by-zero.
         garrison_regen_interval_turns: cfg.garrison_regen_interval_turns.min(200),
+        rest_heal_amount: cfg.rest_heal_amount.clamp(1, 100),
+        spending_naval_base: if cfg.spending_naval_base.is_finite() {
+            cfg.spending_naval_base.clamp(0.0, 100.0)
+        } else {
+            2.0
+        },
+        spending_naval_war_bonus: if cfg.spending_naval_war_bonus.is_finite() {
+            cfg.spending_naval_war_bonus.clamp(0.0, 100.0)
+        } else {
+            10.0
+        },
+        spending_naval_gap_coeff: if cfg.spending_naval_gap_coeff.is_finite() {
+            cfg.spending_naval_gap_coeff.clamp(0.0, 10.0)
+        } else {
+            1.5
+        },
         ..cfg
     }
 }
@@ -356,9 +376,9 @@ pub struct LuaAiConfig {
     pub embassy_treasury_threshold: Option<i64>,
     pub max_alliances: Option<usize>,
 
-    // Naval
-    pub max_warships_low_treasury: Option<usize>,
-    pub max_warships_high_treasury: Option<usize>,
+    // Naval. Card #112 removed the warship caps: naval growth now flows
+    // through the scored-spending rotation and is gated only by treasury
+    // + materials.
     pub max_merchant_ships: Option<usize>,
     /// Minimum army size before attempting a naval invasion.
     pub min_army_naval_invasion: Option<usize>,
@@ -435,6 +455,22 @@ pub struct LuaAiConfig {
     // engagements. Applied separately to minor and great-power targets.
     pub attack_fp_vs_minor: Option<f64>,
     pub attack_fp_vs_gp: Option<f64>,
+
+    // Trello card #20: minimum unit health (0–100) required for the AI to
+    // count a unit toward its forward attack firepower. Units below this
+    // threshold sit out and heal via the end-of-turn rest-heal pass.
+    pub rest_health_threshold: Option<u8>,
+
+    // Trello card #8: extra score penalty added when the AI considers
+    // attacking an enemy's capital province while that enemy still owns
+    // reachable non-capital provinces. Higher = more strongly save the
+    // capital for last (avoid flipping a minor into anarchy too early).
+    pub capital_save_for_last_penalty: Option<i32>,
+
+    // Trello card #112: optional per-personality override of the naval
+    // spending weight in `ai_scored_spending`. If `None`, naval uses
+    // `spending_military_weight`.
+    pub spending_naval_weight: Option<f64>,
 }
 
 /// Clamp an f64 to a finite range, replacing NaN/inf with the default.
@@ -536,9 +572,6 @@ impl LuaAiConfig {
         self.max_alliances = sanitize_opt_usize(self.max_alliances, 0, 10);
 
         // Naval
-        self.max_warships_low_treasury = sanitize_opt_usize(self.max_warships_low_treasury, 0, 50);
-        self.max_warships_high_treasury =
-            sanitize_opt_usize(self.max_warships_high_treasury, 0, 50);
         self.max_merchant_ships = sanitize_opt_usize(self.max_merchant_ships, 0, 50);
         self.min_army_naval_invasion = sanitize_opt_usize(self.min_army_naval_invasion, 1, 20);
 
@@ -635,6 +668,17 @@ impl LuaAiConfig {
         self.attack_fp_vs_minor = sanitize_opt_f64(self.attack_fp_vs_minor, 0.1, 5.0);
         self.attack_fp_vs_gp = sanitize_opt_f64(self.attack_fp_vs_gp, 0.1, 5.0);
 
+        // Trello card #20: rest-heal threshold
+        self.rest_health_threshold = self.rest_health_threshold.map(|v| v.min(100));
+
+        // Trello card #8: capital-save-for-last penalty
+        self.capital_save_for_last_penalty = self
+            .capital_save_for_last_penalty
+            .map(|v| v.clamp(0, 1_000));
+
+        // Trello card #112: naval spending weight override
+        self.spending_naval_weight = sanitize_opt_f64(self.spending_naval_weight, 0.0, 10.0);
+
         self
     }
 }
@@ -695,8 +739,6 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             embassy_treasury_threshold: table.get("embassy_treasury_threshold").ok(),
             max_alliances: table.get::<usize>("max_alliances").ok(),
             // Naval
-            max_warships_low_treasury: table.get::<usize>("max_warships_low_treasury").ok(),
-            max_warships_high_treasury: table.get::<usize>("max_warships_high_treasury").ok(),
             max_merchant_ships: table.get::<usize>("max_merchant_ships").ok(),
             min_army_naval_invasion: table.get::<usize>("min_army_naval_invasion").ok(),
             // Economy
@@ -758,6 +800,10 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             // Attack acceptance (card #99 phase 2)
             attack_fp_vs_minor: table.get("attack_fp_vs_minor").ok(),
             attack_fp_vs_gp: table.get("attack_fp_vs_gp").ok(),
+            // Trello cards #8 / #20 / #112
+            rest_health_threshold: table.get("rest_health_threshold").ok(),
+            capital_save_for_last_penalty: table.get("capital_save_for_last_penalty").ok(),
+            spending_naval_weight: table.get("spending_naval_weight").ok(),
         }
         .sanitize(),
     )
@@ -1101,8 +1147,6 @@ mod tests {
             grant_interval: None,
             embassy_treasury_threshold: None,
             max_alliances: None,
-            max_warships_low_treasury: None,
-            max_warships_high_treasury: None,
             max_merchant_ships: None,
             min_army_naval_invasion: None,
             expansion_threshold_multiplier: None,
@@ -1150,6 +1194,9 @@ mod tests {
             naval_min_adjacent_strength_ratio: None,
             attack_fp_vs_minor: None,
             attack_fp_vs_gp: None,
+            rest_health_threshold: None,
+            capital_save_for_last_penalty: None,
+            spending_naval_weight: None,
         };
 
         let sanitized = cfg.sanitize();
@@ -1202,8 +1249,6 @@ mod tests {
             grant_interval: None,
             embassy_treasury_threshold: None,
             max_alliances: None,
-            max_warships_low_treasury: None,
-            max_warships_high_treasury: None,
             max_merchant_ships: None,
             min_army_naval_invasion: None,
             expansion_threshold_multiplier: None,
@@ -1251,6 +1296,9 @@ mod tests {
             naval_min_adjacent_strength_ratio: None,
             attack_fp_vs_minor: None,
             attack_fp_vs_gp: None,
+            rest_health_threshold: None,
+            capital_save_for_last_penalty: None,
+            spending_naval_weight: None,
         };
 
         let sanitized = cfg.sanitize();
@@ -1342,8 +1390,6 @@ mod tests {
             grant_interval: None,
             embassy_treasury_threshold: None,
             max_alliances: None,
-            max_warships_low_treasury: None,
-            max_warships_high_treasury: None,
             max_merchant_ships: None,
             min_army_naval_invasion: None,
             expansion_threshold_multiplier: None,
@@ -1391,6 +1437,9 @@ mod tests {
             naval_min_adjacent_strength_ratio: None,
             attack_fp_vs_minor: None,
             attack_fp_vs_gp: None,
+            rest_health_threshold: None,
+            capital_save_for_last_penalty: None,
+            spending_naval_weight: None,
         };
 
         let sanitized = cfg.sanitize();

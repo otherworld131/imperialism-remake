@@ -197,15 +197,16 @@ pub struct BattleResult {
 
 /// Calculate the General bonus multiplier for a force.
 ///
-/// If the force contains a General, all friendly units get a 5% firepower
-/// boost per General medal. Returns 1.0 if no General is present.
+/// A General in the force grants a base +10% firepower to every friendly
+/// unit, plus +5% per medal (so 4-medal generals cap at +30%). Returns
+/// 1.0 if no General is present.
 fn general_bonus(units: &[ArmyUnit]) -> f64 {
     if let Some(general) = units
         .iter()
         .filter(|u| u.unit_type == ArmyUnitType::General)
         .max_by_key(|u| u.medals)
     {
-        1.0 + general.medals as f64 * 0.05
+        1.10 + general.medals as f64 * 0.05
     } else {
         1.0
     }
@@ -667,9 +668,7 @@ pub fn resolve_battle_with_config(
     // surviving firepower.
     let attacker_won = if retreated {
         false
-    } else if defender_retreated {
-        true
-    } else if def_units.is_empty() && !atk_units.is_empty() {
+    } else if defender_retreated || (def_units.is_empty() && !atk_units.is_empty()) {
         true
     } else if atk_units.is_empty() {
         false

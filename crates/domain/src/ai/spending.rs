@@ -31,6 +31,9 @@ pub enum SpendingCategory {
     HireEngineer,
     /// Hire an improver civilian (Farmer/Miner/Forester/etc.) for tile yield.
     HireImprover,
+    /// Build a warship (card #112). Naval expansion now uses the same
+    /// backlog-driven alternation as army expansion — no hard cap.
+    Warship,
 }
 
 struct SpendingWeights {
@@ -218,6 +221,18 @@ pub(crate) fn ai_scored_spending(
                 options.push(opt);
             }
         }
+        if let Some(mut opt) = score_warship(game, nation_id, &weights) {
+            opt.score += backlog_bonus(
+                game,
+                nation_id,
+                SpendingCategory::Warship,
+                current_turn,
+                military_priority,
+            );
+            if opt.cost <= available {
+                options.push(opt);
+            }
+        }
 
         // Pick highest-scoring action above threshold
         options.sort_by(|a, b| {
@@ -331,8 +346,17 @@ fn backlog_bonus(
     };
 
     let personality = nation.ai_personality.unwrap_or(AiPersonality::Balanced);
+    // Card #112: Warship shares the Military backlog weight — navy growth
+    // is still a flavor of military investment; only the execute path is
+    // different. Aliasing here lets the match reuse the existing Military
+    // weight cells without duplicating the table.
+    let category_for_weight = if category == SpendingCategory::Warship {
+        SpendingCategory::Military
+    } else {
+        category
+    };
     // Pull the right weight cell from the (personality × category) table.
-    let mut weight = match (personality, category) {
+    let mut weight = match (personality, category_for_weight) {
         (AiPersonality::Aggressive, SpendingCategory::Military) => {
             cfg.backlog_weight_aggressive_military
         }
@@ -397,11 +421,17 @@ fn backlog_bonus(
         (AiPersonality::Diplomatic, SpendingCategory::HireImprover) => {
             cfg.backlog_weight_diplomatic_hire_improver
         }
+        // Warship is aliased to Military above — this arm is unreachable,
+        // but the exhaustiveness check still wants it covered.
+        (_, SpendingCategory::Warship) => cfg.backlog_weight_balanced_military,
     };
 
     // At war or military-lagging: double the military backlog weight to bias
-    // the alternation toward catching up the army faster.
-    if military_priority && category == SpendingCategory::Military {
+    // the alternation toward catching up the army faster. Applies to navy
+    // spend too — a mid-war navy build is as urgent as an army build.
+    if military_priority
+        && (category == SpendingCategory::Military || category == SpendingCategory::Warship)
+    {
         weight *= 2;
     }
 
@@ -837,6 +867,109 @@ fn score_hire_engineer(
     })
 }
 
+/// Card #112: score a Warship build. Naval expansion now flows through the
+/// same scoring rotation as army expansion. Base score rises with:
+///   - being at war (more urgent than peacetime)
+///   - being outmatched at sea vs. any known enemy
+///   - peacetime baseline (non-zero so the backlog-bonus eventually pushes
+///     navy above idle alternatives)
+///
+/// Gates:
+///   - AI must own at least one coastal province (can't build ships inland).
+///   - Materials for one Frigate must be on hand (fabric + lumber + arms,
+///     with steel→arms conversion allowed). Otherwise the score is zero so
+///     the rotation picks a different category while materials accumulate.
+fn score_warship(
+    game: &GameState,
+    nation_id: NationId,
+    weights: &SpendingWeights,
+) -> Option<ScoredAction> {
+    let nation = game.get_nation(nation_id)?;
+
+    // Must have a coastal province — landlocked powers can't sail.
+    let has_coast = nation
+        .province_ids
+        .iter()
+        .any(|&pid| game.get_province(pid).is_some_and(|p| p.coastal));
+    if !has_coast {
+        return None;
+    }
+
+    // Materials gate: no point scoring this if we can't afford the build.
+    if !super::naval::can_build_warship(game, nation_id) {
+        return None;
+    }
+
+    let naval_cfg = &game.game_data.game_config;
+    let naval_base = naval_cfg.spending_naval_base;
+    let naval_war_bonus = naval_cfg.spending_naval_war_bonus;
+    let naval_gap_coeff = naval_cfg.spending_naval_gap_coeff;
+
+    // Peacetime baseline so backlog eventually fires a warship even in calm.
+    let mut raw: f64 = naval_base;
+
+    // At-war bonus, per enemy we're facing.
+    let mut max_enemy_naval_fp: u32 = 0;
+    let mut any_at_war = false;
+    for other in &game.nations {
+        if other.id == nation_id {
+            continue;
+        }
+        let at_war = game
+            .diplomacy
+            .get_relation(nation_id, other.id)
+            .is_some_and(|r| r.at_war);
+        if at_war {
+            any_at_war = true;
+            max_enemy_naval_fp = max_enemy_naval_fp.max(other.total_naval_firepower());
+        }
+    }
+    if any_at_war {
+        raw += naval_war_bonus;
+    }
+
+    // Outmatched at sea: strong driver.
+    let our_naval_fp = nation.total_naval_firepower();
+    if max_enemy_naval_fp > our_naval_fp {
+        raw += (max_enemy_naval_fp - our_naval_fp) as f64 * naval_gap_coeff;
+    }
+
+    // Scale by the Lua naval weight if set, otherwise use the military weight.
+    let personality = get_personality(game, nation_id);
+    let naval_weight = {
+        #[cfg(feature = "lua")]
+        {
+            game.game_data
+                .lua_engine
+                .as_ref()
+                .and_then(|e| super::lua_bridge::lua_get_config(e, personality))
+                .and_then(|c| c.spending_naval_weight)
+                .unwrap_or(weights.military_weight)
+        }
+        #[cfg(not(feature = "lua"))]
+        {
+            let _ = personality;
+            weights.military_weight
+        }
+    };
+    let score = raw * naval_weight;
+
+    // Warships cost materials, not treasury. Use zero so the treasury
+    // gate in the scoring loop doesn't incorrectly block the build.
+    // The real affordability gate is can_build_warship above.
+    let cost = Money::dollars(0);
+
+    if score > 0.0 {
+        Some(ScoredAction {
+            category: SpendingCategory::Warship,
+            score,
+            cost,
+        })
+    } else {
+        None
+    }
+}
+
 // ── Execution functions ──────────────────────────────────────────
 
 fn execute_with_plan(
@@ -854,6 +987,7 @@ fn execute_with_plan(
         SpendingCategory::Embassy => execute_embassy(game, nation_id),
         SpendingCategory::HireEngineer => execute_hire_engineer(game, nation_id),
         SpendingCategory::HireImprover => execute_hire_improver(game, nation_id),
+        SpendingCategory::Warship => execute_warship(game, nation_id, actions),
     }
 }
 
@@ -935,6 +1069,24 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
         actions.push(super::AiAction {
             text: format!("{} has been expanding its military forces", nation_name),
             reason: "Spending system selected military category for expansion".to_string(),
+            is_non_action: false,
+        });
+    }
+}
+
+/// Card #112: Warship executor — delegates to the shared single-ship
+/// builder in the naval module. The scored-spending loop resets this
+/// category's backlog counter whenever it fires, so successive Warship
+/// picks naturally interleave with Military / Infrastructure / etc.
+fn execute_warship(game: &mut GameState, nation_id: NationId, actions: &mut Vec<super::AiAction>) {
+    let nation_name = game
+        .get_nation(nation_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_default();
+    if super::naval::build_one_warship(game, nation_id) {
+        actions.push(super::AiAction {
+            text: format!("{} has commissioned a new warship", nation_name),
+            reason: "Spending system selected naval expansion".to_string(),
             is_non_action: false,
         });
     }
