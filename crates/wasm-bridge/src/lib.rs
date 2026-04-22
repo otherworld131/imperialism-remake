@@ -3161,7 +3161,7 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
                 && player_standing >= 30
                 && player_is_gp
                 && target_is_gp;
-            let can_declare_war = !target_in_anarchy && !raw_at_war && !player_already_at_war;
+            let can_declare_war = !target_in_anarchy && !raw_at_war;
             let can_send_grant = !target_in_anarchy && !raw_at_war && treasury > 0;
             let can_break_treaty = !treaties.is_empty();
             let can_propose_peace = !target_in_anarchy && raw_at_war && !any_pending_peace;
@@ -3416,10 +3416,6 @@ pub fn wasm_diplomacy_declare_war(
 
     if game.diplomacy.is_at_war(nid, target) {
         return "{\"error\":\"already at war\"}".to_string();
-    }
-
-    if game.diplomacy.is_at_war_with_anyone(nid) {
-        return "{\"error\":\"already at war with another nation\"}".to_string();
     }
 
     let turn = game.turn;

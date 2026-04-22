@@ -100,6 +100,11 @@ import LegendScreen from './components/LegendScreen';
 import ProposalModal from './components/ProposalModal';
 import BusyOverlay from './components/BusyOverlay';
 
+function turnToYearQ(turn: number): string {
+  const year = 1815 + Math.floor((turn - 1) / 4);
+  return `${year} Q${((turn - 1) % 4) + 1}`;
+}
+
 function App() {
   const [loading, setLoading] = useState(true);
   const [busyMessage, setBusyMessage] = useState<string | null>(null);
@@ -423,16 +428,23 @@ function App() {
   const handleSkipTurns = useCallback(async () => {
     await runMutation(async () => {
       const n = Math.max(1, Math.min(50, skipN | 0));
-      const startTurn = gameState?.turn?.[0] ?? gameState?.turn ?? 1;
-      setBusyMessage(`Processing turns ${startTurn}–${startTurn + n - 1}…`);
+      let currentJson = gameJson;
+      let currentTurn: number = gameState?.turn?.[0] ?? gameState?.turn ?? 1;
+      const allHeadlines: typeof headlines = [];
+      const allBattles: typeof currentBattles = [];
+      const allNavalBattles: typeof currentNavalBattles = [];
       try {
-        const result = await processTurns(gameJson, n);
-        if ((result as any).error) { alert((result as any).error); return; }
-        const newJson = JSON.stringify(result.game);
-        if (!(await applyGameJson(newJson))) return;
-        const allHeadlines = result.reports.flatMap(r => r.headlines);
-        const allBattles = result.reports.flatMap(r => r.battles);
-        const allNavalBattles = result.reports.flatMap(r => r.naval_battles);
+        for (let i = 0; i < n; i++) {
+          setBusyMessage(`Processing ${turnToYearQ(currentTurn)}…`);
+          const result = await processTurns(currentJson, 1);
+          if ((result as any).error) { alert((result as any).error); return; }
+          currentJson = JSON.stringify(result.game);
+          currentTurn = result.game?.turn?.[0] ?? result.game?.turn ?? (currentTurn + 1);
+          allHeadlines.push(...result.reports.flatMap((r: any) => r.headlines));
+          allBattles.push(...result.reports.flatMap((r: any) => r.battles));
+          allNavalBattles.push(...result.reports.flatMap((r: any) => r.naval_battles));
+        }
+        if (!(await applyGameJson(currentJson))) return;
         setHeadlines(allHeadlines);
         setCurrentBattles(allBattles);
         setCurrentNavalBattles(allNavalBattles);
@@ -450,8 +462,8 @@ function App() {
     if (skipUntilRunning || mutationLockRef.current) return;
     mutationLockRef.current = true;
     setSkipUntilRunning(true);
-    const startTurn = gameState?.turn?.[0] ?? gameState?.turn ?? 1;
-    setBusyMessage(`Processing turn ${startTurn}…`);
+    const startTurn: number = gameState?.turn?.[0] ?? gameState?.turn ?? 1;
+    setBusyMessage(`Processing ${turnToYearQ(startTurn)}…`);
     try {
       const needle = skipUntilText.trim().toLowerCase();
       // When looking for a text match, process one turn at a time so we can
@@ -473,8 +485,8 @@ function App() {
         if ((result as any).error) { alert((result as any).error); return; }
         currentJson = JSON.stringify(result.game);
         processed += result.reports.length;
-        const currentTurn = result.game?.turn?.[0] ?? result.game?.turn ?? (startTurn + processed);
-        setBusyMessage(`Processing turn ${currentTurn}…`);
+        const currentTurn: number = result.game?.turn?.[0] ?? result.game?.turn ?? (startTurn + processed);
+        setBusyMessage(`Processing ${turnToYearQ(currentTurn)}…`);
 
         for (const r of result.reports) {
           allHeadlines.push(...r.headlines);
