@@ -208,12 +208,8 @@ fn diag_default_turn66() {
         let connected = connected_provinces(&game, gp);
         let owned: Vec<&domain::map::Province> =
             game.provinces.iter().filter(|p| p.owner == gp).collect();
-        let collectable = domain::map::infrastructure::collectable_hexes(
-            &game.hex_map,
-            nation.capital_province_id,
-            &owned,
-            &connected,
-        );
+        let collectable =
+            domain::map::infrastructure::collectable_hexes(&game.hex_map, &owned, &connected);
         let mut connected_timber = 0;
         let mut disconnected_timber = 0;
         for &pid in &nation.province_ids {

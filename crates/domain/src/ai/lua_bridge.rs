@@ -102,6 +102,14 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
             .ok()
             .or_else(|| Some("Compound Steam Engine".to_string())),
         infrastructure_horizon_turns: table.get("infrastructure_horizon_turns").unwrap_or(50),
+        infra_coverage_weight: table.get("infra_coverage_weight").unwrap_or(1.0),
+        infra_path_cost_weight: table.get("infra_path_cost_weight").unwrap_or(1.0),
+        trade_lookback_turns: table.get("trade_lookback_turns").unwrap_or(8),
+        trade_discount_weight: table.get("trade_discount_weight").unwrap_or(0.5),
+        trade_history_weight: table.get("trade_history_weight").unwrap_or(1.0),
+        trade_consulate_potential_weight: table
+            .get("trade_consulate_potential_weight")
+            .unwrap_or(0.25),
         engineer_hire_max: table.get("engineer_hire_max").unwrap_or(3),
         engineer_hire_base: table.get("engineer_hire_base").unwrap_or(100),
         engineer_hire_path_coeff: table.get("engineer_hire_path_coeff").unwrap_or(30),

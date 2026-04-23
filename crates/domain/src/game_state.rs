@@ -361,39 +361,53 @@ pub fn new_game_with_seed_and_config(
                 .push(Building::new(BuildingType::ClothingFactory, 1));
         }
 
-        // Starting warehouse contents based on difficulty
+        // Starting warehouse contents based on difficulty.
+        //
+        // Values bumped alongside card #130 (capital-yield nerf): removing
+        // the "whole capital province yields in full" rule costs every
+        // nation several turns of far-from-capital resources, so we preload
+        // enough stockpile to stay productive until the AI/player extends
+        // depots outward.
         match difficulty {
             Difficulty::Introductory | Difficulty::Easy => {
+                nation.add_resource(ResourceType::Timber, 20);
+                nation.add_resource(ResourceType::Coal, 10);
+                nation.add_resource(ResourceType::Iron, 10);
+                nation.add_resource(ResourceType::Cotton, 5);
+                nation.add_resource(ResourceType::Grain, 15);
+                nation.add_resource(ResourceType::Fruit, 5);
+                // Starting materials for easy difficulties (already have mills)
+                nation.add_material(MaterialType::Lumber, 20);
+                nation.add_material(MaterialType::Steel, 10);
+                nation.add_material(MaterialType::Fabric, 5);
+                // Starting food supply to prevent early starvation
+                nation.add_material(MaterialType::CannedFood, 40);
+            }
+            Difficulty::Normal => {
                 nation.add_resource(ResourceType::Timber, 10);
                 nation.add_resource(ResourceType::Coal, 5);
                 nation.add_resource(ResourceType::Iron, 5);
-                nation.add_resource(ResourceType::Cotton, 5);
+                nation.add_resource(ResourceType::Cotton, 3);
                 nation.add_resource(ResourceType::Grain, 10);
-                nation.add_resource(ResourceType::Fruit, 5);
-                // Starting materials for easy difficulties (already have mills)
+                nation.add_resource(ResourceType::Fruit, 3);
+                // Starting materials so AI can build factories before mills produce
                 nation.add_material(MaterialType::Lumber, 10);
-                nation.add_material(MaterialType::Steel, 5);
-                nation.add_material(MaterialType::Fabric, 5);
-                // Starting food supply to prevent early starvation
+                nation.add_material(MaterialType::Steel, 6);
+                nation.add_material(MaterialType::Fabric, 2);
+                // Starting food supply — enough for ~10 turns while building food chain
                 nation.add_material(MaterialType::CannedFood, 20);
             }
-            Difficulty::Normal => {
-                nation.add_resource(ResourceType::Timber, 5);
+            Difficulty::Hard | Difficulty::NighOnImpossible => {
+                // Minimal starting stockpile to bootstrap economy
+                nation.add_resource(ResourceType::Timber, 3);
                 nation.add_resource(ResourceType::Coal, 2);
                 nation.add_resource(ResourceType::Iron, 2);
-                nation.add_resource(ResourceType::Grain, 5);
-                // Starting materials so AI can build factories before mills produce
+                nation.add_resource(ResourceType::Cotton, 2);
+                nation.add_resource(ResourceType::Grain, 3);
                 nation.add_material(MaterialType::Lumber, 5);
                 nation.add_material(MaterialType::Steel, 3);
-                // Starting food supply — enough for ~10 turns while building food chain
-                nation.add_material(MaterialType::CannedFood, 10);
-            }
-            Difficulty::Hard | Difficulty::NighOnImpossible => {
-                // Minimal starting materials to bootstrap economy
-                nation.add_material(MaterialType::Lumber, 2);
-                nation.add_material(MaterialType::Steel, 1);
                 // Small food buffer
-                nation.add_material(MaterialType::CannedFood, 5);
+                nation.add_material(MaterialType::CannedFood, 10);
             }
         }
 
@@ -1414,11 +1428,11 @@ mod tests {
     fn new_game_easy_has_starting_warehouse() {
         let gs = new_game("test", Difficulty::Easy, 0);
         let human = gs.get_nation(gs.human_player_nation).unwrap();
-        assert_eq!(human.resource_amount(ResourceType::Timber), 10);
-        assert_eq!(human.resource_amount(ResourceType::Coal), 5);
-        assert_eq!(human.resource_amount(ResourceType::Iron), 5);
+        assert_eq!(human.resource_amount(ResourceType::Timber), 20);
+        assert_eq!(human.resource_amount(ResourceType::Coal), 10);
+        assert_eq!(human.resource_amount(ResourceType::Iron), 10);
         assert_eq!(human.resource_amount(ResourceType::Cotton), 5);
-        assert_eq!(human.resource_amount(ResourceType::Grain), 10);
+        assert_eq!(human.resource_amount(ResourceType::Grain), 15);
         assert_eq!(human.resource_amount(ResourceType::Fruit), 5);
     }
 
@@ -1426,11 +1440,11 @@ mod tests {
     fn new_game_introductory_has_starting_warehouse() {
         let gs = new_game("test", Difficulty::Introductory, 0);
         let human = gs.get_nation(gs.human_player_nation).unwrap();
-        assert_eq!(human.resource_amount(ResourceType::Timber), 10);
-        assert_eq!(human.resource_amount(ResourceType::Coal), 5);
-        assert_eq!(human.resource_amount(ResourceType::Iron), 5);
+        assert_eq!(human.resource_amount(ResourceType::Timber), 20);
+        assert_eq!(human.resource_amount(ResourceType::Coal), 10);
+        assert_eq!(human.resource_amount(ResourceType::Iron), 10);
         assert_eq!(human.resource_amount(ResourceType::Cotton), 5);
-        assert_eq!(human.resource_amount(ResourceType::Grain), 10);
+        assert_eq!(human.resource_amount(ResourceType::Grain), 15);
         assert_eq!(human.resource_amount(ResourceType::Fruit), 5);
     }
 
@@ -1438,35 +1452,34 @@ mod tests {
     fn new_game_normal_has_smaller_starting_warehouse() {
         let gs = new_game("test", Difficulty::Normal, 0);
         let human = gs.get_nation(gs.human_player_nation).unwrap();
-        assert_eq!(human.resource_amount(ResourceType::Timber), 5);
-        assert_eq!(human.resource_amount(ResourceType::Coal), 2);
-        assert_eq!(human.resource_amount(ResourceType::Iron), 2);
-        assert_eq!(human.resource_amount(ResourceType::Grain), 5);
-        // No cotton or fruit on Normal
-        assert_eq!(human.resource_amount(ResourceType::Cotton), 0);
-        assert_eq!(human.resource_amount(ResourceType::Fruit), 0);
+        assert_eq!(human.resource_amount(ResourceType::Timber), 10);
+        assert_eq!(human.resource_amount(ResourceType::Coal), 5);
+        assert_eq!(human.resource_amount(ResourceType::Iron), 5);
+        assert_eq!(human.resource_amount(ResourceType::Grain), 10);
+        assert_eq!(human.resource_amount(ResourceType::Cotton), 3);
+        assert_eq!(human.resource_amount(ResourceType::Fruit), 3);
     }
 
     #[test]
-    fn new_game_hard_has_empty_warehouse() {
+    fn new_game_hard_has_minimal_warehouse() {
         let gs = new_game("test", Difficulty::Hard, 0);
         let human = gs.get_nation(gs.human_player_nation).unwrap();
-        assert_eq!(human.resource_amount(ResourceType::Timber), 0);
-        assert_eq!(human.resource_amount(ResourceType::Coal), 0);
-        assert_eq!(human.resource_amount(ResourceType::Iron), 0);
-        assert_eq!(human.resource_amount(ResourceType::Cotton), 0);
-        assert_eq!(human.resource_amount(ResourceType::Grain), 0);
+        assert_eq!(human.resource_amount(ResourceType::Timber), 3);
+        assert_eq!(human.resource_amount(ResourceType::Coal), 2);
+        assert_eq!(human.resource_amount(ResourceType::Iron), 2);
+        assert_eq!(human.resource_amount(ResourceType::Cotton), 2);
+        assert_eq!(human.resource_amount(ResourceType::Grain), 3);
         assert_eq!(human.resource_amount(ResourceType::Fruit), 0);
     }
 
     #[test]
-    fn new_game_noi_has_empty_warehouse() {
+    fn new_game_noi_has_minimal_warehouse() {
         let gs = new_game("test", Difficulty::NighOnImpossible, 0);
         let human = gs.get_nation(gs.human_player_nation).unwrap();
-        assert_eq!(human.resource_amount(ResourceType::Timber), 0);
-        assert_eq!(human.resource_amount(ResourceType::Coal), 0);
-        assert_eq!(human.resource_amount(ResourceType::Iron), 0);
-        assert_eq!(human.resource_amount(ResourceType::Grain), 0);
+        assert_eq!(human.resource_amount(ResourceType::Timber), 3);
+        assert_eq!(human.resource_amount(ResourceType::Coal), 2);
+        assert_eq!(human.resource_amount(ResourceType::Iron), 2);
+        assert_eq!(human.resource_amount(ResourceType::Grain), 3);
     }
 
     // ── Auto-prospecting on Easy/Introductory ─────────────────────

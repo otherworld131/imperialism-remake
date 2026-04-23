@@ -161,6 +161,24 @@ pub struct AiPriorityState {
     /// the category has never been picked; the backlog scorer treats
     /// that as "very stale" so it climbs the priority ladder fast.
     pub last_invest_turn: HashMap<crate::ai::SpendingCategory, u32>,
+    /// Card #132: hard-committed depot target. While `Some(t)`, the
+    /// planner must return a plan for `t.candidate` routed from
+    /// `t.origin_capital` every turn until the depot is built there or
+    /// the path becomes unreachable. Absence of a commitment means the
+    /// planner is free to pick the best candidate this turn.
+    #[serde(default)]
+    pub committed_infra_target: Option<CommittedInfraTarget>,
+}
+
+/// A hard commitment to build a depot at `candidate`, routing rail from
+/// `origin_capital`. Created by `plan_next_depot` when it selects a new
+/// target, cleared by the spending loop when the planner reports
+/// "reached" or "unreachable".
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CommittedInfraTarget {
+    pub candidate: crate::hex::HexCoord,
+    pub origin_capital: crate::hex::HexCoord,
+    pub turn_committed: u32,
 }
 
 impl Nation {

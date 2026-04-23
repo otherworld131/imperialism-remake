@@ -110,8 +110,14 @@ pub(crate) fn ai_scored_spending(
     // Cache the depot plan — computing it is O(owned_hexes × Dijkstra) and
     // would dominate runtime if we re-ran it every spending-loop iteration.
     // It only changes after Infrastructure executes.
-    let mut depot_plan: Option<super::economy::DepotPlan> =
-        super::economy::plan_next_depot(game, nation_id);
+    //
+    // Card #132: run the planner and persist any commitment changes so the
+    // engineer sees a stable target turn over turn. `KeepCommitment` means
+    // the existing commitment is still valid; `Fresh` means we cleared it
+    // and (optionally) picked a new target.
+    let first_outcome = super::economy::plan_next_depot(game, nation_id);
+    apply_plan_outcome(game, nation_id, &first_outcome);
+    let mut depot_plan: Option<super::economy::DepotPlan> = first_outcome.as_plan().cloned();
     // Priority mode: peacetime nations always develop economy first (diplomacy
     // close second); military only takes priority if at war or falling behind
     // on army size relative to other GPs.
@@ -288,7 +294,9 @@ pub(crate) fn ai_scored_spending(
                 // engineer's state, so recompute connectivity + plan cache.
                 if cat == SpendingCategory::Infrastructure {
                     connected = connected_provinces(game, nation_id);
-                    depot_plan = super::economy::plan_next_depot(game, nation_id);
+                    let outcome = super::economy::plan_next_depot(game, nation_id);
+                    apply_plan_outcome(game, nation_id, &outcome);
+                    depot_plan = outcome.as_plan().cloned();
                     // If the engineer did not transition from idle to working
                     // AND the treasury wasn't spent (engineer hire), the
                     // execute was a silent no-op: the next hex is blocked,
@@ -312,6 +320,40 @@ pub(crate) fn ai_scored_spending(
                 }
             }
             _ => break,
+        }
+    }
+}
+
+/// Persist the planner's commitment decision on `nation.ai_priority_state`.
+///
+/// Card #132: the planner runs pure (`&GameState`) and returns a
+/// `PlanOutcome`; mutating the commitment belongs here in the spending
+/// loop. `KeepCommitment` is a no-op (the field is already set); `Fresh`
+/// either sets the new target or clears the field if nothing is worth
+/// building this turn.
+fn apply_plan_outcome(
+    game: &mut GameState,
+    nation_id: NationId,
+    outcome: &super::economy::PlanOutcome,
+) {
+    let current_turn = game.turn.0;
+    let Some(nation) = game.get_nation_mut(nation_id) else {
+        return;
+    };
+    match outcome {
+        super::economy::PlanOutcome::KeepCommitment(_) => {
+            // Commitment already set; leave it.
+        }
+        super::economy::PlanOutcome::Fresh(Some(plan)) => {
+            nation.ai_priority_state.committed_infra_target =
+                Some(crate::nation::CommittedInfraTarget {
+                    candidate: plan.candidate,
+                    origin_capital: plan.origin_capital,
+                    turn_committed: current_turn,
+                });
+        }
+        super::economy::PlanOutcome::Fresh(None) => {
+            nation.ai_priority_state.committed_infra_target = None;
         }
     }
 }
@@ -1281,14 +1323,33 @@ fn execute_infrastructure(
         next_hex
     };
 
-    start_engineer_task(
-        game,
-        nation_id,
-        engineer_idx,
-        build_coord,
-        BuildTask::Railroad,
-        &cfg,
-    );
+    // Safety guard: if build_coord already has rail/depot (e.g. built by a
+    // second engineer this same turn), the path is effectively exhausted —
+    // place the depot rather than spinning on already-built tiles.
+    let build_coord_already_built = game
+        .hex_map
+        .get_tile(build_coord)
+        .is_some_and(|t| t.infrastructure.has_railroad || t.infrastructure.has_depot);
+
+    if build_coord_already_built {
+        start_engineer_task(
+            game,
+            nation_id,
+            engineer_idx,
+            plan.candidate,
+            BuildTask::Depot,
+            &cfg,
+        );
+    } else {
+        start_engineer_task(
+            game,
+            nation_id,
+            engineer_idx,
+            build_coord,
+            BuildTask::Railroad,
+            &cfg,
+        );
+    }
 }
 
 /// Deploy the engineer to `coord` and begin `task`. Clears any prior tile
@@ -1612,7 +1673,7 @@ pub fn pick_priority_minor_targets(
         Some(n) => n,
         None => return Vec::new(),
     };
-    let demand = super::economy::compute_resource_demand(nation);
+    let demand = super::economy::compute_resource_demand(nation, game, &game.game_data.game_config);
 
     let mut scored: Vec<(NationId, f64)> = Vec::new();
     for minor in &game.nations {

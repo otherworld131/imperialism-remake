@@ -218,63 +218,46 @@ pub fn build_fort(
     Ok((new_level, cost))
 }
 
-/// Set of hexes a nation can harvest this turn: its entire capital province,
-/// plus the 1-hex radius around every connected depot in owned provinces.
+/// Set of hexes a nation can harvest this turn under the unified collector
+/// model (cards #130 + #131).
 ///
-/// A depot is "connected" if its province appears in `connected`, i.e. reachable
-/// from the capital by rail/port chain.
+/// A tile is a *collector* if either
+///   * it has a depot AND its province is in `connected` (reachable from a
+///     country capital by rail/port chain), or
+///   * `tile.is_country_capital` is set (country capitals are their own hubs,
+///     rail-independent — this keeps conquered foreign capitals productive
+///     even when the rail link is lost).
+///
+/// Each collector emits its own hex plus every owned neighboring hex. The
+/// `HashSet` return type deduplicates overlapping collector radii, which makes
+/// the "each tile yields at most once" guarantee load-bearing for card #131.
 pub fn collectable_hexes(
     hex_map: &HexMap,
-    capital_province_id: ProvinceId,
     owned_provinces: &[&Province],
     connected: &HashSet<ProvinceId>,
 ) -> HashSet<HexCoord> {
     let mut out: HashSet<HexCoord> = HashSet::new();
-    // Owned-tile lookup so the depot radius doesn't leak onto enemy hexes.
+    // Owned-tile lookup so a collector's radius never leaks onto enemy hexes.
     let owned_tiles: HashSet<HexCoord> = owned_provinces
         .iter()
         .flat_map(|p| p.tiles.iter().copied())
         .collect();
 
-    // Rule 1: the nation's own capital province always yields in full.
-    // Rule 2: any province containing an owned country-capital tile yields in
-    //         full, regardless of rail connectivity. Captured foreign capitals
-    //         become independent hubs — same behaviour as the home capital.
-    // Rule 3: connected non-capital provinces yield 1-hex radius around every
-    //         depot they contain.
-    let mut captured_capital_provinces: HashSet<ProvinceId> = HashSet::new();
     for province in owned_provinces {
-        if province.id == capital_province_id {
-            continue;
-        }
+        let province_connected = connected.contains(&province.id);
         for &tile_coord in &province.tiles {
-            if let Some(tile) = hex_map.get_tile(tile_coord)
-                && tile.is_country_capital
-            {
-                captured_capital_provinces.insert(province.id);
-                break;
+            let Some(tile) = hex_map.get_tile(tile_coord) else {
+                continue;
+            };
+            let connected_depot = tile.infrastructure.has_depot && province_connected;
+            let is_collector = connected_depot || tile.is_country_capital;
+            if !is_collector {
+                continue;
             }
-        }
-    }
-
-    for province in owned_provinces {
-        if province.id == capital_province_id || captured_capital_provinces.contains(&province.id) {
-            for &t in &province.tiles {
-                out.insert(t);
-            }
-            continue;
-        }
-        if connected.contains(&province.id) {
-            for &tile_coord in &province.tiles {
-                if let Some(tile) = hex_map.get_tile(tile_coord)
-                    && tile.infrastructure.has_depot
-                {
-                    out.insert(tile_coord);
-                    for neighbor in tile_coord.neighbors() {
-                        if owned_tiles.contains(&neighbor) {
-                            out.insert(neighbor);
-                        }
-                    }
+            out.insert(tile_coord);
+            for neighbor in tile_coord.neighbors() {
+                if owned_tiles.contains(&neighbor) {
+                    out.insert(neighbor);
                 }
             }
         }
@@ -930,31 +913,43 @@ mod tests {
     // ── collectable_hexes ─────────────────────────────────────
 
     #[test]
-    fn collectable_hexes_includes_whole_capital_province() {
+    fn collectable_hexes_capital_tile_yields_one_hex_radius_only() {
+        // Card #130: the capital tile acts as a depot (own hex + 1-hex radius).
+        // Far tiles in the same province do NOT yield just because they share
+        // the capital's province — they need their own depot.
         let mut map = HexMap::new(10, 10);
-        let a = HexCoord::new(0, 0);
-        let b = HexCoord::new(1, 0);
-        let c = HexCoord::new(2, 0);
-        for coord in [a, b, c] {
-            map.set_tile(
-                coord,
-                Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
-            );
-        }
+        let cap = HexCoord::new(0, 0);
+        let neighbor = cap.neighbors()[0];
+        let far = HexCoord::new(5, 5);
+        let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        cap_tile.is_country_capital = true;
+        cap_tile.infrastructure.has_depot = true;
+        map.set_tile(cap, cap_tile);
+        map.set_tile(
+            neighbor,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        map.set_tile(
+            far,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
         let capital = Province::new(
             ProvinceId(1),
             "Cap".to_string(),
             NationId(1),
-            a,
-            vec![a, b, c],
+            cap,
+            vec![cap, neighbor, far],
             4,
         );
         let provinces_ref: Vec<&Province> = vec![&capital];
         let connected: HashSet<ProvinceId> = HashSet::from([ProvinceId(1)]);
-        let set = collectable_hexes(&map, ProvinceId(1), &provinces_ref, &connected);
-        assert!(set.contains(&a));
-        assert!(set.contains(&b));
-        assert!(set.contains(&c));
+        let set = collectable_hexes(&map, &provinces_ref, &connected);
+        assert!(set.contains(&cap), "capital tile is a collector");
+        assert!(set.contains(&neighbor), "neighbor is in 1-hex radius");
+        assert!(
+            !set.contains(&far),
+            "far tile in capital province does NOT yield under the unified model"
+        );
     }
 
     #[test]
@@ -997,28 +992,29 @@ mod tests {
         );
         let provinces_ref: Vec<&Province> = vec![&capital, &target];
         let connected: HashSet<ProvinceId> = HashSet::from([ProvinceId(1), ProvinceId(2)]);
-        let set = collectable_hexes(&map, ProvinceId(1), &provinces_ref, &connected);
+        let set = collectable_hexes(&map, &provinces_ref, &connected);
         assert!(set.contains(&depot_hex));
         assert!(set.contains(&neighbor));
         assert!(!set.contains(&far), "far tile is outside depot radius");
     }
 
     #[test]
-    fn collectable_hexes_country_capital_yields_whole_province() {
-        // A captured foreign capital: owned by us, but its province is NOT in
-        // the connected set. The entire province should still be harvestable
-        // because the tile is a country capital — it becomes an independent hub
-        // that behaves exactly like the nation's own capital province.
+    fn collectable_hexes_country_capital_yields_one_hex_radius() {
+        // Cards #130 + #131: a captured country capital acts as a depot
+        // (own hex + 1-hex owned-neighbor radius), rail-independent. The
+        // previous "whole province yields" rule is gone — far tiles need
+        // their own depot.
         let mut map = HexMap::new(10, 10);
         let cap = HexCoord::new(0, 0);
         let captured_cap = HexCoord::new(4, 0);
         let neighbor_of_captured = captured_cap.neighbors()[0];
         let far = HexCoord::new(8, 8);
 
-        map.set_tile(
-            cap,
-            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
-        );
+        let mut own_cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        own_cap_tile.is_country_capital = true;
+        own_cap_tile.infrastructure.has_depot = true;
+        map.set_tile(cap, own_cap_tile);
+
         let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
         cap_tile.is_country_capital = true;
         map.set_tile(captured_cap, cap_tile);
@@ -1048,21 +1044,22 @@ mod tests {
             3,
         );
         let provinces_ref: Vec<&Province> = vec![&own_cap, &captured];
-        // Captured province NOT in the connected set — no rail chain.
+        // Captured province NOT in the connected set — country capital is
+        // its own hub, rail-independent.
         let connected: HashSet<ProvinceId> = HashSet::from([ProvinceId(1)]);
-        let set = collectable_hexes(&map, ProvinceId(1), &provinces_ref, &connected);
+        let set = collectable_hexes(&map, &provinces_ref, &connected);
 
         assert!(
             set.contains(&captured_cap),
-            "captured country-capital hex yields unconditionally"
+            "captured country-capital hex yields as an independent collector"
         );
         assert!(
             set.contains(&neighbor_of_captured),
-            "neighbor in captured-capital province yields"
+            "neighbor within 1-hex radius of captured capital yields"
         );
         assert!(
-            set.contains(&far),
-            "far tile in captured-capital province also yields (whole province rule)"
+            !set.contains(&far),
+            "far tile in captured-capital province does NOT yield under the unified model"
         );
     }
 
@@ -1096,8 +1093,175 @@ mod tests {
         );
         let provinces_ref: Vec<&Province> = vec![&capital, &target];
         let connected: HashSet<ProvinceId> = HashSet::from([ProvinceId(1)]); // not 2
-        let set = collectable_hexes(&map, ProvinceId(1), &provinces_ref, &connected);
+        let set = collectable_hexes(&map, &provinces_ref, &connected);
         assert!(!set.contains(&depot_hex));
+    }
+
+    #[test]
+    fn collectable_hexes_overlapping_depots_dedup() {
+        // Card #131: two depot radii overlap on one owned hex; the set
+        // contains that hex exactly once (HashSet dedup is load-bearing
+        // once collectors can overlap under the unified model).
+        let mut map = HexMap::new(10, 10);
+        let d1 = HexCoord::new(2, 0);
+        let d2 = HexCoord::new(4, 0);
+        // The two depots are 2 hexes apart, so their 1-hex radii overlap on
+        // the tile between them.
+        let shared_candidates: Vec<HexCoord> = d1
+            .neighbors()
+            .iter()
+            .copied()
+            .filter(|n| d2.neighbors().contains(n))
+            .collect();
+        assert!(
+            !shared_candidates.is_empty(),
+            "test precondition: depot radii must overlap"
+        );
+        let shared = shared_candidates[0];
+
+        let mut t1 = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        t1.infrastructure.has_depot = true;
+        map.set_tile(d1, t1);
+        let mut t2 = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        t2.infrastructure.has_depot = true;
+        map.set_tile(d2, t2);
+        map.set_tile(
+            shared,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+
+        let prov = Province::new(
+            ProvinceId(1),
+            "Only".to_string(),
+            NationId(1),
+            d1,
+            vec![d1, d2, shared],
+            4,
+        );
+        let provinces_ref: Vec<&Province> = vec![&prov];
+        let connected: HashSet<ProvinceId> = HashSet::from([ProvinceId(1)]);
+        let set = collectable_hexes(&map, &provinces_ref, &connected);
+
+        let shared_count = set.iter().filter(|h| **h == shared).count();
+        assert_eq!(
+            shared_count, 1,
+            "overlap tile must appear exactly once (HashSet dedup)"
+        );
+    }
+
+    #[test]
+    fn collectable_hexes_province_capital_without_country_capital_yields_nothing() {
+        // Card #130 regression: a province whose centroid has is_capital=true
+        // (province capital) but NOT is_country_capital must not act as a
+        // collector. Only an actual depot (or country-capital tile) makes a
+        // province contribute yields.
+        let mut map = HexMap::new(10, 10);
+        let home_cap = HexCoord::new(0, 0);
+        let prov_centroid = HexCoord::new(4, 0); // is_capital=true, no country capital
+        let far = HexCoord::new(6, 0); // outside any collector radius
+
+        // Home country capital (with implicit depot, our rail hub).
+        let mut home_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        home_tile.is_country_capital = true;
+        home_tile.infrastructure.has_depot = true;
+        map.set_tile(home_cap, home_tile);
+
+        // Province centroid: is_capital flag set, but NOT country capital,
+        // and NO depot. Under the unified model this tile must yield nothing.
+        let mut centroid_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        centroid_tile.is_capital = true;
+        map.set_tile(prov_centroid, centroid_tile);
+        map.set_tile(
+            far,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+
+        let home = Province::new(
+            ProvinceId(1),
+            "Home".to_string(),
+            NationId(1),
+            home_cap,
+            vec![home_cap],
+            4,
+        );
+        let province = Province::new(
+            ProvinceId(2),
+            "P".to_string(),
+            NationId(1),
+            prov_centroid,
+            vec![prov_centroid, far],
+            3,
+        );
+        let provinces_ref: Vec<&Province> = vec![&home, &province];
+        // Even if province 2 is "connected", no depot → no collector.
+        let connected: HashSet<ProvinceId> = HashSet::from([ProvinceId(1), ProvinceId(2)]);
+        let set = collectable_hexes(&map, &provinces_ref, &connected);
+
+        assert!(
+            !set.contains(&prov_centroid),
+            "province capital without a depot must not collect (card #130)"
+        );
+        assert!(
+            !set.contains(&far),
+            "far tile without any collector nearby does not yield"
+        );
+    }
+
+    #[test]
+    fn collectable_hexes_captured_country_capital_without_depot_still_yields_radius() {
+        // Card #130 "even of conquered countries": the is_country_capital
+        // flag persists through conquest and acts as an independent collector
+        // seed EVEN if the actual depot has been removed.
+        let mut map = HexMap::new(10, 10);
+        let home_cap = HexCoord::new(0, 0);
+        let captured = HexCoord::new(4, 0);
+        let captured_neighbor = captured.neighbors()[0];
+
+        let mut home_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        home_tile.is_country_capital = true;
+        home_tile.infrastructure.has_depot = true;
+        map.set_tile(home_cap, home_tile);
+
+        // Captured country-capital tile: flag set but has_depot = false.
+        let mut captured_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        captured_tile.is_country_capital = true;
+        // No depot.
+        map.set_tile(captured, captured_tile);
+        map.set_tile(
+            captured_neighbor,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+
+        let home = Province::new(
+            ProvinceId(1),
+            "Home".to_string(),
+            NationId(1),
+            home_cap,
+            vec![home_cap],
+            4,
+        );
+        let captured_prov = Province::new(
+            ProvinceId(2),
+            "Captured".to_string(),
+            NationId(1),
+            captured,
+            vec![captured, captured_neighbor],
+            3,
+        );
+        let provinces_ref: Vec<&Province> = vec![&home, &captured_prov];
+        // Captured province NOT in connected set — country-capital seeds are
+        // rail-independent.
+        let connected: HashSet<ProvinceId> = HashSet::from([ProvinceId(1)]);
+        let set = collectable_hexes(&map, &provinces_ref, &connected);
+
+        assert!(
+            set.contains(&captured),
+            "is_country_capital is an independent collector seed even with no depot"
+        );
+        assert!(
+            set.contains(&captured_neighbor),
+            "captured country-capital collects its 1-hex neighbor radius"
+        );
     }
 
     // ── rail_terrain_enabled / tech gate ─────────────────────────

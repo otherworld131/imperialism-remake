@@ -91,6 +91,30 @@ game_config = {
     -- exists, not hoarding cash.
     infrastructure_horizon_turns = 50,
 
+    -- Depot-planner scoring weights (card #132).
+    --   net_score = coverage * horizon * infra_coverage_weight
+    --             - path_cost * infra_path_cost_weight - depot_cost
+    -- Raise infra_path_cost_weight above 1.0 to prefer short routes over
+    -- high-coverage remote candidates.
+    infra_coverage_weight = 1.0,
+    infra_path_cost_weight = 1.0,
+
+    -- Trade-aware demand (cards #131 / #132).
+    --   trade_lookback_turns             — window for "recently imported"
+    --   trade_discount_weight            — master switch (0 disables)
+    --   trade_history_weight             — weight on avg-per-turn imports
+    --                                      from trade_history (rate = sum /
+    --                                      lookback_turns so a one-off buy
+    --                                      N turns ago counts as 1/N this turn)
+    --   trade_consulate_potential_weight — weight on tradeable tile yield
+    --                                      owned by consulated minors (lower
+    --                                      than history because potential is
+    --                                      softer signal than actual imports)
+    trade_lookback_turns = 8,
+    trade_discount_weight = 0.5,
+    trade_history_weight = 1.0,
+    trade_consulate_potential_weight = 0.25,
+
     -- Engineer-hire scoring (drives `score_hire_engineer`).
     -- Score = base + path_len × path_coeff, capped, returns None at hire_max.
     engineer_hire_max = 3,

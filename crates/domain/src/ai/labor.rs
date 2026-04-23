@@ -182,22 +182,16 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
     // if nothing in `collectable` is available — the AI's rail planner is
     // expected to catch up and connect them within a few turns.
     let collectable: std::collections::HashSet<crate::hex::HexCoord> = {
-        let nation = match game.get_nation(nation_id) {
-            Some(n) => n,
-            None => return,
-        };
+        if game.get_nation(nation_id).is_none() {
+            return;
+        }
         let connected = super::super::turn::connected_provinces(game, nation_id);
         let owned_provinces: Vec<&crate::map::Province> = game
             .provinces
             .iter()
             .filter(|p| p.owner == nation_id)
             .collect();
-        crate::map::infrastructure::collectable_hexes(
-            &game.hex_map,
-            nation.capital_province_id,
-            &owned_provinces,
-            &connected,
-        )
+        crate::map::infrastructure::collectable_hexes(&game.hex_map, &owned_provinces, &connected)
     };
 
     // Find all improvable tiles across the nation's provinces.
@@ -272,6 +266,18 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
                 return;
             };
             let civilian_id = nation.civilians[civ_idx].id;
+            // Clear the old tile's slot before redeploying so stale IDs don't
+            // block the engineer from building railroad on previously-worked hexes.
+            if let Some(old_pos) = nation.civilians[civ_idx].position {
+                if let Some(old_tile) = game.hex_map.get_tile_mut(old_pos) {
+                    if old_tile.assigned_civilian == Some(civilian_id) {
+                        old_tile.assigned_civilian = None;
+                    }
+                }
+            }
+            let Some(nation) = game.get_nation_mut(nation_id) else {
+                return;
+            };
             nation.civilians[civ_idx].deploy(coord);
             nation.civilians[civ_idx].start_work(2);
 

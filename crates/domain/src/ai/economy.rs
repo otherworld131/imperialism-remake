@@ -100,7 +100,15 @@ pub(super) fn get_rail_network_for_nation(
 /// Per-resource demand weights for this nation based on mill deficits,
 /// money urgency, and food security. Used by both `score_province` and
 /// the depot-placement planner to value resource tiles consistently.
-pub(super) fn compute_resource_demand(nation: &Nation) -> HashMap<ResourceType, f64> {
+///
+/// Card #132: the raw deficit is discounted by "importable via trade" — the
+/// AI should prefer connecting provinces producing resources it can't cover
+/// through trade over resources already flowing in from partners.
+pub(super) fn compute_resource_demand(
+    nation: &Nation,
+    game: &GameState,
+    cfg: &crate::data::GameConfig,
+) -> HashMap<ResourceType, f64> {
     let mut demand: HashMap<ResourceType, f64> = HashMap::new();
 
     for building in &nation.buildings {
@@ -161,7 +169,90 @@ pub(super) fn compute_resource_demand(nation: &Nation) -> HashMap<ResourceType, 
         demand.entry(r).or_insert(food_urgency);
     }
 
+    // Card #132: subtract importable-via-trade from raw demand. If a need
+    // is already being covered by trade history or by a consulated partner
+    // producing the resource, the AI should not chase it by building new
+    // infrastructure.
+    //
+    // Discount is explicitly capped by the current `demand[r]` value
+    // (the raw deficit) so a large historical import stream can't make
+    // the AI ignore a real need over multiple turns — the worst trade
+    // can do is take the resource's demand to zero, never negative.
+    if cfg.trade_discount_weight > 0.0 {
+        let (history, potential) = importable_via_trade(nation, game, cfg);
+        let lookback = cfg.trade_lookback_turns.max(1) as f64;
+        for (resource, slot) in demand.iter_mut() {
+            let history_rate = history.get(resource).copied().unwrap_or(0.0) / lookback;
+            let potential_rate = potential.get(resource).copied().unwrap_or(0.0);
+            let raw_discount = history_rate * cfg.trade_history_weight
+                + potential_rate * cfg.trade_consulate_potential_weight;
+            let discount = raw_discount * cfg.trade_discount_weight;
+            let capped = discount.min(*slot); // never more than the raw deficit
+            *slot = (*slot - capped).max(0.0);
+        }
+    }
+
     demand
+}
+
+/// Estimate how much of each resource a nation can plausibly obtain through
+/// trade this turn. Returns a `(history, consulate_potential)` pair so the
+/// caller can weight each signal separately (cards #131 / #132):
+///
+/// - **history**: total quantities bought within the last
+///   `cfg.trade_lookback_turns` turns. All entries in the window are weighted
+///   equally; the caller divides by the window length to get a per-turn rate.
+/// - **consulate_potential**: tradeable tile yield owned by non-GP minors
+///   we hold a consulate with. Reflects what's available to us but we may
+///   not yet be purchasing; weighted lower than history so potential alone
+///   can't silence a real deficit.
+pub(super) fn importable_via_trade(
+    nation: &Nation,
+    game: &GameState,
+    cfg: &crate::data::GameConfig,
+) -> (HashMap<ResourceType, f64>, HashMap<ResourceType, f64>) {
+    let mut history: HashMap<ResourceType, f64> = HashMap::new();
+    let mut potential: HashMap<ResourceType, f64> = HashMap::new();
+
+    let lookback = cfg.trade_lookback_turns;
+    let current = game.turn.0;
+    let cutoff = current.saturating_sub(lookback);
+    for entry in &nation.trade_history {
+        if !entry.bought {
+            continue;
+        }
+        if entry.turn.0 < cutoff {
+            continue;
+        }
+        *history.entry(entry.resource).or_default() += entry.quantity as f64;
+    }
+
+    for other in &game.nations {
+        if other.id == nation.id || other.is_great_power() || other.province_ids.is_empty() {
+            continue;
+        }
+        let has_consulate = game
+            .diplomacy
+            .get_relation(nation.id, other.id)
+            .is_some_and(|r| r.has_consulate);
+        if !has_consulate {
+            continue;
+        }
+        for pid in &other.province_ids {
+            if let Some(p) = game.get_province(*pid) {
+                for &coord in &p.tiles {
+                    if let Some(tile) = game.hex_map.get_tile(coord)
+                        && let Some(y) = tile.calculate_yield()
+                        && y.resource.is_tradeable()
+                    {
+                        *potential.entry(y.resource).or_default() += y.quantity as f64;
+                    }
+                }
+            }
+        }
+    }
+
+    (history, potential)
 }
 
 /// Demand-weighted yield for a single tile (≥1 per producing tile).
@@ -180,8 +271,14 @@ pub(super) fn score_tile_for_demand(
 }
 
 #[allow(dead_code)]
-pub(super) fn score_province(hex_map: &HexMap, province: &Province, nation: &Nation) -> u32 {
-    let demand = compute_resource_demand(nation);
+pub(super) fn score_province(
+    hex_map: &HexMap,
+    province: &Province,
+    nation: &Nation,
+    game: &GameState,
+    cfg: &crate::data::GameConfig,
+) -> u32 {
+    let demand = compute_resource_demand(nation, game, cfg);
     let mut score = 0u32;
     for &coord in &province.tiles {
         score += score_tile_for_demand(hex_map, coord, &demand);
@@ -190,12 +287,17 @@ pub(super) fn score_province(hex_map: &HexMap, province: &Province, nation: &Nat
 }
 
 /// A single planned depot placement.
+#[derive(Debug, Clone)]
 pub(super) struct DepotPlan {
     /// Where the depot will go.
     pub candidate: HexCoord,
-    /// Unbuilt hexes from the existing network to `candidate`, in build order.
+    /// Unbuilt hexes from `origin_capital` to `candidate`, in build order.
     /// Empty when the candidate is already reached by rail.
     pub path: Vec<HexCoord>,
+    /// Country-capital tile the path roots from. Card #132: planning is
+    /// always anchored at a country capital (original or conquered), never
+    /// at an arbitrary rail-network tip.
+    pub origin_capital: HexCoord,
     /// Total $ to lay every hex in `path`. Kept for debugging / test inspection.
     #[allow(dead_code)]
     pub path_cost: Money,
@@ -208,23 +310,60 @@ pub(super) struct DepotPlan {
     pub net_score: f64,
 }
 
-/// Plan the single best depot placement for `nation_id` under the current
-/// tech/ownership/rail network state, or `None` if nothing is worth building.
+/// Outcome of a planning call. Card #132: the AI must commit to a depot
+/// target across turns, so the planner either tells the spending loop to
+/// honor the existing commitment or tells it to replace it.
+#[derive(Debug, Clone)]
+pub(super) enum PlanOutcome {
+    /// The nation's `committed_infra_target` is still valid. Follow the
+    /// returned plan; do not mutate the commitment.
+    KeepCommitment(DepotPlan),
+    /// No valid commitment (either never existed, was fulfilled, or its
+    /// target became unreachable). The `Option` holds the newly-picked
+    /// plan, or `None` if nothing is worth building this turn. The caller
+    /// must write the plan's `(candidate, origin_capital)` back to
+    /// `committed_infra_target` — or clear it to `None`.
+    Fresh(Option<DepotPlan>),
+}
+
+impl PlanOutcome {
+    /// Convenience: the current plan to act on, if any.
+    pub(super) fn as_plan(&self) -> Option<&DepotPlan> {
+        match self {
+            PlanOutcome::KeepCommitment(p) => Some(p),
+            PlanOutcome::Fresh(opt) => opt.as_ref(),
+        }
+    }
+}
+
+/// Plan the next depot target for `nation_id` (card #132).
 ///
-/// Strategy:
-/// 1. Enumerate every owned land hex without a depot as a candidate.
-/// 2. Score each candidate by the demand-weighted yield of tiles within its
-///    1-hex radius (minus hexes already covered by another connected depot).
-/// 3. Drop candidates unreachable by tech-enabled rail on owned hexes.
-/// 4. Compute `net_score = coverage * horizon - path_cost - depot_cost` and
-///    return the argmax (if positive).
-pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> Option<DepotPlan> {
-    use crate::map::infrastructure::{collectable_hexes, is_province_connected, railroad_cost};
+/// Card-mandated behaviour:
+/// 1. Seeds for Dijkstra are **country-capital tiles only** (the nation's own
+///    capital plus every owned `is_country_capital` tile). Province centroids
+///    and mid-network rail tips do NOT seed new plans.
+/// 2. Existing rail/depot hexes are zero-cost edges — the shortest path from
+///    a capital through an existing spur and out one more hex is still cheap.
+/// 3. The candidate with the highest trade-adjusted coverage ÷ distance score
+///    wins. Demand already discounts resources available via trade (see
+///    `compute_resource_demand` / `importable_via_trade`).
+/// 4. The pick is **hard-committed**: if the nation's `committed_infra_target`
+///    still points at an owned, reachable, non-depot candidate, that target
+///    is returned unchanged — no re-shopping turn over turn. Commitment is
+///    released only when the depot is built, the candidate/origin is lost,
+///    or no tech-enabled path remains.
+///
+/// Returns a `PlanOutcome` the spending loop uses to persist or clear the
+/// nation's `committed_infra_target` field.
+pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutcome {
+    use crate::map::infrastructure::collectable_hexes;
     use crate::turn::connected_provinces;
 
-    let nation = game.get_nation(nation_id)?;
+    let nation = match game.get_nation(nation_id) {
+        Some(n) => n,
+        None => return PlanOutcome::Fresh(None),
+    };
     let cfg = &game.game_data.game_config;
-    let capital_tile = game.get_province(nation.capital_province_id)?.capital_tile;
 
     let connected = connected_provinces(game, nation_id);
     let owned_provinces: Vec<&Province> = game
@@ -232,21 +371,22 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> Option<D
         .iter()
         .filter(|p| p.owner == nation_id)
         .collect();
-    let already_covered = collectable_hexes(
-        &game.hex_map,
-        nation.capital_province_id,
-        &owned_provinces,
-        &connected,
-    );
+    let already_covered = collectable_hexes(&game.hex_map, &owned_provinces, &connected);
 
     let owned_hexes: HashSet<HexCoord> = owned_provinces
         .iter()
         .flat_map(|p| p.tiles.iter().copied())
         .collect();
 
-    // Rail network seeds: the nation's own capital PLUS every owned
-    // country-capital tile. Captured foreign capitals are independent hubs.
-    let mut seeds: Vec<HexCoord> = vec![capital_tile];
+    // Seeds: every owned country-capital tile. These are the only valid
+    // anchors for a new railway under card #132. Include the home capital
+    // defensively even if its tile's `is_country_capital` flag is somehow
+    // unset (map-gen edge case).
+    let capital_tile = match game.get_province(nation.capital_province_id) {
+        Some(p) => p.capital_tile,
+        None => return PlanOutcome::Fresh(None),
+    };
+    let mut capital_seeds: Vec<HexCoord> = vec![capital_tile];
     for &h in &owned_hexes {
         if h == capital_tile {
             continue;
@@ -254,19 +394,75 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> Option<D
         if let Some(tile) = game.hex_map.get_tile(h)
             && tile.is_country_capital
         {
-            seeds.push(h);
+            capital_seeds.push(h);
         }
     }
-    let network = get_rail_network_for_nation(&game.hex_map, &seeds);
-    let demand = compute_resource_demand(nation);
-    let horizon = cfg.infrastructure_horizon_turns as f64;
-    let depot_cost = Money::dollars(cfg.depot_cost);
 
-    // Single multi-source Dijkstra from the network → distance + prev map for
-    // every reachable owned hex. Avoids running one Dijkstra per candidate.
-    let (dist, prev) = dijkstra_from_network(
+    // ── Check existing commitment first ───────────────────────
+    if let Some(t) = nation.ai_priority_state.committed_infra_target.as_ref() {
+        let cand_tile = game.hex_map.get_tile(t.candidate);
+        let fulfilled = cand_tile.is_some_and(|tile| tile.infrastructure.has_depot);
+        let candidate_ownership_ok = owned_hexes.contains(&t.candidate);
+        // Accept the origin as valid if (a) the tile still has
+        // `is_country_capital`, OR (b) it's still the nation's own
+        // `capital_province.capital_tile`. Case (b) mirrors the defensive
+        // home-capital fallback in seed construction above: if the flag is
+        // somehow unset on the home-capital tile, the planner still treats
+        // it as a valid origin, and commitment validation must agree —
+        // otherwise the commitment would clear every turn (F-001).
+        let origin_tile = game.hex_map.get_tile(t.origin_capital);
+        let origin_is_home_capital = t.origin_capital == capital_tile;
+        let origin_ok = owned_hexes.contains(&t.origin_capital)
+            && (origin_is_home_capital
+                || origin_tile.is_some_and(|tile| tile.is_country_capital));
+
+        if !fulfilled && candidate_ownership_ok && origin_ok {
+            // Single-source Dijkstra from the committed origin capital to
+            // verify the commitment is still reachable under current tech
+            // and ownership, and to refresh the path with whatever rail has
+            // been laid since.
+            let mut origin_seed = HashSet::new();
+            origin_seed.insert(t.origin_capital);
+            let (dist, prev, _source) = dijkstra_from_seeds(
+                &game.hex_map,
+                &origin_seed,
+                &owned_hexes,
+                cfg,
+                &nation.researched_techs,
+                &game.game_data,
+            );
+            if t.candidate == t.origin_capital || dist.contains_key(&t.candidate) {
+                let path = reconstruct_path(&game.hex_map, &prev, t.candidate);
+                let path_cost = sum_path_cost(&game.hex_map, &path, cfg);
+                let coverage_value = coverage_around(
+                    &game.hex_map,
+                    t.candidate,
+                    &owned_hexes,
+                    &already_covered,
+                    &compute_resource_demand(nation, game, cfg),
+                );
+                let net_score = net_score(coverage_value, path_cost, cfg);
+                return PlanOutcome::KeepCommitment(DepotPlan {
+                    candidate: t.candidate,
+                    path,
+                    origin_capital: t.origin_capital,
+                    path_cost,
+                    coverage_value,
+                    net_score,
+                });
+            }
+            // else: fall through to re-plan (commitment is now unreachable)
+        }
+        // fulfilled / lost candidate / lost origin / unreachable → clear and re-plan
+    }
+
+    // ── Re-plan from country-capital seeds ────────────────────
+    let demand = compute_resource_demand(nation, game, cfg);
+
+    let seed_set: HashSet<HexCoord> = capital_seeds.iter().copied().collect();
+    let (dist, prev, source_of) = dijkstra_from_seeds(
         &game.hex_map,
-        &network,
+        &seed_set,
         &owned_hexes,
         cfg,
         &nation.researched_techs,
@@ -275,7 +471,11 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> Option<D
 
     let mut best: Option<DepotPlan> = None;
 
-    for &candidate in &owned_hexes {
+    // Sort to ensure deterministic selection when scores are tied.
+    let mut sorted_candidates: Vec<HexCoord> = owned_hexes.iter().copied().collect();
+    sorted_candidates.sort_unstable_by_key(|c| (c.q, c.r));
+
+    for candidate in sorted_candidates {
         let tile = match game.hex_map.get_tile(candidate) {
             Some(t) => t,
             None => continue,
@@ -284,92 +484,167 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> Option<D
             continue;
         }
 
-        let mut coverage_value: u32 = 0;
-        let radius: Vec<HexCoord> = std::iter::once(candidate)
-            .chain(candidate.neighbors().iter().copied())
-            .collect();
-        for r_hex in &radius {
-            if !owned_hexes.contains(r_hex) {
-                continue;
-            }
-            if already_covered.contains(r_hex) {
-                continue;
-            }
-            coverage_value += score_tile_for_demand(&game.hex_map, *r_hex, &demand);
-        }
+        let coverage_value = coverage_around(
+            &game.hex_map,
+            candidate,
+            &owned_hexes,
+            &already_covered,
+            &demand,
+        );
         if coverage_value == 0 {
             continue;
         }
 
-        // Skip unreachable candidates (no path recorded by the multi-source run).
-        if !network.contains(&candidate) && !dist.contains_key(&candidate) {
+        // Unreachable from any country capital → skip.
+        if !seed_set.contains(&candidate) && !dist.contains_key(&candidate) {
             continue;
         }
 
-        // Reconstruct the path from network to candidate (tiles NOT in network).
-        let mut path: Vec<HexCoord> = Vec::new();
-        let mut c = candidate;
-        while let Some(&p) = prev.get(&c) {
-            if !network.contains(&c) {
-                path.push(c);
+        let path = reconstruct_path(&game.hex_map, &prev, candidate);
+        let path_cost = sum_path_cost(&game.hex_map, &path, cfg);
+
+        // Origin capital = the seed this candidate was reached from. If the
+        // candidate is itself a seed (a country-capital tile), it's its own
+        // origin.
+        let origin_capital = if seed_set.contains(&candidate) {
+            candidate
+        } else {
+            match source_of.get(&candidate).copied() {
+                Some(o) => o,
+                None => continue, // no source recorded — shouldn't happen, skip defensively
             }
-            c = p;
-        }
-        path.reverse();
+        };
 
-        let path_cost_cents: i64 = path
-            .iter()
-            .filter_map(|c| game.hex_map.get_tile(*c))
-            .filter(|t| !t.infrastructure.has_railroad && !t.infrastructure.has_depot)
-            .filter_map(|t| railroad_cost(t.terrain(), cfg).map(|m| m.cents()))
-            .sum();
-        let path_cost = Money::from_cents(path_cost_cents);
-
-        // Net score is used for ranking candidates (higher = better). We do
-        // *not* gate on `> 0`: a nation should always be developing something
-        // if an opportunity exists — depots are long-lived and coverage
-        // compounds beyond any finite horizon, so even a "break-even" depot is
-        // worth building over hoarding treasury.
-        let net_score = coverage_value as f64 * horizon
-            - path_cost.as_dollars() as f64
-            - depot_cost.as_dollars() as f64;
+        let ns = net_score(coverage_value, path_cost, cfg);
 
         let plan = DepotPlan {
             candidate,
             path,
+            origin_capital,
             path_cost,
             coverage_value,
-            net_score,
+            net_score: ns,
         };
-        match &best {
-            None => best = Some(plan),
-            Some(b) if plan.net_score > b.net_score => best = Some(plan),
-            _ => {}
+        let better = match &best {
+            None => true,
+            Some(b) => {
+                plan.net_score > b.net_score
+                    || (plan.net_score == b.net_score && plan.path_cost < b.path_cost)
+                    || (plan.net_score == b.net_score
+                        && plan.path_cost == b.path_cost
+                        && (plan.candidate.q, plan.candidate.r)
+                            < (b.candidate.q, b.candidate.r))
+            }
+        };
+        if better {
+            best = Some(plan);
         }
     }
 
-    let _ = is_province_connected; // silence unused-import warning in some builds
-    best
+    PlanOutcome::Fresh(best)
 }
 
-/// Single multi-source Dijkstra from every tile in `network` out to every
-/// reachable owned land hex (respecting tech constraints). Returns the cost
-/// map and a predecessor map so callers can reconstruct paths to any hex
-/// without re-running Dijkstra per target.
-fn dijkstra_from_network(
+/// Demand-weighted coverage of the 1-hex radius around `center`, excluding
+/// tiles already covered by another connected collector.
+fn coverage_around(
     hex_map: &HexMap,
-    network: &HashSet<HexCoord>,
+    center: HexCoord,
+    owned_hexes: &HashSet<HexCoord>,
+    already_covered: &HashSet<HexCoord>,
+    demand: &HashMap<ResourceType, f64>,
+) -> u32 {
+    let mut v: u32 = 0;
+    let radius: Vec<HexCoord> = std::iter::once(center)
+        .chain(center.neighbors().iter().copied())
+        .collect();
+    for r_hex in &radius {
+        if !owned_hexes.contains(r_hex) {
+            continue;
+        }
+        if already_covered.contains(r_hex) {
+            continue;
+        }
+        v += score_tile_for_demand(hex_map, *r_hex, demand);
+    }
+    v
+}
+
+/// Reconstruct the build-order path to `candidate`, dropping any tiles that
+/// already have railroad or a depot (zero-cost edges reused from the network).
+fn reconstruct_path(
+    hex_map: &HexMap,
+    prev: &HashMap<HexCoord, HexCoord>,
+    candidate: HexCoord,
+) -> Vec<HexCoord> {
+    let mut path: Vec<HexCoord> = Vec::new();
+    let mut c = candidate;
+    while let Some(&p) = prev.get(&c) {
+        let already_built = hex_map
+            .get_tile(c)
+            .is_some_and(|t| t.infrastructure.has_railroad || t.infrastructure.has_depot);
+        if !already_built {
+            path.push(c);
+        }
+        c = p;
+    }
+    path.reverse();
+    path
+}
+
+/// Sum the $ cost to lay railroad on every hex in `path` that doesn't
+/// already have rail/depot. Existing rail is traversed at $0.
+fn sum_path_cost(hex_map: &HexMap, path: &[HexCoord], cfg: &crate::data::GameConfig) -> Money {
+    let cents: i64 = path
+        .iter()
+        .filter_map(|c| hex_map.get_tile(*c))
+        .filter(|t| !t.infrastructure.has_railroad && !t.infrastructure.has_depot)
+        .filter_map(|t| {
+            crate::map::infrastructure::railroad_cost(t.terrain(), cfg).map(|m| m.cents())
+        })
+        .sum();
+    Money::from_cents(cents)
+}
+
+/// Weighted net score for ranking candidates. Card #132 exposes the
+/// coverage and path-cost weights in Lua via `cfg.infra_coverage_weight`
+/// and `cfg.infra_path_cost_weight` so designers can tilt toward short
+/// routes vs. high-coverage remote candidates without touching Rust.
+fn net_score(coverage_value: u32, path_cost: Money, cfg: &crate::data::GameConfig) -> f64 {
+    let horizon = cfg.infrastructure_horizon_turns as f64;
+    let depot_cost = cfg.depot_cost as f64;
+    coverage_value as f64 * horizon * cfg.infra_coverage_weight
+        - path_cost.as_dollars() as f64 * cfg.infra_path_cost_weight
+        - depot_cost
+}
+
+/// Multi-source Dijkstra from every tile in `seeds` out to every reachable
+/// owned land hex (tech-gated; existing rail/depot hexes are zero-cost edges).
+/// Returns:
+/// - `dist`: cheapest build cost to each reachable hex, in cents.
+/// - `prev`: predecessor map for path reconstruction.
+/// - `source_of`: which seed each hex was reached from. Used by the depot
+///   planner (card #132) to tag every candidate with the nearest country
+///   capital so the `DepotPlan.origin_capital` is always the correct anchor.
+fn dijkstra_from_seeds(
+    hex_map: &HexMap,
+    seeds: &HashSet<HexCoord>,
     owned_hexes: &HashSet<HexCoord>,
     cfg: &crate::data::GameConfig,
     researched_techs: &[crate::events::TechId],
     game_data: &crate::data::GameData,
-) -> (HashMap<HexCoord, i64>, HashMap<HexCoord, HexCoord>) {
+) -> (
+    HashMap<HexCoord, i64>,
+    HashMap<HexCoord, HexCoord>,
+    HashMap<HexCoord, HexCoord>,
+) {
     let mut dist: HashMap<HexCoord, i64> = HashMap::new();
     let mut prev: HashMap<HexCoord, HexCoord> = HashMap::new();
+    let mut source_of: HashMap<HexCoord, HexCoord> = HashMap::new();
     let mut heap: BinaryHeap<Reverse<(i64, HexCoord)>> = BinaryHeap::new();
 
-    for &coord in network {
+    for &coord in seeds {
         dist.insert(coord, 0);
+        source_of.insert(coord, coord);
         heap.push(Reverse((0, coord)));
     }
 
@@ -377,6 +652,10 @@ fn dijkstra_from_network(
         if cost > *dist.get(&current).unwrap_or(&i64::MAX) {
             continue;
         }
+        let current_source = match source_of.get(&current).copied() {
+            Some(s) => s,
+            None => continue,
+        };
         for neighbor in current.neighbors() {
             let tile = match hex_map.get_tile(neighbor) {
                 Some(t) => t,
@@ -385,7 +664,7 @@ fn dijkstra_from_network(
             if !tile.terrain().is_land() {
                 continue;
             }
-            if !owned_hexes.contains(&neighbor) && !network.contains(&neighbor) {
+            if !owned_hexes.contains(&neighbor) && !seeds.contains(&neighbor) {
                 continue;
             }
             let has_existing = tile.infrastructure.has_railroad || tile.infrastructure.has_depot;
@@ -411,11 +690,12 @@ fn dijkstra_from_network(
             if new_cost < *dist.get(&neighbor).unwrap_or(&i64::MAX) {
                 dist.insert(neighbor, new_cost);
                 prev.insert(neighbor, current);
+                source_of.insert(neighbor, current_source);
                 heap.push(Reverse((new_cost, neighbor)));
             }
         }
     }
-    (dist, prev)
+    (dist, prev, source_of)
 }
 
 /// Dijkstra from the existing railroad network to a target tile.
@@ -627,13 +907,14 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
         Some(n) => n,
         None => return,
     };
+    let cfg_for_scoring = game.game_data.game_config.clone();
     let mut province_scores: Vec<(ProvinceId, u32)> = province_ids
         .iter()
         .filter(|&&pid| pid != capital_province_id)
         .filter_map(|&pid| {
             let score = game
                 .get_province(pid)
-                .map(|p| score_province(&game.hex_map, p, nation_ref))?;
+                .map(|p| score_province(&game.hex_map, p, nation_ref, game, &cfg_for_scoring))?;
             if score > 0 { Some((pid, score)) } else { None }
         })
         .collect();
@@ -1638,5 +1919,531 @@ mod tests {
             "AI should build freight cars proactively, got {}",
             ai.transport.freight_cars
         );
+    }
+
+    // ── Trade-aware demand (card #132) ─────────────────────────
+
+    fn prime_timber_deficit(game: &mut GameState, nation_id: NationId) {
+        // Give the nation a LumberMill so compute_resource_demand registers
+        // a real Timber deficit (effective_capacity * 2, minus any Timber
+        // already in warehouse).
+        let nation = game.get_nation_mut(nation_id).unwrap();
+        nation
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 2));
+        // Clear any starting timber so the deficit is clean.
+        nation.warehouse.insert(ResourceType::Timber, 0);
+    }
+
+    #[test]
+    fn demand_discounted_by_recent_imports() {
+        // Card #132: when the nation has been importing timber recently, its
+        // timber demand score drops (we're already covering the need via
+        // trade). Same setup minus the history produces a higher score.
+        let mut game_a = test_game_with_ai();
+        let mut game_b = test_game_with_ai();
+        prime_timber_deficit(&mut game_a, NationId(2));
+        prime_timber_deficit(&mut game_b, NationId(2));
+
+        // game_b has recent buy history for timber.
+        let nation_b = game_b.get_nation_mut(NationId(2)).unwrap();
+        nation_b
+            .trade_history
+            .push(crate::economy::trade::TradeHistoryEntry {
+                turn: TurnNumber::new(1),
+                partner: NationId(1),
+                resource: ResourceType::Timber,
+                quantity: 30,
+                total_cost: Money::dollars(600),
+                bought: true,
+            });
+
+        let cfg = game_a.game_data.game_config.clone();
+        let demand_a =
+            compute_resource_demand(game_a.get_nation(NationId(2)).unwrap(), &game_a, &cfg);
+        let demand_b =
+            compute_resource_demand(game_b.get_nation(NationId(2)).unwrap(), &game_b, &cfg);
+
+        let a_timber = demand_a.get(&ResourceType::Timber).copied().unwrap_or(0.0);
+        let b_timber = demand_b.get(&ResourceType::Timber).copied().unwrap_or(0.0);
+        assert!(a_timber > 0.0, "baseline must have positive timber demand");
+        assert!(
+            b_timber < a_timber,
+            "recent imports should reduce timber demand (a={a_timber}, b={b_timber})"
+        );
+    }
+
+    #[test]
+    fn demand_not_discounted_when_weight_zero() {
+        // Safety valve: if trade_discount_weight is 0, trade history and
+        // consulates must not influence demand at all.
+        let mut game = test_game_with_ai();
+        prime_timber_deficit(&mut game, NationId(2));
+        game.get_nation_mut(NationId(2))
+            .unwrap()
+            .trade_history
+            .push(crate::economy::trade::TradeHistoryEntry {
+                turn: TurnNumber::new(1),
+                partner: NationId(1),
+                resource: ResourceType::Timber,
+                quantity: 100,
+                total_cost: Money::dollars(2000),
+                bought: true,
+            });
+        let mut cfg = game.game_data.game_config.clone();
+        cfg.trade_discount_weight = 0.0;
+
+        let demand = compute_resource_demand(game.get_nation(NationId(2)).unwrap(), &game, &cfg);
+        // With weight=0, demand should equal the raw LumberMill deficit
+        // (capacity 2 × 2 − warehouse 0 = 4).
+        let timber = demand.get(&ResourceType::Timber).copied().unwrap_or(0.0);
+        assert_eq!(timber, 4.0);
+    }
+
+    #[test]
+    fn demand_lookback_window_drops_stale_imports() {
+        // Imports older than cfg.trade_lookback_turns are ignored.
+        let mut game = test_game_with_ai();
+        prime_timber_deficit(&mut game, NationId(2));
+        // Game is at turn 1 by default; an entry on turn 0 is still inside
+        // the default 8-turn window. Advance the game turn past the window.
+        game.turn = TurnNumber::new(50);
+        game.get_nation_mut(NationId(2))
+            .unwrap()
+            .trade_history
+            .push(crate::economy::trade::TradeHistoryEntry {
+                turn: TurnNumber::new(1), // 49 turns stale
+                partner: NationId(1),
+                resource: ResourceType::Timber,
+                quantity: 100,
+                total_cost: Money::dollars(2000),
+                bought: true,
+            });
+
+        let cfg = game.game_data.game_config.clone();
+        let demand = compute_resource_demand(game.get_nation(NationId(2)).unwrap(), &game, &cfg);
+        let timber = demand.get(&ResourceType::Timber).copied().unwrap_or(0.0);
+        // Stale history ignored → still the raw deficit.
+        assert_eq!(timber, 4.0);
+    }
+
+    // ── Commitment-aware planner (card #132) ───────────────────
+
+    use crate::data::GameData;
+    use crate::map::tile::Tile;
+
+    /// Build a minimal nation-1 game with a country-capital tile at `capital`
+    /// (grain deposit, depot), plus extra tiles for the planner to consider.
+    /// Province 1 owns `capital` and all `extras`.
+    fn planner_game(capital: HexCoord, extras: &[(HexCoord, ResourceType)]) -> GameState {
+        let mut hex_map = HexMap::new(20, 20);
+        // Capital tile: country-capital + depot, grain resource so it yields.
+        let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        cap_tile.set_resource(ResourceType::Grain);
+        cap_tile.is_country_capital = true;
+        cap_tile.infrastructure.has_depot = true;
+        hex_map.set_tile(capital, cap_tile);
+
+        let mut tiles: Vec<HexCoord> = vec![capital];
+        for (coord, resource) in extras {
+            let mut t = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+            t.set_resource(*resource);
+            hex_map.set_tile(*coord, t);
+            tiles.push(*coord);
+        }
+
+        let province = Province::new(
+            ProvinceId(1),
+            "P".to_string(),
+            NationId(1),
+            capital,
+            tiles,
+            4,
+        );
+        let mut nation = Nation::new(
+            NationId(1),
+            "N1".to_string(),
+            crate::nation::NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        // LumberMill so the planner sees timber demand.
+        nation
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 2));
+        nation.treasury = Money::dollars(20_000);
+
+        GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "t".to_string(),
+            hex_map,
+            provinces: vec![province],
+            nations: vec![nation],
+            human_player_nation: NationId(99), // unused in planner tests
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy: crate::diplomacy::DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
+            political_archive: Vec::new(),
+            ai_debug: false,
+            observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn plan_honors_commitment_over_better_candidate() {
+        // Two candidates reachable from the capital; B has higher coverage.
+        // Seed a commitment to A; planner must KeepCommitment(A) anyway.
+        let capital = HexCoord::new(0, 0);
+        let a = HexCoord::new(2, 0);
+        let b = HexCoord::new(0, 2);
+        let mut game = planner_game(
+            capital,
+            &[
+                (a, ResourceType::Timber),
+                (b, ResourceType::Timber),
+                // Extra timber tiles around `b` to make its coverage higher.
+                (HexCoord::new(1, 2), ResourceType::Timber),
+                (HexCoord::new(-1, 2), ResourceType::Timber),
+                // Path filler between capital and a, b.
+                (HexCoord::new(1, 0), ResourceType::Grain),
+                (HexCoord::new(0, 1), ResourceType::Grain),
+            ],
+        );
+
+        // Install a commitment to `a`.
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .ai_priority_state
+            .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
+            candidate: a,
+            origin_capital: capital,
+            turn_committed: 1,
+        });
+
+        let outcome = plan_next_depot(&game, NationId(1));
+        match outcome {
+            PlanOutcome::KeepCommitment(plan) => {
+                assert_eq!(plan.candidate, a, "planner must honor committed target");
+                assert_eq!(plan.origin_capital, capital);
+            }
+            other => panic!("expected KeepCommitment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_clears_fulfilled_commitment() {
+        // Commitment's candidate already has a depot → ClearAndReplan (Fresh).
+        let capital = HexCoord::new(0, 0);
+        let a = HexCoord::new(2, 0);
+        let mut game = planner_game(
+            capital,
+            &[
+                (a, ResourceType::Timber),
+                (HexCoord::new(1, 0), ResourceType::Grain),
+            ],
+        );
+        // Place a depot at `a` so the commitment is "fulfilled".
+        if let Some(t) = game.hex_map.get_tile_mut(a) {
+            t.infrastructure.has_depot = true;
+        }
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .ai_priority_state
+            .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
+            candidate: a,
+            origin_capital: capital,
+            turn_committed: 1,
+        });
+
+        let outcome = plan_next_depot(&game, NationId(1));
+        assert!(
+            matches!(outcome, PlanOutcome::Fresh(_)),
+            "fulfilled commitment must clear and re-plan"
+        );
+    }
+
+    #[test]
+    fn plan_clears_unreachable_commitment() {
+        // Commitment to a candidate we no longer own → Fresh.
+        let capital = HexCoord::new(0, 0);
+        let a = HexCoord::new(2, 0);
+        let mut game = planner_game(
+            capital,
+            &[
+                (a, ResourceType::Timber),
+                (HexCoord::new(1, 0), ResourceType::Grain),
+            ],
+        );
+        // Install a commitment to a coordinate NOT in any owned province.
+        let off_map = HexCoord::new(15, 15);
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .ai_priority_state
+            .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
+            candidate: off_map,
+            origin_capital: capital,
+            turn_committed: 1,
+        });
+
+        let outcome = plan_next_depot(&game, NationId(1));
+        assert!(
+            matches!(outcome, PlanOutcome::Fresh(_)),
+            "unowned commitment candidate must clear and re-plan"
+        );
+    }
+
+    #[test]
+    fn plan_roots_from_nearest_country_capital() {
+        // Two country capitals. A target is close to the second one; the
+        // returned plan's origin_capital must be the nearer of the two.
+        let cap1 = HexCoord::new(0, 0);
+        let cap2 = HexCoord::new(10, 0);
+        // A midway corridor of owned tiles between the two capitals so
+        // both Dijkstras can reach a candidate; the Dijkstra frontier
+        // meets somewhere in the middle.
+        let corridor: Vec<HexCoord> = (1..=9).map(|q| HexCoord::new(q, 0)).collect();
+        // A timber tile outside cap2's direct radius so candidates near
+        // cap2 have positive coverage after `already_covered` is deducted.
+        // cap2's radius only covers (10,0)±1.
+        let timber_yield = HexCoord::new(7, 0);
+
+        let mut hex_map = HexMap::new(20, 20);
+        let mut cap1_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        cap1_tile.set_resource(ResourceType::Grain);
+        cap1_tile.is_country_capital = true;
+        cap1_tile.infrastructure.has_depot = true;
+        hex_map.set_tile(cap1, cap1_tile);
+
+        let mut cap2_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        cap2_tile.set_resource(ResourceType::Grain);
+        cap2_tile.is_country_capital = true;
+        cap2_tile.infrastructure.has_depot = true;
+        hex_map.set_tile(cap2, cap2_tile);
+
+        // Fill the corridor (every tile between the capitals is owned).
+        for c in &corridor {
+            let resource = if *c == timber_yield {
+                ResourceType::Timber
+            } else {
+                ResourceType::Grain
+            };
+            let mut t = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+            t.set_resource(resource);
+            hex_map.set_tile(*c, t);
+        }
+
+        let mut all_tiles = vec![cap1, cap2];
+        all_tiles.extend(corridor.iter().copied());
+        let province = Province::new(
+            ProvinceId(1),
+            "Big".to_string(),
+            NationId(1),
+            cap1,
+            all_tiles,
+            4,
+        );
+        let mut nation = Nation::new(
+            NationId(1),
+            "N1".to_string(),
+            crate::nation::NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 2));
+        nation.treasury = Money::dollars(20_000);
+
+        let game = GameState {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "t".to_string(),
+            hex_map,
+            provinces: vec![province],
+            nations: vec![nation],
+            human_player_nation: NationId(99),
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy: crate::diplomacy::DiplomacyState::new(),
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
+            political_archive: Vec::new(),
+            ai_debug: false,
+            observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
+        };
+
+        let outcome = plan_next_depot(&game, NationId(1));
+        let plan = outcome
+            .as_plan()
+            .expect("planner should pick a target")
+            .clone();
+        // Whatever candidate wins, its origin_capital must be whichever of
+        // cap1/cap2 yields the shorter path. With a linear corridor of
+        // grassland hexes, the nearer capital by Dijkstra is the nearer
+        // capital by q-axis distance.
+        let dist_to_cap1 = (plan.candidate.q - cap1.q).unsigned_abs();
+        let dist_to_cap2 = (plan.candidate.q - cap2.q).unsigned_abs();
+        let expected_origin = if dist_to_cap2 <= dist_to_cap1 {
+            cap2
+        } else {
+            cap1
+        };
+        assert_eq!(
+            plan.origin_capital, expected_origin,
+            "plan must root from the nearer country capital (candidate={:?}, \
+             dist to cap1={}, dist to cap2={})",
+            plan.candidate, dist_to_cap1, dist_to_cap2
+        );
+    }
+
+    #[test]
+    fn plan_reuses_existing_rail_at_zero_cost() {
+        // Lay rail all the way to the target; path_cost must be zero
+        // (candidate reachable entirely through existing rail).
+        let capital = HexCoord::new(0, 0);
+        let rail_hex = HexCoord::new(1, 0);
+        let target = HexCoord::new(2, 0);
+        // Put a timber-bearing tile next to target so `target` as a depot
+        // candidate has coverage (the target tile itself is within the
+        // capital's already-covered radius only out to distance 1).
+        let extra_timber = HexCoord::new(3, 0);
+        let mut game = planner_game(
+            capital,
+            &[
+                (rail_hex, ResourceType::Grain), // filler
+                (target, ResourceType::Timber),
+                (extra_timber, ResourceType::Timber),
+            ],
+        );
+        // Mark the intermediate hex AND the target as existing rail.
+        for h in [rail_hex, target] {
+            if let Some(t) = game.hex_map.get_tile_mut(h) {
+                t.infrastructure.has_railroad = true;
+            }
+        }
+
+        let outcome = plan_next_depot(&game, NationId(1));
+        let plan = outcome
+            .as_plan()
+            .expect("planner should pick a target")
+            .clone();
+        assert_eq!(
+            plan.path_cost,
+            Money::ZERO,
+            "existing rail reused at zero cost → path cost 0, got {:?}",
+            plan.path_cost
+        );
+    }
+
+    #[test]
+    fn plan_clears_unreachable_commitment_owned_but_no_path() {
+        // Candidate IS owned but the only path from the capital runs through
+        // Swamp terrain. Nation has no "Iron Railroad Bridge" tech, so swamp is
+        // impassable. Dijkstra cannot reach the candidate → commitment must clear.
+        let capital = HexCoord::new(0, 0);
+        let swamp_coord = HexCoord::new(1, 0);
+        let candidate = HexCoord::new(2, 0);
+
+        // planner_game adds both hexes to province 1 as grassland.
+        let mut game = planner_game(
+            capital,
+            &[
+                (swamp_coord, ResourceType::Grain),
+                (candidate, ResourceType::Timber),
+            ],
+        );
+
+        // Replace the intermediate hex with swamp terrain (tech-gated).
+        let mut swamp_tile = Tile::with_province(TerrainType::Swamp, ProvinceId(1));
+        swamp_tile.set_resource(ResourceType::Grain);
+        game.hex_map.set_tile(swamp_coord, swamp_tile);
+
+        // Install commitment to the candidate.
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .ai_priority_state
+            .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
+            candidate,
+            origin_capital: capital,
+            turn_committed: 1,
+        });
+
+        // Nation has no techs → swamp is impassable → candidate is unreachable.
+        let outcome = plan_next_depot(&game, NationId(1));
+        assert!(
+            matches!(outcome, PlanOutcome::Fresh(_)),
+            "tech-blocked path must clear commitment and re-plan, got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn plan_commitment_stable_across_turns() {
+        // Simulate two consecutive AI "turns" (two plan_next_depot calls).
+        // After the first call sets a commitment, the second call must return
+        // KeepCommitment with the same target — no silent retargeting.
+        let capital = HexCoord::new(0, 0);
+        let intermediate = HexCoord::new(1, 0);
+        let candidate = HexCoord::new(2, 0);
+        let extra_timber = HexCoord::new(3, 0);
+
+        let mut game = planner_game(
+            capital,
+            &[
+                (intermediate, ResourceType::Grain),
+                (candidate, ResourceType::Timber),
+                (extra_timber, ResourceType::Timber),
+            ],
+        );
+
+        // Turn 1: no commitment yet — planner picks a fresh target.
+        let outcome1 = plan_next_depot(&game, NationId(1));
+        let plan1 = outcome1
+            .as_plan()
+            .expect("planner should find a target on turn 1")
+            .clone();
+
+        // Simulate apply_plan_outcome: write the commitment into game state.
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .ai_priority_state
+            .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
+            candidate: plan1.candidate,
+            origin_capital: plan1.origin_capital,
+            turn_committed: 1,
+        });
+
+        // Turn 2: commitment is set — planner must honor it (KeepCommitment)
+        // and return the *same* candidate.
+        let outcome2 = plan_next_depot(&game, NationId(1));
+        match outcome2 {
+            PlanOutcome::KeepCommitment(plan2) => {
+                assert_eq!(
+                    plan2.candidate, plan1.candidate,
+                    "commitment must not retarget across turns"
+                );
+            }
+            other => panic!("expected KeepCommitment on turn 2, got {other:?}"),
+        }
     }
 }

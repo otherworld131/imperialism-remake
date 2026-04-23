@@ -739,11 +739,9 @@ fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
     let collectable_by_nation: Vec<(NationId, HashSet<crate::hex::HexCoord>)> = nation_ids
         .iter()
         .map(|&nid| {
-            let nation = match game.get_nation(nid) {
-                Some(n) => n,
-                None => return (nid, HashSet::new()),
-            };
-            let capital_pid = nation.capital_province_id;
+            if game.get_nation(nid).is_none() {
+                return (nid, HashSet::new());
+            }
             let owned: Vec<&crate::map::Province> =
                 game.provinces.iter().filter(|p| p.owner == nid).collect();
             let connected = connected_map
@@ -751,12 +749,8 @@ fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
                 .find(|(id, _)| *id == nid)
                 .map(|(_, s)| s.clone())
                 .unwrap_or_default();
-            let set = crate::map::infrastructure::collectable_hexes(
-                &game.hex_map,
-                capital_pid,
-                &owned,
-                &connected,
-            );
+            let set =
+                crate::map::infrastructure::collectable_hexes(&game.hex_map, &owned, &connected);
             (nid, set)
         })
         .collect();
@@ -1413,6 +1407,9 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
         }
 
         if let Some(tile) = game.hex_map.get_tile_mut(work.position) {
+            // Release the civilian's tile slot so the engineer (or another
+            // improver) can use it next turn.
+            tile.assigned_civilian = None;
             match work.civilian_type {
                 CivilianType::Farmer
                 | CivilianType::Rancher
@@ -6160,12 +6157,18 @@ mod tests {
 
         let mut hex_map = HexMap::new(10, 10);
 
-        // A grain tile (produces 1 Grain at level 0)
+        // A grain tile (produces 1 Grain at level 0). Also acts as the
+        // nation's country capital (implicit depot + is_country_capital
+        // flag), mirroring what `place_depot_unchecked` does at game
+        // setup for every nation's capital.
         let mut farm_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
         farm_tile.set_resource(ResourceType::Grain);
+        farm_tile.is_country_capital = true;
+        farm_tile.infrastructure.has_depot = true;
         hex_map.set_tile(coord_farm, farm_tile);
 
-        // A forest tile with timber (produces 1 Timber)
+        // A forest tile with timber (produces 1 Timber) — adjacent to the
+        // capital tile, so it's in the capital's 1-hex collector radius.
         let mut forest_tile = Tile::with_province(TerrainType::Forest, ProvinceId(1));
         forest_tile.set_resource(ResourceType::Timber);
         hex_map.set_tile(coord_forest, forest_tile);
@@ -6222,10 +6225,13 @@ mod tests {
 
         let mut hex_map = HexMap::new(10, 10);
 
-        // A mountain tile with gold deposit at improvement level 1 (produces 1 Gold)
+        // A mountain tile with gold deposit at improvement level 1 (produces 1 Gold).
+        // Also acts as the country capital so the collector radius covers it.
         let mut gold_tile = Tile::with_province(TerrainType::Mountain, ProvinceId(1));
         gold_tile.reveal_deposit(ResourceType::Gold);
         gold_tile.set_improvement_level(1);
+        gold_tile.is_country_capital = true;
+        gold_tile.infrastructure.has_depot = true;
         hex_map.set_tile(coord_gold, gold_tile);
 
         let province1 = Province::new(
@@ -7314,21 +7320,32 @@ mod tests {
     #[test]
     fn capital_province_resources_delivered_without_transport() {
         // Capital province resources are delivered for free (no freight cars needed).
+        // Under the unified collector model (cards #130 + #131), only tiles
+        // within the capital-tile's 1-hex radius yield — so we arrange the
+        // 6 grain tiles around the capital (not stretched in a line).
         let mut hex_map = HexMap::new(10, 10);
-        let mut tiles = Vec::new();
-        for i in 0..6 {
-            let coord = HexCoord::new(i, 0);
+        let capital = HexCoord::new(2, 2);
+        let mut tiles = vec![capital];
+        tiles.extend_from_slice(&capital.neighbors());
+
+        // Capital tile: grain + country-capital flag + depot.
+        let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        cap_tile.set_resource(ResourceType::Grain);
+        cap_tile.is_country_capital = true;
+        cap_tile.infrastructure.has_depot = true;
+        hex_map.set_tile(capital, cap_tile);
+        // 6 grain neighbors in the same province.
+        for coord in capital.neighbors() {
             let mut tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
             tile.set_resource(ResourceType::Grain);
             hex_map.set_tile(coord, tile);
-            tiles.push(coord);
         }
 
         let province = Province::new(
             ProvinceId(1),
             "CapitalFarms".to_string(),
             NationId(1),
-            HexCoord::new(0, 0),
+            capital,
             tiles,
             4,
         );
@@ -7373,7 +7390,8 @@ mod tests {
 
         let report = process_turn(&mut game);
 
-        // 6 farms in capital province → all delivered for free, no overflow
+        // 7 farms all within the capital tile's 1-hex collector radius →
+        // all delivered for free, no overflow.
         let total_overflow: u32 = report
             .transport_overflow
             .iter()
@@ -7385,9 +7403,9 @@ mod tests {
             "Capital province has no transport overflow"
         );
 
-        // All 6 grain should be in warehouse
+        // Capital + 6 neighbors = 7 grain.
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.resource_amount(ResourceType::Grain), 6);
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 7);
     }
 
     #[test]
@@ -10133,6 +10151,8 @@ mod tests {
         let mut hex_map = HexMap::new(20, 20);
         let mut farm_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
         farm_tile.set_resource(ResourceType::Grain);
+        farm_tile.is_country_capital = true;
+        farm_tile.infrastructure.has_depot = true;
         hex_map.set_tile(coord_farm, farm_tile);
         let mut forest_tile = Tile::with_province(TerrainType::Forest, ProvinceId(1));
         forest_tile.set_resource(ResourceType::Timber);

@@ -93,6 +93,26 @@ pub struct GameConfig {
     // AI infrastructure planner horizon: number of turns to amortise depot
     // yield over when comparing candidate placements to build costs.
     pub infrastructure_horizon_turns: u32,
+    // AI infrastructure planner scoring weights (card #132).
+    // `net_score = coverage * horizon * infra_coverage_weight
+    //            - path_cost * infra_path_cost_weight - depot_cost`
+    pub infra_coverage_weight: f64,
+    pub infra_path_cost_weight: f64,
+    // Trade-aware demand (cards #131 / #132): how far back to look for
+    // import history, and how strongly to discount demand for resources
+    // already flowing in via trade.
+    //
+    // The discount for resource R is:
+    //   discount(R) = trade_discount_weight
+    //               * ( history_rate(R)      * trade_history_weight
+    //                 + consulate_potential(R) * trade_consulate_potential_weight )
+    // where history_rate is total recent imports divided by lookback_turns
+    // (per-turn decay so a one-off buy 8 turns ago is weighted 1/8 this turn).
+    // `trade_discount_weight = 0` disables the whole feature.
+    pub trade_lookback_turns: u32,
+    pub trade_discount_weight: f64,
+    pub trade_history_weight: f64,
+    pub trade_consulate_potential_weight: f64,
     // Engineer-hire scoring (drives `score_hire_engineer`).
     pub engineer_hire_max: u32,
     pub engineer_hire_base: u32,
@@ -231,6 +251,12 @@ impl Default for GameConfig {
             railroad_tech_swamp: Some("Iron Railroad Bridge".to_string()),
             railroad_tech_mountain: Some("Compound Steam Engine".to_string()),
             infrastructure_horizon_turns: 50,
+            infra_coverage_weight: 1.0,
+            infra_path_cost_weight: 1.0,
+            trade_lookback_turns: 8,
+            trade_discount_weight: 0.5,
+            trade_history_weight: 1.0,
+            trade_consulate_potential_weight: 0.25,
             engineer_hire_max: 3,
             engineer_hire_base: 100,
             engineer_hire_path_coeff: 30,
