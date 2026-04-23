@@ -56,6 +56,7 @@ export interface Headline {
   category: 'war' | 'battle' | 'diplomacy' | 'growth' | 'trade' | 'crisis' | 'politics' | 'military' | 'default';
   reason?: string;
   is_non_action?: boolean;
+  nation_ids?: number[];
 }
 
 export interface ArchivedNewspaper {

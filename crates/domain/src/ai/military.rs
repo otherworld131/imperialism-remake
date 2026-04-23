@@ -168,6 +168,7 @@ pub(crate) fn ai_build_military(
                     personality
                 ),
                 is_non_action: false,
+                nation_id,
             });
         }
     } else if army_count < tier2_max && treasury > tier2_treasury {
@@ -213,6 +214,7 @@ pub(crate) fn ai_build_military(
                     treasury.as_dollars()
                 ),
                 is_non_action: false,
+                nation_id,
             });
         }
     } else if army_count >= tier2_max && treasury > tier3_treasury {
@@ -273,6 +275,7 @@ pub(crate) fn ai_build_military(
                                 unit_type
                             ),
                             is_non_action: false,
+                            nation_id,
                         });
                     }
                 } else {
@@ -304,6 +307,7 @@ pub(crate) fn ai_build_military(
                             treasury.as_dollars()
                         ),
                         is_non_action: false,
+                        nation_id,
                     });
                 }
             }
@@ -516,6 +520,7 @@ pub(crate) fn ai_declare_wars(
                     war_cooldown
                 ),
                 is_non_action: true,
+                nation_id: ai_id,
             });
             continue;
         }
@@ -534,6 +539,7 @@ pub(crate) fn ai_declare_wars(
                     ai_army, army_min_for_war
                 ),
                 is_non_action: true,
+                nation_id: ai_id,
             });
             continue;
         }
@@ -548,6 +554,7 @@ pub(crate) fn ai_declare_wars(
                     standing
                 ),
                 is_non_action: true,
+                nation_id: ai_id,
             });
             continue;
         }
@@ -558,6 +565,7 @@ pub(crate) fn ai_declare_wars(
                 text: format!("{} did not declare war this turn", attacker_name),
                 reason: "already at war — cannot open a second front".to_string(),
                 is_non_action: true,
+                nation_id: ai_id,
             });
             continue;
         }
@@ -897,6 +905,7 @@ pub(crate) fn ai_declare_wars(
                         c.relationship_penalty,
                     ),
                     is_non_action: true,
+                    nation_id: ai_id,
                 });
                 continue;
             }
@@ -939,6 +948,7 @@ pub(crate) fn ai_declare_wars(
                             c.at_war_bonus,
                         ),
                         is_non_action: false,
+                        nation_id: ai_id,
                     });
                 } else {
                     // No eligible candidates (all at war, allied, anarchic, dogpiled, or no targets)
@@ -949,6 +959,7 @@ pub(crate) fn ai_declare_wars(
                         ),
                         reason: "no eligible targets (already at war, allied, anarchic, or dogpile-prevented)".to_string(),
                         is_non_action: true,
+                        nation_id: ai_id,
                     });
                 }
                 continue;
@@ -1009,6 +1020,7 @@ pub(crate) fn ai_declare_wars(
                             candidate.opportunity_score
                         ),
                         is_non_action: true,
+                        nation_id: ai_id,
                     });
                     continue;
                 }
@@ -1056,6 +1068,7 @@ pub(crate) fn ai_declare_wars(
                 candidate.relationship_penalty,
             ),
             is_non_action: false,
+            nation_id: ai_id,
         });
         let turn = game.turn;
         game.history.push((

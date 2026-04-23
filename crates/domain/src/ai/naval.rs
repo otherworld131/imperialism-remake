@@ -297,6 +297,7 @@ pub fn ai_naval_strategy(
                 max_enemy_naval_fp, our_naval_fp
             ),
             is_non_action: false,
+            nation_id,
         });
         return; // Focus on shipbuilding when outmatched
     }
@@ -446,6 +447,7 @@ pub fn ai_naval_strategy(
                     ),
                     reason: reason_text,
                     is_non_action: false,
+                    nation_id,
                 });
 
                 if game.ai_debug {

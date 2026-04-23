@@ -77,7 +77,11 @@ function applyNewsFilters(
   return headlines.filter(h => {
     if (h.is_non_action && !opts.showNonActions) return false;
     if (opts.category !== 'all' && h.category !== opts.category) return false;
-    if (opts.country !== 'all' && !h.text.includes(opts.country)) return false;
+    if (opts.country !== 'all') {
+      const nid = parseInt(opts.country, 10);
+      if (Number.isNaN(nid)) return true;
+      if (!h.nation_ids?.includes(nid)) return false;
+    }
     return true;
   });
 }
@@ -226,6 +230,15 @@ function App() {
   const [skipUntilText, setSkipUntilText] = useState<string>('');
   const [skipUntilRunning, setSkipUntilRunning] = useState<boolean>(false);
   const isObserver = gameState?.observer_mode === true;
+  useEffect(() => {
+    if (isObserver) {
+      setShowHiddenResources(true);
+      setShowAiCivilians(true);
+      setShowAiReasoning(true);
+      setShowAiNonActions(true);
+      setDisableFogOfWar(true);
+    }
+  }, [isObserver]);
   const observerGps: { id: number; name: string; color: string }[] = useMemo(
     () => (gameState?.nations || [])
       .filter((n: any) => n.nation_type === 'GreatPower')
@@ -441,7 +454,7 @@ function App() {
 
   const handleSkipTurns = useCallback(async () => {
     await runMutation(async () => {
-      const n = Math.max(1, Math.min(50, skipN | 0));
+      const n = Math.max(1, Math.min(500, skipN | 0));
       let currentJson = gameJson;
       let currentTurn: number = gameState?.turn?.[0] ?? gameState?.turn ?? 1;
       const allHeadlines: typeof headlines = [];
@@ -699,7 +712,7 @@ function App() {
 
     setSelectedTile(tile);
     setSelectedNavyKey(null);
-    if (tile.owner && (mapMode === 'diplomatic' || mapMode === 'relationship')) {
+    if (tile.owner && tile.terrain !== 'Sea' && (mapMode === 'diplomatic' || mapMode === 'relationship')) {
       setSelectedNation(tile.owner);
     }
 
@@ -1193,7 +1206,7 @@ function App() {
             <input
               type="number"
               min={1}
-              max={50}
+              max={500}
               value={skipN}
               onChange={e => setSkipN(Number(e.target.value))}
               style={styles.skipInput}
@@ -1276,9 +1289,9 @@ function App() {
           <LedgerPanel entries={gpLedgerData} previousEntries={prevGpLedgerData} onClose={() => setActiveScreen('map')} />
         )}
         {activeScreen === 'newspaper' && (() => {
-          const countryOptions: string[] = (gameState?.nations || [])
+          const countryOptions: { id: number; name: string }[] = (gameState?.nations || [])
             .filter((n: any) => !!n.name)
-            .map((n: any) => n.name);
+            .map((n: any) => ({ id: n.id as number, name: n.name as string }));
           const visible = applyNewsFilters(headlines, {
             showNonActions: showAiNonActions,
             category: newsFilterCategory,

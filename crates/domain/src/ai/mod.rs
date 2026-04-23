@@ -31,6 +31,7 @@ pub struct AiAction {
     pub text: String,
     pub reason: String,
     pub is_non_action: bool,
+    pub nation_id: crate::types::NationId,
 }
 
 /// Run AI decisions for all non-human Great Powers.

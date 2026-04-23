@@ -1115,6 +1115,7 @@ pub fn ai_manage_resources(
                 total_revenue.as_dollars()
             ),
             is_non_action: false,
+            nation_id,
         });
     }
 }

@@ -235,7 +235,7 @@ fn award_first_colony_clippers(game: &mut GameState, nation_id: NationId, report
             name
         ),
         HeadlineCategory::Trade,
-    ));
+    ).for_nation(nation_id));
 }
 
 /// Process one turn of the game.
@@ -1171,7 +1171,7 @@ fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
                             let headline = format!("{} has grown into a Village!", prov.name);
                             report
                                 .newspaper_headlines
-                                .push(Headline::new(headline.clone(), HeadlineCategory::Growth));
+                                .push(Headline::new(headline.clone(), HeadlineCategory::Growth).for_nation(*owner_id));
                             report
                                 .settlement_upgrades
                                 .push((*province_id, "Village".to_string()));
@@ -1212,7 +1212,7 @@ fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
                         let headline = format!("{} has grown into a Town!", prov.name);
                         report
                             .newspaper_headlines
-                            .push(Headline::new(headline.clone(), HeadlineCategory::Growth));
+                            .push(Headline::new(headline.clone(), HeadlineCategory::Growth).for_nation(*owner_id));
                         report
                             .settlement_upgrades
                             .push((*province_id, "Town".to_string()));
@@ -2362,7 +2362,7 @@ fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
             report.newspaper_headlines.push(Headline::new(
                 format!("FINANCIAL CRISIS: {} faces bankruptcy!", nation.name),
                 HeadlineCategory::Crisis,
-            ));
+            ).for_nation(nation.id));
         }
     }
 }
@@ -2495,7 +2495,7 @@ fn resolve_beachheads(game: &mut GameState, report: &mut TurnReport) {
                     attacker_name, target_name
                 ),
                 HeadlineCategory::Military,
-            ));
+            ).for_nation(attacker_id));
         }
     }
 }
@@ -2727,7 +2727,7 @@ fn resolve_combat(
                         .unwrap_or("Unknown"),
                 ),
                 HeadlineCategory::War,
-            ));
+            ).for_nations(&[attacker_id, defender_id]));
             continue;
         }
 
@@ -2938,7 +2938,7 @@ fn resolve_combat(
                         province.name
                     ),
                     HeadlineCategory::Growth,
-                ));
+                ).for_nation(attacker_id));
             }
 
             let attacker_name = game
@@ -3184,7 +3184,7 @@ fn resolve_combat(
                         province.name
                     ),
                     HeadlineCategory::Growth,
-                ));
+                ).for_nation(attacker_id));
             }
 
             // Award conquest medal if this is a Minor Nation capital
@@ -3234,7 +3234,7 @@ fn resolve_combat(
                     atk_name, prov_name, def_name_conquest, origin_suffix
                 ),
                 HeadlineCategory::War,
-            ));
+            ).for_nations(&[attacker_id, defender_id]));
 
             // Record history event
             game.history.push((
@@ -3257,7 +3257,7 @@ fn resolve_combat(
                 report.newspaper_headlines.push(Headline::new(
                     format!("{} has been eliminated!", def_name_conquest),
                     HeadlineCategory::War,
-                ));
+                ).for_nation(defender_id));
             }
         } else {
             let def_name = game
@@ -3274,7 +3274,7 @@ fn resolve_combat(
                     def_name, prov_name, origin_suffix
                 ),
                 HeadlineCategory::Battle,
-            ));
+            ).for_nation(defender_id));
         }
 
         // Keep the defender's garrison_count cache in sync with surviving
@@ -3554,7 +3554,7 @@ fn resolve_combat(
             report.newspaper_headlines.push(Headline::new(
                 format!("{} counter-attacks and recaptures {}!", ca_name, prov_name),
                 HeadlineCategory::War,
-            ));
+            ).for_nation(counter_attacker_id));
             // Anarchy is evaluated in the end-of-combat sweep.
         } else {
             let occ_name = game
@@ -3568,7 +3568,7 @@ fn resolve_combat(
             report.newspaper_headlines.push(Headline::new(
                 format!("{} repels counter-attack on {}!", occ_name, prov_name),
                 HeadlineCategory::Battle,
-            ));
+            ).for_nation(new_owner_id));
         }
 
         // Keep garrison_count cache in sync for the counter-attack site too.
@@ -4067,7 +4067,7 @@ fn check_and_apply_anarchy(
             name
         ),
         HeadlineCategory::War,
-    ));
+    ).for_nation(nation_id));
     game.history
         .push((game.turn, format!("{} fell into anarchy", name)));
     true
@@ -4209,7 +4209,7 @@ fn release_integrated_minors(
                 minor_name,
                 provinces_to_restore.len()
             ),
-        ));
+        ).for_nations(&[minor_id, overlord_id]));
         game.history.push((
             game.turn,
             format!(
@@ -4424,7 +4424,7 @@ fn run_pact_defense_cascade(
                         "{} personality judged {} worth protecting against {} (pact defense cascade)",
                         personality, defender_name, attacker_name
                     ),
-                ));
+                ).for_nations(&[gp_id, attacker_id, minor_id]));
                 game.history.push((
                     game.turn,
                     format!(
@@ -4453,7 +4453,7 @@ fn run_pact_defense_cascade(
                         "{} personality judged intervention too costly — insufficient strategic value or unfavorable balance vs {}",
                         personality, attacker_name
                     ),
-                ));
+                ).for_nations(&[gp_id, minor_id]));
             }
         } else {
             // Human player: create a PactDefenseRequest proposal and pause cascade
@@ -4478,7 +4478,7 @@ fn run_pact_defense_cascade(
                     defender_name, attacker_name
                 ),
                 HeadlineCategory::Diplomacy,
-            ));
+            ).for_nations(&[gp_id, minor_id, attacker_id]));
             return; // Pause cascade until human responds
         }
     }
@@ -4490,7 +4490,7 @@ fn run_pact_defense_cascade(
             defender_name, attacker_name
         ),
         HeadlineCategory::Diplomacy,
-    ));
+    ).for_nations(&[minor_id, attacker_id]));
 }
 
 /// Accept a pact defense request: protector declares war on attacker and
@@ -4533,7 +4533,7 @@ pub fn accept_pact_defense(
             protector_name, minor_name, attacker_name
         ),
         HeadlineCategory::War,
-    ));
+    ).for_nations(&[protector_id, attacker_id, minor_id]));
     game.history.push((
         game.turn,
         format!(
@@ -4665,7 +4665,7 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
                     result.defender_ships_lost.len()
                 ),
                 HeadlineCategory::Battle,
-            ));
+            ).for_nations(&[attacker_id, defender_id]));
         } else {
             report.newspaper_headlines.push(Headline::new(
                 format!(
@@ -4675,7 +4675,7 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
                     result.attacker_ships_lost.len()
                 ),
                 HeadlineCategory::Battle,
-            ));
+            ).for_nations(&[defender_id, attacker_id]));
         }
 
         report.naval_battles.push(result);
@@ -4786,7 +4786,7 @@ fn apply_blockade_effects(game: &GameState, report: &mut TurnReport) {
                         nation_name, blocked
                     ),
                     HeadlineCategory::Battle,
-                ));
+                ).for_nation(nation_id));
             }
         }
     }
@@ -4921,7 +4921,7 @@ fn record_broken_alliance_headlines(
             ),
             HeadlineCategory::Diplomacy,
             separate_peace_reason(game, broken.peacemaker, broken.former_ally, broken.enemy),
-        ));
+        ).for_nations(&[broken.peacemaker, broken.former_ally]));
     }
 }
 
@@ -5082,7 +5082,7 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                         ),
                         HeadlineCategory::Diplomacy,
                         diplomacy_reason(game, target_id, human, treaty_label, true),
-                    ));
+                    ).for_nations(&[target_id, human]));
                     let turn = game.turn;
                     game.history.push((
                         turn,
@@ -5107,7 +5107,7 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                         ),
                         HeadlineCategory::Diplomacy,
                         "AI accepted but state drifted (counterpart relation changed mid-turn); treaty could not be applied".to_string(),
-                    ));
+                    ).for_nations(&[target_id, human]));
                 }
             } else {
                 report
@@ -5124,7 +5124,7 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                     ),
                     HeadlineCategory::Diplomacy,
                     diplomacy_reason(game, target_id, human, treaty_label, false),
-                ));
+                ).for_nations(&[target_id, human]));
             }
         } else if proposal.to == human {
             // AI→human: keep pending for UI
@@ -5214,7 +5214,7 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                         ),
                         HeadlineCategory::Diplomacy,
                         diplomacy_reason(game, target_id, from_id, treaty_label, true),
-                    ));
+                    ).for_nations(&[target_id, from_id]));
                     let turn = game.turn;
                     game.history.push((
                         turn,
@@ -5239,7 +5239,7 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                         ),
                         HeadlineCategory::Diplomacy,
                         "AI accepted but state drifted (counterpart relation changed mid-turn); treaty could not be applied".to_string(),
-                    ));
+                    ).for_nations(&[target_id, from_id]));
                 }
             } else {
                 report
@@ -5256,7 +5256,7 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                     ),
                     HeadlineCategory::Diplomacy,
                     diplomacy_reason(game, target_id, from_id, treaty_label, false),
-                ));
+                ).for_nations(&[target_id, from_id]));
             }
         }
     }
@@ -5357,7 +5357,7 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
                     "Alliance obligation: {} was attacked by {} — treaty auto-triggers defensive war ({} defending ally/allies in total)",
                     defender_name, attacker_name, defender_allies_count
                 ),
-            ));
+            ).for_nations(&[*ally, *attacker, *defender]));
         }
 
         // Check attacker's allies
@@ -5415,7 +5415,7 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
                     "Alliance obligation: {} declared war on {} — treaty auto-triggers offensive support ({} supporting ally/allies in total)",
                     attacker_name, defender_name, attacker_allies_count
                 ),
-            ));
+            ).for_nations(&[*ally, *defender, *attacker]));
         }
     }
 
@@ -5465,7 +5465,7 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
                     name
                 ),
                 HeadlineCategory::Diplomacy,
-            ));
+            ).for_nation(cid));
         }
     }
 
@@ -5773,7 +5773,7 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                 report.newspaper_headlines.push(Headline::new(
                     format!("{} has earned a General!", nation_name),
                     HeadlineCategory::Military,
-                ));
+                ).for_nation(*nation_id));
             }
         }
     }
@@ -5830,7 +5830,7 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                 report.newspaper_headlines.push(Headline::new(
                     format!("{} has earned an Admiral!", nation_name),
                     HeadlineCategory::Military,
-                ));
+                ).for_nation(*nation_id));
             }
         }
     }
@@ -5866,7 +5866,7 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
             report.newspaper_headlines.push(Headline::new(
                 format!("{}'s capitol building has expanded!", attacker_name),
                 HeadlineCategory::Growth,
-            ));
+            ).for_nation(attacker_id));
         }
     }
 
@@ -5914,7 +5914,7 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                         nation_name
                     ),
                     HeadlineCategory::Growth,
-                ));
+                ).for_nation(*nation_id));
             }
         }
     }
@@ -5946,7 +5946,7 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
         } else {
             Headline::with_reason(action.text.clone(), category, action.reason.clone())
         };
-        report.newspaper_headlines.push(headline);
+        report.newspaper_headlines.push(headline.for_nation(action.nation_id));
     }
 
     // Voluntary incorporations — major headline
@@ -5965,7 +5965,7 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
                 minor_name, gp_name
             ),
             HeadlineCategory::Politics,
-        ));
+        ).for_nations(&[*gp_id, *minor_id]));
     }
 
     // Unit upgrades — brief mention
@@ -5996,7 +5996,7 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
                     human_nation.name
                 ),
                 HeadlineCategory::Trade,
-            ));
+            ).for_nation(game.human_player_nation));
         }
     }
 
@@ -6004,7 +6004,7 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
         report.newspaper_headlines.push(Headline::new(
             format!("The {} empire grows stronger", human_nation.name),
             HeadlineCategory::Default,
-        ));
+        ).for_nation(game.human_player_nation));
     }
 
     if game.turn.is_decade_election() {
@@ -6022,7 +6022,7 @@ fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
         report.newspaper_headlines.push(Headline::new(
             "Your nation has fallen into anarchy! All governance has ceased.".to_string(),
             HeadlineCategory::Crisis,
-        ));
+        ).for_nation(game.human_player_nation));
     }
 
     // Period-appropriate flavor headlines that rotate based on turn number
@@ -6081,7 +6081,7 @@ fn check_council_vote(game: &GameState, report: &mut TurnReport) {
                     result.total_governors
                 ),
                 HeadlineCategory::Politics,
-            ));
+            ).for_nation(winner_id));
         }
     } else {
         report.newspaper_headlines.push(Headline::new(
@@ -6454,11 +6454,13 @@ mod tests {
                 text: "Testland did not declare war this turn".to_string(),
                 reason: "war cooldown active".to_string(),
                 is_non_action: true,
+                nation_id: crate::types::NationId(0),
             },
             crate::ai::AiAction {
                 text: "Testland has declared war on Otherland!".to_string(),
                 reason: "combined score above threshold".to_string(),
                 is_non_action: false,
+                nation_id: crate::types::NationId(0),
             },
         ];
 
@@ -6503,11 +6505,13 @@ mod tests {
                 text: "Scientists in Testland have discovered Steam Engine!".to_string(),
                 reason: "Economic personality selected tech (cost=$500)".to_string(),
                 is_non_action: false,
+                nation_id: crate::types::NationId(0),
             },
             crate::ai::AiAction {
                 text: "Testland has declared war on Otherland!".to_string(),
                 reason: "Combined score 2.30 > threshold 1.50".to_string(),
                 is_non_action: false,
+                nation_id: crate::types::NationId(1),
             },
         ];
 

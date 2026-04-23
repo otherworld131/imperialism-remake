@@ -33,7 +33,11 @@ function applyNewsFilters(
   return headlines.filter(h => {
     if (!opts.showNonActions && h.is_non_action) return false;
     if (opts.category !== 'all' && (h.category || 'default') !== opts.category) return false;
-    if (opts.country !== 'all' && !h.text.includes(opts.country)) return false;
+    if (opts.country !== 'all') {
+      const nid = parseInt(opts.country, 10);
+      if (Number.isNaN(nid)) return true;
+      if (!h.nation_ids?.includes(nid)) return false;
+    }
     return true;
   });
 }
@@ -56,7 +60,7 @@ interface Props {
   worldNews: Headline[];
   archiveData: ArchivedNewspaper[];
   nations: any[];
-  countryOptions: string[];
+  countryOptions: { id: number; name: string }[];
   newsFilterCategory: string;
   newsFilterCountry: string;
   showAiReasoning: boolean;
@@ -146,7 +150,7 @@ export default function NewspaperScreen({
             </select>
             <select value={localCountry} onChange={e => handleCountryChange(e.target.value)} style={styles.select}>
               <option value="all">All countries</option>
-              {countryOptions.map(n => <option key={n} value={n}>{n}</option>)}
+              {countryOptions.map(n => <option key={n.id} value={String(n.id)}>{n.name}</option>)}
             </select>
             <input
               type="text"

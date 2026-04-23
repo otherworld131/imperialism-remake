@@ -38,6 +38,10 @@ pub struct Headline {
     /// default; revealed by the "Show AI non-actions" debug toggle.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_non_action: bool,
+    /// Nation IDs involved in this headline. Used by the newspaper filter to
+    /// match by ID instead of text substring.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nation_ids: Vec<crate::types::NationId>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -51,6 +55,7 @@ impl Headline {
             category,
             reason: None,
             is_non_action: false,
+            nation_ids: Vec::new(),
         }
     }
 
@@ -60,6 +65,7 @@ impl Headline {
             category,
             reason: Some(reason),
             is_non_action: false,
+            nation_ids: Vec::new(),
         }
     }
 
@@ -69,7 +75,18 @@ impl Headline {
             category,
             reason: Some(reason),
             is_non_action: true,
+            nation_ids: Vec::new(),
         }
+    }
+
+    pub fn for_nation(mut self, id: crate::types::NationId) -> Self {
+        self.nation_ids.push(id);
+        self
+    }
+
+    pub fn for_nations(mut self, ids: &[crate::types::NationId]) -> Self {
+        self.nation_ids.extend_from_slice(ids);
+        self
     }
 }
 

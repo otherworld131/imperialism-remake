@@ -226,6 +226,9 @@ pub fn wasm_process_turns(game_json: &str, count: u32) -> String {
                     if h.is_non_action {
                         obj["is_non_action"] = serde_json::json!(true);
                     }
+                    if !h.nation_ids.is_empty() {
+                        obj["nation_ids"] = serde_json::json!(&h.nation_ids);
+                    }
                     obj
                 })
                 .collect::<Vec<_>>(),
@@ -282,6 +285,9 @@ pub fn wasm_process_turn(game_json: &str) -> String {
                     }
                     if h.is_non_action {
                         obj["is_non_action"] = serde_json::json!(true);
+                    }
+                    if !h.nation_ids.is_empty() {
+                        obj["nation_ids"] = serde_json::json!(&h.nation_ids);
                     }
                     obj
                 })
@@ -4337,6 +4343,9 @@ pub fn wasm_get_newspaper_archive(game_json: &str) -> String {
                     if h.is_non_action {
                         obj["is_non_action"] = serde_json::json!(true);
                     }
+                    if !h.nation_ids.is_empty() {
+                        obj["nation_ids"] = serde_json::json!(&h.nation_ids);
+                    }
                     obj
                 })
                 .collect();
@@ -5146,6 +5155,113 @@ mod tests {
             action.get("is_non_action").is_none() || action["is_non_action"].is_null(),
             "positive-action headlines must OMIT is_non_action (skip_serializing_if), got: {}",
             action
+        );
+    }
+
+    #[test]
+    fn newspaper_archive_json_includes_nation_ids() {
+        use domain::events::{Headline, HeadlineCategory};
+        use domain::types::NationId;
+
+        let json = make_game_json();
+        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        game.game_data = domain::data::GameData::default();
+
+        game.newspaper_archive.push((
+            game.turn,
+            vec![
+                Headline::new("War breaks out!".to_string(), HeadlineCategory::War)
+                    .for_nations(&[NationId(1), NationId(2)]),
+                Headline::new("The Imperial Times".to_string(), HeadlineCategory::Default),
+            ],
+        ));
+
+        let game_json = serde_json::to_string(&game).unwrap();
+        let archive_json = wasm_get_newspaper_archive(&game_json);
+        let parsed: serde_json::Value = serde_json::from_str(&archive_json).unwrap();
+        let headlines = parsed.as_array().unwrap()[0]["headlines"].as_array().unwrap();
+
+        let war = headlines
+            .iter()
+            .find(|h| h["text"].as_str().unwrap().contains("War breaks out"))
+            .expect("war headline");
+        let ids: Vec<i64> = war["nation_ids"]
+            .as_array()
+            .expect("nation_ids must be present")
+            .iter()
+            .map(|v| v.as_i64().unwrap())
+            .collect();
+        assert_eq!(ids, vec![1, 2], "nation_ids must survive WASM serialization");
+
+        let masthead = headlines
+            .iter()
+            .find(|h| h["text"].as_str().unwrap().contains("Imperial Times"))
+            .expect("masthead headline");
+        assert!(
+            masthead.get("nation_ids").is_none() || masthead["nation_ids"].is_null(),
+            "headlines without nation_ids must omit the field, got: {}",
+            masthead
+        );
+    }
+
+    #[test]
+    fn process_turn_headlines_include_nation_ids() {
+        let json = make_game_json();
+        let result = wasm_process_turn(&json);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let headlines = parsed["report"]["headlines"].as_array().expect("headlines array");
+
+        // Masthead headline never carries nation_ids
+        let masthead = headlines
+            .iter()
+            .find(|h| h["text"].as_str().unwrap_or("").contains("Imperial Times"))
+            .expect("masthead headline");
+        assert!(
+            masthead.get("nation_ids").is_none() || masthead["nation_ids"].is_null(),
+            "masthead must omit nation_ids, got: {}",
+            masthead
+        );
+
+        // At least one AI-action headline should carry nation_ids (AI nations always act)
+        let with_ids: Vec<_> = headlines
+            .iter()
+            .filter(|h| h.get("nation_ids").is_some() && !h["nation_ids"].is_null())
+            .collect();
+        assert!(
+            !with_ids.is_empty(),
+            "at least one headline from a real turn must carry nation_ids"
+        );
+        for h in &with_ids {
+            let ids = h["nation_ids"].as_array().expect("nation_ids must be array");
+            assert!(!ids.is_empty(), "nation_ids array must not be empty");
+        }
+    }
+
+    #[test]
+    fn process_turns_headlines_include_nation_ids() {
+        let json = make_game_json();
+        let result = wasm_process_turns(&json, 1);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let reports = parsed["reports"].as_array().expect("reports array");
+        assert!(!reports.is_empty());
+        let headlines = reports[0]["headlines"].as_array().expect("headlines array");
+
+        let masthead = headlines
+            .iter()
+            .find(|h| h["text"].as_str().unwrap_or("").contains("Imperial Times"))
+            .expect("masthead headline");
+        assert!(
+            masthead.get("nation_ids").is_none() || masthead["nation_ids"].is_null(),
+            "masthead must omit nation_ids"
+        );
+
+        let with_ids: Vec<_> = headlines
+            .iter()
+            .filter(|h| h.get("nation_ids").is_some() && !h["nation_ids"].is_null())
+            .collect();
+        assert!(
+            !with_ids.is_empty(),
+            "at least one headline per turn must carry nation_ids"
         );
     }
 

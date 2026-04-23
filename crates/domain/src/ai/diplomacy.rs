@@ -166,6 +166,7 @@ pub fn ai_manage_diplomacy(
                     target_name
                 ),
                 is_non_action: false,
+                nation_id,
             });
         }
     }
@@ -310,6 +311,7 @@ pub fn ai_manage_diplomacy(
                         personality
                     ),
                     is_non_action: false,
+                    nation_id,
                 });
                 let turn = game.turn;
                 if !game
@@ -356,6 +358,7 @@ pub fn ai_manage_diplomacy(
             ),
             reason: why,
             is_non_action: true,
+            nation_id,
         });
     }
 
@@ -498,6 +501,7 @@ pub fn ai_manage_diplomacy(
                             personality, score, partner_standing
                         ),
                         is_non_action: false,
+                        nation_id,
                     });
                 }
             }
@@ -532,6 +536,7 @@ pub fn ai_manage_diplomacy(
             text: format!("{} did not propose any alliance this turn", nation_name),
             reason: why,
             is_non_action: true,
+            nation_id,
         });
     }
 
@@ -741,6 +746,7 @@ pub fn ai_pre_election_strategy(
                         game.turn.0, personality
                     ),
                     is_non_action: false,
+                    nation_id,
                 });
             }
         }

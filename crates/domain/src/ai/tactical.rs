@@ -609,6 +609,7 @@ fn ai_build_forts(
                 treasury_after,
             ),
             is_non_action: false,
+            nation_id,
         });
     }
 }
@@ -787,6 +788,7 @@ fn ai_propose_peace(
                     worthiness.lost_enough,
                 ),
                 is_non_action: true,
+                nation_id,
             });
             continue;
         }
@@ -852,6 +854,7 @@ fn ai_propose_peace(
                         worthiness.lost_enough,
                     ),
                     is_non_action: false,
+                    nation_id,
                 });
                 let turn = game.turn;
                 game.history.push((
@@ -887,6 +890,7 @@ fn ai_propose_peace(
                     worthiness.lost_enough,
                 ),
                 is_non_action: false,
+                nation_id,
             });
         } else {
             // AI-to-minor-nation: auto-accept (minor nations are passive)
@@ -911,6 +915,7 @@ fn ai_propose_peace(
                     worthiness.lost_enough,
                 ),
                 is_non_action: false,
+                nation_id,
             });
             let turn = game.turn;
             game.history.push((
