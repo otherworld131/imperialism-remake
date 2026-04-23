@@ -13,8 +13,8 @@ use domain::events::TreatyType;
 use domain::game_state::{
     GameState, new_game, new_game_with_config, new_observer_game, new_observer_game_with_config,
 };
-use domain::map::MapGenConfig;
 use domain::hex::HexCoord;
+use domain::map::MapGenConfig;
 use domain::military::combat::BattleResult;
 use domain::military::naval::NavalBattleResult;
 use domain::military::ships::{Ship, ShipCategory, ShipType};
@@ -1572,7 +1572,8 @@ pub fn wasm_cancel_unit_move(game_json: &str, unit_id: u32) -> String {
     }
     let uid = domain::map::UnitId(unit_id);
     let player = game.human_player_nation;
-    game.pending_moves.retain(|(nid, id, _)| !(*nid == player && *id == uid));
+    game.pending_moves
+        .retain(|(nid, id, _)| !(*nid == player && *id == uid));
     serialize_game(&game)
 }
 
@@ -4033,6 +4034,112 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
                 })
                 .collect();
 
+            // Per-nation cash-flow breakdown (last processed turn) — read from
+            // `game.last_cash_flow`, populated by the turn processor.
+            let cash_flow_json = if let Some(flow) = game.last_cash_flow.get(&nid) {
+                let income_map: serde_json::Map<String, serde_json::Value> = flow
+                    .income_totals_by_source()
+                    .into_iter()
+                    .map(|(k, v)| (k.label().to_string(), serde_json::json!(v)))
+                    .collect();
+                let expense_map: serde_json::Map<String, serde_json::Value> = flow
+                    .expense_totals_by_sink()
+                    .into_iter()
+                    .map(|(k, v)| (k.label().to_string(), serde_json::json!(v)))
+                    .collect();
+                let income_by_cat: serde_json::Map<String, serde_json::Value> = flow
+                    .income_by_category()
+                    .into_iter()
+                    .map(|(k, v)| (k.label().to_string(), serde_json::json!(v)))
+                    .collect();
+                let expense_by_cat: serde_json::Map<String, serde_json::Value> = flow
+                    .expense_by_category()
+                    .into_iter()
+                    .map(|(k, v)| (k.label().to_string(), serde_json::json!(v)))
+                    .collect();
+                serde_json::json!({
+                    "opening_treasury": flow.opening_treasury.as_dollars(),
+                    "closing_treasury": flow.closing_treasury.as_dollars(),
+                    "total_income": flow.total_income().as_dollars(),
+                    "total_expense": flow.total_expense().as_dollars(),
+                    "observed_delta": flow.observed_delta().as_dollars(),
+                    "accounted_delta": flow.accounted_delta().as_dollars(),
+                    "reconciliation_mismatch": flow.reconciliation_mismatch().as_dollars(),
+                    "reconciles": flow.reconciles(),
+                    "income_totals": income_map,
+                    "expense_totals": expense_map,
+                    "income_by_category": income_by_cat,
+                    "expense_by_category": expense_by_cat,
+                })
+            } else {
+                serde_json::Value::Null
+            };
+            let cumulative_income: serde_json::Map<String, serde_json::Value> = nation
+                .cash_income_totals
+                .iter()
+                .map(|(k, v)| (format!("{:?}", k), serde_json::json!(*v)))
+                .collect();
+            let cumulative_expense: serde_json::Map<String, serde_json::Value> = nation
+                .cash_expense_totals
+                .iter()
+                .map(|(k, v)| (format!("{:?}", k), serde_json::json!(*v)))
+                .collect();
+
+            // Resource-flow (last turn) — best-effort visibility, NOT reconciled.
+            let resource_flow_json = if let Some(flow) = game.last_resource_flow.get(&nid) {
+                let inflow: Vec<serde_json::Value> = flow
+                    .inflow
+                    .iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "stockpile": e.stockpile.label(),
+                            "source": e.source.label(),
+                            "category": e.source.category().label(),
+                            "amount": e.amount,
+                        })
+                    })
+                    .collect();
+                let outflow: Vec<serde_json::Value> = flow
+                    .outflow
+                    .iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "stockpile": e.stockpile.label(),
+                            "sink": e.sink.label(),
+                            "category": e.sink.category().label(),
+                            "amount": e.amount,
+                        })
+                    })
+                    .collect();
+                // Per-stockpile inflow by category: { "Timber": { "Production": 10, "Trade": 5 } }
+                let mut inflow_by_stockpile: serde_json::Map<String, serde_json::Value> =
+                    serde_json::Map::new();
+                for (stock, by_cat) in flow.inflow_by_stockpile_and_category() {
+                    let m: serde_json::Map<String, serde_json::Value> = by_cat
+                        .into_iter()
+                        .map(|(c, v)| (c.label().to_string(), serde_json::json!(v)))
+                        .collect();
+                    inflow_by_stockpile.insert(stock.label(), serde_json::Value::Object(m));
+                }
+                let mut outflow_by_stockpile: serde_json::Map<String, serde_json::Value> =
+                    serde_json::Map::new();
+                for (stock, by_cat) in flow.outflow_by_stockpile_and_category() {
+                    let m: serde_json::Map<String, serde_json::Value> = by_cat
+                        .into_iter()
+                        .map(|(c, v)| (c.label().to_string(), serde_json::json!(v)))
+                        .collect();
+                    outflow_by_stockpile.insert(stock.label(), serde_json::Value::Object(m));
+                }
+                serde_json::json!({
+                    "inflow": inflow,
+                    "outflow": outflow,
+                    "inflow_by_stockpile_category": inflow_by_stockpile,
+                    "outflow_by_stockpile_category": outflow_by_stockpile,
+                })
+            } else {
+                serde_json::Value::Null
+            };
+
             serde_json::json!({
                 "nation_id": nid.0,
                 "nation_name": nation_name,
@@ -4046,6 +4153,12 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
                     "total_resources": total_resources,
                     "total_materials": total_materials,
                     "total_goods": total_goods,
+                },
+                "cash_flow": cash_flow_json,
+                "resource_flow": resource_flow_json,
+                "cumulative": {
+                    "income_totals": cumulative_income,
+                    "expense_totals": cumulative_expense,
                 },
                 "labor": {
                     "untrained": nation.labor.untrained,

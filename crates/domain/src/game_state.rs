@@ -3,6 +3,7 @@ use crate::data::GameData;
 use crate::diplomacy::DiplomacyState;
 use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::civilians::{Civilian, CivilianType, next_civilian_id};
+use crate::economy::ledger::{CashFlow, CashSink, ResourceFlow};
 use crate::events::{DomainEvent, Headline};
 use crate::map::{HexMap, Province, UnitId};
 use crate::military::combat::BattleResult;
@@ -10,6 +11,7 @@ use crate::military::naval::NavalBattleResult;
 use crate::military::ships::{Ship, ShipType};
 use crate::nation::{Nation, NationColor};
 use crate::types::*;
+use std::collections::HashMap;
 
 /// A single entry in a political-map snapshot: (province, owner,
 /// incorporated_from). Stored as a tuple rather than a named struct to keep
@@ -91,6 +93,28 @@ pub struct GameState {
     /// only observes. `human_player_nation` remains set as the "viewpoint" nation.
     #[serde(default)]
     pub observer_mode: bool,
+    /// Per-nation cash flow breakdown from the most recently processed turn.
+    /// Populated at the end of `process_turn`; read by the WASM bridge to
+    /// surface the ledger-tab cash-flow view in the web UI. Transient and
+    /// rebuilt each turn — saved for WASM consistency; `#[serde(default)]`
+    /// handles saves taken before this field existed.
+    #[serde(default)]
+    pub last_cash_flow: HashMap<NationId, CashFlow>,
+    /// Per-nation resource flow (inflows and outflows, per stockpile) from
+    /// the most recently processed turn. Best-effort visibility aggregated
+    /// from existing `TurnReport` fields — NOT a reconciled invariant.
+    #[serde(default)]
+    pub last_resource_flow: HashMap<NationId, ResourceFlow>,
+    /// Transient collector for AI-side treasury mutations. AI paths push an
+    /// entry here each time they spend or receive cash; the turn processor
+    /// drains it into `TurnReport.ai_cash_spending` (or the income equivalent)
+    /// at end of turn. `#[serde(skip)]` — purely in-turn state.
+    #[serde(skip, default)]
+    pub pending_ai_cash_spending: Vec<(NationId, CashSink, Money, Option<NationId>)>,
+    /// Transient collector for AI-side cash income entries (e.g. goods sales
+    /// triggered by AI economy code). Drained into the report at end of turn.
+    #[serde(skip, default)]
+    pub pending_ai_cash_income: Vec<(NationId, Money)>,
 }
 
 impl GameState {
@@ -226,7 +250,13 @@ pub fn new_game_with_config(
         }
         h ^ 0xA1CA_FE42
     };
-    new_game_with_seed_and_config(map_key, difficulty, human_nation_index, personality_seed, cfg)
+    new_game_with_seed_and_config(
+        map_key,
+        difficulty,
+        human_nation_index,
+        personality_seed,
+        cfg,
+    )
 }
 
 /// Create a new game with an explicit personality seed (canonical map config).
@@ -522,9 +552,7 @@ pub fn new_game_with_seed_and_config(
         nations.push(nation);
     }
 
-    let human_nation_id = generated.great_power_nations
-        [human_idx]
-    .nation_id;
+    let human_nation_id = generated.great_power_nations[human_idx].nation_id;
 
     let mut diplomacy = DiplomacyState::new();
     let gp_ids: Vec<NationId> = nations
@@ -555,6 +583,10 @@ pub fn new_game_with_seed_and_config(
         political_archive: Vec::new(),
         ai_debug: false,
         observer_mode: false,
+        last_cash_flow: HashMap::new(),
+        last_resource_flow: HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
     };
 
     // Refresh the per-province `garrison_count` cache now that militia have
@@ -712,8 +744,7 @@ pub fn new_observer_game_with_config(
         h ^ 0xA1CA_FE42
     };
     // Build base game with nation 0 as the placeholder "human" seat.
-    let mut game =
-        new_game_with_seed_and_config(map_key, difficulty, 0, personality_seed, cfg);
+    let mut game = new_game_with_seed_and_config(map_key, difficulty, 0, personality_seed, cfg);
 
     // Assign an AI personality + difficulty bonus to the placeholder seat so
     // all 7 GPs are on equal footing.
@@ -803,6 +834,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: HashMap::new(),
+            last_resource_flow: HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         }
     }
 

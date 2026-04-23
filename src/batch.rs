@@ -25,6 +25,31 @@ pub(crate) struct GameReport {
     final_scores: BTreeMap<String, u32>,
     wars_declared: BTreeMap<String, u32>,
     winner: Option<String>,
+    /// Populated only when `--batch-verbose-cashflow` is set. Per-turn cash
+    /// income/expense breakdown for every GP, keyed by turn number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    per_turn_cash_flow: Option<Vec<PerTurnCashFlowEntry>>,
+}
+
+#[derive(serde::Serialize)]
+pub(crate) struct PerTurnCashFlowEntry {
+    turn: u32,
+    year: u32,
+    quarter: u32,
+    /// Per-nation snapshot of the cash flow closed at this turn. Keyed by
+    /// nation name for human readability in the JSON.
+    by_nation: BTreeMap<String, NationCashFlowSnapshot>,
+}
+
+#[derive(serde::Serialize)]
+pub(crate) struct NationCashFlowSnapshot {
+    opening_treasury: i64,
+    closing_treasury: i64,
+    total_income: i64,
+    total_expense: i64,
+    reconciliation_mismatch: i64,
+    income_by_source: BTreeMap<String, i64>,
+    expense_by_sink: BTreeMap<String, i64>,
 }
 
 #[derive(serde::Serialize)]
@@ -57,6 +82,11 @@ pub(crate) struct NationSnapshot {
     lumber: u32,
     arms: u32,
     steel: u32,
+    // Cumulative per-source cash flow totals (dollars) — for tracing AI
+    // money-in / money-out evolution across a game. Source/sink keys are the
+    // enum variant names (e.g. "GoldGemsConversion", "ArmyMaintenance").
+    cash_income_totals: BTreeMap<String, i64>,
+    cash_expense_totals: BTreeMap<String, i64>,
 }
 
 #[derive(serde::Serialize)]
@@ -199,6 +229,16 @@ fn take_snapshot(
                 lumber: nation.material_amount(domain::types::MaterialType::Lumber),
                 arms: nation.material_amount(domain::types::MaterialType::Arms),
                 steel: nation.material_amount(domain::types::MaterialType::Steel),
+                cash_income_totals: nation
+                    .cash_income_totals
+                    .iter()
+                    .map(|(k, v)| (format!("{:?}", k), *v))
+                    .collect(),
+                cash_expense_totals: nation
+                    .cash_expense_totals
+                    .iter()
+                    .map(|(k, v)| (format!("{:?}", k), *v))
+                    .collect(),
             },
         );
     }
@@ -276,7 +316,7 @@ fn compute_aggregate(games: &[GameReport]) -> AggregateReport {
 
 // ── Batch run ────────────────────────────────────────────────────
 
-pub(crate) fn run_batch(n: u32) {
+pub(crate) fn run_batch(n: u32, verbose_cashflow: bool) {
     let ai_debug = std::env::args().any(|a| a == "--ai-debug");
     let snapshot_years: &[u32] = &[1815, 1830, 1845, 1860, 1875, 1890, 1915];
     let mut games_data: Vec<GameReport> = Vec::with_capacity(n as usize);
@@ -325,6 +365,9 @@ pub(crate) fn run_batch(n: u32) {
         // Track war declarations by diffing diplomacy state
         let mut wars_declared: BTreeMap<String, u32> = BTreeMap::new();
 
+        // Per-turn cash-flow firehose (only recorded when verbose flag is set).
+        let mut per_turn_cash_flow: Vec<PerTurnCashFlowEntry> = Vec::new();
+
         while !game.is_game_over() {
             let year = game.turn.year();
             let quarter = game.turn.quarter();
@@ -340,7 +383,45 @@ pub(crate) fn run_batch(n: u32) {
             if !game.observer_mode {
                 auto_manage_human(&mut game);
             }
-            let _report = process_turn(&mut game);
+            let report = process_turn(&mut game);
+
+            if verbose_cashflow {
+                let mut by_nation: BTreeMap<String, NationCashFlowSnapshot> = BTreeMap::new();
+                for nation in game.great_powers() {
+                    if let Some(flow) = report.cash_flow.get(&nation.id) {
+                        let income_by_source: BTreeMap<String, i64> = flow
+                            .income_totals_by_source()
+                            .into_iter()
+                            .map(|(k, v)| (k.label().to_string(), v))
+                            .collect();
+                        let expense_by_sink: BTreeMap<String, i64> = flow
+                            .expense_totals_by_sink()
+                            .into_iter()
+                            .map(|(k, v)| (k.label().to_string(), v))
+                            .collect();
+                        by_nation.insert(
+                            nation.name.clone(),
+                            NationCashFlowSnapshot {
+                                opening_treasury: flow.opening_treasury.as_dollars(),
+                                closing_treasury: flow.closing_treasury.as_dollars(),
+                                total_income: flow.total_income().as_dollars(),
+                                total_expense: flow.total_expense().as_dollars(),
+                                reconciliation_mismatch: flow
+                                    .reconciliation_mismatch()
+                                    .as_dollars(),
+                                income_by_source,
+                                expense_by_sink,
+                            },
+                        );
+                    }
+                }
+                per_turn_cash_flow.push(PerTurnCashFlowEntry {
+                    turn: report.turn.0,
+                    year: report.year,
+                    quarter: report.quarter,
+                    by_nation,
+                });
+            }
 
             // Detect new wars
             let new_wars = get_war_pairs(&game);
@@ -380,6 +461,11 @@ pub(crate) fn run_batch(n: u32) {
             final_scores,
             wars_declared,
             winner: best_name,
+            per_turn_cash_flow: if verbose_cashflow {
+                Some(per_turn_cash_flow)
+            } else {
+                None
+            },
         });
 
         eprintln!(

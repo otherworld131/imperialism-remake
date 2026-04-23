@@ -1,6 +1,9 @@
 use crate::ai::run_ai_turns;
 use crate::economy::buildings::BuildingType;
 use crate::economy::civilians::CivilianType;
+use crate::economy::ledger::{
+    CashFlow, CashSink, CashSource, ResourceFlow, ResourceIn, ResourceOut, Stockpile,
+};
 use crate::economy::production::{
     ProductionChain, calculate_factory_production, calculate_mill_production,
 };
@@ -17,7 +20,7 @@ use crate::military::ships::Ship;
 use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::turn::scoring::{CouncilVoteResult, calculate_score, run_council_vote};
 use crate::types::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Result of processing one turn.
 #[derive(Debug)]
@@ -69,6 +72,30 @@ pub struct TurnReport {
     pub disconnected_resources: Vec<(NationId, ResourceType, u32)>,
     /// Rewards earned this turn: (nation_id, description).
     pub rewards_earned: Vec<(NationId, String)>,
+    // ── Cash-flow ledger fields (transient — used to build `cash_flow`) ───
+    /// Treasury snapshot at the very start of `process_turn`, per nation.
+    pub opening_treasury: HashMap<NationId, Money>,
+    /// Treasury snapshot just before `process_turn` returns, per nation.
+    pub closing_treasury: HashMap<NationId, Money>,
+    /// AI spending entries: (nation, sink, amount, optional partner).
+    /// Populated at every AI treasury-mutation site so the cash-flow aggregator
+    /// can see money that left the treasury inside AI decision paths.
+    pub ai_cash_spending: Vec<(NationId, CashSink, Money, Option<NationId>)>,
+    /// Per-nation total of construction cost paid this turn (roads/ports/etc).
+    pub construction_spending: Vec<(NationId, Money)>,
+    /// Per-nation revenue from auto-selling own materials/goods this turn.
+    pub goods_auto_sale_revenue: Vec<(NationId, Money)>,
+    /// AI goods-sale revenue (direct cash-in entries from AI economy paths).
+    pub ai_goods_sale_revenue: Vec<(NationId, Money)>,
+    /// Debt forgiven by the bankruptcy clamp: (nation, amount). Entered as
+    /// income in the cash-flow breakdown so reconciliation closes.
+    pub bankruptcy_writeoff: Vec<(NationId, Money)>,
+    /// Per-nation derived cash flow (populated by `finalize_cash_flow` at end
+    /// of `process_turn`). This is what CLI, batch, and the WASM bridge read.
+    pub cash_flow: HashMap<NationId, CashFlow>,
+    /// Per-nation derived resource flow (populated by `finalize_resource_flow`
+    /// at end of `process_turn`). Best-effort visibility, NOT reconciled.
+    pub resource_flow: HashMap<NationId, ResourceFlow>,
 }
 
 impl TurnReport {
@@ -106,6 +133,15 @@ impl TurnReport {
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
             rewards_earned: Vec::new(),
+            opening_treasury: HashMap::new(),
+            closing_treasury: HashMap::new(),
+            ai_cash_spending: Vec::new(),
+            construction_spending: Vec::new(),
+            goods_auto_sale_revenue: Vec::new(),
+            ai_goods_sale_revenue: Vec::new(),
+            bankruptcy_writeoff: Vec::new(),
+            cash_flow: HashMap::new(),
+            resource_flow: HashMap::new(),
         }
     }
 
@@ -237,7 +273,30 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         trade_diplomacy: Vec::new(),
         disconnected_resources: Vec::new(),
         rewards_earned: Vec::new(),
+        opening_treasury: HashMap::new(),
+        closing_treasury: HashMap::new(),
+        ai_cash_spending: Vec::new(),
+        construction_spending: Vec::new(),
+        goods_auto_sale_revenue: Vec::new(),
+        ai_goods_sale_revenue: Vec::new(),
+        bankruptcy_writeoff: Vec::new(),
+        cash_flow: HashMap::new(),
+        resource_flow: HashMap::new(),
     };
+
+    // Cash-flow ledger: snapshot every nation's treasury BEFORE any turn work.
+    // We diff against the closing snapshot to build a per-turn breakdown and
+    // to run the reconciliation invariant in tests.
+    //
+    // Defensive reset: AI pending collectors are drained at end-of-turn, but
+    // `run_ai_turns` is public and callable outside `process_turn`. Stale
+    // entries left behind by such standalone calls would bleed into the next
+    // turn's ledger — clear them before we open the new accounting window.
+    game.pending_ai_cash_spending.clear();
+    game.pending_ai_cash_income.clear();
+    for nation in &game.nations {
+        report.opening_treasury.insert(nation.id, nation.treasury);
+    }
 
     // 0. AI decisions for computer-controlled Great Powers
     let ai_actions = run_ai_turns(game);
@@ -385,6 +444,18 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         },
     ));
 
+    // Cash-flow ledger: drain AI collectors and snapshot closing treasury.
+    // This runs BEFORE `advance_turn` because advance_turn only bumps the
+    // turn counter — it does not touch treasury — but keeping snapshot and
+    // aggregator adjacent makes the flow easier to audit.
+    report.ai_cash_spending = std::mem::take(&mut game.pending_ai_cash_spending);
+    report.ai_goods_sale_revenue = std::mem::take(&mut game.pending_ai_cash_income);
+    for nation in &game.nations {
+        report.closing_treasury.insert(nation.id, nation.treasury);
+    }
+    finalize_cash_flow(game, &mut report);
+    finalize_resource_flow(game, &mut report);
+
     // 12. Advance turn
     report
         .events
@@ -395,6 +466,186 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         .push(DomainEvent::TurnStarted(TurnStarted { turn: game.turn }));
 
     report
+}
+
+/// Derive per-nation `CashFlow` from the scattered per-source fields on
+/// `TurnReport`, write it to `report.cash_flow` and `game.last_cash_flow`,
+/// and update `nation.cash_income_totals` / `cash_expense_totals`
+/// cumulative counters.
+///
+/// Every income source and expense sink we currently know about is aggregated
+/// here — if the reconciliation invariant fails, there is either an untracked
+/// treasury mutation site, or a miscategorised source in this function.
+fn finalize_cash_flow(game: &mut GameState, report: &mut TurnReport) {
+    use std::collections::HashMap as StdHashMap;
+
+    // Gather per-nation partial sums first so we can construct each CashFlow
+    // once, then write cumulative totals onto the Nation afterward.
+    let mut flows: StdHashMap<NationId, CashFlow> = StdHashMap::new();
+    for nation in &game.nations {
+        let opening = *report
+            .opening_treasury
+            .get(&nation.id)
+            .unwrap_or(&nation.treasury);
+        let mut flow = CashFlow::new(opening);
+        flow.closing_treasury = nation.treasury;
+        flows.insert(nation.id, flow);
+    }
+
+    // ── Income ──────────────────────────────────────────────────
+    // Gold/Gems conversion — already captured per-nation in gold_income.
+    for (nation_id, amount) in &report.gold_income {
+        if let Some(flow) = flows.get_mut(nation_id) {
+            flow.add_income(CashSource::GoldGemsConversion, *amount, None);
+        }
+    }
+    // Goods auto-sales (player/normal path) — recorded at processor.rs
+    // by the goods_auto_sale_revenue instrumentation.
+    for (nation_id, amount) in &report.goods_auto_sale_revenue {
+        if let Some(flow) = flows.get_mut(nation_id) {
+            flow.add_income(CashSource::GoodsAutoSales, *amount, None);
+        }
+    }
+    // Trade sales — seller side (revenue in) of every matched trade txn.
+    for txn in &report.trade_transactions {
+        if let Some(flow) = flows.get_mut(&txn.seller) {
+            flow.add_income(
+                CashSource::TradeExportRevenue,
+                txn.total_cost,
+                Some(txn.buyer),
+            );
+        }
+    }
+    // AI goods-sale revenue — drained from pending_ai_cash_income above.
+    for (nation_id, amount) in &report.ai_goods_sale_revenue {
+        if let Some(flow) = flows.get_mut(nation_id) {
+            flow.add_income(CashSource::AiGoodsSale, *amount, None);
+        }
+    }
+    // Bankruptcy writeoff — clamp adjustment treated as income so the
+    // reconciliation invariant closes.
+    for (nation_id, amount) in &report.bankruptcy_writeoff {
+        if let Some(flow) = flows.get_mut(nation_id) {
+            flow.add_income(CashSource::BankruptcyWriteoff, *amount, None);
+        }
+    }
+
+    // ── Expense ─────────────────────────────────────────────────
+    // Army maintenance.
+    for (nation_id, amount) in &report.maintenance_costs {
+        if let Some(flow) = flows.get_mut(nation_id) {
+            flow.add_expense(CashSink::ArmyMaintenance, *amount, None);
+        }
+    }
+    // Subsidies — payer side.
+    for (payer, target, amount) in &report.subsidy_costs {
+        if let Some(flow) = flows.get_mut(payer) {
+            flow.add_expense(CashSink::Subsidy, *amount, Some(*target));
+        }
+    }
+    // Trade purchases — buyer side of every matched trade txn.
+    for txn in &report.trade_transactions {
+        if let Some(flow) = flows.get_mut(&txn.buyer) {
+            flow.add_expense(CashSink::TradePurchase, txn.total_cost, Some(txn.seller));
+        }
+    }
+    // Infrastructure construction (roads/ports/etc).
+    for (nation_id, amount) in &report.construction_spending {
+        if let Some(flow) = flows.get_mut(nation_id) {
+            flow.add_expense(CashSink::ConstructionInfrastructure, *amount, None);
+        }
+    }
+    // AI spending — captured via pending_ai_cash_spending.
+    for (nation_id, sink, amount, partner) in &report.ai_cash_spending {
+        if let Some(flow) = flows.get_mut(nation_id) {
+            flow.add_expense(*sink, *amount, *partner);
+        }
+    }
+
+    // Update Nation cumulative totals (dollars).
+    for nation in &mut game.nations {
+        if let Some(flow) = flows.get(&nation.id) {
+            for (source, dollars) in flow.income_totals_by_source() {
+                *nation.cash_income_totals.entry(source).or_insert(0) += dollars;
+            }
+            for (sink, dollars) in flow.expense_totals_by_sink() {
+                *nation.cash_expense_totals.entry(sink).or_insert(0) += dollars;
+            }
+        }
+    }
+
+    // Publish to TurnReport and persist on GameState for WASM bridge reads.
+    report.cash_flow = flows.clone();
+    game.last_cash_flow = flows;
+}
+
+/// Derive per-nation `ResourceFlow` from scattered per-source fields already
+/// on `TurnReport`. Best-effort visibility — NOT reconciled. Covers:
+/// - `resource_production` → HomeProduction (raw resources)
+/// - `transport_overflow` → TransportOverflow (resources lost)
+/// - `disconnected_resources` → DisconnectedLoss (resources lost)
+/// - `trade_transactions` → TradeImport / TradeExport per resource
+/// - `food_consumed` is aggregated, no type split — not populated here
+/// - Mill/factory I/O is not instrumented — not populated here
+///
+/// Writes to `report.resource_flow` and `game.last_resource_flow`.
+fn finalize_resource_flow(game: &mut GameState, report: &mut TurnReport) {
+    let mut flows: std::collections::HashMap<NationId, ResourceFlow> =
+        std::collections::HashMap::new();
+    for nation in &game.nations {
+        flows.entry(nation.id).or_default();
+    }
+
+    // Home production inflows
+    for (nation_id, resource, amount) in &report.resource_production {
+        if let Some(flow) = flows.get_mut(nation_id) {
+            flow.add_inflow(
+                Stockpile::Resource(*resource),
+                ResourceIn::HomeProduction,
+                *amount,
+            );
+        }
+    }
+    // Transport overflow: resources that never reached the warehouse
+    for (nation_id, resource, amount) in &report.transport_overflow {
+        if let Some(flow) = flows.get_mut(nation_id) {
+            flow.add_outflow(
+                Stockpile::Resource(*resource),
+                ResourceOut::TransportOverflow,
+                *amount,
+            );
+        }
+    }
+    // Disconnected resources: lost because producing province was isolated
+    for (nation_id, resource, amount) in &report.disconnected_resources {
+        if let Some(flow) = flows.get_mut(nation_id) {
+            flow.add_outflow(
+                Stockpile::Resource(*resource),
+                ResourceOut::DisconnectedLoss,
+                *amount,
+            );
+        }
+    }
+    // Trade inflow (buyer) / outflow (seller)
+    for txn in &report.trade_transactions {
+        if let Some(flow) = flows.get_mut(&txn.buyer) {
+            flow.add_inflow(
+                Stockpile::Resource(txn.resource),
+                ResourceIn::TradeImport,
+                txn.quantity,
+            );
+        }
+        if let Some(flow) = flows.get_mut(&txn.seller) {
+            flow.add_outflow(
+                Stockpile::Resource(txn.resource),
+                ResourceOut::TradeExport,
+                txn.quantity,
+            );
+        }
+    }
+
+    report.resource_flow = flows.clone();
+    game.last_resource_flow = flows;
 }
 
 /// Compute the set of province IDs connected to a nation's capital.
@@ -1120,6 +1371,9 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
                             // and completion would otherwise leave us unable
                             // to stop the build. Report the charge either way.
                             nation.treasury -= cost;
+                        }
+                        if cost != Money::ZERO {
+                            report.construction_spending.push((work.nation_id, cost));
                         }
                         report.civilian_completions.push((
                             work.nation_id,
@@ -1877,6 +2131,11 @@ fn resolve_trade_session(
         if let Some(human) = game.get_nation_mut(human_id) {
             human.treasury += player_goods_revenue;
             human.goods_sales_revenue_dollars += player_goods_revenue.as_dollars();
+            if player_goods_revenue != Money::ZERO {
+                report
+                    .goods_auto_sale_revenue
+                    .push((human_id, player_goods_revenue));
+            }
             for (commodity, qty, _revenue) in &goods_sold {
                 match commodity {
                     trade::Commodity::Material(m) => {
@@ -2087,11 +2346,18 @@ fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
             .fold(Money::ZERO, |acc, c| acc + c);
         if total_cost != Money::ZERO {
             nation.treasury -= total_cost;
+            report.maintenance_costs.push((nation.id, total_cost));
         }
 
-        // Bankruptcy protection: treasury cannot go below $0
+        // Bankruptcy protection: treasury cannot go below $0. The clamp
+        // represents debt forgiven mid-turn — we surface it as income in the
+        // cash-flow ledger so the reconciliation invariant closes.
         if nation.treasury < BANKRUPTCY_FLOOR {
+            let writeoff = Money::from_cents(BANKRUPTCY_FLOOR.cents() - nation.treasury.cents());
             nation.treasury = BANKRUPTCY_FLOOR;
+            if writeoff > Money::ZERO {
+                report.bankruptcy_writeoff.push((nation.id, writeoff));
+            }
         }
 
         // Generate bankruptcy headline if treasury went negative
@@ -5943,6 +6209,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         }
     }
 
@@ -5997,6 +6267,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         }
     }
 
@@ -6359,6 +6633,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         let report = process_turn(&mut game);
@@ -6460,6 +6738,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         }
     }
 
@@ -7083,6 +7365,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         let report = process_turn(&mut game);
@@ -7348,6 +7634,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         // Process 7 turns: 1 turn to start countdown (set to 6), then 6 turns to count down
@@ -7419,6 +7709,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         for _ in 0..10 {
@@ -7559,6 +7853,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         }
     }
 
@@ -7665,6 +7963,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         let report = process_turn(&mut game);
@@ -7843,6 +8145,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         // Process 12 turns to count down the town_countdown
@@ -7917,6 +8223,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         // Process only 11 turns — not enough
@@ -7992,6 +8302,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         // 7 turns: Hamlet → Village (1 to start countdown + 6 to count down)
@@ -8313,6 +8627,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         }
     }
 
@@ -8356,6 +8674,15 @@ mod tests {
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
             rewards_earned: Vec::new(),
+            opening_treasury: HashMap::new(),
+            closing_treasury: HashMap::new(),
+            ai_cash_spending: Vec::new(),
+            construction_spending: Vec::new(),
+            goods_auto_sale_revenue: Vec::new(),
+            ai_goods_sale_revenue: Vec::new(),
+            bankruptcy_writeoff: Vec::new(),
+            cash_flow: HashMap::new(),
+            resource_flow: HashMap::new(),
         };
 
         resolve_voluntary_incorporations(&mut game, &mut report);
@@ -8422,6 +8749,15 @@ mod tests {
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
             rewards_earned: Vec::new(),
+            opening_treasury: HashMap::new(),
+            closing_treasury: HashMap::new(),
+            ai_cash_spending: Vec::new(),
+            construction_spending: Vec::new(),
+            goods_auto_sale_revenue: Vec::new(),
+            ai_goods_sale_revenue: Vec::new(),
+            bankruptcy_writeoff: Vec::new(),
+            cash_flow: HashMap::new(),
+            resource_flow: HashMap::new(),
         };
 
         resolve_voluntary_incorporations(&mut game, &mut report);
@@ -8689,6 +9025,15 @@ mod tests {
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
             rewards_earned: Vec::new(),
+            opening_treasury: HashMap::new(),
+            closing_treasury: HashMap::new(),
+            ai_cash_spending: Vec::new(),
+            construction_spending: Vec::new(),
+            goods_auto_sale_revenue: Vec::new(),
+            ai_goods_sale_revenue: Vec::new(),
+            bankruptcy_writeoff: Vec::new(),
+            cash_flow: HashMap::new(),
+            resource_flow: HashMap::new(),
         };
 
         resolve_unit_upgrades(&mut game, &mut report);
@@ -8758,6 +9103,15 @@ mod tests {
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
             rewards_earned: Vec::new(),
+            opening_treasury: HashMap::new(),
+            closing_treasury: HashMap::new(),
+            ai_cash_spending: Vec::new(),
+            construction_spending: Vec::new(),
+            goods_auto_sale_revenue: Vec::new(),
+            ai_goods_sale_revenue: Vec::new(),
+            bankruptcy_writeoff: Vec::new(),
+            cash_flow: HashMap::new(),
+            resource_flow: HashMap::new(),
         };
 
         resolve_unit_upgrades(&mut game, &mut report);
@@ -8878,6 +9232,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         // Verify pact exists
@@ -8920,6 +9278,15 @@ mod tests {
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
             rewards_earned: Vec::new(),
+            opening_treasury: HashMap::new(),
+            closing_treasury: HashMap::new(),
+            ai_cash_spending: Vec::new(),
+            construction_spending: Vec::new(),
+            goods_auto_sale_revenue: Vec::new(),
+            ai_goods_sale_revenue: Vec::new(),
+            bankruptcy_writeoff: Vec::new(),
+            cash_flow: HashMap::new(),
+            resource_flow: HashMap::new(),
         };
 
         trigger_pact_defense(&mut game, NationId(3), NationId(2), &mut report);
@@ -9007,6 +9374,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         let mut report = TurnReport {
@@ -9041,6 +9412,15 @@ mod tests {
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
             rewards_earned: Vec::new(),
+            opening_treasury: HashMap::new(),
+            closing_treasury: HashMap::new(),
+            ai_cash_spending: Vec::new(),
+            construction_spending: Vec::new(),
+            goods_auto_sale_revenue: Vec::new(),
+            ai_goods_sale_revenue: Vec::new(),
+            bankruptcy_writeoff: Vec::new(),
+            cash_flow: HashMap::new(),
+            resource_flow: HashMap::new(),
         };
 
         // GP defender - should not trigger pact defense
@@ -9174,6 +9554,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         let report = process_turn(&mut game);
@@ -9284,6 +9668,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         let report = process_turn(&mut game);
@@ -9531,6 +9919,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
         crate::military::combat::seed_militia_from_garrison_count(&mut game);
         game
@@ -9707,6 +10099,15 @@ mod tests {
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
             rewards_earned: Vec::new(),
+            opening_treasury: HashMap::new(),
+            closing_treasury: HashMap::new(),
+            ai_cash_spending: Vec::new(),
+            construction_spending: Vec::new(),
+            goods_auto_sale_revenue: Vec::new(),
+            ai_goods_sale_revenue: Vec::new(),
+            bankruptcy_writeoff: Vec::new(),
+            cash_flow: HashMap::new(),
+            resource_flow: HashMap::new(),
         };
 
         collect_resources(&mut game, &mut report);
@@ -9790,6 +10191,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         let mut game = game_state;
@@ -9826,6 +10231,15 @@ mod tests {
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
             rewards_earned: Vec::new(),
+            opening_treasury: HashMap::new(),
+            closing_treasury: HashMap::new(),
+            ai_cash_spending: Vec::new(),
+            construction_spending: Vec::new(),
+            goods_auto_sale_revenue: Vec::new(),
+            ai_goods_sale_revenue: Vec::new(),
+            bankruptcy_writeoff: Vec::new(),
+            cash_flow: HashMap::new(),
+            resource_flow: HashMap::new(),
         };
 
         collect_resources(&mut game, &mut report);
@@ -9926,6 +10340,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         let connected = connected_provinces(&game, NationId(1));
@@ -10139,6 +10557,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         // Process several turns
@@ -10237,6 +10659,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         process_turn(&mut game);
@@ -10354,6 +10780,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
         // Seed persistent militia so the defender actually has units in
         // the fortified province (otherwise the auto-conquer path fires
@@ -10526,6 +10956,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         process_turn(&mut game);
@@ -10873,6 +11307,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         assert!(
@@ -10947,6 +11385,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         assert!(
@@ -11014,6 +11456,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         assert!(
@@ -11081,6 +11527,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         assert!(
@@ -11126,6 +11576,15 @@ mod tests {
             trade_diplomacy: Vec::new(),
             disconnected_resources: Vec::new(),
             rewards_earned: Vec::new(),
+            opening_treasury: HashMap::new(),
+            closing_treasury: HashMap::new(),
+            ai_cash_spending: Vec::new(),
+            construction_spending: Vec::new(),
+            goods_auto_sale_revenue: Vec::new(),
+            ai_goods_sale_revenue: Vec::new(),
+            bankruptcy_writeoff: Vec::new(),
+            cash_flow: HashMap::new(),
+            resource_flow: HashMap::new(),
         }
     }
 
@@ -11205,6 +11664,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         }
     }
 
@@ -12374,6 +12837,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         game.pending_attacks.push((NationId(1), ProvinceId(2)));
@@ -12561,6 +13028,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
         game.pending_attacks.push((NationId(1), ProvinceId(2)));
         game.diplomacy.declare_war(NationId(1), NationId(2));
@@ -12829,6 +13300,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
         game.pending_attacks.push((NationId(1), ProvinceId(2)));
         game.diplomacy.declare_war(NationId(1), NationId(2));
@@ -12971,6 +13446,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         let mut report = TurnReport::empty();
@@ -13233,6 +13712,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         (game, NationId(1), NationId(2), ProvinceId(1), ProvinceId(2))
@@ -13497,6 +13980,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         let mut report = TurnReport::empty();
@@ -13926,6 +14413,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
         game.pending_attacks.push((NationId(1), ProvinceId(3)));
         game.diplomacy.declare_war(NationId(1), NationId(3));

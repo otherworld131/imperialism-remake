@@ -2,6 +2,7 @@ use crate::ai::AiPersonality;
 use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::civilians::Civilian;
 use crate::economy::labor::LaborPool;
+use crate::economy::ledger::{CashSink, CashSource};
 use crate::economy::transport::TransportSystem;
 use crate::events::TechId;
 use crate::military::ships::Ship;
@@ -126,6 +127,14 @@ pub struct Nation {
     /// Cumulative revenue from auto-sold materials/goods on world market (dollars).
     #[serde(default)]
     pub goods_sales_revenue_dollars: i64,
+    /// Cumulative per-source income totals (dollars). Debug telemetry for
+    /// tracing where a nation's money has come from over the whole game.
+    #[serde(default)]
+    pub cash_income_totals: HashMap<CashSource, i64>,
+    /// Cumulative per-sink expense totals (dollars). Debug telemetry for
+    /// tracing where a nation's money has gone over the whole game.
+    #[serde(default)]
+    pub cash_expense_totals: HashMap<CashSink, i64>,
     /// Player sell orders for this turn (cleared after turn resolution).
     #[serde(default)]
     pub player_sell_orders: Vec<crate::economy::trade::PlayerSellOrder>,
@@ -197,6 +206,8 @@ impl Nation {
             is_in_anarchy: false,
             integrated_by: None,
             goods_sales_revenue_dollars: 0,
+            cash_income_totals: HashMap::new(),
+            cash_expense_totals: HashMap::new(),
             player_sell_orders: Vec::new(),
             player_buy_orders: Vec::new(),
             ai_priority_state: AiPriorityState::default(),

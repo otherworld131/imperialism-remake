@@ -241,6 +241,58 @@ export interface GPLedgerEntry {
     researched_count: number;
     researched_names: string[];
   };
+  // Per-turn cash-flow breakdown from the last processed turn. Null before
+  // the first turn has completed for the current game.
+  cash_flow: CashFlowSnapshot | null;
+  // Per-turn resource-flow breakdown from the last processed turn. Visibility
+  // only — aggregated from existing TurnReport fields, NOT reconciled.
+  resource_flow: ResourceFlowSnapshot | null;
+  // Cumulative totals (dollars) keyed by enum variant name — e.g.
+  // `"GoldGemsConversion": 25000`. Grown across every turn of the game.
+  cumulative: {
+    income_totals: Record<string, number>;
+    expense_totals: Record<string, number>;
+  };
+}
+
+export interface ResourceFlowEntry {
+  stockpile: string;
+  // Inflow entries have `source`; outflow entries have `sink`. Use whichever
+  // is present.
+  source?: string;
+  sink?: string;
+  // FlowCategory label: "Production" | "Trade" | "Consumption".
+  category: string;
+  amount: number;
+}
+
+export interface ResourceFlowSnapshot {
+  inflow: ResourceFlowEntry[];
+  outflow: ResourceFlowEntry[];
+  // Per-stockpile, per-category totals. Shape:
+  // { "Timber": { "Production": 10, "Trade": 5 }, ... }
+  inflow_by_stockpile_category: Record<string, Record<string, number>>;
+  outflow_by_stockpile_category: Record<string, Record<string, number>>;
+}
+
+export interface CashFlowSnapshot {
+  opening_treasury: number;
+  closing_treasury: number;
+  total_income: number;
+  total_expense: number;
+  observed_delta: number;
+  accounted_delta: number;
+  reconciliation_mismatch: number;
+  reconciles: boolean;
+  // Keys are human-readable labels from `CashSource::label()` /
+  // `CashSink::label()` in Rust, so CLI/batch/UI all agree.
+  income_totals: Record<string, number>;
+  expense_totals: Record<string, number>;
+  // Bucketed totals by `FlowCategory` ("Production" / "Trade" /
+  // "Consumption"). Lets the UI show a quick "money came from production
+  // vs. trade" roll-up alongside the per-source detail.
+  income_by_category: Record<string, number>;
+  expense_by_category: Record<string, number>;
 }
 
 export interface DiplomacyOverlayRelation {

@@ -166,6 +166,10 @@ pub(crate) mod test_helpers {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
         crate::military::combat::seed_militia_from_garrison_count(&mut game);
         game
@@ -267,6 +271,10 @@ pub(crate) mod test_helpers {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
         crate::military::combat::seed_militia_from_garrison_count(&mut game);
         game
@@ -387,6 +395,10 @@ pub(crate) mod test_helpers {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
         crate::military::combat::seed_militia_from_garrison_count(&mut game);
         game

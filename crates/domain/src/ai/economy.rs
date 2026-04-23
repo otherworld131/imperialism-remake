@@ -608,9 +608,16 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
             nation_id,
             &provinces_snapshot,
             &cfg,
-        ) && let Some(nation) = game.get_nation_mut(nation_id)
-        {
-            nation.treasury -= cost;
+        ) {
+            if let Some(nation) = game.get_nation_mut(nation_id) {
+                nation.treasury -= cost;
+            }
+            game.pending_ai_cash_spending.push((
+                nation_id,
+                crate::economy::ledger::CashSink::AiInfrastructure,
+                cost,
+                None,
+            ));
         }
         return; // One major action per turn
     }
@@ -670,6 +677,12 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
             if let Some(nation) = game.get_nation_mut(nation_id) {
                 nation.treasury -= cost;
             }
+            game.pending_ai_cash_spending.push((
+                nation_id,
+                crate::economy::ledger::CashSink::AiInfrastructure,
+                cost,
+                None,
+            ));
             spent += cost;
         }
 
@@ -709,6 +722,12 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
                     if let Some(nation) = game.get_nation_mut(nation_id) {
                         nation.treasury -= cost;
                     }
+                    game.pending_ai_cash_spending.push((
+                        nation_id,
+                        crate::economy::ledger::CashSink::AiInfrastructure,
+                        cost,
+                        None,
+                    ));
                     spent += cost;
                 }
             }
@@ -802,6 +821,7 @@ pub fn ai_manage_resources(
     }
 
     if total_revenue > Money::ZERO {
+        game.pending_ai_cash_income.push((nation_id, total_revenue));
         actions.push(super::AiAction {
             text: format!(
                 "{} sold excess goods for ${}",
@@ -1128,42 +1148,49 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
         10
     };
 
-    let nation = match game.get_nation_mut(nation_id) {
-        Some(n) => n,
-        None => return,
-    };
+    let mut total_revenue = Money::ZERO;
+    {
+        let nation = match game.get_nation_mut(nation_id) {
+            Some(n) => n,
+            None => return,
+        };
 
-    // Don't sell resources when already sitting on a large treasury —
-    // keep the materials for building ships, units, and infrastructure instead.
-    if nation.treasury > Money::dollars(trade_treasury_cap) {
-        return;
-    }
+        // Don't sell resources when already sitting on a large treasury —
+        // keep the materials for building ships, units, and infrastructure instead.
+        if nation.treasury > Money::dollars(trade_treasury_cap) {
+            return;
+        }
 
-    // Check all tradeable resource types for surplus
-    let tradeable_resources = [
-        ResourceType::Timber,
-        ResourceType::Coal,
-        ResourceType::Iron,
-        ResourceType::Cotton,
-        ResourceType::Wool,
-        ResourceType::Grain,
-        ResourceType::Fruit,
-        ResourceType::Livestock,
-        ResourceType::Horses,
-        ResourceType::Oil,
-    ];
+        // Check all tradeable resource types for surplus
+        let tradeable_resources = [
+            ResourceType::Timber,
+            ResourceType::Coal,
+            ResourceType::Iron,
+            ResourceType::Cotton,
+            ResourceType::Wool,
+            ResourceType::Grain,
+            ResourceType::Fruit,
+            ResourceType::Livestock,
+            ResourceType::Horses,
+            ResourceType::Oil,
+        ];
 
-    for resource in tradeable_resources {
-        let amount = nation.resource_amount(resource);
-        if amount > trade_resource_reserve {
-            let excess = amount - trade_resource_reserve;
-            let price = trade::base_price(resource);
-            if price != Money::ZERO {
-                let revenue = price * excess as i64;
-                nation.remove_resource(resource, excess);
-                nation.treasury += revenue;
+        for resource in tradeable_resources {
+            let amount = nation.resource_amount(resource);
+            if amount > trade_resource_reserve {
+                let excess = amount - trade_resource_reserve;
+                let price = trade::base_price(resource);
+                if price != Money::ZERO {
+                    let revenue = price * excess as i64;
+                    nation.remove_resource(resource, excess);
+                    nation.treasury += revenue;
+                    total_revenue += revenue;
+                }
             }
         }
+    }
+    if total_revenue > Money::ZERO {
+        game.pending_ai_cash_income.push((nation_id, total_revenue));
     }
 }
 

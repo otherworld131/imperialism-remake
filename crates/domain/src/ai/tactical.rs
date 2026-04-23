@@ -587,17 +587,26 @@ fn ai_build_forts(
     }
 
     if build_fort(&mut game.hex_map, fort_coord, &game.game_data.game_config).is_ok() {
-        let Some(nation) = game.get_nation_mut(nation_id) else {
-            return;
+        let treasury_after = {
+            let Some(nation) = game.get_nation_mut(nation_id) else {
+                return;
+            };
+            nation.treasury -= cost;
+            nation.treasury.as_dollars()
         };
-        nation.treasury -= cost;
+        game.pending_ai_cash_spending.push((
+            nation_id,
+            crate::economy::ledger::CashSink::AiSpendingOther,
+            cost,
+            None,
+        ));
         actions.push(super::AiAction {
             text: format!("{} has fortified its borders", nation_name),
             reason: format!(
                 "Built level {} fort ({} enemies at border, treasury ${})",
                 new_level,
                 enemies.len(),
-                nation.treasury.as_dollars(),
+                treasury_after,
             ),
             is_non_action: false,
         });
@@ -1183,6 +1192,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         ai_distribute_field_army(&mut game, NationId(2), AiPersonality::Balanced);
@@ -1368,6 +1381,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
 
         assert_eq!(
@@ -1487,6 +1504,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
         assert_eq!(
             capital_threat_level(&game, NationId(2)),
@@ -1578,6 +1599,10 @@ mod tests {
             political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
         };
         assert_eq!(
             capital_threat_level(&game, NationId(2)),

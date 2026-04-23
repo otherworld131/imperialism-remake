@@ -74,14 +74,26 @@ pub(crate) fn ai_research_tech(
             {
                 let tech_cost = *tech_cost;
                 let tech_name = tech_name.clone();
-                let nation = match game.get_nation_mut(nation_id) {
-                    Some(n) => n,
-                    None => return,
+                let (did_spend, nation_name) = {
+                    let nation = match game.get_nation_mut(nation_id) {
+                        Some(n) => n,
+                        None => return,
+                    };
+                    if let Some(remaining) = nation.treasury.checked_sub(tech_cost) {
+                        nation.treasury = remaining;
+                        nation.research_tech(tech_id);
+                        (true, nation.name.clone())
+                    } else {
+                        (false, String::new())
+                    }
                 };
-                if let Some(remaining) = nation.treasury.checked_sub(tech_cost) {
-                    nation.treasury = remaining;
-                    nation.research_tech(tech_id);
-                    let nation_name = nation.name.clone();
+                if did_spend {
+                    game.pending_ai_cash_spending.push((
+                        nation_id,
+                        crate::economy::ledger::CashSink::AiResearch,
+                        tech_cost,
+                        None,
+                    ));
                     if game.ai_debug {
                         eprintln!(
                             "[AI:{}:research] Lua picked \"{}\" (cost=${})",
@@ -202,14 +214,26 @@ pub(crate) fn ai_research_tech(
     }
 
     // Check if the nation can afford it
-    let nation = match game.get_nation_mut(nation_id) {
-        Some(n) => n,
-        None => return,
+    let (did_spend, nation_name) = {
+        let nation = match game.get_nation_mut(nation_id) {
+            Some(n) => n,
+            None => return,
+        };
+        if let Some(remaining) = nation.treasury.checked_sub(tech_cost) {
+            nation.treasury = remaining;
+            nation.research_tech(tech_id);
+            (true, nation.name.clone())
+        } else {
+            (false, String::new())
+        }
     };
-    if let Some(remaining) = nation.treasury.checked_sub(tech_cost) {
-        nation.treasury = remaining;
-        nation.research_tech(tech_id);
-        let nation_name = nation.name.clone();
+    if did_spend {
+        game.pending_ai_cash_spending.push((
+            nation_id,
+            crate::economy::ledger::CashSink::AiResearch,
+            tech_cost,
+            None,
+        ));
         actions.push(super::AiAction {
             text: format!(
                 "Scientists in {} have discovered {}!",
@@ -246,14 +270,26 @@ pub(crate) fn ai_research_tech(
         let mut fallback_candidates = all_candidates;
         fallback_candidates.sort_by_key(|(_, cost, _)| cost.cents());
         for (cand_id, cand_cost, cand_name) in &fallback_candidates {
-            let nation = match game.get_nation_mut(nation_id) {
-                Some(n) => n,
-                None => return,
+            let (did_spend, nation_name) = {
+                let nation = match game.get_nation_mut(nation_id) {
+                    Some(n) => n,
+                    None => return,
+                };
+                if let Some(remaining) = nation.treasury.checked_sub(*cand_cost) {
+                    nation.treasury = remaining;
+                    nation.research_tech(*cand_id);
+                    (true, nation.name.clone())
+                } else {
+                    (false, String::new())
+                }
             };
-            if let Some(remaining) = nation.treasury.checked_sub(*cand_cost) {
-                nation.treasury = remaining;
-                nation.research_tech(*cand_id);
-                let nation_name = nation.name.clone();
+            if did_spend {
+                game.pending_ai_cash_spending.push((
+                    nation_id,
+                    crate::economy::ledger::CashSink::AiResearch,
+                    *cand_cost,
+                    None,
+                ));
                 actions.push(super::AiAction {
                     text: format!(
                         "Scientists in {} have discovered {}!",

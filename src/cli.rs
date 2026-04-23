@@ -23,4 +23,11 @@ pub(crate) struct CliArgs {
     /// Enable AI debug output
     #[arg(long)]
     pub ai_debug: bool,
+
+    /// In batch mode, include per-turn cash-flow breakdowns for every GP in
+    /// the JSON report. Default is cumulative year-snapshot totals only;
+    /// this flag switches to a firehose that records income/expense by
+    /// source/sink for every turn. Expect output size to grow ~15x per game.
+    #[arg(long)]
+    pub batch_verbose_cashflow: bool,
 }

@@ -1,4 +1,5 @@
 use domain::economy::buildings::BuildingType;
+use domain::economy::ledger::{CashFlow, CashSink, CashSource, FlowCategory, ResourceFlow};
 use domain::game_state::GameState;
 use domain::hex::HexCoord;
 use domain::map::HexMap;
@@ -1000,6 +1001,9 @@ pub(crate) fn print_pending_orders(game: &GameState) {
 
 pub(crate) fn print_turn_report(game: &GameState, report: &TurnReport) {
     let player_id = game.human_player_nation;
+
+    // ── Treasury ledger (all Great Powers — AI debugging view) ───
+    print_treasury_ledger(game, report);
 
     // ── Newspaper ──────────────────────────────────────────────
     println!();
@@ -2172,5 +2176,220 @@ pub(crate) fn render_map(hex_map: &HexMap, nations: &[Nation]) {
             }
         }
         println!();
+    }
+}
+
+/// Debug-grade per-turn view of where every Great Power's money came from
+/// and where it went. Prints a compact block per GP, with a reconciliation
+/// mismatch row if the aggregator missed a source (should always be $0).
+pub(crate) fn print_treasury_ledger(game: &GameState, report: &TurnReport) {
+    if report.cash_flow.is_empty() {
+        return;
+    }
+
+    println!();
+    println!("  {}", color_bold("Treasury ledger — all Great Powers"));
+
+    let mut gps: Vec<&Nation> = game.nations.iter().filter(|n| n.is_great_power()).collect();
+    gps.sort_by_key(|n| n.id.0);
+
+    for nation in gps {
+        let flow = match report.cash_flow.get(&nation.id) {
+            Some(f) => f,
+            None => continue,
+        };
+        print_treasury_ledger_block(nation, flow);
+        if let Some(rflow) = report.resource_flow.get(&nation.id) {
+            print_resource_flow_line(rflow);
+        }
+    }
+    println!();
+}
+
+fn print_treasury_ledger_block(nation: &Nation, flow: &CashFlow) {
+    let delta = flow.observed_delta().as_dollars();
+    let delta_str = if delta >= 0 {
+        color_green(&format!("+${}", format_number_signed(delta)))
+    } else {
+        color_red(&format!("-${}", format_number_signed(-delta)))
+    };
+    println!(
+        "  {:<12} ${:>8} \u{2192} ${:>8}  ({})",
+        nation.name,
+        format_number_signed(flow.opening_treasury.as_dollars()),
+        format_number_signed(flow.closing_treasury.as_dollars()),
+        delta_str,
+    );
+
+    let income_totals = flow.income_totals_by_source();
+    let expense_totals = flow.expense_totals_by_sink();
+    let total_income = flow.total_income().as_dollars();
+    let total_expense = flow.total_expense().as_dollars();
+
+    if total_income > 0 {
+        // Category summary first — what the user most wants to see.
+        let by_cat = flow.income_by_category();
+        println!(
+            "      Income  ${:<8}  {}",
+            format_number_signed(total_income),
+            format_category_dollars(&by_cat),
+        );
+        // Then the detailed per-source breakdown for debugging.
+        let mut parts: Vec<(CashSource, i64)> =
+            income_totals.into_iter().filter(|(_, v)| *v > 0).collect();
+        parts.sort_by_key(|(k, _)| *k as u8);
+        let s: Vec<String> = parts
+            .iter()
+            .map(|(src, amt)| format!("{} ${}", src.label(), format_number_signed(*amt)))
+            .collect();
+        println!("        detail:  {}", s.join(" | "));
+    }
+    if total_expense > 0 {
+        let by_cat = flow.expense_by_category();
+        println!(
+            "      Expense ${:<8}  {}",
+            format_number_signed(total_expense),
+            format_category_dollars(&by_cat),
+        );
+        let mut parts: Vec<(CashSink, i64)> =
+            expense_totals.into_iter().filter(|(_, v)| *v > 0).collect();
+        parts.sort_by_key(|(k, _)| *k as u8);
+        let s: Vec<String> = parts
+            .iter()
+            .map(|(sink, amt)| format!("{} ${}", sink.label(), format_number_signed(*amt)))
+            .collect();
+        println!("        detail:  {}", s.join(" | "));
+    }
+
+    let mismatch = flow.reconciliation_mismatch().as_dollars();
+    if mismatch != 0 {
+        println!(
+            "      {}",
+            color_red(&format!(
+                "Reconciliation mismatch: ${}",
+                format_number_signed(mismatch)
+            ))
+        );
+    }
+}
+
+fn print_resource_flow_line(flow: &ResourceFlow) {
+    if flow.is_empty() {
+        return;
+    }
+    // Cross-stockpile summary by category (3 buckets).
+    let in_by_cat = flow.inflow_by_category();
+    let out_by_cat = flow.outflow_by_category();
+    if !in_by_cat.is_empty() {
+        println!(
+            "      {} {}",
+            color_green("In  +"),
+            format_category_units(&in_by_cat)
+        );
+    }
+    if !out_by_cat.is_empty() {
+        println!(
+            "      {} {}",
+            color_red("Out -"),
+            format_category_units(&out_by_cat)
+        );
+    }
+    // Detail: top few stockpiles with per-category breakdown so the user can
+    // drill in. Keep it compact — just the biggest movers.
+    let in_stock_cat = flow.inflow_by_stockpile_and_category();
+    let out_stock_cat = flow.outflow_by_stockpile_and_category();
+    let top_inflow_stocks: Vec<_> = {
+        let totals = flow.inflow_totals_by_stockpile();
+        let mut v: Vec<_> = totals.into_iter().collect();
+        v.sort_by_key(|(_, a)| std::cmp::Reverse(*a));
+        v.into_iter().take(4).collect()
+    };
+    let top_outflow_stocks: Vec<_> = {
+        let totals = flow.outflow_totals_by_stockpile();
+        let mut v: Vec<_> = totals.into_iter().collect();
+        v.sort_by_key(|(_, a)| std::cmp::Reverse(*a));
+        v.into_iter().take(4).collect()
+    };
+    if !top_inflow_stocks.is_empty() {
+        let detail: Vec<String> = top_inflow_stocks
+            .iter()
+            .map(|(s, _)| {
+                let cats = in_stock_cat.get(s).cloned().unwrap_or_default();
+                format!("{} ({})", s.label(), format_category_units(&cats))
+            })
+            .collect();
+        println!("        in detail:  {}", detail.join(", "));
+    }
+    if !top_outflow_stocks.is_empty() {
+        let detail: Vec<String> = top_outflow_stocks
+            .iter()
+            .map(|(s, _)| {
+                let cats = out_stock_cat.get(s).cloned().unwrap_or_default();
+                format!("{} ({})", s.label(), format_category_units(&cats))
+            })
+            .collect();
+        println!("        out detail: {}", detail.join(", "));
+    }
+}
+
+/// Format a `FlowCategory → $amount` map as e.g.
+/// `production $1,230 | trade $450 | consumption $800`, showing only
+/// nonzero buckets in stable order.
+fn format_category_dollars(map: &std::collections::HashMap<FlowCategory, i64>) -> String {
+    const ORDER: [FlowCategory; 3] = [
+        FlowCategory::Production,
+        FlowCategory::Trade,
+        FlowCategory::Consumption,
+    ];
+    ORDER
+        .iter()
+        .filter_map(|c| {
+            let v = *map.get(c).unwrap_or(&0);
+            if v == 0 {
+                None
+            } else {
+                Some(format!("{} ${}", c.label(), format_number_signed(v)))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+/// Format a `FlowCategory → u32` map for resource quantities.
+fn format_category_units(map: &std::collections::HashMap<FlowCategory, u32>) -> String {
+    const ORDER: [FlowCategory; 3] = [
+        FlowCategory::Production,
+        FlowCategory::Trade,
+        FlowCategory::Consumption,
+    ];
+    ORDER
+        .iter()
+        .filter_map(|c| {
+            let v = *map.get(c).unwrap_or(&0);
+            if v == 0 {
+                None
+            } else {
+                Some(format!("{} {}", c.label(), v))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn format_number_signed(n: i64) -> String {
+    let is_neg = n < 0;
+    let s = n.abs().to_string();
+    let mut result = String::new();
+    for (i, ch) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(ch);
+    }
+    let formatted: String = result.chars().rev().collect();
+    if is_neg {
+        format!("-{}", formatted)
+    } else {
+        formatted
     }
 }

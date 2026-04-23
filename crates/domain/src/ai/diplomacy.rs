@@ -95,6 +95,12 @@ pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
             if let Some(nation) = game.get_nation_mut(nation_id) {
                 nation.treasury -= cost;
             }
+            game.pending_ai_cash_spending.push((
+                nation_id,
+                crate::economy::ledger::CashSink::AiDiplomacyConsulate,
+                cost,
+                Some(mn_id),
+            ));
             built += 1;
         }
     }
@@ -582,6 +588,12 @@ pub fn ai_manage_diplomacy(
             if let Some(nation) = game.get_nation_mut(nation_id) {
                 nation.treasury -= grant;
             }
+            game.pending_ai_cash_spending.push((
+                nation_id,
+                crate::economy::ledger::CashSink::AiGrant,
+                grant,
+                Some(mn_id),
+            ));
         }
     }
 }
@@ -659,6 +671,12 @@ pub fn ai_pre_election_strategy(
         if let Some(nation) = game.get_nation_mut(nation_id) {
             nation.treasury -= grant_amount;
         }
+        game.pending_ai_cash_spending.push((
+            nation_id,
+            crate::economy::ledger::CashSink::AiGrant,
+            grant_amount,
+            Some(*mn_id),
+        ));
     }
 
     // All personalities try to build embassies with MNs that have consulates,
@@ -699,6 +717,12 @@ pub fn ai_pre_election_strategy(
                 if let Some(nation) = game.get_nation_mut(nation_id) {
                     nation.treasury -= embassy_cost;
                 }
+                game.pending_ai_cash_spending.push((
+                    nation_id,
+                    crate::economy::ledger::CashSink::AiDiplomacyEmbassy,
+                    embassy_cost,
+                    Some(*mn_id),
+                ));
                 let nation_name = game
                     .get_nation(nation_id)
                     .map(|n| n.name.clone())

@@ -204,6 +204,12 @@ function App() {
   const [diplomacyScreenData, setDiplomacyScreenData] = useState<DiplomacyScreenData | null>(null);
   const [ledgerData, setLedgerData] = useState<LedgerData | null>(null);
   const [gpLedgerData, setGpLedgerData] = useState<GPLedgerEntry[]>([]);
+  // Previous-turn snapshot of the ledger data, kept so the UI can render
+  // turn-over-turn deltas on every stat column. Rotated only when the turn
+  // number actually advances — not on every refetch — so mid-turn refreshes
+  // don't collapse the delta to zero.
+  const [prevGpLedgerData, setPrevGpLedgerData] = useState<GPLedgerEntry[] | null>(null);
+  const prevLedgerTurnRef = useRef<number | null>(null);
   const [proposalData, setProposalData] = useState<ProposalData | null>(null);
   const [showProposals, setShowProposals] = useState(false);
 
@@ -316,9 +322,17 @@ function App() {
     setTradeData(tradeRes);
     setDiplomacyScreenData(diploRes);
     setLedgerData(ledgerRes);
+    // Rotate the previous-ledger snapshot only when the turn number has
+    // actually advanced since the last captured snapshot. This keeps the
+    // delta comparison pinned to "last turn" rather than "last refetch".
+    const newTurn: number = state?.turn?.[0] ?? state?.turn ?? 1;
+    if (prevLedgerTurnRef.current !== null && newTurn !== prevLedgerTurnRef.current) {
+      setPrevGpLedgerData(gpLedgerData);
+    }
+    prevLedgerTurnRef.current = newTurn;
     setGpLedgerData(gpLedgerRes);
     return true;
-  }, [showError, disableFogOfWar]);
+  }, [showError, disableFogOfWar, gpLedgerData]);
 
   // Re-fetch tiles when fog of war toggle changes
   useEffect(() => {
@@ -1259,7 +1273,7 @@ function App() {
 
         {/* Full-screen views */}
         {activeScreen === 'ledger' && (
-          <LedgerPanel entries={gpLedgerData} onClose={() => setActiveScreen('map')} />
+          <LedgerPanel entries={gpLedgerData} previousEntries={prevGpLedgerData} onClose={() => setActiveScreen('map')} />
         )}
         {activeScreen === 'newspaper' && (() => {
           const countryOptions: string[] = (gameState?.nations || [])

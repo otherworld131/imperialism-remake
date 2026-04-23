@@ -994,24 +994,33 @@ fn execute_with_plan(
 fn execute_hire_engineer(game: &mut GameState, nation_id: NationId) {
     let cfg = game.game_data.game_config.clone();
     let cost = Money::dollars(cfg.engineer_cost);
-    let nation = match game.get_nation_mut(nation_id) {
-        Some(n) => n,
-        None => return,
+    let spent = {
+        let nation = match game.get_nation_mut(nation_id) {
+            Some(n) => n,
+            None => return,
+        };
+        if cfg.civilian_costs_expert && nation.labor.expert == 0 {
+            return;
+        }
+        if nation.treasury.checked_sub(cost).is_none() {
+            return;
+        }
+        nation.treasury -= cost;
+        if cfg.civilian_costs_expert {
+            nation.labor.expert -= 1;
+        }
+        nation.civilians.push(Civilian::new(
+            next_civilian_id(),
+            CivilianType::Engineer,
+            nation_id,
+        ));
+        cost
     };
-    if cfg.civilian_costs_expert && nation.labor.expert == 0 {
-        return;
-    }
-    if nation.treasury.checked_sub(cost).is_none() {
-        return;
-    }
-    nation.treasury -= cost;
-    if cfg.civilian_costs_expert {
-        nation.labor.expert -= 1;
-    }
-    nation.civilians.push(Civilian::new(
-        next_civilian_id(),
-        CivilianType::Engineer,
+    game.pending_ai_cash_spending.push((
         nation_id,
+        crate::economy::ledger::CashSink::AiCivilianBuild,
+        spent,
+        None,
     ));
 }
 
@@ -1062,7 +1071,7 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
         _ => Money::dollars(500),
     };
 
-    if let Some(remaining) = nation.treasury.checked_sub(cost) {
+    let spent = if let Some(remaining) = nation.treasury.checked_sub(cost) {
         nation.treasury = remaining;
         let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
         nation.army.push(unit);
@@ -1071,6 +1080,17 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
             reason: "Spending system selected military category for expansion".to_string(),
             is_non_action: false,
         });
+        Some(cost)
+    } else {
+        None
+    };
+    if let Some(amount) = spent {
+        game.pending_ai_cash_spending.push((
+            nation_id,
+            crate::economy::ledger::CashSink::AiArmyBuild,
+            amount,
+            None,
+        ));
     }
 }
 
@@ -1131,24 +1151,32 @@ fn execute_infrastructure(
         None => {
             let civilian_costs_expert = cfg.civilian_costs_expert;
             let cost = CivilianType::Engineer.creation_cost(&cfg);
-            let nation = match game.get_nation_mut(nation_id) {
-                Some(n) => n,
-                None => return,
-            };
-            if civilian_costs_expert && nation.labor.expert == 0 {
-                return;
+            {
+                let nation = match game.get_nation_mut(nation_id) {
+                    Some(n) => n,
+                    None => return,
+                };
+                if civilian_costs_expert && nation.labor.expert == 0 {
+                    return;
+                }
+                if nation.treasury.checked_sub(cost).is_none() {
+                    return;
+                }
+                nation.treasury -= cost;
+                if civilian_costs_expert {
+                    nation.labor.expert -= 1;
+                }
+                nation.civilians.push(Civilian::new(
+                    next_civilian_id(),
+                    CivilianType::Engineer,
+                    nation_id,
+                ));
             }
-            if nation.treasury.checked_sub(cost).is_none() {
-                return;
-            }
-            nation.treasury -= cost;
-            if civilian_costs_expert {
-                nation.labor.expert -= 1;
-            }
-            nation.civilians.push(Civilian::new(
-                next_civilian_id(),
-                CivilianType::Engineer,
+            game.pending_ai_cash_spending.push((
                 nation_id,
+                crate::economy::ledger::CashSink::AiCivilianBuild,
+                cost,
+                None,
             ));
             return;
         }
@@ -1393,9 +1421,16 @@ fn execute_consulate(game: &mut GameState, nation_id: NationId) {
 
     if let Some(mn_id) = best_mn
         && game.diplomacy.build_consulate(nation_id, mn_id).is_ok()
-        && let Some(nation) = game.get_nation_mut(nation_id)
     {
-        nation.treasury -= cost;
+        if let Some(nation) = game.get_nation_mut(nation_id) {
+            nation.treasury -= cost;
+        }
+        game.pending_ai_cash_spending.push((
+            nation_id,
+            crate::economy::ledger::CashSink::AiDiplomacyConsulate,
+            cost,
+            Some(mn_id),
+        ));
     }
 }
 
@@ -1440,9 +1475,16 @@ fn execute_embassy(game: &mut GameState, nation_id: NationId) {
 
     if let Some(mn_id) = best_mn
         && game.diplomacy.build_embassy(nation_id, mn_id).is_ok()
-        && let Some(nation) = game.get_nation_mut(nation_id)
     {
-        nation.treasury -= cost;
+        if let Some(nation) = game.get_nation_mut(nation_id) {
+            nation.treasury -= cost;
+        }
+        game.pending_ai_cash_spending.push((
+            nation_id,
+            crate::economy::ledger::CashSink::AiDiplomacyEmbassy,
+            cost,
+            Some(mn_id),
+        ));
     }
 }
 
@@ -1489,13 +1531,24 @@ fn execute_hire_improver(game: &mut GameState, nation_id: NationId) {
     }
 
     let cost = civ_type.creation_cost(&cfg);
-    if let Some(remaining) = nation.treasury.checked_sub(cost) {
+    let did_spend = if let Some(remaining) = nation.treasury.checked_sub(cost) {
         nation.treasury = remaining;
         if civilian_costs_expert {
             nation.labor.expert -= 1;
         }
         let civilian = Civilian::new(next_civilian_id(), civ_type, nation_id);
         nation.civilians.push(civilian);
+        true
+    } else {
+        false
+    };
+    if did_spend {
+        game.pending_ai_cash_spending.push((
+            nation_id,
+            crate::economy::ledger::CashSink::AiCivilianBuild,
+            cost,
+            None,
+        ));
     }
 }
 
