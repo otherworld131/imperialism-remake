@@ -2,10 +2,31 @@ import { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } fr
 import type { ReactNode } from 'react';
 import type { TileData, MapMode, DiplomacyOverlay, MilitaryOverlayEntry, ArmyUnitDetail, ValidMoveTargets, NavyMarker } from '../wasm';
 import { computeNationLabels } from '../lib/nationLabels';
+import { organicPolyline, stitchPolylines, vKey, chaikin, displaceAlongNormalMixed, type Vec2 } from '../lib/mapGeometry';
 import HexTooltip from './HexTooltip';
 
 const HEX_SIZE = 18;
 const SQRT3 = Math.sqrt(3);
+
+// Unified noise field used for ALL border smoothing (coastline, country
+// interior borders, province borders). One seed + one frequency means a
+// coastline and a country border passing near the same point displace by
+// correlated amounts — so when they meet at a beach, they read as drawn
+// on the same map rather than as independent wavy lines. Amplitudes and
+// subdivisions differ per border class to control visual emphasis.
+const BORDER_FREQUENCY = 0.06;
+const BORDER_OCTAVES = 4;
+const BORDER_SMOOTHING = 1;
+const BORDER_SEED = 1337;
+
+const COAST_AMPLITUDE = HEX_SIZE * 0.48;
+const COAST_SUBDIV = 12;
+
+const COUNTRY_BORDER_AMPLITUDE = HEX_SIZE * 0.34;
+const COUNTRY_BORDER_SUBDIV = 10;
+
+const PROVINCE_BORDER_AMPLITUDE = HEX_SIZE * 0.22;
+const PROVINCE_BORDER_SUBDIV = 8;
 
 const TERRAIN_COLORS: Record<string, string> = {
   Grassland: '#a8b860',
@@ -224,6 +245,7 @@ interface Props {
   isDeployMode?: boolean;
   deployableTiles?: Set<string>;
   disableFogOfWar?: boolean;
+  organicBorders?: boolean;
   scale?: number;
   offset?: { x: number; y: number };
   onScaleChange?: (scale: number) => void;
@@ -266,6 +288,7 @@ export default function HexMap({
   onMapModeChange, onTileClick, onTileHover, showHiddenResources = false, showAiCivilians = false,
   selectedUnit, pendingMoves = [], validMoveTargets, isMovementMode = false,
   isDeployMode = false, deployableTiles, disableFogOfWar = false,
+  organicBorders = true,
   scale: scaleProp, offset: offsetProp, onScaleChange, onOffsetChange,
   highlightedNationId = null,
   navyMarkers = [], selectedNavyKey = null, onNavyMarkerClick, onNavyMarkerHover,
@@ -450,6 +473,300 @@ export default function HexMap({
   // Uses visual_group so incorporated minor nations get their own label
   const nationLabels = useMemo(() => computeNationLabels(tiles), [tiles]);
 
+  // ── Organic coastline + border geometry ─────────────────────────────────
+  //
+  // Builds smoothed polylines for the land/sea boundary and for political
+  // borders so the map doesn't look visibly hexagonal at its silhouette. The
+  // hex grid is untouched for gameplay; this is pure presentation. See
+  // web/src/lib/mapGeometry.ts. Computed only when organicBorders is on.
+  const mapGeometry = useMemo(() => {
+    if (!organicBorders) return null;
+    const verts = hexVertices(HEX_SIZE);
+    const tileMapLocal = new Map<string, TileData>();
+    for (const tile of tiles) tileMapLocal.set(`${tile.q},${tile.r}`, tile);
+
+    // Collect all coastline hex edges (land hex facing sea or map edge), plus
+    // land-side political edges (province and country-interior), plus the
+    // map bounding box. Each political edge is deduplicated because two
+    // adjacent land hexes each see the shared edge.
+    const vertexCoord = new Map<string, Vec2>();
+    const coastEdges: { a: string; b: string }[] = [];
+    const provinceEdgeList: { a: string; b: string }[] = [];
+    const countryInteriorEdgeList: { a: string; b: string }[] = [];
+    const seenPoliticalEdges = new Set<string>();
+    const landHexes: TileData[] = [];
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+    const storeVertex = (k: string, x: number, y: number) => {
+      if (!vertexCoord.has(k)) vertexCoord.set(k, [x, y]);
+    };
+    const politicalKey = (k1: string, k2: string) => (k1 < k2 ? `${k1}|${k2}` : `${k2}|${k1}`);
+
+    for (const tile of tiles) {
+      const [px, py] = hexToPixel(tile.q, tile.r);
+      // Bbox: include every tile so the sea-fill rect covers the map.
+      for (const [vx, vy] of verts) {
+        const x = px + vx, y = py + vy;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+      if (tile.terrain === 'Sea') continue;
+      landHexes.push(tile);
+      const neighbors = hexNeighbors(tile.q, tile.r);
+      const tileVG = tile.visual_group || tile.owner;
+      for (let i = 0; i < 6; i++) {
+        const [nq, nr] = neighbors[i];
+        const neighbor = tileMapLocal.get(`${nq},${nr}`);
+        const v1 = verts[i];
+        const v2 = verts[(i + 1) % 6];
+        const x1 = px + v1[0], y1 = py + v1[1];
+        const x2 = px + v2[0], y2 = py + v2[1];
+        const k1 = vKey(x1, y1);
+        const k2 = vKey(x2, y2);
+        storeVertex(k1, x1, y1);
+        storeVertex(k2, x2, y2);
+
+        if (!neighbor || neighbor.terrain === 'Sea') {
+          coastEdges.push({ a: k1, b: k2 });
+          continue;
+        }
+        const neighborVG = neighbor.visual_group || neighbor.owner;
+        const pk = politicalKey(k1, k2);
+        if (tileVG !== neighborVG) {
+          if (!seenPoliticalEdges.has(pk)) {
+            seenPoliticalEdges.add(pk);
+            countryInteriorEdgeList.push({ a: k1, b: k2 });
+          }
+        } else if (tile.owner && tile.province !== neighbor.province) {
+          if (!seenPoliticalEdges.has(pk)) {
+            seenPoliticalEdges.add(pk);
+            provinceEdgeList.push({ a: k1, b: k2 });
+          }
+        }
+      }
+    }
+
+    // All border buckets use the same noise field (frequency / seed / octaves)
+    // so where different classes of border pass through the same point, they
+    // displace by correlated amounts and read as drawn on a single map.
+    const smoothBucket = (
+      edgeList: { a: string; b: string }[],
+      amplitude: number,
+      subdiv: number,
+    ): { closed: Vec2[][]; open: Vec2[][]; openKeys: string[][] } => {
+      const { closed: closedKeys, open: openKeysRaw } = stitchPolylines(edgeList);
+      const common = {
+        subdiv,
+        amplitude,
+        frequency: BORDER_FREQUENCY,
+        octaves: BORDER_OCTAVES,
+        seed: BORDER_SEED,
+        smoothing: BORDER_SMOOTHING,
+      };
+      const closedPaths: Vec2[][] = [];
+      for (const keys of closedKeys) {
+        const pts = keys.map(k => vertexCoord.get(k)!) as Vec2[];
+        if (pts.length < 3) continue;
+        closedPaths.push(organicPolyline(pts, { ...common, closed: true }));
+      }
+      const openPaths: Vec2[][] = [];
+      for (const keys of openKeysRaw) {
+        const pts = keys.map(k => vertexCoord.get(k)!) as Vec2[];
+        if (pts.length < 2) continue;
+        openPaths.push(organicPolyline(pts, { ...common, closed: false }));
+      }
+      return { closed: closedPaths, open: openPaths, openKeys: openKeysRaw };
+    };
+
+    const coastBucket = smoothBucket(coastEdges, COAST_AMPLITUDE, COAST_SUBDIV);
+    const smoothedClosed = coastBucket.closed;
+    const smoothedOpen = coastBucket.open;
+    const openKeys = coastBucket.openKeys;
+
+    // ── Per-visual-group connected components for anti-spill clipping ──
+    // Group land hexes into connected regions that share the same visual_group
+    // (owner or incorporated-minor parent). For each region, stitch its
+    // boundary — which alternates between coast and country-interior segments
+    // — into closed polygons, then smooth with PER-SEGMENT amplitudes that
+    // match the separately-drawn strokes. Clipping fills to this polygon
+    // prevents a nation's color from leaking past the smoothed border.
+    const tileComp = new Map<string, number>();
+    const compVg: string[] = [];
+    const compTiles: TileData[][] = [];
+    for (const tile of landHexes) {
+      const tk = `${tile.q},${tile.r}`;
+      if (tileComp.has(tk)) continue;
+      const vg = tile.visual_group || tile.owner || '';
+      const idx = compTiles.length;
+      const queue: TileData[] = [tile];
+      const members: TileData[] = [];
+      tileComp.set(tk, idx);
+      while (queue.length > 0) {
+        const t = queue.shift()!;
+        members.push(t);
+        for (const [nq, nr] of hexNeighbors(t.q, t.r)) {
+          const n = tileMapLocal.get(`${nq},${nr}`);
+          if (!n || n.terrain === 'Sea') continue;
+          const nvg = n.visual_group || n.owner || '';
+          if (nvg !== vg) continue;
+          const ntk = `${n.q},${n.r}`;
+          if (tileComp.has(ntk)) continue;
+          tileComp.set(ntk, idx);
+          queue.push(n);
+        }
+      }
+      compVg.push(vg);
+      compTiles.push(members);
+    }
+
+    // Collect each component's boundary edges with type (coast vs country).
+    type BoundaryEdge = { a: string; b: string; type: 'coast' | 'country' };
+    const compBoundary: BoundaryEdge[][] = compVg.map(() => []);
+    for (const tile of landHexes) {
+      const compIdx = tileComp.get(`${tile.q},${tile.r}`)!;
+      const [px, py] = hexToPixel(tile.q, tile.r);
+      const neighbors = hexNeighbors(tile.q, tile.r);
+      const tileVG = tile.visual_group || tile.owner || '';
+      for (let i = 0; i < 6; i++) {
+        const [nq, nr] = neighbors[i];
+        const n = tileMapLocal.get(`${nq},${nr}`);
+        let type: 'coast' | 'country' | null = null;
+        if (!n || n.terrain === 'Sea') type = 'coast';
+        else {
+          const nvg = n.visual_group || n.owner || '';
+          if (nvg !== tileVG) type = 'country';
+        }
+        if (type == null) continue;
+        const v1 = verts[i];
+        const v2 = verts[(i + 1) % 6];
+        const x1 = px + v1[0], y1 = py + v1[1];
+        const x2 = px + v2[0], y2 = py + v2[1];
+        const k1 = vKey(x1, y1);
+        const k2 = vKey(x2, y2);
+        compBoundary[compIdx].push({ a: k1, b: k2, type });
+      }
+    }
+
+    // Build one smoothed, closed Path2D per component. Each segment uses the
+    // amplitude of its type so the polygon coincides with the strokes that
+    // are drawn as coast / country-border polylines elsewhere.
+    const componentClips: Array<{ path: Path2D; tileKeys: Set<string> }> = [];
+    const edgeKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+    for (let idx = 0; idx < compVg.length; idx++) {
+      const boundary = compBoundary[idx];
+      if (boundary.length === 0) continue; // e.g. a landlocked single tile (shouldn't happen)
+      const typeMap = new Map<string, 'coast' | 'country'>();
+      for (const { a, b, type } of boundary) typeMap.set(edgeKey(a, b), type);
+      const { closed: closedLoops, open: openLoops } = stitchPolylines(
+        boundary.map(({ a, b }) => ({ a, b })),
+      );
+      const path = new Path2D();
+      const smoothLoop = (keys: string[], isClosed: boolean) => {
+        const pts = keys.map(k => vertexCoord.get(k)!) as Vec2[];
+        if (pts.length < 2) return null;
+        const n = pts.length;
+        const segCount = isClosed ? n : n - 1;
+        const segAmp = new Array<number>(segCount);
+        const segSub = new Array<number>(segCount);
+        for (let i = 0; i < segCount; i++) {
+          const t = typeMap.get(edgeKey(keys[i], keys[(i + 1) % n]));
+          if (t === 'coast') { segAmp[i] = COAST_AMPLITUDE; segSub[i] = COAST_SUBDIV; }
+          else if (t === 'country') { segAmp[i] = COUNTRY_BORDER_AMPLITUDE; segSub[i] = COUNTRY_BORDER_SUBDIV; }
+          else { segAmp[i] = 0; segSub[i] = 2; }
+        }
+        const displaced = displaceAlongNormalMixed(pts, segAmp, segSub, {
+          frequency: BORDER_FREQUENCY, octaves: BORDER_OCTAVES, seed: BORDER_SEED, closed: isClosed,
+        });
+        return chaikin(displaced, BORDER_SMOOTHING, isClosed);
+      };
+      const appendLoop = (loop: Vec2[]) => {
+        path.moveTo(loop[0][0], loop[0][1]);
+        for (let i = 1; i < loop.length; i++) path.lineTo(loop[i][0], loop[i][1]);
+        path.closePath();
+      };
+      for (const keys of closedLoops) {
+        const loop = smoothLoop(keys, true);
+        if (loop && loop.length >= 3) appendLoop(loop);
+      }
+      for (const keys of openLoops) {
+        const loop = smoothLoop(keys, false);
+        if (loop && loop.length >= 2) appendLoop(loop);
+      }
+      const tileKeys = new Set(compTiles[idx].map(t => `${t.q},${t.r}`));
+      componentClips.push({ path, tileKeys });
+    }
+
+    // Precompute vertex-key → land tile keys so the open-polyline fallback
+    // below can look up adjacent land hexes in O(1) instead of scanning.
+    const vertexToLandHexes = new Map<string, string[]>();
+    for (const tile of landHexes) {
+      const [px, py] = hexToPixel(tile.q, tile.r);
+      const tk = `${tile.q},${tile.r}`;
+      for (const [vx, vy] of verts) {
+        const k = vKey(px + vx, py + vy);
+        const list = vertexToLandHexes.get(k);
+        if (list) list.push(tk); else vertexToLandHexes.set(k, [tk]);
+      }
+    }
+
+    // Stitched coastlines should almost always close (each coastline vertex
+    // has degree 2). When one doesn't — e.g. a degenerate isthmus with a
+    // degree-4 vertex — the resulting open polyline can't seal a land
+    // region on its own. Track the tiles adjacent to any such vertex so
+    // their hex shape can be added to the clip path as a fallback.
+    const openFallbackHexKeys = new Set<string>();
+    for (const keys of openKeys) {
+      for (const k of keys) {
+        const hexes = vertexToLandHexes.get(k);
+        if (hexes) for (const tk of hexes) openFallbackHexKeys.add(tk);
+      }
+    }
+
+    // Build the land clip path: smoothed closed coastline polygons (as a
+    // union via evenodd), PLUS fallback hex polygons for any open-polyline
+    // land tiles so their region is still filled.
+    const buildClipPath = (): Path2D => {
+      const p = new Path2D();
+      for (const loop of smoothedClosed) {
+        if (loop.length === 0) continue;
+        p.moveTo(loop[0][0], loop[0][1]);
+        for (let i = 1; i < loop.length; i++) p.lineTo(loop[i][0], loop[i][1]);
+        p.closePath();
+      }
+      for (const tile of landHexes) {
+        const [px, py] = hexToPixel(tile.q, tile.r);
+        if (!openFallbackHexKeys.has(`${tile.q},${tile.r}`)) continue;
+        p.moveTo(px + verts[0][0], py + verts[0][1]);
+        for (let i = 1; i < 6; i++) p.lineTo(px + verts[i][0], py + verts[i][1]);
+        p.closePath();
+      }
+      return p;
+    };
+
+    // Country interior and province borders — same pipeline as the coast,
+    // same noise field, tuned amplitude per class.
+    const country = smoothBucket(countryInteriorEdgeList, COUNTRY_BORDER_AMPLITUDE, COUNTRY_BORDER_SUBDIV);
+    const province = smoothBucket(provinceEdgeList, PROVINCE_BORDER_AMPLITUDE, PROVINCE_BORDER_SUBDIV);
+
+    // Pad the sea-fill rect so it overshoots any noise-displaced coastline.
+    const PAD = HEX_SIZE * 1.2;
+    return {
+      seaBox: { x: minX - PAD, y: minY - PAD, w: (maxX - minX) + 2 * PAD, h: (maxY - minY) + 2 * PAD },
+      clipPath: buildClipPath(),
+      coastPolylinesClosed: smoothedClosed,
+      coastPolylinesOpen: smoothedOpen,
+      countryPolylinesClosed: country.closed,
+      countryPolylinesOpen: country.open,
+      provincePolylinesClosed: province.closed,
+      provincePolylinesOpen: province.open,
+      componentClips,
+      compTiles,
+    };
+  }, [tiles, organicBorders]);
+
   const render = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -474,139 +791,170 @@ export default function HexMap({
       return tile.is_incorporated_minor ? incorporatedFill(nc) : politicalFill(nc);
     };
 
-    // ── Pass 1: Fill all hexagons ──
-    for (const tile of tiles) {
-      const [px, py] = hexToPixel(tile.q, tile.r);
-      let color: string;
-
-      if (tile.terrain === 'Sea') {
-        color = TERRAIN_COLORS.Sea;
-      } else if (mapMode === 'terrain') {
-        // Terrain mode: base terrain + subtle nation tint
-        color = TERRAIN_COLORS[tile.terrain] || '#666';
+    // Resolve the fill color for a single tile in the current map mode.
+    const tileFillColor = (tile: TileData): string => {
+      if (tile.terrain === 'Sea') return TERRAIN_COLORS.Sea;
+      if (mapMode === 'terrain') {
+        let color = TERRAIN_COLORS[tile.terrain] || '#666';
         if (tile.owner_color) {
           const nc = NATION_COLORS[tile.owner_color];
           if (nc) color = tintColor(color, nc, tile.is_incorporated_minor ? 0.10 : 0.15);
         }
-      } else if (mapMode === 'diplomatic' || mapMode === 'relationship') {
-        // Overlay modes: use nationFillMap colors, fall back to political fill
+        return color;
+      }
+      if (mapMode === 'diplomatic' || mapMode === 'relationship' ||
+          mapMode === 'military' || mapMode === 'naval') {
         const overlayColor = tile.owner ? nationFillMap.get(tile.owner) : null;
-        if (overlayColor) {
-          color = overlayColor;
-        } else {
-          color = pickPoliticalColor(tile);
-        }
-      } else if (mapMode === 'military' || mapMode === 'naval') {
-        // Military/Naval: political base with strength tint from nationFillMap
-        const overlayColor = tile.owner ? nationFillMap.get(tile.owner) : null;
-        if (overlayColor) {
-          color = overlayColor;
-        } else {
-          color = pickPoliticalColor(tile);
-        }
-      } else {
-        // Political mode
-        color = pickPoliticalColor(tile);
+        return overlayColor ?? pickPoliticalColor(tile);
+      }
+      return pickPoliticalColor(tile);
+    };
+
+    if (mapGeometry) {
+      // ── Pass 0: Sea background ──
+      {
+        const { x, y, w, h } = mapGeometry.seaBox;
+        ctx.fillStyle = TERRAIN_COLORS.Sea;
+        ctx.fillRect(x, y, w, h);
       }
 
-      drawHexagon(ctx, px, py, HEX_SIZE);
-      ctx.fillStyle = color;
-      ctx.fill();
-
-      // Fog of war overlay: gray out non-visible tiles
-      if (!tile.visible && !disableFogOfWar) {
+      // ── Pass 1: Land fills, clipped PER visual-group component so a
+      // nation's color can't leak past its smoothed border onto the neighbour.
+      for (let i = 0; i < mapGeometry.componentClips.length; i++) {
+        const comp = mapGeometry.componentClips[i];
+        const compTilesArr = mapGeometry.compTiles[i];
+        ctx.save();
+        ctx.clip(comp.path, 'evenodd');
+        for (const tile of compTilesArr) {
+          const [px, py] = hexToPixel(tile.q, tile.r);
+          drawHexagon(ctx, px, py, HEX_SIZE);
+          ctx.fillStyle = tileFillColor(tile);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+    } else {
+      // ── Original non-organic rendering: per-hex fills for every tile ──
+      for (const tile of tiles) {
+        const [px, py] = hexToPixel(tile.q, tile.r);
         drawHexagon(ctx, px, py, HEX_SIZE);
-        ctx.fillStyle = 'rgba(128, 128, 128, 0.35)';
+        ctx.fillStyle = tileFillColor(tile);
         ctx.fill();
       }
     }
 
-    // ── Pass 2: Draw each hex side with appropriate thickness ──
-    // Collect segments into 3 buckets by thickness
-    const normalEdges: number[] = [];   // x1,y1,x2,y2 flat array
-    const provinceEdges: number[] = [];
-    const countryEdges: number[] = [];
-
-    for (const tile of tiles) {
-      const [px, py] = hexToPixel(tile.q, tile.r);
-      const neighbors = hexNeighbors(tile.q, tile.r);
-
-      for (let i = 0; i < 6; i++) {
-        const [nq, nr] = neighbors[i];
-        const neighbor = tileMap.get(`${nq},${nr}`);
-
-        // Determine border type for THIS side
-        // Use visual_group for border grouping: incorporated minor provinces
-        // keep separate country-level borders from their overlord GP
-        let borderType: 0 | 1 | 2; // 0=normal, 1=province, 2=country
-        const tileVG = tile.visual_group || tile.owner;
-        const neighborVG = neighbor ? (neighbor.visual_group || neighbor.owner) : '';
-
-        if (tile.terrain === 'Sea') {
-          // Sea tiles: only draw if neighbor is land (coastline from land side handles it)
-          borderType = 0;
-        } else if (!neighbor || neighbor.terrain === 'Sea') {
-          // Edge of map or coast: country border if owned
-          borderType = tile.owner ? 2 : 0;
-        } else if (tileVG !== neighborVG) {
-          // Different visual groups (different nations, or GP vs incorporated minor)
-          borderType = 2;
-        } else if (tile.owner && tile.province !== neighbor.province) {
-          // Same visual group, different province
-          borderType = 1;
-        } else {
-          // Same visual group, same province: normal thin edge
-          borderType = 0;
-        }
-
-        // Get the two vertices of this edge
-        const v1 = verts[i];
-        const v2 = verts[(i + 1) % 6];
-        const x1 = px + v1[0], y1 = py + v1[1];
-        const x2 = px + v2[0], y2 = py + v2[1];
-
-        if (borderType === 2) {
-          countryEdges.push(x1, y1, x2, y2);
-        } else if (borderType === 1) {
-          provinceEdges.push(x1, y1, x2, y2);
-        } else {
-          normalEdges.push(x1, y1, x2, y2);
-        }
+    // Fog of war — applied per-hex (land and sea) in both modes.
+    if (!disableFogOfWar) {
+      ctx.fillStyle = 'rgba(128, 128, 128, 0.35)';
+      for (const tile of tiles) {
+        if (tile.visible) continue;
+        const [px, py] = hexToPixel(tile.q, tile.r);
+        drawHexagon(ctx, px, py, HEX_SIZE);
+        ctx.fill();
       }
     }
 
-    // Draw normal edges (very thin, subtle)
-    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
-    ctx.lineWidth = 0.5;
-    ctx.lineCap = 'butt';
-    ctx.beginPath();
-    for (let i = 0; i < normalEdges.length; i += 4) {
-      ctx.moveTo(normalEdges[i], normalEdges[i + 1]);
-      ctx.lineTo(normalEdges[i + 2], normalEdges[i + 3]);
-    }
-    ctx.stroke();
+    // ── Pass 2: Edge strokes ──
+    // When organicBorders is on, interior same-province edges are drawn as a
+    // subtle hex grid (gameplay aid), and the three political/coast classes
+    // are drawn as smoothed polylines. When off, all four classes are drawn
+    // as straight hex-edge segments in their original styles.
+    {
+      const normalEdges: number[] = [];
+      const provinceEdges: number[] = [];
+      const countryEdges: number[] = [];
 
-    // Draw province edges (medium)
-    ctx.strokeStyle = 'rgba(20,15,10,0.5)';
-    ctx.lineWidth = 1.5;
-    ctx.lineCap = 'butt';
-    ctx.beginPath();
-    for (let i = 0; i < provinceEdges.length; i += 4) {
-      ctx.moveTo(provinceEdges[i], provinceEdges[i + 1]);
-      ctx.lineTo(provinceEdges[i + 2], provinceEdges[i + 3]);
-    }
-    ctx.stroke();
+      for (const tile of tiles) {
+        const [px, py] = hexToPixel(tile.q, tile.r);
+        const neighbors = hexNeighbors(tile.q, tile.r);
+        for (let i = 0; i < 6; i++) {
+          const [nq, nr] = neighbors[i];
+          const neighbor = tileMap.get(`${nq},${nr}`);
+          if (tile.terrain === 'Sea') continue;
+          const tileVG = tile.visual_group || tile.owner;
+          const neighborVG = neighbor ? (neighbor.visual_group || neighbor.owner) : '';
+          const v1 = verts[i];
+          const v2 = verts[(i + 1) % 6];
+          const x1 = px + v1[0], y1 = py + v1[1];
+          const x2 = px + v2[0], y2 = py + v2[1];
 
-    // Draw country edges (thick, on top)
-    ctx.strokeStyle = 'rgba(10,5,0,0.9)';
-    ctx.lineWidth = 3.5;
-    ctx.lineCap = 'butt';
-    ctx.beginPath();
-    for (let i = 0; i < countryEdges.length; i += 4) {
-      ctx.moveTo(countryEdges[i], countryEdges[i + 1]);
-      ctx.lineTo(countryEdges[i + 2], countryEdges[i + 3]);
+          if (!neighbor || neighbor.terrain === 'Sea') {
+            if (mapGeometry) continue; // smoothed coastline handles it
+            if (tile.owner) countryEdges.push(x1, y1, x2, y2);
+            continue;
+          }
+          if (tileVG !== neighborVG) {
+            if (mapGeometry) continue; // smoothed country polyline handles it
+            countryEdges.push(x1, y1, x2, y2);
+            continue;
+          }
+          if (tile.owner && tile.province !== neighbor.province) {
+            if (mapGeometry) continue; // smoothed province polyline handles it
+            provinceEdges.push(x1, y1, x2, y2);
+            continue;
+          }
+          normalEdges.push(x1, y1, x2, y2);
+        }
+      }
+
+      // Thin subtle hex grid inside a province.
+      ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+      ctx.lineWidth = 0.5;
+      ctx.lineCap = 'butt';
+      ctx.beginPath();
+      for (let i = 0; i < normalEdges.length; i += 4) {
+        ctx.moveTo(normalEdges[i], normalEdges[i + 1]);
+        ctx.lineTo(normalEdges[i + 2], normalEdges[i + 3]);
+      }
+      ctx.stroke();
+
+      if (mapGeometry) {
+        const strokePolyline = (pts: Vec2[], closed: boolean) => {
+          if (pts.length < 2) return;
+          ctx.beginPath();
+          ctx.moveTo(pts[0][0], pts[0][1]);
+          for (let k = 1; k < pts.length; k++) ctx.lineTo(pts[k][0], pts[k][1]);
+          if (closed) ctx.closePath();
+          ctx.stroke();
+        };
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+
+        ctx.strokeStyle = 'rgba(20,15,10,0.5)';
+        ctx.lineWidth = 1.5;
+        for (const loop of mapGeometry.provincePolylinesClosed) strokePolyline(loop, true);
+        for (const line of mapGeometry.provincePolylinesOpen) strokePolyline(line, false);
+
+        ctx.strokeStyle = 'rgba(10,5,0,0.9)';
+        ctx.lineWidth = 3.5;
+        for (const loop of mapGeometry.countryPolylinesClosed) strokePolyline(loop, true);
+        for (const line of mapGeometry.countryPolylinesOpen) strokePolyline(line, false);
+
+        ctx.strokeStyle = 'rgba(10,5,0,0.85)';
+        ctx.lineWidth = 2.5;
+        for (const loop of mapGeometry.coastPolylinesClosed) strokePolyline(loop, true);
+        for (const line of mapGeometry.coastPolylinesOpen) strokePolyline(line, false);
+      } else {
+        // Straight hex-edge strokes — original look.
+        ctx.strokeStyle = 'rgba(20,15,10,0.5)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (let i = 0; i < provinceEdges.length; i += 4) {
+          ctx.moveTo(provinceEdges[i], provinceEdges[i + 1]);
+          ctx.lineTo(provinceEdges[i + 2], provinceEdges[i + 3]);
+        }
+        ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(10,5,0,0.9)';
+        ctx.lineWidth = 3.5;
+        ctx.beginPath();
+        for (let i = 0; i < countryEdges.length; i += 4) {
+          ctx.moveTo(countryEdges[i], countryEdges[i + 1]);
+          ctx.lineTo(countryEdges[i + 2], countryEdges[i + 3]);
+        }
+        ctx.stroke();
+      }
     }
-    ctx.stroke();
 
     // ── Pass 2.5: Highlight selected nation's tiles (setup preview) ──
     if (highlightedNationId != null) {

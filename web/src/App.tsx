@@ -152,6 +152,7 @@ function App() {
   const [showAiReasoning, setShowAiReasoning] = useState(false);
   const [showAiNonActions, setShowAiNonActions] = useState(false);
   const [disableFogOfWar, setDisableFogOfWar] = useState(false);
+  const [organicBorders, setOrganicBorders] = useState(true);
   const [newsFilterCategory, setNewsFilterCategory] = useState<string>('all');
   const [newsFilterCountry, setNewsFilterCountry] = useState<string>('all');
   const [mapMode, setMapMode] = useState<MapMode>('political');
@@ -361,6 +362,7 @@ function App() {
     await runMutation(async () => {
       if (!(await applyGameJson(json))) return;
       setGameStartParams(params);
+      setOrganicBorders(params.organicBorders);
       setGameStarted(true);
       try {
         const state = JSON.parse(json);
@@ -1272,6 +1274,7 @@ function App() {
             isDeployMode={isDeployMode}
             deployableTiles={deployableTiles}
             disableFogOfWar={disableFogOfWar}
+            organicBorders={organicBorders}
             scale={mapScale}
             offset={mapOffset}
             onScaleChange={setMapScale}
@@ -1606,6 +1609,10 @@ function App() {
                 <label>
                   <input type="checkbox" checked={disableFogOfWar} onChange={e => setDisableFogOfWar(e.target.checked)} />
                   {' '}Disable fog of war
+                </label>
+                <label>
+                  <input type="checkbox" checked={organicBorders} onChange={e => setOrganicBorders(e.target.checked)} />
+                  {' '}Organic borders
                 </label>
               </div>
 

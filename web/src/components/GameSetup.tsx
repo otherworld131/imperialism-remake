@@ -29,6 +29,7 @@ export interface GameStartParams {
   difficulty: number;
   nationIdx: number;
   mapGenConfig: MapGenConfig;
+  organicBorders: boolean;
 }
 
 interface Props {
@@ -54,6 +55,7 @@ export default function GameSetup({ onStartGame }: Props) {
   const [difficulty, setDifficulty] = useState(2);
   const [mapKey, setMapKey] = useState('');
   const [observerMode, setObserverMode] = useState(false);
+  const [organicBorders, setOrganicBorders] = useState(true);
 
   // Random-map customization (ignored for historical scenarios).
   const [mapWidth, setMapWidth] = useState(DEFAULT_MAP_GEN_CONFIG.width);
@@ -155,6 +157,7 @@ export default function GameSetup({ onStartGame }: Props) {
       difficulty,
       nationIdx: idx,
       mapGenConfig,
+      organicBorders,
     });
   };
 
@@ -329,6 +332,18 @@ export default function GameSetup({ onStartGame }: Props) {
               </label>
             </div>
 
+            <div style={s.group}>
+              <label style={s.observerRow} onClick={() => setOrganicBorders(!organicBorders)}>
+                <span style={organicBorders ? { ...s.observerBox, ...s.observerBoxChecked } : s.observerBox}>
+                  {organicBorders ? '✓' : ''}
+                </span>
+                <span>
+                  <span style={s.observerLabel}>Organic Borders</span>
+                  <span style={s.observerHint}> — smooth coasts &amp; borders so the map doesn&rsquo;t look hex-shaped</span>
+                </span>
+              </label>
+            </div>
+
             {previewError && <div style={s.error}>{previewError}</div>}
           </div>
 
@@ -364,6 +379,7 @@ export default function GameSetup({ onStartGame }: Props) {
             onTileClick={handleTileClick}
             disableFogOfWar={true}
             highlightedNationId={pickedGp?.id ?? null}
+            organicBorders={organicBorders}
           />
         </div>
         <div style={s.sidebar}>
