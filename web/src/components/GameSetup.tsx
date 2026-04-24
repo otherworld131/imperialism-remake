@@ -55,9 +55,9 @@ export default function GameSetup({ onStartGame }: Props) {
   const [selectedScenario, setSelectedScenario] = useState<string | null>(null);
   const [difficulty, setDifficulty] = useState(2);
   const [mapKey, setMapKey] = useState('');
-  const [observerMode, setObserverMode] = useState(false);
+  const [observerMode, setObserverMode] = useState(true);
   const [organicBorders, setOrganicBorders] = useState(true);
-  const [hideHexGrid, setHideHexGrid] = useState(false);
+  const [hideHexGrid, setHideHexGrid] = useState(true);
 
   // Random-map customization (ignored for historical scenarios).
   const [mapWidth, setMapWidth] = useState(DEFAULT_MAP_GEN_CONFIG.width);
