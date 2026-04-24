@@ -200,6 +200,65 @@ export function chaikin(pts: Vec2[], iterations = 2, closed = false): Vec2[] {
 }
 
 /**
+ * Full "organic edge" pipeline that keeps every hex vertex as a hard anchor:
+ * for each segment pts[i] -> pts[(i+1)%n], generate its sub-polyline with
+ * noise-displaced sub-points and Chaikin-smooth that sub-polyline as OPEN
+ * (endpoints fixed), then concatenate. Because each segment is smoothed in
+ * isolation, two polylines that share a segment produce an identical sub-curve
+ * for it — which is what makes two neighbouring nations' clip boundaries agree
+ * exactly along their shared border.
+ *
+ * The trade-off is that the original pts[i] stay sharp corners between
+ * segments (no cross-edge corner cutting). With subdiv >= 10 the sub-curves
+ * are already smooth enough that these hex-vertex corners are unobtrusive.
+ */
+export function smoothPolylineAnchored(
+  pts: Vec2[],
+  segAmp: number[],
+  segSubdiv: number[],
+  opts: {
+    frequency: number;
+    octaves: number;
+    seed: number;
+    smoothing: number;
+    closed: boolean;
+    segNormals?: Vec2[];
+  },
+): Vec2[] {
+  const { frequency, octaves, seed, smoothing, closed, segNormals } = opts;
+  const n = pts.length;
+  if (n < 2) return pts.slice();
+  const out: Vec2[] = [];
+  const segCount = closed ? n : n - 1;
+  for (let i = 0; i < segCount; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % n];
+    const amp = segAmp[i] ?? 0;
+    const sub = Math.max(2, segSubdiv[i] ?? 4);
+    const seg: Vec2[] = [a];
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const len = Math.hypot(dx, dy);
+    if (amp > 0 && len > 0) {
+      const given = segNormals?.[i];
+      const nx = given ? given[0] : -dy / len;
+      const ny = given ? given[1] : dx / len;
+      for (let k = 1; k < sub; k++) {
+        const t = k / sub;
+        const px = a[0] + dx * t;
+        const py = a[1] + dy * t;
+        const d = amp * fbm(px * frequency, py * frequency, octaves, seed);
+        seg.push([px + nx * d, py + ny * d]);
+      }
+    }
+    seg.push(b);
+    const smoothed = smoothing > 0 ? chaikin(seg, smoothing, false) : seg;
+    if (out.length === 0) out.push(...smoothed);
+    else out.push(...smoothed.slice(1));
+  }
+  return out;
+}
+
+/**
  * Convenience: full "organic edge" pipeline — displace then Chaikin smooth.
  */
 export function organicPolyline(
@@ -231,14 +290,20 @@ export function organicPolyline(
  * polyline walks around a region whose boundary is made of different edge
  * types (e.g. coast vs nation-nation) that should displace by different
  * amounts so the polygon aligns with separately-drawn strokes.
+ *
+ * If `segNormals` is supplied, those unit normals are used instead of the
+ * walk-direction perpendicular. Pre-computed canonical normals are required
+ * when the same edge is visited by more than one polyline (e.g. both halves
+ * of a country border) and must displace identically in both — walk-based
+ * normals would flip at shared edges and cause a gap on one side.
  */
 export function displaceAlongNormalMixed(
   pts: Vec2[],
   segAmp: number[],
   segSubdiv: number[],
-  opts: { frequency: number; octaves: number; seed: number; closed: boolean },
+  opts: { frequency: number; octaves: number; seed: number; closed: boolean; segNormals?: Vec2[] },
 ): Vec2[] {
-  const { frequency, octaves, seed, closed } = opts;
+  const { frequency, octaves, seed, closed, segNormals } = opts;
   const n = pts.length;
   if (n < 2) return pts.slice();
   const out: Vec2[] = [];
@@ -252,7 +317,13 @@ export function displaceAlongNormalMixed(
     const dx = b[0] - a[0], dy = b[1] - a[1];
     const len = Math.hypot(dx, dy);
     if (len === 0 || amp === 0) continue;
-    const nx = -dy / len, ny = dx / len;
+    let nx: number, ny: number;
+    const given = segNormals?.[i];
+    if (given) {
+      nx = given[0]; ny = given[1];
+    } else {
+      nx = -dy / len; ny = dx / len;
+    }
     for (let k = 1; k < sub; k++) {
       const t = k / sub;
       const px = a[0] + dx * t;

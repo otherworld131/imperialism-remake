@@ -2,7 +2,7 @@ import { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } fr
 import type { ReactNode } from 'react';
 import type { TileData, MapMode, DiplomacyOverlay, MilitaryOverlayEntry, ArmyUnitDetail, ValidMoveTargets, NavyMarker } from '../wasm';
 import { computeNationLabels } from '../lib/nationLabels';
-import { organicPolyline, stitchPolylines, vKey, chaikin, displaceAlongNormalMixed, type Vec2 } from '../lib/mapGeometry';
+import { stitchPolylines, vKey, smoothPolylineAnchored, type Vec2 } from '../lib/mapGeometry';
 import HexTooltip from './HexTooltip';
 
 const HEX_SIZE = 18;
@@ -485,14 +485,17 @@ export default function HexMap({
     const tileMapLocal = new Map<string, TileData>();
     for (const tile of tiles) tileMapLocal.set(`${tile.q},${tile.r}`, tile);
 
-    // Collect all coastline hex edges (land hex facing sea or map edge), plus
-    // land-side political edges (province and country-interior), plus the
-    // map bounding box. Each political edge is deduplicated because two
-    // adjacent land hexes each see the shared edge.
+    // Collect coastline hex edges (land facing sea or map edge) plus political
+    // edges (province and country-interior), and a canonical outward normal
+    // per edge. The normal is looked up — not recomputed from walk direction —
+    // when displacing a polyline, so every visitor of the edge (standalone
+    // stroke, per-component clip on one side, per-component clip on the
+    // other side) agrees on the same displaced curve.
     const vertexCoord = new Map<string, Vec2>();
     const coastEdges: { a: string; b: string }[] = [];
     const provinceEdgeList: { a: string; b: string }[] = [];
     const countryInteriorEdgeList: { a: string; b: string }[] = [];
+    const edgeNormal = new Map<string, Vec2>();
     const seenPoliticalEdges = new Set<string>();
     const landHexes: TileData[] = [];
 
@@ -529,18 +532,47 @@ export default function HexMap({
         storeVertex(k1, x1, y1);
         storeVertex(k2, x2, y2);
 
-        if (!neighbor || neighbor.terrain === 'Sea') {
+        const isCoast = !neighbor || neighbor.terrain === 'Sea';
+        const neighborVG = neighbor ? (neighbor.visual_group || neighbor.owner) : '';
+        const isCountry = !isCoast && tileVG !== neighborVG;
+        const isProvince = !isCoast && !isCountry && !!tile.owner && tile.province !== neighbor!.province;
+        if (!isCoast && !isCountry && !isProvince) continue; // interior edge: stays straight
+
+        const pk = politicalKey(k1, k2);
+
+        // Canonical outward normal, computed ONCE per edge. For coast edges
+        // "outward" means from the land hex toward the sea side. For land-to-
+        // land edges (country/province) there's no physical "outward" so we
+        // pick a deterministic direction: perpendicular CCW of the sorted
+        // a→b vector. Any single fixed choice works as long as every visitor
+        // uses the same.
+        if (!edgeNormal.has(pk)) {
+          // Perpendicular to the segment (sorted a→b for determinism).
+          const [sa, sb] = k1 < k2 ? [k1, k2] : [k2, k1];
+          const pa = vertexCoord.get(sa)!;
+          const pb = vertexCoord.get(sb)!;
+          const dx = pb[0] - pa[0], dy = pb[1] - pa[1];
+          const len = Math.hypot(dx, dy) || 1;
+          let nx = -dy / len, ny = dx / len;
+          if (isCoast) {
+            // Flip to point away from the land hex.
+            const mx = (pa[0] + pb[0]) * 0.5;
+            const my = (pa[1] + pb[1]) * 0.5;
+            if ((mx - px) * nx + (my - py) * ny < 0) { nx = -nx; ny = -ny; }
+          }
+          edgeNormal.set(pk, [nx, ny]);
+        }
+
+        if (isCoast) {
           coastEdges.push({ a: k1, b: k2 });
           continue;
         }
-        const neighborVG = neighbor.visual_group || neighbor.owner;
-        const pk = politicalKey(k1, k2);
-        if (tileVG !== neighborVG) {
+        if (isCountry) {
           if (!seenPoliticalEdges.has(pk)) {
             seenPoliticalEdges.add(pk);
             countryInteriorEdgeList.push({ a: k1, b: k2 });
           }
-        } else if (tile.owner && tile.province !== neighbor.province) {
+        } else if (isProvince) {
           if (!seenPoliticalEdges.has(pk)) {
             seenPoliticalEdges.add(pk);
             provinceEdgeList.push({ a: k1, b: k2 });
@@ -549,34 +581,59 @@ export default function HexMap({
       }
     }
 
+    // Build a per-segment normal array for an ordered key sequence, using the
+    // canonical normals that were computed during edge collection.
+    const normalsFor = (keys: string[], closed: boolean): Vec2[] => {
+      const n = keys.length;
+      const segCount = closed ? n : n - 1;
+      const out: Vec2[] = new Array(segCount);
+      for (let i = 0; i < segCount; i++) {
+        const pk = politicalKey(keys[i], keys[(i + 1) % n]);
+        out[i] = edgeNormal.get(pk) ?? [0, 0];
+      }
+      return out;
+    };
+
     // All border buckets use the same noise field (frequency / seed / octaves)
     // so where different classes of border pass through the same point, they
     // displace by correlated amounts and read as drawn on a single map.
+    // smoothPolylineAnchored applies Chaikin per-segment with hex vertices
+    // pinned — this is what makes two neighbouring nations' clip boundaries
+    // agree exactly along their shared edges (no blue gap).
+    const smoothKeys = (keys: string[], amplitude: number, subdiv: number, closed: boolean): Vec2[] => {
+      const pts = keys.map(k => vertexCoord.get(k)!) as Vec2[];
+      if (pts.length < 2) return [];
+      const segCount = closed ? pts.length : pts.length - 1;
+      const segAmp = new Array<number>(segCount).fill(amplitude);
+      const segSub = new Array<number>(segCount).fill(subdiv);
+      const segNormals = normalsFor(keys, closed);
+      return smoothPolylineAnchored(pts, segAmp, segSub, {
+        frequency: BORDER_FREQUENCY,
+        octaves: BORDER_OCTAVES,
+        seed: BORDER_SEED,
+        smoothing: BORDER_SMOOTHING,
+        closed,
+        segNormals,
+      });
+    };
+
     const smoothBucket = (
       edgeList: { a: string; b: string }[],
       amplitude: number,
       subdiv: number,
     ): { closed: Vec2[][]; open: Vec2[][]; openKeys: string[][] } => {
       const { closed: closedKeys, open: openKeysRaw } = stitchPolylines(edgeList);
-      const common = {
-        subdiv,
-        amplitude,
-        frequency: BORDER_FREQUENCY,
-        octaves: BORDER_OCTAVES,
-        seed: BORDER_SEED,
-        smoothing: BORDER_SMOOTHING,
-      };
       const closedPaths: Vec2[][] = [];
       for (const keys of closedKeys) {
-        const pts = keys.map(k => vertexCoord.get(k)!) as Vec2[];
-        if (pts.length < 3) continue;
-        closedPaths.push(organicPolyline(pts, { ...common, closed: true }));
+        if (keys.length < 3) continue;
+        const smoothed = smoothKeys(keys, amplitude, subdiv, true);
+        if (smoothed.length >= 3) closedPaths.push(smoothed);
       }
       const openPaths: Vec2[][] = [];
       for (const keys of openKeysRaw) {
-        const pts = keys.map(k => vertexCoord.get(k)!) as Vec2[];
-        if (pts.length < 2) continue;
-        openPaths.push(organicPolyline(pts, { ...common, closed: false }));
+        if (keys.length < 2) continue;
+        const smoothed = smoothKeys(keys, amplitude, subdiv, false);
+        if (smoothed.length >= 2) openPaths.push(smoothed);
       }
       return { closed: closedPaths, open: openPaths, openKeys: openKeysRaw };
     };
@@ -652,14 +709,16 @@ export default function HexMap({
 
     // Build one smoothed, closed Path2D per component. Each segment uses the
     // amplitude of its type so the polygon coincides with the strokes that
-    // are drawn as coast / country-border polylines elsewhere.
+    // are drawn as coast / country-border polylines elsewhere — and the
+    // canonical per-edge normals make shared edges displace identically on
+    // both sides, so two neighbouring nations' clips kiss exactly along the
+    // border with no gap and no overlap.
     const componentClips: Array<{ path: Path2D; tileKeys: Set<string> }> = [];
-    const edgeKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
     for (let idx = 0; idx < compVg.length; idx++) {
       const boundary = compBoundary[idx];
-      if (boundary.length === 0) continue; // e.g. a landlocked single tile (shouldn't happen)
+      if (boundary.length === 0) continue;
       const typeMap = new Map<string, 'coast' | 'country'>();
-      for (const { a, b, type } of boundary) typeMap.set(edgeKey(a, b), type);
+      for (const { a, b, type } of boundary) typeMap.set(politicalKey(a, b), type);
       const { closed: closedLoops, open: openLoops } = stitchPolylines(
         boundary.map(({ a, b }) => ({ a, b })),
       );
@@ -672,15 +731,16 @@ export default function HexMap({
         const segAmp = new Array<number>(segCount);
         const segSub = new Array<number>(segCount);
         for (let i = 0; i < segCount; i++) {
-          const t = typeMap.get(edgeKey(keys[i], keys[(i + 1) % n]));
+          const t = typeMap.get(politicalKey(keys[i], keys[(i + 1) % n]));
           if (t === 'coast') { segAmp[i] = COAST_AMPLITUDE; segSub[i] = COAST_SUBDIV; }
           else if (t === 'country') { segAmp[i] = COUNTRY_BORDER_AMPLITUDE; segSub[i] = COUNTRY_BORDER_SUBDIV; }
           else { segAmp[i] = 0; segSub[i] = 2; }
         }
-        const displaced = displaceAlongNormalMixed(pts, segAmp, segSub, {
-          frequency: BORDER_FREQUENCY, octaves: BORDER_OCTAVES, seed: BORDER_SEED, closed: isClosed,
+        const segNormals = normalsFor(keys, isClosed);
+        return smoothPolylineAnchored(pts, segAmp, segSub, {
+          frequency: BORDER_FREQUENCY, octaves: BORDER_OCTAVES, seed: BORDER_SEED,
+          smoothing: BORDER_SMOOTHING, closed: isClosed, segNormals,
         });
-        return chaikin(displaced, BORDER_SMOOTHING, isClosed);
       };
       const appendLoop = (loop: Vec2[]) => {
         path.moveTo(loop[0][0], loop[0][1]);
@@ -746,8 +806,8 @@ export default function HexMap({
       return p;
     };
 
-    // Country interior and province borders — same pipeline as the coast,
-    // same noise field, tuned amplitude per class.
+    // Country and province borders — same noise field as the coast so they
+    // agree where they meet.
     const country = smoothBucket(countryInteriorEdgeList, COUNTRY_BORDER_AMPLITUDE, COUNTRY_BORDER_SUBDIV);
     const province = smoothBucket(provinceEdgeList, PROVINCE_BORDER_AMPLITUDE, PROVINCE_BORDER_SUBDIV);
 
@@ -823,6 +883,16 @@ export default function HexMap({
       for (let i = 0; i < mapGeometry.componentClips.length; i++) {
         const comp = mapGeometry.componentClips[i];
         const compTilesArr = mapGeometry.compTiles[i];
+        // Fatten pass: fill the full component polygon with a representative
+        // color so the boundary anti-aliasing zone ends up land-tinted
+        // instead of sea-tinted. Without this, the AA-blended pixels at the
+        // smoothed edge let the sea background bleed through as a blue
+        // sliver below the stroke.
+        const first = compTilesArr[0];
+        if (first) {
+          ctx.fillStyle = tileFillColor(first);
+          ctx.fill(comp.path, 'evenodd');
+        }
         ctx.save();
         ctx.clip(comp.path, 'evenodd');
         for (const tile of compTilesArr) {
@@ -897,7 +967,8 @@ export default function HexMap({
         }
       }
 
-      // Thin subtle hex grid inside a province.
+      // Thin subtle intra-province hex grid — drawn straight in both modes
+      // (hex edges that aren't at a border stay hexagonal by design).
       ctx.strokeStyle = 'rgba(0,0,0,0.08)';
       ctx.lineWidth = 0.5;
       ctx.lineCap = 'butt';
