@@ -2,7 +2,7 @@ import { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } fr
 import type { ReactNode } from 'react';
 import type { TileData, MapMode, DiplomacyOverlay, MilitaryOverlayEntry, ArmyUnitDetail, ValidMoveTargets, NavyMarker } from '../wasm';
 import { computeNationLabels } from '../lib/nationLabels';
-import { stitchPolylines, vKey, smoothPolylineAnchored, type Vec2 } from '../lib/mapGeometry';
+import { stitchPolylines, vKey, smoothPolylineAnchored, fbm, type Vec2 } from '../lib/mapGeometry';
 import HexTooltip from './HexTooltip';
 
 const HEX_SIZE = 18;
@@ -27,6 +27,16 @@ const COUNTRY_BORDER_SUBDIV = 10;
 
 const PROVINCE_BORDER_AMPLITUDE = HEX_SIZE * 0.22;
 const PROVINCE_BORDER_SUBDIV = 8;
+
+// Per-edge ruggedness multiplier: a low-frequency, differently-seeded noise
+// field sampled at each edge midpoint, used to scale the base amplitude so
+// some regions read as flatter and others as more rugged. Frequency is much
+// lower than BORDER_FREQUENCY so ruggedness varies slowly across the map.
+const RUGGEDNESS_FREQUENCY = 0.014;
+const RUGGEDNESS_OCTAVES = 2;
+const RUGGEDNESS_SEED = 9001;
+const RUGGEDNESS_MIN = 0.35;
+const RUGGEDNESS_MAX = 1.55;
 
 const TERRAIN_COLORS: Record<string, string> = {
   Grassland: '#a8b860',
@@ -246,6 +256,7 @@ interface Props {
   deployableTiles?: Set<string>;
   disableFogOfWar?: boolean;
   organicBorders?: boolean;
+  hideHexGrid?: boolean;
   scale?: number;
   offset?: { x: number; y: number };
   onScaleChange?: (scale: number) => void;
@@ -289,6 +300,7 @@ export default function HexMap({
   selectedUnit, pendingMoves = [], validMoveTargets, isMovementMode = false,
   isDeployMode = false, deployableTiles, disableFogOfWar = false,
   organicBorders = true,
+  hideHexGrid = false,
   scale: scaleProp, offset: offsetProp, onScaleChange, onOffsetChange,
   highlightedNationId = null,
   navyMarkers = [], selectedNavyKey = null, onNavyMarkerClick, onNavyMarkerHover,
@@ -496,6 +508,7 @@ export default function HexMap({
     const provinceEdgeList: { a: string; b: string }[] = [];
     const countryInteriorEdgeList: { a: string; b: string }[] = [];
     const edgeNormal = new Map<string, Vec2>();
+    const edgeAmpMult = new Map<string, number>();
     const seenPoliticalEdges = new Set<string>();
     const landHexes: TileData[] = [];
 
@@ -554,13 +567,19 @@ export default function HexMap({
           const dx = pb[0] - pa[0], dy = pb[1] - pa[1];
           const len = Math.hypot(dx, dy) || 1;
           let nx = -dy / len, ny = dx / len;
+          const mx = (pa[0] + pb[0]) * 0.5;
+          const my = (pa[1] + pb[1]) * 0.5;
           if (isCoast) {
             // Flip to point away from the land hex.
-            const mx = (pa[0] + pb[0]) * 0.5;
-            const my = (pa[1] + pb[1]) * 0.5;
             if ((mx - px) * nx + (my - py) * ny < 0) { nx = -nx; ny = -ny; }
           }
           edgeNormal.set(pk, [nx, ny]);
+
+          // Ruggedness multiplier: smoothly-varying per-midpoint noise,
+          // remapped from [-1, 1] into [RUGGEDNESS_MIN, RUGGEDNESS_MAX].
+          const rRaw = fbm(mx * RUGGEDNESS_FREQUENCY, my * RUGGEDNESS_FREQUENCY, RUGGEDNESS_OCTAVES, RUGGEDNESS_SEED);
+          const t = Math.max(0, Math.min(1, (rRaw + 1) * 0.5));
+          edgeAmpMult.set(pk, RUGGEDNESS_MIN + (RUGGEDNESS_MAX - RUGGEDNESS_MIN) * t);
         }
 
         if (isCoast) {
@@ -594,6 +613,17 @@ export default function HexMap({
       return out;
     };
 
+    const ampMultsFor = (keys: string[], closed: boolean): number[] => {
+      const n = keys.length;
+      const segCount = closed ? n : n - 1;
+      const out = new Array<number>(segCount);
+      for (let i = 0; i < segCount; i++) {
+        const pk = politicalKey(keys[i], keys[(i + 1) % n]);
+        out[i] = edgeAmpMult.get(pk) ?? 1;
+      }
+      return out;
+    };
+
     // All border buckets use the same noise field (frequency / seed / octaves)
     // so where different classes of border pass through the same point, they
     // displace by correlated amounts and read as drawn on a single map.
@@ -604,7 +634,9 @@ export default function HexMap({
       const pts = keys.map(k => vertexCoord.get(k)!) as Vec2[];
       if (pts.length < 2) return [];
       const segCount = closed ? pts.length : pts.length - 1;
-      const segAmp = new Array<number>(segCount).fill(amplitude);
+      const mults = ampMultsFor(keys, closed);
+      const segAmp = new Array<number>(segCount);
+      for (let i = 0; i < segCount; i++) segAmp[i] = amplitude * mults[i];
       const segSub = new Array<number>(segCount).fill(subdiv);
       const segNormals = normalsFor(keys, closed);
       return smoothPolylineAnchored(pts, segAmp, segSub, {
@@ -730,10 +762,11 @@ export default function HexMap({
         const segCount = isClosed ? n : n - 1;
         const segAmp = new Array<number>(segCount);
         const segSub = new Array<number>(segCount);
+        const mults = ampMultsFor(keys, isClosed);
         for (let i = 0; i < segCount; i++) {
           const t = typeMap.get(politicalKey(keys[i], keys[(i + 1) % n]));
-          if (t === 'coast') { segAmp[i] = COAST_AMPLITUDE; segSub[i] = COAST_SUBDIV; }
-          else if (t === 'country') { segAmp[i] = COUNTRY_BORDER_AMPLITUDE; segSub[i] = COUNTRY_BORDER_SUBDIV; }
+          if (t === 'coast') { segAmp[i] = COAST_AMPLITUDE * mults[i]; segSub[i] = COAST_SUBDIV; }
+          else if (t === 'country') { segAmp[i] = COUNTRY_BORDER_AMPLITUDE * mults[i]; segSub[i] = COUNTRY_BORDER_SUBDIV; }
           else { segAmp[i] = 0; segSub[i] = 2; }
         }
         const segNormals = normalsFor(keys, isClosed);
@@ -968,16 +1001,19 @@ export default function HexMap({
       }
 
       // Thin subtle intra-province hex grid — drawn straight in both modes
-      // (hex edges that aren't at a border stay hexagonal by design).
-      ctx.strokeStyle = 'rgba(0,0,0,0.08)';
-      ctx.lineWidth = 0.5;
-      ctx.lineCap = 'butt';
-      ctx.beginPath();
-      for (let i = 0; i < normalEdges.length; i += 4) {
-        ctx.moveTo(normalEdges[i], normalEdges[i + 1]);
-        ctx.lineTo(normalEdges[i + 2], normalEdges[i + 3]);
+      // (hex edges that aren't at a border stay hexagonal by design). Can be
+      // hidden entirely via the Hide Hex Grid toggle.
+      if (!hideHexGrid) {
+        ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+        ctx.lineWidth = 0.5;
+        ctx.lineCap = 'butt';
+        ctx.beginPath();
+        for (let i = 0; i < normalEdges.length; i += 4) {
+          ctx.moveTo(normalEdges[i], normalEdges[i + 1]);
+          ctx.lineTo(normalEdges[i + 2], normalEdges[i + 3]);
+        }
+        ctx.stroke();
       }
-      ctx.stroke();
 
       if (mapGeometry) {
         const strokePolyline = (pts: Vec2[], closed: boolean) => {

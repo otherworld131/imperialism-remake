@@ -30,6 +30,7 @@ export interface GameStartParams {
   nationIdx: number;
   mapGenConfig: MapGenConfig;
   organicBorders: boolean;
+  hideHexGrid: boolean;
 }
 
 interface Props {
@@ -56,6 +57,7 @@ export default function GameSetup({ onStartGame }: Props) {
   const [mapKey, setMapKey] = useState('');
   const [observerMode, setObserverMode] = useState(false);
   const [organicBorders, setOrganicBorders] = useState(true);
+  const [hideHexGrid, setHideHexGrid] = useState(false);
 
   // Random-map customization (ignored for historical scenarios).
   const [mapWidth, setMapWidth] = useState(DEFAULT_MAP_GEN_CONFIG.width);
@@ -158,6 +160,7 @@ export default function GameSetup({ onStartGame }: Props) {
       nationIdx: idx,
       mapGenConfig,
       organicBorders,
+      hideHexGrid,
     });
   };
 
@@ -344,6 +347,18 @@ export default function GameSetup({ onStartGame }: Props) {
               </label>
             </div>
 
+            <div style={s.group}>
+              <label style={s.observerRow} onClick={() => setHideHexGrid(!hideHexGrid)}>
+                <span style={hideHexGrid ? { ...s.observerBox, ...s.observerBoxChecked } : s.observerBox}>
+                  {hideHexGrid ? '✓' : ''}
+                </span>
+                <span>
+                  <span style={s.observerLabel}>Hide Hex Grid</span>
+                  <span style={s.observerHint}> — hide the faint interior hex outlines (borders still show)</span>
+                </span>
+              </label>
+            </div>
+
             {previewError && <div style={s.error}>{previewError}</div>}
           </div>
 
@@ -380,6 +395,7 @@ export default function GameSetup({ onStartGame }: Props) {
             disableFogOfWar={true}
             highlightedNationId={pickedGp?.id ?? null}
             organicBorders={organicBorders}
+            hideHexGrid={hideHexGrid}
           />
         </div>
         <div style={s.sidebar}>

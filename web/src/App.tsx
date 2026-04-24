@@ -153,6 +153,7 @@ function App() {
   const [showAiNonActions, setShowAiNonActions] = useState(false);
   const [disableFogOfWar, setDisableFogOfWar] = useState(false);
   const [organicBorders, setOrganicBorders] = useState(true);
+  const [hideHexGrid, setHideHexGrid] = useState(false);
   const [newsFilterCategory, setNewsFilterCategory] = useState<string>('all');
   const [newsFilterCountry, setNewsFilterCountry] = useState<string>('all');
   const [mapMode, setMapMode] = useState<MapMode>('political');
@@ -363,6 +364,7 @@ function App() {
       if (!(await applyGameJson(json))) return;
       setGameStartParams(params);
       setOrganicBorders(params.organicBorders);
+      setHideHexGrid(params.hideHexGrid);
       setGameStarted(true);
       try {
         const state = JSON.parse(json);
@@ -1275,6 +1277,7 @@ function App() {
             deployableTiles={deployableTiles}
             disableFogOfWar={disableFogOfWar}
             organicBorders={organicBorders}
+            hideHexGrid={hideHexGrid}
             scale={mapScale}
             offset={mapOffset}
             onScaleChange={setMapScale}
@@ -1613,6 +1616,10 @@ function App() {
                 <label>
                   <input type="checkbox" checked={organicBorders} onChange={e => setOrganicBorders(e.target.checked)} />
                   {' '}Organic borders
+                </label>
+                <label>
+                  <input type="checkbox" checked={hideHexGrid} onChange={e => setHideHexGrid(e.target.checked)} />
+                  {' '}Hide hex grid
                 </label>
               </div>
 
