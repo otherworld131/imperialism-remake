@@ -4,6 +4,7 @@ mod batch;
 mod cli;
 mod commands;
 mod display;
+mod flavor_bridge;
 mod saves;
 
 use clap::Parser;
@@ -11,6 +12,8 @@ use clap::Parser;
 use domain::game_state::new_game;
 use domain::turn::{calculate_score, process_turn};
 use domain::types::*;
+
+use crate::flavor_bridge::apply_flavor;
 
 fn main() {
     let args = cli::CliArgs::parse();
@@ -63,6 +66,7 @@ fn main() {
         new_game(map_key, Difficulty::Normal, nation_index)
     };
 
+    apply_flavor(&mut game);
     game.ai_debug = ai_debug;
 
     // Show initial map

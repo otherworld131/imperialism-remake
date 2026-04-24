@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/domain",
     "crates/application",
+    "crates/flavor",
     "crates/infrastructure",
     "crates/presentation",
     "crates/wasm-bridge",
@@ -41,6 +42,7 @@ gui = ["presentation"]
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 domain = { path = "crates/domain" }
+flavor = { path = "crates/flavor" }
 infrastructure = { path = "crates/infrastructure" }
 presentation = { path = "crates/presentation", optional = true }
 serde = { version = "1", features = ["derive"] }

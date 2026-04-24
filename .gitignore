@@ -13,6 +13,7 @@ web/node_modules/
 web/dist/
 crates/wasm-bridge/pkg/
 crates/wasm-bridge/target/
+crates/flavor/web-demo/pkg/
 
 # Debug/batch logs
 *.log
