@@ -147,6 +147,24 @@ pub struct Nation {
     /// spending category from being neglected forever.
     #[serde(default)]
     pub ai_priority_state: AiPriorityState,
+    /// Flavor-only display string: the adjective form of the nation name
+    /// (e.g. "Devronian" in "the Devronian army"). Populated at game init
+    /// by the `flavor` crate; never read by game logic.
+    #[serde(default)]
+    pub adjective: String,
+    /// Flavor-only display string: singular demonym ("a Devronian").
+    #[serde(default)]
+    pub demonym_singular: String,
+    /// Flavor-only display string: plural demonym ("the Devronians").
+    #[serde(default)]
+    pub demonym_plural: String,
+    /// Flavor-only display string: full formal title ("Empire of Devronia").
+    #[serde(default)]
+    pub government_title: String,
+    /// Flavor-only SVG string rendering the nation's procedurally generated
+    /// flag. 60×40 viewBox. Empty when no flavor was applied.
+    #[serde(default)]
+    pub flag_svg: String,
 }
 
 /// Persistent per-nation AI state used by the scored-spending loop.
@@ -229,6 +247,11 @@ impl Nation {
             player_sell_orders: Vec::new(),
             player_buy_orders: Vec::new(),
             ai_priority_state: AiPriorityState::default(),
+            adjective: String::new(),
+            demonym_singular: String::new(),
+            demonym_plural: String::new(),
+            government_title: String::new(),
+            flag_svg: String::new(),
         }
     }
 

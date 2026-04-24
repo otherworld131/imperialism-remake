@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Flavor demo — Imperialism Remake</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Flavor demo</h1>
+      <p class="sub">
+        Procedural country names, government forms, and flags. Everything is
+        flavor-only — no effect on game rules. Running entirely in the
+        browser via a WASM build of <code>crates/flavor</code>.
+      </p>
+    </header>
+
+    <section class="controls">
+      <label>Seed <input id="seed" type="number" value="42" /></label>
+      <label>Count <input id="count" type="number" value="10" min="1" max="60" /></label>
+      <label class="grow">
+        Mix
+        <input
+          id="mix"
+          type="text"
+          value="kingdom=80,republic=20"
+          placeholder="e.g. empire=50,republic=30,theocracy=20"
+        />
+      </label>
+      <button id="reroll" type="button">Reroll</button>
+      <button id="random-seed" type="button">Random seed</button>
+    </section>
+
+    <section class="mix-help">
+      <div class="presets">
+        <span class="label">Presets:</span>
+        <button type="button" data-mix="kingdom=80,republic=20">80% kingdom / 20% republic</button>
+        <button type="button" data-mix="empire=50,kingdom=30,republic=20">Empire-heavy</button>
+        <button type="button" data-mix="republic=50,federalrepublic=30,confederation=20">Republican</button>
+        <button type="button" data-mix="sultanate=40,emirate=30,khanate=20,shogunate=10">Eastern realms</button>
+        <button type="button" data-mix="duchy=25,principality=25,grandduchy=20,citystate=15,kingdom=15">Minor-nation mix</button>
+        <button type="button" data-mix="theocracy=100">All theocracies</button>
+      </div>
+      <details class="forms">
+        <summary>Available mix keys (click to append)</summary>
+        <div id="form-chips" class="chips"></div>
+        <p class="hint">
+          Syntax: <code>key=weight,key=weight,…</code> — weights are raw numbers,
+          normalized internally. Unknown keys are ignored with a warning.
+          Empty mix falls back to the default great-power distribution.
+        </p>
+      </details>
+    </section>
+
+    <main id="grid"></main>
+
+    <footer>
+      <p>
+        Everything is flavor-only and never affects game rules. Source:
+        <code>crates/flavor</code>.
+      </p>
+    </footer>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

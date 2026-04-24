@@ -1,0 +1,27 @@
+[package]
+name = "flavor"
+version.workspace = true
+edition.workspace = true
+
+# Ancillary flavor systems (country names, government forms, flags).
+# Deliberately has ZERO dependency on the domain crate — it is a pure
+# data/string generator that the scenario loader calls once at game
+# init. Runs standalone via the flavor-demo binary.
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+
+[features]
+default = []
+# When enabled, exposes #[wasm_bindgen] shims used by the in-browser re-roll
+# demo. The native CLI binary (`flavor-demo`) never uses this feature.
+wasm = ["dep:wasm-bindgen", "dep:serde_json"]
+
+[[bin]]
+name = "flavor-demo"
+path = "src/bin/flavor_demo.rs"

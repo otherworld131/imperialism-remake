@@ -325,6 +325,7 @@ pub(crate) fn run_batch(n: u32, verbose_cashflow: bool) {
         let map_key = format!("batch_{}", game_idx);
         let personality_seed = game_idx as u64 * 6_364_136_223_846_793_005 + 1;
         let mut game = new_game_with_seed(&map_key, Difficulty::Normal, 0, personality_seed);
+        crate::flavor_bridge::apply_flavor(&mut game);
         // Batch mode: promote the human slot to fully AI-managed so every GP
         // develops. Without this the slot-0 nation has no personality and is
         // skipped by `run_ai_turns`, so it never grows its army/infra.

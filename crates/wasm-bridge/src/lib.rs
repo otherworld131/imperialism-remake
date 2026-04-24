@@ -1,5 +1,7 @@
 use wasm_bindgen::prelude::*;
 
+mod flavor_bridge;
+
 use domain::ai::common::next_unit_id;
 use domain::ai::common::{AiPersonality, personality_for_nation_index};
 use domain::economy::buildings::BuildingType;
@@ -51,7 +53,8 @@ pub fn wasm_new_game(
 ) -> String {
     let diff = difficulty_from_u8(difficulty);
     let cfg = build_map_config(map_width, map_height, num_great_powers, num_minor_nations);
-    let game = new_game_with_config(map_key, diff, nation_index, cfg);
+    let mut game = new_game_with_config(map_key, diff, nation_index, cfg);
+    flavor_bridge::apply_flavor(&mut game);
     serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
 }
 
@@ -66,7 +69,8 @@ pub fn wasm_new_scenario_game(scenario_id: &str, difficulty: u8, nation_index: u
         _ => Difficulty::Normal,
     };
     match new_scenario_game(scenario_id, diff, nation_index) {
-        Ok(game) => {
+        Ok(mut game) => {
+            flavor_bridge::apply_flavor(&mut game);
             serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
         }
         Err(e) => format!("{{\"error\":\"{}\"}}", e),

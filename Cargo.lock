@@ -2517,6 +2517,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "flavor"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3000,6 +3009,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "domain",
+ "flavor",
  "infrastructure",
  "presentation",
  "serde",
@@ -5168,6 +5178,7 @@ name = "wasm-bridge"
 version = "0.1.0"
 dependencies = [
  "domain",
+ "flavor",
  "serde",
  "serde_json",
  "wasm-bindgen",
