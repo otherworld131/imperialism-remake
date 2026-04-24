@@ -8,17 +8,27 @@ import HexTooltip from './HexTooltip';
 const HEX_SIZE = 18;
 const SQRT3 = Math.sqrt(3);
 
-// Unified noise field used for ALL border smoothing (coastline, country
-// interior borders, province borders). One seed + one frequency means a
-// coastline and a country border passing near the same point displace by
-// correlated amounts — so when they meet at a beach, they read as drawn
-// on the same map rather than as independent wavy lines. Amplitudes and
-// subdivisions differ per border class to control visual emphasis.
+// ─── Organic-border tunables ────────────────────────────────────────────
+// All knobs for the "non-hex looking" map rendering live here. Tweak these
+// and the effect appears immediately on next render — no other code needs
+// to change. See web/src/lib/mapGeometry.ts for the underlying math.
+
+// Displacement noise — shared by coast + country + province smoothing.
+// One seed + one frequency means a coastline and a country border passing
+// near the same point displace by correlated amounts, so they read as
+// drawn on the same map.
+//   BORDER_FREQUENCY: cycles per world unit. Higher = tighter wiggles.
+//   BORDER_OCTAVES:   fBm octaves. More = more fine detail.
+//   BORDER_SMOOTHING: Chaikin passes per segment. Larger = softer corners.
+//   BORDER_SEED:      change for a different wiggle pattern.
 const BORDER_FREQUENCY = 0.06;
 const BORDER_OCTAVES = 4;
 const BORDER_SMOOTHING = 1;
 const BORDER_SEED = 1337;
 
+// Per-class amplitude (in world units, relative to HEX_SIZE) and the
+// number of sub-points inserted along each hex edge. Larger amplitude =
+// wavier; more subdivisions = smoother curve.
 const COAST_AMPLITUDE = HEX_SIZE * 0.48;
 const COAST_SUBDIV = 12;
 
@@ -28,15 +38,28 @@ const COUNTRY_BORDER_SUBDIV = 10;
 const PROVINCE_BORDER_AMPLITUDE = HEX_SIZE * 0.22;
 const PROVINCE_BORDER_SUBDIV = 8;
 
-// Per-edge ruggedness multiplier: a low-frequency, differently-seeded noise
-// field sampled at each edge midpoint, used to scale the base amplitude so
-// some regions read as flatter and others as more rugged. Frequency is much
-// lower than BORDER_FREQUENCY so ruggedness varies slowly across the map.
+// ─── Per-edge ruggedness ────────────────────────────────────────────────
+// A second noise field (independent of BORDER_*) sampled at each edge
+// midpoint and remapped to a multiplier. Some regions end up flatter,
+// others more rugged, with smooth transitions. Multiplies the class
+// amplitude above; final per-edge amp = AMPLITUDE * mult.
+//
+// To tune the look:
+//   * Raise RUGGEDNESS_MAX / lower RUGGEDNESS_MIN → more contrast between
+//     flat and rugged areas.
+//   * Lower RUGGEDNESS_FREQUENCY → larger flat/rugged regions; higher →
+//     more frequent alternation.
+//   * Change RUGGEDNESS_SEED → different ruggedness layout.
 const RUGGEDNESS_FREQUENCY = 0.014;
 const RUGGEDNESS_OCTAVES = 2;
 const RUGGEDNESS_SEED = 9001;
-const RUGGEDNESS_MIN = 0.35;
-const RUGGEDNESS_MAX = 1.55;
+const RUGGEDNESS_MIN = 0.35; // flattest multiplier
+const RUGGEDNESS_MAX = 1.55; // most rugged multiplier
+
+// ─── Preview highlight ──────────────────────────────────────────────────
+// Stroke used for the "selected nation" outline on the new-game preview.
+const PREVIEW_HIGHLIGHT_COLOR = '#ff2a2a';
+const PREVIEW_HIGHLIGHT_WIDTH = 3.5;
 
 const TERRAIN_COLORS: Record<string, string> = {
   Grassland: '#a8b860',
@@ -1063,17 +1086,34 @@ export default function HexMap({
       }
     }
 
-    // ── Pass 2.5: Highlight selected nation's tiles (setup preview) ──
+    // ── Pass 2.5: Highlight selected nation (setup preview) ──
+    // In organic mode, stroke the smoothed outline of each of the nation's
+    // components as a single red contour. In non-organic mode, fall back to
+    // per-hex outlines (skipping sea tiles — that was the bug where picking
+    // a nation whose id collided with sea-tile data lit up the whole ocean).
     if (highlightedNationId != null) {
-      ctx.strokeStyle = '#ffd700';
-      ctx.lineWidth = 2.5;
-      ctx.lineCap = 'butt';
-      ctx.lineJoin = 'miter';
-      for (const tile of tiles) {
-        if (tile.nation_id !== highlightedNationId) continue;
-        const [px, py] = hexToPixel(tile.q, tile.r);
-        drawHexagon(ctx, px, py, HEX_SIZE * 0.95);
-        ctx.stroke();
+      if (mapGeometry) {
+        ctx.strokeStyle = PREVIEW_HIGHLIGHT_COLOR;
+        ctx.lineWidth = PREVIEW_HIGHLIGHT_WIDTH;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        for (let i = 0; i < mapGeometry.componentClips.length; i++) {
+          const compTilesArr = mapGeometry.compTiles[i];
+          if (!compTilesArr.some(t => t.nation_id === highlightedNationId)) continue;
+          ctx.stroke(mapGeometry.componentClips[i].path);
+        }
+      } else {
+        ctx.strokeStyle = PREVIEW_HIGHLIGHT_COLOR;
+        ctx.lineWidth = PREVIEW_HIGHLIGHT_WIDTH;
+        ctx.lineCap = 'butt';
+        ctx.lineJoin = 'miter';
+        for (const tile of tiles) {
+          if (tile.terrain === 'Sea') continue;
+          if (tile.nation_id !== highlightedNationId) continue;
+          const [px, py] = hexToPixel(tile.q, tile.r);
+          drawHexagon(ctx, px, py, HEX_SIZE * 0.95);
+          ctx.stroke();
+        }
       }
     }
 
