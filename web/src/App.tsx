@@ -1591,6 +1591,18 @@ function App() {
                 </div>
               )}
 
+              <h3 style={styles.panelTitle}>UI</h3>
+              <div style={{ padding: '4px 0', fontSize: '12px', display: 'flex', flexDirection: 'column' as const, gap: 4 }}>
+                <label>
+                  <input type="checkbox" checked={organicBorders} onChange={e => setOrganicBorders(e.target.checked)} />
+                  {' '}Organic borders
+                </label>
+                <label>
+                  <input type="checkbox" checked={hideHexGrid} onChange={e => setHideHexGrid(e.target.checked)} />
+                  {' '}Hide hex grid
+                </label>
+              </div>
+
               <h3 style={styles.panelTitle}>Debug</h3>
               <div style={{ padding: '4px 0', fontSize: '12px', display: 'flex', flexDirection: 'column' as const, gap: 4 }}>
                 <label>
@@ -1612,14 +1624,6 @@ function App() {
                 <label>
                   <input type="checkbox" checked={disableFogOfWar} onChange={e => setDisableFogOfWar(e.target.checked)} />
                   {' '}Disable fog of war
-                </label>
-                <label>
-                  <input type="checkbox" checked={organicBorders} onChange={e => setOrganicBorders(e.target.checked)} />
-                  {' '}Organic borders
-                </label>
-                <label>
-                  <input type="checkbox" checked={hideHexGrid} onChange={e => setHideHexGrid(e.target.checked)} />
-                  {' '}Hide hex grid
                 </label>
               </div>
 
