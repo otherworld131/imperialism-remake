@@ -341,6 +341,20 @@ export default function HexMap({
   const scaleRef = useRef(scaleProp ?? 0.7);
   const offsetRef = useRef(offsetProp ?? { x: -200, y: -100 });
 
+  // RAF-based render scheduling: gestures (wheel, drag, touch) mutate
+  // scaleRef/offsetRef synchronously and call scheduleFrameRef.current(),
+  // which coalesces to at most one render per animation frame. State is
+  // committed back to props at gesture end (or after a short idle for
+  // wheel), so parents stay authoritative for persistence without
+  // triggering a React commit on every input event.
+  //
+  // scheduleFrameRef is assigned below (once render + scheduleFrame are
+  // declared) so handlers declared earlier in the component body can still
+  // reach the live scheduler without TDZ issues.
+  const rafIdRef = useRef<number | null>(null);
+  const gestureCommitTimerRef = useRef<number | null>(null);
+  const scheduleFrameRef = useRef<() => void>(() => {});
+
   const offset = offsetProp ?? localOffset;
   const scale = scaleProp ?? localScale;
   useLayoutEffect(() => { scaleRef.current = scale; offsetRef.current = offset; }, [scale, offset]);
@@ -352,6 +366,26 @@ export default function HexMap({
     } else {
       setLocalScale(valOrFn as any);
     }
+  };
+
+  const cancelCommitTimer = () => {
+    if (gestureCommitTimerRef.current != null) {
+      window.clearTimeout(gestureCommitTimerRef.current);
+      gestureCommitTimerRef.current = null;
+    }
+  };
+  const commitGestureStateNow = () => {
+    cancelCommitTimer();
+    setOffset(offsetRef.current);
+    setScale(scaleRef.current);
+  };
+  const scheduleGestureCommit = (delayMs = 150) => {
+    cancelCommitTimer();
+    gestureCommitTimerRef.current = window.setTimeout(() => {
+      gestureCommitTimerRef.current = null;
+      setOffset(offsetRef.current);
+      setScale(scaleRef.current);
+    }, delayMs);
   };
 
   // ── Hex tooltip state ──────────────────────────────────────
@@ -453,11 +487,15 @@ export default function HexMap({
     };
   };
 
-  /** Zoom toward a screen-space point, adjusting offset so that point stays fixed. */
+  /** Zoom toward a screen-space point, adjusting offset so that point stays fixed.
+   *  Updates refs + schedules a frame synchronously; commit to React state is
+   *  debounced so wheel bursts don't re-render App per event. */
   const zoomAt = (cx: number, cy: number, newScale: number) => {
-    const z = computeZoom(cx, cy, scale, offset, newScale);
-    setOffset(z.offset);
-    setScale(z.scale);
+    const z = computeZoom(cx, cy, scaleRef.current, offsetRef.current, newScale);
+    scaleRef.current = z.scale;
+    offsetRef.current = z.offset;
+    scheduleFrameRef.current();
+    scheduleGestureCommit();
   };
 
   const showPoliticalColors = mapMode !== 'terrain';
@@ -883,21 +921,74 @@ export default function HexMap({
     };
   }, [tiles, organicBorders]);
 
+  /** Pre-classified hex edges (flat [x1,y1,x2,y2,...] arrays). Depends only
+   *  on tiles/tileMap — not on scale/offset — so it doesn't recompute during
+   *  zoom/pan. In organic-borders mode `country`/`province` go unused (the
+   *  smoothed polylines handle those), but they're cheap to produce and the
+   *  non-organic fallback in render uses them without a second pass. */
+  const classifiedEdges = useMemo(() => {
+    const verts = hexVertices(HEX_SIZE);
+    const normalEdges: number[] = [];
+    const provinceEdges: number[] = [];
+    const countryEdges: number[] = [];
+    for (const tile of tiles) {
+      if (tile.terrain === 'Sea') continue;
+      const [px, py] = hexToPixel(tile.q, tile.r);
+      const neighbors = hexNeighbors(tile.q, tile.r);
+      const tileVG = tile.visual_group || tile.owner;
+      for (let i = 0; i < 6; i++) {
+        const [nq, nr] = neighbors[i];
+        const neighbor = tileMap.get(`${nq},${nr}`);
+        const neighborVG = neighbor ? (neighbor.visual_group || neighbor.owner) : '';
+        const v1 = verts[i];
+        const v2 = verts[(i + 1) % 6];
+        const x1 = px + v1[0], y1 = py + v1[1];
+        const x2 = px + v2[0], y2 = py + v2[1];
+        if (!neighbor || neighbor.terrain === 'Sea') {
+          if (tile.owner) countryEdges.push(x1, y1, x2, y2);
+          continue;
+        }
+        if (tileVG !== neighborVG) {
+          countryEdges.push(x1, y1, x2, y2);
+          continue;
+        }
+        if (tile.owner && tile.province !== neighbor.province) {
+          provinceEdges.push(x1, y1, x2, y2);
+          continue;
+        }
+        normalEdges.push(x1, y1, x2, y2);
+      }
+    }
+    return { normalEdges, provinceEdges, countryEdges };
+  }, [tiles, tileMap]);
+
+  /** Max army firepower across all capitals — used to normalize the per-capital
+   *  strength-bar width. Previously re-scanned every frame. */
+  const maxArmyFP = useMemo(() => {
+    let m = 0;
+    for (const tile of tiles) {
+      if (tile.is_capital && tile.army_firepower > m) m = tile.army_firepower;
+    }
+    return m < 1 ? 1 : m;
+  }, [tiles]);
+
   const render = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    canvas.width = canvas.clientWidth;
-    canvas.height = canvas.clientHeight;
+    // Canvas size is assigned by the ResizeObserver (not every frame).
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const verts = hexVertices(HEX_SIZE);
+    // Read gesture-authoritative transform from refs so zoom/pan during
+    // a gesture can update refs directly and schedule a frame without a
+    // React state commit.
+    const scale = scaleRef.current;
+    const offset = offsetRef.current;
 
-    ctx.save();
-    ctx.translate(offset.x, offset.y);
-    ctx.scale(scale, scale);
+    ctx.setTransform(scale, 0, 0, scale, offset.x, offset.y);
 
     // Helper: pick the right political fill based on incorporated status
     const pickPoliticalColor = (tile: TileData): string => {
@@ -986,42 +1077,7 @@ export default function HexMap({
     // are drawn as smoothed polylines. When off, all four classes are drawn
     // as straight hex-edge segments in their original styles.
     {
-      const normalEdges: number[] = [];
-      const provinceEdges: number[] = [];
-      const countryEdges: number[] = [];
-
-      for (const tile of tiles) {
-        const [px, py] = hexToPixel(tile.q, tile.r);
-        const neighbors = hexNeighbors(tile.q, tile.r);
-        for (let i = 0; i < 6; i++) {
-          const [nq, nr] = neighbors[i];
-          const neighbor = tileMap.get(`${nq},${nr}`);
-          if (tile.terrain === 'Sea') continue;
-          const tileVG = tile.visual_group || tile.owner;
-          const neighborVG = neighbor ? (neighbor.visual_group || neighbor.owner) : '';
-          const v1 = verts[i];
-          const v2 = verts[(i + 1) % 6];
-          const x1 = px + v1[0], y1 = py + v1[1];
-          const x2 = px + v2[0], y2 = py + v2[1];
-
-          if (!neighbor || neighbor.terrain === 'Sea') {
-            if (mapGeometry) continue; // smoothed coastline handles it
-            if (tile.owner) countryEdges.push(x1, y1, x2, y2);
-            continue;
-          }
-          if (tileVG !== neighborVG) {
-            if (mapGeometry) continue; // smoothed country polyline handles it
-            countryEdges.push(x1, y1, x2, y2);
-            continue;
-          }
-          if (tile.owner && tile.province !== neighbor.province) {
-            if (mapGeometry) continue; // smoothed province polyline handles it
-            provinceEdges.push(x1, y1, x2, y2);
-            continue;
-          }
-          normalEdges.push(x1, y1, x2, y2);
-        }
-      }
+      const { normalEdges, provinceEdges, countryEdges } = classifiedEdges;
 
       // Thin subtle intra-province hex grid — drawn straight in both modes
       // (hex edges that aren't at a border stay hexagonal by design). Can be
@@ -1147,6 +1203,14 @@ export default function HexMap({
     if (scale > 0.6 && mapMode === 'terrain') {
       const rSize = Math.max(10, HEX_SIZE * 0.7);
       const badgeFont = Math.max(7, HEX_SIZE * 0.32);
+      const resourceFontStr = `${rSize}px sans-serif`;
+      const badgeFontStr = `bold ${badgeFont}px sans-serif`;
+      // Text alignment is uniform across the pass — set once. Font alternates
+      // between resource and badge inside the loop, but only when a badge
+      // actually needs drawing (skips the extra set on plain icons).
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = resourceFontStr;
       for (const tile of tiles) {
         if (tile.terrain === 'Sea' || !tile.owner) continue;
         if (tile.is_capital || tile.is_country_capital) continue;
@@ -1156,18 +1220,13 @@ export default function HexMap({
         if (!icon) continue;
         const [px, py] = hexToPixel(tile.q, tile.r);
 
-        ctx.font = `${rSize}px sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
         ctx.globalAlpha = tile.resource_hidden ? (showHiddenResources ? 0.85 : 0.4) : 0.75;
         ctx.fillText(icon, px, py);
         ctx.globalAlpha = 1.0;
 
         // Improvement-level badge (e.g. "2/3"), gold when fully improved
         if (tile.improvement_level > 0 && tile.max_improvement_level > 0) {
-          ctx.font = `bold ${badgeFont}px sans-serif`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
+          ctx.font = badgeFontStr;
           const fully = tile.improvement_level >= tile.max_improvement_level;
           const text = `${tile.improvement_level}/${tile.max_improvement_level}`;
           const bx = px + HEX_SIZE * 0.5;
@@ -1177,6 +1236,7 @@ export default function HexMap({
           ctx.strokeText(text, bx, by);
           ctx.fillStyle = fully ? '#ffd700' : '#fff';
           ctx.fillText(text, bx, by);
+          ctx.font = resourceFontStr;
         }
       }
       ctx.globalAlpha = 1.0;
@@ -1185,13 +1245,17 @@ export default function HexMap({
     // ── Pass 5: Infrastructure icons ──
     if (scale > 0.8) {
       const iconSize = Math.max(8, HEX_SIZE * 0.5);
+      const iconFontStr = `${iconSize}px sans-serif`;
+      // Font + alignment are uniform across the pass except for forts, which
+      // use a size that depends on fort_level and re-sets font inside the
+      // loop. Set defaults once here.
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = iconFontStr;
       for (const tile of tiles) {
         if (tile.terrain === 'Sea') continue;
         if (!tile.has_railroad && !tile.has_depot && !tile.has_port && !tile.has_fort) continue;
         const [px, py] = hexToPixel(tile.q, tile.r);
-        ctx.font = `${iconSize}px sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
 
         if (tile.has_railroad) {
           // Draw small railroad tracks (two parallel lines)
@@ -1231,6 +1295,9 @@ export default function HexMap({
           ctx.strokeText('\u26ED', px, py - HEX_SIZE * 0.3);
           ctx.fillStyle = `rgba(120,120,130,0.9)`;
           ctx.fillText('\u26ED', px, py - HEX_SIZE * 0.3);
+          // Reset to default icon font so the next tile's icons don't
+          // inherit this fort's fort_level-dependent size.
+          ctx.font = iconFontStr;
         }
       }
     }
@@ -1300,13 +1367,13 @@ export default function HexMap({
     // ── Pass 7: Army strength bar at capitals (navy is surfaced via the
     //             navy markers on the adjacent sea hex, so no naval bar here).
     if (scale > 0.8) {
-      let maxArmyFP = 0;
-      for (const tile of tiles) {
-        if (tile.is_capital && tile.army_firepower > maxArmyFP) maxArmyFP = tile.army_firepower;
-      }
-      if (maxArmyFP < 1) maxArmyFP = 1;
-
       const maxBarWidth = HEX_SIZE * 0.8;
+
+      // Font + text alignment are uniform across every capital badge — set
+      // once outside the loop instead of per tile.
+      ctx.font = '7px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
 
       for (const tile of tiles) {
         if (tile.terrain === 'Sea') continue;
@@ -1324,9 +1391,6 @@ export default function HexMap({
         ctx.lineWidth = 0.5;
         ctx.strokeRect(barX, barY, barWidth, 2.5);
 
-        ctx.font = '7px sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
         ctx.fillStyle = 'rgba(255,255,255,0.9)';
         ctx.fillText(`x${tile.army_unit_count}`, barX + barWidth + 2, barY + 1.5);
       }
@@ -1521,35 +1585,64 @@ export default function HexMap({
       ctx.setLineDash([]);
     }
 
-    ctx.restore();
-  }, [tiles, offset, scale, showPoliticalColors, showHiddenResources, showAiCivilians, mapMode, nationFillMap,
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }, [tiles, showPoliticalColors, showHiddenResources, showAiCivilians, mapMode, nationFillMap,
       isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves, nationLabels, disableFogOfWar,
-      navyMarkers, selectedNavyKey]);
+      navyMarkers, selectedNavyKey, mapGeometry, tileMap, diplomacyOverlay,
+      hideHexGrid, highlightedNationId, classifiedEdges, maxArmyFP]);
 
-  useEffect(() => { render(); }, [render]);
+  const scheduleFrame = useCallback(() => {
+    if (rafIdRef.current != null) return;
+    rafIdRef.current = requestAnimationFrame(() => {
+      rafIdRef.current = null;
+      render();
+    });
+  }, [render]);
+  // Keep the ref in sync so handlers declared earlier in the component can
+  // dispatch to the current scheduler without a TDZ reference.
+  scheduleFrameRef.current = scheduleFrame;
+
+  // Schedule a repaint whenever any render-relevant value changes. Includes
+  // scale/offset so external state updates (zoom buttons, keyboard, parent-
+  // driven pan) still trigger a frame.
+  useEffect(() => { scheduleFrame(); }, [scheduleFrame, scale, offset]);
+
+  // Cancel any pending RAF and commit timer on unmount.
+  useEffect(() => () => {
+    if (rafIdRef.current != null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+    if (gestureCommitTimerRef.current != null) {
+      window.clearTimeout(gestureCommitTimerRef.current);
+      gestureCommitTimerRef.current = null;
+    }
+  }, []);
 
   // Re-render when canvas becomes visible after being hidden (display: none → visible)
   // and surface the current viewport size so the tooltip off-screen effect
-  // reacts to resizes too.
+  // reacts to resizes too. Sets canvas.width/height here (once per resize)
+  // instead of on every frame.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const updateSize = () => {
-      setCanvasSize(prev => {
-        const w = canvas.clientWidth;
-        const h = canvas.clientHeight;
-        if (prev.w === w && prev.h === h) return prev;
-        return { w, h };
-      });
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      setCanvasSize(prev => (prev.w === w && prev.h === h ? prev : { w, h }));
     };
     updateSize();
     const observer = new ResizeObserver(() => {
       updateSize();
-      render();
+      scheduleFrame();
     });
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [render]);
+  }, [scheduleFrame]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1582,7 +1675,12 @@ export default function HexMap({
 
   const handleMouseDown = (e: React.MouseEvent) => {
     setDragging(true);
-    setDragStart({ x: e.clientX - offset.x, y: e.clientY - offset.y });
+    // Use offsetRef so dragStart is relative to the gesture-authoritative
+    // offset (which may differ from state mid-commit).
+    setDragStart({ x: e.clientX - offsetRef.current.x, y: e.clientY - offsetRef.current.y });
+    // A mousedown starts a new gesture; cancel any pending commit so it
+    // doesn't fire mid-drag and cause a React render.
+    cancelCommitTimer();
     closeNonStickyTooltip();
   };
   /** Order-stable index of each marker within its anchor hex. Determines the
@@ -1617,7 +1715,11 @@ export default function HexMap({
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (dragging) {
-      setOffset({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
+      // Write the new offset to the ref and schedule a single frame; do not
+      // setState per mousemove (would cascade through App and re-render
+      // everything). State commit happens on mouseup.
+      offsetRef.current = { x: e.clientX - dragStart.x, y: e.clientY - dragStart.y };
+      scheduleFrame();
       // Dragging dismisses a non-sticky tooltip; sticky persists until click /
       // off-screen.
       closeNonStickyTooltip();
@@ -1625,8 +1727,8 @@ export default function HexMap({
     }
     if (!canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
-    const mx = (e.clientX - rect.left - offset.x) / scale;
-    const my = (e.clientY - rect.top - offset.y) / scale;
+    const mx = (e.clientX - rect.left - offsetRef.current.x) / scaleRef.current;
+    const my = (e.clientY - rect.top - offsetRef.current.y) / scaleRef.current;
     const wrapperX = e.clientX - rect.left;
     const wrapperY = e.clientY - rect.top;
 
@@ -1677,29 +1779,28 @@ export default function HexMap({
     }
     armTooltipTimer(key);
   };
-  const handleMouseUp = () => setDragging(false);
-  const handleMouseLeave = () => {
+  const handleMouseUp = () => {
+    if (dragging) {
+      // Commit the ref-driven offset back to React state so parents (e.g.
+      // App) see the final pan. No state churn during the drag itself.
+      commitGestureStateNow();
+    }
     setDragging(false);
-    closeNonStickyTooltip();
   };
-
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const cx = e.clientX - rect.left;
-    const cy = e.clientY - rect.top;
-    zoomAt(cx, cy, scale - e.deltaY * 0.001);
+  const handleMouseLeave = () => {
+    if (dragging) commitGestureStateNow();
+    setDragging(false);
     closeNonStickyTooltip();
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
     e.preventDefault();
+    cancelCommitTimer();
     if (e.touches.length === 1) {
       const touch = e.touches[0];
       lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
       setDragging(true);
-      setDragStart({ x: touch.clientX - offset.x, y: touch.clientY - offset.y });
+      setDragStart({ x: touch.clientX - offsetRef.current.x, y: touch.clientY - offsetRef.current.y });
     } else if (e.touches.length === 2) {
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
@@ -1712,7 +1813,8 @@ export default function HexMap({
     e.preventDefault();
     if (e.touches.length === 1 && lastTouchRef.current) {
       const touch = e.touches[0];
-      setOffset({ x: touch.clientX - dragStart.x, y: touch.clientY - dragStart.y });
+      offsetRef.current = { x: touch.clientX - dragStart.x, y: touch.clientY - dragStart.y };
+      scheduleFrame();
       lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
     } else if (e.touches.length === 2 && lastPinchDistRef.current !== null) {
       const rect = canvasRef.current?.getBoundingClientRect();
@@ -1723,7 +1825,7 @@ export default function HexMap({
       const scaleFactor = dist / lastPinchDistRef.current;
       const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
       const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
-      zoomAt(cx, cy, scale * scaleFactor);
+      zoomAt(cx, cy, scaleRef.current * scaleFactor);
       lastPinchDistRef.current = dist;
     }
   };
@@ -1731,6 +1833,7 @@ export default function HexMap({
   const handleTouchEnd = (e: React.TouchEvent) => {
     e.preventDefault();
     if (e.touches.length === 0) {
+      commitGestureStateNow();
       setDragging(false);
       lastTouchRef.current = null;
       lastPinchDistRef.current = null;
@@ -1739,9 +1842,32 @@ export default function HexMap({
       lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
       lastPinchDistRef.current = null;
       setDragging(true);
-      setDragStart({ x: touch.clientX - offset.x, y: touch.clientY - offset.y });
+      setDragStart({ x: touch.clientX - offsetRef.current.x, y: touch.clientY - offsetRef.current.y });
     }
   };
+
+  // Native wheel listener: React's onWheel is registered as passive in modern
+  // Chrome, which means preventDefault() is silently ignored and the page
+  // scrolls instead of zooming. Attaching with { passive: false } fixes that
+  // and avoids React's event-system overhead on the hot path.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      zoomAt(cx, cy, scaleRef.current - e.deltaY * 0.001);
+      closeNonStickyTooltip();
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+    // zoomAt and closeNonStickyTooltip close over refs/stable callbacks — we
+    // intentionally only re-bind when scheduleFrame identity changes (i.e.
+    // when render deps change).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduleFrame]);
 
   const handleClick = (e: React.MouseEvent) => {
     if (!canvasRef.current) return;
@@ -1753,8 +1879,8 @@ export default function HexMap({
       hoverTargetRef.current = null;
     }
     const rect = canvasRef.current.getBoundingClientRect();
-    const mx = (e.clientX - rect.left - offset.x) / scale;
-    const my = (e.clientY - rect.top - offset.y) / scale;
+    const mx = (e.clientX - rect.left - offsetRef.current.x) / scaleRef.current;
+    const my = (e.clientY - rect.top - offsetRef.current.y) / scaleRef.current;
     const marker = markerAtPoint(mx, my);
     if (marker) {
       if (onNavyMarkerClick) onNavyMarkerClick(marker);
@@ -1785,7 +1911,6 @@ export default function HexMap({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
-        onWheel={handleWheel}
         onClick={handleClick}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
