@@ -1169,14 +1169,37 @@ mod tests {
     }
 
     #[test]
-    fn render_history_event_treaty_proposal_accepted() {
+    fn render_history_event_treaty_proposal_accepted_all_variants() {
         let g = render_test_game();
-        let s = g.render_history_event(&HistoryEvent::TreatyProposalAccepted {
-            acceptor: NationId(1),
-            proposer: NationId(2),
-            treaty_type: TreatyType::Alliance,
-        });
-        assert_eq!(s, "Devron accepted Smallton's Alliance proposal");
+        let cases: &[(TreatyType, &str)] = &[
+            (TreatyType::Alliance, "Devron accepted Smallton's Alliance proposal"),
+            (
+                TreatyType::NonAggressionPact,
+                "Devron accepted Smallton's Non-Aggression Pact proposal",
+            ),
+            (
+                TreatyType::PeaceTreaty,
+                "Devron accepted Smallton's Peace Treaty proposal",
+            ),
+            // Fallback path: any treaty type the renderer does not recognise
+            // collapses to the generic "Treaty" label.
+            (
+                TreatyType::WarDeclaration,
+                "Devron accepted Smallton's Treaty proposal",
+            ),
+            (
+                TreatyType::RequestToJoinEmpire,
+                "Devron accepted Smallton's Treaty proposal",
+            ),
+        ];
+        for (treaty_type, expected) in cases {
+            let s = g.render_history_event(&HistoryEvent::TreatyProposalAccepted {
+                acceptor: NationId(1),
+                proposer: NationId(2),
+                treaty_type: *treaty_type,
+            });
+            assert_eq!(s, *expected, "treaty_type = {:?}", treaty_type);
+        }
     }
 
     #[test]
