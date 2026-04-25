@@ -1,8 +1,30 @@
 import React from 'react';
+import Flag from './Flag';
+
+interface NationLite {
+  id: number;
+  name: string;
+  color: string;
+  nation_type: string;
+  government_title?: string;
+  flag_svg?: string;
+}
 
 interface Props {
+  nations?: NationLite[];
   onClose: () => void;
 }
+
+const NATION_COLORS: Record<string, string> = {
+  Yellow: '#ffd900', Orange: '#ff8c00', LightBlue: '#66b3ff',
+  Red: '#e62626', Green: '#1abf1a', Purple: '#a633d9',
+  Blue: '#3359e6', Gray: '#999', Brown: '#8c5926',
+  Pink: '#ff80b3', Teal: '#00b3a6', Olive: '#808000',
+  Maroon: '#800000', Navy: '#000080', Cyan: '#00bcd4',
+  Lime: '#a0e000', Coral: '#ff7f50', Lavender: '#b399d4',
+  Tan: '#d2b48c', Salmon: '#fa8072', Khaki: '#bdb76b',
+  Indigo: '#4b0082',
+};
 
 const TERRAIN_LEGEND = [
   { name: 'Grassland', color: '#a8b860', desc: 'Fertile plains for farming' },
@@ -64,7 +86,10 @@ const DIPLO_LEGEND = [
   { color: '#aaaaaa', label: 'Neutral' },
 ];
 
-export default function LegendScreen({ onClose }: Props) {
+export default function LegendScreen({ nations = [], onClose }: Props) {
+  const flagNations = nations.filter(n => n.flag_svg);
+  const greatPowers = flagNations.filter(n => n.nation_type === 'GreatPower');
+  const minorNations = flagNations.filter(n => n.nation_type !== 'GreatPower');
   return (
     <div style={styles.overlay}>
       <div style={styles.container}>
@@ -186,6 +211,65 @@ export default function LegendScreen({ onClose }: Props) {
               </div>
             </div>
           </div>
+
+          {/* Nations & Flags */}
+          {flagNations.length > 0 && (
+            <div style={{ ...styles.section, borderBottom: 'none', marginBottom: 0 }}>
+              <h3 style={styles.sectionTitle}>Nations</h3>
+              {greatPowers.length > 0 && (
+                <>
+                  <div style={styles.flagGroupTitle}>Great Powers</div>
+                  <div style={styles.flagGrid}>
+                    {greatPowers.map(n => (
+                      <div key={n.id} style={styles.flagCard}>
+                        <Flag
+                          svg={n.flag_svg || ''}
+                          width={150}
+                          height={100}
+                          title={n.government_title || n.name}
+                        />
+                        <div style={styles.flagCaption}>
+                          <span style={{ ...styles.flagDot, background: NATION_COLORS[n.color] || '#888' }} />
+                          <div style={{ minWidth: 0 }}>
+                            <div style={styles.flagName}>{n.name}</div>
+                            {n.government_title && n.government_title !== n.name && (
+                              <div style={styles.flagTitle}>{n.government_title}</div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+              {minorNations.length > 0 && (
+                <>
+                  <div style={{ ...styles.flagGroupTitle, marginTop: 16 }}>Minor Nations</div>
+                  <div style={styles.flagGrid}>
+                    {minorNations.map(n => (
+                      <div key={n.id} style={styles.flagCard}>
+                        <Flag
+                          svg={n.flag_svg || ''}
+                          width={120}
+                          height={80}
+                          title={n.government_title || n.name}
+                        />
+                        <div style={styles.flagCaption}>
+                          <span style={{ ...styles.flagDot, background: NATION_COLORS[n.color] || '#888' }} />
+                          <div style={{ minWidth: 0 }}>
+                            <div style={styles.flagName}>{n.name}</div>
+                            {n.government_title && n.government_title !== n.name && (
+                              <div style={styles.flagTitle}>{n.government_title}</div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -238,4 +322,32 @@ const styles: Record<string, React.CSSProperties> = {
   },
   itemName: { fontSize: 14, fontWeight: 'bold' as const },
   itemDesc: { fontSize: 12, color: '#999' },
+  flagGroupTitle: {
+    fontSize: 12, color: '#daa520', textTransform: 'uppercase' as const,
+    letterSpacing: 1, marginBottom: 10,
+  },
+  flagGrid: {
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+    gap: 16,
+  },
+  flagCard: {
+    display: 'flex', flexDirection: 'column' as const, alignItems: 'flex-start',
+    gap: 8, padding: 10, background: '#1a1a2e',
+    border: '1px solid #3a3520', borderRadius: 4,
+  },
+  flagCaption: {
+    display: 'flex', alignItems: 'center', gap: 8, width: '100%', minWidth: 0,
+  },
+  flagDot: {
+    width: 12, height: 12, borderRadius: '50%',
+    border: '1px solid rgba(255,255,255,0.2)', flexShrink: 0,
+  },
+  flagName: {
+    fontSize: 14, fontWeight: 'bold' as const, color: '#e0d8c0',
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
+  },
+  flagTitle: {
+    fontSize: 11, color: '#9a9a9a', marginTop: 1,
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
+  },
 };

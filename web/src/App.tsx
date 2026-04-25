@@ -1373,7 +1373,10 @@ function App() {
           />
         )}
         {activeScreen === 'legend' && (
-          <LegendScreen onClose={() => setActiveScreen('map')} />
+          <LegendScreen
+            nations={gameState?.nations || []}
+            onClose={() => setActiveScreen('map')}
+          />
         )}
 
         {/* Side panel — context-sensitive, hidden for full-screen views */}
