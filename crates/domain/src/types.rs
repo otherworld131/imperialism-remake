@@ -1,7 +1,7 @@
 /// Macro for generating strongly-typed ID wrappers.
 macro_rules! define_id {
     ($name:ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
         pub struct $name(pub u32);
 
         impl std::fmt::Display for $name {
@@ -168,7 +168,7 @@ impl std::fmt::Display for Money {
 
 // ── Resource / Material / Goods enums ───────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ResourceType {
     Timber,
     Coal,
@@ -221,7 +221,7 @@ impl ResourceType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub enum MaterialType {
     Lumber,
     Steel,
@@ -240,7 +240,7 @@ impl std::fmt::Display for MaterialType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub enum GoodsType {
     Furniture,
     Clothing,

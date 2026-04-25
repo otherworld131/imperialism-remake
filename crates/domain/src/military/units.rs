@@ -42,6 +42,38 @@ pub enum ArmyUnitType {
     General, // earned as reward, boosts initiative
 }
 
+impl std::str::FromStr for ArmyUnitType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Militia" => Ok(Self::Militia),
+            "GarrisonArtillery" => Ok(Self::GarrisonArtillery),
+            "Regulars" => Ok(Self::Regulars),
+            "Grenadiers" => Ok(Self::Grenadiers),
+            "RifleInfantry" => Ok(Self::RifleInfantry),
+            "Guards" => Ok(Self::Guards),
+            "Sharpshooters" => Ok(Self::Sharpshooters),
+            "ModernInfantry" => Ok(Self::ModernInfantry),
+            "MachineGunners" => Ok(Self::MachineGunners),
+            "Rangers" => Ok(Self::Rangers),
+            "Cuirassiers" => Ok(Self::Cuirassiers),
+            "Scouts" => Ok(Self::Scouts),
+            "CarbineCavalry" => Ok(Self::CarbineCavalry),
+            "Armour" => Ok(Self::Armour),
+            "Mechanised" => Ok(Self::Mechanised),
+            "LightArtillery" => Ok(Self::LightArtillery),
+            "StandardArtillery" => Ok(Self::StandardArtillery),
+            "FieldArtillery" => Ok(Self::FieldArtillery),
+            "SiegeArtillery" => Ok(Self::SiegeArtillery),
+            "RailroadGun" => Ok(Self::RailroadGun),
+            "MobileArtillery" => Ok(Self::MobileArtillery),
+            "Sapper" => Ok(Self::Sapper),
+            "General" => Ok(Self::General),
+            _ => Err(format!("unknown ArmyUnitType: {}", s)),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UnitStats {
     pub firepower: u32,

@@ -1,17 +1,13 @@
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use domain::economy::buildings::{Building, BuildingType};
-use domain::economy::civilians::{BuildTask, CivilianType, next_civilian_id, parse_civilian_type};
+use domain::economy::civilians::{BuildTask, CivilianType, parse_civilian_type};
 use domain::game_state::GameState;
 use domain::hex::HexCoord;
-use domain::map::{UnitId, infrastructure};
+use domain::map::infrastructure;
 use domain::military::ships::{Ship, ShipType};
 use domain::military::units::{ArmyUnit, ArmyUnitType};
 use domain::types::*;
-
-/// Global counter for generating unique UnitIds when building units via CLI.
-pub(crate) static NEXT_UNIT_ID: AtomicU32 = AtomicU32::new(2_000_000);
 
 // ── Helper functions ─────────────────────────────────────────────
 
@@ -348,7 +344,7 @@ pub(crate) fn build_unit(game: &mut GameState, query: &str) {
     }
 
     let capital_province = player.capital_province_id;
-    let uid = UnitId(NEXT_UNIT_ID.fetch_add(1, Ordering::Relaxed));
+    let uid = game.alloc_unit_id();
     let unit = ArmyUnit::new(uid, unit_type, player_id, capital_province);
 
     let player = game.get_nation_mut(player_id).unwrap();
@@ -482,7 +478,7 @@ pub(crate) fn cmd_build_ship(game: &mut GameState, query: &str) {
         return;
     }
 
-    let uid = UnitId(NEXT_UNIT_ID.fetch_add(1, Ordering::Relaxed));
+    let uid = game.alloc_unit_id();
     let ship = Ship::new(uid, ship_type, player_id);
 
     let player = game.get_nation_mut(player_id).unwrap();
@@ -543,7 +539,7 @@ pub(crate) fn cmd_build_warship(game: &mut GameState, query: &str) {
         return;
     }
 
-    let uid = UnitId(NEXT_UNIT_ID.fetch_add(1, Ordering::Relaxed));
+    let uid = game.alloc_unit_id();
     let ship = Ship::new(uid, ship_type, player_id);
 
     let player = game.get_nation_mut(player_id).unwrap();
@@ -833,7 +829,7 @@ pub(crate) fn cmd_hire_civilian(game: &mut GameState, type_name: &str) {
         return;
     }
 
-    let id = next_civilian_id();
+    let id = game.alloc_unit_id();
     let civilian = domain::economy::civilians::Civilian::new(id, civ_type, player_id);
 
     let player = game.get_nation_mut(player_id).unwrap();

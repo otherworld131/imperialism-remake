@@ -1,6 +1,8 @@
 //! Converts RON definition structs into domain types.
 
 use super::definitions::*;
+use crate::economy::buildings::BuildingType;
+use crate::economy::civilians::CivilianType;
 use crate::events::TechId;
 use crate::military::ships::{ShipCategory, ShipStats, ShipType};
 use crate::military::units::{ArmyUnitType, UnitCategory, UnitStats};
@@ -155,15 +157,24 @@ pub fn load_unit_stats(ron_str: &str) -> Result<HashMap<ArmyUnitType, UnitStats>
 
 fn convert_tech_effect(def: TechEffectDef) -> TechEffect {
     match def {
-        TechEffectDef::UnlockUnit(name) => TechEffect::UnlockUnit(name),
-        TechEffectDef::UnlockBuilding(name) => TechEffect::UnlockBuilding(name),
+        TechEffectDef::UnlockUnit(name) => TechEffect::UnlockUnit(
+            name.parse::<ArmyUnitType>().unwrap_or_else(|e| panic!("tech data error: {}", e)),
+        ),
+        TechEffectDef::UnlockBuilding(name) => TechEffect::UnlockBuilding(
+            name.parse::<BuildingType>().unwrap_or_else(|e| panic!("tech data error: {}", e)),
+        ),
         TechEffectDef::EnableTerrainImprovement { terrain, max_level } => {
             TechEffect::EnableTerrainImprovement { terrain, max_level }
         }
         TechEffectDef::EnableInfrastructure(name) => TechEffect::EnableInfrastructure(name),
         TechEffectDef::UnlockShip(name) => TechEffect::UnlockShip(name),
-        TechEffectDef::UpgradeUnit { from, to } => TechEffect::UpgradeUnit { from, to },
-        TechEffectDef::EnableCivilian(name) => TechEffect::EnableCivilian(name),
+        TechEffectDef::UpgradeUnit { from, to } => TechEffect::UpgradeUnit {
+            from: from.parse::<ArmyUnitType>().unwrap_or_else(|e| panic!("tech data error: {}", e)),
+            to: to.parse::<ArmyUnitType>().unwrap_or_else(|e| panic!("tech data error: {}", e)),
+        },
+        TechEffectDef::EnableCivilian(name) => TechEffect::EnableCivilian(
+            name.parse::<CivilianType>().unwrap_or_else(|e| panic!("tech data error: {}", e)),
+        ),
         TechEffectDef::LuaScript(script) => TechEffect::LuaScript(script),
     }
 }
@@ -183,7 +194,7 @@ mod tests {
                     earliest_year: 1815,
                     latest_year: 1820,
                     prerequisites: [],
-                    effects: [UnlockUnit("Infantry")],
+                    effects: [UnlockUnit("Regulars")],
                 ),
             ],
         )"#;

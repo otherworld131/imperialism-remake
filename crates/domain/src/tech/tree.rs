@@ -1,4 +1,7 @@
+use crate::economy::buildings::BuildingType;
+use crate::economy::civilians::CivilianType;
 use crate::events::TechId;
+use crate::military::units::ArmyUnitType;
 use crate::types::*;
 use std::collections::HashSet;
 
@@ -15,8 +18,8 @@ pub struct Technology {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TechEffect {
-    UnlockUnit(String),
-    UnlockBuilding(String),
+    UnlockUnit(ArmyUnitType),
+    UnlockBuilding(BuildingType),
     EnableTerrainImprovement {
         terrain: String,
         max_level: u8,
@@ -24,10 +27,10 @@ pub enum TechEffect {
     EnableInfrastructure(String),
     UnlockShip(String),
     UpgradeUnit {
-        from: String,
-        to: String,
+        from: ArmyUnitType,
+        to: ArmyUnitType,
     },
-    EnableCivilian(String),
+    EnableCivilian(CivilianType),
     /// Run a Lua script when this tech is researched.
     LuaScript(String),
 }
@@ -130,7 +133,7 @@ impl TechTree {
                 earliest_year: 1826,
                 latest_year: 1829,
                 prerequisites: vec![TechId(3), TechId(5)],
-                effects: vec![TechEffect::UnlockBuilding("Textile Mill".to_string())],
+                effects: vec![TechEffect::UnlockBuilding(BuildingType::TextileMill)],
             },
             Technology {
                 id: TechId(9),
@@ -160,7 +163,7 @@ impl TechTree {
                 earliest_year: 1836,
                 latest_year: 1839,
                 prerequisites: vec![],
-                effects: vec![TechEffect::UnlockBuilding("Steel Mill".to_string())],
+                effects: vec![TechEffect::UnlockBuilding(BuildingType::SteelMill)],
             },
             Technology {
                 id: TechId(12),
@@ -181,8 +184,8 @@ impl TechTree {
                 latest_year: 1845,
                 prerequisites: vec![TechId(11)],
                 effects: vec![TechEffect::UpgradeUnit {
-                    from: "Regulars".to_string(),
-                    to: "RifleInfantry".to_string(),
+                    from: ArmyUnitType::Regulars,
+                    to: ArmyUnitType::RifleInfantry,
                 }],
             },
             Technology {
@@ -193,8 +196,8 @@ impl TechTree {
                 latest_year: 1844,
                 prerequisites: vec![],
                 effects: vec![TechEffect::UpgradeUnit {
-                    from: "LightArtillery".to_string(),
-                    to: "StandardArtillery".to_string(),
+                    from: ArmyUnitType::LightArtillery,
+                    to: ArmyUnitType::StandardArtillery,
                 }],
             },
             Technology {
@@ -213,9 +216,7 @@ impl TechTree {
                 earliest_year: 1846,
                 latest_year: 1851,
                 prerequisites: vec![TechId(8)],
-                effects: vec![TechEffect::UnlockBuilding(
-                    "Advanced Textile Mill".to_string(),
-                )],
+                effects: vec![TechEffect::UnlockBuilding(BuildingType::AdvancedTextileMill)],
             },
             Technology {
                 id: TechId(17),
@@ -281,7 +282,7 @@ impl TechTree {
                 earliest_year: 1872,
                 latest_year: 1886,
                 prerequisites: vec![TechId(14)],
-                effects: vec![TechEffect::UnlockUnit("SiegeArtillery".to_string())],
+                effects: vec![TechEffect::UnlockUnit(ArmyUnitType::SiegeArtillery)],
             },
             Technology {
                 id: TechId(23),
@@ -311,7 +312,7 @@ impl TechTree {
                 earliest_year: 1879,
                 latest_year: 1893,
                 prerequisites: vec![TechId(13)],
-                effects: vec![TechEffect::UnlockUnit("MachineGunners".to_string())],
+                effects: vec![TechEffect::UnlockUnit(ArmyUnitType::MachineGunners)],
             },
             Technology {
                 id: TechId(26),
@@ -320,7 +321,7 @@ impl TechTree {
                 earliest_year: 1875,
                 latest_year: 1894,
                 prerequisites: vec![TechId(19), TechId(20)],
-                effects: vec![TechEffect::UnlockBuilding("Chemical Plant".to_string())],
+                effects: vec![TechEffect::UnlockBuilding(BuildingType::ChemicalPlant)],
             },
             Technology {
                 id: TechId(27),
@@ -338,7 +339,7 @@ impl TechTree {
                 earliest_year: 1884,
                 latest_year: 1898,
                 prerequisites: vec![TechId(26)],
-                effects: vec![TechEffect::UnlockUnit("Mechanised".to_string())],
+                effects: vec![TechEffect::UnlockUnit(ArmyUnitType::Mechanised)],
             },
         ];
 

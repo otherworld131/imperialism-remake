@@ -19,6 +19,8 @@ pub enum BuildingType {
     // Late-game
     OilRefinery,
     PowerPlant,
+    AdvancedTextileMill,
+    ChemicalPlant,
 }
 
 impl std::fmt::Display for BuildingType {
@@ -34,7 +36,36 @@ impl std::fmt::Display for BuildingType {
             Self::ClothingFactory => write!(f, "Clothing Factory"),
             Self::OilRefinery => write!(f, "Oil Refinery"),
             Self::PowerPlant => write!(f, "Power Plant"),
+            Self::AdvancedTextileMill => write!(f, "Advanced Textile Mill"),
+            Self::ChemicalPlant => write!(f, "Chemical Plant"),
             other => write!(f, "{:?}", other),
+        }
+    }
+}
+
+impl std::str::FromStr for BuildingType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Armory" => Ok(Self::Armory),
+            "Capitol" => Ok(Self::Capitol),
+            "Food Processing" => Ok(Self::FoodProcessing),
+            "Railyard" => Ok(Self::Railyard),
+            "Shipyard" => Ok(Self::Shipyard),
+            "Trade School" => Ok(Self::TradeSchool),
+            "University" => Ok(Self::University),
+            "Warehouse" => Ok(Self::Warehouse),
+            "Lumber Mill" => Ok(Self::LumberMill),
+            "Steel Mill" => Ok(Self::SteelMill),
+            "Textile Mill" => Ok(Self::TextileMill),
+            "Furniture Factory" => Ok(Self::FurnitureFactory),
+            "Hardware Factory" => Ok(Self::HardwareFactory),
+            "Clothing Factory" => Ok(Self::ClothingFactory),
+            "Oil Refinery" => Ok(Self::OilRefinery),
+            "Power Plant" => Ok(Self::PowerPlant),
+            "Advanced Textile Mill" => Ok(Self::AdvancedTextileMill),
+            "Chemical Plant" => Ok(Self::ChemicalPlant),
+            _ => Err(format!("unknown BuildingType: {}", s)),
         }
     }
 }

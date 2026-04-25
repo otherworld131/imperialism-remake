@@ -1354,7 +1354,7 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
 
 /// Expand a building, paying the correct material cost.
 /// When `use_tier` is true, uses tier progression (2→4→8→12...) with proportional cost.
-/// When false, expands by +1 capacity for 1 lumber + 1 steel (legacy behavior).
+/// When false, expands by +1 capacity for 1 lumber + 1 steel.
 fn expand_building(game: &mut GameState, nation_id: NationId, bt: BuildingType, use_tier: bool) {
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,

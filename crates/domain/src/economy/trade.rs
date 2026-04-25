@@ -315,8 +315,8 @@ pub fn generate_minor_nation_offers(
         }
 
         // Calculate total resource production for this minor nation
-        let mut production: std::collections::HashMap<ResourceType, u32> =
-            std::collections::HashMap::new();
+        let mut production: std::collections::BTreeMap<ResourceType, u32> =
+            std::collections::BTreeMap::new();
 
         for province in provinces {
             if province.owner != nation.id {

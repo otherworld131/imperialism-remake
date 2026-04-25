@@ -2227,7 +2227,6 @@ fn resolve_trade_session(
             buyer.treasury -= txn.total_cost;
             buyer.add_resource(txn.resource, txn.quantity);
         }
-        // Seller gets money
         if let Some(seller) = game.get_nation_mut(txn.seller) {
             seller.treasury += txn.total_cost;
         }
@@ -2269,10 +2268,10 @@ fn resolve_trade_session(
     }
 
     // 6. Diplomatic impact: +1 score per distinct commodity type traded per partner pair
-    let mut trade_pairs: std::collections::HashMap<
+    let mut trade_pairs: std::collections::BTreeMap<
         (NationId, NationId),
-        std::collections::HashSet<ResourceType>,
-    > = std::collections::HashMap::new();
+        std::collections::BTreeSet<ResourceType>,
+    > = std::collections::BTreeMap::new();
     for txn in &transactions {
         trade_pairs
             .entry((txn.buyer, txn.seller))
@@ -3949,10 +3948,9 @@ fn regenerate_garrisons(game: &mut GameState) {
         }
     }
     for (owner, pid) in spawns {
+        let unit = crate::military::combat::spawn_militia_unit(&mut game.next_unit_id, owner, pid);
         if let Some(nation) = game.get_nation_mut(owner) {
-            nation
-                .army
-                .push(crate::military::combat::spawn_militia_unit(owner, pid));
+            nation.army.push(unit);
         }
         sync_garrison_cache(game, pid);
     }
@@ -4242,11 +4240,14 @@ fn seed_released_minor_garrison(
             .unwrap_or(0);
         let missing = target.saturating_sub(current);
         if missing > 0 {
-            if let Some(minor) = game.get_nation_mut(minor_id) {
-                for _ in 0..missing {
-                    minor
-                        .army
-                        .push(crate::military::combat::spawn_militia_unit(minor_id, *pid));
+            for _ in 0..missing {
+                let unit = crate::military::combat::spawn_militia_unit(
+                    &mut game.next_unit_id,
+                    minor_id,
+                    *pid,
+                );
+                if let Some(minor) = game.get_nation_mut(minor_id) {
+                    minor.army.push(unit);
                 }
             }
             sync_garrison_cache(game, *pid);
@@ -4260,13 +4261,15 @@ fn seed_released_minor_garrison(
             .get_nation(minor_id)
             .map(|n| !n.has_garrison_artillery_at(capital_pid))
             .unwrap_or(false);
-        if needs_artillery && let Some(minor) = game.get_nation_mut(minor_id) {
-            minor
-                .army
-                .push(crate::military::combat::spawn_garrison_artillery_unit(
-                    minor_id,
-                    capital_pid,
-                ));
+        if needs_artillery {
+            let unit = crate::military::combat::spawn_garrison_artillery_unit(
+                &mut game.next_unit_id,
+                minor_id,
+                capital_pid,
+            );
+            if let Some(minor) = game.get_nation_mut(minor_id) {
+                minor.army.push(unit);
+            }
         }
     }
 }

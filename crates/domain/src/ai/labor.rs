@@ -268,12 +268,11 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
             let civilian_id = nation.civilians[civ_idx].id;
             // Clear the old tile's slot before redeploying so stale IDs don't
             // block the engineer from building railroad on previously-worked hexes.
-            if let Some(old_pos) = nation.civilians[civ_idx].position {
-                if let Some(old_tile) = game.hex_map.get_tile_mut(old_pos) {
-                    if old_tile.assigned_civilian == Some(civilian_id) {
-                        old_tile.assigned_civilian = None;
-                    }
-                }
+            if let Some(old_pos) = nation.civilians[civ_idx].position
+                && let Some(old_tile) = game.hex_map.get_tile_mut(old_pos)
+                && old_tile.assigned_civilian == Some(civilian_id)
+            {
+                old_tile.assigned_civilian = None;
             }
             let Some(nation) = game.get_nation_mut(nation_id) else {
                 return;

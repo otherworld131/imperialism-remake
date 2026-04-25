@@ -7,7 +7,9 @@ pub mod trade;
 pub mod transport;
 
 pub use buildings::{Building, BuildingType};
-pub use civilians::{BuildTask, Civilian, CivilianType, next_civilian_id, parse_civilian_type};
+pub use civilians::{BuildTask, Civilian, CivilianType, parse_civilian_type};
+#[cfg(test)]
+pub use civilians::next_civilian_id;
 pub use labor::{LaborPool, WorkerType};
 pub use ledger::{
     CashEntry, CashFlow, CashSink, CashSource, FlowCategory, ResourceFlow, ResourceIn, ResourceOut,

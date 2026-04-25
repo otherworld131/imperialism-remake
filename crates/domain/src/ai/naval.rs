@@ -3,7 +3,7 @@ use crate::game_state::GameState;
 use crate::military::ships::{Ship, ShipType};
 use crate::types::*;
 
-use super::common::{AiPersonality, get_personality, next_unit_id};
+use super::common::{AiPersonality, get_personality};
 
 /// Try to build one Frigate for `nation_id`. Returns `true` if a ship was
 /// added to the nation's warships. No cap check — the caller decides when
@@ -56,7 +56,7 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
     let arms_have = nation.material_amount(MaterialType::Arms);
 
     if fabric_have >= fabric_need && lumber_have >= lumber_need && arms_have >= arms_need {
-        let uid = next_unit_id();
+        let uid = game.alloc_unit_id();
         let ship = Ship::new(uid, ShipType::Frigate, nation_id);
         let Some(nation) = game.get_nation_mut(nation_id) else {
             return false;
@@ -141,7 +141,7 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
 
     // Try to build Trader (2 fabric + 4 lumber)
     if fabric_have >= 2 && lumber_have >= 4 {
-        let uid = next_unit_id();
+        let uid = game.alloc_unit_id();
         let ship = Ship::new(uid, ShipType::Trader, nation_id);
         let Some(nation) = game.get_nation_mut(nation_id) else {
             return;

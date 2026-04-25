@@ -2,10 +2,9 @@ use wasm_bindgen::prelude::*;
 
 mod flavor_bridge;
 
-use domain::ai::common::next_unit_id;
 use domain::ai::common::{AiPersonality, personality_for_nation_index};
 use domain::economy::buildings::BuildingType;
-use domain::economy::civilians::{CivilianType, next_civilian_id, parse_civilian_type};
+use domain::economy::civilians::{CivilianType, parse_civilian_type};
 use domain::economy::production::{
     ProductionChain, calculate_factory_production, calculate_mill_production,
 };
@@ -1965,16 +1964,20 @@ pub fn wasm_recruit_army_unit(game_json: &str, nation_id: u32, unit_type_str: &s
     }
 
     // Deduct costs and create unit
-    let nation = match game.get_nation_mut(nid) {
-        Some(n) => n,
-        None => return "{\"error\":\"nation not found\"}".to_string(),
+    let capital = {
+        let nation = match game.get_nation_mut(nid) {
+            Some(n) => n,
+            None => return "{\"error\":\"nation not found\"}".to_string(),
+        };
+        nation.treasury -= stats.cost;
+        nation.consume_material(MaterialType::Arms, stats.arms_required);
+        nation.capital_province_id
     };
-    nation.treasury -= stats.cost;
-    nation.consume_material(MaterialType::Arms, stats.arms_required);
-    let capital = nation.capital_province_id;
-    let uid = next_unit_id();
+    let uid = game.alloc_unit_id();
     let new_unit = ArmyUnit::new(uid, unit_type, nid, capital);
-    nation.army.push(new_unit);
+    if let Some(nation) = game.get_nation_mut(nid) {
+        nation.army.push(new_unit);
+    }
 
     serialize_game(&game)
 }
@@ -2002,19 +2005,21 @@ pub fn wasm_hire_civilian(game_json: &str, nation_id: u32, civilian_type_str: &s
 
     let cost = civ_type.creation_cost(&game.game_data.game_config);
 
-    let nation = match game.get_nation_mut(nid) {
-        Some(n) => n,
-        None => return "{\"error\":\"nation not found\"}".to_string(),
-    };
-
-    if nation.treasury < cost {
-        return "{\"error\":\"insufficient funds\"}".to_string();
+    {
+        let nation = match game.get_nation_mut(nid) {
+            Some(n) => n,
+            None => return "{\"error\":\"nation not found\"}".to_string(),
+        };
+        if nation.treasury < cost {
+            return "{\"error\":\"insufficient funds\"}".to_string();
+        }
+        nation.treasury -= cost;
     }
-
-    nation.treasury -= cost;
-    let cid = next_civilian_id();
-    let new_civ = domain::economy::civilians::Civilian::new(cid, civ_type, nid);
-    nation.civilians.push(new_civ);
+    let cid = game.alloc_unit_id();
+    if let Some(nation) = game.get_nation_mut(nid) {
+        let new_civ = domain::economy::civilians::Civilian::new(cid, civ_type, nid);
+        nation.civilians.push(new_civ);
+    }
 
     serialize_game(&game)
 }
@@ -2067,21 +2072,24 @@ pub fn wasm_build_ship(game_json: &str, nation_id: u32, ship_type_str: &str) -> 
     }
 
     // Deduct resources and create ship
-    let nation = match game.get_nation_mut(nid) {
-        Some(n) => n,
-        None => return "{\"error\":\"nation not found\"}".to_string(),
-    };
-    nation.consume_material(MaterialType::Fabric, stats.fabric_cost);
-    nation.consume_material(MaterialType::Lumber, stats.lumber_cost);
-    nation.consume_material(MaterialType::Arms, stats.arms_cost);
-    nation.consume_material(MaterialType::Steel, stats.steel_cost);
-    nation.remove_resource(ResourceType::Coal, stats.coal_cost);
-
-    let sid = next_unit_id();
+    {
+        let nation = match game.get_nation_mut(nid) {
+            Some(n) => n,
+            None => return "{\"error\":\"nation not found\"}".to_string(),
+        };
+        nation.consume_material(MaterialType::Fabric, stats.fabric_cost);
+        nation.consume_material(MaterialType::Lumber, stats.lumber_cost);
+        nation.consume_material(MaterialType::Arms, stats.arms_cost);
+        nation.consume_material(MaterialType::Steel, stats.steel_cost);
+        nation.remove_resource(ResourceType::Coal, stats.coal_cost);
+    }
+    let sid = game.alloc_unit_id();
     let new_ship = Ship::new(sid, ship_type, nid);
-    match ship_type.category() {
-        ShipCategory::Merchant => nation.merchant_fleet.push(new_ship),
-        ShipCategory::Warship => nation.warships.push(new_ship),
+    if let Some(nation) = game.get_nation_mut(nid) {
+        match ship_type.category() {
+            ShipCategory::Merchant => nation.merchant_fleet.push(new_ship),
+            ShipCategory::Warship => nation.warships.push(new_ship),
+        }
     }
 
     serialize_game(&game)

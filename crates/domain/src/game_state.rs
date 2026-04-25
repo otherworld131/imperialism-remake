@@ -2,7 +2,7 @@ use crate::ai::common::random_personalities;
 use crate::data::GameData;
 use crate::diplomacy::DiplomacyState;
 use crate::economy::buildings::{Building, BuildingType};
-use crate::economy::civilians::{Civilian, CivilianType, next_civilian_id};
+use crate::economy::civilians::{Civilian, CivilianType};
 use crate::economy::ledger::{CashFlow, CashSink, ResourceFlow};
 use crate::events::{DomainEvent, Headline};
 use crate::map::{HexMap, Province, UnitId};
@@ -115,9 +115,29 @@ pub struct GameState {
     /// triggered by AI economy code). Drained into the report at end of turn.
     #[serde(skip, default)]
     pub pending_ai_cash_income: Vec<(NationId, Money)>,
+    /// Monotonically-increasing counter used to allocate unique `UnitId`s
+    /// for all entities created during this game (army units, civilians,
+    /// garrison militia, warships). Stored in `GameState` so two games
+    /// started from the same map key produce identical ID sequences and
+    /// therefore identical turn outcomes (determinism).
+    #[serde(default = "default_next_unit_id")]
+    pub next_unit_id: u32,
+}
+
+fn default_next_unit_id() -> u32 {
+    6_000_000
 }
 
 impl GameState {
+    /// Allocate a unique `UnitId` for any new entity (army unit, civilian,
+    /// garrison, warship) created during this game. Uses a per-game counter so
+    /// two games from the same map key produce the same ID sequence.
+    pub fn alloc_unit_id(&mut self) -> UnitId {
+        let id = self.next_unit_id;
+        self.next_unit_id += 1;
+        UnitId(id)
+    }
+
     /// Look up a nation by its ID.
     pub fn get_nation(&self, id: NationId) -> Option<&Nation> {
         self.nations.iter().find(|n| n.id == id)
@@ -301,6 +321,11 @@ pub fn new_game_with_seed_and_config(
     let game_data = GameData::default();
     let mut nations = Vec::new();
     let mut ai_personality_idx = 0;
+    // Per-game unit-ID counter. Starts at 6_000_000 to stay above the
+    // hardcoded ranges used by generals (3M+), admirals (4M+), and colony
+    // ships (5M+) in the turn processor. Two calls to `new_game` with the
+    // same map key produce identical ID sequences.
+    let mut id_counter: u32 = 6_000_000;
 
     // Create Great Power nations
     for (i, setup) in generated.great_power_nations.iter().enumerate() {
@@ -434,16 +459,27 @@ pub fn new_game_with_seed_and_config(
         nation.transport.build_freight_cars(starting_cars);
 
         // Starting civilians: 1 Farmer + 1 Forester + N Engineers for each Great Power
-        let farmer = Civilian::new(next_civilian_id(), CivilianType::Farmer, setup.nation_id);
-        let forester = Civilian::new(next_civilian_id(), CivilianType::Forester, setup.nation_id);
+        let farmer = Civilian::new(
+            crate::map::UnitId(id_counter),
+            CivilianType::Farmer,
+            setup.nation_id,
+        );
+        id_counter += 1;
+        let forester = Civilian::new(
+            crate::map::UnitId(id_counter),
+            CivilianType::Forester,
+            setup.nation_id,
+        );
+        id_counter += 1;
         nation.civilians.push(farmer);
         nation.civilians.push(forester);
         for _ in 0..game_data.game_config.starting_engineers {
             nation.civilians.push(Civilian::new(
-                next_civilian_id(),
+                crate::map::UnitId(id_counter),
                 CivilianType::Engineer,
                 setup.nation_id,
             ));
+            id_counter += 1;
         }
 
         // Starting merchant fleet: 1 Trader for each Great Power
@@ -488,6 +524,7 @@ pub fn new_game_with_seed_and_config(
                 nation
                     .army
                     .push(crate::military::combat::spawn_militia_unit(
+                        &mut id_counter,
                         setup.nation_id,
                         pid,
                     ));
@@ -550,6 +587,7 @@ pub fn new_game_with_seed_and_config(
                 nation
                     .army
                     .push(crate::military::combat::spawn_militia_unit(
+                        &mut id_counter,
                         setup.nation_id,
                         pid,
                     ));
@@ -559,6 +597,7 @@ pub fn new_game_with_seed_and_config(
         nation
             .army
             .push(crate::military::combat::spawn_garrison_artillery_unit(
+                &mut id_counter,
                 setup.nation_id,
                 setup.capital_province,
             ));
@@ -601,6 +640,7 @@ pub fn new_game_with_seed_and_config(
         last_resource_flow: HashMap::new(),
         pending_ai_cash_spending: Vec::new(),
         pending_ai_cash_income: Vec::new(),
+        next_unit_id: id_counter,
     };
 
     // Refresh the per-province `garrison_count` cache now that militia have
