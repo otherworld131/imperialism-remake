@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::hex::HexCoord;
 use crate::types::*;
@@ -15,25 +15,24 @@ pub struct HexMap {
         serialize_with = "serialize_hex_tiles",
         deserialize_with = "deserialize_hex_tiles"
     )]
-    tiles: HashMap<HexCoord, Tile>,
+    tiles: BTreeMap<HexCoord, Tile>,
     width: i32,
     height: i32,
 }
 
-/// Serialize HashMap<HexCoord, Tile> as a Vec of (HexCoord, Tile) pairs
+/// Serialize BTreeMap<HexCoord, Tile> as a Vec of (HexCoord, Tile) pairs
 /// because HexCoord cannot be used directly as a JSON object key.
-fn serialize_hex_tiles<S>(tiles: &HashMap<HexCoord, Tile>, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_hex_tiles<S>(tiles: &BTreeMap<HexCoord, Tile>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
     use serde::Serialize;
-    let mut entries: Vec<(&HexCoord, &Tile)> = tiles.iter().collect();
-    entries.sort_by_key(|(coord, _)| (coord.q, coord.r));
+    let entries: Vec<(&HexCoord, &Tile)> = tiles.iter().collect();
     entries.serialize(serializer)
 }
 
-/// Deserialize Vec of (HexCoord, Tile) pairs back into HashMap<HexCoord, Tile>.
-fn deserialize_hex_tiles<'de, D>(deserializer: D) -> Result<HashMap<HexCoord, Tile>, D::Error>
+/// Deserialize Vec of (HexCoord, Tile) pairs back into BTreeMap<HexCoord, Tile>.
+fn deserialize_hex_tiles<'de, D>(deserializer: D) -> Result<BTreeMap<HexCoord, Tile>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -49,7 +48,7 @@ impl HexMap {
     /// No tiles are placed — call `set_tile` to populate.
     pub fn new(width: i32, height: i32) -> Self {
         Self {
-            tiles: HashMap::new(),
+            tiles: BTreeMap::new(),
             width,
             height,
         }

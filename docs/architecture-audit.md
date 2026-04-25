@@ -279,3 +279,48 @@ Candidates for new cards on "UP Next backend":
 - Delete `BattleConfig::legacy()` (D-10)
 - Move global ID counters into `GameState` (C-6)
 - Unify error handling with typed enums (C-11)
+
+---
+
+## 7. Second-Pass Review (2026-04-25)
+
+A second pass spot-checked the headline claims and reconciled this audit with the parallel `economy-lessons-from-rust-imperialism.md` note. Conclusions:
+
+### Verified
+- `crates/domain/src/turn/processor.rs` is **14,672 lines** (confirmed).
+- `crates/domain/src/game_state.rs` is **1,534 lines** (confirmed).
+- `crates/wasm-bridge/src/lib.rs` is **5,662 lines** — even larger than implied by L-1/L-2; the seam problem is bigger than the audit calls out.
+- `crates/domain/Cargo.toml` declares `serde` and `ron` as direct (non-optional) deps (confirmed; lines 7–8). The CLAUDE.md "domain depends only on std + mlua" rule is genuinely violated.
+- No first-class `Reservation` type exists in the domain. The handful of `reserved` matches in the codebase are scattered field flags (in `processor.rs`, `types.rs`, `military/combat.rs`, `ai/diplomacy.rs`), not a coherent reservation layer. This corroborates the parallel economy-lessons note.
+
+### Severity reframing
+- **L-3/L-4 (serde in domain) is directionally right but is realistically Tier 4, not 🔴 Critical.** Removing serde derives from domain types means standing up a parallel "snapshot" mirror crate — a large, mechanical change that won't move any user-visible needle until the WASM bridge (L-1/L-2) is fixed first. The audit's prioritized backlog already places this in Tier 4; the table at the top of section 1 overstates the urgency.
+- **L-1/L-2 (raw `GameState` over WASM) and C-1/C-2 (god-objects) are the real critical seam.** These are what make every other refactor expensive, and they're what break the architecture diagram in CLAUDE.md most visibly.
+- **C-4 (HashMap → BTreeMap in `apply_warehouse_caps`) remains the single best Tier 1 fix.** It's <50 LOC, directly attacks the known Devron determinism bug, and `tests/simulation.rs::test_determinism` provides immediate verification.
+
+### Cross-cutting with `economy-lessons-from-rust-imperialism.md`
+The economy-lessons doc and this audit converge on the same root cause from different angles:
+- This audit attacks it structurally: **split `processor.rs` by phase, split `GameState`/`Nation` by concern.**
+- The economy-lessons doc attacks it semantically: **introduce reservation/snapshot/phase boundaries inside the economy.**
+
+The highest-leverage move that both docs imply is to **extract a `NationEconomy` substruct first** (audit C-2 + economy-lessons §8). That gives every downstream improvement (reservations, AI snapshots, plan/reserve/execute split, unified inventory API) a natural home to land in. Without that decomposition, the reservation work in particular will tangle further into `processor.rs` and make things worse before they get better.
+
+### Refined recommended order
+1. Fix C-4 warehouse-caps determinism (independently valuable, ~1 PR).
+2. Delete the audit's other Tier 1 items (D-9, D-10) — pure cleanup.
+3. Extract `NationEconomy` substruct from `Nation` (the seam both docs need).
+4. Split `turn/processor.rs` by phase (C-1) — into `economy_phase.rs`, `military_phase.rs`, etc.
+5. Then layer the economy-lessons §1–§4 work (unified inventory → reservations → AI snapshots → plan/reserve/execute) inside the new structure.
+6. Then attack L-1/L-2 (typed WASM commands + view models). Domain-side decomposition makes this dramatically cheaper because there are real component boundaries to project view models from.
+7. L-3/L-4 (serde out of domain) last, as the endgame cleanup.
+
+### What this audit understates
+- **Test-suite coupling.** Many domain assertions live inside `processor.rs`-anchored tests. Splitting `processor.rs` means rewriting a meaningful slice of the test suite simultaneously. Plan for this; it's not a free refactor.
+- **The `wasm-bridge` size.** At 5,662 lines, the bridge has accumulated logic (not just translation). It is itself a god-module that mirrors `processor.rs` on the FFI side. Treat L-1/L-2 as a bridge-decomposition task, not just an API redesign.
+
+### What this audit overstates
+- The 🔴 Red on "Domain purity (no infra leaks)" implies serde-in-domain is a bug. It's a deliberate-feeling shortcut whose cost is real but bounded — the wire format coupling is the actual problem, not the import itself.
+- The 836+ unwrap count is alarming but most are in cold paths or test fixtures. The audit's instruction to "audit each" is correct; the headline number suggests a worse situation than spot-checks reveal.
+
+### Net assessment
+Audit conclusions are accurate and the prioritization is broadly right. The main correction is to **down-prioritize serde-removal and up-prioritize `Nation` decomposition** as the sequencing keystone for everything else. Treat this audit and the economy-lessons doc as two views of the same refactor program, not two separate workstreams.

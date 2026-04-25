@@ -1,7 +1,7 @@
 use crate::events::TreatyType;
 use crate::types::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A diplomatic proposal awaiting evaluation by the target nation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,7 +121,7 @@ pub struct DiplomacyState {
         serialize_with = "serialize_relations",
         deserialize_with = "deserialize_relations"
     )]
-    relations: HashMap<(NationId, NationId), DiplomaticRelation>,
+    relations: BTreeMap<(NationId, NationId), DiplomaticRelation>,
     /// Per-nation diplomatic standing (global reputation).
     pub standing: HashMap<NationId, i32>,
     /// Proposals awaiting evaluation by the target nation.
@@ -164,10 +164,10 @@ mod pact_defense_set_serde {
     }
 }
 
-/// Serialize HashMap<(NationId, NationId), DiplomaticRelation> as a Vec of pairs
+/// Serialize BTreeMap<(NationId, NationId), DiplomaticRelation> as a Vec of pairs
 /// because tuple keys cannot be used directly as JSON object keys.
 fn serialize_relations<S>(
-    relations: &HashMap<(NationId, NationId), DiplomaticRelation>,
+    relations: &BTreeMap<(NationId, NationId), DiplomaticRelation>,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
@@ -177,10 +177,10 @@ where
     entries.serialize(serializer)
 }
 
-/// Deserialize Vec of ((NationId, NationId), DiplomaticRelation) pairs back into HashMap.
+/// Deserialize Vec of ((NationId, NationId), DiplomaticRelation) pairs back into BTreeMap.
 fn deserialize_relations<'de, D>(
     deserializer: D,
-) -> Result<HashMap<(NationId, NationId), DiplomaticRelation>, D::Error>
+) -> Result<BTreeMap<(NationId, NationId), DiplomaticRelation>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -204,7 +204,7 @@ impl DiplomacyState {
     /// Create an empty diplomacy state.
     pub fn new() -> Self {
         Self {
-            relations: HashMap::new(),
+            relations: BTreeMap::new(),
             standing: HashMap::new(),
             pending_proposals: Vec::new(),
             pending_separate_peace_breaks: Vec::new(),

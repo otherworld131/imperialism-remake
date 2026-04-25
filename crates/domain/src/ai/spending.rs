@@ -10,14 +10,14 @@
 
 use std::collections::HashSet;
 
-use crate::economy::civilians::{BuildTask, Civilian, CivilianType, next_civilian_id};
+use crate::economy::civilians::{BuildTask, Civilian, CivilianType};
 use crate::game_state::GameState;
 use crate::hex::HexCoord;
 use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::turn::connected_provinces;
 use crate::types::*;
 
-use super::common::{AiPersonality, get_personality, next_unit_id};
+use super::common::{AiPersonality, get_personality};
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -1036,8 +1036,8 @@ fn execute_with_plan(
 fn execute_hire_engineer(game: &mut GameState, nation_id: NationId) {
     let cfg = game.game_data.game_config.clone();
     let cost = Money::dollars(cfg.engineer_cost);
-    let spent = {
-        let nation = match game.get_nation_mut(nation_id) {
+    {
+        let nation = match game.get_nation(nation_id) {
             Some(n) => n,
             None => return,
         };
@@ -1047,91 +1047,92 @@ fn execute_hire_engineer(game: &mut GameState, nation_id: NationId) {
         if nation.treasury.checked_sub(cost).is_none() {
             return;
         }
+    }
+    // Allocate ID before taking mutable borrow of nation.
+    let civ_id = game.alloc_unit_id();
+    if let Some(nation) = game.get_nation_mut(nation_id) {
         nation.treasury -= cost;
         if cfg.civilian_costs_expert {
             nation.labor.expert -= 1;
         }
-        nation.civilians.push(Civilian::new(
-            next_civilian_id(),
-            CivilianType::Engineer,
-            nation_id,
-        ));
-        cost
-    };
+        nation.civilians.push(Civilian::new(civ_id, CivilianType::Engineer, nation_id));
+    }
     game.pending_ai_cash_spending.push((
         nation_id,
         crate::economy::ledger::CashSink::AiCivilianBuild,
-        spent,
+        cost,
         None,
     ));
 }
 
 fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec<super::AiAction>) {
     let turn_number = game.turn.0;
-    let nation = match game.get_nation_mut(nation_id) {
-        Some(n) => n,
-        None => return,
-    };
+    let (capital, nation_name, unit_type, cost, can_afford) = {
+        let nation = match game.get_nation_mut(nation_id) {
+            Some(n) => n,
+            None => return,
+        };
 
-    let capital = nation.capital_province_id;
-    let nation_name = nation.name.clone();
-    let variety_seed = (turn_number as usize).wrapping_mul(nation_id.0 as usize + 7);
-    // Field army count — ignore garrison militia so early-game recruit
-    // choices aren't skewed by the always-present home garrison.
-    let army_count = nation.field_army_count();
+        let capital = nation.capital_province_id;
+        let nation_name = nation.name.clone();
+        let variety_seed = (turn_number as usize).wrapping_mul(nation_id.0 as usize + 7);
+        // Field army count — ignore garrison militia so early-game recruit
+        // choices aren't skewed by the always-present home garrison.
+        let army_count = nation.field_army_count();
 
-    // Pick unit type based on army composition and variety
-    let unit_type = if army_count < 3 {
-        // Early game: mostly regulars
-        let options = [
-            ArmyUnitType::Regulars,
-            ArmyUnitType::Regulars,
-            ArmyUnitType::Grenadiers,
-        ];
-        options[variety_seed % options.len()]
-    } else if army_count < 8 {
-        // Mid game: mix
-        let options = [
-            ArmyUnitType::Grenadiers,
-            ArmyUnitType::LightArtillery,
-            ArmyUnitType::Grenadiers,
-        ];
-        options[variety_seed % options.len()]
-    } else {
-        // Late game: artillery focus
-        let options = [
-            ArmyUnitType::LightArtillery,
-            ArmyUnitType::Grenadiers,
-            ArmyUnitType::LightArtillery,
-        ];
-        options[variety_seed % options.len()]
-    };
+        // Pick unit type based on army composition and variety
+        let unit_type = if army_count < 3 {
+            // Early game: mostly regulars
+            let options = [
+                ArmyUnitType::Regulars,
+                ArmyUnitType::Regulars,
+                ArmyUnitType::Grenadiers,
+            ];
+            options[variety_seed % options.len()]
+        } else if army_count < 8 {
+            // Mid game: mix
+            let options = [
+                ArmyUnitType::Grenadiers,
+                ArmyUnitType::LightArtillery,
+                ArmyUnitType::Grenadiers,
+            ];
+            options[variety_seed % options.len()]
+        } else {
+            // Late game: artillery focus
+            let options = [
+                ArmyUnitType::LightArtillery,
+                ArmyUnitType::Grenadiers,
+                ArmyUnitType::LightArtillery,
+            ];
+            options[variety_seed % options.len()]
+        };
 
-    let cost = match unit_type {
-        ArmyUnitType::LightArtillery => Money::dollars(2000),
-        ArmyUnitType::Grenadiers => Money::dollars(1000),
-        _ => Money::dollars(500),
-    };
+        let cost = match unit_type {
+            ArmyUnitType::LightArtillery => Money::dollars(2000),
+            ArmyUnitType::Grenadiers => Money::dollars(1000),
+            _ => Money::dollars(500),
+        };
 
-    let spent = if let Some(remaining) = nation.treasury.checked_sub(cost) {
-        nation.treasury = remaining;
-        let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
-        nation.army.push(unit);
-        actions.push(super::AiAction {
-            text: format!("{} has been expanding its military forces", nation_name),
-            reason: "Spending system selected military category for expansion".to_string(),
-            is_non_action: false,
-            nation_id,
-        });
-        Some(cost)
-    } else {
-        None
+        let can_afford = nation.treasury >= cost;
+        (capital, nation_name, unit_type, cost, can_afford)
     };
-    if let Some(amount) = spent {
+    if can_afford {
+        let unit_id = game.alloc_unit_id();
+        if let Some(nation) = game.get_nation_mut(nation_id) {
+            nation.treasury -= cost;
+            let unit = ArmyUnit::new(unit_id, unit_type, nation_id, capital);
+            nation.army.push(unit);
+            actions.push(super::AiAction {
+                text: format!("{} has been expanding its military forces", nation_name),
+                reason: "Spending system selected military category for expansion".to_string(),
+                is_non_action: false,
+                nation_id,
+            });
+        }
         game.pending_ai_cash_spending.push((
             nation_id,
             crate::economy::ledger::CashSink::AiArmyBuild,
-            amount,
+            cost,
             None,
         ));
     }
@@ -1196,7 +1197,7 @@ fn execute_infrastructure(
             let civilian_costs_expert = cfg.civilian_costs_expert;
             let cost = CivilianType::Engineer.creation_cost(&cfg);
             {
-                let nation = match game.get_nation_mut(nation_id) {
+                let nation = match game.get_nation(nation_id) {
                     Some(n) => n,
                     None => return,
                 };
@@ -1206,15 +1207,15 @@ fn execute_infrastructure(
                 if nation.treasury.checked_sub(cost).is_none() {
                     return;
                 }
+            }
+            // Allocate ID before the mutable borrow.
+            let civ_id = game.alloc_unit_id();
+            if let Some(nation) = game.get_nation_mut(nation_id) {
                 nation.treasury -= cost;
                 if civilian_costs_expert {
                     nation.labor.expert -= 1;
                 }
-                nation.civilians.push(Civilian::new(
-                    next_civilian_id(),
-                    CivilianType::Engineer,
-                    nation_id,
-                ));
+                nation.civilians.push(Civilian::new(civ_id, CivilianType::Engineer, nation_id));
             }
             game.pending_ai_cash_spending.push((
                 nation_id,
@@ -1555,64 +1556,61 @@ fn execute_hire_improver(game: &mut GameState, nation_id: NationId) {
     let civilian_costs_expert = game.game_data.game_config.civilian_costs_expert;
     let cfg = game.game_data.game_config.clone();
 
-    let nation = match game.get_nation_mut(nation_id) {
-        Some(n) => n,
-        None => return,
-    };
-
-    if civilian_costs_expert && nation.labor.expert == 0 {
-        return;
-    }
-
-    // Count improver civilians only (engineers are managed by execute_hire_engineer).
-    let improver_count = nation
-        .civilians
-        .iter()
-        .filter(|c| c.civilian_type != CivilianType::Engineer)
-        .count();
-
-    let civ_type = if improver_count < 2 {
-        CivilianType::Farmer
-    } else {
-        let has_forester = nation
+    // Read-only phase: determine if we can and should hire.
+    let (civ_type, cost) = {
+        let nation = match game.get_nation(nation_id) {
+            Some(n) => n,
+            None => return,
+        };
+        if civilian_costs_expert && nation.labor.expert == 0 {
+            return;
+        }
+        let improver_count = nation
             .civilians
             .iter()
-            .any(|c| c.civilian_type == CivilianType::Forester);
-        if has_forester {
-            CivilianType::Miner
+            .filter(|c| c.civilian_type != CivilianType::Engineer)
+            .count();
+        let civ_type = if improver_count < 2 {
+            CivilianType::Farmer
         } else {
-            CivilianType::Forester
+            let has_forester = nation
+                .civilians
+                .iter()
+                .any(|c| c.civilian_type == CivilianType::Forester);
+            if has_forester {
+                CivilianType::Miner
+            } else {
+                CivilianType::Forester
+            }
+        };
+        let already_idle_unplaced = nation
+            .civilians
+            .iter()
+            .any(|c| c.civilian_type == civ_type && c.position.is_none());
+        if already_idle_unplaced {
+            return;
         }
+        let cost = civ_type.creation_cost(&cfg);
+        if nation.treasury.checked_sub(cost).is_none() {
+            return;
+        }
+        (civ_type, cost)
     };
-
-    let already_idle_unplaced = nation
-        .civilians
-        .iter()
-        .any(|c| c.civilian_type == civ_type && c.position.is_none());
-    if already_idle_unplaced {
-        return;
-    }
-
-    let cost = civ_type.creation_cost(&cfg);
-    let did_spend = if let Some(remaining) = nation.treasury.checked_sub(cost) {
-        nation.treasury = remaining;
+    // Allocate ID before the mutable borrow.
+    let civ_id = game.alloc_unit_id();
+    if let Some(nation) = game.get_nation_mut(nation_id) {
+        nation.treasury -= cost;
         if civilian_costs_expert {
             nation.labor.expert -= 1;
         }
-        let civilian = Civilian::new(next_civilian_id(), civ_type, nation_id);
-        nation.civilians.push(civilian);
-        true
-    } else {
-        false
-    };
-    if did_spend {
-        game.pending_ai_cash_spending.push((
-            nation_id,
-            crate::economy::ledger::CashSink::AiCivilianBuild,
-            cost,
-            None,
-        ));
+        nation.civilians.push(Civilian::new(civ_id, civ_type, nation_id));
     }
+    game.pending_ai_cash_spending.push((
+        nation_id,
+        crate::economy::ledger::CashSink::AiCivilianBuild,
+        cost,
+        None,
+    ));
 }
 
 /// Drop annexed/destroyed priority targets and pick replacements so the

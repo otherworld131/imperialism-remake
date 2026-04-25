@@ -3,6 +3,7 @@ use crate::hex::HexCoord;
 use crate::map::UnitId;
 use crate::types::*;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Engineer work tasks — kinds of infrastructure an Engineer civilian can build.
@@ -35,10 +36,13 @@ impl std::fmt::Display for BuildTask {
 }
 
 /// Global counter for generating unique civilian UnitIds.
-/// Range starts at 3_000_000 to avoid collision with army unit IDs (2_000_000+).
+/// Only used in test helpers; production code uses `GameState::alloc_unit_id`.
+#[cfg(test)]
 static CIVILIAN_ID_COUNTER: AtomicU32 = AtomicU32::new(3_000_000);
 
 /// Generate a unique UnitId for a civilian unit.
+/// Only used in test helpers; production code uses `GameState::alloc_unit_id`.
+#[cfg(test)]
 pub fn next_civilian_id() -> UnitId {
     UnitId(CIVILIAN_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
 }
@@ -128,6 +132,22 @@ impl std::fmt::Display for CivilianType {
             CivilianType::Rancher => write!(f, "Rancher"),
             CivilianType::Forester => write!(f, "Forester"),
             CivilianType::Driller => write!(f, "Driller"),
+        }
+    }
+}
+
+impl std::str::FromStr for CivilianType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Prospector" => Ok(Self::Prospector),
+            "Miner" => Ok(Self::Miner),
+            "Engineer" => Ok(Self::Engineer),
+            "Farmer" => Ok(Self::Farmer),
+            "Rancher" => Ok(Self::Rancher),
+            "Forester" => Ok(Self::Forester),
+            "Driller" => Ok(Self::Driller),
+            _ => Err(format!("unknown CivilianType: {}", s)),
         }
     }
 }

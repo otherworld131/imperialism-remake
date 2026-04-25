@@ -9,6 +9,7 @@
 
 pub mod flags;
 pub mod government;
+pub mod lua_mix;
 pub mod names;
 pub mod rng;
 
@@ -19,6 +20,7 @@ pub use flags::{
     Emblem, EmblemPosition, FlagDesign, FlagExclusion, FlagPattern, FlagRules, random_for, svg_for,
 };
 pub use government::{GovernmentForm, GovernmentMix, government_title};
+pub use lua_mix::{load_default_mixes, load_mixes_from};
 pub use names::{
     CountryName, generate_city_name, generate_city_names, generate_country_name,
     generate_country_names,

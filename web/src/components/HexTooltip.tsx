@@ -63,7 +63,11 @@ export default function HexTooltip({
             </b>
           </div>
           {tile.province && (() => {
-            const ownerTitle = governmentTitleByNationId?.[tile.nation_id] || tile.owner;
+            // For incorporated provinces, look up the original minor — the
+            // title still reads "Province of <Minor>" even though the GP
+            // owns it. Falls back to the owner's title for normal tiles.
+            const displayNid = tile.incorporated_nation_id ?? tile.nation_id;
+            const ownerTitle = governmentTitleByNationId?.[displayNid] || tile.owner;
             return (
               <div>
                 Province: {tile.province}

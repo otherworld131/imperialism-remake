@@ -52,6 +52,34 @@ impl GovernmentForm {
         GovernmentForm::Dominion,
     ];
 
+    /// Parse a form identifier (e.g. "Empire") into the matching variant.
+    pub fn parse(name: &str) -> Option<GovernmentForm> {
+        use GovernmentForm::*;
+        let v = match name {
+            "AbsoluteMonarchy" => AbsoluteMonarchy,
+            "ConstitutionalMonarchy" => ConstitutionalMonarchy,
+            "Empire" => Empire,
+            "Kingdom" => Kingdom,
+            "Republic" => Republic,
+            "FederalRepublic" => FederalRepublic,
+            "Confederation" => Confederation,
+            "Duchy" => Duchy,
+            "Principality" => Principality,
+            "GrandDuchy" => GrandDuchy,
+            "CityState" => CityState,
+            "Theocracy" => Theocracy,
+            "Shogunate" => Shogunate,
+            "Khanate" => Khanate,
+            "Sultanate" => Sultanate,
+            "Emirate" => Emirate,
+            "TribalConfederacy" => TribalConfederacy,
+            "MilitaryJunta" => MilitaryJunta,
+            "Dominion" => Dominion,
+            _ => return None,
+        };
+        Some(v)
+    }
+
     /// Short label shown in the UI (no country name).
     pub fn short_label(self) -> &'static str {
         use GovernmentForm::*;

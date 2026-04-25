@@ -1,7 +1,7 @@
 use crate::map::UnitId;
 use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::types::*;
-
+#[cfg(test)]
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Strategy for choosing which enemy unit to prioritize for damage.
@@ -34,8 +34,7 @@ pub struct BattleConfig {
     /// province before any damage is dealt.
     pub defender_retreat_ratio: f64,
     /// Fraction of attacker starting firepower lost to trigger mid-battle
-    /// retreat (0.60 is the legacy default). Set to `1.0` or greater to
-    /// disable.
+    /// retreat. Set to `1.0` or greater to disable.
     pub attacker_postbattle_fp_loss: f64,
     /// Fraction of defender starting firepower lost to trigger mid-battle
     /// retreat by the defender.
@@ -43,9 +42,7 @@ pub struct BattleConfig {
 }
 
 impl BattleConfig {
-    /// Legacy behavior: only the attacker retreats, at 60% FP loss, no
-    /// pre-battle retreat.
-    pub fn legacy(targeting: TargetingPriority) -> Self {
+    pub fn with_targeting(targeting: TargetingPriority) -> Self {
         Self {
             targeting,
             attacker_can_retreat: true,
@@ -53,7 +50,7 @@ impl BattleConfig {
             attacker_retreat_ratio: f64::INFINITY,
             defender_retreat_ratio: f64::INFINITY,
             attacker_postbattle_fp_loss: 0.60,
-            defender_postbattle_fp_loss: 2.0, // disabled
+            defender_postbattle_fp_loss: 2.0,
         }
     }
 }
@@ -84,28 +81,31 @@ pub fn fort_defense_bonus(fort_level: u8) -> f64 {
     }
 }
 
-/// Global counter for generating unique UnitIds in garrison creation.
-///
-/// Starts at 5_000_000 so persistent militia IDs never collide with the
-/// 1_000_000 / 1_100_000 / 1_500_000 / 2_000_000 / 2_500_000 / 3_000_000 /
-/// 4_000_000 bands used by initial GP/MN army, merchants, warships,
-/// AI-built units, generals, and admirals.
-static GARRISON_ID_COUNTER: AtomicU32 = AtomicU32::new(5_000_000);
-
 /// Spawn a single Militia `ArmyUnit` tagged to the given owner and position.
 /// Used both by persistent-garrison seeding and by the garrison regeneration
-/// tick.
-pub fn spawn_militia_unit(owner: NationId, position: ProvinceId) -> ArmyUnit {
+/// tick. Takes the game's unit-ID counter so that ID allocation is
+/// deterministic across two games started from the same map key.
+pub fn spawn_militia_unit(
+    id_counter: &mut u32,
+    owner: NationId,
+    position: ProvinceId,
+) -> ArmyUnit {
     use crate::map::UnitId;
-    let id = GARRISON_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let id = *id_counter;
+    *id_counter += 1;
     ArmyUnit::new(UnitId(id), ArmyUnitType::Militia, owner, position)
 }
 
 /// Spawn a single `GarrisonArtillery` unit tagged to the given owner/position.
 /// Only produced for a minor nation's capital at map generation time.
-pub fn spawn_garrison_artillery_unit(owner: NationId, position: ProvinceId) -> ArmyUnit {
+pub fn spawn_garrison_artillery_unit(
+    id_counter: &mut u32,
+    owner: NationId,
+    position: ProvinceId,
+) -> ArmyUnit {
     use crate::map::UnitId;
-    let id = GARRISON_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let id = *id_counter;
+    *id_counter += 1;
     ArmyUnit::new(UnitId(id), ArmyUnitType::GarrisonArtillery, owner, position)
 }
 
@@ -125,19 +125,23 @@ pub fn seed_militia_from_garrison_count(game: &mut crate::game_state::GameState)
         if target == 0 {
             continue;
         }
-        let Some(nation) = game.get_nation_mut(owner) else {
-            continue;
-        };
-        let existing = nation
-            .army
-            .iter()
-            .filter(|u| u.position == pid && u.unit_type == ArmyUnitType::Militia)
-            .count();
+        let existing = game
+            .get_nation(owner)
+            .map(|n| {
+                n.army
+                    .iter()
+                    .filter(|u| u.position == pid && u.unit_type == ArmyUnitType::Militia)
+                    .count()
+            })
+            .unwrap_or(0);
         if existing >= target as usize {
             continue;
         }
         for _ in existing..(target as usize) {
-            nation.army.push(spawn_militia_unit(owner, pid));
+            let unit = spawn_militia_unit(&mut game.next_unit_id, owner, pid);
+            if let Some(nation) = game.get_nation_mut(owner) {
+                nation.army.push(unit);
+            }
         }
     }
 }
@@ -289,11 +293,8 @@ pub fn resolve_battle(
 
 /// Resolve a battle with an explicit targeting priority.
 ///
-/// Legacy entry point: uses the pre-card-#18 retreat model (attacker-only
-/// retreat at 60% firepower loss, no pre-battle bailout, no defender
-/// retreat). Use [`resolve_battle_with_config`] for full control.
-///
 /// See [`resolve_battle`] for full combat resolution details.
+/// Use [`resolve_battle_with_config`] for full retreat control.
 pub fn resolve_battle_with_targeting(
     attacker: &CombatForce,
     defender: &CombatForce,
@@ -308,19 +309,18 @@ pub fn resolve_battle_with_targeting(
         province,
         terrain,
         fort_level,
-        BattleConfig::legacy(targeting),
+        BattleConfig::with_targeting(targeting),
     )
 }
 
 /// Resolve a battle with a full [`BattleConfig`], including retreat rules.
 ///
-/// Adds (card #18) two retreat paths beyond the legacy attacker-only model:
+/// Two retreat paths are supported:
 ///   * Pre-battle retreat: a side whose opponent's firepower exceeds its own
 ///     by more than the retreat-ratio bails before any damage is dealt,
 ///     provided `*_can_retreat` is true.
-///   * Mid-battle retreat: the existing "lost more than X% of starting FP"
-///     break triggers for either side, gated by the corresponding
-///     `*_postbattle_fp_loss` threshold and `*_can_retreat` flag.
+///   * Mid-battle retreat: a side that has lost more than `*_postbattle_fp_loss`
+///     fraction of its starting FP retreats, gated by `*_can_retreat`.
 ///
 /// Retreat placements (where survivors go) are the caller's responsibility:
 /// this function just sets `retreated` / `defender_retreated` flags and
@@ -738,15 +738,15 @@ pub fn resolve_battle_with_config(
     }
 }
 
-/// Creates the starting garrison for a province.
+/// Test-only counter for `create_garrison`. Production code uses `GameState::alloc_unit_id`.
+#[cfg(test)]
+static GARRISON_ID_COUNTER: AtomicU32 = AtomicU32::new(5_000_000);
+
+/// Creates the starting garrison for a province. Used in tests only.
 ///
 /// - Great Power: 4 Militia units
 /// - Minor Nation: 3 Militia + 1 GarrisonArtillery (defensive artillery behind fortifications)
-///
-/// In the original Imperialism, minor nations had strong defensive artillery
-/// that required 2-3 Light Artillery to overcome, creating a natural growth period.
-///
-/// Each unit gets a unique UnitId from an atomic counter.
+#[cfg(test)]
 pub fn create_garrison(nation_type: NationType) -> Vec<ArmyUnit> {
     use crate::map::UnitId;
 
@@ -1896,9 +1896,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_resolve_preserves_attacker_only_retreat() {
-        // Sanity check: the legacy entry point still behaves like the
-        // pre-card-#18 model — defender never retreats.
+    fn outnumbered_defender_does_not_retreat_when_eliminated() {
+        // A lone Militia against 5 Guards is eliminated before it can retreat.
         let atk_nation = NationId(1);
         let def_nation = NationId(2);
         let attacker = make_force(
@@ -1918,7 +1917,7 @@ mod tests {
         let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 0);
         assert!(
             !result.defender_retreated,
-            "legacy resolve never flags defender retreat"
+            "eliminated defender should not be flagged as retreated"
         );
     }
 }

@@ -819,17 +819,17 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
 
 fn serialize_tech_effect(effect: &TechEffect) -> (String, String) {
     match effect {
-        TechEffect::UnlockUnit(s) => ("UnlockUnit".to_string(), s.clone()),
-        TechEffect::UnlockBuilding(s) => ("UnlockBuilding".to_string(), s.clone()),
+        TechEffect::UnlockUnit(u) => ("UnlockUnit".to_string(), format!("{:?}", u)),
+        TechEffect::UnlockBuilding(b) => ("UnlockBuilding".to_string(), format!("{:?}", b)),
         TechEffect::EnableTerrainImprovement { terrain, .. } => {
             ("EnableTerrainImprovement".to_string(), terrain.clone())
         }
         TechEffect::EnableInfrastructure(s) => ("EnableInfrastructure".to_string(), s.clone()),
         TechEffect::UnlockShip(s) => ("UnlockShip".to_string(), s.clone()),
         TechEffect::UpgradeUnit { from, to } => {
-            ("UpgradeUnit".to_string(), format!("{}->{}", from, to))
+            ("UpgradeUnit".to_string(), format!("{:?}->{:?}", from, to))
         }
-        TechEffect::EnableCivilian(s) => ("EnableCivilian".to_string(), s.clone()),
+        TechEffect::EnableCivilian(c) => ("EnableCivilian".to_string(), format!("{:?}", c)),
         TechEffect::LuaScript(s) => ("LuaScript".to_string(), s.clone()),
     }
 }

@@ -8,7 +8,7 @@ use crate::events::TechId;
 use crate::military::ships::Ship;
 use crate::military::units::ArmyUnit;
 use crate::types::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Colors used to distinguish nations on the map and in the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -51,11 +51,11 @@ pub struct Nation {
     pub province_ids: Vec<ProvinceId>,
     pub capital_province_id: ProvinceId,
     /// Resource warehouse — stores raw resources.
-    pub warehouse: HashMap<ResourceType, u32>,
+    pub warehouse: BTreeMap<ResourceType, u32>,
     /// Processed materials warehouse.
-    pub materials: HashMap<MaterialType, u32>,
+    pub materials: BTreeMap<MaterialType, u32>,
     /// Finished goods warehouse.
-    pub goods: HashMap<GoodsType, u32>,
+    pub goods: BTreeMap<GoodsType, u32>,
     /// Buildings owned by this nation.
     pub buildings: Vec<Building>,
     /// Labor pool (workers available for production).
@@ -216,9 +216,9 @@ impl Nation {
             treasury: Money::ZERO,
             province_ids: vec![capital_province_id],
             capital_province_id,
-            warehouse: HashMap::new(),
-            materials: HashMap::new(),
-            goods: HashMap::new(),
+            warehouse: BTreeMap::new(),
+            materials: BTreeMap::new(),
+            goods: BTreeMap::new(),
             buildings: Vec::new(),
             labor: LaborPool::new(),
             researched_techs: Vec::new(),

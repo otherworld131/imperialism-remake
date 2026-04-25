@@ -1,6 +1,8 @@
 use crate::game_state::GameState;
+#[cfg(test)]
 use crate::map::UnitId;
 use crate::types::*;
+#[cfg(test)]
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// AI personality types that affect decision-making priorities.
@@ -73,9 +75,13 @@ pub fn random_personalities(seed: u64, count: usize) -> Vec<AiPersonality> {
 }
 
 /// Global counter for generating unique UnitIds for AI-built army units.
+/// Only used in test helpers; production code uses `GameState::alloc_unit_id`.
+#[cfg(test)]
 static AI_UNIT_ID_COUNTER: AtomicU32 = AtomicU32::new(2_000_000);
 
 /// Generate a unique UnitId for an AI-built unit.
+/// Only used in test helpers; production code uses `GameState::alloc_unit_id`.
+#[cfg(test)]
 pub fn next_unit_id() -> UnitId {
     UnitId(AI_UNIT_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
 }

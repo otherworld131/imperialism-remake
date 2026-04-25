@@ -2,19 +2,18 @@ use wasm_bindgen::prelude::*;
 
 mod flavor_bridge;
 
-use domain::ai::common::next_unit_id;
 use domain::ai::common::{AiPersonality, personality_for_nation_index};
 use domain::economy::buildings::BuildingType;
-use domain::economy::civilians::{CivilianType, next_civilian_id, parse_civilian_type};
+use domain::economy::civilians::{CivilianType, parse_civilian_type};
 use domain::economy::production::{
     ProductionChain, calculate_factory_production, calculate_mill_production,
 };
 use domain::economy::trade::{Commodity, base_price, commodity_price};
 use domain::economy::transport::TransportSystem;
 use domain::events::TreatyType;
-use domain::game_state::{
-    GameState, new_game, new_game_with_config, new_observer_game, new_observer_game_with_config,
-};
+use domain::game_state::{GameState, new_game_with_config, new_observer_game_with_config};
+#[cfg(test)]
+use domain::game_state::{new_game, new_observer_game};
 use domain::hex::HexCoord;
 use domain::map::MapGenConfig;
 use domain::military::combat::BattleResult;
@@ -41,6 +40,7 @@ fn build_map_config(
 }
 
 /// Create a new game. Returns JSON string of the full game state.
+/// `flavor_key` seeds names/flags; pass an empty string to reuse `map_key`.
 #[wasm_bindgen]
 pub fn wasm_new_game(
     map_key: &str,
@@ -50,17 +50,24 @@ pub fn wasm_new_game(
     map_height: i32,
     num_great_powers: u32,
     num_minor_nations: u32,
+    flavor_key: &str,
 ) -> String {
     let diff = difficulty_from_u8(difficulty);
     let cfg = build_map_config(map_width, map_height, num_great_powers, num_minor_nations);
     let mut game = new_game_with_config(map_key, diff, nation_index, cfg);
-    flavor_bridge::apply_flavor(&mut game);
+    flavor_bridge::apply_flavor(&mut game, flavor_key);
     serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
 }
 
 /// Create a new game from a historical scenario.
+/// `flavor_key` seeds names/flags; pass an empty string to reuse `map_key`.
 #[wasm_bindgen]
-pub fn wasm_new_scenario_game(scenario_id: &str, difficulty: u8, nation_index: usize) -> String {
+pub fn wasm_new_scenario_game(
+    scenario_id: &str,
+    difficulty: u8,
+    nation_index: usize,
+    flavor_key: &str,
+) -> String {
     let diff = match difficulty {
         0 => Difficulty::Introductory,
         1 => Difficulty::Easy,
@@ -70,7 +77,7 @@ pub fn wasm_new_scenario_game(scenario_id: &str, difficulty: u8, nation_index: u
     };
     match new_scenario_game(scenario_id, diff, nation_index) {
         Ok(mut game) => {
-            flavor_bridge::apply_flavor(&mut game);
+            flavor_bridge::apply_flavor(&mut game, flavor_key);
             serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
         }
         Err(e) => format!("{{\"error\":\"{}\"}}", e),
@@ -90,6 +97,7 @@ fn difficulty_from_u8(d: u8) -> Difficulty {
 
 /// Create a new game in observer mode. All Great Powers are AI-controlled;
 /// the human only observes. The nation at index 0 is the default viewpoint.
+/// `flavor_key` seeds names/flags; pass an empty string to reuse `map_key`.
 #[wasm_bindgen]
 pub fn wasm_new_observer_game(
     map_key: &str,
@@ -98,15 +106,22 @@ pub fn wasm_new_observer_game(
     map_height: i32,
     num_great_powers: u32,
     num_minor_nations: u32,
+    flavor_key: &str,
 ) -> String {
     let cfg = build_map_config(map_width, map_height, num_great_powers, num_minor_nations);
-    let game = new_observer_game_with_config(map_key, difficulty_from_u8(difficulty), cfg);
+    let mut game = new_observer_game_with_config(map_key, difficulty_from_u8(difficulty), cfg);
+    flavor_bridge::apply_flavor(&mut game, flavor_key);
     serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
 }
 
 /// Create a new observer-mode scenario game.
+/// `flavor_key` seeds names/flags; pass an empty string to reuse the scenario id.
 #[wasm_bindgen]
-pub fn wasm_new_observer_scenario_game(scenario_id: &str, difficulty: u8) -> String {
+pub fn wasm_new_observer_scenario_game(
+    scenario_id: &str,
+    difficulty: u8,
+    flavor_key: &str,
+) -> String {
     let diff = difficulty_from_u8(difficulty);
     match new_scenario_game(scenario_id, diff, 0) {
         Ok(mut game) => {
@@ -128,10 +143,25 @@ pub fn wasm_new_observer_scenario_game(scenario_id: &str, difficulty: u8) -> Str
                 }
             }
             game.observer_mode = true;
+            flavor_bridge::apply_flavor(&mut game, flavor_key);
             serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
         }
         Err(e) => format!("{{\"error\":\"{}\"}}", e),
     }
+}
+
+/// Re-roll the flavor (names, flags, government titles) on an existing game
+/// state, leaving everything else untouched. Used by GameSetup's
+/// "Re-roll Names" button.
+#[wasm_bindgen]
+pub fn wasm_apply_flavor(game_json: &str, flavor_key: &str) -> String {
+    let mut game: GameState = match serde_json::from_str(game_json) {
+        Ok(g) => g,
+        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    };
+    flavor_bridge::clear_flavor(&mut game);
+    flavor_bridge::apply_flavor(&mut game, flavor_key);
+    serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
 }
 
 /// Switch which nation is the "viewpoint" (a.k.a. human player).
@@ -594,6 +624,7 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
                 "civilian_on_tile": civ_data,
                 "is_minor": is_minor,
                 "is_incorporated_minor": is_incorporated_minor,
+                "incorporated_nation_id": incorporated_from_id.map(|n| n.0),
                 "is_anarchic": nation_anarchy_lookup.get(&owner_nid).copied().unwrap_or(false),
                 "visual_group": visual_group,
                 "visible": is_visible,
@@ -1933,16 +1964,20 @@ pub fn wasm_recruit_army_unit(game_json: &str, nation_id: u32, unit_type_str: &s
     }
 
     // Deduct costs and create unit
-    let nation = match game.get_nation_mut(nid) {
-        Some(n) => n,
-        None => return "{\"error\":\"nation not found\"}".to_string(),
+    let capital = {
+        let nation = match game.get_nation_mut(nid) {
+            Some(n) => n,
+            None => return "{\"error\":\"nation not found\"}".to_string(),
+        };
+        nation.treasury -= stats.cost;
+        nation.consume_material(MaterialType::Arms, stats.arms_required);
+        nation.capital_province_id
     };
-    nation.treasury -= stats.cost;
-    nation.consume_material(MaterialType::Arms, stats.arms_required);
-    let capital = nation.capital_province_id;
-    let uid = next_unit_id();
+    let uid = game.alloc_unit_id();
     let new_unit = ArmyUnit::new(uid, unit_type, nid, capital);
-    nation.army.push(new_unit);
+    if let Some(nation) = game.get_nation_mut(nid) {
+        nation.army.push(new_unit);
+    }
 
     serialize_game(&game)
 }
@@ -1970,19 +2005,21 @@ pub fn wasm_hire_civilian(game_json: &str, nation_id: u32, civilian_type_str: &s
 
     let cost = civ_type.creation_cost(&game.game_data.game_config);
 
-    let nation = match game.get_nation_mut(nid) {
-        Some(n) => n,
-        None => return "{\"error\":\"nation not found\"}".to_string(),
-    };
-
-    if nation.treasury < cost {
-        return "{\"error\":\"insufficient funds\"}".to_string();
+    {
+        let nation = match game.get_nation_mut(nid) {
+            Some(n) => n,
+            None => return "{\"error\":\"nation not found\"}".to_string(),
+        };
+        if nation.treasury < cost {
+            return "{\"error\":\"insufficient funds\"}".to_string();
+        }
+        nation.treasury -= cost;
     }
-
-    nation.treasury -= cost;
-    let cid = next_civilian_id();
-    let new_civ = domain::economy::civilians::Civilian::new(cid, civ_type, nid);
-    nation.civilians.push(new_civ);
+    let cid = game.alloc_unit_id();
+    if let Some(nation) = game.get_nation_mut(nid) {
+        let new_civ = domain::economy::civilians::Civilian::new(cid, civ_type, nid);
+        nation.civilians.push(new_civ);
+    }
 
     serialize_game(&game)
 }
@@ -2035,21 +2072,24 @@ pub fn wasm_build_ship(game_json: &str, nation_id: u32, ship_type_str: &str) -> 
     }
 
     // Deduct resources and create ship
-    let nation = match game.get_nation_mut(nid) {
-        Some(n) => n,
-        None => return "{\"error\":\"nation not found\"}".to_string(),
-    };
-    nation.consume_material(MaterialType::Fabric, stats.fabric_cost);
-    nation.consume_material(MaterialType::Lumber, stats.lumber_cost);
-    nation.consume_material(MaterialType::Arms, stats.arms_cost);
-    nation.consume_material(MaterialType::Steel, stats.steel_cost);
-    nation.remove_resource(ResourceType::Coal, stats.coal_cost);
-
-    let sid = next_unit_id();
+    {
+        let nation = match game.get_nation_mut(nid) {
+            Some(n) => n,
+            None => return "{\"error\":\"nation not found\"}".to_string(),
+        };
+        nation.consume_material(MaterialType::Fabric, stats.fabric_cost);
+        nation.consume_material(MaterialType::Lumber, stats.lumber_cost);
+        nation.consume_material(MaterialType::Arms, stats.arms_cost);
+        nation.consume_material(MaterialType::Steel, stats.steel_cost);
+        nation.remove_resource(ResourceType::Coal, stats.coal_cost);
+    }
+    let sid = game.alloc_unit_id();
     let new_ship = Ship::new(sid, ship_type, nid);
-    match ship_type.category() {
-        ShipCategory::Merchant => nation.merchant_fleet.push(new_ship),
-        ShipCategory::Warship => nation.warships.push(new_ship),
+    if let Some(nation) = game.get_nation_mut(nid) {
+        match ship_type.category() {
+            ShipCategory::Merchant => nation.merchant_fleet.push(new_ship),
+            ShipCategory::Warship => nation.warships.push(new_ship),
+        }
     }
 
     serialize_game(&game)
