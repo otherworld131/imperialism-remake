@@ -2099,7 +2099,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        }
+            next_unit_id: 6_000_000,}
     }
 
     #[test]
@@ -2292,7 +2292,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         let outcome = plan_next_depot(&game, NationId(1));
         let plan = outcome

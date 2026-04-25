@@ -2029,7 +2029,7 @@ mod tests {
                 last_resource_flow: std::collections::HashMap::new(),
                 pending_ai_cash_spending: Vec::new(),
                 pending_ai_cash_income: Vec::new(),
-            }
+            next_unit_id: 6_000_000,}
         }
 
         let game_full = build_game(None);
@@ -2167,7 +2167,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         let (_, tgt_with_anarchic) =
             coalition_firepower_for_war_decision(&game, NationId(1), NationId(2));
@@ -2389,7 +2389,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
         crate::military::combat::seed_militia_from_garrison_count(&mut game);
 
         let mut actions = Vec::new();
@@ -2544,7 +2544,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         // Put AI at war with minor
         game.diplomacy.declare_war(NationId(2), NationId(3));

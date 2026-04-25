@@ -6219,7 +6219,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        }
+            next_unit_id: 6_000_000,}
     }
 
     /// Build a game state with a gold mine for testing monetary conversion.
@@ -6280,7 +6280,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        }
+            next_unit_id: 6_000_000,}
     }
 
     // ── Turn advancement ──────────────────────────────────────
@@ -6650,7 +6650,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         let report = process_turn(&mut game);
 
@@ -6755,7 +6755,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        }
+            next_unit_id: 6_000_000,}
     }
 
     #[test]
@@ -7393,7 +7393,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         let report = process_turn(&mut game);
 
@@ -7663,7 +7663,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         // Process 7 turns: 1 turn to start countdown (set to 6), then 6 turns to count down
         for _ in 0..7 {
@@ -7738,7 +7738,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         for _ in 0..10 {
             process_turn(&mut game);
@@ -7882,7 +7882,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        }
+            next_unit_id: 6_000_000,}
     }
 
     #[test]
@@ -7992,7 +7992,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         let report = process_turn(&mut game);
 
@@ -8174,7 +8174,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         // Process 12 turns to count down the town_countdown
         for _ in 0..12 {
@@ -8252,7 +8252,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         // Process only 11 turns — not enough
         for _ in 0..11 {
@@ -8331,7 +8331,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         // 7 turns: Hamlet → Village (1 to start countdown + 6 to count down)
         for _ in 0..7 {
@@ -8656,7 +8656,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        }
+            next_unit_id: 6_000_000,}
     }
 
     #[test]
@@ -9261,7 +9261,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         // Verify pact exists
         assert!(game.diplomacy.has_treaty(
@@ -9403,7 +9403,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         let mut report = TurnReport {
             turn: TurnNumber::new(1),
@@ -9583,7 +9583,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         let report = process_turn(&mut game);
 
@@ -9697,7 +9697,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         let report = process_turn(&mut game);
 
@@ -9948,7 +9948,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
         crate::military::combat::seed_militia_from_garrison_count(&mut game);
         game
     }
@@ -10222,7 +10222,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         let mut game = game_state;
 
@@ -10371,7 +10371,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         let connected = connected_provinces(&game, NationId(1));
         assert!(
@@ -10588,7 +10588,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         // Process several turns
         for _ in 0..10 {
@@ -10690,7 +10690,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         process_turn(&mut game);
 
@@ -10811,7 +10811,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
         // Seed persistent militia so the defender actually has units in
         // the fortified province (otherwise the auto-conquer path fires
         // and the siege-reduction logic never runs).
@@ -10987,7 +10987,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         process_turn(&mut game);
 
@@ -11338,7 +11338,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         assert!(
             can_attack_province(&game, NationId(1), ProvinceId(2)),
@@ -11416,7 +11416,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         assert!(
             !can_attack_province(&game, NationId(1), ProvinceId(2)),
@@ -11487,7 +11487,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         assert!(
             can_attack_province(&game, NationId(1), ProvinceId(2)),
@@ -11558,7 +11558,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         assert!(
             !can_attack_province(&game, NationId(1), ProvinceId(2)),
@@ -11695,7 +11695,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        }
+            next_unit_id: 6_000_000,}
     }
 
     #[test]
@@ -12241,14 +12241,17 @@ mod tests {
         // Stage militia excess at P1 (Nation 1's own) and verify they
         // migrate into P2 after conquest.
         let mut game = test_game_for_counter_attack();
-        let n1 = game.get_nation_mut(NationId(1)).unwrap();
         // Add 4 extra militia to P1 (default 4 for GP + 4 extra = 8).
+        let mut extra = Vec::new();
         for _ in 0..4 {
-            n1.army.push(crate::military::combat::spawn_militia_unit(
+            extra.push(crate::military::combat::spawn_militia_unit(
+                &mut game.next_unit_id,
                 NationId(1),
                 ProvinceId(1),
             ));
         }
+        let n1 = game.get_nation_mut(NationId(1)).unwrap();
+        n1.army.extend(extra);
         sync_garrison_cache(&mut game, ProvinceId(1));
         // Bump attacker force to guarantee conquest.
         let n1 = game.get_nation_mut(NationId(1)).unwrap();
@@ -12372,12 +12375,21 @@ mod tests {
         use crate::military::combat::spawn_militia_unit;
 
         let mut game = test_game_for_counter_attack();
-        let n2 = game.get_nation_mut(NationId(2)).unwrap();
-        n2.capital_province_id = ProvinceId(3);
-        // Fill P3 to the cap (8 by default: 3 from fixture + 5 extra).
-        for _ in 0..5 {
-            n2.army.push(spawn_militia_unit(NationId(2), ProvinceId(3)));
+        {
+            let n2 = game.get_nation_mut(NationId(2)).unwrap();
+            n2.capital_province_id = ProvinceId(3);
         }
+        // Fill P3 to the cap (8 by default: 3 from fixture + 5 extra).
+        let mut extra = Vec::new();
+        for _ in 0..5 {
+            extra.push(spawn_militia_unit(
+                &mut game.next_unit_id,
+                NationId(2),
+                ProvinceId(3),
+            ));
+        }
+        let n2 = game.get_nation_mut(NationId(2)).unwrap();
+        n2.army.extend(extra);
         sync_garrison_cache(&mut game, ProvinceId(3));
         assert_eq!(
             game.get_nation(NationId(2))
@@ -12452,9 +12464,13 @@ mod tests {
         use crate::map::UnitId;
         use crate::military::combat::spawn_garrison_artillery_unit;
         let mut game = test_game_for_counter_attack();
-        let n2 = game.get_nation_mut(NationId(2)).unwrap();
-        let artillery = spawn_garrison_artillery_unit(NationId(2), ProvinceId(2));
+        let artillery = spawn_garrison_artillery_unit(
+            &mut game.next_unit_id,
+            NationId(2),
+            ProvinceId(2),
+        );
         let artillery_id = artillery.id;
+        let n2 = game.get_nation_mut(NationId(2)).unwrap();
         n2.army.push(artillery);
 
         // Overwhelming attacker: 12 Guards to crush militia + artillery.
@@ -12868,7 +12884,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         game.pending_attacks.push((NationId(1), ProvinceId(2)));
         game.diplomacy.declare_war(NationId(1), NationId(2));
@@ -13059,7 +13075,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
         game.pending_attacks.push((NationId(1), ProvinceId(2)));
         game.diplomacy.declare_war(NationId(1), NationId(2));
 
@@ -13331,7 +13347,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
         game.pending_attacks.push((NationId(1), ProvinceId(2)));
         game.diplomacy.declare_war(NationId(1), NationId(2));
 
@@ -13477,7 +13493,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         let mut report = TurnReport::empty();
         resolve_alliance_obligations(&mut game, &mut report);
@@ -13743,7 +13759,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         (game, NationId(1), NationId(2), ProvinceId(1), ProvinceId(2))
     }
@@ -14011,7 +14027,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         let mut report = TurnReport::empty();
         apply_end_of_combat_anarchy(&mut game, &mut report);
@@ -14444,7 +14460,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
         game.pending_attacks.push((NationId(1), ProvinceId(3)));
         game.diplomacy.declare_war(NationId(1), NationId(3));
 

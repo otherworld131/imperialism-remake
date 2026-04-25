@@ -1201,7 +1201,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         ai_distribute_field_army(&mut game, NationId(2), AiPersonality::Balanced);
 
@@ -1390,7 +1390,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
 
         assert_eq!(
             capital_threat_level(&game, NationId(2)),
@@ -1513,7 +1513,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
         assert_eq!(
             capital_threat_level(&game, NationId(2)),
             CapitalThreat::Safe,
@@ -1608,7 +1608,7 @@ mod tests {
             last_resource_flow: std::collections::HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        };
+            next_unit_id: 6_000_000,};
         assert_eq!(
             capital_threat_level(&game, NationId(2)),
             CapitalThreat::Imminent,

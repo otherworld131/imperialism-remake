@@ -892,7 +892,7 @@ mod tests {
             last_resource_flow: HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-        }
+            next_unit_id: 6_000_000,}
     }
 
     #[test]

@@ -518,7 +518,7 @@ mod tests {
             resource: ResourceType::Timber,
             quantity: 3,
             total_cost: Money::dollars(30),
-        });
+                bought: true,});
         // Turn 4 (previous) — should count
         nation.trade_history.push(TradeHistoryEntry {
             turn: TurnNumber(4),
@@ -526,7 +526,7 @@ mod tests {
             resource: ResourceType::Coal,
             quantity: 2,
             total_cost: Money::dollars(20),
-        });
+                bought: true,});
         // Turn 3 (older) — should NOT count
         nation.trade_history.push(TradeHistoryEntry {
             turn: TurnNumber(3),
@@ -534,7 +534,7 @@ mod tests {
             resource: ResourceType::Iron,
             quantity: 10,
             total_cost: Money::dollars(100),
-        });
+                bought: true,});
 
         let data = get_trade_screen(&game);
         let capacity = game.get_nation(human_id).unwrap().total_cargo_capacity();
