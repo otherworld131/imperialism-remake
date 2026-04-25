@@ -113,6 +113,11 @@ economic = {
     coalition_prov_weight = 0.3,
     coalition_econ_weight = 0.3,
 
+    -- Economic-score multipliers (economy-heavy: weight workers more, treasury less)
+    econ_score_treasury_divisor = 8000.0,   -- treasury contributes more (smaller divisor)
+    econ_score_buildings_multiplier = 0.15, -- buildings count more for an economic AI
+    econ_score_workers_multiplier = 0.07,   -- workforce premium
+
     -- Peace proposal thresholds
     peace_accept_threshold = 0.45,
     peace_reject_threshold = 0.70,
