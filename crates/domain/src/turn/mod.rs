@@ -1,3 +1,6 @@
+pub mod civilian_phase;
+pub mod economy_phase;
+pub mod news_phase;
 pub mod processor;
 pub mod scoring;
 

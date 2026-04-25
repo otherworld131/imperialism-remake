@@ -502,11 +502,15 @@ pub(crate) fn ai_declare_wars(
             .unwrap_or_else(|| "Unknown".to_string());
 
         // ── 1. Cooldown check ──────────────────────────────────
-        let war_prefix = format!("{} declared war on", attacker_name);
         let last_war_turn: Option<u32> = game
             .history
             .iter()
-            .filter(|(_, msg)| msg.starts_with(&war_prefix))
+            .filter(|(_, ev)| {
+                matches!(
+                    ev,
+                    crate::events::HistoryEvent::WarDeclared { attacker, .. } if *attacker == ai_id
+                )
+            })
             .map(|(t, _)| t.0)
             .max();
         if let Some(last) = last_war_turn
@@ -1073,7 +1077,11 @@ pub(crate) fn ai_declare_wars(
         let turn = game.turn;
         game.history.push((
             turn,
-            format!("{} declared war on {}", attacker_name, target_name),
+            crate::events::HistoryEvent::WarDeclared {
+                attacker: ai_id,
+                defender: target_id,
+                protectee: None,
+            },
         ));
     }
 }
@@ -1706,7 +1714,11 @@ mod tests {
         game.turn = TurnNumber::new(15);
         game.history.push((
             TurnNumber::new(10),
-            "AINation declared war on SomeNation".to_string(),
+            crate::events::HistoryEvent::WarDeclared {
+                attacker: NationId(2),
+                defender: NationId(99),
+                protectee: None,
+            },
         ));
 
         let mut actions = Vec::new();

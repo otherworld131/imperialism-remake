@@ -15,9 +15,15 @@ use crate::map::infrastructure::is_province_connected_multi;
 use crate::military::combat::{
     BattleConfig, BattleResult, CombatForce, TargetingPriority, resolve_battle_with_config,
 };
-use crate::military::naval::{NavalBattleResult, calculate_blockade_effect, resolve_naval_battle};
+use crate::military::naval::{NavalBattleResult, resolve_naval_battle};
 use crate::military::ships::Ship;
 use crate::military::units::{ArmyUnit, ArmyUnitType};
+use crate::turn::civilian_phase::{update_province_connectivity, update_settlements};
+use crate::turn::economy_phase::{
+    apply_blockade_effects, apply_maintenance, apply_warehouse_caps, compute_blockade_capacity,
+    tick_buildings,
+};
+use crate::turn::news_phase::generate_newspaper;
 use crate::turn::scoring::{CouncilVoteResult, calculate_score, run_council_vote};
 use crate::types::*;
 use std::collections::{HashMap, HashSet};
@@ -1081,155 +1087,6 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
     }
 }
 
-/// Update settlement progression for connected provinces.
-///
-/// For each province connected to its nation's capital via depot/port:
-/// - If the province just became connected, start the industrialization countdown (6 turns).
-/// - Tick down the industrialization counter each turn.
-/// - When the countdown reaches 0 and the settlement is a Hamlet, upgrade to Village.
-///
-/// Also recomputes capital connectivity for all Great Power provinces.
-/// A province is connected if:
-///   1. It IS the nation's capital province, OR
-///   2. The infrastructure system (railroads/depots/ports) connects it
-///      (via `is_province_connected`), OR
-///   3. The province is directly adjacent to the capital province —
-///      this ensures early-game settlement progression before railroads
-///      are built.
-fn update_province_connectivity(game: &mut GameState) {
-    let nation_ids: Vec<NationId> = game
-        .nations
-        .iter()
-        .filter(|n| n.is_great_power() && !n.is_in_anarchy)
-        .map(|n| n.id)
-        .collect();
-
-    for nation_id in nation_ids {
-        let connected = connected_provinces(game, nation_id);
-        for prov in game.provinces.iter_mut() {
-            // Only upgrade connectivity (false → true), never downgrade.
-            // Full disconnection tracking will be added with the transport system.
-            if prov.owner == nation_id && connected.contains(&prov.id) {
-                prov.connected_to_capital = true;
-            }
-        }
-    }
-}
-
-fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
-    // Collect province IDs and their owner for processing
-    let province_data: Vec<(ProvinceId, NationId)> =
-        game.provinces.iter().map(|p| (p.id, p.owner)).collect();
-
-    for (province_id, owner_id) in &province_data {
-        let province = match game.provinces.iter().find(|p| p.id == *province_id) {
-            Some(p) => p,
-            None => continue,
-        };
-
-        let owner_nation = game.nations.iter().find(|n| n.id == *owner_id);
-
-        // Skip settlement progression for Minor Nation provinces or anarchic nations
-        let skip = owner_nation
-            .map(|n| !n.is_great_power() || n.is_in_anarchy)
-            .unwrap_or(false);
-        if skip {
-            continue;
-        }
-
-        if province.connected_to_capital {
-            let mut just_became_village = false;
-
-            match province.industrialization_turns_remaining {
-                None => {
-                    // Just connected or already industrialized; if still Hamlet, start countdown
-                    if province.settlement_level == SettlementLevel::Hamlet {
-                        let prov = game
-                            .provinces
-                            .iter_mut()
-                            .find(|p| p.id == *province_id)
-                            .unwrap();
-                        prov.industrialization_turns_remaining = Some(6);
-                    }
-                }
-                Some(remaining) => {
-                    if remaining <= 1 {
-                        // Countdown complete: upgrade settlement
-                        let prov = game
-                            .provinces
-                            .iter_mut()
-                            .find(|p| p.id == *province_id)
-                            .unwrap();
-
-                        if prov.settlement_level == SettlementLevel::Hamlet {
-                            prov.settlement_level = SettlementLevel::Village;
-                            prov.industrialization_turns_remaining = None;
-                            // Start the Town countdown (12 turns)
-                            prov.town_countdown = Some(12);
-                            just_became_village = true;
-
-                            let headline = format!("{} has grown into a Village!", prov.name);
-                            report
-                                .newspaper_headlines
-                                .push(Headline::new(headline.clone(), HeadlineCategory::Growth).for_nation(*owner_id));
-                            report
-                                .settlement_upgrades
-                                .push((*province_id, "Village".to_string()));
-                        } else {
-                            prov.industrialization_turns_remaining = None;
-                        }
-                    } else {
-                        // Tick down
-                        let prov = game
-                            .provinces
-                            .iter_mut()
-                            .find(|p| p.id == *province_id)
-                            .unwrap();
-                        prov.industrialization_turns_remaining = Some(remaining - 1);
-                    }
-                }
-            }
-
-            // Village → Town progression: tick down the town_countdown
-            // Skip if the province just became a Village this turn
-            if !just_became_village {
-                let prov_level = game
-                    .provinces
-                    .iter()
-                    .find(|p| p.id == *province_id)
-                    .map(|p| (p.settlement_level, p.town_countdown));
-
-                if let Some((SettlementLevel::Village, Some(remaining))) = prov_level {
-                    if remaining <= 1 {
-                        let prov = game
-                            .provinces
-                            .iter_mut()
-                            .find(|p| p.id == *province_id)
-                            .unwrap();
-                        prov.settlement_level = SettlementLevel::Town;
-                        prov.town_countdown = None;
-
-                        let headline = format!("{} has grown into a Town!", prov.name);
-                        report
-                            .newspaper_headlines
-                            .push(Headline::new(headline.clone(), HeadlineCategory::Growth).for_nation(*owner_id));
-                        report
-                            .settlement_upgrades
-                            .push((*province_id, "Town".to_string()));
-                    } else {
-                        let prov = game
-                            .provinces
-                            .iter_mut()
-                            .find(|p| p.id == *province_id)
-                            .unwrap();
-                        prov.town_countdown = Some(remaining - 1);
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Resolve civilian work actions for all nations.
 ///
 /// For each nation, ticks all working civilians. When work completes:
@@ -1857,15 +1714,6 @@ fn resolve_town_production(game: &mut GameState, report: &mut TurnReport) {
     }
 }
 
-/// Tick all buildings for all nations, advancing expansion timers.
-fn tick_buildings(game: &mut GameState) {
-    for nation in &mut game.nations {
-        for building in &mut nation.economy.buildings {
-            building.tick();
-        }
-    }
-}
-
 /// Process food: convert raw food into canned food using FoodProcessing buildings.
 ///
 /// If a nation has a FoodProcessing building and raw food (grain/fruit/livestock),
@@ -2327,45 +2175,6 @@ fn resolve_trade_session(
 }
 
 /// Apply maintenance costs for army units.
-/// Bankruptcy floor: treasury cannot go below $0.
-const BANKRUPTCY_FLOOR: Money = Money::ZERO;
-
-fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
-    for nation in &mut game.nations {
-        if nation.is_in_anarchy {
-            continue;
-        }
-        let total_cost: Money = nation
-            .army
-            .iter()
-            .map(|u| u.maintenance_cost())
-            .fold(Money::ZERO, |acc, c| acc + c);
-        if total_cost != Money::ZERO {
-            nation.economy.treasury -= total_cost;
-            report.maintenance_costs.push((nation.id, total_cost));
-        }
-
-        // Bankruptcy protection: treasury cannot go below $0. The clamp
-        // represents debt forgiven mid-turn — we surface it as income in the
-        // cash-flow ledger so the reconciliation invariant closes.
-        if nation.economy.treasury < BANKRUPTCY_FLOOR {
-            let writeoff = Money::from_cents(BANKRUPTCY_FLOOR.cents() - nation.economy.treasury.cents());
-            nation.economy.treasury = BANKRUPTCY_FLOOR;
-            if writeoff > Money::ZERO {
-                report.bankruptcy_writeoff.push((nation.id, writeoff));
-            }
-        }
-
-        // Generate bankruptcy headline if treasury went negative
-        if nation.is_bankrupt() {
-            report.newspaper_headlines.push(Headline::new(
-                format!("FINANCIAL CRISIS: {} faces bankruptcy!", nation.name),
-                HeadlineCategory::Crisis,
-            ).for_nation(nation.id));
-        }
-    }
-}
-
 /// Resolve beachhead (naval landing) operations.
 ///
 /// For each nation with warships assigned to `Beachhead(target_province)`:
@@ -2940,25 +2749,14 @@ fn resolve_combat(
                 ).for_nation(attacker_id));
             }
 
-            let attacker_name = game
-                .get_nation(attacker_id)
-                .map(|n| n.name.clone())
-                .unwrap_or_default();
-            let prov_name = game
-                .get_province(province_id)
-                .map(|p| p.name.clone())
-                .unwrap_or_else(|| format!("Province {:?}", province_id));
-            let defender_name = game
-                .get_nation(defender_id)
-                .map(|n| n.name.clone())
-                .unwrap_or_default();
             let turn = game.turn;
             game.history.push((
                 turn,
-                format!(
-                    "{} conquered {} from {}",
-                    attacker_name, prov_name, defender_name
-                ),
+                HistoryEvent::ProvinceConquered {
+                    conqueror: attacker_id,
+                    loser: defender_id,
+                    province: province_id,
+                },
             ));
             // Anarchy handled by the end-of-combat sweep.
             continue;
@@ -3238,10 +3036,11 @@ fn resolve_combat(
             // Record history event
             game.history.push((
                 game.turn,
-                format!(
-                    "{} conquered {} from {}{}",
-                    atk_name, prov_name, def_name_conquest, origin_suffix
-                ),
+                HistoryEvent::ProvinceConquered {
+                    conqueror: attacker_id,
+                    loser: defender_id,
+                    province: province_id,
+                },
             ));
 
             // Anarchy is evaluated in a single end-of-combat sweep
@@ -4067,7 +3866,8 @@ fn check_and_apply_anarchy(
         HeadlineCategory::War,
     ).for_nation(nation_id));
     game.history
-        .push((game.turn, format!("{} fell into anarchy", name)));
+        .push((game.turn, HistoryEvent::FellIntoAnarchy { nation: nation_id }));
+    let _ = name;
     true
 }
 
@@ -4210,10 +4010,10 @@ fn release_integrated_minors(
         ).for_nations(&[minor_id, overlord_id]));
         game.history.push((
             game.turn,
-            format!(
-                "{} regained independence after {} fell into anarchy",
-                minor_name, overlord_name
-            ),
+            HistoryEvent::RegainedIndependence {
+                minor: minor_id,
+                former_overlord: overlord_id,
+            },
         ));
         released.push(minor_id);
     }
@@ -4430,10 +4230,11 @@ fn run_pact_defense_cascade(
                 ).for_nations(&[gp_id, attacker_id, minor_id]));
                 game.history.push((
                     game.turn,
-                    format!(
-                        "{} declared war on {} to protect {}",
-                        gp_name, attacker_name, defender_name
-                    ),
+                    HistoryEvent::WarDeclared {
+                        attacker: gp_id,
+                        defender: attacker_id,
+                        protectee: Some(minor_id),
+                    },
                 ));
 
                 incorporate_minor_into_empire(
@@ -4441,7 +4242,7 @@ fn run_pact_defense_cascade(
                     minor_id,
                     gp_id,
                     report,
-                    "joined the empire of",
+                    IncorporationReason::JoinedEmpire,
                 );
                 return; // Stop cascade — one protector is enough
             } else {
@@ -4539,13 +4340,20 @@ pub fn accept_pact_defense(
     ).for_nations(&[protector_id, attacker_id, minor_id]));
     game.history.push((
         game.turn,
-        format!(
-            "{} declared war on {} to protect {}",
-            protector_name, attacker_name, minor_name
-        ),
+        HistoryEvent::WarDeclared {
+            attacker: protector_id,
+            defender: attacker_id,
+            protectee: Some(minor_id),
+        },
     ));
 
-    incorporate_minor_into_empire(game, minor_id, protector_id, report, "joined the empire of");
+    incorporate_minor_into_empire(
+        game,
+        minor_id,
+        protector_id,
+        report,
+        IncorporationReason::JoinedEmpire,
+    );
 }
 
 /// Continue the pact defense cascade after the human player rejects.
@@ -4682,116 +4490,6 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
         }
 
         report.naval_battles.push(result);
-    }
-}
-
-/// Compute blockade-adjusted cargo capacity for all Great Powers.
-///
-/// For each GP at war with an enemy that has warships, reduce their effective
-/// cargo capacity using `calculate_blockade_effect`. This map is passed to the
-/// trade session so blockades actually reduce trade volume.
-fn compute_blockade_capacity(game: &GameState) -> std::collections::HashMap<NationId, u32> {
-    // Only consider active Great Powers (not anarchic, not eliminated)
-    let active_gp_ids: Vec<NationId> = game
-        .nations
-        .iter()
-        .filter(|n| n.is_great_power() && !n.is_in_anarchy && !n.province_ids.is_empty())
-        .map(|n| n.id)
-        .collect();
-
-    let mut capacity_map = std::collections::HashMap::new();
-
-    for &nation_id in &active_gp_ids {
-        let nation = match game.get_nation(nation_id) {
-            Some(n) => n,
-            None => continue,
-        };
-        let raw_cargo = nation.total_cargo_capacity();
-
-        // Only count warships from active enemy nations, and only if the war
-        // is past its one-turn grace period (card #104: blockade, like every
-        // other hostile action, doesn't fire on the declaration turn).
-        let mut enemy_warship_count: u32 = 0;
-        for &other_id in &active_gp_ids {
-            if other_id == nation_id {
-                continue;
-            }
-            let hostile = game
-                .diplomacy
-                .get_relation(nation_id, other_id)
-                .is_some_and(|r| r.hostilities_active_on(game.turn));
-            if hostile && let Some(other) = game.get_nation(other_id) {
-                enemy_warship_count += other.warship_count() as u32;
-            }
-        }
-
-        let effective = if enemy_warship_count > 0 {
-            calculate_blockade_effect(raw_cargo, enemy_warship_count)
-        } else {
-            raw_cargo
-        };
-        capacity_map.insert(nation_id, effective);
-    }
-
-    capacity_map
-}
-
-/// Apply blockade effects: reduce effective trade cargo capacity for nations
-/// whose enemies have warships.
-///
-/// This is a simplified model: for each nation at war with an enemy that has
-/// warships, the nation's effective cargo for trade is reduced. We apply this
-/// by recording it for reference (the actual trade resolution already happened,
-/// but the blockade effect adds a newspaper headline).
-fn apply_blockade_effects(game: &GameState, report: &mut TurnReport) {
-    let gp_ids: Vec<NationId> = game
-        .nations
-        .iter()
-        .filter(|n| n.is_great_power())
-        .map(|n| n.id)
-        .collect();
-
-    for &nation_id in &gp_ids {
-        let nation = match game.get_nation(nation_id) {
-            Some(n) => n,
-            None => continue,
-        };
-
-        let cargo = nation.total_cargo_capacity();
-        if cargo == 0 {
-            continue;
-        }
-
-        // Sum up enemy warship counts, gated by the one-turn grace period
-        // (card #104: blockade effects don't apply on the declaration turn).
-        let mut enemy_warship_count: u32 = 0;
-        for &other_id in &gp_ids {
-            if other_id == nation_id {
-                continue;
-            }
-            let hostile = game
-                .diplomacy
-                .get_relation(nation_id, other_id)
-                .is_some_and(|r| r.hostilities_active_on(game.turn));
-            if hostile && let Some(other) = game.get_nation(other_id) {
-                enemy_warship_count += other.warship_count() as u32;
-            }
-        }
-
-        if enemy_warship_count > 0 {
-            let effective_cargo = calculate_blockade_effect(cargo, enemy_warship_count);
-            let blocked = cargo - effective_cargo;
-            if blocked > 0 {
-                let nation_name = &nation.name;
-                report.newspaper_headlines.push(Headline::new(
-                    format!(
-                        "BLOCKADE: {} merchant fleet loses {} cargo capacity to enemy warships",
-                        nation_name, blocked
-                    ),
-                    HeadlineCategory::Battle,
-                ).for_nation(nation_id));
-            }
-        }
     }
 }
 
@@ -4965,14 +4663,6 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
     for &(a, b) in &mutual_peace {
         if game.diplomacy.is_at_war(a, b) {
             game.diplomacy.queue_peace(a, b);
-            let name_a = game
-                .get_nation(a)
-                .map(|n| n.name.clone())
-                .unwrap_or_default();
-            let name_b = game
-                .get_nation(b)
-                .map(|n| n.name.clone())
-                .unwrap_or_default();
             report
                 .events
                 .push(DomainEvent::TreatyAccepted(crate::events::TreatyAccepted {
@@ -4981,10 +4671,7 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                     treaty_type: TreatyType::PeaceTreaty,
                 }));
             let turn = game.turn;
-            game.history.push((
-                turn,
-                format!("{} and {} agreed to mutual peace", name_a, name_b),
-            ));
+            game.history.push((turn, HistoryEvent::MutualPeace { a, b }));
         }
     }
 
@@ -5089,10 +4776,11 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                     let turn = game.turn;
                     game.history.push((
                         turn,
-                        format!(
-                            "{} accepted {}'s {} proposal",
-                            to_name, from_name, treaty_label
-                        ),
+                        HistoryEvent::TreatyProposalAccepted {
+                            acceptor: target_id,
+                            proposer: human,
+                            treaty_type: proposal.proposal_type,
+                        },
                     ));
                 } else {
                     // AI accepted but treaty could not be applied (state drift)
@@ -5221,10 +4909,11 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
                     let turn = game.turn;
                     game.history.push((
                         turn,
-                        format!(
-                            "{} accepted {}'s {} proposal",
-                            to_name, from_name, treaty_label
-                        ),
+                        HistoryEvent::TreatyProposalAccepted {
+                            acceptor: target_id,
+                            proposer: from_id,
+                            treaty_type: proposal.proposal_type,
+                        },
                     ));
                 } else {
                     // AI accepted but treaty could not be applied (state drift)
@@ -5473,15 +5162,15 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
     }
 
     // Actually declare the new wars (done after collecting to avoid borrow issues)
-    for (ally, enemy, ally_name, enemy_name) in &new_wars {
+    for (ally, enemy, _ally_name, _enemy_name) in &new_wars {
         let turn = game.turn;
         game.diplomacy.declare_war_at(*ally, *enemy, turn);
         game.history.push((
             turn,
-            format!(
-                "{} joined war against {} (alliance obligation)",
-                ally_name, enemy_name
-            ),
+            HistoryEvent::JoinedWar {
+                joiner: *ally,
+                target: *enemy,
+            },
         ));
     }
 }
@@ -5499,7 +5188,7 @@ fn incorporate_minor_into_empire(
     minor_id: NationId,
     gp_id: NationId,
     report: &mut TurnReport,
-    reason: &str,
+    reason: IncorporationReason,
 ) {
     let provinces_to_transfer: Vec<ProvinceId> = game
         .get_nation(minor_id)
@@ -5555,15 +5244,6 @@ fn incorporate_minor_into_empire(
     // party; any pact-defense dedup entry involving it is stale.
     game.diplomacy.clear_pact_defense_for_nation(minor_id);
 
-    let minor_name = game
-        .get_nation(minor_id)
-        .map(|n| n.name.clone())
-        .unwrap_or_else(|| "Unknown".to_string());
-    let gp_name = game
-        .get_nation(gp_id)
-        .map(|n| n.name.clone())
-        .unwrap_or_else(|| "Unknown".to_string());
-
     report
         .events
         .push(DomainEvent::NationIncorporated(NationIncorporated {
@@ -5575,8 +5255,14 @@ fn incorporate_minor_into_empire(
 
     award_first_colony_clippers(game, gp_id, report);
 
-    game.history
-        .push((game.turn, format!("{} {} {}", minor_name, reason, gp_name)));
+    game.history.push((
+        game.turn,
+        HistoryEvent::MinorJoinedEmpire {
+            minor: minor_id,
+            overlord: gp_id,
+            reason,
+        },
+    ));
 }
 
 fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnReport) {
@@ -5630,7 +5316,7 @@ fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnRepor
                 *minor_id,
                 gp_id,
                 report,
-                "voluntarily joined the empire of",
+                IncorporationReason::VoluntarilyJoinedEmpire,
             );
         }
     }
@@ -5923,129 +5609,6 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
     }
 }
 
-fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
-    let year = game.turn.year();
-    let quarter = game.turn.quarter();
-
-    report.newspaper_headlines.push(Headline::new(
-        format!("The Imperial Times - {year} Q{quarter}"),
-        HeadlineCategory::Default,
-    ));
-
-    // AI actions (tech research, military buildup, war declarations).
-    // Non-actions ("considered but declined") flow through with is_non_action=true
-    // so the UI can filter them behind a debug toggle.
-    for action in &report.ai_actions {
-        let category = if action.text.contains("declared war on")
-            || action.text.contains("did not declare war")
-            || action.text.contains("held back from war")
-        {
-            HeadlineCategory::War
-        } else {
-            HeadlineCategory::Default
-        };
-        let headline = if action.is_non_action {
-            Headline::non_action(action.text.clone(), category, action.reason.clone())
-        } else {
-            Headline::with_reason(action.text.clone(), category, action.reason.clone())
-        };
-        report.newspaper_headlines.push(headline.for_nation(action.nation_id));
-    }
-
-    // Voluntary incorporations — major headline
-    for (minor_id, gp_id) in &report.incorporations {
-        let minor_name = game
-            .get_nation(*minor_id)
-            .map(|n| n.name.clone())
-            .unwrap_or_else(|| "Unknown".to_string());
-        let gp_name = game
-            .get_nation(*gp_id)
-            .map(|n| n.name.clone())
-            .unwrap_or_else(|| "Unknown".to_string());
-        report.newspaper_headlines.push(Headline::new(
-            format!(
-                "BREAKING: {} has voluntarily joined the {} empire!",
-                minor_name, gp_name
-            ),
-            HeadlineCategory::Politics,
-        ).for_nations(&[*gp_id, *minor_id]));
-    }
-
-    // Unit upgrades — brief mention
-    if !report.unit_upgrades.is_empty() {
-        let upgrade_count = report.unit_upgrades.len();
-        report.newspaper_headlines.push(Headline::new(
-            format!(
-                "Military modernization: {} unit{} upgraded across the nations",
-                upgrade_count,
-                if upgrade_count == 1 { "" } else { "s" }
-            ),
-            HeadlineCategory::Military,
-        ));
-    }
-
-    // Trade activity headline for the human player
-    if !report.trade_transactions.is_empty()
-        && let Some(human_nation) = game.get_nation(game.human_player_nation)
-    {
-        let human_traded = report
-            .trade_transactions
-            .iter()
-            .any(|txn| txn.buyer == game.human_player_nation);
-        if human_traded {
-            report.newspaper_headlines.push(Headline::new(
-                format!(
-                    "Trade flourishes between {} and its partners",
-                    human_nation.name
-                ),
-                HeadlineCategory::Trade,
-            ).for_nation(game.human_player_nation));
-        }
-    }
-
-    if let Some(human_nation) = game.get_nation(game.human_player_nation) {
-        report.newspaper_headlines.push(Headline::new(
-            format!("The {} empire grows stronger", human_nation.name),
-            HeadlineCategory::Default,
-        ).for_nation(game.human_player_nation));
-    }
-
-    if game.turn.is_decade_election() {
-        report.newspaper_headlines.push(Headline::new(
-            "Council of Governors to convene!".to_string(),
-            HeadlineCategory::Politics,
-        ));
-    }
-
-    // Human player anarchy game-over notice
-    if game
-        .get_nation(game.human_player_nation)
-        .is_some_and(|n| n.is_in_anarchy)
-    {
-        report.newspaper_headlines.push(Headline::new(
-            "Your nation has fallen into anarchy! All governance has ceased.".to_string(),
-            HeadlineCategory::Crisis,
-        ).for_nation(game.human_player_nation));
-    }
-
-    // Period-appropriate flavor headlines that rotate based on turn number
-    let flavor_headlines = [
-        "Railroad expansion continues across the continent",
-        "Industrial production reaches new heights",
-        "Diplomatic tensions simmer between the Great Powers",
-        "Colonial ambitions drive the Great Powers forward",
-        "New trade routes open promising opportunities",
-        "The age of progress marches ever onward",
-        "Rumors of unrest in the frontier provinces",
-        "Great exhibitions showcase industrial might",
-    ];
-    let flavor_index = (game.turn.0 as usize) % flavor_headlines.len();
-    report.newspaper_headlines.push(Headline::new(
-        flavor_headlines[flavor_index].to_string(),
-        HeadlineCategory::Default,
-    ));
-}
-
 /// Calculate scores for all Great Powers and store them in the report.
 fn calculate_scores(game: &GameState, report: &mut TurnReport) {
     let mut scores: Vec<(NationId, String, u32)> = game
@@ -6097,48 +5660,6 @@ fn check_council_vote(game: &GameState, report: &mut TurnReport) {
     }
 
     report.council_vote = Some(result);
-}
-
-/// Apply warehouse capacity caps to prevent infinite resource accumulation.
-///
-/// Each nation's Warehouse building capacity determines storage limits:
-/// - Raw resources: capped at `50 * warehouse_capacity` per resource type
-/// - Materials: capped at `50 * warehouse_capacity` per material type
-/// - Finished goods: capped at `25 * warehouse_capacity` per goods type
-///
-/// Excess resources above the cap are silently lost (spoilage/waste).
-/// Nations without a Warehouse building use a default capacity of 1.
-fn apply_warehouse_caps(game: &mut GameState) {
-    for nation in &mut game.nations {
-        let warehouse_capacity = nation
-            .economy.buildings
-            .iter()
-            .find(|b| b.building_type == BuildingType::Warehouse)
-            .map(|b| b.effective_capacity())
-            .unwrap_or(1);
-
-        let raw_cap = 50 * warehouse_capacity;
-        let material_cap = 50 * warehouse_capacity;
-        let goods_cap = 25 * warehouse_capacity;
-
-        for amount in nation.economy.warehouse.values_mut() {
-            if *amount > raw_cap {
-                *amount = raw_cap;
-            }
-        }
-
-        for amount in nation.economy.materials.values_mut() {
-            if *amount > material_cap {
-                *amount = material_cap;
-            }
-        }
-
-        for amount in nation.economy.goods.values_mut() {
-            if *amount > goods_cap {
-                *amount = goods_cap;
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -8730,8 +8251,9 @@ mod tests {
 
         // History recorded
         assert!(!game.history.is_empty());
-        assert!(game.history[0].1.contains("Smallton"));
-        assert!(game.history[0].1.contains("Testlandia"));
+        let rendered = game.render_history_event(&game.history[0].1);
+        assert!(rendered.contains("Smallton"));
+        assert!(rendered.contains("Testlandia"));
     }
 
     #[test]

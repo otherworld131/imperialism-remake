@@ -763,22 +763,24 @@ pub(crate) fn research_tech(game: &mut GameState, query: &str) {
             player.economy.treasury -= tech_cost;
             player.research_tech(tech_id);
 
-            let player_name = player.name.clone();
             println!(
                 "  {}",
                 crate::display::color_green(&format!("Researched: {}!", tech_name))
             );
             println!("  Cost: {} (treasury now: {})", tech_cost, player.economy.treasury);
 
-            // Record history event (deduplicate: skip if same text already exists for this turn)
+            // Record history event (deduplicate: skip if same event already exists for this turn)
             let turn = game.turn;
-            let entry_text = format!("{} researched {}", player_name, tech_name);
+            let entry = domain::events::HistoryEvent::TechnologyResearched {
+                researcher: game.human_player_nation,
+                tech_name: tech_name.clone(),
+            };
             if !game
                 .history
                 .iter()
-                .any(|(t, text)| *t == turn && text == &entry_text)
+                .any(|(t, ev)| *t == turn && *ev == entry)
             {
-                game.history.push((turn, entry_text));
+                game.history.push((turn, entry));
             }
         }
         _ => {
@@ -1022,8 +1024,13 @@ pub(crate) fn cmd_consulate(game: &mut GameState, query: &str) {
 
             // Record history event
             let turn = game.turn;
-            game.history
-                .push((turn, format!("Trade consulate built with {}", target_name)));
+            game.history.push((
+                turn,
+                domain::events::HistoryEvent::ConsulateBuilt {
+                    player: player_id,
+                    target: target_id,
+                },
+            ));
         }
         Err(e) => {
             println!("  Cannot build consulate: {}", e);
@@ -1081,8 +1088,13 @@ pub(crate) fn cmd_embassy(game: &mut GameState, query: &str) {
 
             // Record history event
             let turn = game.turn;
-            game.history
-                .push((turn, format!("Embassy built with {}", target_name)));
+            game.history.push((
+                turn,
+                domain::events::HistoryEvent::EmbassyBuilt {
+                    player: player_id,
+                    target: target_id,
+                },
+            ));
         }
         Err(e) => {
             println!("  Cannot build embassy: {}", e);
@@ -1125,10 +1137,6 @@ pub(crate) fn cmd_war(game: &mut GameState, query: &str) {
 
     let turn = game.turn;
     game.diplomacy.declare_war_at(player_id, target_id, turn);
-    let player_name = game
-        .get_nation(player_id)
-        .map(|n| n.name.clone())
-        .unwrap_or_else(|| "Unknown".to_string());
     println!();
     println!("  ╔════════════════════════════════════════╗");
     println!("  ║  DECLARATION OF WAR                    ║");
@@ -1147,7 +1155,11 @@ pub(crate) fn cmd_war(game: &mut GameState, query: &str) {
     let turn = game.turn;
     game.history.push((
         turn,
-        format!("{} declared war on {}", player_name, target_name),
+        domain::events::HistoryEvent::WarDeclared {
+            attacker: player_id,
+            defender: target_id,
+            protectee: None,
+        },
     ));
 }
 
@@ -1175,10 +1187,6 @@ pub(crate) fn cmd_peace(game: &mut GameState, query: &str) {
     }
 
     let _ = game.diplomacy.make_peace(player_id, target_id);
-    let player_name = game
-        .get_nation(player_id)
-        .map(|n| n.name.clone())
-        .unwrap_or_else(|| "Unknown".to_string());
     println!(
         "  {}",
         crate::display::color_green(&format!("Peace has been established with {}.", target_name))
@@ -1189,7 +1197,10 @@ pub(crate) fn cmd_peace(game: &mut GameState, query: &str) {
     let turn = game.turn;
     game.history.push((
         turn,
-        format!("{} signed peace with {}", player_name, target_name),
+        domain::events::HistoryEvent::PeaceSigned {
+            a: player_id,
+            b: target_id,
+        },
     ));
 }
 
@@ -1229,16 +1240,12 @@ pub(crate) fn cmd_pact(game: &mut GameState, query: &str) {
                 ))
             );
             let turn = game.turn;
-            let player_name = game
-                .get_nation(player_id)
-                .map(|n| n.name.clone())
-                .unwrap_or_default();
             game.history.push((
                 turn,
-                format!(
-                    "{} signed non-aggression pact with {}",
-                    player_name, target_name
-                ),
+                domain::events::HistoryEvent::NonAggressionPactSigned {
+                    signer: player_id,
+                    partner: target_id,
+                },
             ));
         }
         Err(e) => {
@@ -1285,13 +1292,12 @@ pub(crate) fn cmd_alliance(game: &mut GameState, query: &str) {
                 crate::display::color_green(&format!("Alliance formed with {}!", target_name))
             );
             let turn = game.turn;
-            let player_name = game
-                .get_nation(player_id)
-                .map(|n| n.name.clone())
-                .unwrap_or_default();
             game.history.push((
                 turn,
-                format!("{} formed an alliance with {}", player_name, target_name),
+                domain::events::HistoryEvent::AllianceFormed {
+                    signer: player_id,
+                    partner: target_id,
+                },
             ));
         }
         Err(e) => {

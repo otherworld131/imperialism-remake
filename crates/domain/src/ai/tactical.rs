@@ -739,7 +739,7 @@ fn ai_propose_peace(
 
         // ── Decide whether to propose peace ─────────────────
         // Lua hook can override the decision
-        let war_start = super::assessment::find_war_start_turn(game, &nation_name, &enemy_name);
+        let war_start = super::assessment::find_war_start_turn(game, nation_id, enemy_id);
         let war_duration = war_start
             .map(|start| game.turn.0.saturating_sub(start))
             .unwrap_or(0);
@@ -859,7 +859,10 @@ fn ai_propose_peace(
                 let turn = game.turn;
                 game.history.push((
                     turn,
-                    format!("{} made peace with {}", nation_name, enemy_name),
+                    crate::events::HistoryEvent::PeaceMade {
+                        a: nation_id,
+                        b: enemy_id,
+                    },
                 ));
             } else if game.ai_debug {
                 eprintln!(
@@ -920,7 +923,10 @@ fn ai_propose_peace(
             let turn = game.turn;
             game.history.push((
                 turn,
-                format!("{} made peace with {}", nation_name, enemy_name),
+                crate::events::HistoryEvent::PeaceMade {
+                    a: nation_id,
+                    b: enemy_id,
+                },
             ));
         }
     }
@@ -1639,22 +1645,35 @@ mod tests {
 
     #[test]
     fn ai_proposes_peace_after_heavy_losses() {
+        use crate::events::HistoryEvent;
         let mut game = test_game_with_adjacent_provinces();
         game.turn = TurnNumber::new(25);
 
         // Record war declaration and province losses in history
         game.history.push((
             TurnNumber::new(1),
-            "AINation declared war on EnemyLand".to_string(),
+            HistoryEvent::WarDeclared {
+                attacker: NationId(2),
+                defender: NationId(3),
+                protectee: None,
+            },
         ));
         // AI lost 2 provinces (meeting Balanced lost_enough_losses threshold)
         game.history.push((
             TurnNumber::new(10),
-            "EnemyLand conquered Province A from AINation".to_string(),
+            HistoryEvent::ProvinceConquered {
+                conqueror: NationId(3),
+                loser: NationId(2),
+                province: ProvinceId(2),
+            },
         ));
         game.history.push((
             TurnNumber::new(15),
-            "EnemyLand conquered Province B from AINation".to_string(),
+            HistoryEvent::ProvinceConquered {
+                conqueror: NationId(3),
+                loser: NationId(2),
+                province: ProvinceId(2),
+            },
         ));
 
         // Make AI weaker: enemy has more provinces
@@ -1691,12 +1710,17 @@ mod tests {
 
     #[test]
     fn diplomatic_ai_proposes_peace_earlier() {
+        use crate::events::HistoryEvent;
         let mut game = test_game_with_adjacent_provinces();
         game.turn = TurnNumber::new(15);
 
         game.history.push((
             TurnNumber::new(1),
-            "AINation declared war on EnemyLand".to_string(),
+            HistoryEvent::WarDeclared {
+                attacker: NationId(2),
+                defender: NationId(3),
+                protectee: None,
+            },
         ));
 
         // Make AI "losing"
@@ -1728,12 +1752,17 @@ mod tests {
 
     #[test]
     fn aggressive_ai_fights_longer() {
+        use crate::events::HistoryEvent;
         let mut game = test_game_with_adjacent_provinces();
         game.turn = TurnNumber::new(25);
 
         game.history.push((
             TurnNumber::new(1),
-            "AINation declared war on EnemyLand".to_string(),
+            HistoryEvent::WarDeclared {
+                attacker: NationId(2),
+                defender: NationId(3),
+                protectee: None,
+            },
         ));
 
         // Make AI "losing"
@@ -1772,22 +1801,25 @@ mod tests {
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Balanced);
         // AI has 1 province (ProvinceId(2)) but lost 3 provinces in history
+        use crate::events::HistoryEvent;
         game.history.push((
             TurnNumber::new(5),
-            "AINation declared war on HumanNation".to_string(),
+            HistoryEvent::WarDeclared {
+                attacker: NationId(2),
+                defender: NationId(1),
+                protectee: None,
+            },
         ));
-        game.history.push((
-            TurnNumber::new(10),
-            "HumanNation conquered Province A from AINation".to_string(),
-        ));
-        game.history.push((
-            TurnNumber::new(12),
-            "HumanNation conquered Province B from AINation".to_string(),
-        ));
-        game.history.push((
-            TurnNumber::new(14),
-            "HumanNation conquered Province C from AINation".to_string(),
-        ));
+        for turn in [10u32, 12, 14] {
+            game.history.push((
+                TurnNumber::new(turn),
+                HistoryEvent::ProvinceConquered {
+                    conqueror: NationId(1),
+                    loser: NationId(2),
+                    province: ProvinceId(2),
+                },
+            ));
+        }
 
         // Put AI at war with human
         game.diplomacy.declare_war(NationId(2), NationId(1));
@@ -1834,13 +1866,22 @@ mod tests {
         ai.ai_personality = Some(AiPersonality::Diplomatic);
         // Diplomatic AI has low lost_enough_losses threshold (1)
         // Simulate losing 1 province
+        use crate::events::HistoryEvent;
         game.history.push((
             TurnNumber::new(5),
-            "AINation declared war on HumanNation".to_string(),
+            HistoryEvent::WarDeclared {
+                attacker: NationId(2),
+                defender: NationId(1),
+                protectee: None,
+            },
         ));
         game.history.push((
             TurnNumber::new(10),
-            "HumanNation conquered Lost Province from AINation".to_string(),
+            HistoryEvent::ProvinceConquered {
+                conqueror: NationId(1),
+                loser: NationId(2),
+                province: ProvinceId(2),
+            },
         ));
 
         // Put at war
@@ -1882,9 +1923,14 @@ mod tests {
         // Put at war
         game.diplomacy.declare_war(NationId(2), NationId(1));
         game.turn = TurnNumber::new(50); // past any war duration threshold
+        use crate::events::HistoryEvent;
         game.history.push((
             TurnNumber::new(1),
-            "AINation declared war on HumanNation".to_string(),
+            HistoryEvent::WarDeclared {
+                attacker: NationId(2),
+                defender: NationId(1),
+                protectee: None,
+            },
         ));
 
         // Give AI more provinces than enemy so it doesn't feel like it's losing

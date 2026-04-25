@@ -4,7 +4,7 @@ use crate::diplomacy::DiplomacyState;
 use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::civilians::{Civilian, CivilianType};
 use crate::economy::ledger::{CashFlow, CashSink, ResourceFlow};
-use crate::events::{DomainEvent, Headline};
+use crate::events::{DomainEvent, Headline, HistoryEvent};
 use crate::map::{HexMap, Province, UnitId};
 use crate::military::combat::BattleResult;
 use crate::military::naval::NavalBattleResult;
@@ -69,9 +69,9 @@ pub struct GameState {
     /// (not the same turn the landing was established).
     #[serde(default)]
     pub pending_landings: Vec<(NationId, ProvinceId, TurnNumber)>,
-    /// History of major game events: (turn_number, description).
+    /// History of major game events. Use `render_history_event` for player-facing text.
     #[serde(default)]
-    pub history: Vec<(TurnNumber, String)>,
+    pub history: Vec<(TurnNumber, HistoryEvent)>,
     /// High score table: (nation_name, score, date_string).
     #[serde(default)]
     pub high_scores: Vec<(String, u32, String)>,
@@ -195,6 +195,137 @@ impl GameState {
     /// Whether the game is over (turn >= 1915 Q1).
     pub fn is_game_over(&self) -> bool {
         self.turn.is_game_end() || self.turn > TurnNumber::from_year_quarter(1915, 1)
+    }
+
+    /// Render a `HistoryEvent` as the player-facing string used by the
+    /// newspaper, history view, and CLI display. Resolves nation/province
+    /// IDs against the current game state, so renames or destroyed
+    /// entities show as "Unknown".
+    pub fn render_history_event(&self, event: &HistoryEvent) -> String {
+        let nation_name = |id: NationId| -> String {
+            self.get_nation(id)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string())
+        };
+        let province_name = |id: ProvinceId| -> String {
+            self.get_province(id)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string())
+        };
+        match event {
+            HistoryEvent::WarDeclared {
+                attacker,
+                defender,
+                protectee: None,
+            } => format!(
+                "{} declared war on {}",
+                nation_name(*attacker),
+                nation_name(*defender)
+            ),
+            HistoryEvent::WarDeclared {
+                attacker,
+                defender,
+                protectee: Some(p),
+            } => format!(
+                "{} declared war on {} to protect {}",
+                nation_name(*attacker),
+                nation_name(*defender),
+                nation_name(*p)
+            ),
+            HistoryEvent::JoinedWar { joiner, target } => format!(
+                "{} joined war against {} (alliance obligation)",
+                nation_name(*joiner),
+                nation_name(*target)
+            ),
+            HistoryEvent::PeaceMade { a, b } => {
+                format!("{} made peace with {}", nation_name(*a), nation_name(*b))
+            }
+            HistoryEvent::PeaceSigned { a, b } => {
+                format!("{} signed peace with {}", nation_name(*a), nation_name(*b))
+            }
+            HistoryEvent::MutualPeace { a, b } => format!(
+                "{} and {} agreed to mutual peace",
+                nation_name(*a),
+                nation_name(*b)
+            ),
+            HistoryEvent::ProvinceConquered {
+                conqueror,
+                loser,
+                province,
+            } => format!(
+                "{} conquered {} from {}",
+                nation_name(*conqueror),
+                province_name(*province),
+                nation_name(*loser)
+            ),
+            HistoryEvent::TechnologyResearched {
+                researcher,
+                tech_name,
+            } => format!("{} researched {}", nation_name(*researcher), tech_name),
+            HistoryEvent::NonAggressionPactSigned { signer, partner } => format!(
+                "{} signed a non-aggression pact with {}",
+                nation_name(*signer),
+                nation_name(*partner)
+            ),
+            HistoryEvent::AllianceFormed { signer, partner } => format!(
+                "{} formed an alliance with {}",
+                nation_name(*signer),
+                nation_name(*partner)
+            ),
+            HistoryEvent::TreatyProposalAccepted {
+                acceptor,
+                proposer,
+                treaty_type,
+            } => {
+                let label = match treaty_type {
+                    crate::events::TreatyType::NonAggressionPact => "Non-Aggression Pact",
+                    crate::events::TreatyType::Alliance => "Alliance",
+                    crate::events::TreatyType::PeaceTreaty => "Peace Treaty",
+                    _ => "Treaty",
+                };
+                format!(
+                    "{} accepted {}'s {} proposal",
+                    nation_name(*acceptor),
+                    nation_name(*proposer),
+                    label
+                )
+            }
+            HistoryEvent::FellIntoAnarchy { nation } => {
+                format!("{} fell into anarchy", nation_name(*nation))
+            }
+            HistoryEvent::RegainedIndependence {
+                minor,
+                former_overlord,
+            } => format!(
+                "{} regained independence after {} fell into anarchy",
+                nation_name(*minor),
+                nation_name(*former_overlord)
+            ),
+            HistoryEvent::MinorJoinedEmpire {
+                minor,
+                overlord,
+                reason,
+            } => {
+                let phrase = match reason {
+                    crate::events::IncorporationReason::JoinedEmpire => "joined the empire of",
+                    crate::events::IncorporationReason::VoluntarilyJoinedEmpire => {
+                        "voluntarily joined the empire of"
+                    }
+                };
+                format!(
+                    "{} {} {}",
+                    nation_name(*minor),
+                    phrase,
+                    nation_name(*overlord)
+                )
+            }
+            HistoryEvent::ConsulateBuilt { player: _, target } => {
+                format!("Trade consulate built with {}", nation_name(*target))
+            }
+            HistoryEvent::EmbassyBuilt { player: _, target } => {
+                format!("Embassy built with {}", nation_name(*target))
+            }
+        }
     }
 
     /// Find a nation by partial, case-insensitive name match.
