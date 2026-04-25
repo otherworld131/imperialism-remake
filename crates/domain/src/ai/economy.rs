@@ -1027,6 +1027,9 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
 }
 
 /// The AI keeps a reserve of each good (Lua-configurable) and sells excess when treasury is low.
+///
+/// Builds a `NationEconomySnapshot` for all read operations; mutations go
+/// through `game` directly (Trello #163).
 #[allow(unused_variables)] // personality used only with cfg(feature = "lua")
 pub fn ai_manage_resources(
     game: &mut GameState,
@@ -1061,17 +1064,18 @@ pub fn ai_manage_resources(
         2
     };
 
-    let nation = match game.get_nation(nation_id) {
-        Some(n) => n,
-        None => return,
-    };
+    // Build snapshot for all planning reads (Trello #163).
+    let snapshot = super::snapshot::NationEconomySnapshot::build(game, nation_id);
 
     // Only sell goods when treasury is low
-    if nation.economy.treasury >= Money::dollars(goods_sell_threshold) {
+    if snapshot.treasury >= Money::dollars(goods_sell_threshold) {
         return;
     }
 
-    let nation_name = nation.name.clone();
+    let nation_name = game
+        .get_nation(nation_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_default();
 
     // Define goods to sell and their prices
     let goods_prices: [(GoodsType, i64); 3] = [
@@ -1083,16 +1087,15 @@ pub fn ai_manage_resources(
     let mut total_revenue = Money::ZERO;
 
     for (goods_type, price_per_unit) in &goods_prices {
-        let amount = match game.get_nation(nation_id) {
-            Some(n) => n.goods_amount(*goods_type),
-            None => return,
-        };
+        // Read from snapshot (stable view of the turn).
+        let amount = snapshot.goods(*goods_type);
         if amount <= goods_reserve {
             continue;
         }
         let excess = amount - goods_reserve;
         let revenue = Money::dollars(*price_per_unit) * excess as i64;
 
+        // Mutations go through game.
         let Some(nation) = game.get_nation_mut(nation_id) else {
             return;
         };
@@ -1189,35 +1192,37 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
         15_000
     };
 
-    // Expand mills when input resources exceed capacity * threshold
-    let nation = match game.get_nation(nation_id) {
-        Some(n) => n,
-        None => return,
-    };
+    // Build snapshot after infrastructure bootstrap so it reflects new buildings.
+    // Used for all resource/building reads below; mutations go through `game` (Trello #163).
+    let snap = super::snapshot::NationEconomySnapshot::build(game, nation_id);
 
-    let expansions_needed: Vec<BuildingType> = nation
-        .economy.buildings
+    // Expand mills when input resources exceed capacity * threshold
+    let mill_types = [
+        BuildingType::LumberMill,
+        BuildingType::SteelMill,
+        BuildingType::TextileMill,
+    ];
+    let expansions_needed: Vec<BuildingType> = mill_types
         .iter()
-        .filter_map(|b| {
-            let input_resources = match b.building_type {
-                BuildingType::LumberMill => nation.resource_amount(ResourceType::Timber),
+        .filter_map(|&bt| {
+            let cap = snap.building_capacity(bt);
+            if cap == 0 || snap.is_expanding(bt) {
+                return None;
+            }
+            let input_resources = match bt {
+                BuildingType::LumberMill => snap.resource(ResourceType::Timber),
                 BuildingType::SteelMill => {
-                    // Use min(coal, iron) * 2 to match actual 1:1 production ratio
-                    nation
-                        .resource_amount(ResourceType::Coal)
-                        .min(nation.resource_amount(ResourceType::Iron))
+                    snap.resource(ResourceType::Coal)
+                        .min(snap.resource(ResourceType::Iron))
                         * 2
                 }
                 BuildingType::TextileMill => {
-                    nation.resource_amount(ResourceType::Cotton)
-                        + nation.resource_amount(ResourceType::Wool)
+                    snap.resource(ResourceType::Cotton) + snap.resource(ResourceType::Wool)
                 }
                 _ => return None,
             };
-            if input_resources > b.effective_capacity() * expansion_threshold_multiplier
-                && b.pending_capacity == 0
-            {
-                Some(b.building_type)
+            if input_resources > cap * expansion_threshold_multiplier {
+                Some(bt)
             } else {
                 None
             }
@@ -1229,27 +1234,26 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
     }
 
     // Expand factories when their input material exceeds capacity * threshold.
-    // Factory input = the corresponding material in the warehouse.
-    let nation = match game.get_nation(nation_id) {
-        Some(n) => n,
-        None => return,
-    };
-
-    let factory_expansions: Vec<BuildingType> = nation
-        .economy.buildings
+    let factory_types = [
+        BuildingType::FurnitureFactory,
+        BuildingType::HardwareFactory,
+        BuildingType::ClothingFactory,
+    ];
+    let factory_expansions: Vec<BuildingType> = factory_types
         .iter()
-        .filter_map(|b| {
-            let input_materials = match b.building_type {
-                BuildingType::FurnitureFactory => nation.material_amount(MaterialType::Lumber),
-                BuildingType::HardwareFactory => nation.material_amount(MaterialType::Steel),
-                BuildingType::ClothingFactory => nation.material_amount(MaterialType::Fabric),
+        .filter_map(|&bt| {
+            let cap = snap.building_capacity(bt);
+            if cap == 0 || snap.is_expanding(bt) {
+                return None;
+            }
+            let input_materials = match bt {
+                BuildingType::FurnitureFactory => snap.material(MaterialType::Lumber),
+                BuildingType::HardwareFactory => snap.material(MaterialType::Steel),
+                BuildingType::ClothingFactory => snap.material(MaterialType::Fabric),
                 _ => return None,
             };
-            // Factories consume 2 materials per unit, so check against capacity * 2 * threshold
-            if input_materials > b.effective_capacity() * 2 * expansion_threshold_multiplier
-                && b.pending_capacity == 0
-            {
-                Some(b.building_type)
+            if input_materials > cap * 2 * expansion_threshold_multiplier {
+                Some(bt)
             } else {
                 None
             }
@@ -1261,7 +1265,6 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
     }
 
     // Expand FoodProcessing when food surplus exceeds capacity * threshold.
-    // This builds the CannedFood pipeline for immigration and starvation buffer.
     let food_threshold: u32 = 'val: {
         #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg
@@ -1273,31 +1276,12 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
         2
     };
 
-    let nation = match game.get_nation(nation_id) {
-        Some(n) => n,
-        None => return,
-    };
-
-    let total_raw_food = nation.resource_amount(ResourceType::Grain)
-        + nation.resource_amount(ResourceType::Fruit)
-        + nation.resource_amount(ResourceType::Livestock);
-    let food_cap = nation
-        .economy.buildings
-        .iter()
-        .find(|b| b.building_type == BuildingType::FoodProcessing)
-        .map(|b| b.effective_capacity())
-        .unwrap_or(0);
-    let workers = nation.economy.labor.total_workers();
-    let food_surplus = total_raw_food.saturating_sub(workers);
+    let food_cap = snap.building_capacity(BuildingType::FoodProcessing);
+    let food_surplus = snap.total_food().saturating_sub(snap.total_workers);
 
     if food_surplus > food_cap * food_threshold
         && food_cap > 0
-        && nation
-            .economy.buildings
-            .iter()
-            .find(|b| b.building_type == BuildingType::FoodProcessing)
-            .map(|b| b.pending_capacity == 0)
-            .unwrap_or(false)
+        && !snap.is_expanding(BuildingType::FoodProcessing)
     {
         expand_building(
             game,
@@ -1307,43 +1291,44 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
         );
     }
 
-    // When treasury is very high, expand existing mills and factories even without
-    // surplus resources — invest in future capacity growth.
-    // Only expand if capacity isn't already far ahead of actual input supply.
-    let nation = match game.get_nation(nation_id) {
-        Some(n) => n,
-        None => return,
-    };
-    if nation.economy.treasury > Money::dollars(high_treasury_threshold) {
-        let expandable: Vec<BuildingType> = nation
-            .economy.buildings
+    // When treasury is very high, speculative-expand mills and factories.
+    if snap.treasury > Money::dollars(high_treasury_threshold) {
+        let all_prod_types = [
+            BuildingType::LumberMill,
+            BuildingType::SteelMill,
+            BuildingType::TextileMill,
+            BuildingType::FurnitureFactory,
+            BuildingType::HardwareFactory,
+            BuildingType::ClothingFactory,
+        ];
+        let expandable: Vec<BuildingType> = all_prod_types
             .iter()
-            .filter(|b| {
-                if b.pending_capacity != 0 {
-                    return false;
+            .filter_map(|&bt| {
+                let cap = snap.building_capacity(bt);
+                if cap == 0 || snap.is_expanding(bt) {
+                    return None;
                 }
-                // Cap speculative expansion: don't expand if capacity already > 2x input
-                let input = match b.building_type {
-                    BuildingType::LumberMill => nation.resource_amount(ResourceType::Timber),
+                let input = match bt {
+                    BuildingType::LumberMill => snap.resource(ResourceType::Timber),
                     BuildingType::SteelMill => {
-                        nation
-                            .resource_amount(ResourceType::Coal)
-                            .min(nation.resource_amount(ResourceType::Iron))
+                        snap.resource(ResourceType::Coal)
+                            .min(snap.resource(ResourceType::Iron))
                             * 2
                     }
                     BuildingType::TextileMill => {
-                        nation.resource_amount(ResourceType::Cotton)
-                            + nation.resource_amount(ResourceType::Wool)
+                        snap.resource(ResourceType::Cotton) + snap.resource(ResourceType::Wool)
                     }
-                    BuildingType::FurnitureFactory => nation.material_amount(MaterialType::Lumber),
-                    BuildingType::HardwareFactory => nation.material_amount(MaterialType::Steel),
-                    BuildingType::ClothingFactory => nation.material_amount(MaterialType::Fabric),
-                    _ => return false,
+                    BuildingType::FurnitureFactory => snap.material(MaterialType::Lumber),
+                    BuildingType::HardwareFactory => snap.material(MaterialType::Steel),
+                    BuildingType::ClothingFactory => snap.material(MaterialType::Fabric),
+                    _ => return None,
                 };
-                // Only speculative-expand if capacity <= 2x current input (room to grow into)
-                b.effective_capacity() <= input.max(1) * 2
+                if cap <= input.max(1) * 2 {
+                    Some(bt)
+                } else {
+                    None
+                }
             })
-            .map(|b| b.building_type)
             .collect();
 
         for bt in expandable {

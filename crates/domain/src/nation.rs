@@ -3,6 +3,7 @@ use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::civilians::Civilian;
 use crate::economy::labor::LaborPool;
 use crate::economy::ledger::{CashSink, CashSource};
+use crate::economy::trade::Commodity;
 use crate::economy::transport::TransportSystem;
 use crate::events::TechId;
 use crate::military::ships::Ship;
@@ -57,6 +58,23 @@ pub struct NationEconomy {
     pub buildings: Vec<Building>,
     /// Labor pool (workers available for production).
     pub labor: LaborPool,
+
+    // ── Reservation accounting (Trello #162) ─────────────────────────
+    /// Per-resource reserved amounts (sum of active reservations).
+    #[serde(default)]
+    pub reserved_warehouse: BTreeMap<ResourceType, u32>,
+    /// Per-material reserved amounts.
+    #[serde(default)]
+    pub reserved_materials: BTreeMap<MaterialType, u32>,
+    /// Per-goods reserved amounts.
+    #[serde(default)]
+    pub reserved_goods: BTreeMap<GoodsType, u32>,
+    /// Active reservation ledger: id → (commodity, quantity).
+    #[serde(default)]
+    pub reservation_ledger: BTreeMap<ReservationId, (Commodity, u32)>,
+    /// Monotonically increasing counter for generating unique ReservationIds.
+    #[serde(default)]
+    pub next_reservation_id: u64,
 }
 
 impl NationEconomy {
@@ -68,7 +86,180 @@ impl NationEconomy {
             goods: BTreeMap::new(),
             buildings: Vec::new(),
             labor: LaborPool::new(),
+            reserved_warehouse: BTreeMap::new(),
+            reserved_materials: BTreeMap::new(),
+            reserved_goods: BTreeMap::new(),
+            reservation_ledger: BTreeMap::new(),
+            next_reservation_id: 0,
         }
+    }
+
+    // ── Unified commodity API (#160) ──────────────────────────────────
+
+    /// Total stored quantity of a commodity (reserved + free).
+    pub fn amount(&self, key: Commodity) -> u32 {
+        match key {
+            Commodity::Resource(r) => self.warehouse.get(&r).copied().unwrap_or(0),
+            Commodity::Material(m) => self.materials.get(&m).copied().unwrap_or(0),
+            Commodity::Goods(g) => self.goods.get(&g).copied().unwrap_or(0),
+        }
+    }
+
+    /// Add a quantity of a commodity to this nation's inventory.
+    pub fn add(&mut self, key: Commodity, qty: u32) {
+        match key {
+            Commodity::Resource(r) => *self.warehouse.entry(r).or_insert(0) += qty,
+            Commodity::Material(m) => *self.materials.entry(m).or_insert(0) += qty,
+            Commodity::Goods(g) => *self.goods.entry(g).or_insert(0) += qty,
+        }
+    }
+
+    /// Consume a quantity of a commodity. Returns `false` if insufficient
+    /// total quantity is held (no mutation on failure).
+    pub fn consume(&mut self, key: Commodity, qty: u32) -> bool {
+        match key {
+            Commodity::Resource(r) => {
+                let cur = self.warehouse.entry(r).or_insert(0);
+                if *cur >= qty {
+                    *cur -= qty;
+                    true
+                } else {
+                    false
+                }
+            }
+            Commodity::Material(m) => {
+                let cur = self.materials.entry(m).or_insert(0);
+                if *cur >= qty {
+                    *cur -= qty;
+                    true
+                } else {
+                    false
+                }
+            }
+            Commodity::Goods(g) => {
+                let cur = self.goods.entry(g).or_insert(0);
+                if *cur >= qty {
+                    *cur -= qty;
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    /// Iterate over all commodities with non-zero total quantity.
+    pub fn iter_all(&self) -> impl Iterator<Item = (Commodity, u32)> + '_ {
+        let resources = self.warehouse.iter().map(|(&k, &v)| (Commodity::Resource(k), v));
+        let materials = self.materials.iter().map(|(&k, &v)| (Commodity::Material(k), v));
+        let goods = self.goods.iter().map(|(&k, &v)| (Commodity::Goods(k), v));
+        resources.chain(materials).chain(goods)
+    }
+
+    // ── Reservation API (#162) ────────────────────────────────────────
+
+    /// How much of a commodity is currently reserved by in-flight reservations.
+    pub fn reserved(&self, key: Commodity) -> u32 {
+        match key {
+            Commodity::Resource(r) => self.reserved_warehouse.get(&r).copied().unwrap_or(0),
+            Commodity::Material(m) => self.reserved_materials.get(&m).copied().unwrap_or(0),
+            Commodity::Goods(g) => self.reserved_goods.get(&g).copied().unwrap_or(0),
+        }
+    }
+
+    /// How much of a commodity is free (not reserved) and available for use.
+    pub fn available(&self, key: Commodity) -> u32 {
+        self.amount(key).saturating_sub(self.reserved(key))
+    }
+
+    /// Reserve `qty` units of `key`, returning an opaque `ReservationId`.
+    ///
+    /// Fails with `DomainError::InsufficientInventory` if `available(key) < qty`.
+    /// Reservations must be committed or released before end-of-turn; any
+    /// uncommitted reservations are auto-released by `release_all_reservations`.
+    pub fn reserve(
+        &mut self,
+        key: Commodity,
+        qty: u32,
+    ) -> Result<ReservationId, crate::DomainError> {
+        let avail = self.available(key);
+        if avail < qty {
+            return Err(crate::DomainError::InsufficientInventory {
+                requested: qty,
+                available: avail,
+            });
+        }
+        let id = ReservationId(self.next_reservation_id);
+        self.next_reservation_id += 1;
+        match key {
+            Commodity::Resource(r) => *self.reserved_warehouse.entry(r).or_insert(0) += qty,
+            Commodity::Material(m) => *self.reserved_materials.entry(m).or_insert(0) += qty,
+            Commodity::Goods(g) => *self.reserved_goods.entry(g).or_insert(0) += qty,
+        }
+        self.reservation_ledger.insert(id, (key, qty));
+        Ok(id)
+    }
+
+    /// Commit a reservation: deduct the reserved quantity from total inventory
+    /// and remove the reservation entry.
+    ///
+    /// Fails with `DomainError::ReservationNotFound` if `id` is unknown.
+    pub fn commit(&mut self, id: ReservationId) -> Result<(), crate::DomainError> {
+        let (key, qty) = self
+            .reservation_ledger
+            .remove(&id)
+            .ok_or(crate::DomainError::ReservationNotFound(id))?;
+        // Reduce aggregate reserved counter
+        match key {
+            Commodity::Resource(r) => {
+                let e = self.reserved_warehouse.entry(r).or_insert(0);
+                *e = e.saturating_sub(qty);
+            }
+            Commodity::Material(m) => {
+                let e = self.reserved_materials.entry(m).or_insert(0);
+                *e = e.saturating_sub(qty);
+            }
+            Commodity::Goods(g) => {
+                let e = self.reserved_goods.entry(g).or_insert(0);
+                *e = e.saturating_sub(qty);
+            }
+        }
+        // Deduct from total inventory
+        self.consume(key, qty);
+        Ok(())
+    }
+
+    /// Release a reservation without consuming inventory.
+    ///
+    /// Fails with `DomainError::ReservationNotFound` if `id` is unknown.
+    pub fn release(&mut self, id: ReservationId) -> Result<(), crate::DomainError> {
+        let (key, qty) = self
+            .reservation_ledger
+            .remove(&id)
+            .ok_or(crate::DomainError::ReservationNotFound(id))?;
+        match key {
+            Commodity::Resource(r) => {
+                let e = self.reserved_warehouse.entry(r).or_insert(0);
+                *e = e.saturating_sub(qty);
+            }
+            Commodity::Material(m) => {
+                let e = self.reserved_materials.entry(m).or_insert(0);
+                *e = e.saturating_sub(qty);
+            }
+            Commodity::Goods(g) => {
+                let e = self.reserved_goods.entry(g).or_insert(0);
+                *e = e.saturating_sub(qty);
+            }
+        }
+        Ok(())
+    }
+
+    /// Release all active reservations for this nation (end-of-turn safety net).
+    pub fn release_all_reservations(&mut self) {
+        self.reservation_ledger.clear();
+        self.reserved_warehouse.clear();
+        self.reserved_materials.clear();
+        self.reserved_goods.clear();
     }
 }
 
@@ -974,5 +1165,138 @@ mod tests {
         let mut n = sample_great_power();
         n.economy.treasury = Money::dollars(-1);
         assert!(n.is_bankrupt());
+    }
+
+    // ── NationEconomy unified commodity API (#160) ──────────────────
+
+    #[test]
+    fn economy_amount_returns_zero_when_empty() {
+        let n = sample_great_power();
+        assert_eq!(n.economy.amount(Commodity::Resource(ResourceType::Timber)), 0);
+        assert_eq!(n.economy.amount(Commodity::Material(MaterialType::Lumber)), 0);
+        assert_eq!(n.economy.amount(Commodity::Goods(GoodsType::Furniture)), 0);
+    }
+
+    #[test]
+    fn economy_add_and_amount_round_trip() {
+        let mut n = sample_great_power();
+        n.economy.add(Commodity::Resource(ResourceType::Coal), 10);
+        n.economy.add(Commodity::Material(MaterialType::Steel), 5);
+        n.economy.add(Commodity::Goods(GoodsType::Clothing), 3);
+        assert_eq!(n.economy.amount(Commodity::Resource(ResourceType::Coal)), 10);
+        assert_eq!(n.economy.amount(Commodity::Material(MaterialType::Steel)), 5);
+        assert_eq!(n.economy.amount(Commodity::Goods(GoodsType::Clothing)), 3);
+    }
+
+    #[test]
+    fn economy_consume_returns_true_when_sufficient() {
+        let mut n = sample_great_power();
+        n.economy.add(Commodity::Resource(ResourceType::Iron), 8);
+        assert!(n.economy.consume(Commodity::Resource(ResourceType::Iron), 5));
+        assert_eq!(n.economy.amount(Commodity::Resource(ResourceType::Iron)), 3);
+    }
+
+    #[test]
+    fn economy_consume_returns_false_when_insufficient() {
+        let mut n = sample_great_power();
+        n.economy.add(Commodity::Material(MaterialType::Arms), 2);
+        assert!(!n.economy.consume(Commodity::Material(MaterialType::Arms), 5));
+        assert_eq!(n.economy.amount(Commodity::Material(MaterialType::Arms)), 2);
+    }
+
+    #[test]
+    fn economy_iter_all_yields_all_nonempty_commodities() {
+        let mut n = sample_great_power();
+        n.economy.add(Commodity::Resource(ResourceType::Grain), 7);
+        n.economy.add(Commodity::Material(MaterialType::Fabric), 4);
+        n.economy.add(Commodity::Goods(GoodsType::Hardware), 1);
+        let all: Vec<(Commodity, u32)> = n.economy.iter_all().collect();
+        assert_eq!(all.len(), 3);
+        assert!(all.contains(&(Commodity::Resource(ResourceType::Grain), 7)));
+        assert!(all.contains(&(Commodity::Material(MaterialType::Fabric), 4)));
+        assert!(all.contains(&(Commodity::Goods(GoodsType::Hardware), 1)));
+    }
+
+    // ── Reservation API (#162) ──────────────────────────────────────
+
+    #[test]
+    fn reserve_reduces_available_not_total() {
+        let mut n = sample_great_power();
+        n.economy.add(Commodity::Resource(ResourceType::Timber), 10);
+        let id = n.economy.reserve(Commodity::Resource(ResourceType::Timber), 4).unwrap();
+        assert_eq!(n.economy.amount(Commodity::Resource(ResourceType::Timber)), 10);
+        assert_eq!(n.economy.reserved(Commodity::Resource(ResourceType::Timber)), 4);
+        assert_eq!(n.economy.available(Commodity::Resource(ResourceType::Timber)), 6);
+        let _ = n.economy.release(id);
+    }
+
+    #[test]
+    fn reserve_fails_when_insufficient_available() {
+        let mut n = sample_great_power();
+        n.economy.add(Commodity::Material(MaterialType::Lumber), 3);
+        let result = n.economy.reserve(Commodity::Material(MaterialType::Lumber), 5);
+        assert!(matches!(result, Err(crate::DomainError::InsufficientInventory { .. })));
+        assert_eq!(n.economy.amount(Commodity::Material(MaterialType::Lumber)), 3);
+    }
+
+    #[test]
+    fn commit_deducts_from_total_and_clears_reservation() {
+        let mut n = sample_great_power();
+        n.economy.add(Commodity::Goods(GoodsType::Furniture), 6);
+        let id = n.economy.reserve(Commodity::Goods(GoodsType::Furniture), 2).unwrap();
+        n.economy.commit(id).unwrap();
+        assert_eq!(n.economy.amount(Commodity::Goods(GoodsType::Furniture)), 4);
+        assert_eq!(n.economy.reserved(Commodity::Goods(GoodsType::Furniture)), 0);
+        assert!(n.economy.reservation_ledger.is_empty());
+    }
+
+    #[test]
+    fn release_restores_available_without_consuming() {
+        let mut n = sample_great_power();
+        n.economy.add(Commodity::Resource(ResourceType::Gold), 5);
+        let id = n.economy.reserve(Commodity::Resource(ResourceType::Gold), 3).unwrap();
+        n.economy.release(id).unwrap();
+        assert_eq!(n.economy.amount(Commodity::Resource(ResourceType::Gold)), 5);
+        assert_eq!(n.economy.reserved(Commodity::Resource(ResourceType::Gold)), 0);
+    }
+
+    #[test]
+    fn release_nonexistent_reservation_returns_error() {
+        let mut n = sample_great_power();
+        let fake_id = ReservationId(9999);
+        let result = n.economy.release(fake_id);
+        assert!(matches!(result, Err(crate::DomainError::ReservationNotFound(_))));
+    }
+
+    #[test]
+    fn release_all_reservations_clears_all() {
+        let mut n = sample_great_power();
+        n.economy.add(Commodity::Resource(ResourceType::Coal), 10);
+        n.economy.add(Commodity::Material(MaterialType::Steel), 8);
+        n.economy.reserve(Commodity::Resource(ResourceType::Coal), 5).unwrap();
+        n.economy.reserve(Commodity::Material(MaterialType::Steel), 3).unwrap();
+        n.economy.release_all_reservations();
+        assert!(n.economy.reservation_ledger.is_empty());
+        assert_eq!(n.economy.available(Commodity::Resource(ResourceType::Coal)), 10);
+        assert_eq!(n.economy.available(Commodity::Material(MaterialType::Steel)), 8);
+    }
+
+    #[test]
+    fn reservation_survives_serde_round_trip() {
+        let mut n = sample_great_power();
+        n.economy.add(Commodity::Resource(ResourceType::Iron), 12);
+        let id = n.economy.reserve(Commodity::Resource(ResourceType::Iron), 4).unwrap();
+        let json = serde_json::to_string(&n.economy).unwrap();
+        let restored: NationEconomy = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.reservation_ledger.get(&id).map(|(_, q)| *q), Some(4));
+        assert_eq!(restored.reserved(Commodity::Resource(ResourceType::Iron)), 4);
+    }
+
+    #[test]
+    fn reserved_leq_total_invariant() {
+        let mut n = sample_great_power();
+        n.economy.add(Commodity::Resource(ResourceType::Wool), 7);
+        n.economy.reserve(Commodity::Resource(ResourceType::Wool), 4).unwrap();
+        assert!(n.economy.reserved(Commodity::Resource(ResourceType::Wool)) <= n.economy.amount(Commodity::Resource(ResourceType::Wool)));
     }
 }

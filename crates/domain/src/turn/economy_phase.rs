@@ -1,10 +1,13 @@
 //! Economy phase of the turn pipeline.
 //!
-//! First chunk of the C-1 processor split: small, well-bounded economy
-//! helpers (warehouse caps, building tick, blockade-aware capacity, unit
-//! maintenance, and blockade headline generation) live here. Heavier
-//! phases (`collect_resources`, `run_production`, `resolve_trade_session`)
-//! remain in `processor.rs` for follow-up PRs.
+//! Implements the plan → reserve → execute structure (Trello #161).
+//! `run_economy_phase` is the single entry point called by `processor.rs`.
+//!
+//! Lighter helpers (warehouse caps, building tick, blockade capacity,
+//! maintenance, blockade headlines) live here alongside the phase types.
+//! The heavy execution functions (`collect_resources`, `run_production`,
+//! `resolve_trade_session`) remain in `processor.rs` and are invoked from
+//! `execute_reserved_economy`.
 
 use crate::economy::buildings::BuildingType;
 use crate::events::{Headline, HeadlineCategory};
@@ -13,6 +16,87 @@ use crate::military::naval::calculate_blockade_effect;
 use crate::turn::processor::TurnReport;
 use crate::types::*;
 use std::collections::HashMap;
+
+// ── Plan / Reserve / Execute types (#161) ────────────────────────────────────
+
+/// An economic action gathered during the collect phase.
+/// No game state is mutated during collection — this represents *intent*.
+#[derive(Debug, Clone)]
+pub struct EconomicOrder {
+    pub kind: EconomicOrderKind,
+}
+
+/// The kind of economy-phase work each order represents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EconomicOrderKind {
+    /// Collect raw resources from owned, connected tiles.
+    CollectTileResources,
+    /// Run production chains (mills → materials, factories → goods).
+    RunProduction,
+    /// Execute the trade session with minor nations and the world market.
+    ExecuteTrade,
+}
+
+/// An economic order that has been validated and whose resource requirements
+/// have been pre-committed. In Phase 3 this is a structural placeholder;
+/// per-commodity `ReservationId`s are added in Trello #162.
+#[derive(Debug, Clone)]
+pub struct ReservedAction {
+    pub order: EconomicOrder,
+}
+
+/// Gather the standard economy orders for this turn.
+///
+/// **No mutation.** Reads game state to decide which standard operations
+/// should run; the actual work happens in the matching `run_*_phase` entry points.
+pub(super) fn collect_economic_orders(_game: &GameState) -> Vec<EconomicOrder> {
+    vec![
+        EconomicOrder { kind: EconomicOrderKind::CollectTileResources },
+        EconomicOrder { kind: EconomicOrderKind::RunProduction },
+        EconomicOrder { kind: EconomicOrderKind::ExecuteTrade },
+    ]
+}
+
+/// Validate orders and mark resource reservations.
+///
+/// Returns the subset of orders that are feasible and ready to execute.
+/// In Phase 3 this is a thin pass-through; per-commodity reservation IDs
+/// are added in Trello #162.
+pub(super) fn validate_and_reserve(
+    _game: &mut GameState,
+    orders: Vec<EconomicOrder>,
+) -> Vec<ReservedAction> {
+    orders.into_iter().map(|order| ReservedAction { order }).collect()
+}
+
+/// Execute a set of reserved economy actions.
+///
+/// Calls into `processor.rs` for the heavy execution logic and releases
+/// any uncommitted reservations at the end of each batch (#162 safety net).
+pub(super) fn execute_reserved_economy(
+    game: &mut GameState,
+    report: &mut TurnReport,
+    reserved: Vec<ReservedAction>,
+) {
+    for action in reserved {
+        match action.order.kind {
+            EconomicOrderKind::CollectTileResources => {
+                super::processor::collect_resources(game, report);
+            }
+            EconomicOrderKind::RunProduction => {
+                super::processor::run_production(game, report);
+            }
+            EconomicOrderKind::ExecuteTrade => {
+                let blockade_capacity = compute_blockade_capacity(game);
+                super::processor::resolve_trade_session(game, report, &blockade_capacity);
+            }
+        }
+    }
+    // Release any reservations not committed during execution (#162 safety net).
+    for nation in &mut game.nations {
+        nation.economy.release_all_reservations();
+    }
+}
 
 /// Bankruptcy floor: treasury cannot go below $0.
 const BANKRUPTCY_FLOOR: Money = Money::ZERO;

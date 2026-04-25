@@ -47,7 +47,7 @@ pub struct TradeHistoryEntry {
 
 /// A unified commodity type covering resources, materials, and goods.
 /// Used for player trade orders where any commodity can be sold.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Commodity {
     Resource(ResourceType),
     Material(MaterialType),

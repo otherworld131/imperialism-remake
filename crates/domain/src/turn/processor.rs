@@ -20,9 +20,10 @@ use crate::military::ships::Ship;
 use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::turn::civilian_phase::{update_province_connectivity, update_settlements};
 use crate::turn::economy_phase::{
-    apply_blockade_effects, apply_maintenance, apply_warehouse_caps, compute_blockade_capacity,
-    tick_buildings,
+    apply_blockade_effects, apply_maintenance, apply_warehouse_caps, tick_buildings,
 };
+#[cfg(test)]
+use crate::turn::economy_phase::compute_blockade_capacity;
 use crate::turn::news_phase::generate_newspaper;
 use crate::turn::scoring::{CouncilVoteResult, calculate_score, run_council_vote};
 use crate::types::*;
@@ -326,8 +327,19 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 0d. Resolve civilian actions (tick working civilians, apply improvements)
     resolve_civilian_actions(game, &mut report);
 
-    // 1. Resource production: gather yields from all owned tiles
-    collect_resources(game, &mut report);
+    // 1. Economy phase: collect tile resources (plan → reserve → execute, Trello #161)
+    // Only collect_resources fires here; production and trade run after their
+    // interleaved steps (transport, monetary conversion, town production).
+    use crate::turn::economy_phase::{
+        EconomicOrderKind, collect_economic_orders, validate_and_reserve,
+        execute_reserved_economy,
+    };
+    let collect_orders: Vec<_> = collect_economic_orders(game)
+        .into_iter()
+        .filter(|o| o.kind == EconomicOrderKind::CollectTileResources)
+        .collect();
+    let reserved_collect = validate_and_reserve(game, collect_orders);
+    execute_reserved_economy(game, &mut report, reserved_collect);
 
     // 1b. Transport resolution: cap resources delivered by freight car capacity
     resolve_transport(game, &mut report);
@@ -335,17 +347,24 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 2. Gold/Gems -> money conversion
     convert_monetary_resources(game, &mut report);
 
-    // 3. Run production chains (mills then factories)
-    run_production(game, &mut report);
+    // 3. Production phase (plan → reserve → execute)
+    let produce_orders: Vec<_> = collect_economic_orders(game)
+        .into_iter()
+        .filter(|o| o.kind == EconomicOrderKind::RunProduction)
+        .collect();
+    let reserved_produce = validate_and_reserve(game, produce_orders);
+    execute_reserved_economy(game, &mut report, reserved_produce);
 
     // 3a. Town production: Villages and Towns produce materials and goods autonomously
     resolve_town_production(game, &mut report);
 
-    // 3b. Pre-trade blockade: compute effective cargo capacity reduced by enemy warships
-    let blockade_capacity = compute_blockade_capacity(game);
-
-    // 3b. Trade session: Minor Nations sell resources to Great Powers
-    resolve_trade_session(game, &mut report, &blockade_capacity);
+    // 3b. Trade phase (plan → reserve → execute; blockade capacity computed inside)
+    let trade_orders: Vec<_> = collect_economic_orders(game)
+        .into_iter()
+        .filter(|o| o.kind == EconomicOrderKind::ExecuteTrade)
+        .collect();
+    let reserved_trade = validate_and_reserve(game, trade_orders);
+    execute_reserved_economy(game, &mut report, reserved_trade);
 
     // 3c. Warehouse capacity caps: prevent infinite resource accumulation
     apply_warehouse_caps(game);
@@ -732,7 +751,7 @@ pub fn connected_provinces(game: &GameState, nation_id: NationId) -> HashSet<Pro
 /// calculates yields, and adds resources to the nation's warehouse.
 /// Only resources from provinces connected to the capital are delivered;
 /// resources from disconnected provinces are tracked in `report.disconnected_resources`.
-fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
+pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
     // Phase 0: precompute connected provinces for each nation
     let nation_ids: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
     let connected_map: Vec<(NationId, HashSet<ProvinceId>)> = nation_ids
@@ -1352,7 +1371,7 @@ fn convert_monetary_resources(game: &mut GameState, report: &mut TurnReport) {
 /// Labor is a shared pool: workers provide labor based on training level (untrained=1,
 /// trained=2, expert=4). Each unit of production costs labor_per_production (default 2).
 /// Mills consume labor first, then remaining labor feeds factories.
-fn run_production(game: &mut GameState, report: &mut TurnReport) {
+pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
     let cfg = &game.game_data.game_config;
     let untrained_mult = cfg.untrained_labor;
     let trained_mult = cfg.trained_labor;
@@ -1887,7 +1906,7 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
 
 /// Resolve a trade session: generate offers from Minor Nations, handle player
 /// sell/buy orders, use smart bids for AI GPs, resolve trades, and apply results.
-fn resolve_trade_session(
+pub(super) fn resolve_trade_session(
     game: &mut GameState,
     report: &mut TurnReport,
     blockade_capacity: &std::collections::HashMap<NationId, u32>,
