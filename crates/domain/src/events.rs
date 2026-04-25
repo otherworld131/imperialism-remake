@@ -309,31 +309,6 @@ pub enum HistoryEvent {
     },
 }
 
-impl HistoryEvent {
-    /// Returns the nation that "made the war happen" for this event, if any.
-    /// Used by AI war-start detection — a `WarDeclared` matches whether you
-    /// search by attacker or defender, but not by an unrelated protectee.
-    pub fn war_pair(&self) -> Option<(NationId, NationId)> {
-        match self {
-            HistoryEvent::WarDeclared {
-                attacker, defender, ..
-            } => Some((*attacker, *defender)),
-            HistoryEvent::JoinedWar { joiner, target } => Some((*joiner, *target)),
-            _ => None,
-        }
-    }
-
-    /// Returns `(conqueror, loser)` for province-conquest events.
-    pub fn conquest_parties(&self) -> Option<(NationId, NationId)> {
-        match self {
-            HistoryEvent::ProvinceConquered {
-                conqueror, loser, ..
-            } => Some((*conqueror, *loser)),
-            _ => None,
-        }
-    }
-}
-
 // ── Wrapper enum ───────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]

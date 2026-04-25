@@ -1036,6 +1036,221 @@ mod tests {
         assert!(!gs.is_game_over());
     }
 
+    // ── HistoryEvent rendering ────────────────────────────────
+    //
+    // Documents the canonical player-facing strings produced by
+    // `render_history_event`. Two notes for future maintainers:
+    //
+    // * NAP rendering unified the AI-driven ("signed a non-aggression
+    //   pact with") and CLI-driven ("signed non-aggression pact with",
+    //   missing the article) wordings to the AI form. The CLI's
+    //   action-time `println!` is unchanged; only the historical
+    //   retrospective text is now consistent.
+    // * Deleted nations / provinces render as "Unknown" — the renderer
+    //   does best-effort lookup against the live game state.
+
+    use crate::events::{HistoryEvent, IncorporationReason, TreatyType};
+
+    fn render_test_game() -> GameState {
+        let mut g = sample_game_state();
+        g.nations[0].name = "Devron".to_string();
+        g.nations[1].name = "Smallton".to_string();
+        g.provinces[0].name = "Capital Province".to_string();
+        g
+    }
+
+    #[test]
+    fn render_history_event_war_declared_simple() {
+        let g = render_test_game();
+        let s = g.render_history_event(&HistoryEvent::WarDeclared {
+            attacker: NationId(1),
+            defender: NationId(2),
+            protectee: None,
+        });
+        assert_eq!(s, "Devron declared war on Smallton");
+    }
+
+    #[test]
+    fn render_history_event_war_declared_with_protectee() {
+        let mut g = render_test_game();
+        g.nations.push(Nation::new(
+            NationId(3),
+            "Patagon".to_string(),
+            NationColor::Yellow,
+            NationType::MinorNation,
+            ProvinceId(1),
+        ));
+        let s = g.render_history_event(&HistoryEvent::WarDeclared {
+            attacker: NationId(1),
+            defender: NationId(2),
+            protectee: Some(NationId(3)),
+        });
+        assert_eq!(s, "Devron declared war on Smallton to protect Patagon");
+    }
+
+    #[test]
+    fn render_history_event_joined_war() {
+        let g = render_test_game();
+        let s = g.render_history_event(&HistoryEvent::JoinedWar {
+            joiner: NationId(1),
+            target: NationId(2),
+        });
+        assert_eq!(s, "Devron joined war against Smallton (alliance obligation)");
+    }
+
+    #[test]
+    fn render_history_event_peace_variants() {
+        let g = render_test_game();
+        assert_eq!(
+            g.render_history_event(&HistoryEvent::PeaceMade {
+                a: NationId(1),
+                b: NationId(2),
+            }),
+            "Devron made peace with Smallton",
+        );
+        assert_eq!(
+            g.render_history_event(&HistoryEvent::PeaceSigned {
+                a: NationId(1),
+                b: NationId(2),
+            }),
+            "Devron signed peace with Smallton",
+        );
+        assert_eq!(
+            g.render_history_event(&HistoryEvent::MutualPeace {
+                a: NationId(1),
+                b: NationId(2),
+            }),
+            "Devron and Smallton agreed to mutual peace",
+        );
+    }
+
+    #[test]
+    fn render_history_event_province_conquered() {
+        let g = render_test_game();
+        let s = g.render_history_event(&HistoryEvent::ProvinceConquered {
+            conqueror: NationId(1),
+            loser: NationId(2),
+            province: ProvinceId(1),
+        });
+        assert_eq!(s, "Devron conquered Capital Province from Smallton");
+    }
+
+    #[test]
+    fn render_history_event_technology_researched() {
+        let g = render_test_game();
+        let s = g.render_history_event(&HistoryEvent::TechnologyResearched {
+            researcher: NationId(1),
+            tech_name: "Steam Power".to_string(),
+        });
+        assert_eq!(s, "Devron researched Steam Power");
+    }
+
+    #[test]
+    fn render_history_event_non_aggression_pact() {
+        // Canonical wording: "signed a non-aggression pact with" (with the
+        // article). Previously the CLI emitted a non-grammatical variant
+        // without the article; this test pins the unified form.
+        let g = render_test_game();
+        let s = g.render_history_event(&HistoryEvent::NonAggressionPactSigned {
+            signer: NationId(1),
+            partner: NationId(2),
+        });
+        assert_eq!(s, "Devron signed a non-aggression pact with Smallton");
+    }
+
+    #[test]
+    fn render_history_event_alliance_formed() {
+        let g = render_test_game();
+        let s = g.render_history_event(&HistoryEvent::AllianceFormed {
+            signer: NationId(1),
+            partner: NationId(2),
+        });
+        assert_eq!(s, "Devron formed an alliance with Smallton");
+    }
+
+    #[test]
+    fn render_history_event_treaty_proposal_accepted() {
+        let g = render_test_game();
+        let s = g.render_history_event(&HistoryEvent::TreatyProposalAccepted {
+            acceptor: NationId(1),
+            proposer: NationId(2),
+            treaty_type: TreatyType::Alliance,
+        });
+        assert_eq!(s, "Devron accepted Smallton's Alliance proposal");
+    }
+
+    #[test]
+    fn render_history_event_anarchy_and_independence() {
+        let g = render_test_game();
+        assert_eq!(
+            g.render_history_event(&HistoryEvent::FellIntoAnarchy {
+                nation: NationId(1),
+            }),
+            "Devron fell into anarchy",
+        );
+        assert_eq!(
+            g.render_history_event(&HistoryEvent::RegainedIndependence {
+                minor: NationId(2),
+                former_overlord: NationId(1),
+            }),
+            "Smallton regained independence after Devron fell into anarchy",
+        );
+    }
+
+    #[test]
+    fn render_history_event_minor_joined_empire_variants() {
+        let g = render_test_game();
+        assert_eq!(
+            g.render_history_event(&HistoryEvent::MinorJoinedEmpire {
+                minor: NationId(2),
+                overlord: NationId(1),
+                reason: IncorporationReason::JoinedEmpire,
+            }),
+            "Smallton joined the empire of Devron",
+        );
+        assert_eq!(
+            g.render_history_event(&HistoryEvent::MinorJoinedEmpire {
+                minor: NationId(2),
+                overlord: NationId(1),
+                reason: IncorporationReason::VoluntarilyJoinedEmpire,
+            }),
+            "Smallton voluntarily joined the empire of Devron",
+        );
+    }
+
+    #[test]
+    fn render_history_event_consulate_and_embassy() {
+        let g = render_test_game();
+        assert_eq!(
+            g.render_history_event(&HistoryEvent::ConsulateBuilt {
+                player: NationId(1),
+                target: NationId(2),
+            }),
+            "Trade consulate built with Smallton",
+        );
+        assert_eq!(
+            g.render_history_event(&HistoryEvent::EmbassyBuilt {
+                player: NationId(1),
+                target: NationId(2),
+            }),
+            "Embassy built with Smallton",
+        );
+    }
+
+    #[test]
+    fn render_history_event_unknown_fallback_for_missing_nation_or_province() {
+        // Nation IDs / province IDs that don't exist in the game state
+        // render as "Unknown" — covers eliminated nations and pruned
+        // provinces showing up in old archived history entries.
+        let g = render_test_game();
+        let s = g.render_history_event(&HistoryEvent::ProvinceConquered {
+            conqueror: NationId(99),
+            loser: NationId(98),
+            province: ProvinceId(97),
+        });
+        assert_eq!(s, "Unknown conquered Unknown from Unknown");
+    }
+
     #[test]
     fn new_game_starting_treasury_varies_by_difficulty() {
         let intro = new_game("test", Difficulty::Introductory, 0);

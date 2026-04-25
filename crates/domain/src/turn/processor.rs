@@ -3867,7 +3867,6 @@ fn check_and_apply_anarchy(
     ).for_nation(nation_id));
     game.history
         .push((game.turn, HistoryEvent::FellIntoAnarchy { nation: nation_id }));
-    let _ = name;
     true
 }
 
