@@ -218,6 +218,97 @@ pub struct MinorRegainedIndependence {
     pub former_overlord: NationId,
 }
 
+// ── Persistent history events ──────────────────────────────────
+
+/// Reason a minor nation became part of a great power.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum IncorporationReason {
+    /// Forced via pact-defense protection cascade.
+    JoinedEmpire,
+    /// Voluntary incorporation due to high diplomatic score.
+    VoluntarilyJoinedEmpire,
+}
+
+/// A typed entry in `GameState::history`.
+///
+/// AI logic pattern-matches these to reason about past events instead of
+/// grepping strings. UI/CLI rendering goes through `render(&GameState)` so
+/// the player-facing wording stays consistent and nation/province names are
+/// looked up live (a nation rename or province change would otherwise leave
+/// stale text in the log).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum HistoryEvent {
+    /// "{attacker} declared war on {defender}", optionally "to protect {protectee}".
+    WarDeclared {
+        attacker: NationId,
+        defender: NationId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        protectee: Option<NationId>,
+    },
+    /// "{joiner} joined war against {target} (alliance obligation)".
+    JoinedWar {
+        joiner: NationId,
+        target: NationId,
+    },
+    /// "{a} made peace with {b}" — AI auto-accept against a passive minor.
+    PeaceMade { a: NationId, b: NationId },
+    /// "{a} signed peace with {b}" — human-driven CLI peace command.
+    PeaceSigned { a: NationId, b: NationId },
+    /// "{a} and {b} agreed to mutual peace" — both sides voluntarily ended a war.
+    MutualPeace { a: NationId, b: NationId },
+    /// "{conqueror} conquered {province} from {loser}".
+    ProvinceConquered {
+        conqueror: NationId,
+        loser: NationId,
+        province: ProvinceId,
+    },
+    /// "{researcher} researched {tech_name}". Tech name is stored verbatim
+    /// because the tech tree may not be loaded when rendering.
+    TechnologyResearched {
+        researcher: NationId,
+        tech_name: String,
+    },
+    /// "{signer} signed a non-aggression pact with {partner}".
+    NonAggressionPactSigned {
+        signer: NationId,
+        partner: NationId,
+    },
+    /// "{signer} formed an alliance with {partner}".
+    AllianceFormed {
+        signer: NationId,
+        partner: NationId,
+    },
+    /// "{acceptor} accepted {proposer}'s {treaty_type} proposal".
+    TreatyProposalAccepted {
+        acceptor: NationId,
+        proposer: NationId,
+        treaty_type: TreatyType,
+    },
+    /// "{nation} fell into anarchy".
+    FellIntoAnarchy { nation: NationId },
+    /// "{minor} regained independence after {former_overlord} fell into anarchy".
+    RegainedIndependence {
+        minor: NationId,
+        former_overlord: NationId,
+    },
+    /// "{minor} joined the empire of {overlord}" or "voluntarily joined the empire of".
+    MinorJoinedEmpire {
+        minor: NationId,
+        overlord: NationId,
+        reason: IncorporationReason,
+    },
+    /// "Trade consulate built with {target}".
+    ConsulateBuilt {
+        player: NationId,
+        target: NationId,
+    },
+    /// "Embassy built with {target}".
+    EmbassyBuilt {
+        player: NationId,
+        target: NationId,
+    },
+}
+
 // ── Wrapper enum ───────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]

@@ -117,13 +117,16 @@ pub(crate) fn ai_research_tech(
                         nation_id,
                     });
                     let turn = game.turn;
-                    let entry_text = format!("{} researched {}", nation_name, tech_name);
+                    let entry = crate::events::HistoryEvent::TechnologyResearched {
+                        researcher: nation_id,
+                        tech_name: tech_name.clone(),
+                    };
                     if !game
                         .history
                         .iter()
-                        .any(|(t, text)| *t == turn && text == &entry_text)
+                        .any(|(t, ev)| *t == turn && *ev == entry)
                     {
-                        game.history.push((turn, entry_text));
+                        game.history.push((turn, entry));
                     }
                     return;
                 }
@@ -250,14 +253,17 @@ pub(crate) fn ai_research_tech(
             nation_id,
         });
         let turn = game.turn;
-        let entry_text = format!("{} researched {}", nation_name, tech_name);
-        // Deduplicate: only push if this exact text doesn't already exist for this turn
+        let entry = crate::events::HistoryEvent::TechnologyResearched {
+            researcher: nation_id,
+            tech_name: tech_name.clone(),
+        };
+        // Deduplicate: only push if this exact event doesn't already exist for this turn
         if !game
             .history
             .iter()
-            .any(|(t, text)| *t == turn && text == &entry_text)
+            .any(|(t, ev)| *t == turn && *ev == entry)
         {
-            game.history.push((turn, entry_text));
+            game.history.push((turn, entry));
         }
         return; // Successfully researched
     }
@@ -306,13 +312,16 @@ pub(crate) fn ai_research_tech(
                     nation_id,
                 });
                 let turn = game.turn;
-                let entry_text = format!("{} researched {}", nation_name, cand_name);
+                let entry = crate::events::HistoryEvent::TechnologyResearched {
+                    researcher: nation_id,
+                    tech_name: cand_name.clone(),
+                };
                 if !game
                     .history
                     .iter()
-                    .any(|(t, text)| *t == turn && text == &entry_text)
+                    .any(|(t, ev)| *t == turn && *ev == entry)
                 {
-                    game.history.push((turn, entry_text));
+                    game.history.push((turn, entry));
                 }
                 return;
             }

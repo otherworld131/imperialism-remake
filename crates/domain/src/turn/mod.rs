@@ -1,3 +1,6 @@
+pub(crate) mod civilian_phase;
+pub(crate) mod economy_phase;
+pub(crate) mod news_phase;
 pub mod processor;
 pub mod scoring;
 

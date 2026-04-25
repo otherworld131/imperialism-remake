@@ -185,27 +185,25 @@ fn sigmoid(x: f64, steepness: f64) -> f64 {
 /// Compute momentum by scanning history for province changes in the last `window` turns.
 fn compute_momentum(
     game: &GameState,
-    nation_name: &str,
-    enemy_name: &str,
+    nation_id: NationId,
+    enemy_id: NationId,
     window: u32,
 ) -> (f64, usize, usize) {
+    use crate::events::HistoryEvent;
     let min_turn = game.turn.0.saturating_sub(window);
     let mut captured = 0usize;
     let mut lost = 0usize;
-    for (turn_entry, desc) in &game.history {
+    for (turn_entry, event) in &game.history {
         if turn_entry.0 < min_turn {
             continue;
         }
-        if desc.contains("conquered") {
-            if desc.contains(&format!("from {}", enemy_name))
-                && desc.contains(nation_name)
-                && !desc.starts_with(enemy_name)
-            {
+        if let HistoryEvent::ProvinceConquered {
+            conqueror, loser, ..
+        } = event
+        {
+            if *conqueror == nation_id && *loser == enemy_id {
                 captured += 1;
-            } else if desc.contains(&format!("from {}", nation_name))
-                && desc.contains(enemy_name)
-                && !desc.starts_with(nation_name)
-            {
+            } else if *conqueror == enemy_id && *loser == nation_id {
                 lost += 1;
             }
         }
@@ -217,20 +215,21 @@ fn compute_momentum(
 /// Find the turn when the *current* war started between two nations by scanning history.
 /// Uses the most recent war declaration (not the first ever) so that province counts
 /// are scoped to the current conflict when nations have fought multiple wars.
-/// Matches anchored patterns to avoid false positives from entries like
-/// "X declared war on Y to protect Z" when looking for pair (Y, Z).
-pub fn find_war_start_turn(game: &GameState, name_a: &str, name_b: &str) -> Option<u32> {
-    let declared_a_on_b = format!("{} declared war on {}", name_a, name_b);
-    let declared_b_on_a = format!("{} declared war on {}", name_b, name_a);
-    let joined_a_vs_b = format!("{} joined war against {}", name_a, name_b);
-    let joined_b_vs_a = format!("{} joined war against {}", name_b, name_a);
+/// Pact-defense intervention (`X declared war on Y to protect Z`) only matches the
+/// (X, Y) pair — never the (Y, Z) pair — because the typed event keeps protectee
+/// distinct from the war participants.
+pub fn find_war_start_turn(game: &GameState, a: NationId, b: NationId) -> Option<u32> {
+    use crate::events::HistoryEvent;
     game.history
         .iter()
-        .filter(|(_, desc)| {
-            desc.starts_with(&declared_a_on_b)
-                || desc.starts_with(&declared_b_on_a)
-                || desc.starts_with(&joined_a_vs_b)
-                || desc.starts_with(&joined_b_vs_a)
+        .filter(|(_, ev)| match ev {
+            HistoryEvent::WarDeclared {
+                attacker, defender, ..
+            } => (*attacker == a && *defender == b) || (*attacker == b && *defender == a),
+            HistoryEvent::JoinedWar { joiner, target } => {
+                (*joiner == a && *target == b) || (*joiner == b && *target == a)
+            }
+            _ => false,
         })
         .map(|(turn, _)| turn.0)
         .max()
@@ -282,15 +281,7 @@ pub fn evaluate_coalition_strength(
         .map(|&id| nation_economic_score(game, id))
         .sum();
 
-    let nation_name = game
-        .get_nation(nation_id)
-        .map(|n| n.name.as_str())
-        .unwrap_or("");
-    let enemy_name = game
-        .get_nation(enemy_id)
-        .map(|n| n.name.as_str())
-        .unwrap_or("");
-    let (momentum, _, _) = compute_momentum(game, nation_name, enemy_name, 5);
+    let (momentum, _, _) = compute_momentum(game, nation_id, enemy_id, 5);
 
     let our_total = our_military * w.mil_weight
         + our_provinces as f64 * w.prov_weight
@@ -451,36 +442,26 @@ pub fn evaluate_war_worthiness(
     win_likelihood: f64,
     #[cfg(feature = "lua")] lua_cfg: Option<&LuaAiConfig>,
 ) -> WarWorthiness {
-    let nation_name = game
-        .get_nation(nation_id)
-        .map(|n| n.name.clone())
-        .unwrap_or_default();
-    let enemy_name = game
-        .get_nation(enemy_id)
-        .map(|n| n.name.clone())
-        .unwrap_or_default();
-
+    use crate::events::HistoryEvent;
     // Find war start turn
-    let war_start = find_war_start_turn(game, &nation_name, &enemy_name).unwrap_or(0);
+    let war_start = find_war_start_turn(game, nation_id, enemy_id).unwrap_or(0);
 
     // Count captures and losses since war start
     let mut provinces_captured = 0usize;
     let mut provinces_lost = 0usize;
-    for (turn_entry, desc) in &game.history {
+    for (turn_entry, event) in &game.history {
         if turn_entry.0 < war_start {
             continue;
         }
-        if !desc.contains("conquered") {
-            continue;
-        }
-        // "X conquered Province Y from Z" — X gains, Z loses
-        if desc.contains(&format!("from {}", enemy_name)) && !desc.starts_with(&enemy_name) {
-            // We (or our side) took something from the enemy
-            provinces_captured += 1;
-        } else if desc.contains(&format!("from {}", nation_name)) && !desc.starts_with(&nation_name)
+        if let HistoryEvent::ProvinceConquered {
+            conqueror, loser, ..
+        } = event
         {
-            // Enemy took something from us
-            provinces_lost += 1;
+            if *conqueror == nation_id && *loser == enemy_id {
+                provinces_captured += 1;
+            } else if *conqueror == enemy_id && *loser == nation_id {
+                provinces_lost += 1;
+            }
         }
     }
 
@@ -698,15 +679,7 @@ pub fn evaluate_peace_proposal(
     }
 
     // Accept stalemate
-    let receiver_name = game
-        .get_nation(to)
-        .map(|n| n.name.clone())
-        .unwrap_or_default();
-    let proposer_name = game
-        .get_nation(from)
-        .map(|n| n.name.clone())
-        .unwrap_or_default();
-    let war_start = find_war_start_turn(game, &receiver_name, &proposer_name);
+    let war_start = find_war_start_turn(game, to, from);
     if let Some(start) = war_start {
         let duration = game.turn.0.saturating_sub(start);
         if duration > stalemate_duration && worthiness.provinces_captured == 0 {
@@ -1044,49 +1017,68 @@ mod tests {
 
     #[test]
     fn find_war_start_returns_most_recent_war() {
+        use crate::events::HistoryEvent;
         let mut game = test_game_with_adjacent_provinces();
         // Simulate war→peace→war: two war declarations between same nations
         game.history.push((
             TurnNumber(5),
-            "Alphaland declared war on Betaland".to_string(),
+            HistoryEvent::WarDeclared {
+                attacker: NationId(2),
+                defender: NationId(3),
+                protectee: None,
+            },
         ));
         game.history.push((
             TurnNumber(15),
-            "Alphaland declared war on Betaland".to_string(),
+            HistoryEvent::WarDeclared {
+                attacker: NationId(2),
+                defender: NationId(3),
+                protectee: None,
+            },
         ));
         // Should return the most recent (turn 15), not the first (turn 5)
-        let start = find_war_start_turn(&game, "Alphaland", "Betaland");
+        let start = find_war_start_turn(&game, NationId(2), NationId(3));
         assert_eq!(start, Some(15));
     }
 
     #[test]
     fn find_war_start_matches_alliance_join() {
+        use crate::events::HistoryEvent;
         let mut game = test_game_with_adjacent_provinces();
         game.history.push((
             TurnNumber(10),
-            "Gammaland joined war against Deltaland (alliance obligation)".to_string(),
+            HistoryEvent::JoinedWar {
+                joiner: NationId(2),
+                target: NationId(3),
+            },
         ));
-        let start = find_war_start_turn(&game, "Gammaland", "Deltaland");
+        let start = find_war_start_turn(&game, NationId(2), NationId(3));
         assert_eq!(start, Some(10));
     }
 
     #[test]
     fn find_war_start_ignores_pact_defense_false_positive() {
+        use crate::events::HistoryEvent;
         let mut game = test_game_with_adjacent_provinces();
-        // "A declared war on B to protect C" should NOT match pair (B, C)
+        // "A declared war on B to protect C" should NOT match pair (B, C):
+        // attacker=1, defender=2, protectee=3
         game.history.push((
             TurnNumber(8),
-            "Alphaland declared war on Betaland to protect Gammaland".to_string(),
+            HistoryEvent::WarDeclared {
+                attacker: NationId(1),
+                defender: NationId(2),
+                protectee: Some(NationId(3)),
+            },
         ));
-        // No direct war between Betaland and Gammaland
-        let start = find_war_start_turn(&game, "Betaland", "Gammaland");
+        // No direct war between B (2) and C (3)
+        let start = find_war_start_turn(&game, NationId(2), NationId(3));
         assert_eq!(
             start, None,
-            "pact defense entry should not match (B, C) pair"
+            "pact defense entry should not match (defender, protectee) pair"
         );
 
-        // But it SHOULD match the (A, B) pair
-        let start_ab = find_war_start_turn(&game, "Alphaland", "Betaland");
+        // But it SHOULD match the (attacker, defender) pair
+        let start_ab = find_war_start_turn(&game, NationId(1), NationId(2));
         assert_eq!(start_ab, Some(8));
     }
 }

@@ -300,12 +300,11 @@ pub fn ai_manage_diplomacy(
                     .get_nation(mn_id)
                     .map(|n| n.name.clone())
                     .unwrap_or_default();
-                let pact_text = format!(
-                    "{} signed a non-aggression pact with {}",
-                    nation_name, mn_name
-                );
                 actions.push(super::AiAction {
-                    text: pact_text.clone(),
+                    text: format!(
+                        "{} signed a non-aggression pact with {}",
+                        nation_name, mn_name
+                    ),
                     reason: format!(
                         "{:?} personality favors non-aggression pacts with embassy partners",
                         personality
@@ -314,12 +313,16 @@ pub fn ai_manage_diplomacy(
                     nation_id,
                 });
                 let turn = game.turn;
+                let entry = crate::events::HistoryEvent::NonAggressionPactSigned {
+                    signer: nation_id,
+                    partner: mn_id,
+                };
                 if !game
                     .history
                     .iter()
-                    .any(|(t, text)| *t == turn && text == &pact_text)
+                    .any(|(t, ev)| *t == turn && *ev == entry)
                 {
-                    game.history.push((turn, pact_text));
+                    game.history.push((turn, entry));
                 }
             }
         }

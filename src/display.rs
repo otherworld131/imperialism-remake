@@ -896,7 +896,7 @@ pub(crate) fn print_history(game: &GameState) {
             turn.year(),
             turn.quarter(),
             turn.0,
-            event
+            game.render_history_event(event)
         );
     }
 }
