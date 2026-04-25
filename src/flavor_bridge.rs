@@ -3,12 +3,13 @@
 //! Kept out of the domain crate on purpose: domain has no dependency on
 //! `flavor`. Call this once right after constructing a `GameState`. It
 //! populates the display-only strings (`adjective`, `demonym_plural`,
-//! `government_title`, `flag_svg`, …) on every `Nation`. Nothing in the
+//! `government_title`, `flag_svg`, …) on every `Nation` and overwrites
+//! `name` with the flavor-generated short form. Nothing in the
 //! turn-resolution pipeline reads these fields — they're strictly UI.
 
 use domain::game_state::GameState;
 use domain::types::NationType;
-use flavor::{FlagRules, GovernmentMix, Rng, generate_for_seed};
+use flavor::{FlagRules, Rng, generate_for_seed, load_default_mixes};
 
 /// DJB2-style hash of a string — matches the seed derivation used by
 /// `crates/domain/src/map/generator.rs`, so flavor seeding stays consistent
@@ -31,17 +32,22 @@ fn nation_seed(base_seed: u64, nation_index: u32) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Apply procedural flavor (adjective, demonyms, government title, flag
-/// SVG) to every nation in `game`. Existing gameplay `name` is preserved;
-/// flavor augments — it never overwrites the core name used by the engine.
+/// Apply procedural flavor (name, demonyms, government title, flag SVG) to
+/// every nation in `game`. The flavor-generated `name` overwrites the
+/// engine's static-pool name so the procedural country names actually appear
+/// in-game. Existing flavor fields are skipped (so save reloads don't churn).
 ///
-/// The seed is derived from `game.map_key` so replays on the same map
-/// produce the same flavor.
-pub fn apply_flavor(game: &mut GameState) {
-    let base_seed = djb2(&game.map_key);
+/// `flavor_key` seeds name + flag generation. An empty string falls back to
+/// `game.map_key`, keeping replays stable on the same map.
+pub fn apply_flavor(game: &mut GameState, flavor_key: &str) {
+    let key = if flavor_key.is_empty() {
+        game.map_key.as_str()
+    } else {
+        flavor_key
+    };
+    let base_seed = djb2(key);
     let rules = FlagRules::default();
-    let gp_mix = GovernmentMix::great_power_default();
-    let mn_mix = GovernmentMix::minor_nation_default();
+    let (gp_mix, mn_mix) = load_default_mixes();
 
     for nation in game.nations.iter_mut() {
         // Skip rehydration: if flavor fields were already populated (e.g.
@@ -53,6 +59,7 @@ pub fn apply_flavor(game: &mut GameState) {
         let mix = if is_gp { &gp_mix } else { &mn_mix };
         let s = nation_seed(base_seed, nation.id.0);
         let flavor = generate_for_seed(s, mix, &rules);
+        nation.name = flavor.name;
         nation.adjective = flavor.adjective;
         nation.demonym_singular = flavor.demonym_singular;
         nation.demonym_plural = flavor.demonym_plural;

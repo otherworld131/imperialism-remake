@@ -66,7 +66,7 @@ fn main() {
         new_game(map_key, Difficulty::Normal, nation_index)
     };
 
-    apply_flavor(&mut game);
+    apply_flavor(&mut game, "");
     game.ai_debug = ai_debug;
 
     // Show initial map

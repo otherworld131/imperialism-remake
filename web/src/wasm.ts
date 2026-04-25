@@ -442,6 +442,7 @@ export async function newGame(
   difficulty: number,
   nationIndex: number,
   cfg: MapGenConfig = DEFAULT_MAP_GEN_CONFIG,
+  flavorKey: string = '',
 ): Promise<string> {
   return call<string>(
     'wasm_new_game',
@@ -452,6 +453,7 @@ export async function newGame(
     cfg.height,
     cfg.numGreatPowers,
     cfg.numMinorNations,
+    flavorKey,
   );
 }
 
@@ -480,14 +482,20 @@ export async function getScenarios(): Promise<any[]> {
   return JSON.parse(await call<string>('wasm_get_scenarios'));
 }
 
-export async function newScenarioGame(scenarioId: string, difficulty: number, nationIndex: number): Promise<string> {
-  return call<string>('wasm_new_scenario_game', scenarioId, difficulty, nationIndex);
+export async function newScenarioGame(
+  scenarioId: string,
+  difficulty: number,
+  nationIndex: number,
+  flavorKey: string = '',
+): Promise<string> {
+  return call<string>('wasm_new_scenario_game', scenarioId, difficulty, nationIndex, flavorKey);
 }
 
 export async function newObserverGame(
   mapKey: string,
   difficulty: number,
   cfg: MapGenConfig = DEFAULT_MAP_GEN_CONFIG,
+  flavorKey: string = '',
 ): Promise<string> {
   return call<string>(
     'wasm_new_observer_game',
@@ -497,11 +505,22 @@ export async function newObserverGame(
     cfg.height,
     cfg.numGreatPowers,
     cfg.numMinorNations,
+    flavorKey,
   );
 }
 
-export async function newObserverScenarioGame(scenarioId: string, difficulty: number): Promise<string> {
-  return call<string>('wasm_new_observer_scenario_game', scenarioId, difficulty);
+export async function newObserverScenarioGame(
+  scenarioId: string,
+  difficulty: number,
+  flavorKey: string = '',
+): Promise<string> {
+  return call<string>('wasm_new_observer_scenario_game', scenarioId, difficulty, flavorKey);
+}
+
+/// Re-roll names/flags/government titles on an existing game state.
+/// Map layout, ownership and any other state is preserved.
+export async function applyFlavor(gameJson: string, flavorKey: string): Promise<string> {
+  return call<string>('wasm_apply_flavor', gameJson, flavorKey);
 }
 
 export async function setHumanPlayer(gameJson: string, nationIndex: number): Promise<string> {

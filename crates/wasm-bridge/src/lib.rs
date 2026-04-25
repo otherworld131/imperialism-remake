@@ -41,6 +41,7 @@ fn build_map_config(
 }
 
 /// Create a new game. Returns JSON string of the full game state.
+/// `flavor_key` seeds names/flags; pass an empty string to reuse `map_key`.
 #[wasm_bindgen]
 pub fn wasm_new_game(
     map_key: &str,
@@ -50,17 +51,24 @@ pub fn wasm_new_game(
     map_height: i32,
     num_great_powers: u32,
     num_minor_nations: u32,
+    flavor_key: &str,
 ) -> String {
     let diff = difficulty_from_u8(difficulty);
     let cfg = build_map_config(map_width, map_height, num_great_powers, num_minor_nations);
     let mut game = new_game_with_config(map_key, diff, nation_index, cfg);
-    flavor_bridge::apply_flavor(&mut game);
+    flavor_bridge::apply_flavor(&mut game, flavor_key);
     serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
 }
 
 /// Create a new game from a historical scenario.
+/// `flavor_key` seeds names/flags; pass an empty string to reuse `map_key`.
 #[wasm_bindgen]
-pub fn wasm_new_scenario_game(scenario_id: &str, difficulty: u8, nation_index: usize) -> String {
+pub fn wasm_new_scenario_game(
+    scenario_id: &str,
+    difficulty: u8,
+    nation_index: usize,
+    flavor_key: &str,
+) -> String {
     let diff = match difficulty {
         0 => Difficulty::Introductory,
         1 => Difficulty::Easy,
@@ -70,7 +78,7 @@ pub fn wasm_new_scenario_game(scenario_id: &str, difficulty: u8, nation_index: u
     };
     match new_scenario_game(scenario_id, diff, nation_index) {
         Ok(mut game) => {
-            flavor_bridge::apply_flavor(&mut game);
+            flavor_bridge::apply_flavor(&mut game, flavor_key);
             serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
         }
         Err(e) => format!("{{\"error\":\"{}\"}}", e),
@@ -90,6 +98,7 @@ fn difficulty_from_u8(d: u8) -> Difficulty {
 
 /// Create a new game in observer mode. All Great Powers are AI-controlled;
 /// the human only observes. The nation at index 0 is the default viewpoint.
+/// `flavor_key` seeds names/flags; pass an empty string to reuse `map_key`.
 #[wasm_bindgen]
 pub fn wasm_new_observer_game(
     map_key: &str,
@@ -98,15 +107,22 @@ pub fn wasm_new_observer_game(
     map_height: i32,
     num_great_powers: u32,
     num_minor_nations: u32,
+    flavor_key: &str,
 ) -> String {
     let cfg = build_map_config(map_width, map_height, num_great_powers, num_minor_nations);
-    let game = new_observer_game_with_config(map_key, difficulty_from_u8(difficulty), cfg);
+    let mut game = new_observer_game_with_config(map_key, difficulty_from_u8(difficulty), cfg);
+    flavor_bridge::apply_flavor(&mut game, flavor_key);
     serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
 }
 
 /// Create a new observer-mode scenario game.
+/// `flavor_key` seeds names/flags; pass an empty string to reuse the scenario id.
 #[wasm_bindgen]
-pub fn wasm_new_observer_scenario_game(scenario_id: &str, difficulty: u8) -> String {
+pub fn wasm_new_observer_scenario_game(
+    scenario_id: &str,
+    difficulty: u8,
+    flavor_key: &str,
+) -> String {
     let diff = difficulty_from_u8(difficulty);
     match new_scenario_game(scenario_id, diff, 0) {
         Ok(mut game) => {
@@ -128,10 +144,25 @@ pub fn wasm_new_observer_scenario_game(scenario_id: &str, difficulty: u8) -> Str
                 }
             }
             game.observer_mode = true;
+            flavor_bridge::apply_flavor(&mut game, flavor_key);
             serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
         }
         Err(e) => format!("{{\"error\":\"{}\"}}", e),
     }
+}
+
+/// Re-roll the flavor (names, flags, government titles) on an existing game
+/// state, leaving everything else untouched. Used by GameSetup's
+/// "Re-roll Names" button.
+#[wasm_bindgen]
+pub fn wasm_apply_flavor(game_json: &str, flavor_key: &str) -> String {
+    let mut game: GameState = match serde_json::from_str(game_json) {
+        Ok(g) => g,
+        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    };
+    flavor_bridge::clear_flavor(&mut game);
+    flavor_bridge::apply_flavor(&mut game, flavor_key);
+    serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
 }
 
 /// Switch which nation is the "viewpoint" (a.k.a. human player).

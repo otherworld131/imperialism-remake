@@ -5,7 +5,7 @@
 
 use domain::game_state::GameState;
 use domain::types::NationType;
-use flavor::{FlagRules, GovernmentMix, generate_for_seed};
+use flavor::{FlagRules, generate_for_seed, load_default_mixes};
 
 fn djb2(s: &str) -> u64 {
     let mut h: u64 = 5381;
@@ -22,11 +22,22 @@ fn nation_seed(base_seed: u64, nation_index: u32) -> u64 {
     z ^ (z >> 31)
 }
 
-pub fn apply_flavor(game: &mut GameState) {
-    let base_seed = djb2(&game.map_key);
+/// Apply procedural flavor (name, demonyms, government title, flag SVG) to
+/// every nation in `game`. The flavor-generated `name` overwrites the
+/// engine's static-pool name so the procedural country names actually appear
+/// in-game. Existing flavor fields are skipped (so save reloads don't churn).
+///
+/// `flavor_key` seeds name + flag generation. An empty string falls back to
+/// `game.map_key`, keeping replays stable on the same map.
+pub fn apply_flavor(game: &mut GameState, flavor_key: &str) {
+    let key = if flavor_key.is_empty() {
+        game.map_key.as_str()
+    } else {
+        flavor_key
+    };
+    let base_seed = djb2(key);
     let rules = FlagRules::default();
-    let gp_mix = GovernmentMix::great_power_default();
-    let mn_mix = GovernmentMix::minor_nation_default();
+    let (gp_mix, mn_mix) = load_default_mixes();
 
     for nation in game.nations.iter_mut() {
         if !nation.flag_svg.is_empty() {
@@ -36,10 +47,23 @@ pub fn apply_flavor(game: &mut GameState) {
         let mix = if is_gp { &gp_mix } else { &mn_mix };
         let s = nation_seed(base_seed, nation.id.0);
         let flavor = generate_for_seed(s, mix, &rules);
+        nation.name = flavor.name;
         nation.adjective = flavor.adjective;
         nation.demonym_singular = flavor.demonym_singular;
         nation.demonym_plural = flavor.demonym_plural;
         nation.government_title = flavor.government_title;
         nation.flag_svg = flavor.flag_svg;
+    }
+}
+
+/// Wipe the flavor fields on every nation so a subsequent `apply_flavor`
+/// regenerates them. Used by the "re-roll names" preview path.
+pub fn clear_flavor(game: &mut GameState) {
+    for nation in game.nations.iter_mut() {
+        nation.adjective.clear();
+        nation.demonym_singular.clear();
+        nation.demonym_plural.clear();
+        nation.government_title.clear();
+        nation.flag_svg.clear();
     }
 }

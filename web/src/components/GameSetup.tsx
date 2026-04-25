@@ -2,10 +2,12 @@ import { useState, useEffect, useMemo } from 'react';
 import {
   getScenarios, newGame, newScenarioGame, getMapData,
   newObserverGame, newObserverScenarioGame, setHumanPlayer,
+  applyFlavor,
   DEFAULT_MAP_GEN_CONFIG,
 } from '../wasm';
 import type { TileData, MapGenConfig } from '../wasm';
 import HexMap from './HexMap';
+import Flag from './Flag';
 
 const MAP_SIZE_PRESETS: Array<{ key: string; label: string; width: number; height: number }> = [
   { key: 'small', label: 'Small (60×40)', width: 60, height: 40 },
@@ -42,6 +44,8 @@ interface GpInfo {
   id: number;
   name: string;
   color: string;
+  governmentTitle: string;
+  flagSvg: string;
 }
 
 type Step = 'config' | 'preview';
@@ -55,6 +59,7 @@ export default function GameSetup({ onStartGame }: Props) {
   const [selectedScenario, setSelectedScenario] = useState<string | null>(null);
   const [difficulty, setDifficulty] = useState(2);
   const [mapKey, setMapKey] = useState('');
+  const [flavorKey, setFlavorKey] = useState('');
   const [observerMode, setObserverMode] = useState(true);
   const [organicBorders, setOrganicBorders] = useState(true);
   const [hideHexGrid, setHideHexGrid] = useState(true);
@@ -90,22 +95,33 @@ export default function GameSetup({ onStartGame }: Props) {
 
   const effectiveMapKey = useMemo(() => mapKey || 'imperialism', [mapKey]);
 
-  const buildPreview = async (keyOverride?: string) => {
+  const extractGps = (parsed: any): GpInfo[] =>
+    (parsed.nations as any[])
+      .filter((n: any) => n.nation_type === 'GreatPower')
+      .map((n: any, idx: number) => ({
+        idx,
+        id: n.id,
+        name: n.name,
+        color: n.color,
+        governmentTitle: n.government_title || n.name,
+        flagSvg: n.flag_svg || '',
+      }));
+
+  const buildPreview = async (keyOverride?: string, flavorOverride?: string) => {
     setPreviewError(null);
     const key = keyOverride ?? effectiveMapKey;
+    const fkey = flavorOverride ?? flavorKey;
     try {
       const json = selectedScenario
-        ? await newScenarioGame(selectedScenario, difficulty, 0)
-        : await newGame(key, difficulty, 0, mapGenConfig);
+        ? await newScenarioGame(selectedScenario, difficulty, 0, fkey)
+        : await newGame(key, difficulty, 0, mapGenConfig, fkey);
       // Detect error payloads from the bridge.
       const parsed = JSON.parse(json);
       if (parsed.error) {
         setPreviewError(parsed.error);
         return;
       }
-      const gps: GpInfo[] = (parsed.nations as any[])
-        .filter(n => n.nation_type === 'GreatPower')
-        .map((n, idx) => ({ idx, id: n.id, name: n.name, color: n.color }));
+      const gps = extractGps(parsed);
       const tiles = await getMapData(json, true);
       setPreviewJson(json);
       setPreviewTiles(tiles);
@@ -121,12 +137,35 @@ export default function GameSetup({ onStartGame }: Props) {
   };
 
   const handleReroll = () => {
+    const fresh = randomSeed();
+    setFlavorKey(fresh);
     if (selectedScenario) {
-      buildPreview();
+      buildPreview(undefined, fresh);
     } else {
-      const fresh = randomSeed();
       setMapKey(fresh);
-      buildPreview(fresh);
+      buildPreview(fresh, fresh);
+    }
+  };
+
+  const handleRerollNames = async () => {
+    if (!previewJson) return;
+    const fresh = randomSeed();
+    setFlavorKey(fresh);
+    try {
+      const updated = await applyFlavor(previewJson, fresh);
+      const parsed = JSON.parse(updated);
+      if (parsed.error) {
+        setPreviewError(parsed.error);
+        return;
+      }
+      setPreviewJson(updated);
+      setPreviewGps(extractGps(parsed));
+      // Tiles use Nation.name in the legend; refresh them too so labels
+      // pick up the new short names.
+      const tiles = await getMapData(updated, true);
+      setPreviewTiles(tiles);
+    } catch (e) {
+      setPreviewError(String(e));
     }
   };
 
@@ -141,8 +180,8 @@ export default function GameSetup({ onStartGame }: Props) {
     let gameJson: string;
     if (observerMode) {
       gameJson = selectedScenario
-        ? await newObserverScenarioGame(selectedScenario, difficulty)
-        : await newObserverGame(effectiveMapKey, difficulty, mapGenConfig);
+        ? await newObserverScenarioGame(selectedScenario, difficulty, flavorKey)
+        : await newObserverGame(effectiveMapKey, difficulty, mapGenConfig, flavorKey);
       if (idx !== 0) {
         gameJson = await setHumanPlayer(gameJson, idx);
       }
@@ -379,6 +418,7 @@ export default function GameSetup({ onStartGame }: Props) {
           {selectedScenario
             ? `Scenario: ${selectedScenario}`
             : `Seed: ${effectiveMapKey}`}
+          {' \u00b7 '}Names: {flavorKey || effectiveMapKey}
           {' \u00b7 '}{DIFFICULTIES[difficulty]}
           {observerMode ? ' \u00b7 Observer Mode' : ''}
         </div>
@@ -415,7 +455,13 @@ export default function GameSetup({ onStartGame }: Props) {
                 onClick={() => setPickedNationIdx(gp.idx)}
               >
                 <div style={{ ...s.gpSwatch, background: NATION_COLORS[gp.color] || '#888' }} />
-                <div style={s.gpName}>{gp.name}</div>
+                <Flag svg={gp.flagSvg} width={36} height={24} title={gp.governmentTitle} />
+                <div style={s.gpNameBlock}>
+                  <div style={s.gpName}>{gp.name}</div>
+                  {gp.governmentTitle && gp.governmentTitle !== gp.name && (
+                    <div style={s.gpTitle}>{gp.governmentTitle}</div>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -424,6 +470,9 @@ export default function GameSetup({ onStartGame }: Props) {
       <div style={s.previewFooter}>
         <button style={s.secondaryBtn} onClick={() => setStep('config')}>Back</button>
         <button style={s.secondaryBtn} onClick={handleReroll}>Re-roll</button>
+        <button style={s.secondaryBtn} onClick={handleRerollNames} title="Re-roll only the country names and flags. Map layout stays the same.">
+          Re-roll Names
+        </button>
         <div style={{ flex: 1 }} />
         <button
           style={canBegin ? s.startBtn : { ...s.startBtn, ...s.startBtnDisabled }}
@@ -478,13 +527,15 @@ const s: Record<string, React.CSSProperties> = {
   previewSub: { fontSize: 12, color: '#9a9a9a', marginTop: 2 },
   previewBody: { flex: 1, display: 'flex', overflow: 'hidden' },
   mapWrap: { flex: 1, position: 'relative' as const, overflow: 'hidden' },
-  sidebar: { width: 240, background: '#161625', borderLeft: '2px solid #3a3520', padding: 16, overflowY: 'auto' as const },
+  sidebar: { width: 320, background: '#161625', borderLeft: '2px solid #3a3520', padding: 16, overflowY: 'auto' as const },
   sidebarTitle: { fontSize: 14, color: '#daa520', textTransform: 'uppercase' as const, letterSpacing: 0.5, marginBottom: 4 },
   sidebarHint: { fontSize: 11, color: '#9a9a9a', marginBottom: 14, lineHeight: 1.4 },
   gpList: { display: 'flex', flexDirection: 'column' as const, gap: 6 },
   gpRow: { display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: '#1a1a2e', border: '1px solid #3a3520', borderRadius: 3, cursor: 'pointer' },
   gpRowSelected: { borderColor: '#daa520', background: 'rgba(218,165,32,0.08)' },
-  gpSwatch: { width: 16, height: 16, borderRadius: '50%', border: '1px solid rgba(255,255,255,0.2)' },
-  gpName: { fontSize: 13 },
+  gpSwatch: { width: 12, height: 12, borderRadius: '50%', border: '1px solid rgba(255,255,255,0.2)', flexShrink: 0 },
+  gpNameBlock: { display: 'flex', flexDirection: 'column' as const, minWidth: 0, flex: 1 },
+  gpName: { fontSize: 13, fontWeight: 'bold' as const },
+  gpTitle: { fontSize: 11, color: '#9a9a9a', marginTop: 1 },
   previewFooter: { padding: '12px 20px', background: '#0f0f23', borderTop: '2px solid #3a3520', display: 'flex', gap: 10, alignItems: 'center' },
 };
