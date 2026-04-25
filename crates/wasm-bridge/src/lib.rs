@@ -12,9 +12,9 @@ use domain::economy::production::{
 use domain::economy::trade::{Commodity, base_price, commodity_price};
 use domain::economy::transport::TransportSystem;
 use domain::events::TreatyType;
-use domain::game_state::{
-    GameState, new_game, new_game_with_config, new_observer_game, new_observer_game_with_config,
-};
+use domain::game_state::{GameState, new_game_with_config, new_observer_game_with_config};
+#[cfg(test)]
+use domain::game_state::{new_game, new_observer_game};
 use domain::hex::HexCoord;
 use domain::map::MapGenConfig;
 use domain::military::combat::BattleResult;
@@ -625,6 +625,7 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
                 "civilian_on_tile": civ_data,
                 "is_minor": is_minor,
                 "is_incorporated_minor": is_incorporated_minor,
+                "incorporated_nation_id": incorporated_from_id.map(|n| n.0),
                 "is_anarchic": nation_anarchy_lookup.get(&owner_nid).copied().unwrap_or(false),
                 "visual_group": visual_group,
                 "visible": is_visible,

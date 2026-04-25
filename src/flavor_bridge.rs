@@ -8,8 +8,9 @@
 //! turn-resolution pipeline reads these fields — they're strictly UI.
 
 use domain::game_state::GameState;
-use domain::types::NationType;
-use flavor::{FlagRules, Rng, generate_for_seed, load_default_mixes};
+use domain::types::{NationId, NationType};
+use flavor::{FlagRules, Rng, generate_city_names, generate_for_seed, load_default_mixes};
+use std::collections::HashMap;
 
 /// DJB2-style hash of a string — matches the seed derivation used by
 /// `crates/domain/src/map/generator.rs`, so flavor seeding stays consistent
@@ -66,7 +67,27 @@ pub fn apply_flavor(game: &mut GameState, flavor_key: &str) {
         nation.government_title = flavor.government_title;
         nation.flag_svg = flavor.flag_svg;
     }
-    // Touch the Rng import so the compiler doesn't warn when the helper
-    // grows more entrypoints later.
-    let _ = Rng::from_seed(base_seed);
+
+    apply_province_names(game, base_seed);
+}
+
+/// Procedurally name every province. Each owner gets its own seeded RNG so
+/// the names are deterministic per (flavor_key, owner) and unique within
+/// an owner's own provinces.
+fn apply_province_names(game: &mut GameState, base_seed: u64) {
+    let mut by_owner: HashMap<NationId, Vec<usize>> = HashMap::new();
+    for (i, prov) in game.provinces.iter().enumerate() {
+        by_owner.entry(prov.owner).or_default().push(i);
+    }
+    for (owner_id, mut indices) in by_owner {
+        indices.sort_by_key(|i| game.provinces[*i].id.0);
+        let owner_seed = nation_seed(base_seed, owner_id.0);
+        let mut rng = Rng::from_seed(owner_seed);
+        let names = generate_city_names(&mut rng, indices.len());
+        for (k, prov_idx) in indices.iter().enumerate() {
+            if let Some(name) = names.get(k) {
+                game.provinces[*prov_idx].name = name.clone();
+            }
+        }
+    }
 }

@@ -1385,9 +1385,14 @@ function App() {
           {activeScreen === 'map' && (
             <>
               {selectedTile && (() => {
-                const ownerNation = gameState?.nations?.find((n: any) => n.id === selectedTile.nation_id);
-                const ownerTitle = ownerNation?.government_title || selectedTile.owner || '';
-                const ownerFlag = ownerNation?.flag_svg || '';
+                // For diplomatically incorporated provinces, prefer the
+                // original minor's identity so the player still sees its
+                // flag and full title — gameplay-wise the overlord rules,
+                // but the absorbed nation keeps its face in the UI.
+                const displayNationId = selectedTile.incorporated_nation_id ?? selectedTile.nation_id;
+                const displayNation = gameState?.nations?.find((n: any) => n.id === displayNationId);
+                const ownerTitle = displayNation?.government_title || displayNation?.name || selectedTile.owner || '';
+                const ownerFlag = displayNation?.flag_svg || '';
                 const showResource = selectedTile.resource && (!selectedTile.resource_hidden || showHiddenResources);
                 return (
                   <div style={styles.tileInfo}>

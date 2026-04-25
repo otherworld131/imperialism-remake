@@ -30,6 +30,10 @@ export interface TileData {
   civilian_on_tile: { id: number; type: string; working: boolean; turns_remaining: number; build_task: string | null; owner: string; owner_color: string; is_human: boolean } | null;
   is_minor: boolean;
   is_incorporated_minor: boolean;
+  /** When the tile's province was diplomatically incorporated into the
+   *  owner GP, this is the original minor's nation_id (kept for display so
+   *  the UI can still show the absorbed nation's name + flag). */
+  incorporated_nation_id: number | null;
   is_anarchic: boolean;
   visual_group: string | null;
   visible: boolean;
