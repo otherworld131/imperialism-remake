@@ -103,6 +103,7 @@ import BattleScreen from './components/BattleScreen';
 import LegendScreen from './components/LegendScreen';
 import ProposalModal from './components/ProposalModal';
 import BusyOverlay from './components/BusyOverlay';
+import Flag from './components/Flag';
 
 function turnToYearQ(turn: number): string {
   const year = 1815 + Math.floor((turn - 1) / 4);
@@ -1156,13 +1157,22 @@ function App() {
   const year = 1815 + Math.floor((turnNumber - 1) / 4);
   const quarter = ((turnNumber - 1) % 4) + 1;
   const playerName = player?.name || '?';
+  const playerTitle = player?.government_title || playerName;
+  const playerFlag = player?.flag_svg || '';
+  const governmentTitleByNationId: Record<number, string> = {};
+  for (const n of gameState?.nations || []) {
+    if (n?.government_title) governmentTitleByNationId[n.id] = n.government_title;
+  }
 
   return (
     <main style={styles.container}>
       {/* Top bar */}
       <div style={styles.topBar} className="top-bar-responsive">
-        <span style={styles.title} className="title-text">
-          {isObserver ? `Observing: ${playerName}` : `Empire of ${playerName}`}
+        <span style={styles.titleGroup} className="title-text">
+          <Flag svg={playerFlag} width={36} height={24} title={playerTitle} />
+          <span style={styles.title}>
+            {isObserver ? `Observing: ${playerTitle}` : playerTitle}
+          </span>
         </span>
         {gameStartParams?.scenario ? (
           <span
@@ -1287,6 +1297,7 @@ function App() {
             onNavyMarkerClick={handleNavyMarkerClick}
             onNavyMarkerHover={handleNavyMarkerHover}
             renderTooltipModeExtras={renderTooltipModeExtras}
+            governmentTitleByNationId={governmentTitleByNationId}
           />
         </div>
 
@@ -1370,21 +1381,24 @@ function App() {
         <div style={styles.sidePanel} className="side-panel-responsive">
           {activeScreen === 'map' && (
             <>
-              <h3 style={styles.panelTitle}>Tile Info</h3>
-              {selectedTile && (
-                <div style={styles.tileSelected}>
-                  <div style={styles.tileLabel}>Selected</div>
+              {selectedTile && (() => {
+                const ownerNation = gameState?.nations?.find((n: any) => n.id === selectedTile.nation_id);
+                const ownerTitle = ownerNation?.government_title || selectedTile.owner || '';
+                const ownerFlag = ownerNation?.flag_svg || '';
+                const showResource = selectedTile.resource && (!selectedTile.resource_hidden || showHiddenResources);
+                return (
                   <div style={styles.tileInfo}>
-                    <p><b>{selectedTile.terrain}{selectedTile.resource && (!selectedTile.resource_hidden || showHiddenResources) ? ` — ${selectedTile.resource}` : ''}</b></p>
-                    <p>Province: {selectedTile.province || 'None'}</p>
-                    <p>Owner: {selectedTile.owner || 'None'}</p>
-                    {selectedTile.resource && (!selectedTile.resource_hidden || showHiddenResources) && <p>Level: {selectedTile.improvement_level}/{selectedTile.max_improvement_level}</p>}
-                    {selectedTile.is_capital && <p>{'\u2605'} Capital</p>}
-                    {selectedTile.has_railroad && <p>Railroad</p>}
-                    {selectedTile.has_fort && <p>Fort L{selectedTile.fort_level}</p>}
+                    {(ownerFlag || ownerTitle) && (
+                      <div style={styles.tileOwnerRow}>
+                        <Flag svg={ownerFlag} width={48} height={32} title={ownerTitle} />
+                        {ownerTitle && <span style={styles.tileOwnerName}>{ownerTitle}</span>}
+                      </div>
+                    )}
+                    <p><b>{selectedTile.terrain}{showResource ? ` — ${selectedTile.resource}` : ''}</b></p>
+                    {selectedTile.province && <p>Province: {selectedTile.province}</p>}
                   </div>
-                </div>
-              )}
+                );
+              })()}
               {!selectedTile && !selectedNavyMarker && !hoveredNavyMarker && (
                 <p style={styles.hint}>Click to pin; hover a hex for a tooltip</p>
               )}
@@ -1730,6 +1744,7 @@ const styles: Record<string, React.CSSProperties> = {
   container: { display: 'flex', flexDirection: 'column', height: '100vh', fontFamily: "'Georgia', serif", background: '#1a1a2e', color: '#e0d8c0' },
   loading: { display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', fontSize: 24, color: '#c0a060' },
   topBar: { display: 'flex', alignItems: 'center', gap: 20, padding: '8px 16px', background: '#0f0f23', borderBottom: '2px solid #3a3520', flexShrink: 0 },
+  titleGroup: { display: 'inline-flex', alignItems: 'center', gap: 10 },
   title: { fontWeight: 'bold', fontSize: 18, color: '#daa520' },
   screenTabs: { display: 'flex', background: '#0f0f23', borderBottom: '2px solid #3a3520', flexShrink: 0 },
   screenTab: { flex: 1, padding: '10px 8px', textAlign: 'center' as const, fontSize: 13, color: '#9a9a9a', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'Georgia, serif', borderBottom: '3px solid transparent', display: 'flex', flexDirection: 'column' as const, alignItems: 'center' as const },
@@ -1741,6 +1756,8 @@ const styles: Record<string, React.CSSProperties> = {
   sidePanel: { width: 260, padding: 12, background: '#161625', borderLeft: '2px solid #3a3520', overflowY: 'auto' as const, flexShrink: 0 },
   panelTitle: { margin: '12px 0 6px', color: '#daa520', borderBottom: '1px solid #3a3520', paddingBottom: 4 },
   tileInfo: { fontSize: 13 },
+  tileOwnerRow: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 },
+  tileOwnerName: { fontWeight: 'bold', color: '#daa520' },
   tileSelected: { background: 'rgba(218,165,32,0.1)', border: '1px solid rgba(218,165,32,0.3)', borderRadius: 4, padding: 8, marginBottom: 8 },
   tileHovered: { padding: 8, marginBottom: 8, opacity: 0.8 },
   tileLabel: { fontSize: 11, color: '#daa520', textTransform: 'uppercase' as const, letterSpacing: 0.5, marginBottom: 4 },

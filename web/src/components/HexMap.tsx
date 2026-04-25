@@ -285,6 +285,8 @@ interface Props {
   onScaleChange?: (scale: number) => void;
   onOffsetChange?: (offset: { x: number; y: number }) => void;
   highlightedNationId?: number | null;
+  /** nation_id → full government title (e.g., "Kingdom of Pram"). Used by tooltip. */
+  governmentTitleByNationId?: Record<number, string>;
 }
 
 const CIVILIAN_EMOJI: Record<string, string> = {
@@ -328,6 +330,7 @@ export default function HexMap({
   highlightedNationId = null,
   navyMarkers = [], selectedNavyKey = null, onNavyMarkerClick, onNavyMarkerHover,
   renderTooltipModeExtras,
+  governmentTitleByNationId,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Use props if provided (controlled mode), otherwise use local state (uncontrolled)
@@ -2136,6 +2139,7 @@ export default function HexMap({
           screenY={tooltip.screenY}
           sticky={tooltip.sticky}
           showHiddenResources={showHiddenResources}
+          governmentTitleByNationId={governmentTitleByNationId}
           modeExtras={tooltip.tile && renderTooltipModeExtras ? renderTooltipModeExtras(tooltip.tile) : null}
         />
       )}
