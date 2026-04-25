@@ -39,17 +39,14 @@ pub enum NationColor {
     Indigo,
 }
 
-/// A nation in the game — either a Great Power (player-controlled or AI)
-/// or a Minor Nation (AI-only, can be annexed or allied).
+/// Economy substruct — owns inventory, labor, treasury, and buildings.
+///
+/// Extracted from `Nation` (KEYSTONE refactor). Future economy work
+/// (reservations, snapshots, plan/reserve/execute) adds fields here, not
+/// to `Nation`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Nation {
-    pub id: NationId,
-    pub name: String,
-    pub color: NationColor,
-    pub nation_type: NationType,
+pub struct NationEconomy {
     pub treasury: Money,
-    pub province_ids: Vec<ProvinceId>,
-    pub capital_province_id: ProvinceId,
     /// Resource warehouse — stores raw resources.
     pub warehouse: BTreeMap<ResourceType, u32>,
     /// Processed materials warehouse.
@@ -60,6 +57,39 @@ pub struct Nation {
     pub buildings: Vec<Building>,
     /// Labor pool (workers available for production).
     pub labor: LaborPool,
+}
+
+impl NationEconomy {
+    pub fn new() -> Self {
+        Self {
+            treasury: Money::ZERO,
+            warehouse: BTreeMap::new(),
+            materials: BTreeMap::new(),
+            goods: BTreeMap::new(),
+            buildings: Vec::new(),
+            labor: LaborPool::new(),
+        }
+    }
+}
+
+impl Default for NationEconomy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A nation in the game — either a Great Power (player-controlled or AI)
+/// or a Minor Nation (AI-only, can be annexed or allied).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Nation {
+    pub id: NationId,
+    pub name: String,
+    pub color: NationColor,
+    pub nation_type: NationType,
+    pub province_ids: Vec<ProvinceId>,
+    pub capital_province_id: ProvinceId,
+    /// Inventory, labor, treasury, and buildings live here.
+    pub economy: NationEconomy,
     /// Technologies that have been researched by this nation.
     pub researched_techs: Vec<TechId>,
     /// Army units owned by this nation.
@@ -213,14 +243,9 @@ impl Nation {
             name,
             color,
             nation_type,
-            treasury: Money::ZERO,
             province_ids: vec![capital_province_id],
             capital_province_id,
-            warehouse: BTreeMap::new(),
-            materials: BTreeMap::new(),
-            goods: BTreeMap::new(),
-            buildings: Vec::new(),
-            labor: LaborPool::new(),
+            economy: NationEconomy::new(),
             researched_techs: Vec::new(),
             army: Vec::new(),
             civilians: Vec::new(),
@@ -269,14 +294,14 @@ impl Nation {
 
     /// Add raw resources to the warehouse.
     pub fn add_resource(&mut self, resource: ResourceType, amount: u32) {
-        *self.warehouse.entry(resource).or_insert(0) += amount;
+        *self.economy.warehouse.entry(resource).or_insert(0) += amount;
     }
 
     /// Remove raw resources from the warehouse.
     /// Returns `false` if the nation does not have enough of the resource
     /// (no resources are removed in that case).
     pub fn remove_resource(&mut self, resource: ResourceType, amount: u32) -> bool {
-        let current = self.warehouse.entry(resource).or_insert(0);
+        let current = self.economy.warehouse.entry(resource).or_insert(0);
         if *current >= amount {
             *current -= amount;
             true
@@ -287,13 +312,13 @@ impl Nation {
 
     /// The current amount of a raw resource in the warehouse.
     pub fn resource_amount(&self, resource: ResourceType) -> u32 {
-        self.warehouse.get(&resource).copied().unwrap_or(0)
+        self.economy.warehouse.get(&resource).copied().unwrap_or(0)
     }
 
     /// Consume a material from the warehouse.
     /// Returns `false` if the nation does not have enough (no materials removed).
     pub fn consume_material(&mut self, material: MaterialType, amount: u32) -> bool {
-        let current = self.materials.entry(material).or_insert(0);
+        let current = self.economy.materials.entry(material).or_insert(0);
         if *current >= amount {
             *current -= amount;
             true
@@ -305,7 +330,7 @@ impl Nation {
     /// Consume a finished good from the warehouse.
     /// Returns `false` if the nation does not have enough (no goods removed).
     pub fn consume_goods(&mut self, goods: GoodsType, amount: u32) -> bool {
-        let current = self.goods.entry(goods).or_insert(0);
+        let current = self.economy.goods.entry(goods).or_insert(0);
         if *current >= amount {
             *current -= amount;
             true
@@ -316,22 +341,22 @@ impl Nation {
 
     /// The current amount of a material in the warehouse.
     pub fn material_amount(&self, material: MaterialType) -> u32 {
-        self.materials.get(&material).copied().unwrap_or(0)
+        self.economy.materials.get(&material).copied().unwrap_or(0)
     }
 
     /// The current amount of a finished good in the warehouse.
     pub fn goods_amount(&self, goods: GoodsType) -> u32 {
-        self.goods.get(&goods).copied().unwrap_or(0)
+        self.economy.goods.get(&goods).copied().unwrap_or(0)
     }
 
     /// Add materials to the warehouse.
     pub fn add_material(&mut self, material: MaterialType, amount: u32) {
-        *self.materials.entry(material).or_insert(0) += amount;
+        *self.economy.materials.entry(material).or_insert(0) += amount;
     }
 
     /// Add finished goods to the warehouse.
     pub fn add_goods(&mut self, goods: GoodsType, amount: u32) {
-        *self.goods.entry(goods).or_insert(0) += amount;
+        *self.economy.goods.entry(goods).or_insert(0) += amount;
     }
 
     /// Whether this nation is a Great Power.
@@ -341,14 +366,16 @@ impl Nation {
 
     /// Get a mutable reference to a building by its type.
     pub fn get_building_mut(&mut self, building_type: BuildingType) -> Option<&mut Building> {
-        self.buildings
+        self.economy
+            .buildings
             .iter_mut()
             .find(|b| b.building_type == building_type)
     }
 
     /// Check whether this nation has a building of the given type.
     pub fn has_building(&self, building_type: BuildingType) -> bool {
-        self.buildings
+        self.economy
+            .buildings
             .iter()
             .any(|b| b.building_type == building_type)
     }
@@ -449,7 +476,7 @@ impl Nation {
 
     /// Returns true if the nation's treasury is negative (in debt).
     pub fn is_bankrupt(&self) -> bool {
-        self.treasury < Money::ZERO
+        self.economy.treasury < Money::ZERO
     }
 
     /// Whether this nation is in anarchy (lost its capital).
@@ -499,7 +526,7 @@ mod tests {
     #[test]
     fn new_nation_starts_with_zero_treasury() {
         let n = sample_great_power();
-        assert_eq!(n.treasury, Money::ZERO);
+        assert_eq!(n.economy.treasury, Money::ZERO);
     }
 
     #[test]
@@ -512,9 +539,9 @@ mod tests {
     #[test]
     fn new_nation_has_empty_warehouses() {
         let n = sample_great_power();
-        assert!(n.warehouse.is_empty());
-        assert!(n.materials.is_empty());
-        assert!(n.goods.is_empty());
+        assert!(n.economy.warehouse.is_empty());
+        assert!(n.economy.materials.is_empty());
+        assert!(n.economy.goods.is_empty());
     }
 
     // ── is_great_power ────────────────────────────────────────
@@ -857,7 +884,9 @@ mod tests {
     #[test]
     fn has_building_after_adding() {
         let mut n = sample_great_power();
-        n.buildings.push(Building::new(BuildingType::LumberMill, 2));
+        n.economy
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 2));
         assert!(n.has_building(BuildingType::LumberMill));
         assert!(!n.has_building(BuildingType::SteelMill));
     }
@@ -865,11 +894,14 @@ mod tests {
     #[test]
     fn get_building_mut_modifies_capacity() {
         let mut n = sample_great_power();
-        n.buildings.push(Building::new(BuildingType::SteelMill, 1));
+        n.economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 1));
         let mill = n.get_building_mut(BuildingType::SteelMill).unwrap();
         mill.start_expansion(3);
         assert!(
-            n.buildings
+            n.economy
+                .buildings
                 .iter()
                 .any(|b| b.building_type == BuildingType::SteelMill && b.pending_capacity == 3)
         );
@@ -933,14 +965,14 @@ mod tests {
     #[test]
     fn is_bankrupt_false_when_positive() {
         let mut n = sample_great_power();
-        n.treasury = Money::dollars(1000);
+        n.economy.treasury = Money::dollars(1000);
         assert!(!n.is_bankrupt());
     }
 
     #[test]
     fn is_bankrupt_true_when_negative() {
         let mut n = sample_great_power();
-        n.treasury = Money::dollars(-1);
+        n.economy.treasury = Money::dollars(-1);
         assert!(n.is_bankrupt());
     }
 }

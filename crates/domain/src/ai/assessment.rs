@@ -109,9 +109,9 @@ pub fn nation_military_score(game: &GameState, nation_id: NationId, naval_weight
 pub fn nation_economic_score(game: &GameState, nation_id: NationId) -> f64 {
     game.get_nation(nation_id)
         .map(|n| {
-            n.treasury.as_dollars() as f64 / 10_000.0
-                + n.buildings.len() as f64 * 0.1
-                + n.labor.total_workers() as f64 * 0.05
+            n.economy.treasury.as_dollars() as f64 / 10_000.0
+                + n.economy.buildings.len() as f64 * 0.1
+                + n.economy.labor.total_workers() as f64 * 0.05
         })
         .unwrap_or(0.0)
 }

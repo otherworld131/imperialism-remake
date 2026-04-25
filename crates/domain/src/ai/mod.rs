@@ -126,14 +126,14 @@ mod tests {
     fn ai_does_not_touch_human_player() {
         let mut game = test_game_with_ai();
         let human = game.get_nation_mut(NationId(1)).unwrap();
-        let original_treasury = human.treasury;
+        let original_treasury = human.economy.treasury;
         let original_techs = human.researched_techs.len();
 
         run_ai_turns(&mut game);
 
         let human = game.get_nation(NationId(1)).unwrap();
         assert_eq!(
-            human.treasury, original_treasury,
+            human.economy.treasury, original_treasury,
             "Human player should not be affected by AI turns"
         );
         assert_eq!(
@@ -158,9 +158,9 @@ mod tests {
         );
         // Treasury reduced by spending (research is free, scoring system may spend on other things)
         assert!(
-            ai.treasury < Money::dollars(10000),
+            ai.economy.treasury < Money::dollars(10000),
             "AI should spend some treasury, has ${}",
-            ai.treasury.as_dollars()
+            ai.economy.treasury.as_dollars()
         );
     }
 
@@ -185,7 +185,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(3),
         );
-        ally.treasury = Money::dollars(10000);
+        ally.economy.treasury = Money::dollars(10000);
         ally.ai_personality = Some(AiPersonality::Balanced);
         game.nations.push(ally);
 

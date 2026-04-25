@@ -344,7 +344,7 @@ pub fn new_game_with_seed_and_config(
             NationType::GreatPower,
             setup.capital_province,
         );
-        nation.treasury = starting_cash;
+        nation.economy.treasury = starting_cash;
         for pid in &setup.province_ids {
             nation.add_province(*pid);
         }
@@ -361,28 +361,28 @@ pub fn new_game_with_seed_and_config(
             BuildingType::Warehouse,
         ];
         for bt in &fixed_buildings {
-            nation.buildings.push(Building::new(*bt, 1));
+            nation.economy.buildings.push(Building::new(*bt, 1));
         }
 
         // On Easy/Introductory, add starting mills and factories
         if matches!(difficulty, Difficulty::Easy | Difficulty::Introductory) {
             nation
-                .buildings
+                .economy.buildings
                 .push(Building::new(BuildingType::LumberMill, 2));
             nation
-                .buildings
+                .economy.buildings
                 .push(Building::new(BuildingType::SteelMill, 2));
             nation
-                .buildings
+                .economy.buildings
                 .push(Building::new(BuildingType::TextileMill, 2));
             nation
-                .buildings
+                .economy.buildings
                 .push(Building::new(BuildingType::FurnitureFactory, 1));
             nation
-                .buildings
+                .economy.buildings
                 .push(Building::new(BuildingType::HardwareFactory, 1));
             nation
-                .buildings
+                .economy.buildings
                 .push(Building::new(BuildingType::ClothingFactory, 1));
         }
 
@@ -439,18 +439,18 @@ pub fn new_game_with_seed_and_config(
         // Starting workers based on difficulty (original game: 4 untrained, 2 trained, 1 expert)
         match difficulty {
             Difficulty::Introductory | Difficulty::Easy => {
-                nation.labor.untrained = 4;
-                nation.labor.trained = 2;
-                nation.labor.expert = 1;
+                nation.economy.labor.untrained = 4;
+                nation.economy.labor.trained = 2;
+                nation.economy.labor.expert = 1;
             }
             Difficulty::Normal => {
-                nation.labor.untrained = 4;
-                nation.labor.trained = 2;
-                nation.labor.expert = 1;
+                nation.economy.labor.untrained = 4;
+                nation.economy.labor.trained = 2;
+                nation.economy.labor.expert = 1;
             }
             Difficulty::Hard | Difficulty::NighOnImpossible => {
-                nation.labor.untrained = 3;
-                nation.labor.trained = 1;
+                nation.economy.labor.untrained = 3;
+                nation.economy.labor.trained = 1;
             }
         }
 
@@ -539,10 +539,10 @@ pub fn new_game_with_seed_and_config(
             // AI difficulty bonuses (applied to AI nations only, not human)
             match difficulty {
                 Difficulty::Hard => {
-                    nation.treasury += Money::dollars(1000); // +$1,000 starting cash
+                    nation.economy.treasury += Money::dollars(1000); // +$1,000 starting cash
                 }
                 Difficulty::NighOnImpossible => {
-                    nation.treasury += Money::dollars(5000); // +$5,000 starting cash
+                    nation.economy.treasury += Money::dollars(5000); // +$5,000 starting cash
                 }
                 _ => {} // Normal/Easy/Introductory: no AI bonuses
             }
@@ -807,8 +807,8 @@ pub fn new_observer_game_with_config(
     if let Some(nation) = game.get_nation_mut(human_id) {
         nation.ai_personality = Some(extra);
         match difficulty {
-            Difficulty::Hard => nation.treasury += Money::dollars(1000),
-            Difficulty::NighOnImpossible => nation.treasury += Money::dollars(5000),
+            Difficulty::Hard => nation.economy.treasury += Money::dollars(1000),
+            Difficulty::NighOnImpossible => nation.economy.treasury += Money::dollars(5000),
             _ => {}
         }
     }
@@ -916,14 +916,14 @@ mod tests {
         let intro_cash = intro
             .get_nation(intro.human_player_nation)
             .unwrap()
-            .treasury;
-        let easy_cash = easy.get_nation(easy.human_player_nation).unwrap().treasury;
+            .economy.treasury;
+        let easy_cash = easy.get_nation(easy.human_player_nation).unwrap().economy.treasury;
         let normal_cash = normal
             .get_nation(normal.human_player_nation)
             .unwrap()
-            .treasury;
-        let hard_cash = hard.get_nation(hard.human_player_nation).unwrap().treasury;
-        let noi_cash = noi.get_nation(noi.human_player_nation).unwrap().treasury;
+            .economy.treasury;
+        let hard_cash = hard.get_nation(hard.human_player_nation).unwrap().economy.treasury;
+        let noi_cash = noi.get_nation(noi.human_player_nation).unwrap().economy.treasury;
 
         assert_eq!(intro_cash, Money::dollars(15000));
         assert_eq!(easy_cash, Money::dollars(12000));
@@ -945,7 +945,7 @@ mod tests {
         for nation in gs.great_powers() {
             // $15,000 starting cash
             assert_eq!(
-                nation.treasury,
+                nation.economy.treasury,
                 Money::dollars(15000),
                 "{} should start with $15,000 on Introductory",
                 nation.name
@@ -953,12 +953,12 @@ mod tests {
 
             // 5 untrained + 3 trained workers
             assert_eq!(
-                nation.labor.untrained, 4,
+                nation.economy.labor.untrained, 4,
                 "{} should have 5 untrained workers on Introductory",
                 nation.name
             );
             assert_eq!(
-                nation.labor.trained, 2,
+                nation.economy.labor.trained, 2,
                 "{} should have 3 trained workers on Introductory",
                 nation.name
             );
@@ -1025,16 +1025,16 @@ mod tests {
 
             // $12,000 starting cash
             assert_eq!(
-                nation.treasury,
+                nation.economy.treasury,
                 Money::dollars(12000),
                 "{} should start with $12,000 on Easy",
                 nation.name
             );
 
             // 4 untrained + 2 trained + 1 expert workers
-            assert_eq!(nation.labor.untrained, 4);
-            assert_eq!(nation.labor.trained, 2);
-            assert_eq!(nation.labor.expert, 1);
+            assert_eq!(nation.economy.labor.untrained, 4);
+            assert_eq!(nation.economy.labor.trained, 2);
+            assert_eq!(nation.economy.labor.expert, 1);
         }
     }
 
@@ -1066,16 +1066,16 @@ mod tests {
 
             // $10,000 starting cash
             assert_eq!(
-                nation.treasury,
+                nation.economy.treasury,
                 Money::dollars(10000),
                 "{} should start with $10,000 on Normal",
                 nation.name
             );
 
             // 4 untrained + 2 trained + 1 expert workers
-            assert_eq!(nation.labor.untrained, 4);
-            assert_eq!(nation.labor.trained, 2);
-            assert_eq!(nation.labor.expert, 1);
+            assert_eq!(nation.economy.labor.untrained, 4);
+            assert_eq!(nation.economy.labor.trained, 2);
+            assert_eq!(nation.economy.labor.expert, 1);
         }
     }
 
@@ -1086,7 +1086,7 @@ mod tests {
             if nation.id == gs.human_player_nation {
                 // Human: $8,000 starting cash (no AI bonus)
                 assert_eq!(
-                    nation.treasury,
+                    nation.economy.treasury,
                     Money::dollars(8000),
                     "{} (human) should start with $8,000 on Hard",
                     nation.name
@@ -1094,7 +1094,7 @@ mod tests {
             } else {
                 // AI: $8,000 base + $1,000 AI difficulty bonus = $9,000
                 assert_eq!(
-                    nation.treasury,
+                    nation.economy.treasury,
                     Money::dollars(9000),
                     "{} (AI) should start with $9,000 on Hard ($8,000 + $1,000 bonus)",
                     nation.name
@@ -1109,8 +1109,8 @@ mod tests {
             );
 
             // 3 untrained + 1 trained workers (harder start)
-            assert_eq!(nation.labor.untrained, 3);
-            assert_eq!(nation.labor.trained, 1);
+            assert_eq!(nation.economy.labor.untrained, 3);
+            assert_eq!(nation.economy.labor.trained, 1);
         }
     }
 
@@ -1121,7 +1121,7 @@ mod tests {
             if nation.id == gs.human_player_nation {
                 // Human: $5,000 starting cash (no AI bonus)
                 assert_eq!(
-                    nation.treasury,
+                    nation.economy.treasury,
                     Money::dollars(5000),
                     "{} (human) should start with $5,000 on NOI",
                     nation.name
@@ -1129,7 +1129,7 @@ mod tests {
             } else {
                 // AI: $5,000 base + $5,000 AI difficulty bonus = $10,000
                 assert_eq!(
-                    nation.treasury,
+                    nation.economy.treasury,
                     Money::dollars(10000),
                     "{} (AI) should start with $10,000 on NOI ($5,000 + $5,000 bonus)",
                     nation.name
@@ -1138,12 +1138,12 @@ mod tests {
 
             // 3 untrained + 1 trained workers (harder start)
             assert_eq!(
-                nation.labor.untrained, 3,
+                nation.economy.labor.untrained, 3,
                 "{} should have 3 untrained workers on NOI",
                 nation.name
             );
             assert_eq!(
-                nation.labor.trained, 1,
+                nation.economy.labor.trained, 1,
                 "{} should have 1 trained worker on NOI",
                 nation.name
             );
@@ -1220,9 +1220,9 @@ mod tests {
     fn get_nation_mut_modifies() {
         let mut gs = sample_game_state();
         let nation = gs.get_nation_mut(NationId(1)).unwrap();
-        nation.treasury = Money::dollars(1000);
+        nation.economy.treasury = Money::dollars(1000);
         assert_eq!(
-            gs.get_nation(NationId(1)).unwrap().treasury,
+            gs.get_nation(NationId(1)).unwrap().economy.treasury,
             Money::dollars(1000)
         );
     }

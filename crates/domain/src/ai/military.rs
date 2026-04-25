@@ -29,7 +29,7 @@ pub(crate) fn ai_build_military(
         let n = game.get_nation(nation_id);
         let nation_name = n.map(|n| n.name.as_str()).unwrap_or("?");
         let army_count = n.map(|n| n.field_army_count()).unwrap_or(0);
-        let treasury = n.map(|n| n.treasury.as_dollars()).unwrap_or(0);
+        let treasury = n.map(|n| n.economy.treasury.as_dollars()).unwrap_or(0);
         eprintln!(
             "[AI:{}:military] army={}, treasury=${}, personality={}",
             nation_name, army_count, treasury, personality
@@ -56,7 +56,7 @@ pub(crate) fn ai_build_military(
     // garrison militia do not count toward tier caps (they can't project
     // power anyway).
     let army_count = nation.field_army_count();
-    let treasury = nation.treasury;
+    let treasury = nation.economy.treasury;
     let capital = nation.capital_province_id;
     let nation_name = nation.name.clone();
 
@@ -155,7 +155,7 @@ pub(crate) fn ai_build_military(
             _ => Money::dollars(500),
         };
         if treasury > tier1_treasury + cost {
-            nation.treasury -= cost;
+            nation.economy.treasury -= cost;
             let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
             nation.army.push(unit);
             actions.push(super::AiAction {
@@ -202,7 +202,7 @@ pub(crate) fn ai_build_military(
             Money::dollars(1000)
         };
         if treasury > tier2_treasury + build_cost {
-            nation.treasury -= build_cost;
+            nation.economy.treasury -= build_cost;
             let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
             nation.army.push(unit);
             actions.push(super::AiAction {
@@ -261,8 +261,8 @@ pub(crate) fn ai_build_military(
                 } else {
                     Money::dollars(1000)
                 };
-                if let Some(remaining) = nation.treasury.checked_sub(cost) {
-                    nation.treasury = remaining;
+                if let Some(remaining) = nation.economy.treasury.checked_sub(cost) {
+                    nation.economy.treasury = remaining;
                     let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
                     nation.army.push(unit);
                     if i == 0 {
@@ -295,8 +295,8 @@ pub(crate) fn ai_build_military(
             if treasury > tier4_treasury {
                 let unit_type = ArmyUnitType::LightArtillery;
                 let cost = Money::dollars(2000);
-                if let Some(remaining) = nation.treasury.checked_sub(cost) {
-                    nation.treasury = remaining;
+                if let Some(remaining) = nation.economy.treasury.checked_sub(cost) {
+                    nation.economy.treasury = remaining;
                     let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
                     nation.army.push(unit);
                     actions.push(super::AiAction {
@@ -575,7 +575,7 @@ pub(crate) fn ai_declare_wars(
         let ai_resources: std::collections::HashSet<ResourceType> = game
             .get_nation(ai_id)
             .map(|n| {
-                n.warehouse
+                n.economy.warehouse
                     .iter()
                     .filter(|(_, qty)| **qty > 0)
                     .map(|(r, _)| *r)
@@ -1488,7 +1488,7 @@ mod tests {
     fn ai_builds_regulars_when_army_small_and_can_afford() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.treasury = Money::dollars(3000);
+        ai.economy.treasury = Money::dollars(3000);
         // AI starts with 0 FIELD army units (only starting garrison militia).
 
         run_ai_turns(&mut game);
@@ -1507,7 +1507,7 @@ mod tests {
         assert_eq!(built.owner, NationId(2));
         assert_eq!(built.position, ProvinceId(2)); // capital
         assert_eq!(
-            ai.treasury,
+            ai.economy.treasury,
             Money::dollars(2500),
             "Treasury should be reduced by $500"
         );
@@ -1517,7 +1517,7 @@ mod tests {
     fn ai_does_not_build_military_when_poor() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.treasury = Money::dollars(1000); // < $2,000 threshold
+        ai.economy.treasury = Money::dollars(1000); // < $2,000 threshold
 
         run_ai_turns(&mut game);
 
@@ -1534,7 +1534,7 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         // Give large treasury so AI can spend on both infrastructure and military
-        ai.treasury = Money::dollars(50000);
+        ai.economy.treasury = Money::dollars(50000);
         ai.ai_personality = Some(AiPersonality::Aggressive);
         // Give AI enough provinces that 3 army isn't enough (deficit scoring)
         for i in 10..15 {
@@ -1559,7 +1559,7 @@ mod tests {
             ai.army.len()
         );
         assert!(
-            ai.treasury < Money::dollars(50000),
+            ai.economy.treasury < Money::dollars(50000),
             "Treasury should be reduced after building a unit"
         );
     }
@@ -1568,7 +1568,7 @@ mod tests {
     fn ai_builds_more_units_when_territory_large() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.treasury = Money::dollars(20000);
+        ai.economy.treasury = Money::dollars(20000);
         ai.ai_personality = Some(AiPersonality::Aggressive);
         // Give AI many provinces so it needs a large army
         for i in 10..20 {
@@ -1584,7 +1584,7 @@ mod tests {
             ai.army.len()
         );
         assert!(
-            ai.treasury < Money::dollars(20000),
+            ai.economy.treasury < Money::dollars(20000),
             "Treasury should be reduced after building units"
         );
     }
@@ -1593,7 +1593,7 @@ mod tests {
     fn ai_military_units_have_unique_ids() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.treasury = Money::dollars(50000);
+        ai.economy.treasury = Money::dollars(50000);
 
         // Run multiple turns to build several units
         let mut actions = Vec::new();
@@ -2208,7 +2208,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(3),
         );
-        gp3.treasury = Money::dollars(1000);
+        gp3.economy.treasury = Money::dollars(1000);
         // WeakGP has 0 army units — very vulnerable
         game.nations.push(gp3);
 
@@ -2318,7 +2318,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(2),
         );
-        ai_nation.treasury = Money::dollars(10000);
+        ai_nation.economy.treasury = Money::dollars(10000);
         ai_nation.ai_personality = Some(AiPersonality::Aggressive);
         for i in 0..10 {
             ai_nation.army.push(ArmyUnit::new(
@@ -2354,7 +2354,7 @@ mod tests {
             ProvinceId(3),
         );
         gp_nation.add_province(ProvinceId(4));
-        gp_nation.treasury = Money::dollars(500);
+        gp_nation.economy.treasury = Money::dollars(500);
 
         let human_nation = crate::nation::Nation::new(
             NationId(1),
@@ -2491,7 +2491,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(2),
         );
-        ai_nation.treasury = Money::dollars(10000);
+        ai_nation.economy.treasury = Money::dollars(10000);
         for i in 0..4 {
             ai_nation
                 .civilians

@@ -132,7 +132,7 @@ pub(crate) mod test_helpers {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        human_nation.treasury = Money::dollars(10000);
+        human_nation.economy.treasury = Money::dollars(10000);
 
         let mut ai_nation = Nation::new(
             NationId(2),
@@ -141,7 +141,7 @@ pub(crate) mod test_helpers {
             NationType::GreatPower,
             ProvinceId(2),
         );
-        ai_nation.treasury = Money::dollars(10000);
+        ai_nation.economy.treasury = Money::dollars(10000);
         // Pre-populate with 4 civilians so AI does not hire more during tests
         for i in 0..4 {
             ai_nation.civilians.push(Civilian::new(
@@ -229,7 +229,7 @@ pub(crate) mod test_helpers {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        human_nation.treasury = Money::dollars(10000);
+        human_nation.economy.treasury = Money::dollars(10000);
 
         let mut ai_nation = Nation::new(
             NationId(2),
@@ -238,7 +238,7 @@ pub(crate) mod test_helpers {
             NationType::GreatPower,
             ProvinceId(2),
         );
-        ai_nation.treasury = Money::dollars(10000);
+        ai_nation.economy.treasury = Money::dollars(10000);
         // Pre-populate with 4 civilians so AI does not hire more during tests
         for i in 0..4 {
             ai_nation.civilians.push(Civilian::new(
@@ -348,7 +348,7 @@ pub(crate) mod test_helpers {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        human_nation.treasury = Money::dollars(10000);
+        human_nation.economy.treasury = Money::dollars(10000);
 
         let mut ai_nation = Nation::new(
             NationId(2),
@@ -357,7 +357,7 @@ pub(crate) mod test_helpers {
             NationType::GreatPower,
             ProvinceId(2),
         );
-        ai_nation.treasury = Money::dollars(20000);
+        ai_nation.economy.treasury = Money::dollars(20000);
         ai_nation.ai_personality = Some(AiPersonality::Balanced);
         // Pre-populate with 4 civilians
         for i in 0..4 {

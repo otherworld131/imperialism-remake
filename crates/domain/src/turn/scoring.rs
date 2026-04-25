@@ -68,7 +68,7 @@ pub fn calculate_score(nation: &Nation) -> NationScore {
         .iter()
         .map(|u| u.effective_firepower() as u32)
         .sum::<u32>();
-    let labor_score = nation.labor.total_workers() * 10;
+    let labor_score = nation.economy.labor.total_workers() * 10;
     let transport_score = nation.transport.freight_cars * 5;
     let merchant_marine_score = nation.total_cargo_capacity() * 20;
     let diplomatic_score = 50; // placeholder
@@ -76,8 +76,8 @@ pub fn calculate_score(nation: &Nation) -> NationScore {
 
     // Economic scoring components to prevent game stagnation
     let tech_score = nation.researched_techs.len() as u32 * 30;
-    let treasury_score = (nation.treasury.as_dollars().max(0) / 100).min(500) as u32;
-    let building_score = nation.buildings.len() as u32 * 10;
+    let treasury_score = (nation.economy.treasury.as_dollars().max(0) / 100).min(500) as u32;
+    let building_score = nation.economy.buildings.len() as u32 * 10;
 
     let total = military_score
         + labor_score
@@ -273,7 +273,7 @@ mod tests {
         for i in 1..province_count {
             nation.add_province(ProvinceId(id * 1000 + i));
         }
-        nation.labor.untrained = workers;
+        nation.economy.labor.untrained = workers;
         nation
     }
 
@@ -324,8 +324,8 @@ mod tests {
             nation.add_province(ProvinceId(100 + i));
         }
         // Set up workers: 3 untrained + 2 trained = 5 total
-        nation.labor.untrained = 3;
-        nation.labor.trained = 2;
+        nation.economy.labor.untrained = 3;
+        nation.economy.labor.trained = 2;
 
         let score = calculate_score(&nation);
 

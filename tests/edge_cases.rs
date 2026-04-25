@@ -131,7 +131,7 @@ fn save_load_cycle_preserves_state() {
     for (orig, load) in game.nations.iter().zip(loaded.nations.iter()) {
         assert_eq!(orig.id, load.id);
         assert_eq!(orig.name, load.name);
-        assert_eq!(orig.treasury, load.treasury);
+        assert_eq!(orig.economy.treasury, load.economy.treasury);
         assert_eq!(orig.province_count(), load.province_count());
     }
 
@@ -169,7 +169,7 @@ fn multiple_save_load_cycles_preserve_state() {
         );
         for (orig, load) in game.nations.iter().zip(loaded.nations.iter()) {
             assert_eq!(
-                orig.treasury, load.treasury,
+                orig.economy.treasury, load.economy.treasury,
                 "Treasury mismatch for {} at cycle {cycle}",
                 orig.name
             );
@@ -371,7 +371,7 @@ fn save_load_roundtrip_with_wars_and_treaties() {
             orig.name
         );
         assert_eq!(
-            orig.treasury, load.treasury,
+            orig.economy.treasury, load.economy.treasury,
             "Treasury mismatch for {}",
             orig.name
         );
@@ -399,7 +399,7 @@ fn negative_treasury_does_not_panic() {
     // Drain the human player's treasury.
     {
         let player = game.get_nation_mut(human_id).unwrap();
-        player.treasury = Money::dollars(-10000);
+        player.economy.treasury = Money::dollars(-10000);
     }
 
     // Run turns — should not panic even with negative treasury.

@@ -252,7 +252,7 @@ mod tests {
         let original_player = game.get_nation(game.human_player_nation).unwrap();
         let loaded_player = loaded.get_nation(loaded.human_player_nation).unwrap();
         assert_eq!(loaded_player.name, original_player.name);
-        assert_eq!(loaded_player.treasury, original_player.treasury);
+        assert_eq!(loaded_player.economy.treasury, original_player.economy.treasury);
         assert_eq!(
             loaded_player.province_count(),
             original_player.province_count()
@@ -278,7 +278,7 @@ mod tests {
             let player = game.get_nation_mut(player_id).unwrap();
             player.add_resource(domain::types::ResourceType::Timber, 15);
             player.add_resource(domain::types::ResourceType::Coal, 8);
-            player.treasury = domain::types::Money::dollars(7500);
+            player.economy.treasury = domain::types::Money::dollars(7500);
         }
 
         let dir = std::env::temp_dir().join("imperialism_test_saves_2");
@@ -299,7 +299,7 @@ mod tests {
             loaded_player.resource_amount(domain::types::ResourceType::Coal),
             13
         );
-        assert_eq!(loaded_player.treasury, domain::types::Money::dollars(7500));
+        assert_eq!(loaded_player.economy.treasury, domain::types::Money::dollars(7500));
 
         // Cleanup
         let _ = std::fs::remove_file(&path);

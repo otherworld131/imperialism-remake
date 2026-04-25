@@ -116,7 +116,7 @@ pub(crate) fn nation_color_code(nation: &Nation) -> &str {
 pub(crate) fn max_recruitment_capacity(player: &Nation) -> u32 {
     let province_count = player.province_count() as u32;
     let has_expanded_capitol = player
-        .buildings
+        .economy.buildings
         .iter()
         .any(|b| b.building_type == BuildingType::Capitol && b.capacity > 1);
     let per_province = if has_expanded_capitol { 3 } else { 4 };
@@ -129,7 +129,7 @@ pub(crate) fn print_prompt(game: &GameState) {
     let nation = game.get_nation(game.human_player_nation).unwrap();
     print!(
         "  [{} | {} | {}] > ",
-        nation.name, game.turn, nation.treasury
+        nation.name, game.turn, nation.economy.treasury
     );
 }
 
@@ -137,7 +137,7 @@ pub(crate) fn print_status(game: &GameState) {
     let player = game.get_nation(game.human_player_nation).unwrap();
     println!("  Playing as: {} (Great Power)", player.name);
     println!("  Turn: {} (Year {})", game.turn, game.turn.year());
-    println!("  Treasury: {}", player.treasury);
+    println!("  Treasury: {}", player.economy.treasury);
     println!("  Provinces: {}", player.province_count());
     println!("  Difficulty: {:?}", game.difficulty);
 }
@@ -183,7 +183,7 @@ pub(crate) fn print_warehouse(game: &GameState) {
     ];
     println!("    Materials:");
     for m in &materials {
-        let amt = player.materials.get(m).copied().unwrap_or(0);
+        let amt = player.economy.materials.get(m).copied().unwrap_or(0);
         if amt > 0 {
             println!("      {:?}: {}", m, amt);
             has_any = true;
@@ -198,7 +198,7 @@ pub(crate) fn print_warehouse(game: &GameState) {
     ];
     println!("    Finished Goods:");
     for g in &goods {
-        let amt = player.goods.get(g).copied().unwrap_or(0);
+        let amt = player.economy.goods.get(g).copied().unwrap_or(0);
         if amt > 0 {
             println!("      {:?}: {}", g, amt);
             has_any = true;
@@ -258,7 +258,7 @@ pub(crate) fn print_nations(game: &GameState) {
             nation.id.0,
             nation.name,
             nation.province_count(),
-            nation.treasury,
+            nation.economy.treasury,
             marker
         );
     }
@@ -277,10 +277,10 @@ pub(crate) fn print_nations(game: &GameState) {
 pub(crate) fn print_buildings(game: &GameState) {
     let player = game.get_nation(game.human_player_nation).unwrap();
     println!("  BUILDINGS:");
-    if player.buildings.is_empty() {
+    if player.economy.buildings.is_empty() {
         println!("    (none)");
     } else {
-        for b in &player.buildings {
+        for b in &player.economy.buildings {
             let pending = if b.pending_capacity > 0 {
                 format!(
                     " (+{} in {} turn{})",
@@ -300,17 +300,17 @@ pub(crate) fn print_buildings(game: &GameState) {
     println!();
     println!(
         "  Workers: {} untrained, {} trained, {} expert",
-        player.labor.untrained, player.labor.trained, player.labor.expert
+        player.economy.labor.untrained, player.economy.labor.trained, player.economy.labor.expert
     );
 }
 
 pub(crate) fn print_population(game: &GameState) {
     let player = game.get_nation(game.human_player_nation).unwrap();
 
-    let untrained = player.labor.untrained;
-    let trained = player.labor.trained;
-    let expert = player.labor.expert;
-    let total = player.labor.total_workers();
+    let untrained = player.economy.labor.untrained;
+    let trained = player.economy.labor.trained;
+    let expert = player.economy.labor.expert;
+    let total = player.economy.labor.total_workers();
 
     println!("  POPULATION:");
     println!("    Untrained workers: {}", untrained);
@@ -352,7 +352,7 @@ pub(crate) fn print_population(game: &GameState) {
     );
     println!("    Current workers: {} / {}", total, max_recruits);
     let has_expanded_capitol = player
-        .buildings
+        .economy.buildings
         .iter()
         .any(|b| b.building_type == BuildingType::Capitol && b.capacity > 1);
     if has_expanded_capitol {
@@ -737,10 +737,10 @@ pub(crate) fn print_overview(game: &GameState) {
         .count();
 
     // Population breakdown
-    let untrained = player.labor.untrained;
-    let trained = player.labor.trained;
-    let expert = player.labor.expert;
-    let total_workers = player.labor.total_workers();
+    let untrained = player.economy.labor.untrained;
+    let trained = player.economy.labor.trained;
+    let expert = player.economy.labor.expert;
+    let total_workers = player.economy.labor.total_workers();
 
     // Army
     let army_count = player.army.len();
@@ -762,7 +762,7 @@ pub(crate) fn print_overview(game: &GameState) {
 
     // Buildings
     let standard_count = player
-        .buildings
+        .economy.buildings
         .iter()
         .filter(|b| {
             !matches!(
@@ -777,7 +777,7 @@ pub(crate) fn print_overview(game: &GameState) {
         })
         .count();
     let mill_count = player
-        .buildings
+        .economy.buildings
         .iter()
         .filter(|b| {
             matches!(
@@ -787,7 +787,7 @@ pub(crate) fn print_overview(game: &GameState) {
         })
         .count();
     let factory_count = player
-        .buildings
+        .economy.buildings
         .iter()
         .filter(|b| {
             matches!(
@@ -830,7 +830,7 @@ pub(crate) fn print_overview(game: &GameState) {
     println!("  {}", "\u{2550}".repeat(44));
     println!(
         "  Treasury:     ${}",
-        format_number(player.treasury.as_dollars() as u32)
+        format_number(player.economy.treasury.as_dollars() as u32)
     );
     println!("  Provinces:    {}", homeland_provinces);
     println!(
@@ -970,7 +970,7 @@ pub(crate) fn print_pending_orders(game: &GameState) {
 
         // Buildings under expansion
         let expanding: Vec<_> = player
-            .buildings
+            .economy.buildings
             .iter()
             .filter(|b| b.is_expanding())
             .collect();
@@ -1057,7 +1057,7 @@ pub(crate) fn print_turn_report(game: &GameState, report: &TurnReport) {
             let fruit = player.resource_amount(ResourceType::Fruit);
             let livestock = player.resource_amount(ResourceType::Livestock);
             let total_food = grain + fruit + livestock;
-            let food_needed = player.labor.total_workers();
+            let food_needed = player.economy.labor.total_workers();
             if total_food >= food_needed {
                 color_green(&format!("OK (surplus {})", total_food - food_needed))
             } else {
@@ -2067,7 +2067,7 @@ pub(crate) fn print_nation_info(game: &GameState, query: &str) {
 
     // Treasury (Great Powers only)
     if target.is_great_power() {
-        println!("  Treasury: {}", target.treasury);
+        println!("  Treasury: {}", target.economy.treasury);
     }
 
     // AI personality (for AI-controlled Great Powers)

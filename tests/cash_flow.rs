@@ -89,7 +89,7 @@ fn debug_dump_turn_one() {
         game.nations
             .iter()
             .filter(|n| n.is_great_power())
-            .map(|n| (n.name.clone(), n.treasury.as_dollars()))
+            .map(|n| (n.name.clone(), n.economy.treasury.as_dollars()))
             .collect::<Vec<_>>()
     );
     let report = process_turn(&mut game);

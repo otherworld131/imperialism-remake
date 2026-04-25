@@ -33,7 +33,7 @@ fn ai_build_infrastructure(game: &mut GameState, nation_id: NationId) {
     for mill_type in mill_types {
         if !nation.has_building(mill_type) {
             // First mill is free (bootstrap) — no material cost
-            nation.buildings.push(Building::new(mill_type, 2));
+            nation.economy.buildings.push(Building::new(mill_type, 2));
         }
     }
 
@@ -45,7 +45,7 @@ fn ai_build_infrastructure(game: &mut GameState, nation_id: NationId) {
     ];
     for (mill, factory) in mill_factory_pairs {
         if nation.has_building(mill) && !nation.has_building(factory) {
-            nation.buildings.push(Building::new(factory, 1));
+            nation.economy.buildings.push(Building::new(factory, 1));
         }
     }
 }
@@ -111,7 +111,7 @@ pub(super) fn compute_resource_demand(
 ) -> HashMap<ResourceType, f64> {
     let mut demand: HashMap<ResourceType, f64> = HashMap::new();
 
-    for building in &nation.buildings {
+    for building in &nation.economy.buildings {
         match building.building_type {
             BuildingType::LumberMill => {
                 let need = building.effective_capacity() * 2;
@@ -138,9 +138,9 @@ pub(super) fn compute_resource_demand(
         }
     }
 
-    let money_urgency = if nation.treasury < Money::dollars(3000) {
+    let money_urgency = if nation.economy.treasury < Money::dollars(3000) {
         4.0
-    } else if nation.treasury < Money::dollars(8000) {
+    } else if nation.economy.treasury < Money::dollars(8000) {
         2.0
     } else {
         1.0
@@ -152,7 +152,7 @@ pub(super) fn compute_resource_demand(
     let total_food = nation.resource_amount(ResourceType::Grain)
         + nation.resource_amount(ResourceType::Fruit)
         + nation.resource_amount(ResourceType::Livestock);
-    let workers = nation.labor.total_workers();
+    let workers = nation.economy.labor.total_workers();
     let food_urgency = if total_food <= workers {
         10.0
     } else if total_food <= workers * 2 {
@@ -798,7 +798,7 @@ pub(super) fn find_cheapest_path(
 #[cfg(test)]
 pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: NationId) {
     let treasury = match game.get_nation(nation_id) {
-        Some(n) => n.treasury,
+        Some(n) => n.economy.treasury,
         None => return,
     };
 
@@ -890,7 +890,7 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
             &cfg,
         ) {
             if let Some(nation) = game.get_nation_mut(nation_id) {
-                nation.treasury -= cost;
+                nation.economy.treasury -= cost;
             }
             game.pending_ai_cash_spending.push((
                 nation_id,
@@ -956,7 +956,7 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
             )
         {
             if let Some(nation) = game.get_nation_mut(nation_id) {
-                nation.treasury -= cost;
+                nation.economy.treasury -= cost;
             }
             game.pending_ai_cash_spending.push((
                 nation_id,
@@ -1001,7 +1001,7 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
                     &cfg,
                 ) {
                     if let Some(nation) = game.get_nation_mut(nation_id) {
-                        nation.treasury -= cost;
+                        nation.economy.treasury -= cost;
                     }
                     game.pending_ai_cash_spending.push((
                         nation_id,
@@ -1017,7 +1017,7 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
         // When cash-rich, allow connecting additional provinces per turn
         let current_treasury = game
             .get_nation(nation_id)
-            .map(|n| n.treasury)
+            .map(|n| n.economy.treasury)
             .unwrap_or(Money::ZERO);
         if spent < budget && current_treasury > infrastructure_budget * 3 {
             continue;
@@ -1067,7 +1067,7 @@ pub fn ai_manage_resources(
     };
 
     // Only sell goods when treasury is low
-    if nation.treasury >= Money::dollars(goods_sell_threshold) {
+    if nation.economy.treasury >= Money::dollars(goods_sell_threshold) {
         return;
     }
 
@@ -1097,7 +1097,7 @@ pub fn ai_manage_resources(
             return;
         };
         nation.consume_goods(*goods_type, excess);
-        nation.treasury += revenue;
+        nation.economy.treasury += revenue;
         total_revenue += revenue;
     }
 
@@ -1136,7 +1136,7 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
             .unwrap_or("?");
         let treasury = game
             .get_nation(nation_id)
-            .map(|n| n.treasury.as_dollars())
+            .map(|n| n.economy.treasury.as_dollars())
             .unwrap_or(0);
         eprintln!(
             "[AI:{}:economy] treasury=${}, personality={}",
@@ -1196,7 +1196,7 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
     };
 
     let expansions_needed: Vec<BuildingType> = nation
-        .buildings
+        .economy.buildings
         .iter()
         .filter_map(|b| {
             let input_resources = match b.building_type {
@@ -1236,7 +1236,7 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
     };
 
     let factory_expansions: Vec<BuildingType> = nation
-        .buildings
+        .economy.buildings
         .iter()
         .filter_map(|b| {
             let input_materials = match b.building_type {
@@ -1282,18 +1282,18 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
         + nation.resource_amount(ResourceType::Fruit)
         + nation.resource_amount(ResourceType::Livestock);
     let food_cap = nation
-        .buildings
+        .economy.buildings
         .iter()
         .find(|b| b.building_type == BuildingType::FoodProcessing)
         .map(|b| b.effective_capacity())
         .unwrap_or(0);
-    let workers = nation.labor.total_workers();
+    let workers = nation.economy.labor.total_workers();
     let food_surplus = total_raw_food.saturating_sub(workers);
 
     if food_surplus > food_cap * food_threshold
         && food_cap > 0
         && nation
-            .buildings
+            .economy.buildings
             .iter()
             .find(|b| b.building_type == BuildingType::FoodProcessing)
             .map(|b| b.pending_capacity == 0)
@@ -1314,9 +1314,9 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
         Some(n) => n,
         None => return,
     };
-    if nation.treasury > Money::dollars(high_treasury_threshold) {
+    if nation.economy.treasury > Money::dollars(high_treasury_threshold) {
         let expandable: Vec<BuildingType> = nation
-            .buildings
+            .economy.buildings
             .iter()
             .filter(|b| {
                 if b.pending_capacity != 0 {
@@ -1363,7 +1363,7 @@ fn expand_building(game: &mut GameState, nation_id: NationId, bt: BuildingType, 
 
     let increase = if use_tier {
         nation
-            .buildings
+            .economy.buildings
             .iter()
             .find(|b| b.building_type == bt)
             .map(|b| b.next_capacity() - b.capacity)
@@ -1439,7 +1439,7 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
 
         // Don't sell resources when already sitting on a large treasury —
         // keep the materials for building ships, units, and infrastructure instead.
-        if nation.treasury > Money::dollars(trade_treasury_cap) {
+        if nation.economy.treasury > Money::dollars(trade_treasury_cap) {
             return;
         }
 
@@ -1465,7 +1465,7 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
                 if price != Money::ZERO {
                     let revenue = price * excess as i64;
                     nation.remove_resource(resource, excess);
-                    nation.treasury += revenue;
+                    nation.economy.treasury += revenue;
                     total_revenue += revenue;
                 }
             }
@@ -1521,7 +1521,7 @@ pub(crate) fn ai_build_transport_proactive(game: &mut GameState, nation_id: Nati
     };
 
     // Calculate total resources in warehouse
-    let total_resources: u32 = nation.warehouse.values().sum();
+    let total_resources: u32 = nation.economy.warehouse.values().sum();
     let capacity = nation.transport.total_capacity();
 
     // If resources exceed capacity, we need more freight cars
@@ -1557,8 +1557,8 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         // Give the AI lumber and steel materials
-        *ai.materials.entry(MaterialType::Lumber).or_insert(0) = 3;
-        *ai.materials.entry(MaterialType::Steel).or_insert(0) = 3;
+        *ai.economy.materials.entry(MaterialType::Lumber).or_insert(0) = 3;
+        *ai.economy.materials.entry(MaterialType::Steel).or_insert(0) = 3;
 
         run_ai_turns(&mut game);
 
@@ -1575,14 +1575,14 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         // Give the AI all three mills already so it won't spend materials on them
-        ai.buildings
+        ai.economy.buildings
             .push(Building::new(BuildingType::LumberMill, 2));
-        ai.buildings.push(Building::new(BuildingType::SteelMill, 2));
-        ai.buildings
+        ai.economy.buildings.push(Building::new(BuildingType::SteelMill, 2));
+        ai.economy.buildings
             .push(Building::new(BuildingType::TextileMill, 2));
         // Give materials for factory construction
-        *ai.materials.entry(MaterialType::Lumber).or_insert(0) = 2;
-        *ai.materials.entry(MaterialType::Steel).or_insert(0) = 2;
+        *ai.economy.materials.entry(MaterialType::Lumber).or_insert(0) = 2;
+        *ai.economy.materials.entry(MaterialType::Steel).or_insert(0) = 2;
 
         run_ai_turns(&mut game);
 
@@ -1624,7 +1624,7 @@ mod tests {
     fn ai_sells_excess_resources() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.treasury = Money::dollars(1000);
+        ai.economy.treasury = Money::dollars(1000);
         // Give AI 15 timber (surplus over 10 threshold)
         ai.add_resource(ResourceType::Timber, 15);
 
@@ -1638,7 +1638,7 @@ mod tests {
             "AI should sell down to 10 timber"
         );
         assert_eq!(
-            ai.treasury,
+            ai.economy.treasury,
             Money::dollars(1250),
             "Treasury should increase by $250 from selling 5 timber at $50"
         );
@@ -1648,7 +1648,7 @@ mod tests {
     fn ai_does_not_sell_resources_below_threshold() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.treasury = Money::dollars(1000);
+        ai.economy.treasury = Money::dollars(1000);
         ai.add_resource(ResourceType::Timber, 8); // below threshold of 10
 
         run_ai_turns(&mut game);
@@ -1665,7 +1665,7 @@ mod tests {
     fn ai_sells_multiple_excess_resources() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.treasury = Money::dollars(0);
+        ai.economy.treasury = Money::dollars(0);
         ai.add_resource(ResourceType::Timber, 15); // 5 excess at $50 = $250
         ai.add_resource(ResourceType::Coal, 20); // 10 excess at $75 = $750
 
@@ -1675,7 +1675,7 @@ mod tests {
         assert_eq!(ai.resource_amount(ResourceType::Timber), 10);
         assert_eq!(ai.resource_amount(ResourceType::Coal), 10);
         assert_eq!(
-            ai.treasury,
+            ai.economy.treasury,
             Money::dollars(1000),
             "Treasury should increase by $250 + $750 = $1000"
         );
@@ -1685,7 +1685,7 @@ mod tests {
     fn ai_sells_tradeable_grain_when_in_surplus() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.treasury = Money::dollars(0);
+        ai.economy.treasury = Money::dollars(0);
         ai.add_resource(ResourceType::Grain, 20);
 
         run_ai_turns(&mut game);
@@ -1700,7 +1700,7 @@ mod tests {
             ai.resource_amount(ResourceType::Grain)
         );
         assert!(
-            ai.treasury > Money::ZERO,
+            ai.economy.treasury > Money::ZERO,
             "AI should have earned money from selling grain"
         );
     }
@@ -1710,16 +1710,16 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         // Give all buildings so infrastructure doesn't consume materials
-        ai.buildings
+        ai.economy.buildings
             .push(Building::new(BuildingType::LumberMill, 2));
-        ai.buildings.push(Building::new(BuildingType::SteelMill, 2));
-        ai.buildings
+        ai.economy.buildings.push(Building::new(BuildingType::SteelMill, 2));
+        ai.economy.buildings
             .push(Building::new(BuildingType::TextileMill, 2));
-        ai.buildings
+        ai.economy.buildings
             .push(Building::new(BuildingType::FurnitureFactory, 1));
-        ai.buildings
+        ai.economy.buildings
             .push(Building::new(BuildingType::HardwareFactory, 1));
-        ai.buildings
+        ai.economy.buildings
             .push(Building::new(BuildingType::ClothingFactory, 1));
         // Give enough materials for both potential mill expansion and freight cars
         ai.add_material(MaterialType::Lumber, 20);
@@ -1816,7 +1816,7 @@ mod tests {
 
         // Treasury should have decreased by $2,000
         let ai = game.get_nation(ai_id).unwrap();
-        assert_eq!(ai.treasury, Money::dollars(8000));
+        assert_eq!(ai.economy.treasury, Money::dollars(8000));
     }
 
     #[test]
@@ -1825,7 +1825,7 @@ mod tests {
         let ai_id = NationId(2);
 
         // Set treasury below $3,000 threshold
-        game.get_nation_mut(ai_id).unwrap().treasury = Money::dollars(1000);
+        game.get_nation_mut(ai_id).unwrap().economy.treasury = Money::dollars(1000);
 
         // Give AI excess goods
         game.get_nation_mut(ai_id)
@@ -1862,7 +1862,7 @@ mod tests {
             "Should not sell Clothing below reserve"
         );
         assert_eq!(
-            ai.treasury,
+            ai.economy.treasury,
             Money::dollars(2100), // 1000 + 600 + 500
             "Treasury should increase by goods revenue"
         );
@@ -1878,7 +1878,7 @@ mod tests {
         let ai_id = NationId(2);
 
         // Treasury above threshold
-        game.get_nation_mut(ai_id).unwrap().treasury = Money::dollars(5000);
+        game.get_nation_mut(ai_id).unwrap().economy.treasury = Money::dollars(5000);
 
         // Give AI excess goods
         game.get_nation_mut(ai_id)
@@ -1930,10 +1930,10 @@ mod tests {
         // already in warehouse).
         let nation = game.get_nation_mut(nation_id).unwrap();
         nation
-            .buildings
+            .economy.buildings
             .push(Building::new(BuildingType::LumberMill, 2));
         // Clear any starting timber so the deficit is clean.
-        nation.warehouse.insert(ResourceType::Timber, 0);
+        nation.economy.warehouse.insert(ResourceType::Timber, 0);
     }
 
     #[test]
@@ -2070,9 +2070,9 @@ mod tests {
         );
         // LumberMill so the planner sees timber demand.
         nation
-            .buildings
+            .economy.buildings
             .push(Building::new(BuildingType::LumberMill, 2));
-        nation.treasury = Money::dollars(20_000);
+        nation.economy.treasury = Money::dollars(20_000);
 
         GameState {
             turn: TurnNumber::new(1),
@@ -2263,9 +2263,9 @@ mod tests {
             ProvinceId(1),
         );
         nation
-            .buildings
+            .economy.buildings
             .push(Building::new(BuildingType::LumberMill, 2));
-        nation.treasury = Money::dollars(20_000);
+        nation.economy.treasury = Money::dollars(20_000);
 
         let game = GameState {
             turn: TurnNumber::new(1),

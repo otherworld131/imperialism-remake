@@ -35,7 +35,7 @@ pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
 
     // Check treasury threshold
     let treasury = match game.get_nation(nation_id) {
-        Some(n) => n.treasury,
+        Some(n) => n.economy.treasury,
         None => return,
     };
     if treasury < treasury_threshold {
@@ -83,7 +83,7 @@ pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
         }
 
         let treasury = match game.get_nation(nation_id) {
-            Some(n) => n.treasury,
+            Some(n) => n.economy.treasury,
             None => return,
         };
         if treasury.checked_sub(cost).is_none() {
@@ -93,7 +93,7 @@ pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
         // Build consulate
         if game.diplomacy.build_consulate(nation_id, mn_id).is_ok() {
             if let Some(nation) = game.get_nation_mut(nation_id) {
-                nation.treasury -= cost;
+                nation.economy.treasury -= cost;
             }
             game.pending_ai_cash_spending.push((
                 nation_id,
@@ -548,7 +548,7 @@ pub fn ai_manage_diplomacy(
     {
         let treasury_val = game
             .get_nation(nation_id)
-            .map(|n| n.treasury.as_dollars())
+            .map(|n| n.economy.treasury.as_dollars())
             .unwrap_or(0);
         let wealth_multiplier = if treasury_val > 100_000 {
             20 // Very wealthy: grant 20x more
@@ -584,14 +584,14 @@ pub fn ai_manage_diplomacy(
 
             let can_afford = game
                 .get_nation(nation_id)
-                .is_some_and(|n| n.treasury.checked_sub(grant).is_some());
+                .is_some_and(|n| n.economy.treasury.checked_sub(grant).is_some());
             if !can_afford {
                 break;
             }
 
             game.diplomacy.send_grant(nation_id, mn_id, grant);
             if let Some(nation) = game.get_nation_mut(nation_id) {
-                nation.treasury -= grant;
+                nation.economy.treasury -= grant;
             }
             game.pending_ai_cash_spending.push((
                 nation_id,
@@ -667,14 +667,14 @@ pub fn ai_pre_election_strategy(
 
         let can_afford = game
             .get_nation(nation_id)
-            .is_some_and(|n| n.treasury.checked_sub(grant_amount).is_some());
+            .is_some_and(|n| n.economy.treasury.checked_sub(grant_amount).is_some());
         if !can_afford {
             break;
         }
 
         game.diplomacy.send_grant(nation_id, *mn_id, grant_amount);
         if let Some(nation) = game.get_nation_mut(nation_id) {
-            nation.treasury -= grant_amount;
+            nation.economy.treasury -= grant_amount;
         }
         game.pending_ai_cash_spending.push((
             nation_id,
@@ -700,7 +700,7 @@ pub fn ai_pre_election_strategy(
     let embassy_cost = Money::dollars(5000);
     let treasury_ok = game
         .get_nation(nation_id)
-        .is_some_and(|n| n.treasury >= embassy_treasury_threshold);
+        .is_some_and(|n| n.economy.treasury >= embassy_treasury_threshold);
     if treasury_ok {
         for mn_id in &minor_ids {
             let has_consulate_no_embassy = game
@@ -713,14 +713,14 @@ pub fn ai_pre_election_strategy(
 
             let can_afford = game
                 .get_nation(nation_id)
-                .is_some_and(|n| n.treasury.checked_sub(embassy_cost).is_some());
+                .is_some_and(|n| n.economy.treasury.checked_sub(embassy_cost).is_some());
             if !can_afford {
                 break;
             }
 
             if game.diplomacy.build_embassy(nation_id, *mn_id).is_ok() {
                 if let Some(nation) = game.get_nation_mut(nation_id) {
-                    nation.treasury -= embassy_cost;
+                    nation.economy.treasury -= embassy_cost;
                 }
                 game.pending_ai_cash_spending.push((
                     nation_id,
@@ -901,7 +901,7 @@ mod tests {
         // Set Diplomatic personality
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Diplomatic);
-        ai.treasury = Money::dollars(10000);
+        ai.economy.treasury = Money::dollars(10000);
 
         ai_build_consulates(&mut game, NationId(2));
 
@@ -986,7 +986,7 @@ mod tests {
         // Set Balanced personality
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Balanced);
-        ai.treasury = Money::dollars(10000);
+        ai.economy.treasury = Money::dollars(10000);
 
         ai_build_consulates(&mut game, NationId(2));
 
@@ -1011,7 +1011,7 @@ mod tests {
         let mut game = test_game_with_ai_and_minor();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Balanced);
-        ai.treasury = Money::dollars(1000); // Below $2,000 threshold
+        ai.economy.treasury = Money::dollars(1000); // Below $2,000 threshold
 
         ai_build_consulates(&mut game, NationId(2));
 
@@ -1137,7 +1137,7 @@ mod tests {
 
         // Treasury should have decreased by $500 for the grant
         assert!(
-            game.get_nation(ai_id).unwrap().treasury < Money::dollars(10000),
+            game.get_nation(ai_id).unwrap().economy.treasury < Money::dollars(10000),
             "AI treasury should decrease after sending grant"
         );
     }
@@ -1159,7 +1159,7 @@ mod tests {
             ProvinceId(2),
         );
         gp3.ai_personality = Some(AiPersonality::Diplomatic); // Diplomatic bias +0.4 makes acceptance likely
-        gp3.treasury = Money::dollars(10000);
+        gp3.economy.treasury = Money::dollars(10000);
         game.nations.push(gp3);
 
         // Initialize GP embassies (so they have embassies with each other)
@@ -1205,7 +1205,7 @@ mod tests {
         // Give AI a Balanced personality (not Aggressive, so it will send grants)
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Balanced);
-        ai.treasury = Money::dollars(10000);
+        ai.economy.treasury = Money::dollars(10000);
 
         // Set up embassy between AI(2) and MN(3)
         game.diplomacy
@@ -1237,7 +1237,7 @@ mod tests {
         );
 
         // Treasury should have decreased
-        let treasury_after = game.get_nation(NationId(2)).unwrap().treasury;
+        let treasury_after = game.get_nation(NationId(2)).unwrap().economy.treasury;
         assert!(
             treasury_after < Money::dollars(10000),
             "Treasury should decrease from pre-election grants"
@@ -1252,7 +1252,7 @@ mod tests {
 
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Balanced);
-        ai.treasury = Money::dollars(10000);
+        ai.economy.treasury = Money::dollars(10000);
 
         // Set up embassy
         game.diplomacy
@@ -1262,11 +1262,11 @@ mod tests {
             .build_embassy(NationId(2), NationId(3))
             .unwrap();
 
-        let treasury_before = game.get_nation(NationId(2)).unwrap().treasury;
+        let treasury_before = game.get_nation(NationId(2)).unwrap().economy.treasury;
         let mut actions = Vec::new();
         ai_pre_election_strategy(&mut game, NationId(2), &mut actions);
 
-        let treasury_after = game.get_nation(NationId(2)).unwrap().treasury;
+        let treasury_after = game.get_nation(NationId(2)).unwrap().economy.treasury;
         assert_eq!(
             treasury_before, treasury_after,
             "Pre-election strategy should do nothing when far from election"
@@ -1281,7 +1281,7 @@ mod tests {
 
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Aggressive);
-        ai.treasury = Money::dollars(10000);
+        ai.economy.treasury = Money::dollars(10000);
 
         // Set up embassy
         game.diplomacy
@@ -1291,11 +1291,11 @@ mod tests {
             .build_embassy(NationId(2), NationId(3))
             .unwrap();
 
-        let treasury_before = game.get_nation(NationId(2)).unwrap().treasury;
+        let treasury_before = game.get_nation(NationId(2)).unwrap().economy.treasury;
         let mut actions = Vec::new();
         ai_pre_election_strategy(&mut game, NationId(2), &mut actions);
 
-        let treasury_after = game.get_nation(NationId(2)).unwrap().treasury;
+        let treasury_after = game.get_nation(NationId(2)).unwrap().economy.treasury;
         assert_eq!(
             treasury_before, treasury_after,
             "Aggressive AI should ignore pre-election strategy"
@@ -1319,7 +1319,7 @@ mod tests {
             ProvinceId(2),
         );
         gp3.ai_personality = Some(AiPersonality::Balanced);
-        gp3.treasury = Money::dollars(10000);
+        gp3.economy.treasury = Money::dollars(10000);
         game.nations.push(gp3);
 
         // Initialize GP embassies
@@ -1373,7 +1373,7 @@ mod tests {
                 ProvinceId(2),
             );
             gp.ai_personality = Some(AiPersonality::Balanced);
-            gp.treasury = Money::dollars(10000);
+            gp.economy.treasury = Money::dollars(10000);
             game.nations.push(gp);
         }
 

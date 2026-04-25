@@ -132,7 +132,7 @@ pub(crate) fn ai_scored_spending(
     // Safety limit: max 20 spending actions per turn to prevent infinite loops
     for _iteration in 0..20 {
         let treasury = match game.get_nation(nation_id) {
-            Some(n) => n.treasury,
+            Some(n) => n.economy.treasury,
             None => return,
         };
 
@@ -274,7 +274,7 @@ pub(crate) fn ai_scored_spending(
                 } else {
                     None
                 };
-                let treasury_before = game.get_nation(nation_id).map(|n| n.treasury);
+                let treasury_before = game.get_nation(nation_id).map(|n| n.economy.treasury);
                 execute_with_plan(
                     game,
                     nation_id,
@@ -310,7 +310,7 @@ pub(crate) fn ai_scored_spending(
                                 .any(|c| c.civilian_type == CivilianType::Engineer && c.working)
                         })
                         .unwrap_or(false);
-                    let treasury_after = game.get_nation(nation_id).map(|n| n.treasury);
+                    let treasury_after = game.get_nation(nation_id).map(|n| n.economy.treasury);
                     let treasury_changed = treasury_before != treasury_after;
                     let engineer_transitioned =
                         engineer_was_working == Some(false) && engineer_now_working;
@@ -554,7 +554,7 @@ fn score_military(
     // Penalty for building army when economy is weak — soldiers without workers
     // are unsustainable. Scale down military value when worker count is low.
     // Exception: nations with very few units still need basic defense.
-    let workers = nation.labor.total_workers() as f64;
+    let workers = nation.economy.labor.total_workers() as f64;
     let economy_penalty = if army_count >= 8.0 && workers <= 1.0 {
         0.3 // large army with no economy — stop building
     } else if army_count >= 5.0 && workers <= 2.0 {
@@ -619,7 +619,7 @@ fn score_infrastructure(
     } else {
         Money::dollars(cfg.depot_cost)
     };
-    nation.treasury.checked_sub(next_cost)?;
+    nation.economy.treasury.checked_sub(next_cost)?;
 
     // Priority = normalised net_score, clamped to a positive floor so the
     // AI always invests in infrastructure when a candidate exists — even if
@@ -797,7 +797,7 @@ fn score_civilian(
     let nation = game.get_nation(nation_id)?;
 
     // Civilian construction requires an expert worker
-    if game.game_data.game_config.civilian_costs_expert && nation.labor.expert == 0 {
+    if game.game_data.game_config.civilian_costs_expert && nation.economy.labor.expert == 0 {
         return None;
     }
 
@@ -877,7 +877,7 @@ fn score_hire_engineer(
     let nation = game.get_nation(nation_id)?;
     let cfg = &game.game_data.game_config;
 
-    if cfg.civilian_costs_expert && nation.labor.expert == 0 {
+    if cfg.civilian_costs_expert && nation.economy.labor.expert == 0 {
         return None;
     }
 
@@ -900,7 +900,7 @@ fn score_hire_engineer(
     let score = raw * weights.economy_weight;
 
     let cost = Money::dollars(cfg.engineer_cost);
-    nation.treasury.checked_sub(cost)?;
+    nation.economy.treasury.checked_sub(cost)?;
 
     Some(ScoredAction {
         category: SpendingCategory::HireEngineer,
@@ -1041,19 +1041,19 @@ fn execute_hire_engineer(game: &mut GameState, nation_id: NationId) {
             Some(n) => n,
             None => return,
         };
-        if cfg.civilian_costs_expert && nation.labor.expert == 0 {
+        if cfg.civilian_costs_expert && nation.economy.labor.expert == 0 {
             return;
         }
-        if nation.treasury.checked_sub(cost).is_none() {
+        if nation.economy.treasury.checked_sub(cost).is_none() {
             return;
         }
     }
     // Allocate ID before taking mutable borrow of nation.
     let civ_id = game.alloc_unit_id();
     if let Some(nation) = game.get_nation_mut(nation_id) {
-        nation.treasury -= cost;
+        nation.economy.treasury -= cost;
         if cfg.civilian_costs_expert {
-            nation.labor.expert -= 1;
+            nation.economy.labor.expert -= 1;
         }
         nation.civilians.push(Civilian::new(civ_id, CivilianType::Engineer, nation_id));
     }
@@ -1113,13 +1113,13 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
             _ => Money::dollars(500),
         };
 
-        let can_afford = nation.treasury >= cost;
+        let can_afford = nation.economy.treasury >= cost;
         (capital, nation_name, unit_type, cost, can_afford)
     };
     if can_afford {
         let unit_id = game.alloc_unit_id();
         if let Some(nation) = game.get_nation_mut(nation_id) {
-            nation.treasury -= cost;
+            nation.economy.treasury -= cost;
             let unit = ArmyUnit::new(unit_id, unit_type, nation_id, capital);
             nation.army.push(unit);
             actions.push(super::AiAction {
@@ -1201,19 +1201,19 @@ fn execute_infrastructure(
                     Some(n) => n,
                     None => return,
                 };
-                if civilian_costs_expert && nation.labor.expert == 0 {
+                if civilian_costs_expert && nation.economy.labor.expert == 0 {
                     return;
                 }
-                if nation.treasury.checked_sub(cost).is_none() {
+                if nation.economy.treasury.checked_sub(cost).is_none() {
                     return;
                 }
             }
             // Allocate ID before the mutable borrow.
             let civ_id = game.alloc_unit_id();
             if let Some(nation) = game.get_nation_mut(nation_id) {
-                nation.treasury -= cost;
+                nation.economy.treasury -= cost;
                 if civilian_costs_expert {
-                    nation.labor.expert -= 1;
+                    nation.economy.labor.expert -= 1;
                 }
                 nation.civilians.push(Civilian::new(civ_id, CivilianType::Engineer, nation_id));
             }
@@ -1413,7 +1413,7 @@ fn start_engineer_task(
     };
     let treasury = game
         .get_nation(nation_id)
-        .map(|n| n.treasury)
+        .map(|n| n.economy.treasury)
         .unwrap_or(Money::ZERO);
     if treasury.checked_sub(cost).is_none() {
         return;
@@ -1487,7 +1487,7 @@ fn execute_consulate(game: &mut GameState, nation_id: NationId) {
         && game.diplomacy.build_consulate(nation_id, mn_id).is_ok()
     {
         if let Some(nation) = game.get_nation_mut(nation_id) {
-            nation.treasury -= cost;
+            nation.economy.treasury -= cost;
         }
         game.pending_ai_cash_spending.push((
             nation_id,
@@ -1541,7 +1541,7 @@ fn execute_embassy(game: &mut GameState, nation_id: NationId) {
         && game.diplomacy.build_embassy(nation_id, mn_id).is_ok()
     {
         if let Some(nation) = game.get_nation_mut(nation_id) {
-            nation.treasury -= cost;
+            nation.economy.treasury -= cost;
         }
         game.pending_ai_cash_spending.push((
             nation_id,
@@ -1562,7 +1562,7 @@ fn execute_hire_improver(game: &mut GameState, nation_id: NationId) {
             Some(n) => n,
             None => return,
         };
-        if civilian_costs_expert && nation.labor.expert == 0 {
+        if civilian_costs_expert && nation.economy.labor.expert == 0 {
             return;
         }
         let improver_count = nation
@@ -1591,7 +1591,7 @@ fn execute_hire_improver(game: &mut GameState, nation_id: NationId) {
             return;
         }
         let cost = civ_type.creation_cost(&cfg);
-        if nation.treasury.checked_sub(cost).is_none() {
+        if nation.economy.treasury.checked_sub(cost).is_none() {
             return;
         }
         (civ_type, cost)
@@ -1599,9 +1599,9 @@ fn execute_hire_improver(game: &mut GameState, nation_id: NationId) {
     // Allocate ID before the mutable borrow.
     let civ_id = game.alloc_unit_id();
     if let Some(nation) = game.get_nation_mut(nation_id) {
-        nation.treasury -= cost;
+        nation.economy.treasury -= cost;
         if civilian_costs_expert {
-            nation.labor.expert -= 1;
+            nation.economy.labor.expert -= 1;
         }
         nation.civilians.push(Civilian::new(civ_id, civ_type, nation_id));
     }

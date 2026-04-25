@@ -79,8 +79,8 @@ pub(crate) fn ai_research_tech(
                         Some(n) => n,
                         None => return,
                     };
-                    if let Some(remaining) = nation.treasury.checked_sub(tech_cost) {
-                        nation.treasury = remaining;
+                    if let Some(remaining) = nation.economy.treasury.checked_sub(tech_cost) {
+                        nation.economy.treasury = remaining;
                         nation.research_tech(tech_id);
                         (true, nation.name.clone())
                     } else {
@@ -220,8 +220,8 @@ pub(crate) fn ai_research_tech(
             Some(n) => n,
             None => return,
         };
-        if let Some(remaining) = nation.treasury.checked_sub(tech_cost) {
-            nation.treasury = remaining;
+        if let Some(remaining) = nation.economy.treasury.checked_sub(tech_cost) {
+            nation.economy.treasury = remaining;
             nation.research_tech(tech_id);
             (true, nation.name.clone())
         } else {
@@ -265,7 +265,7 @@ pub(crate) fn ai_research_tech(
     // Second pass: if we couldn't afford the preferred tech and treasury is high,
     // try ANY available tech (cheapest first) to avoid hoarding cash.
     let treasury = match game.get_nation(nation_id) {
-        Some(n) => n.treasury,
+        Some(n) => n.economy.treasury,
         None => return,
     };
     if treasury > Money::dollars(10_000) {
@@ -277,8 +277,8 @@ pub(crate) fn ai_research_tech(
                     Some(n) => n,
                     None => return,
                 };
-                if let Some(remaining) = nation.treasury.checked_sub(*cand_cost) {
-                    nation.treasury = remaining;
+                if let Some(remaining) = nation.economy.treasury.checked_sub(*cand_cost) {
+                    nation.economy.treasury = remaining;
                     nation.research_tech(*cand_id);
                     (true, nation.name.clone())
                 } else {
@@ -335,7 +335,7 @@ mod tests {
         ai.research_tech(TechId(1));
         ai.research_tech(TechId(2));
         // Set treasury to $500 (less than the cheapest paid tech at $1,000)
-        ai.treasury = Money::dollars(500);
+        ai.economy.treasury = Money::dollars(500);
 
         // Move to year 1816 so Cotton Gin ($1,000) becomes available
         game.turn = TurnNumber::from_year_quarter(1816, 1);
@@ -349,7 +349,7 @@ mod tests {
             "AI should not research techs it cannot afford"
         );
         assert_eq!(
-            ai.treasury,
+            ai.economy.treasury,
             Money::dollars(500),
             "Treasury should be unchanged"
         );
@@ -361,7 +361,7 @@ mod tests {
         // Set Economic personality
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Economic);
-        ai.treasury = Money::dollars(50000);
+        ai.economy.treasury = Money::dollars(50000);
 
         // At year 1821, multiple techs with different costs are available
         game.turn = TurnNumber::from_year_quarter(1821, 1);
@@ -387,7 +387,7 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Aggressive);
-        ai.treasury = Money::dollars(100000);
+        ai.economy.treasury = Money::dollars(100000);
 
         // Set year to 1841 when Breech-Loading Rifles (military) is available
         game.turn = TurnNumber::from_year_quarter(1841, 1);
@@ -416,7 +416,7 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Balanced);
-        ai.treasury = Money::dollars(50000);
+        ai.economy.treasury = Money::dollars(50000);
 
         // At 1815, two free techs (ID 1 and 2) are available
         let mut actions = Vec::new();

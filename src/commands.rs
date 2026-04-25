@@ -17,7 +17,7 @@ pub(crate) fn check_bankrupt(game: &GameState) -> bool {
     if player.is_bankrupt() {
         println!(
             "  FINANCIAL CRISIS: Your nation is bankrupt (treasury: {}). No spending allowed until treasury recovers.",
-            player.treasury
+            player.economy.treasury
         );
         true
     } else {
@@ -147,7 +147,7 @@ pub(crate) fn build_building(game: &mut GameState, query: &str) {
     let player = game.get_nation_mut(player_id).unwrap();
     player.consume_material(MaterialType::Lumber, lumber_needed);
     player.consume_material(MaterialType::Steel, steel_needed);
-    player.buildings.push(Building::new(bt, initial_capacity));
+    player.economy.buildings.push(Building::new(bt, initial_capacity));
 
     println!(
         "  Built {:?} with capacity {} (consumed {} lumber, {} steel).",
@@ -184,7 +184,7 @@ pub(crate) fn expand_building(game: &mut GameState, query: &str) {
 
     // Calculate the expansion amount using capacity progression (2 -> 4 -> 8 -> 12 -> 16 -> ...)
     let current_capacity = player
-        .buildings
+        .economy.buildings
         .iter()
         .find(|b| b.building_type == bt)
         .map(|b| b.capacity)
@@ -237,7 +237,7 @@ pub(crate) fn recruit_worker(game: &mut GameState) {
 
     // Check province-based recruitment limit
     let max_recruits = crate::display::max_recruitment_capacity(player);
-    let current_workers = player.labor.total_workers();
+    let current_workers = player.economy.labor.total_workers();
     if current_workers >= max_recruits {
         println!(
             "  Cannot recruit: at capacity ({}/{} workers for {} provinces).",
@@ -273,12 +273,12 @@ pub(crate) fn recruit_worker(game: &mut GameState) {
     player.consume_material(MaterialType::CannedFood, 1);
     player.consume_goods(GoodsType::Clothing, 1);
     player.consume_goods(GoodsType::Furniture, 1);
-    player.labor.recruit_immigrant();
+    player.economy.labor.recruit_immigrant();
 
     let max_recruits = crate::display::max_recruitment_capacity(player);
     println!(
         "  Recruited 1 untrained worker (now: {} untrained, {} trained, {} expert, capacity {}).",
-        player.labor.untrained, player.labor.trained, player.labor.expert, max_recruits
+        player.economy.labor.untrained, player.economy.labor.trained, player.economy.labor.expert, max_recruits
     );
 }
 
@@ -290,7 +290,7 @@ pub(crate) fn train_worker(game: &mut GameState) {
     let player_id = game.human_player_nation;
     let player = game.get_nation(player_id).unwrap();
 
-    if player.labor.untrained == 0 {
+    if player.economy.labor.untrained == 0 {
         println!("  No untrained workers available to train.");
         return;
     }
@@ -302,7 +302,7 @@ pub(crate) fn train_worker(game: &mut GameState) {
     if has_paper {
         player.consume_material(MaterialType::Paper, 1);
     }
-    player.labor.train_worker();
+    player.economy.labor.train_worker();
 
     let paper_note = if has_paper {
         " (consumed 1 paper)"
@@ -311,7 +311,7 @@ pub(crate) fn train_worker(game: &mut GameState) {
     };
     println!(
         "  Trained 1 worker{} (now: {} untrained, {} trained, {} expert).",
-        paper_note, player.labor.untrained, player.labor.trained, player.labor.expert
+        paper_note, player.economy.labor.untrained, player.economy.labor.trained, player.economy.labor.expert
     );
 }
 
@@ -335,10 +335,10 @@ pub(crate) fn build_unit(game: &mut GameState, query: &str) {
     let player_id = game.human_player_nation;
     let player = game.get_nation(player_id).unwrap();
 
-    if player.treasury.checked_sub(cost).is_none() {
+    if player.economy.treasury.checked_sub(cost).is_none() {
         println!(
             "  Cannot afford {:?} (cost: {}, treasury: {}).",
-            unit_type, cost, player.treasury
+            unit_type, cost, player.economy.treasury
         );
         return;
     }
@@ -348,14 +348,14 @@ pub(crate) fn build_unit(game: &mut GameState, query: &str) {
     let unit = ArmyUnit::new(uid, unit_type, player_id, capital_province);
 
     let player = game.get_nation_mut(player_id).unwrap();
-    player.treasury -= cost;
+    player.economy.treasury -= cost;
     player.army.push(unit);
 
     println!(
         "  Unit built! {:?} stationed at capital (cost: {}, treasury now: {}). Army size: {}",
         unit_type,
         cost,
-        player.treasury,
+        player.economy.treasury,
         player.army.len()
     );
 }
@@ -417,17 +417,17 @@ pub(crate) fn cmd_upgrade_unit(game: &mut GameState, index_str: &str) {
 
     // Check cost ($500 flat)
     let cost = Money::dollars(500);
-    if player.treasury.checked_sub(cost).is_none() {
+    if player.economy.treasury.checked_sub(cost).is_none() {
         println!(
             "  Cannot afford upgrade (cost: {}, treasury: {}).",
-            cost, player.treasury
+            cost, player.economy.treasury
         );
         return;
     }
 
     // Apply upgrade
     let player = game.get_nation_mut(player_id).unwrap();
-    player.treasury -= cost;
+    player.economy.treasury -= cost;
     let old_medals = player.army[idx].medals;
     let old_health = player.army[idx].health;
     player.army[idx].unit_type = target_type;
@@ -438,7 +438,7 @@ pub(crate) fn cmd_upgrade_unit(game: &mut GameState, index_str: &str) {
 
     println!(
         "  Upgraded {:?} -> {:?} (medals: {}, health: {}, cost: {}, treasury: {}).",
-        current_type, target_type, old_medals, old_health, cost, player.treasury
+        current_type, target_type, old_medals, old_health, cost, player.economy.treasury
     );
 }
 
@@ -710,11 +710,11 @@ pub(crate) fn cmd_sell(game: &mut GameState, args: &str) {
 
     let player = game.get_nation_mut(player_id).unwrap();
     player.remove_resource(resource, quantity);
-    player.treasury += revenue;
+    player.economy.treasury += revenue;
 
     println!(
         "  Sold {} {:?} at {} each for {} total. Treasury: {}",
-        quantity, resource, price, revenue, player.treasury
+        quantity, resource, price, revenue, player.economy.treasury
     );
 }
 
@@ -746,10 +746,10 @@ pub(crate) fn research_tech(game: &mut GameState, query: &str) {
             let player = game.get_nation(player_id).unwrap();
 
             // Check if player can afford it
-            if player.treasury.checked_sub(tech.cost).is_none() {
+            if player.economy.treasury.checked_sub(tech.cost).is_none() {
                 println!(
                     "  Cannot afford {} (cost: {}, treasury: {}).",
-                    tech.name, tech.cost, player.treasury
+                    tech.name, tech.cost, player.economy.treasury
                 );
                 return;
             }
@@ -760,7 +760,7 @@ pub(crate) fn research_tech(game: &mut GameState, query: &str) {
 
             // Deduct cost and add tech
             let player = game.get_nation_mut(player_id).unwrap();
-            player.treasury -= tech_cost;
+            player.economy.treasury -= tech_cost;
             player.research_tech(tech_id);
 
             let player_name = player.name.clone();
@@ -768,7 +768,7 @@ pub(crate) fn research_tech(game: &mut GameState, query: &str) {
                 "  {}",
                 crate::display::color_green(&format!("Researched: {}!", tech_name))
             );
-            println!("  Cost: {} (treasury now: {})", tech_cost, player.treasury);
+            println!("  Cost: {} (treasury now: {})", tech_cost, player.economy.treasury);
 
             // Record history event (deduplicate: skip if same text already exists for this turn)
             let turn = game.turn;
@@ -815,16 +815,16 @@ pub(crate) fn cmd_hire_civilian(game: &mut GameState, type_name: &str) {
     let civilian_costs_expert = game.game_data.game_config.civilian_costs_expert;
     let player = game.get_nation(player_id).unwrap();
 
-    if civilian_costs_expert && player.labor.expert == 0 {
+    if civilian_costs_expert && player.economy.labor.expert == 0 {
         println!("  Cannot hire civilian: requires an expert worker (you have none).");
         println!("  Train workers at the Trade School first.");
         return;
     }
 
-    if player.treasury.checked_sub(cost).is_none() {
+    if player.economy.treasury.checked_sub(cost).is_none() {
         println!(
             "  Cannot afford {} (cost: {}, treasury: {}).",
-            civ_type, cost, player.treasury
+            civ_type, cost, player.economy.treasury
         );
         return;
     }
@@ -833,20 +833,20 @@ pub(crate) fn cmd_hire_civilian(game: &mut GameState, type_name: &str) {
     let civilian = domain::economy::civilians::Civilian::new(id, civ_type, player_id);
 
     let player = game.get_nation_mut(player_id).unwrap();
-    player.treasury -= cost;
+    player.economy.treasury -= cost;
     if civilian_costs_expert {
-        player.labor.expert -= 1;
+        player.economy.labor.expert -= 1;
     }
     player.civilians.push(civilian);
 
     println!(
         "  Hired {} (cost: {}, treasury now: {}). Use 'deploy <index> <province>' to deploy.",
-        civ_type, cost, player.treasury
+        civ_type, cost, player.economy.treasury
     );
     if civilian_costs_expert {
         println!(
             "  (Lost 1 expert worker — {} expert workers remain)",
-            player.labor.expert
+            player.economy.labor.expert
         );
     }
 }
@@ -1000,10 +1000,10 @@ pub(crate) fn cmd_consulate(game: &mut GameState, query: &str) {
 
     let player = game.get_nation(player_id).unwrap();
     let cost = Money::dollars(500);
-    if player.treasury.checked_sub(cost).is_none() {
+    if player.economy.treasury.checked_sub(cost).is_none() {
         println!(
             "  Cannot afford consulate (cost: {}, treasury: {}).",
-            cost, player.treasury
+            cost, player.economy.treasury
         );
         return;
     }
@@ -1011,12 +1011,12 @@ pub(crate) fn cmd_consulate(game: &mut GameState, query: &str) {
     match game.diplomacy.build_consulate(player_id, target_id) {
         Ok(_) => {
             let player = game.get_nation_mut(player_id).unwrap();
-            player.treasury -= cost;
+            player.economy.treasury -= cost;
             println!(
                 "  {}",
                 crate::display::color_green(&format!(
                     "Trade consulate established with {}! (cost: {}, treasury now: {})",
-                    target_name, cost, player.treasury
+                    target_name, cost, player.economy.treasury
                 ))
             );
 
@@ -1059,10 +1059,10 @@ pub(crate) fn cmd_embassy(game: &mut GameState, query: &str) {
 
     let player = game.get_nation(player_id).unwrap();
     let cost = Money::dollars(5000);
-    if player.treasury.checked_sub(cost).is_none() {
+    if player.economy.treasury.checked_sub(cost).is_none() {
         println!(
             "  Cannot afford embassy (cost: {}, treasury: {}).",
-            cost, player.treasury
+            cost, player.economy.treasury
         );
         return;
     }
@@ -1070,12 +1070,12 @@ pub(crate) fn cmd_embassy(game: &mut GameState, query: &str) {
     match game.diplomacy.build_embassy(player_id, target_id) {
         Ok(_) => {
             let player = game.get_nation_mut(player_id).unwrap();
-            player.treasury -= cost;
+            player.economy.treasury -= cost;
             println!(
                 "  {}",
                 crate::display::color_green(&format!(
                     "Embassy established with {}! (cost: {}, treasury now: {})",
-                    target_name, cost, player.treasury
+                    target_name, cost, player.economy.treasury
                 ))
             );
 
@@ -1350,18 +1350,18 @@ pub(crate) fn cmd_grant(game: &mut GameState, args: &str) {
 
     let grant = Money::dollars(amount);
     let player = game.get_nation(player_id).unwrap();
-    if player.treasury.checked_sub(grant).is_none() {
+    if player.economy.treasury.checked_sub(grant).is_none() {
         println!(
             "  Cannot afford grant of {} (treasury: {}).",
-            grant, player.treasury
+            grant, player.economy.treasury
         );
         return;
     }
 
     game.diplomacy.send_grant(player_id, target_id, grant);
     let player = game.get_nation_mut(player_id).unwrap();
-    player.treasury -= grant;
-    let new_treasury = player.treasury;
+    player.economy.treasury -= grant;
+    let new_treasury = player.economy.treasury;
     let score = game
         .diplomacy
         .get_relation(player_id, target_id)
@@ -1628,7 +1628,7 @@ pub(crate) fn build_freight_car(game: &mut GameState) {
     let (labor_needed, lumber_needed, steel_needed) =
         domain::economy::transport::TransportSystem::build_freight_car_cost();
 
-    let total_labor = player.labor.total_workers();
+    let total_labor = player.economy.labor.total_workers();
     let lumber_have = player.material_amount(MaterialType::Lumber);
     let steel_have = player.material_amount(MaterialType::Steel);
 
@@ -1755,7 +1755,7 @@ fn assign_engineer_task(
         BuildTask::Depot => Money::dollars(cfg.depot_cost),
         BuildTask::Port => Money::dollars(cfg.port_cost),
     };
-    let treasury = game.get_nation(player_id).unwrap().treasury;
+    let treasury = game.get_nation(player_id).unwrap().economy.treasury;
     if treasury.checked_sub(cost).is_none() {
         println!(
             "  Cannot afford {} (cost: {}, treasury: {}).",
@@ -1937,7 +1937,7 @@ pub(crate) fn cmd_build_fort(game: &mut GameState, province_query: Option<&str>)
     }
 
     let cost = domain::map::fort_cost(next_level, &game.game_data.game_config).unwrap();
-    let treasury = game.get_nation(player_id).unwrap().treasury;
+    let treasury = game.get_nation(player_id).unwrap().economy.treasury;
     if treasury.checked_sub(cost).is_none() {
         println!(
             "  Cannot afford fort level {} in {} (cost: {}, treasury: {}).",
@@ -1950,12 +1950,12 @@ pub(crate) fn cmd_build_fort(game: &mut GameState, province_query: Option<&str>)
     match domain::map::build_fort(&mut game.hex_map, capital_tile_coord, &cfg_snapshot) {
         Ok((level, cost)) => {
             let player = game.get_nation_mut(player_id).unwrap();
-            player.treasury -= cost;
+            player.economy.treasury -= cost;
             println!(
                 "  {}",
                 crate::display::color_green(&format!(
                     "Fort in {} upgraded to level {}! Cost: {}, treasury now: {}.",
-                    province_name, level, cost, player.treasury
+                    province_name, level, cost, player.economy.treasury
                 ))
             );
         }

@@ -53,14 +53,14 @@ fn test_10_turn_smoke_test() {
     // No nation should have an absurdly negative treasury (maintenance can cause
     // small negatives, but check for reasonable bounds).
     for nation in &game.nations {
-        if nation.treasury.is_negative() {
+        if nation.economy.treasury.is_negative() {
             // Negative treasury is allowed by the game (maintenance costs can push it
             // negative), but it should not be catastrophically negative.
             assert!(
-                nation.treasury.as_dollars() > -100_000,
+                nation.economy.treasury.as_dollars() > -100_000,
                 "Nation {} has unreasonably negative treasury: {}",
                 nation.name,
-                nation.treasury
+                nation.economy.treasury
             );
         }
     }
@@ -113,13 +113,13 @@ fn test_100_turn_endurance() {
     // The human player should have some resources in the warehouse from
     // resource collection and/or trade.
     let human = game.get_nation(game.human_player_nation).unwrap();
-    let total_resources: u32 = human.warehouse.values().sum();
-    let total_materials: u32 = human.materials.values().sum();
-    let total_goods: u32 = human.goods.values().sum();
+    let total_resources: u32 = human.economy.warehouse.values().sum();
+    let total_materials: u32 = human.economy.materials.values().sum();
+    let total_goods: u32 = human.economy.goods.values().sum();
     let has_some_economic_activity = total_resources > 0
         || total_materials > 0
         || total_goods > 0
-        || human.treasury > Money::ZERO;
+        || human.economy.treasury > Money::ZERO;
     assert!(
         has_some_economic_activity,
         "After 100 turns, the human player should have some economic output"
@@ -181,7 +181,7 @@ fn test_determinism() {
         assert_eq!(nation_a.id, nation_b.id, "Nation IDs should match");
         assert_eq!(nation_a.name, nation_b.name, "Nation names should match");
         assert_eq!(
-            nation_a.treasury, nation_b.treasury,
+            nation_a.economy.treasury, nation_b.economy.treasury,
             "Treasury should be identical for {}",
             nation_a.name
         );
@@ -231,16 +231,16 @@ fn test_different_map_keys_diverge() {
     let total_resources_a: u32 = game_a
         .nations
         .iter()
-        .flat_map(|n| n.warehouse.values())
+        .flat_map(|n| n.economy.warehouse.values())
         .sum();
     let total_resources_b: u32 = game_b
         .nations
         .iter()
-        .flat_map(|n| n.warehouse.values())
+        .flat_map(|n| n.economy.warehouse.values())
         .sum();
 
-    let total_treasury_a: i64 = game_a.nations.iter().map(|n| n.treasury.as_dollars()).sum();
-    let total_treasury_b: i64 = game_b.nations.iter().map(|n| n.treasury.as_dollars()).sum();
+    let total_treasury_a: i64 = game_a.nations.iter().map(|n| n.economy.treasury.as_dollars()).sum();
+    let total_treasury_b: i64 = game_b.nations.iter().map(|n| n.economy.treasury.as_dollars()).sum();
 
     // At least one of these aggregate metrics should differ between the two map keys.
     let diverged = total_resources_a != total_resources_b || total_treasury_a != total_treasury_b;
@@ -267,7 +267,7 @@ fn test_multiple_difficulties() {
     for difficulty in &difficulties {
         let game = game_with_difficulty(*difficulty);
         let human = game.get_nation(game.human_player_nation).unwrap();
-        starting_treasuries.push(human.treasury);
+        starting_treasuries.push(human.economy.treasury);
 
         // Run 5 turns and verify valid state
         let game = run_simulation("difficulty_test", 5, *difficulty, 0);
@@ -376,7 +376,7 @@ fn ai_achieves_self_sustaining_economy_within_20_turns() {
         .great_powers()
         .iter()
         .filter(|n| n.id != game.human_player_nation)
-        .any(|n| n.treasury > Money::dollars(0) || n.resource_amount(ResourceType::Timber) > 10);
+        .any(|n| n.economy.treasury > Money::dollars(0) || n.resource_amount(ResourceType::Timber) > 10);
     assert!(
         ai_viable,
         "At least one AI should be economically viable after 20 turns"
@@ -440,7 +440,7 @@ fn minor_nations_respond_to_trade_offers() {
         .great_powers()
         .iter()
         .filter(|n| n.id != game.human_player_nation)
-        .any(|n| !n.trade_history.is_empty() || !n.warehouse.is_empty());
+        .any(|n| !n.trade_history.is_empty() || !n.economy.warehouse.is_empty());
     assert!(
         any_ai_traded,
         "After 10 turns, at least one AI should have engaged in trade or collected resources"
@@ -478,9 +478,9 @@ fn ai_hard_gets_resource_bonus() {
         .iter()
         .filter(|n| n.id != game.human_player_nation)
         .any(|n| {
-            let resources: u32 = n.warehouse.values().sum();
-            let materials: u32 = n.materials.values().sum();
-            resources > 0 || materials > 0 || n.treasury > Money::dollars(0)
+            let resources: u32 = n.economy.warehouse.values().sum();
+            let materials: u32 = n.economy.materials.values().sum();
+            resources > 0 || materials > 0 || n.economy.treasury > Money::dollars(0)
         });
     assert!(
         ai_has_output,
@@ -504,9 +504,9 @@ fn ai_noi_gets_larger_resource_bonus() {
         .iter()
         .filter(|n| n.id != game.human_player_nation)
         .any(|n| {
-            let resources: u32 = n.warehouse.values().sum();
-            let materials: u32 = n.materials.values().sum();
-            resources > 0 || materials > 0 || n.treasury > Money::dollars(0)
+            let resources: u32 = n.economy.warehouse.values().sum();
+            let materials: u32 = n.economy.materials.values().sum();
+            resources > 0 || materials > 0 || n.economy.treasury > Money::dollars(0)
         });
     assert!(
         ai_has_output,
@@ -526,14 +526,14 @@ fn human_player_gets_no_bonus() {
 
     // Hard: human gets $8,000 (no AI bonus)
     assert_eq!(
-        human_hard.treasury,
+        human_hard.economy.treasury,
         Money::dollars(8000),
         "Human on Hard should have $8,000 (no AI cash bonus)"
     );
 
     // NOI: human gets $5,000 (no AI bonus)
     assert_eq!(
-        human_noi.treasury,
+        human_noi.economy.treasury,
         Money::dollars(5000),
         "Human on NOI should have $5,000 (no AI cash bonus)"
     );
@@ -542,7 +542,7 @@ fn human_player_gets_no_bonus() {
     for nation in game_hard.great_powers() {
         if nation.id != game_hard.human_player_nation {
             assert_eq!(
-                nation.treasury,
+                nation.economy.treasury,
                 Money::dollars(9000),
                 "AI on Hard should have $9,000 ($8,000 + $1,000 bonus)"
             );
@@ -551,7 +551,7 @@ fn human_player_gets_no_bonus() {
     for nation in game_noi.great_powers() {
         if nation.id != game_noi.human_player_nation {
             assert_eq!(
-                nation.treasury,
+                nation.economy.treasury,
                 Money::dollars(10000),
                 "AI on NOI should have $10,000 ($5,000 + $5,000 bonus)"
             );
@@ -682,7 +682,7 @@ fn profile_memory_late_game() {
             nation.name,
             nation.army.len(),
             nation.civilians.len(),
-            nation.buildings.len(),
+            nation.economy.buildings.len(),
             nation.warships.len()
         );
     }
@@ -706,7 +706,7 @@ fn trade_simulation_20_turns_economic_growth() {
         game.diplomacy.build_consulate(player, *mn_id).ok();
     }
 
-    let _initial_treasury = game.get_nation(player).unwrap().treasury;
+    let _initial_treasury = game.get_nation(player).unwrap().economy.treasury;
 
     // Process 20 turns
     for _ in 0..20 {
@@ -733,6 +733,6 @@ fn trade_simulation_20_turns_economic_growth() {
     );
     println!(
         "After 20 turns: treasury={}, resources={}",
-        nation.treasury, total_resources
+        nation.economy.treasury, total_resources
     );
 }

@@ -27,7 +27,7 @@ fn observer_mode_run_ai_turns_processes_human_seat() {
     let treasury_before = game
         .get_nation(human_id)
         .expect("human nation exists")
-        .treasury;
+        .economy.treasury;
 
     // Advance a few turns so the AI has chances to act for the human seat.
     for _ in 0..3 {
@@ -38,7 +38,7 @@ fn observer_mode_run_ai_turns_processes_human_seat() {
     let treasury_after = game
         .get_nation(human_id)
         .expect("human nation still exists")
-        .treasury;
+        .economy.treasury;
     // Any change (income, spending, research, hiring) proves the AI is driving the seat.
     assert_ne!(
         treasury_before, treasury_after,
@@ -52,7 +52,7 @@ fn observer_mode_bonus_applies_to_all_gps_on_hard() {
     let treasuries: Vec<_> = game
         .great_powers()
         .iter()
-        .map(|n| n.treasury.as_dollars())
+        .map(|n| n.economy.treasury.as_dollars())
         .collect();
     // On Hard, every GP (including the observer's viewpoint) gets a +$1000 bonus.
     // Base Hard starting cash is $8000 → each GP should be at $9000.
@@ -67,9 +67,9 @@ fn non_observer_human_keeps_no_bonus_on_hard() {
     assert!(!game.observer_mode);
     let human_id = game.human_player_nation;
     let human = game.get_nation(human_id).unwrap();
-    assert_eq!(human.treasury.as_dollars(), 8000);
+    assert_eq!(human.economy.treasury.as_dollars(), 8000);
     // And AI GPs have the bonus.
     for nation in game.great_powers().iter().filter(|n| n.id != human_id) {
-        assert_eq!(nation.treasury.as_dollars(), 9000);
+        assert_eq!(nation.economy.treasury.as_dollars(), 9000);
     }
 }

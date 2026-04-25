@@ -23,7 +23,7 @@ fn build_regulars_deducts_cost_and_grows_army() {
     let player_id = game.human_player_nation;
 
     // Starting state
-    let initial_treasury = game.get_nation(player_id).unwrap().treasury;
+    let initial_treasury = game.get_nation(player_id).unwrap().economy.treasury;
     let initial_army_size = game.get_nation(player_id).unwrap().army.len();
 
     // Build a Regulars unit (cost $500 in the CLI, but we simulate directly)
@@ -33,12 +33,12 @@ fn build_regulars_deducts_cost_and_grows_army() {
     let unit = ArmyUnit::new(uid, ArmyUnitType::Regulars, player_id, capital_province);
 
     let player = game.get_nation_mut(player_id).unwrap();
-    player.treasury -= cost;
+    player.economy.treasury -= cost;
     player.army.push(unit);
 
     // Verify
     let player = game.get_nation(player_id).unwrap();
-    assert_eq!(player.treasury, initial_treasury - cost);
+    assert_eq!(player.economy.treasury, initial_treasury - cost);
     assert_eq!(player.army.len(), initial_army_size + 1);
     assert_eq!(
         player.army.last().unwrap().unit_type,
@@ -71,11 +71,11 @@ fn upgrade_regulars_to_rifle_infantry_preserves_medals() {
 
     // Upgrade (cost $500)
     let upgrade_cost = Money::dollars(500);
-    let initial_treasury = game.get_nation(player_id).unwrap().treasury;
+    let initial_treasury = game.get_nation(player_id).unwrap().economy.treasury;
     let idx = game.get_nation(player_id).unwrap().army.len() - 1;
 
     let player = game.get_nation_mut(player_id).unwrap();
-    player.treasury -= upgrade_cost;
+    player.economy.treasury -= upgrade_cost;
     let old_medals = player.army[idx].medals;
     let old_health = player.army[idx].health;
     player.army[idx].unit_type = ArmyUnitType::RifleInfantry;
@@ -83,7 +83,7 @@ fn upgrade_regulars_to_rifle_infantry_preserves_medals() {
 
     // Verify
     let player = game.get_nation(player_id).unwrap();
-    assert_eq!(player.treasury, initial_treasury - upgrade_cost);
+    assert_eq!(player.economy.treasury, initial_treasury - upgrade_cost);
     assert_eq!(player.army[idx].unit_type, ArmyUnitType::RifleInfantry);
     assert_eq!(player.army[idx].medals, old_medals);
     assert_eq!(player.army[idx].medals, 2);
@@ -100,12 +100,12 @@ fn build_unit_with_insufficient_funds_fails_gracefully() {
 
     // Drain treasury
     let player = game.get_nation_mut(player_id).unwrap();
-    player.treasury = Money::dollars(100);
+    player.economy.treasury = Money::dollars(100);
 
     // Try to build a Regulars unit (cost $500) — should fail
     let cost = Money::dollars(500);
     let player = game.get_nation(player_id).unwrap();
-    let can_afford = player.treasury.checked_sub(cost).is_some();
+    let can_afford = player.economy.treasury.checked_sub(cost).is_some();
     assert!(
         !can_afford,
         "Should not be able to afford $500 with $100 treasury"
@@ -113,7 +113,7 @@ fn build_unit_with_insufficient_funds_fails_gracefully() {
 
     // Army should remain unchanged
     let army_size_before = player.army.len();
-    let treasury_before = player.treasury;
+    let treasury_before = player.economy.treasury;
 
     // The CLI would return early here — we just verify the check works
     assert_eq!(
@@ -121,7 +121,7 @@ fn build_unit_with_insufficient_funds_fails_gracefully() {
         army_size_before
     );
     assert_eq!(
-        game.get_nation(player_id).unwrap().treasury,
+        game.get_nation(player_id).unwrap().economy.treasury,
         treasury_before
     );
 }
@@ -406,17 +406,17 @@ fn expert_worker_reward_at_10_experts() {
 
     // Reset labor pool so we control the exact expert count
     let player = game.get_nation_mut(player_id).unwrap();
-    player.labor.untrained = 0;
-    player.labor.trained = 0;
-    player.labor.expert = 0;
+    player.economy.labor.untrained = 0;
+    player.economy.labor.trained = 0;
+    player.economy.labor.expert = 0;
 
     // Add 10 expert workers to the labor pool
     for _ in 0..10 {
-        player.labor.untrained += 1;
-        player.labor.train_worker();
-        player.labor.promote_worker();
+        player.economy.labor.untrained += 1;
+        player.economy.labor.train_worker();
+        player.economy.labor.promote_worker();
     }
-    assert_eq!(player.labor.expert, 10);
+    assert_eq!(player.economy.labor.expert, 10);
 
     let initial_bonus = player.capitol_bonus_capacity;
 
@@ -443,17 +443,17 @@ fn expert_worker_reward_at_30_experts() {
 
     // Reset labor pool so we control the exact expert count
     let player = game.get_nation_mut(player_id).unwrap();
-    player.labor.untrained = 0;
-    player.labor.trained = 0;
-    player.labor.expert = 0;
+    player.economy.labor.untrained = 0;
+    player.economy.labor.trained = 0;
+    player.economy.labor.expert = 0;
 
     // Add 30 expert workers to the labor pool
     for _ in 0..30 {
-        player.labor.untrained += 1;
-        player.labor.train_worker();
-        player.labor.promote_worker();
+        player.economy.labor.untrained += 1;
+        player.economy.labor.train_worker();
+        player.economy.labor.promote_worker();
     }
-    assert_eq!(player.labor.expert, 30);
+    assert_eq!(player.economy.labor.expert, 30);
 
     // Process a turn — should earn both rewards (10 and 30)
     process_turn(&mut game);
@@ -479,9 +479,9 @@ fn expert_worker_reward_not_awarded_twice() {
     // Add 10 expert workers
     let player = game.get_nation_mut(player_id).unwrap();
     for _ in 0..10 {
-        player.labor.untrained += 1;
-        player.labor.train_worker();
-        player.labor.promote_worker();
+        player.economy.labor.untrained += 1;
+        player.economy.labor.train_worker();
+        player.economy.labor.promote_worker();
     }
 
     // Process two turns

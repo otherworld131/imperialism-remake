@@ -137,8 +137,8 @@ pub fn wasm_new_observer_scenario_game(
             if let Some(nation) = game.get_nation_mut(human_id) {
                 nation.ai_personality = Some(personality);
                 match diff {
-                    Difficulty::Hard => nation.treasury += Money::dollars(1000),
-                    Difficulty::NighOnImpossible => nation.treasury += Money::dollars(5000),
+                    Difficulty::Hard => nation.economy.treasury += Money::dollars(1000),
+                    Difficulty::NighOnImpossible => nation.economy.treasury += Money::dollars(5000),
                     _ => {}
                 }
             }
@@ -215,11 +215,11 @@ pub fn wasm_set_human_player(game_json: &str, nation_index: usize) -> String {
 
     if let Some(nation) = game.get_nation_mut(old_human_id) {
         nation.ai_personality = Some(old_personality);
-        nation.treasury += bonus;
+        nation.economy.treasury += bonus;
     }
     if let Some(nation) = game.get_nation_mut(new_human_id) {
         nation.ai_personality = None;
-        nation.treasury -= bonus;
+        nation.economy.treasury -= bonus;
     }
     game.human_player_nation = new_human_id;
 
@@ -877,10 +877,10 @@ pub fn wasm_research_tech(game_json: &str, tech_name: &str) -> String {
                 Some(n) => n,
                 None => return "{\"error\":\"player nation not found\"}".to_string(),
             };
-            if nation.treasury.checked_sub(cost).is_none() {
+            if nation.economy.treasury.checked_sub(cost).is_none() {
                 return "{\"error\":\"insufficient funds\"}".to_string();
             }
-            nation.treasury -= cost;
+            nation.economy.treasury -= cost;
             nation.research_tech(tech_id);
             serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
         }
@@ -1361,7 +1361,7 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
     };
 
     let arms_available = nation.material_amount(MaterialType::Arms);
-    let treasury = nation.treasury;
+    let treasury = nation.economy.treasury;
 
     // Army units
     let all_army_types = [
@@ -1905,7 +1905,7 @@ pub fn wasm_engineer_build(game_json: &str, civilian_id: u32, build_kind: &str) 
     };
     let nation_treasury = game
         .get_nation(human_nid)
-        .map(|n| n.treasury)
+        .map(|n| n.economy.treasury)
         .unwrap_or(Money::ZERO);
     if nation_treasury.checked_sub(task_cost).is_none() {
         return "{\"error\":\"insufficient funds\"}".to_string();
@@ -1955,7 +1955,7 @@ pub fn wasm_recruit_army_unit(game_json: &str, nation_id: u32, unit_type_str: &s
         {
             return format!("{{\"error\":\"requires tech: {}\"}}", tech);
         }
-        if nation.treasury < stats.cost {
+        if nation.economy.treasury < stats.cost {
             return "{\"error\":\"insufficient funds\"}".to_string();
         }
         if nation.material_amount(MaterialType::Arms) < stats.arms_required {
@@ -1969,7 +1969,7 @@ pub fn wasm_recruit_army_unit(game_json: &str, nation_id: u32, unit_type_str: &s
             Some(n) => n,
             None => return "{\"error\":\"nation not found\"}".to_string(),
         };
-        nation.treasury -= stats.cost;
+        nation.economy.treasury -= stats.cost;
         nation.consume_material(MaterialType::Arms, stats.arms_required);
         nation.capital_province_id
     };
@@ -2010,10 +2010,10 @@ pub fn wasm_hire_civilian(game_json: &str, nation_id: u32, civilian_type_str: &s
             Some(n) => n,
             None => return "{\"error\":\"nation not found\"}".to_string(),
         };
-        if nation.treasury < cost {
+        if nation.economy.treasury < cost {
             return "{\"error\":\"insufficient funds\"}".to_string();
         }
-        nation.treasury -= cost;
+        nation.economy.treasury -= cost;
     }
     let cid = game.alloc_unit_id();
     if let Some(nation) = game.get_nation_mut(nid) {
@@ -2256,7 +2256,7 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
     let (labor_cost, lumber_cost, steel_cost) = TransportSystem::build_freight_car_cost();
     let available_lumber = nation.material_amount(MaterialType::Lumber);
     let available_steel = nation.material_amount(MaterialType::Steel);
-    let available_labor = nation.labor.total_labor_units();
+    let available_labor = nation.economy.labor.total_labor_units();
 
     let can_build = available_lumber >= lumber_cost
         && available_steel >= steel_cost
@@ -2348,7 +2348,7 @@ pub fn wasm_build_freight_car(game_json: &str, nation_id: u32) -> String {
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
 
-    if nation.labor.total_labor_units() < labor_cost {
+    if nation.economy.labor.total_labor_units() < labor_cost {
         return "{\"error\":\"not enough labor\"}".to_string();
     }
     if nation.material_amount(MaterialType::Lumber) < lumber_cost {
@@ -2411,7 +2411,7 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
 
     // Buildings
     let buildings_json: Vec<serde_json::Value> = nation
-        .buildings
+        .economy.buildings
         .iter()
         .map(|b| {
             let next_cap = b.next_capacity();
@@ -2432,28 +2432,28 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
 
     // Warehouse
     let resources_json: serde_json::Value = nation
-        .warehouse
+        .economy.warehouse
         .iter()
         .map(|(r, qty)| (format!("{:?}", r), serde_json::json!(qty)))
         .collect::<serde_json::Map<String, serde_json::Value>>()
         .into();
 
     let materials_json: serde_json::Value = nation
-        .materials
+        .economy.materials
         .iter()
         .map(|(m, qty)| (format!("{:?}", m), serde_json::json!(qty)))
         .collect::<serde_json::Map<String, serde_json::Value>>()
         .into();
 
     let goods_json: serde_json::Value = nation
-        .goods
+        .economy.goods
         .iter()
         .map(|(g, qty)| (format!("{:?}", g), serde_json::json!(qty)))
         .collect::<serde_json::Map<String, serde_json::Value>>()
         .into();
 
     // Labor
-    let labor = &nation.labor;
+    let labor = &nation.economy.labor;
 
     // Production forecast for each chain
     let available_lumber_mat = nation.material_amount(MaterialType::Lumber);
@@ -2461,7 +2461,7 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
 
     // Can-expand map
     let can_expand: serde_json::Value = nation
-        .buildings
+        .economy.buildings
         .iter()
         .map(|b| {
             let next_cap = b.next_capacity();
@@ -2494,19 +2494,19 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
     .collect();
 
     let lumber_mill_cap = nation
-        .buildings
+        .economy.buildings
         .iter()
         .find(|b| b.building_type == BuildingType::LumberMill)
         .map(|b| b.capacity)
         .unwrap_or(0);
     let steel_mill_cap = nation
-        .buildings
+        .economy.buildings
         .iter()
         .find(|b| b.building_type == BuildingType::SteelMill)
         .map(|b| b.capacity)
         .unwrap_or(0);
     let textile_mill_cap = nation
-        .buildings
+        .economy.buildings
         .iter()
         .find(|b| b.building_type == BuildingType::TextileMill)
         .map(|b| b.capacity)
@@ -2542,19 +2542,19 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
     .collect();
 
     let furniture_cap = nation
-        .buildings
+        .economy.buildings
         .iter()
         .find(|b| b.building_type == BuildingType::FurnitureFactory)
         .map(|b| b.capacity)
         .unwrap_or(0);
     let hardware_cap = nation
-        .buildings
+        .economy.buildings
         .iter()
         .find(|b| b.building_type == BuildingType::HardwareFactory)
         .map(|b| b.capacity)
         .unwrap_or(0);
     let clothing_cap = nation
-        .buildings
+        .economy.buildings
         .iter()
         .find(|b| b.building_type == BuildingType::ClothingFactory)
         .map(|b| b.capacity)
@@ -2632,7 +2632,7 @@ pub fn wasm_expand_building(game_json: &str, nation_id: u32, building_type: &str
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
 
-    let building = match nation.buildings.iter().find(|b| b.building_type == bt) {
+    let building = match nation.economy.buildings.iter().find(|b| b.building_type == bt) {
         Some(b) => b,
         None => return "{\"error\":\"building not found\"}".to_string(),
     };
@@ -2656,7 +2656,7 @@ pub fn wasm_expand_building(game_json: &str, nation_id: u32, building_type: &str
     nation.consume_material(MaterialType::Steel, exp_steel);
 
     // Find the building again mutably and start expansion
-    if let Some(b) = nation.buildings.iter_mut().find(|b| b.building_type == bt) {
+    if let Some(b) = nation.economy.buildings.iter_mut().find(|b| b.building_type == bt) {
         b.start_expansion(amount);
     }
 
@@ -2869,7 +2869,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         if gp.id == nid || !gp.is_great_power() {
             continue;
         }
-        for (&resource, &qty) in &gp.warehouse {
+        for (&resource, &qty) in &gp.economy.warehouse {
             if qty > 3 {
                 let surplus = qty - 3;
                 let price = base_price(resource);
@@ -2913,7 +2913,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
     let sellable_materials: Vec<serde_json::Value> = all_materials
         .iter()
         .filter_map(|&m| {
-            let stock = nation.materials.get(&m).copied().unwrap_or(0);
+            let stock = nation.economy.materials.get(&m).copied().unwrap_or(0);
             if stock > 0 {
                 Some(serde_json::json!({
                     "name": format!("{}", m),
@@ -2934,7 +2934,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
     let sellable_goods: Vec<serde_json::Value> = all_goods
         .iter()
         .filter_map(|&g| {
-            let stock = nation.goods.get(&g).copied().unwrap_or(0);
+            let stock = nation.economy.goods.get(&g).copied().unwrap_or(0);
             if stock > 0 {
                 Some(serde_json::json!({
                     "name": format!("{:?}", g),
@@ -2968,7 +2968,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         "total_cargo": total_cargo,
         "remaining_cargo": remaining_cargo,
         "minor_nations": minor_nations,
-        "treasury": nation.treasury.as_dollars(),
+        "treasury": nation.economy.treasury.as_dollars(),
         "player_sell_orders": player_sell_orders,
         "player_buy_orders": player_buy_orders,
         "available_offers": available_offers,
@@ -3050,8 +3050,8 @@ pub fn wasm_set_player_sell_order(
     // Validate stock
     let available = match commodity {
         Commodity::Resource(r) => nation.resource_amount(r),
-        Commodity::Material(m) => nation.materials.get(&m).copied().unwrap_or(0),
-        Commodity::Goods(g) => nation.goods.get(&g).copied().unwrap_or(0),
+        Commodity::Material(m) => nation.economy.materials.get(&m).copied().unwrap_or(0),
+        Commodity::Goods(g) => nation.economy.goods.get(&g).copied().unwrap_or(0),
     };
     if quantity > available {
         return r#"{"error":"insufficient stock"}"#.to_string();
@@ -3172,7 +3172,7 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
     };
 
     let player_standing = game.diplomacy.standing.get(&nid).copied().unwrap_or(100);
-    let treasury = nation.treasury.as_dollars();
+    let treasury = nation.economy.treasury.as_dollars();
     let player_is_gp = nation.nation_type == NationType::GreatPower;
     let player_already_at_war = game.diplomacy.is_at_war_with_anyone(nid);
     let player_in_anarchy = nation.is_in_anarchy;
@@ -3355,7 +3355,7 @@ pub fn wasm_diplomacy_build_consulate(
     let consulate_cost = Money::dollars(500);
     if game
         .get_nation(nid)
-        .map(|n| n.treasury.as_dollars() < consulate_cost.as_dollars())
+        .map(|n| n.economy.treasury.as_dollars() < consulate_cost.as_dollars())
         .unwrap_or(false)
     {
         return "{\"error\":\"not enough treasury\"}".to_string();
@@ -3367,7 +3367,7 @@ pub fn wasm_diplomacy_build_consulate(
     };
 
     if let Some(nation) = game.get_nation_mut(nid) {
-        nation.treasury -= cost;
+        nation.economy.treasury -= cost;
     }
 
     serialize_game(&game)
@@ -3406,7 +3406,7 @@ pub fn wasm_diplomacy_build_embassy(
     let embassy_cost = Money::dollars(5000);
     if game
         .get_nation(nid)
-        .map(|n| n.treasury.as_dollars() < embassy_cost.as_dollars())
+        .map(|n| n.economy.treasury.as_dollars() < embassy_cost.as_dollars())
         .unwrap_or(false)
     {
         return "{\"error\":\"not enough treasury\"}".to_string();
@@ -3418,7 +3418,7 @@ pub fn wasm_diplomacy_build_embassy(
     };
 
     if let Some(nation) = game.get_nation_mut(nid) {
-        nation.treasury -= cost;
+        nation.economy.treasury -= cost;
     }
 
     serialize_game(&game)
@@ -3576,14 +3576,14 @@ pub fn wasm_diplomacy_send_grant(
             Some(n) => n,
             None => return "{\"error\":\"nation not found\"}".to_string(),
         };
-        if nation.treasury.as_dollars() < amount {
+        if nation.economy.treasury.as_dollars() < amount {
             return "{\"error\":\"not enough treasury\"}".to_string();
         }
     }
 
     // Deduct from treasury
     if let Some(nation) = game.get_nation_mut(nid) {
-        nation.treasury -= money;
+        nation.economy.treasury -= money;
     }
 
     game.diplomacy.send_grant(nid, target, money);
@@ -3836,7 +3836,7 @@ pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
     };
 
     // Economy
-    let treasury_dollars = nation.treasury.as_dollars();
+    let treasury_dollars = nation.economy.treasury.as_dollars();
     let subsidies: Vec<serde_json::Value> = nation
         .trade_subsidies
         .iter()
@@ -3851,7 +3851,7 @@ pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
 
     // Buildings
     let buildings: Vec<serde_json::Value> = nation
-        .buildings
+        .economy.buildings
         .iter()
         .map(|b| {
             serde_json::json!({
@@ -3864,19 +3864,19 @@ pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
 
     // Resources, materials, goods
     let resources: Vec<serde_json::Value> = nation
-        .warehouse
+        .economy.warehouse
         .iter()
         .filter(|(_, qty)| **qty > 0)
         .map(|(rt, qty)| serde_json::json!({"name": format!("{:?}", rt), "quantity": qty}))
         .collect();
     let materials: Vec<serde_json::Value> = nation
-        .materials
+        .economy.materials
         .iter()
         .filter(|(_, qty)| **qty > 0)
         .map(|(mt, qty)| serde_json::json!({"name": format!("{:?}", mt), "quantity": qty}))
         .collect();
     let goods: Vec<serde_json::Value> = nation
-        .goods
+        .economy.goods
         .iter()
         .filter(|(_, qty)| **qty > 0)
         .map(|(gt, qty)| serde_json::json!({"name": format!("{:?}", gt), "quantity": qty}))
@@ -3973,10 +3973,10 @@ pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
             "wars": wars,
         },
         "labor": {
-            "untrained": nation.labor.untrained,
-            "trained": nation.labor.trained,
-            "expert": nation.labor.expert,
-            "total": nation.labor.total_workers(),
+            "untrained": nation.economy.labor.untrained,
+            "trained": nation.economy.labor.trained,
+            "expert": nation.economy.labor.expert,
+            "total": nation.economy.labor.total_workers(),
         },
     });
 
@@ -4002,7 +4002,7 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
             let is_human = nid == game.human_player_nation;
 
             // Per-nation ledger data (same logic as wasm_get_ledger_data)
-            let treasury_dollars = nation.treasury.as_dollars();
+            let treasury_dollars = nation.economy.treasury.as_dollars();
             let provinces = nation.province_ids.len();
 
             let mut total_army_fp: u32 = 0;
@@ -4013,7 +4013,7 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
             let total_warship_count = nation.warships.len();
             let merchant_ships = nation.merchant_fleet.len();
 
-            let building_count = nation.buildings.len();
+            let building_count = nation.economy.buildings.len();
 
             let standing = game.diplomacy.get_standing(nid);
             let mut consulate_count = 0u32;
@@ -4046,27 +4046,27 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
             }
 
             // Resource totals
-            let total_resources: u32 = nation.warehouse.values().sum();
-            let total_materials: u32 = nation.materials.values().sum();
-            let total_goods: u32 = nation.goods.values().sum();
+            let total_resources: u32 = nation.economy.warehouse.values().sum();
+            let total_materials: u32 = nation.economy.materials.values().sum();
+            let total_goods: u32 = nation.economy.goods.values().sum();
 
             // Per-resource breakdown
             let resources_detail: serde_json::Map<String, serde_json::Value> = nation
-                .warehouse
+                .economy.warehouse
                 .iter()
                 .map(|(k, v)| (format!("{:?}", k), serde_json::json!(*v)))
                 .collect();
 
             // Per-material breakdown
             let materials_detail: serde_json::Map<String, serde_json::Value> = nation
-                .materials
+                .economy.materials
                 .iter()
                 .map(|(k, v)| (format!("{:?}", k), serde_json::json!(*v)))
                 .collect();
 
             // Per-goods breakdown
             let goods_detail: serde_json::Map<String, serde_json::Value> = nation
-                .goods
+                .economy.goods
                 .iter()
                 .map(|(k, v)| (format!("{:?}", k), serde_json::json!(*v)))
                 .collect();
@@ -4213,10 +4213,10 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
                     "expense_totals": cumulative_expense,
                 },
                 "labor": {
-                    "untrained": nation.labor.untrained,
-                    "trained": nation.labor.trained,
-                    "expert": nation.labor.expert,
-                    "total": nation.labor.total_workers(),
+                    "untrained": nation.economy.labor.untrained,
+                    "trained": nation.economy.labor.trained,
+                    "expert": nation.economy.labor.expert,
+                    "total": nation.economy.labor.total_workers(),
                 },
                 "military": {
                     "total_army_count": total_army_count,
@@ -4940,7 +4940,7 @@ mod tests {
         let mut game: GameState = serde_json::from_str(&json).unwrap();
         game.game_data = domain::data::GameData::default();
         let nation = game.get_nation_mut(game.human_player_nation).unwrap();
-        nation.treasury = Money::ZERO;
+        nation.economy.treasury = Money::ZERO;
         let json = serde_json::to_string(&game).unwrap();
 
         let result = wasm_hire_civilian(&json, game.human_player_nation.0, "Miner");

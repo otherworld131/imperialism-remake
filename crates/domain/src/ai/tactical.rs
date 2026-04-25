@@ -457,7 +457,7 @@ fn ai_build_forts(
     };
 
     // Need treasury > $5,000 to build a fort (level 1 costs $5,000)
-    if nation.treasury <= Money::dollars(5000) {
+    if nation.economy.treasury <= Money::dollars(5000) {
         return;
     }
 
@@ -582,7 +582,7 @@ fn ai_build_forts(
         Some(n) => n,
         None => return,
     };
-    if nation.treasury.checked_sub(cost).is_none() {
+    if nation.economy.treasury.checked_sub(cost).is_none() {
         return;
     }
 
@@ -591,8 +591,8 @@ fn ai_build_forts(
             let Some(nation) = game.get_nation_mut(nation_id) else {
                 return;
             };
-            nation.treasury -= cost;
-            nation.treasury.as_dollars()
+            nation.economy.treasury -= cost;
+            nation.economy.treasury.as_dollars()
         };
         game.pending_ai_cash_spending.push((
             nation_id,
@@ -960,7 +960,7 @@ mod tests {
         // Treasury should be reduced by $5,000
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
-            ai.treasury,
+            ai.economy.treasury,
             Money::dollars(15000),
             "Treasury should be reduced by $5,000 for fort"
         );
@@ -974,7 +974,7 @@ mod tests {
     #[test]
     fn ai_does_not_build_fort_when_poor() {
         let mut game = test_game_with_adjacent_provinces();
-        game.get_nation_mut(NationId(2)).unwrap().treasury = Money::dollars(3000);
+        game.get_nation_mut(NationId(2)).unwrap().economy.treasury = Money::dollars(3000);
 
         let mut actions = Vec::new();
         ai_build_forts(

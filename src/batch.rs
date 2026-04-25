@@ -142,7 +142,7 @@ fn take_snapshot(
         }
 
         let mill_buildings: Vec<&Building> = nation
-            .buildings
+            .economy.buildings
             .iter()
             .filter(|b| {
                 matches!(
@@ -152,7 +152,7 @@ fn take_snapshot(
             })
             .collect();
         let factory_buildings: Vec<&Building> = nation
-            .buildings
+            .economy.buildings
             .iter()
             .filter(|b| {
                 matches!(
@@ -170,7 +170,7 @@ fn take_snapshot(
             .iter()
             .map(|b| b.effective_capacity())
             .sum();
-        let other_buildings = nation.buildings.len() - mills - factories;
+        let other_buildings = nation.economy.buildings.len() - mills - factories;
 
         let mut alliances = 0usize;
         let mut naps = 0usize;
@@ -202,10 +202,10 @@ fn take_snapshot(
         snapshots.insert(
             nation.name.clone(),
             NationSnapshot {
-                treasury: nation.treasury.as_dollars(),
+                treasury: nation.economy.treasury.as_dollars(),
                 provinces: nation.province_count(),
                 army_size: nation.army.len(),
-                worker_count: nation.labor.total_workers(),
+                worker_count: nation.economy.labor.total_workers(),
                 mills,
                 factories,
                 total_mill_capacity,
@@ -526,7 +526,7 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
                 if price != Money::ZERO {
                     let revenue = price * excess as i64;
                     nation.remove_resource(resource, excess);
-                    nation.treasury += revenue;
+                    nation.economy.treasury += revenue;
                 }
             }
         }
@@ -539,7 +539,7 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
     };
     let treasury = game
         .get_nation(player_id)
-        .map(|n| n.treasury)
+        .map(|n| n.economy.treasury)
         .unwrap_or(Money::ZERO);
     let available = game
         .game_data
@@ -555,7 +555,7 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
         let tech_id = tech.id;
         let cost = tech.cost;
         if let Some(nation) = game.get_nation_mut(player_id) {
-            nation.treasury -= cost;
+            nation.economy.treasury -= cost;
             nation.research_tech(tech_id);
         }
     }
@@ -589,7 +589,7 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
             // Verify funds BEFORE mutating the map.
             let can_afford = game
                 .get_nation(player_id)
-                .is_some_and(|n| n.treasury.checked_sub(rr_cost).is_some());
+                .is_some_and(|n| n.economy.treasury.checked_sub(rr_cost).is_some());
             if !can_afford {
                 continue;
             }
@@ -603,7 +603,7 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
                 &cfg_snapshot,
             ) && let Some(nation) = game.get_nation_mut(player_id)
             {
-                nation.treasury -= cost;
+                nation.economy.treasury -= cost;
             }
         }
         // Build depot on first capital tile if affordable
@@ -615,7 +615,7 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
             let depot_cost = Money::dollars(cfg_snapshot.depot_cost);
             let can_afford = game
                 .get_nation(player_id)
-                .is_some_and(|n| n.treasury >= depot_cost);
+                .is_some_and(|n| n.economy.treasury >= depot_cost);
             if !has_depot
                 && can_afford
                 && let Ok(cost) = infrastructure::build_depot(
@@ -627,7 +627,7 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
                 )
                 && let Some(nation) = game.get_nation_mut(player_id)
             {
-                nation.treasury -= cost;
+                nation.economy.treasury -= cost;
             }
         }
     }
@@ -654,7 +654,7 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
             let floor_cost = Money::dollars(cfg_snapshot.railroad_cost_grassland);
             let can_afford = game
                 .get_nation(player_id)
-                .is_some_and(|n| n.treasury >= floor_cost);
+                .is_some_and(|n| n.economy.treasury >= floor_cost);
             if !can_afford {
                 break;
             }
@@ -679,7 +679,7 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
                 };
                 let can_afford_rr = game
                     .get_nation(player_id)
-                    .is_some_and(|n| n.treasury >= rr_cost);
+                    .is_some_and(|n| n.economy.treasury >= rr_cost);
                 if !can_afford_rr {
                     continue;
                 }
@@ -698,9 +698,9 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
                         &cfg_snapshot,
                     )
                     && let Some(nation) = game.get_nation_mut(player_id)
-                    && let Some(remaining) = nation.treasury.checked_sub(cost)
+                    && let Some(remaining) = nation.economy.treasury.checked_sub(cost)
                 {
-                    nation.treasury = remaining;
+                    nation.economy.treasury = remaining;
                 }
             }
             // Build depot on first tile
@@ -712,7 +712,7 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
                 let depot_cost = Money::dollars(cfg_snapshot.depot_cost);
                 let depot_affordable = game
                     .get_nation(player_id)
-                    .is_some_and(|n| n.treasury >= depot_cost);
+                    .is_some_and(|n| n.economy.treasury >= depot_cost);
                 if !has_depot
                     && depot_affordable
                     && let Ok(cost) = infrastructure::build_depot(
@@ -724,7 +724,7 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
                     )
                     && let Some(nation) = game.get_nation_mut(player_id)
                 {
-                    nation.treasury -= cost;
+                    nation.economy.treasury -= cost;
                 }
             }
         }
@@ -747,17 +747,17 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
     if let Some(nation) = game.get_nation_mut(player_id) {
         if needs_lumber_mill {
             nation
-                .buildings
+                .economy.buildings
                 .push(Building::new(BuildingType::LumberMill, 2));
         }
         if needs_steel_mill {
             nation
-                .buildings
+                .economy.buildings
                 .push(Building::new(BuildingType::SteelMill, 2));
         }
         if needs_textile_mill {
             nation
-                .buildings
+                .economy.buildings
                 .push(Building::new(BuildingType::TextileMill, 2));
         }
     }
@@ -778,17 +778,17 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
         if let Some(nation) = game.get_nation_mut(player_id) {
             if needs_furniture {
                 nation
-                    .buildings
+                    .economy.buildings
                     .push(Building::new(BuildingType::FurnitureFactory, 1));
             }
             if needs_hardware {
                 nation
-                    .buildings
+                    .economy.buildings
                     .push(Building::new(BuildingType::HardwareFactory, 1));
             }
             if needs_clothing {
                 nation
-                    .buildings
+                    .economy.buildings
                     .push(Building::new(BuildingType::ClothingFactory, 1));
             }
         }
@@ -887,7 +887,7 @@ pub(crate) fn cmd_auto(game: &mut GameState, turns: u32) {
         "  Done. Now at {} Q{}, Treasury: ${}, Score: {} (#{})",
         game.turn.year(),
         game.turn.quarter(),
-        player.treasury,
+        player.economy.treasury,
         crate::display::format_number(score.total),
         rank
     );

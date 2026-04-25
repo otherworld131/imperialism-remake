@@ -66,7 +66,7 @@ pub fn get_map_screen(game: &GameState) -> MapScreenData {
     MapScreenData {
         turn: format!("{}", game.turn),
         nation_name: nation.name.clone(),
-        treasury: format!("${}", nation.treasury.as_dollars()),
+        treasury: format!("${}", nation.economy.treasury.as_dollars()),
         province_count: nation.province_count(),
         army_count: nation.army.len(),
         civilian_count: nation.civilians.len(),
@@ -83,7 +83,7 @@ pub fn get_transport_screen(game: &GameState) -> TransportScreenData {
     let total_capacity = nation.transport.total_capacity();
 
     // Total production is the sum of all raw resources in the warehouse.
-    let total_production: u32 = nation.warehouse.values().sum();
+    let total_production: u32 = nation.economy.warehouse.values().sum();
 
     let utilization_percent = if total_capacity > 0 {
         let used = total_production.min(total_capacity);
@@ -107,7 +107,7 @@ pub fn get_industry_screen(game: &GameState) -> IndustryScreenData {
         .expect("Human player nation must exist");
 
     let buildings: Vec<(String, u32, bool)> = nation
-        .buildings
+        .economy.buildings
         .iter()
         .map(|b| {
             (
@@ -119,25 +119,25 @@ pub fn get_industry_screen(game: &GameState) -> IndustryScreenData {
         .collect();
 
     let workers = (
-        nation.labor.untrained,
-        nation.labor.trained,
-        nation.labor.expert,
+        nation.economy.labor.untrained,
+        nation.economy.labor.trained,
+        nation.economy.labor.expert,
     );
 
     // Aggregate all resources, materials, and goods into a single warehouse summary.
     let mut warehouse_summary: Vec<(String, u32)> = Vec::new();
 
-    for (resource, &amount) in &nation.warehouse {
+    for (resource, &amount) in &nation.economy.warehouse {
         if amount > 0 {
             warehouse_summary.push((format!("{:?}", resource), amount)); // ResourceType Debug names are user-friendly
         }
     }
-    for (material, &amount) in &nation.materials {
+    for (material, &amount) in &nation.economy.materials {
         if amount > 0 {
             warehouse_summary.push((format!("{}", material), amount));
         }
     }
-    for (goods, &amount) in &nation.goods {
+    for (goods, &amount) in &nation.economy.goods {
         if amount > 0 {
             warehouse_summary.push((format!("{:?}", goods), amount)); // GoodsType Debug names are user-friendly
         }
@@ -188,7 +188,7 @@ pub fn get_trade_screen(game: &GameState) -> TradeScreenData {
 
         // Available resources: what the minor nation has in its warehouse.
         let available_resources: Vec<(String, u32, String)> = minor
-            .warehouse
+            .economy.warehouse
             .iter()
             .filter(|(_, qty)| **qty > 0)
             .map(|(resource, qty)| {
@@ -334,7 +334,7 @@ mod tests {
         let nation = game.get_nation_mut(human_id).unwrap();
 
         // Clear any starting warehouse contents to get a clean baseline
-        nation.warehouse.clear();
+        nation.economy.warehouse.clear();
 
         // Reset freight cars and build exactly 10 for a clean test
         nation.transport.freight_cars = 0;
@@ -377,7 +377,7 @@ mod tests {
         let human = game.get_nation(game.human_player_nation).unwrap();
 
         // The number of buildings in the query output should match the nation
-        assert_eq!(data.buildings.len(), human.buildings.len());
+        assert_eq!(data.buildings.len(), human.economy.buildings.len());
         assert!(!data.buildings.is_empty());
 
         // All fixed buildings should be present on Normal difficulty:

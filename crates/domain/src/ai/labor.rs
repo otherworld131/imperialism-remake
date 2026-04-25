@@ -17,7 +17,7 @@ pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
         None => return,
     };
 
-    let total_workers = nation.labor.total_workers();
+    let total_workers = nation.economy.labor.total_workers();
     let grain = nation.resource_amount(ResourceType::Grain);
     let fruit = nation.resource_amount(ResourceType::Fruit);
     let livestock = nation.resource_amount(ResourceType::Livestock);
@@ -25,7 +25,7 @@ pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
 
     // Scale max workers with province count (2 per province, min 5)
     // Wealthy nations invest in workforce growth (3 per province)
-    let workers_per_province: u32 = if nation.treasury > Money::dollars(20_000) {
+    let workers_per_province: u32 = if nation.economy.treasury > Money::dollars(20_000) {
         3
     } else {
         2
@@ -42,7 +42,7 @@ pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
         } else if nation.resource_amount(ResourceType::Livestock) > 0 {
             nation.remove_resource(ResourceType::Livestock, 1);
         }
-        nation.labor.recruit_immigrant();
+        nation.economy.labor.recruit_immigrant();
     }
 }
 
@@ -55,7 +55,7 @@ fn ai_process_food(game: &mut GameState, nation_id: NationId) {
     };
 
     let food_processing_cap = nation
-        .buildings
+        .economy.buildings
         .iter()
         .find(|b| b.building_type == BuildingType::FoodProcessing)
         .map(|b| b.effective_capacity())
@@ -71,7 +71,7 @@ fn ai_process_food(game: &mut GameState, nation_id: NationId) {
     let total_raw = grain + fruit + livestock;
 
     // Only process if we have excess food beyond worker needs
-    let workers = nation.labor.total_workers();
+    let workers = nation.economy.labor.total_workers();
     if total_raw <= workers {
         return; // Don't process food we need to eat
     }
@@ -135,12 +135,12 @@ fn ai_hire_civilians(game: &mut GameState, nation_id: NationId) {
     };
 
     let civilian_count = nation.civilians.len();
-    let treasury = nation.treasury;
+    let treasury = nation.economy.treasury;
 
     // Rule 1: If < 2 civilians and treasury > $1,000, hire a Farmer
     if civilian_count < 2 && treasury > Money::dollars(1000) {
         let cost = CivilianType::Farmer.creation_cost(&cfg);
-        nation.treasury -= cost;
+        nation.economy.treasury -= cost;
         let farmer = Civilian::new(next_civilian_id(), CivilianType::Farmer, nation_id);
         nation.civilians.push(farmer);
         return; // Only hire one per turn
@@ -160,8 +160,8 @@ fn ai_hire_civilians(game: &mut GameState, nation_id: NationId) {
         };
 
         let cost = civ_type.creation_cost(&cfg);
-        if let Some(remaining) = nation.treasury.checked_sub(cost) {
-            nation.treasury = remaining;
+        if let Some(remaining) = nation.economy.treasury.checked_sub(cost) {
+            nation.economy.treasury = remaining;
             let civilian = Civilian::new(next_civilian_id(), civ_type, nation_id);
             nation.civilians.push(civilian);
         }
@@ -325,7 +325,7 @@ pub(crate) fn ai_train_and_promote_workers(game: &mut GameState, nation_id: Nati
         None => return,
     };
 
-    let untrained = nation.labor.untrained;
+    let untrained = nation.economy.labor.untrained;
     let has_paper = nation.material_amount(MaterialType::Paper) > 0;
 
     // Train one untrained worker if above threshold
@@ -337,7 +337,7 @@ pub(crate) fn ai_train_and_promote_workers(game: &mut GameState, nation_id: Nati
         if has_paper {
             nation.consume_material(MaterialType::Paper, 1);
         }
-        nation.labor.train_worker();
+        nation.economy.labor.train_worker();
     }
 
     // Re-read state after potential training
@@ -347,11 +347,11 @@ pub(crate) fn ai_train_and_promote_workers(game: &mut GameState, nation_id: Nati
     };
 
     // Promote one trained worker to expert if above threshold
-    if nation.labor.trained > promote_threshold {
+    if nation.economy.labor.trained > promote_threshold {
         let Some(nation) = game.get_nation_mut(nation_id) else {
             return;
         };
-        nation.labor.promote_worker();
+        nation.economy.labor.promote_worker();
     }
 }
 
@@ -377,7 +377,7 @@ mod tests {
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
-            ai.labor.total_workers(),
+            ai.economy.labor.total_workers(),
             1,
             "AI should recruit 1 worker when workforce < 5 and food available"
         );
@@ -392,14 +392,14 @@ mod tests {
     fn ai_does_not_recruit_when_workforce_at_five() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.labor.untrained = 5;
+        ai.economy.labor.untrained = 5;
         ai.add_resource(ResourceType::Grain, 5);
 
         run_ai_turns(&mut game);
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
-            ai.labor.total_workers(),
+            ai.economy.labor.total_workers(),
             5,
             "AI should not recruit when it already has 5 workers"
         );
@@ -419,7 +419,7 @@ mod tests {
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
-            ai.labor.total_workers(),
+            ai.economy.labor.total_workers(),
             0,
             "AI should not recruit without food"
         );
@@ -431,7 +431,7 @@ mod tests {
     fn ai_hires_farmer_when_few_civilians_and_can_afford() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.treasury = Money::dollars(5000);
+        ai.economy.treasury = Money::dollars(5000);
         ai.civilians.clear(); // Start with 0 civilians
 
         ai_manage_civilians(&mut game, NationId(2));
@@ -444,7 +444,7 @@ mod tests {
         );
         assert_eq!(ai.civilians[0].civilian_type, CivilianType::Farmer);
         assert_eq!(
-            ai.treasury,
+            ai.economy.treasury,
             Money::dollars(4900),
             "Treasury should be reduced by $100 (Farmer cost)"
         );
@@ -454,7 +454,7 @@ mod tests {
     fn ai_does_not_hire_civilian_when_too_poor() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.treasury = Money::dollars(500); // Below $1,000 threshold
+        ai.economy.treasury = Money::dollars(500); // Below $1,000 threshold
         ai.civilians.clear(); // Start with 0 civilians
 
         ai_manage_civilians(&mut game, NationId(2));
@@ -470,7 +470,7 @@ mod tests {
     fn ai_hires_forester_when_has_two_civilians_and_enough_money() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.treasury = Money::dollars(5000);
+        ai.economy.treasury = Money::dollars(5000);
         ai.civilians.clear();
         // Give AI 2 existing civilians (both farmers)
         ai.civilians.push(Civilian::new(
@@ -503,7 +503,7 @@ mod tests {
     fn ai_hires_miner_when_already_has_forester() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.treasury = Money::dollars(5000);
+        ai.economy.treasury = Money::dollars(5000);
         ai.civilians.clear();
         // Give AI 2 existing civilians including a forester
         ai.civilians.push(Civilian::new(
@@ -526,7 +526,7 @@ mod tests {
             CivilianType::Miner,
             "Should hire Miner when Forester already exists"
         );
-        assert_eq!(ai.treasury, Money::dollars(3500), "Miner costs $1,500");
+        assert_eq!(ai.economy.treasury, Money::dollars(3500), "Miner costs $1,500");
     }
 
     #[test]
@@ -541,7 +541,7 @@ mod tests {
 
         // Give AI a Farmer civilian (idle), clear pre-populated ones
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.treasury = Money::dollars(500); // Not enough for hiring
+        ai.economy.treasury = Money::dollars(500); // Not enough for hiring
         ai.civilians.clear();
         ai.civilians.push(Civilian::new(
             UnitId(950),
@@ -582,7 +582,7 @@ mod tests {
 
         // Give AI a Farmer civilian (idle), clear pre-populated ones
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.treasury = Money::dollars(500);
+        ai.economy.treasury = Money::dollars(500);
         ai.civilians.clear();
         ai.civilians.push(Civilian::new(
             UnitId(960),
@@ -610,18 +610,18 @@ mod tests {
     fn ai_trains_worker_when_many_untrained() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.labor.untrained = 5; // > 3 threshold
-        ai.labor.trained = 0;
+        ai.economy.labor.untrained = 5; // > 3 threshold
+        ai.economy.labor.trained = 0;
         ai.add_material(MaterialType::Paper, 2);
 
         ai_train_and_promote_workers(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
-            ai.labor.untrained, 4,
+            ai.economy.labor.untrained, 4,
             "Should have trained 1 untrained worker"
         );
-        assert_eq!(ai.labor.trained, 1, "Should have 1 trained worker");
+        assert_eq!(ai.economy.labor.trained, 1, "Should have 1 trained worker");
         assert_eq!(
             ai.material_amount(MaterialType::Paper),
             1,
@@ -633,18 +633,18 @@ mod tests {
     fn ai_does_not_train_when_at_threshold() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.labor.untrained = 1; // at default threshold (1), not above
-        ai.labor.trained = 0;
+        ai.economy.labor.untrained = 1; // at default threshold (1), not above
+        ai.economy.labor.trained = 0;
         ai.add_material(MaterialType::Paper, 2);
 
         ai_train_and_promote_workers(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
-            ai.labor.untrained, 1,
+            ai.economy.labor.untrained, 1,
             "Should not train when untrained <= threshold"
         );
-        assert_eq!(ai.labor.trained, 0);
+        assert_eq!(ai.economy.labor.trained, 0);
         assert_eq!(
             ai.material_amount(MaterialType::Paper),
             2,
@@ -656,71 +656,71 @@ mod tests {
     fn ai_promotes_worker_when_many_trained() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.labor.untrained = 0;
-        ai.labor.trained = 5; // > 3 threshold
-        ai.labor.expert = 0;
+        ai.economy.labor.untrained = 0;
+        ai.economy.labor.trained = 5; // > 3 threshold
+        ai.economy.labor.expert = 0;
 
         ai_train_and_promote_workers(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(ai.labor.trained, 4, "Should have promoted 1 trained worker");
-        assert_eq!(ai.labor.expert, 1, "Should have 1 expert worker");
+        assert_eq!(ai.economy.labor.trained, 4, "Should have promoted 1 trained worker");
+        assert_eq!(ai.economy.labor.expert, 1, "Should have 1 expert worker");
     }
 
     #[test]
     fn ai_does_not_promote_when_at_threshold() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.labor.untrained = 0;
-        ai.labor.trained = 2; // at default promote threshold (2)
-        ai.labor.expert = 0;
+        ai.economy.labor.untrained = 0;
+        ai.economy.labor.trained = 2; // at default promote threshold (2)
+        ai.economy.labor.expert = 0;
 
         ai_train_and_promote_workers(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
-            ai.labor.trained, 2,
+            ai.economy.labor.trained, 2,
             "Should not promote when trained <= threshold"
         );
-        assert_eq!(ai.labor.expert, 0);
+        assert_eq!(ai.economy.labor.expert, 0);
     }
 
     #[test]
     fn ai_trains_without_paper_available() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.labor.untrained = 5;
-        ai.labor.trained = 0;
+        ai.economy.labor.untrained = 5;
+        ai.economy.labor.trained = 0;
         // No paper available
 
         ai_train_and_promote_workers(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
-            ai.labor.untrained, 4,
+            ai.economy.labor.untrained, 4,
             "Should still train even without paper"
         );
-        assert_eq!(ai.labor.trained, 1);
+        assert_eq!(ai.economy.labor.trained, 1);
     }
 
     #[test]
     fn ai_trains_and_promotes_in_same_turn() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.labor.untrained = 5;
-        ai.labor.trained = 4; // will be 5 after training
-        ai.labor.expert = 0;
+        ai.economy.labor.untrained = 5;
+        ai.economy.labor.trained = 4; // will be 5 after training
+        ai.economy.labor.expert = 0;
         ai.add_material(MaterialType::Paper, 1);
 
         ai_train_and_promote_workers(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(ai.labor.untrained, 4, "Trained 1 untrained");
+        assert_eq!(ai.economy.labor.untrained, 4, "Trained 1 untrained");
         // trained: was 4, +1 from training = 5, -1 from promotion = 4
         assert_eq!(
-            ai.labor.trained, 4,
+            ai.economy.labor.trained, 4,
             "Net trained stays same (trained+1, promoted-1)"
         );
-        assert_eq!(ai.labor.expert, 1, "Promoted 1 to expert");
+        assert_eq!(ai.economy.labor.expert, 1, "Promoted 1 to expert");
     }
 }

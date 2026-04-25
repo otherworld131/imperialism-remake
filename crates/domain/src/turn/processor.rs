@@ -154,8 +154,8 @@ impl TurnReport {
             None => return format!("Turn {} ({})", self.turn.0, self.turn),
         };
 
-        let treasury = player.treasury.as_dollars();
-        let workers = player.labor.total_workers();
+        let treasury = player.economy.treasury.as_dollars();
+        let workers = player.economy.labor.total_workers();
         let army = player.army.len();
         let provinces = player.province_count();
 
@@ -295,7 +295,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     game.pending_ai_cash_spending.clear();
     game.pending_ai_cash_income.clear();
     for nation in &game.nations {
-        report.opening_treasury.insert(nation.id, nation.treasury);
+        report.opening_treasury.insert(nation.id, nation.economy.treasury);
     }
 
     // 0. AI decisions for computer-controlled Great Powers
@@ -451,7 +451,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     report.ai_cash_spending = std::mem::take(&mut game.pending_ai_cash_spending);
     report.ai_goods_sale_revenue = std::mem::take(&mut game.pending_ai_cash_income);
     for nation in &game.nations {
-        report.closing_treasury.insert(nation.id, nation.treasury);
+        report.closing_treasury.insert(nation.id, nation.economy.treasury);
     }
     finalize_cash_flow(game, &mut report);
     finalize_resource_flow(game, &mut report);
@@ -486,9 +486,9 @@ fn finalize_cash_flow(game: &mut GameState, report: &mut TurnReport) {
         let opening = *report
             .opening_treasury
             .get(&nation.id)
-            .unwrap_or(&nation.treasury);
+            .unwrap_or(&nation.economy.treasury);
         let mut flow = CashFlow::new(opening);
-        flow.closing_treasury = nation.treasury;
+        flow.closing_treasury = nation.economy.treasury;
         flows.insert(nation.id, flow);
     }
 
@@ -999,7 +999,7 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
         let fruit = nation.resource_amount(ResourceType::Fruit);
         let livestock = nation.resource_amount(ResourceType::Livestock);
         let total_food = grain + fruit + livestock;
-        let total_workers = nation.labor.total_workers();
+        let total_workers = nation.economy.labor.total_workers();
 
         if total_food <= total_workers {
             continue; // no food surplus
@@ -1007,7 +1007,7 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
 
         // Immigration limit: 1 per 4 provinces, or 1 per 3 if Capitol expanded
         let capitol_expanded = nation
-            .buildings
+            .economy.buildings
             .iter()
             .find(|b| b.building_type == BuildingType::Capitol)
             .map(|b| b.effective_capacity() > 1)
@@ -1055,7 +1055,7 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
             nation.consume_material(MaterialType::CannedFood, req_canned);
             nation.consume_goods(GoodsType::Clothing, req_clothing);
             nation.consume_goods(GoodsType::Furniture, req_furniture);
-            nation.labor.recruit_immigrant();
+            nation.economy.labor.recruit_immigrant();
             recruited += 1;
         }
 
@@ -1074,8 +1074,8 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
         if !nation.is_great_power() {
             continue;
         }
-        if nation.labor.total_workers() == 0 {
-            nation.labor.recruit_immigrant();
+        if nation.economy.labor.total_workers() == 0 {
+            nation.economy.labor.recruit_immigrant();
             report.immigration.push((nation_id, 1));
         }
     }
@@ -1364,7 +1364,7 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
                             // at order time, but a treasury drop between order
                             // and completion would otherwise leave us unable
                             // to stop the build. Report the charge either way.
-                            nation.treasury -= cost;
+                            nation.economy.treasury -= cost;
                         }
                         if cost != Money::ZERO {
                             report.construction_spending.push((work.nation_id, cost));
@@ -1484,7 +1484,7 @@ fn convert_monetary_resources(game: &mut GameState, report: &mut TurnReport) {
         }
 
         if income != Money::ZERO {
-            nation.treasury += income;
+            nation.economy.treasury += income;
             report.gold_income.push((nation.id, income));
         }
     }
@@ -1514,19 +1514,19 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
 
         // Gather current resource inventory as slices
         let resources: Vec<(ResourceType, u32)> =
-            nation.warehouse.iter().map(|(r, q)| (*r, *q)).collect();
+            nation.economy.warehouse.iter().map(|(r, q)| (*r, *q)).collect();
 
         // Labor is a shared pool across all production this turn
         let mut remaining_labor =
             nation
-                .labor
+                .economy.labor
                 .total_labor_units_with(untrained_mult, trained_mult, expert_mult);
 
         // ── Mills: resources → materials (consume labor first) ──
 
         // Timber chain: LumberMill
         let lumber_mill_cap = nation
-            .buildings
+            .economy.buildings
             .iter()
             .find(|b| b.building_type == BuildingType::LumberMill)
             .map(|b| b.effective_capacity())
@@ -1547,7 +1547,7 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
 
         // Metal chain: SteelMill
         let steel_mill_cap = nation
-            .buildings
+            .economy.buildings
             .iter()
             .find(|b| b.building_type == BuildingType::SteelMill)
             .map(|b| b.effective_capacity())
@@ -1568,7 +1568,7 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
 
         // Textile chain: TextileMill
         let textile_mill_cap = nation
-            .buildings
+            .economy.buildings
             .iter()
             .find(|b| b.building_type == BuildingType::TextileMill)
             .map(|b| b.effective_capacity())
@@ -1606,7 +1606,7 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
             // Produce materials
             for (material, amount) in &result.materials_produced {
                 if *amount > 0 {
-                    *nation.materials.entry(*material).or_insert(0) += *amount;
+                    *nation.economy.materials.entry(*material).or_insert(0) += *amount;
                     new_materials.push((*material, *amount));
                     report
                         .production_output
@@ -1619,11 +1619,11 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
 
         // Build the current materials inventory for factory input
         let materials_inventory: Vec<(MaterialType, u32)> =
-            nation.materials.iter().map(|(m, q)| (*m, *q)).collect();
+            nation.economy.materials.iter().map(|(m, q)| (*m, *q)).collect();
 
         // Furniture: LumberMill output → FurnitureFactory
         let furniture_cap = nation
-            .buildings
+            .economy.buildings
             .iter()
             .find(|b| b.building_type == BuildingType::FurnitureFactory)
             .map(|b| b.effective_capacity())
@@ -1644,7 +1644,7 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
 
         // Hardware: SteelMill output → HardwareFactory
         let hardware_cap = nation
-            .buildings
+            .economy.buildings
             .iter()
             .find(|b| b.building_type == BuildingType::HardwareFactory)
             .map(|b| b.effective_capacity())
@@ -1665,7 +1665,7 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
 
         // Clothing: TextileMill output → ClothingFactory
         let clothing_cap = nation
-            .buildings
+            .economy.buildings
             .iter()
             .find(|b| b.building_type == BuildingType::ClothingFactory)
             .map(|b| b.effective_capacity())
@@ -1692,14 +1692,14 @@ fn run_production(game: &mut GameState, report: &mut TurnReport) {
             // Consume materials
             for (material, amount) in &result.materials_consumed {
                 if *amount > 0 {
-                    let entry = nation.materials.entry(*material).or_insert(0);
+                    let entry = nation.economy.materials.entry(*material).or_insert(0);
                     *entry = entry.saturating_sub(*amount);
                 }
             }
             // Produce goods
             for (good, amount) in &result.goods_produced {
                 if *amount > 0 {
-                    *nation.goods.entry(*good).or_insert(0) += *amount;
+                    *nation.economy.goods.entry(*good).or_insert(0) += *amount;
                     report
                         .production_output
                         .push((nation_id, format!("{:?}", good), *amount));
@@ -1860,7 +1860,7 @@ fn resolve_town_production(game: &mut GameState, report: &mut TurnReport) {
 /// Tick all buildings for all nations, advancing expansion timers.
 fn tick_buildings(game: &mut GameState) {
     for nation in &mut game.nations {
-        for building in &mut nation.buildings {
+        for building in &mut nation.economy.buildings {
             building.tick();
         }
     }
@@ -1881,12 +1881,12 @@ fn process_food(game: &mut GameState, report: &mut TurnReport) {
         };
 
         // Don't process food if there are no workers to feed
-        if nation.labor.total_workers() == 0 {
+        if nation.economy.labor.total_workers() == 0 {
             continue;
         }
 
         let food_processing_cap = nation
-            .buildings
+            .economy.buildings
             .iter()
             .find(|b| b.building_type == BuildingType::FoodProcessing)
             .map(|b| b.effective_capacity())
@@ -1903,7 +1903,7 @@ fn process_food(game: &mut GameState, report: &mut TurnReport) {
 
         // Reserve raw food for worker consumption (runs next step).
         // Only convert surplus beyond what workers need to eat.
-        let workers = nation.labor.total_workers();
+        let workers = nation.economy.labor.total_workers();
         let food_after_workers = total_raw_food.saturating_sub(workers);
 
         if food_after_workers < 2 {
@@ -1960,7 +1960,7 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
         if nation.is_in_anarchy {
             continue;
         }
-        let population = nation.labor.total_workers();
+        let population = nation.economy.labor.total_workers();
         if population == 0 {
             continue;
         }
@@ -2026,7 +2026,7 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
 
             let mut actual_lost = 0;
             for _ in 0..workers_lost {
-                if nation.labor.remove_worker() {
+                if nation.economy.labor.remove_worker() {
                     actual_lost += 1;
                 }
             }
@@ -2063,7 +2063,7 @@ fn resolve_trade_session(
         for (target_id, cost) in subsidies {
             if cost != Money::ZERO {
                 if let Some(nation) = game.get_nation_mut(*gp_id) {
-                    nation.treasury -= cost;
+                    nation.economy.treasury -= cost;
                 }
                 report.subsidy_costs.push((*gp_id, target_id, cost));
             }
@@ -2102,7 +2102,7 @@ fn resolve_trade_session(
         for order in &sell_orders {
             match order.commodity {
                 trade::Commodity::Material(m) => {
-                    let stock = human.materials.get(&m).copied().unwrap_or(0);
+                    let stock = human.economy.materials.get(&m).copied().unwrap_or(0);
                     let qty = order.quantity.min(stock);
                     if qty > 0 {
                         let price = trade::material_price(m, &cfg);
@@ -2112,7 +2112,7 @@ fn resolve_trade_session(
                     }
                 }
                 trade::Commodity::Goods(g) => {
-                    let stock = human.goods.get(&g).copied().unwrap_or(0);
+                    let stock = human.economy.goods.get(&g).copied().unwrap_or(0);
                     let qty = order.quantity.min(stock);
                     if qty > 0 {
                         let price = trade::goods_price(g, &cfg);
@@ -2126,7 +2126,7 @@ fn resolve_trade_session(
         }
         // Apply material/goods sales
         if let Some(human) = game.get_nation_mut(human_id) {
-            human.treasury += player_goods_revenue;
+            human.economy.treasury += player_goods_revenue;
             human.goods_sales_revenue_dollars += player_goods_revenue.as_dollars();
             if player_goods_revenue != Money::ZERO {
                 report
@@ -2136,12 +2136,12 @@ fn resolve_trade_session(
             for (commodity, qty, _revenue) in &goods_sold {
                 match commodity {
                     trade::Commodity::Material(m) => {
-                        if let Some(stock) = human.materials.get_mut(m) {
+                        if let Some(stock) = human.economy.materials.get_mut(m) {
                             *stock = stock.saturating_sub(*qty);
                         }
                     }
                     trade::Commodity::Goods(g) => {
-                        if let Some(stock) = human.goods.get_mut(g) {
+                        if let Some(stock) = human.economy.goods.get_mut(g) {
                             *stock = stock.saturating_sub(*qty);
                         }
                     }
@@ -2224,11 +2224,11 @@ fn resolve_trade_session(
     for txn in &transactions {
         // Buyer pays money and receives resources
         if let Some(buyer) = game.get_nation_mut(txn.buyer) {
-            buyer.treasury -= txn.total_cost;
+            buyer.economy.treasury -= txn.total_cost;
             buyer.add_resource(txn.resource, txn.quantity);
         }
         if let Some(seller) = game.get_nation_mut(txn.seller) {
-            seller.treasury += txn.total_cost;
+            seller.economy.treasury += txn.total_cost;
         }
     }
 
@@ -2341,16 +2341,16 @@ fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
             .map(|u| u.maintenance_cost())
             .fold(Money::ZERO, |acc, c| acc + c);
         if total_cost != Money::ZERO {
-            nation.treasury -= total_cost;
+            nation.economy.treasury -= total_cost;
             report.maintenance_costs.push((nation.id, total_cost));
         }
 
         // Bankruptcy protection: treasury cannot go below $0. The clamp
         // represents debt forgiven mid-turn — we surface it as income in the
         // cash-flow ledger so the reconciliation invariant closes.
-        if nation.treasury < BANKRUPTCY_FLOOR {
-            let writeoff = Money::from_cents(BANKRUPTCY_FLOOR.cents() - nation.treasury.cents());
-            nation.treasury = BANKRUPTCY_FLOOR;
+        if nation.economy.treasury < BANKRUPTCY_FLOOR {
+            let writeoff = Money::from_cents(BANKRUPTCY_FLOOR.cents() - nation.economy.treasury.cents());
+            nation.economy.treasury = BANKRUPTCY_FLOOR;
             if writeoff > Money::ZERO {
                 report.bankruptcy_writeoff.push((nation.id, writeoff));
             }
@@ -5882,7 +5882,7 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
             None => continue,
         };
 
-        let expert_count = nation.labor.expert;
+        let expert_count = nation.economy.labor.expert;
         let already_earned = nation.expert_rewards_earned;
 
         // Determine how many rewards should have been earned by now
@@ -6111,7 +6111,7 @@ fn check_council_vote(game: &GameState, report: &mut TurnReport) {
 fn apply_warehouse_caps(game: &mut GameState) {
     for nation in &mut game.nations {
         let warehouse_capacity = nation
-            .buildings
+            .economy.buildings
             .iter()
             .find(|b| b.building_type == BuildingType::Warehouse)
             .map(|b| b.effective_capacity())
@@ -6121,19 +6121,19 @@ fn apply_warehouse_caps(game: &mut GameState) {
         let material_cap = 50 * warehouse_capacity;
         let goods_cap = 25 * warehouse_capacity;
 
-        for amount in nation.warehouse.values_mut() {
+        for amount in nation.economy.warehouse.values_mut() {
             if *amount > raw_cap {
                 *amount = raw_cap;
             }
         }
 
-        for amount in nation.materials.values_mut() {
+        for amount in nation.economy.materials.values_mut() {
             if *amount > material_cap {
                 *amount = material_cap;
             }
         }
 
-        for amount in nation.goods.values_mut() {
+        for amount in nation.economy.goods.values_mut() {
             if *amount > goods_cap {
                 *amount = goods_cap;
             }
@@ -6192,7 +6192,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation1.treasury = Money::dollars(1000);
+        nation1.economy.treasury = Money::dollars(1000);
 
         GameState {
             turn: TurnNumber::new(1),
@@ -6253,7 +6253,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation1.treasury = Money::dollars(2000);
+        nation1.economy.treasury = Money::dollars(2000);
 
         GameState {
             turn: TurnNumber::new(1),
@@ -6359,14 +6359,14 @@ mod tests {
     #[test]
     fn gold_converts_to_money() {
         let mut game = test_game_state_with_gold();
-        let initial_treasury = game.get_nation(NationId(1)).unwrap().treasury;
+        let initial_treasury = game.get_nation(NationId(1)).unwrap().economy.treasury;
 
         let report = process_turn(&mut game);
 
         let nation = game.get_nation(NationId(1)).unwrap();
 
         // 1 Gold collected => $500 added to treasury
-        assert_eq!(nation.treasury, initial_treasury + Money::dollars(500));
+        assert_eq!(nation.economy.treasury, initial_treasury + Money::dollars(500));
 
         // Gold should have been removed from warehouse
         assert_eq!(nation.resource_amount(ResourceType::Gold), 0);
@@ -6385,14 +6385,14 @@ mod tests {
             .unwrap()
             .add_resource(ResourceType::Gems, 3);
 
-        let initial_treasury = game.get_nation(NationId(1)).unwrap().treasury;
+        let initial_treasury = game.get_nation(NationId(1)).unwrap().economy.treasury;
 
         let report = process_turn(&mut game);
 
         let nation = game.get_nation(NationId(1)).unwrap();
 
         // 3 Gems => $3,000
-        assert_eq!(nation.treasury, initial_treasury + Money::dollars(3000));
+        assert_eq!(nation.economy.treasury, initial_treasury + Money::dollars(3000));
         assert_eq!(nation.resource_amount(ResourceType::Gems), 0);
         assert!(!report.gold_income.is_empty());
     }
@@ -6623,7 +6623,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation.treasury = Money::dollars(500);
+        nation.economy.treasury = Money::dollars(500);
 
         let mut game = GameState {
             turn: TurnNumber::new(1),
@@ -6658,7 +6658,7 @@ mod tests {
         assert!(report.gold_income.is_empty());
 
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.treasury, Money::dollars(500)); // unchanged
+        assert_eq!(nation.economy.treasury, Money::dollars(500)); // unchanged
     }
 
     // ── Gold + Gems combined ──────────────────────────────────
@@ -6669,13 +6669,13 @@ mod tests {
         let nation = game.get_nation_mut(NationId(1)).unwrap();
         nation.add_resource(ResourceType::Gold, 2);
         nation.add_resource(ResourceType::Gems, 1);
-        let initial = nation.treasury;
+        let initial = nation.economy.treasury;
 
         let _report = process_turn(&mut game);
 
         let nation = game.get_nation(NationId(1)).unwrap();
         // 2 Gold = $1,000, 1 Gems = $1,000 => $2,000 total
-        assert_eq!(nation.treasury, initial + Money::dollars(2000));
+        assert_eq!(nation.economy.treasury, initial + Money::dollars(2000));
         assert_eq!(nation.resource_amount(ResourceType::Gold), 0);
         assert_eq!(nation.resource_amount(ResourceType::Gems), 0);
     }
@@ -6705,29 +6705,29 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation.treasury = Money::dollars(5000);
+        nation.economy.treasury = Money::dollars(5000);
 
         // Give enough workers for full production (expert=4 labor each)
-        nation.labor.expert = 5; // 20 labor — enough for all mills + factories
+        nation.economy.labor.expert = 5; // 20 labor — enough for all mills + factories
 
         // Add mills and factories
         nation
-            .buildings
+            .economy.buildings
             .push(Building::new(BuildingType::LumberMill, 2));
         nation
-            .buildings
+            .economy.buildings
             .push(Building::new(BuildingType::SteelMill, 2));
         nation
-            .buildings
+            .economy.buildings
             .push(Building::new(BuildingType::TextileMill, 2));
         nation
-            .buildings
+            .economy.buildings
             .push(Building::new(BuildingType::FurnitureFactory, 1));
         nation
-            .buildings
+            .economy.buildings
             .push(Building::new(BuildingType::HardwareFactory, 1));
         nation
-            .buildings
+            .economy.buildings
             .push(Building::new(BuildingType::ClothingFactory, 1));
 
         GameState {
@@ -6774,7 +6774,7 @@ mod tests {
         // Net lumber: 2 - 2 = 0
         assert_eq!(
             nation
-                .materials
+                .economy.materials
                 .get(&MaterialType::Lumber)
                 .copied()
                 .unwrap_or(0),
@@ -6785,7 +6785,7 @@ mod tests {
         // Furniture produced by factory
         assert_eq!(
             nation
-                .goods
+                .economy.goods
                 .get(&GoodsType::Furniture)
                 .copied()
                 .unwrap_or(0),
@@ -6817,7 +6817,7 @@ mod tests {
         // Net steel: 2 - 2 = 0
         assert_eq!(
             nation
-                .materials
+                .economy.materials
                 .get(&MaterialType::Steel)
                 .copied()
                 .unwrap_or(0),
@@ -6828,7 +6828,7 @@ mod tests {
         assert_eq!(nation.resource_amount(ResourceType::Iron), 1);
         // Hardware produced
         assert_eq!(
-            nation.goods.get(&GoodsType::Hardware).copied().unwrap_or(0),
+            nation.economy.goods.get(&GoodsType::Hardware).copied().unwrap_or(0),
             1
         );
 
@@ -6855,7 +6855,7 @@ mod tests {
         // Net fabric: 2 - 2 = 0
         assert_eq!(
             nation
-                .materials
+                .economy.materials
                 .get(&MaterialType::Fabric)
                 .copied()
                 .unwrap_or(0),
@@ -6864,7 +6864,7 @@ mod tests {
         assert_eq!(nation.resource_amount(ResourceType::Cotton), 0);
         // Clothing produced
         assert_eq!(
-            nation.goods.get(&GoodsType::Clothing).copied().unwrap_or(0),
+            nation.economy.goods.get(&GoodsType::Clothing).copied().unwrap_or(0),
             1
         );
 
@@ -6882,7 +6882,7 @@ mod tests {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
         // Pre-stock lumber (bypassing mill)
-        *nation.materials.entry(MaterialType::Lumber).or_insert(0) = 4;
+        *nation.economy.materials.entry(MaterialType::Lumber).or_insert(0) = 4;
 
         let report = process_turn(&mut game);
 
@@ -6890,7 +6890,7 @@ mod tests {
         // Factory capacity 1, 4 lumber / 2 per unit = 2, limited by capacity = 1
         assert_eq!(
             nation
-                .goods
+                .economy.goods
                 .get(&GoodsType::Furniture)
                 .copied()
                 .unwrap_or(0),
@@ -6899,7 +6899,7 @@ mod tests {
         // 4 - 2 consumed = 2 lumber remaining
         assert_eq!(
             nation
-                .materials
+                .economy.materials
                 .get(&MaterialType::Lumber)
                 .copied()
                 .unwrap_or(0),
@@ -6919,19 +6919,19 @@ mod tests {
     fn hardware_factory_produces_from_steel() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        *nation.materials.entry(MaterialType::Steel).or_insert(0) = 4;
+        *nation.economy.materials.entry(MaterialType::Steel).or_insert(0) = 4;
 
         let report = process_turn(&mut game);
 
         let nation = game.get_nation(NationId(1)).unwrap();
         // Factory capacity 1, 4 steel / 2 = 2, limited by capacity = 1
         assert_eq!(
-            nation.goods.get(&GoodsType::Hardware).copied().unwrap_or(0),
+            nation.economy.goods.get(&GoodsType::Hardware).copied().unwrap_or(0),
             1
         );
         assert_eq!(
             nation
-                .materials
+                .economy.materials
                 .get(&MaterialType::Steel)
                 .copied()
                 .unwrap_or(0),
@@ -6951,19 +6951,19 @@ mod tests {
     fn clothing_factory_produces_from_fabric() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        *nation.materials.entry(MaterialType::Fabric).or_insert(0) = 6;
+        *nation.economy.materials.entry(MaterialType::Fabric).or_insert(0) = 6;
 
         let report = process_turn(&mut game);
 
         let nation = game.get_nation(NationId(1)).unwrap();
         // Factory capacity 1, 6 fabric / 2 = 3, limited by capacity = 1
         assert_eq!(
-            nation.goods.get(&GoodsType::Clothing).copied().unwrap_or(0),
+            nation.economy.goods.get(&GoodsType::Clothing).copied().unwrap_or(0),
             1
         );
         assert_eq!(
             nation
-                .materials
+                .economy.materials
                 .get(&MaterialType::Fabric)
                 .copied()
                 .unwrap_or(0),
@@ -6994,7 +6994,7 @@ mod tests {
         assert_eq!(nation.resource_amount(ResourceType::Timber), 4);
         assert_eq!(
             nation
-                .materials
+                .economy.materials
                 .get(&MaterialType::Lumber)
                 .copied()
                 .unwrap_or(0),
@@ -7002,7 +7002,7 @@ mod tests {
         );
         assert_eq!(
             nation
-                .goods
+                .economy.goods
                 .get(&GoodsType::Furniture)
                 .copied()
                 .unwrap_or(0),
@@ -7065,7 +7065,7 @@ mod tests {
         let mut game = test_game_state();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
         nation.add_resource(ResourceType::Grain, 10);
-        nation.labor.untrained = 3; // 3 workers need 3 food
+        nation.economy.labor.untrained = 3; // 3 workers need 3 food
 
         let report = process_turn(&mut game);
 
@@ -7086,8 +7086,8 @@ mod tests {
     fn food_consumption_uses_fruit_and_livestock() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        nation.labor = LaborPool::new();
-        nation.labor.untrained = 5; // 5 workers need 5 food
+        nation.economy.labor = LaborPool::new();
+        nation.economy.labor.untrained = 5; // 5 workers need 5 food
         nation.add_resource(ResourceType::Grain, 2);
         nation.add_resource(ResourceType::Fruit, 2);
         nation.add_resource(ResourceType::Livestock, 3);
@@ -7129,15 +7129,15 @@ mod tests {
     fn food_consumption_starvation_kills_workers() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        nation.labor = LaborPool::new();
-        nation.labor.untrained = 5; // 5 workers need 5 food
+        nation.economy.labor = LaborPool::new();
+        nation.economy.labor.untrained = 5; // 5 workers need 5 food
         nation.add_resource(ResourceType::Grain, 2); // only 2 food available
 
         let report = process_turn(&mut game);
 
         // Deficit = 5 - 2 = 3, capped at 2 deaths per turn
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.labor.total_workers(), 3); // 5 - 2 = 3
+        assert_eq!(nation.economy.labor.total_workers(), 3); // 5 - 2 = 3
 
         let starved: u32 = report
             .starvation
@@ -7152,14 +7152,14 @@ mod tests {
     fn food_consumption_starvation_capped_at_two() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        nation.labor = LaborPool::new();
-        nation.labor.untrained = 10; // 10 workers need 10 food
+        nation.economy.labor = LaborPool::new();
+        nation.economy.labor.untrained = 10; // 10 workers need 10 food
         // No food at all -> deficit 10, but cap at 2
 
         let report = process_turn(&mut game);
 
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.labor.total_workers(), 8); // 10 - 2 = 8
+        assert_eq!(nation.economy.labor.total_workers(), 8); // 10 - 2 = 8
 
         let starved: u32 = report
             .starvation
@@ -7174,12 +7174,12 @@ mod tests {
     fn food_processing_converts_raw_food_to_canned() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        nation.labor = LaborPool::new();
+        nation.economy.labor = LaborPool::new();
         // Need workers for food processing to trigger
-        nation.labor.untrained = 1;
+        nation.economy.labor.untrained = 1;
         // Add a FoodProcessing building with capacity 3
         nation
-            .buildings
+            .economy.buildings
             .push(Building::new(BuildingType::FoodProcessing, 3));
         // 9 grain: 6 consumed by processing (cap 3 × 2), 1 consumed by worker, 2 remain
         nation.add_resource(ResourceType::Grain, 9);
@@ -7220,7 +7220,7 @@ mod tests {
 
         let nation = game.get_nation(NationId(1)).unwrap();
         let mill = nation
-            .buildings
+            .economy.buildings
             .iter()
             .find(|b| b.building_type == BuildingType::LumberMill)
             .unwrap();
@@ -7232,7 +7232,7 @@ mod tests {
 
         let nation = game.get_nation(NationId(1)).unwrap();
         let mill = nation
-            .buildings
+            .economy.buildings
             .iter()
             .find(|b| b.building_type == BuildingType::LumberMill)
             .unwrap();
@@ -7263,7 +7263,7 @@ mod tests {
         assert_eq!(nation.resource_amount(ResourceType::Timber), 8);
         assert_eq!(
             nation
-                .goods
+                .economy.goods
                 .get(&GoodsType::Furniture)
                 .copied()
                 .unwrap_or(0),
@@ -7364,9 +7364,9 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation.treasury = Money::dollars(5000);
+        nation.economy.treasury = Money::dollars(5000);
         // Zero freight cars — capital province resources should still arrive
-        nation.labor = LaborPool::new();
+        nation.economy.labor = LaborPool::new();
 
         let mut game = GameState {
             turn: TurnNumber::new(1),
@@ -7448,7 +7448,7 @@ mod tests {
         nation.add_resource(ResourceType::Grain, 20);
 
         // Start with 0 workers so food surplus is guaranteed
-        nation.labor.untrained = 0;
+        nation.economy.labor.untrained = 0;
 
         // Give enough provinces: need at least 4 provinces for 1 immigrant
         for i in 2..=5 {
@@ -7469,7 +7469,7 @@ mod tests {
         );
 
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.labor.untrained, 1, "Should have 1 untrained worker");
+        assert_eq!(nation.economy.labor.untrained, 1, "Should have 1 untrained worker");
     }
 
     #[test]
@@ -7483,7 +7483,7 @@ mod tests {
         nation.add_goods(GoodsType::Furniture, 2);
 
         // Workers need food: 5 workers, only 4 food -> no surplus
-        nation.labor.untrained = 5;
+        nation.economy.labor.untrained = 5;
         nation.add_resource(ResourceType::Grain, 4);
 
         for i in 2..=5 {
@@ -7507,7 +7507,7 @@ mod tests {
         let nation = game.get_nation_mut(NationId(1)).unwrap();
 
         // Start with some workers so emergency recruitment doesn't trigger
-        nation.labor.untrained = 2;
+        nation.economy.labor.untrained = 2;
         // Plenty of food, no materials
         nation.add_resource(ResourceType::Grain, 20);
 
@@ -7537,7 +7537,7 @@ mod tests {
         nation.add_goods(GoodsType::Furniture, 10);
         nation.add_resource(ResourceType::Grain, 50);
         // Start with 1 worker so emergency recruitment doesn't trigger
-        nation.labor.untrained = 1;
+        nation.economy.labor.untrained = 1;
 
         // With only 1 province, max immigrants = 1/4 = 0
         // (already has 1 province from construction)
@@ -7568,7 +7568,7 @@ mod tests {
 
         // Verify initial state
         let mill = nation
-            .buildings
+            .economy.buildings
             .iter()
             .find(|b| b.building_type == BuildingType::SteelMill)
             .unwrap();
@@ -7579,7 +7579,7 @@ mod tests {
         process_turn(&mut game);
         let nation = game.get_nation(NationId(1)).unwrap();
         let mill = nation
-            .buildings
+            .economy.buildings
             .iter()
             .find(|b| b.building_type == BuildingType::SteelMill)
             .unwrap();
@@ -7590,7 +7590,7 @@ mod tests {
         process_turn(&mut game);
         let nation = game.get_nation(NationId(1)).unwrap();
         let mill = nation
-            .buildings
+            .economy.buildings
             .iter()
             .find(|b| b.building_type == BuildingType::SteelMill)
             .unwrap();
@@ -7635,7 +7635,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation.treasury = Money::dollars(5000);
+        nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
 
         let mut game = GameState {
@@ -7710,7 +7710,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation.treasury = Money::dollars(5000);
+        nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
 
         let mut game = GameState {
@@ -7758,8 +7758,8 @@ mod tests {
     fn format_summary_line_contains_key_info() {
         let mut game = test_game_state();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        nation.treasury = Money::dollars(8500);
-        nation.labor.untrained = 5;
+        nation.economy.treasury = Money::dollars(8500);
+        nation.economy.labor.untrained = 5;
         // Add enough food so workers don't starve
         nation.add_resource(ResourceType::Grain, 10);
 
@@ -7854,7 +7854,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation.treasury = Money::dollars(5000);
+        nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
 
         GameState {
@@ -7964,7 +7964,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation.treasury = Money::dollars(5000);
+        nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
 
         let mut game = GameState {
@@ -8146,7 +8146,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation.treasury = Money::dollars(5000);
+        nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
 
         let mut game = GameState {
@@ -8224,7 +8224,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation.treasury = Money::dollars(5000);
+        nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
 
         let mut game = GameState {
@@ -8303,7 +8303,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation.treasury = Money::dollars(5000);
+        nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
 
         let mut game = GameState {
@@ -8409,7 +8409,7 @@ mod tests {
 
         // Add food processing building
         nation
-            .buildings
+            .economy.buildings
             .push(Building::new(BuildingType::FoodProcessing, 5));
 
         // Plenty of raw food for canning and surplus
@@ -8420,7 +8420,7 @@ mod tests {
         nation.add_goods(GoodsType::Furniture, 5);
 
         // Start with 0 workers so food surplus is guaranteed
-        nation.labor.untrained = 0;
+        nation.economy.labor.untrained = 0;
 
         // Need at least 4 provinces for 1 immigrant per turn
         for i in 2..=5 {
@@ -8441,7 +8441,7 @@ mod tests {
             .sum();
         assert_eq!(immigration, 1, "Should recruit 1 immigrant");
         assert_eq!(
-            nation.labor.untrained, 1,
+            nation.economy.labor.untrained, 1,
             "Should have 1 untrained worker after immigration"
         );
     }
@@ -8450,8 +8450,8 @@ mod tests {
     fn starvation_insufficient_food_kills_workers() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        nation.labor = LaborPool::new();
-        nation.labor.untrained = 8;
+        nation.economy.labor = LaborPool::new();
+        nation.economy.labor.untrained = 8;
         // Give only 3 food, need 8, deficit = 5, capped at 2 deaths
         nation.add_resource(ResourceType::Grain, 3);
 
@@ -8459,7 +8459,7 @@ mod tests {
 
         let nation = game.get_nation(NationId(1)).unwrap();
         assert_eq!(
-            nation.labor.total_workers(),
+            nation.economy.labor.total_workers(),
             6,
             "Should lose 2 workers (capped)"
         );
@@ -8618,7 +8618,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation1.treasury = Money::dollars(1000);
+        nation1.economy.treasury = Money::dollars(1000);
 
         let nation2 = Nation::new(
             NationId(2),
@@ -8817,7 +8817,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        gp2.treasury = Money::dollars(1000);
+        gp2.economy.treasury = Money::dollars(1000);
         gp2.warships
             .push(Ship::new(UnitId(20), ShipType::Frigate, NationId(2)));
         gp2.warships
@@ -8876,7 +8876,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        gp2.treasury = Money::dollars(1000);
+        gp2.economy.treasury = Money::dollars(1000);
         for i in 0..4 {
             gp2.warships
                 .push(Ship::new(UnitId(20 + i), ShipType::Frigate, NationId(2)));
@@ -8958,7 +8958,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        gp_b.treasury = Money::dollars(1000);
+        gp_b.economy.treasury = Money::dollars(1000);
         game.nations.push(gp_b);
         game.diplomacy
             .initialize_great_powers(&[NationId(1), NationId(3)]);
@@ -9187,7 +9187,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        human.treasury = Money::dollars(10000);
+        human.economy.treasury = Money::dollars(10000);
 
         let mut attacker = Nation::new(
             NationId(2),
@@ -9197,7 +9197,7 @@ mod tests {
             ProvinceId(1),
         );
         attacker.ai_personality = Some(crate::ai::AiPersonality::Aggressive);
-        attacker.treasury = Money::dollars(10000);
+        attacker.economy.treasury = Money::dollars(10000);
 
         let minor = Nation::new(
             NationId(3),
@@ -9215,7 +9215,7 @@ mod tests {
             ProvinceId(3),
         );
         pact_holder.ai_personality = Some(crate::ai::AiPersonality::Aggressive);
-        pact_holder.treasury = Money::dollars(10000);
+        pact_holder.economy.treasury = Money::dollars(10000);
         // Give the pact holder a strong army so it accepts the defense request
         for i in 0..10 {
             pact_holder.army.push(crate::military::units::ArmyUnit::new(
@@ -9366,7 +9366,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation1.treasury = Money::dollars(10000);
+        nation1.economy.treasury = Money::dollars(10000);
 
         let mut nation2 = Nation::new(
             NationId(2),
@@ -9376,7 +9376,7 @@ mod tests {
             ProvinceId(1),
         );
         nation2.ai_personality = Some(crate::ai::AiPersonality::Balanced);
-        nation2.treasury = Money::dollars(10000);
+        nation2.economy.treasury = Money::dollars(10000);
 
         let mut game = GameState {
             turn: TurnNumber::new(1),
@@ -9462,7 +9462,7 @@ mod tests {
     #[test]
     fn subsidy_costs_deducted_each_turn() {
         let mut game = test_game_state();
-        game.nations[0].treasury = Money::dollars(10000);
+        game.nations[0].economy.treasury = Money::dollars(10000);
         // Set a subsidy with a fictional MN
         game.nations[0]
             .trade_subsidies
@@ -9482,7 +9482,7 @@ mod tests {
         );
         // Treasury should be reduced by at least the subsidy amount
         assert!(
-            game.get_nation(NationId(1)).unwrap().treasury < Money::dollars(10000),
+            game.get_nation(NationId(1)).unwrap().economy.treasury < Money::dollars(10000),
             "Treasury should be reduced after subsidy deduction"
         );
     }
@@ -9531,7 +9531,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        gp.treasury = Money::dollars(50000);
+        gp.economy.treasury = Money::dollars(50000);
         // Give merchant ship for cargo
         gp.merchant_fleet.push(Ship::new(
             crate::map::UnitId(999),
@@ -9652,7 +9652,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        gp.treasury = Money::dollars(50000);
+        gp.economy.treasury = Money::dollars(50000);
         gp.merchant_fleet.push(Ship::new(
             crate::map::UnitId(999),
             ShipType::Trader,
@@ -9774,7 +9774,7 @@ mod tests {
 
         // Add food processing building
         nation
-            .buildings
+            .economy.buildings
             .push(Building::new(BuildingType::FoodProcessing, 5));
 
         // Plenty of raw food (surplus for immigration)
@@ -9787,8 +9787,8 @@ mod tests {
         nation.add_goods(GoodsType::Furniture, 2);
 
         // Start with 0 workers so food surplus is guaranteed
-        nation.labor.untrained = 0;
-        nation.labor.trained = 0;
+        nation.economy.labor.untrained = 0;
+        nation.economy.labor.trained = 0;
 
         // Need 4 provinces for 1 immigrant slot
         for i in 2..=5 {
@@ -9903,7 +9903,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation1.treasury = Money::dollars(10000);
+        nation1.economy.treasury = Money::dollars(10000);
         // Give attacker a strong army
         for i in 0..6 {
             nation1.army.push(ArmyUnit::new(
@@ -10195,7 +10195,7 @@ mod tests {
             ProvinceId(1),
         );
         nation1.add_province(ProvinceId(2));
-        nation1.treasury = Money::dollars(1000);
+        nation1.economy.treasury = Money::dollars(1000);
 
         let game_state = GameState {
             turn: TurnNumber::new(1),
@@ -10291,7 +10291,7 @@ mod tests {
         // The disconnected province's resources should NOT be added to warehouse
         // (only the capital province's resources should be there)
         let nation = game.get_nation(NationId(1)).unwrap();
-        let total_in_warehouse: u32 = nation.warehouse.values().sum();
+        let total_in_warehouse: u32 = nation.economy.warehouse.values().sum();
         let total_produced: u32 = report.resource_production.iter().map(|(_, _, q)| q).sum();
         assert_eq!(
             total_in_warehouse, total_produced,
@@ -10391,7 +10391,7 @@ mod tests {
         let mut game = test_game_state();
         // Give the nation a huge army with high maintenance
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        nation.treasury = Money::dollars(100);
+        nation.economy.treasury = Money::dollars(100);
         // Add many expensive units to trigger large maintenance
         for i in 0..50u32 {
             let unit = ArmyUnit::new(
@@ -10408,9 +10408,9 @@ mod tests {
         // Treasury should not go below $0
         let nation = game.get_nation(NationId(1)).unwrap();
         assert!(
-            nation.treasury >= Money::ZERO,
+            nation.economy.treasury >= Money::ZERO,
             "Treasury {} should not go below $0",
-            nation.treasury
+            nation.economy.treasury
         );
 
         // With floor at $0, nation is NOT bankrupt (treasury == $0, not negative)
@@ -10428,7 +10428,7 @@ mod tests {
     fn is_bankrupt_after_excessive_maintenance() {
         let mut game = test_game_state();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        nation.treasury = Money::dollars(10);
+        nation.economy.treasury = Money::dollars(10);
         // Add expensive unit
         let unit = ArmyUnit::new(
             crate::map::UnitId(9100),
@@ -10443,9 +10443,9 @@ mod tests {
         let nation = game.get_nation(NationId(1)).unwrap();
         // With floor at $0, treasury should be capped at zero, not negative
         assert!(
-            nation.treasury >= Money::ZERO,
+            nation.economy.treasury >= Money::ZERO,
             "Treasury {} should not go below $0",
-            nation.treasury
+            nation.economy.treasury
         );
         assert!(!nation.is_bankrupt());
     }
@@ -10455,7 +10455,7 @@ mod tests {
         let mut game = test_game_state();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
         // Start with $0 treasury
-        nation.treasury = Money::ZERO;
+        nation.economy.treasury = Money::ZERO;
         // Add army units that will incur maintenance costs
         for i in 0..5u32 {
             let unit = ArmyUnit::new(
@@ -10471,9 +10471,9 @@ mod tests {
 
         let nation = game.get_nation(NationId(1)).unwrap();
         assert!(
-            nation.treasury >= Money::ZERO,
+            nation.economy.treasury >= Money::ZERO,
             "Treasury {} must not go below $0 after maintenance",
-            nation.treasury
+            nation.economy.treasury
         );
     }
 
@@ -10485,16 +10485,16 @@ mod tests {
         let player = NationId(1);
 
         // Set initial treasury to $10,000
-        game.get_nation_mut(player).unwrap().treasury = Money::dollars(10000);
+        game.get_nation_mut(player).unwrap().economy.treasury = Money::dollars(10000);
         assert_eq!(
-            game.get_nation(player).unwrap().treasury,
+            game.get_nation(player).unwrap().economy.treasury,
             Money::dollars(10000)
         );
 
         // Deduct $500 for a consulate-like expense
-        game.get_nation_mut(player).unwrap().treasury -= Money::dollars(500);
+        game.get_nation_mut(player).unwrap().economy.treasury -= Money::dollars(500);
         assert_eq!(
-            game.get_nation(player).unwrap().treasury,
+            game.get_nation(player).unwrap().economy.treasury,
             Money::dollars(9500)
         );
 
@@ -10502,7 +10502,7 @@ mod tests {
         process_turn(&mut game);
 
         // Verify treasury changed (maintenance or income applied)
-        let final_treasury = game.get_nation(player).unwrap().treasury;
+        let final_treasury = game.get_nation(player).unwrap().economy.treasury;
         // It should still be positive (started with $9,500, no huge army)
         assert!(
             final_treasury > Money::ZERO,
@@ -10641,7 +10641,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation_atk.treasury = Money::dollars(10000);
+        nation_atk.economy.treasury = Money::dollars(10000);
         // Give a powerful army to guarantee victory
         for i in 0..10u32 {
             let unit = ArmyUnit::new(
@@ -10752,7 +10752,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation_atk.treasury = Money::dollars(10000);
+        nation_atk.economy.treasury = Money::dollars(10000);
         // Add siege artillery and strong army
         for i in 0..8u32 {
             let unit = ArmyUnit::new(
@@ -10868,7 +10868,7 @@ mod tests {
         // Verify nation starts with 0 workers
         let nation = game.get_nation(NationId(1)).unwrap();
         assert_eq!(
-            nation.labor.total_workers(),
+            nation.economy.labor.total_workers(),
             0,
             "Nation should start with 0 workers"
         );
@@ -10879,9 +10879,9 @@ mod tests {
         // Emergency recruitment should have given at least 1 worker
         let nation = game.get_nation(NationId(1)).unwrap();
         assert!(
-            nation.labor.total_workers() >= 1,
+            nation.economy.labor.total_workers() >= 1,
             "Emergency recruitment should give at least 1 worker; got {}",
-            nation.labor.total_workers()
+            nation.economy.labor.total_workers()
         );
     }
 
@@ -10938,7 +10938,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation1.treasury = Money::dollars(10000);
+        nation1.economy.treasury = Money::dollars(10000);
         // Give attacker army units
         for i in 0..4 {
             nation1.army.push(ArmyUnit::new(
@@ -11052,7 +11052,7 @@ mod tests {
         let mut game = test_game_state();
         // Add a Warehouse building with capacity 4: raw cap = 200, material cap = 200, goods cap = 100
         game.nations[0]
-            .buildings
+            .economy.buildings
             .push(Building::new(BuildingType::Warehouse, 4));
 
         game.nations[0].add_resource(ResourceType::Coal, 250);
@@ -11093,7 +11093,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(200),
         );
-        nation2.treasury = Money::dollars(5000);
+        nation2.economy.treasury = Money::dollars(5000);
 
         // Give enemy warships
         for i in 0..3 {
@@ -11161,7 +11161,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(200),
         );
-        nation2.treasury = Money::dollars(0);
+        nation2.economy.treasury = Money::dollars(0);
         nation2.is_in_anarchy = true;
         for i in 0..5 {
             nation2.warships.push(Ship::new(
@@ -11204,7 +11204,7 @@ mod tests {
         game.game_data.game_config.provinces_per_immigrant_upgraded = 0;
 
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        nation.labor.untrained = 2;
+        nation.economy.labor.untrained = 2;
         nation.add_resource(ResourceType::Grain, 20);
         nation.add_material(MaterialType::CannedFood, 5);
         nation.add_goods(GoodsType::Clothing, 5);
@@ -11228,14 +11228,14 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation.treasury = Money::dollars(25_000); // treasury_score = min(250, 500) = 250
+        nation.economy.treasury = Money::dollars(25_000); // treasury_score = min(250, 500) = 250
         nation.researched_techs.push(crate::events::TechId(1)); // tech_score = 1 * 30 = 30
         nation.researched_techs.push(crate::events::TechId(2)); // tech_score = 2 * 30 = 60
         nation
-            .buildings
+            .economy.buildings
             .push(Building::new(BuildingType::LumberMill, 1)); // building_score = 1 * 10 = 10
         nation
-            .buildings
+            .economy.buildings
             .push(Building::new(BuildingType::SteelMill, 1)); // building_score = 2 * 10 = 20
 
         let score = calculate_score(&nation);
@@ -11301,7 +11301,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        n1.treasury = Money::dollars(10000);
+        n1.economy.treasury = Money::dollars(10000);
         let n2 = Nation::new(
             NationId(2),
             "B".into(),
@@ -11382,7 +11382,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        n1.treasury = Money::dollars(10000);
+        n1.economy.treasury = Money::dollars(10000);
         let n2 = Nation::new(
             NationId(2),
             "B".into(),
@@ -11452,7 +11452,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        n1.treasury = Money::dollars(10000);
+        n1.economy.treasury = Money::dollars(10000);
         let n2 = Nation::new(
             NationId(2),
             "B".into(),
@@ -11523,7 +11523,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        n1.treasury = Money::dollars(10000);
+        n1.economy.treasury = Money::dollars(10000);
         let n2 = Nation::new(
             NationId(2),
             "B".into(),
@@ -11652,7 +11652,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        n1.treasury = Money::dollars(10_000);
+        n1.economy.treasury = Money::dollars(10_000);
 
         let mut n2 = Nation::new(
             NationId(2),
@@ -11661,7 +11661,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(2),
         );
-        n2.treasury = Money::dollars(10_000);
+        n2.economy.treasury = Money::dollars(10_000);
         n2.ai_personality = Some(AiPersonality::Diplomatic);
 
         let mut diplomacy = DiplomacyState::new();
@@ -12836,7 +12836,7 @@ mod tests {
             ProvinceId(10), // capital elsewhere so P1 is not the capital
         );
         nation1.add_province(ProvinceId(1));
-        nation1.treasury = Money::dollars(10000);
+        nation1.economy.treasury = Money::dollars(10000);
         // 4 Guards in adjacent P1
         for i in 0..4 {
             nation1.army.push(ArmyUnit::new(
@@ -13027,7 +13027,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation1.treasury = Money::dollars(10000);
+        nation1.economy.treasury = Money::dollars(10000);
         for i in 0..4 {
             nation1.army.push(ArmyUnit::new(
                 UnitId(100 + i),
@@ -13274,7 +13274,7 @@ mod tests {
         );
         nation1.add_province(ProvinceId(3));
         nation1.add_province(ProvinceId(4));
-        nation1.treasury = Money::dollars(20000);
+        nation1.economy.treasury = Money::dollars(20000);
         // 3 Guards in P1 (port)
         for i in 0..3 {
             nation1.army.push(ArmyUnit::new(
@@ -14399,7 +14399,7 @@ mod tests {
         // province_ids just like any other owned province. This is precisely
         // what card #129 wants exercised.
         attacker.add_province(ProvinceId(2));
-        attacker.treasury = Money::dollars(20000);
+        attacker.economy.treasury = Money::dollars(20000);
         for i in 0..2 {
             attacker.army.push(ArmyUnit::new(
                 UnitId(100 + i),

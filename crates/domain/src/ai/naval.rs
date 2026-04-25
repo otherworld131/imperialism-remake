@@ -96,7 +96,7 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
         None => return,
     };
 
-    let treasury = nation.treasury;
+    let treasury = nation.economy.treasury;
 
     // ── Read Lua config (feature-gated) ──────────────────────
     #[cfg(feature = "lua")]
@@ -527,7 +527,7 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Balanced);
-        ai.treasury = Money::dollars(5_000);
+        ai.economy.treasury = Money::dollars(5_000);
         ai.add_material(MaterialType::Fabric, 20);
         ai.add_material(MaterialType::Lumber, 40);
         ai.add_material(MaterialType::Arms, 20);
@@ -584,7 +584,7 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Economic);
-        ai.treasury = Money::dollars(3_000); // below $5K threshold: cap is 3
+        ai.economy.treasury = Money::dollars(3_000); // below $5K threshold: cap is 3
         ai.add_material(MaterialType::Fabric, 10);
         ai.add_material(MaterialType::Lumber, 20);
 
@@ -622,7 +622,7 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.ai_personality = Some(AiPersonality::Balanced);
-        ai.treasury = Money::dollars(3_000); // below $5K threshold: cap is 1
+        ai.economy.treasury = Money::dollars(3_000); // below $5K threshold: cap is 1
         ai.add_material(MaterialType::Fabric, 10);
         ai.add_material(MaterialType::Lumber, 20);
 
