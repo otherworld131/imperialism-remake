@@ -13,6 +13,8 @@ interface Props {
   sticky: boolean;
   /** Whether to surface hidden resources in the tile line. */
   showHiddenResources?: boolean;
+  /** Optional lookup of nation_id → full government title (e.g., "Kingdom of Pram"). */
+  governmentTitleByNationId?: Record<number, string>;
   /**
    * Slot for mode-specific content (diplomatic / military / naval strips)
    * the parent wants to show for a tile. Rendered under the generic tile info.
@@ -35,7 +37,8 @@ const BASE_STYLE: React.CSSProperties = {
 };
 
 export default function HexTooltip({
-  tile, marker, screenX, screenY, sticky, showHiddenResources = false, modeExtras,
+  tile, marker, screenX, screenY, sticky, showHiddenResources = false,
+  governmentTitleByNationId, modeExtras,
 }: Props) {
   if (!tile && !marker) return null;
 
@@ -59,8 +62,16 @@ export default function HexTooltip({
                 : ''}
             </b>
           </div>
-          {tile.province && <div>Province: {tile.province}</div>}
-          {tile.owner && <div>Owner: {tile.owner}</div>}
+          {tile.province && (() => {
+            const ownerTitle = governmentTitleByNationId?.[tile.nation_id] || tile.owner;
+            return (
+              <div>
+                Province: {tile.province}
+                {ownerTitle ? `, Province of ${ownerTitle}` : ''}
+              </div>
+            );
+          })()}
+          {!tile.province && tile.owner && <div>Owner: {tile.owner}</div>}
           {tile.resource && (!tile.resource_hidden || showHiddenResources) && (
             <div>Level: {tile.improvement_level}/{tile.max_improvement_level}</div>
           )}
