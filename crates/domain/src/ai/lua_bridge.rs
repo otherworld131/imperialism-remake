@@ -426,6 +426,14 @@ pub struct LuaAiConfig {
     pub coalition_naval_weight: Option<f64>,
     pub coalition_sigmoid_steepness: Option<f64>,
 
+    // Economic-score multipliers (used by `nation_economic_score`).
+    // Treasury contribution is `treasury_dollars / econ_score_treasury_divisor`;
+    // each building adds `econ_score_buildings_multiplier`; each worker
+    // adds `econ_score_workers_multiplier`.
+    pub econ_score_treasury_divisor: Option<f64>,
+    pub econ_score_buildings_multiplier: Option<f64>,
+    pub econ_score_workers_multiplier: Option<f64>,
+
     // Peace proposal thresholds
     pub peace_accept_threshold: Option<f64>,
     pub peace_reject_threshold: Option<f64>,
@@ -622,6 +630,14 @@ impl LuaAiConfig {
         self.coalition_sigmoid_steepness =
             sanitize_opt_f64(self.coalition_sigmoid_steepness, 0.1, 20.0);
 
+        // Economic-score multipliers — divisor must stay > 0 to avoid div-by-zero.
+        self.econ_score_treasury_divisor =
+            sanitize_opt_f64(self.econ_score_treasury_divisor, 1.0, 1_000_000.0);
+        self.econ_score_buildings_multiplier =
+            sanitize_opt_f64(self.econ_score_buildings_multiplier, 0.0, 100.0);
+        self.econ_score_workers_multiplier =
+            sanitize_opt_f64(self.econ_score_workers_multiplier, 0.0, 100.0);
+
         // Tactical
         self.peace_war_duration_threshold =
             sanitize_opt_u32(self.peace_war_duration_threshold, 0, 200);
@@ -781,6 +797,10 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             coalition_momentum_weight: table.get("coalition_momentum_weight").ok(),
             coalition_naval_weight: table.get("coalition_naval_weight").ok(),
             coalition_sigmoid_steepness: table.get("coalition_sigmoid_steepness").ok(),
+            // Economic-score multipliers
+            econ_score_treasury_divisor: table.get("econ_score_treasury_divisor").ok(),
+            econ_score_buildings_multiplier: table.get("econ_score_buildings_multiplier").ok(),
+            econ_score_workers_multiplier: table.get("econ_score_workers_multiplier").ok(),
             // Peace proposal thresholds
             peace_accept_threshold: table.get("peace_accept_threshold").ok(),
             peace_reject_threshold: table.get("peace_reject_threshold").ok(),
@@ -1182,6 +1202,9 @@ mod tests {
             coalition_momentum_weight: None,
             coalition_naval_weight: None,
             coalition_sigmoid_steepness: Some(f64::NAN),
+            econ_score_treasury_divisor: None,
+            econ_score_buildings_multiplier: None,
+            econ_score_workers_multiplier: None,
             peace_accept_threshold: None,
             peace_reject_threshold: None,
             peace_stalemate_duration: None,
@@ -1284,6 +1307,9 @@ mod tests {
             coalition_momentum_weight: None,
             coalition_naval_weight: None,
             coalition_sigmoid_steepness: None,
+            econ_score_treasury_divisor: None,
+            econ_score_buildings_multiplier: None,
+            econ_score_workers_multiplier: None,
             peace_accept_threshold: None,
             peace_reject_threshold: None,
             peace_stalemate_duration: None,
@@ -1425,6 +1451,9 @@ mod tests {
             coalition_momentum_weight: None,
             coalition_naval_weight: None,
             coalition_sigmoid_steepness: None,
+            econ_score_treasury_divisor: None,
+            econ_score_buildings_multiplier: None,
+            econ_score_workers_multiplier: None,
             peace_accept_threshold: None,
             peace_reject_threshold: None,
             peace_stalemate_duration: None,

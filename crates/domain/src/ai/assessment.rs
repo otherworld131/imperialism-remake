@@ -65,6 +65,14 @@ struct AssessmentWeights {
     momentum_weight: f64,
     naval_weight: f64,
     sigmoid_steepness: f64,
+    /// Treasury divisor for `nation_economic_score` — every $X in the
+    /// treasury contributes 1.0 to the economic score.
+    econ_treasury_divisor: f64,
+    /// Multiplier per building when computing `nation_economic_score`.
+    econ_buildings_multiplier: f64,
+    /// Multiplier per worker (skilled + unskilled) when computing
+    /// `nation_economic_score`.
+    econ_workers_multiplier: f64,
 }
 
 impl Default for AssessmentWeights {
@@ -76,6 +84,9 @@ impl Default for AssessmentWeights {
             momentum_weight: 0.15,
             naval_weight: 0.3,
             sigmoid_steepness: 3.0,
+            econ_treasury_divisor: 10_000.0,
+            econ_buildings_multiplier: 0.1,
+            econ_workers_multiplier: 0.05,
         }
     }
 }
@@ -91,6 +102,15 @@ fn weights_from_lua(cfg: Option<&LuaAiConfig>) -> AssessmentWeights {
             momentum_weight: c.coalition_momentum_weight.unwrap_or(d.momentum_weight),
             naval_weight: c.coalition_naval_weight.unwrap_or(d.naval_weight),
             sigmoid_steepness: c.coalition_sigmoid_steepness.unwrap_or(d.sigmoid_steepness),
+            econ_treasury_divisor: c
+                .econ_score_treasury_divisor
+                .unwrap_or(d.econ_treasury_divisor),
+            econ_buildings_multiplier: c
+                .econ_score_buildings_multiplier
+                .unwrap_or(d.econ_buildings_multiplier),
+            econ_workers_multiplier: c
+                .econ_score_workers_multiplier
+                .unwrap_or(d.econ_workers_multiplier),
         },
         None => d,
     }
@@ -106,14 +126,29 @@ pub fn nation_military_score(game: &GameState, nation_id: NationId, naval_weight
 }
 
 /// Compute a nation's economic score (treasury + buildings + workers).
-pub fn nation_economic_score(game: &GameState, nation_id: NationId) -> f64 {
+///
+/// Multipliers come from the resolved `AssessmentWeights` (Lua-overridable
+/// via `econ_score_*` keys); defaults are the pre-Lua values
+/// (`treasury / 10_000`, `buildings * 0.1`, `workers * 0.05`).
+fn nation_economic_score_weighted(
+    game: &GameState,
+    nation_id: NationId,
+    w: &AssessmentWeights,
+) -> f64 {
     game.get_nation(nation_id)
         .map(|n| {
-            n.economy.treasury.as_dollars() as f64 / 10_000.0
-                + n.economy.buildings.len() as f64 * 0.1
-                + n.economy.labor.total_workers() as f64 * 0.05
+            n.economy.treasury.as_dollars() as f64 / w.econ_treasury_divisor
+                + n.economy.buildings.len() as f64 * w.econ_buildings_multiplier
+                + n.economy.labor.total_workers() as f64 * w.econ_workers_multiplier
         })
         .unwrap_or(0.0)
+}
+
+/// Public default-weighted economic score, kept for any external callers.
+/// Internal AI paths should use `nation_economic_score_weighted` so Lua
+/// overrides reach them.
+pub fn nation_economic_score(game: &GameState, nation_id: NationId) -> f64 {
+    nation_economic_score_weighted(game, nation_id, &AssessmentWeights::default())
 }
 
 /// Collect the coalition for `nation_id` in a war against `enemy_id`.
@@ -274,11 +309,11 @@ pub fn evaluate_coalition_strength(
 
     let our_economic: f64 = our_side
         .iter()
-        .map(|&id| nation_economic_score(game, id))
+        .map(|&id| nation_economic_score_weighted(game, id, &w))
         .sum();
     let enemy_economic: f64 = enemy_side
         .iter()
-        .map(|&id| nation_economic_score(game, id))
+        .map(|&id| nation_economic_score_weighted(game, id, &w))
         .sum();
 
     let (momentum, _, _) = compute_momentum(game, nation_id, enemy_id, 5);
@@ -345,11 +380,11 @@ pub fn evaluate_hypothetical_war(
 
     let our_economic: f64 = our_side
         .iter()
-        .map(|&id| nation_economic_score(game, id))
+        .map(|&id| nation_economic_score_weighted(game, id, &w))
         .sum();
     let enemy_economic: f64 = enemy_side
         .iter()
-        .map(|&id| nation_economic_score(game, id))
+        .map(|&id| nation_economic_score_weighted(game, id, &w))
         .sum();
 
     let our_total = our_military * w.mil_weight
@@ -849,10 +884,14 @@ pub fn evaluate_alliance_proposal(
 
     // Power complementarity: bonus if they're militarily strong and we're economically strong
     // or vice versa
-    let our_mil = nation_military_score(game, to, 0.3);
-    let our_econ = nation_economic_score(game, to);
-    let their_mil = nation_military_score(game, from, 0.3);
-    let their_econ = nation_economic_score(game, from);
+    #[cfg(feature = "lua")]
+    let alliance_w = weights_from_lua(_lua_cfg);
+    #[cfg(not(feature = "lua"))]
+    let alliance_w = AssessmentWeights::default();
+    let our_mil = nation_military_score(game, to, alliance_w.naval_weight);
+    let our_econ = nation_economic_score_weighted(game, to, &alliance_w);
+    let their_mil = nation_military_score(game, from, alliance_w.naval_weight);
+    let their_econ = nation_economic_score_weighted(game, from, &alliance_w);
     let mil_ratio = if our_mil > 0.01 {
         their_mil / our_mil
     } else {
