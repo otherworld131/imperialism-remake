@@ -475,6 +475,7 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
     let visible_hexes = compute_visible_hexes(&game, disable_fog);
 
     let map_width = game.hex_map.width();
+    let map_height = game.hex_map.height();
 
     let tiles: Vec<serde_json::Value> = game
         .hex_map
@@ -583,6 +584,7 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
                 "has_fort": tile.infrastructure.has_fort,
                 "fort_level": tile.infrastructure.fort_level,
                 "map_width": map_width,
+                "map_height": map_height,
                 "nation_id": owner_nation_id,
                 "army_firepower": army_fp,
                 "army_unit_count": army_count,

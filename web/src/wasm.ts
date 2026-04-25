@@ -20,6 +20,7 @@ export interface TileData {
   has_railroad: boolean; has_depot: boolean; has_port: boolean;
   has_fort: boolean; fort_level: number;
   map_width: number;
+  map_height: number;
   nation_id: number;
   army_firepower: number;
   army_unit_count: number;

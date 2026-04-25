@@ -14,7 +14,7 @@ function makeTile(partial: Partial<TileData> = {}): TileData {
     province_id: 1,
     has_railroad: false, has_depot: false, has_port: false,
     has_fort: false, fort_level: 0,
-    map_width: 100, nation_id: 1,
+    map_width: 100, map_height: 80, nation_id: 1,
     army_firepower: 0, army_unit_count: 0,
     army_composition: null,
     naval_firepower: 0, naval_ship_count: 0,

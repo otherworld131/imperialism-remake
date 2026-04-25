@@ -19,6 +19,7 @@ function tile(q: number, r: number, owner: string): TileData {
     has_railroad: false, has_depot: false, has_port: false,
     has_fort: false, fort_level: 0,
     map_width: 10,
+    map_height: 10,
     nation_id: 0,
     army_firepower: 0, army_unit_count: 0, army_composition: null,
     naval_firepower: 0, naval_ship_count: 0,

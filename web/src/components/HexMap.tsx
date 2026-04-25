@@ -333,7 +333,10 @@ export default function HexMap({
   // Use props if provided (controlled mode), otherwise use local state (uncontrolled)
   const [localOffset, setLocalOffset] = useState({ x: -200, y: -100 });
   const [dragging, setDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  // Ref (not state) so a pan-constraints clamp / wrap adjustment inside a
+  // mousemove can synchronously rebase the drag origin — state updates are
+  // async and would leave the next move computing delta off a stale start.
+  const dragStartRef = useRef({ x: 0, y: 0 });
   const [localScale, setLocalScale] = useState(0.7);
   const [dropupOpen, setDropupOpen] = useState(false);
   const lastTouchRef = useRef<{ x: number; y: number } | null>(null);
@@ -461,30 +464,149 @@ export default function HexMap({
   // off-screen dismissal effect fires on resize too (not just pan/zoom).
   const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 });
 
+  // Map pixel dimensions used for pan clamping, min-zoom clamp, and the
+  // horizontal-wrap renderer. Every tile carries the same map_width /
+  // map_height from the bridge, so derive from tiles[0].
+  //   mapPixelWidth  = wrap period in world x (pointy-top: every row shifts
+  //                    by mapWidth*HEX_SIZE*SQRT3 when q advances by mapWidth)
+  //   minWorldY / mapPixelHeight = total vertical extent including the half-
+  //                    hex caps above r=0 and below r=mapHeight-1, so the
+  //                    clamp pins the north/south edge of the hex silhouette
+  //                    (not just the tile centers) to the viewport.
+  const mapDims = useMemo(() => {
+    if (tiles.length === 0) {
+      return { mapWidth: 0, mapHeight: 0, mapPixelWidth: 0, mapPixelHeight: 0, minWorldY: 0 };
+    }
+    const { map_width: mapWidth, map_height: mapHeight } = tiles[0];
+    const mapPixelWidth = mapWidth * HEX_SIZE * SQRT3;
+    const minWorldY = -HEX_SIZE;
+    const maxWorldY = HEX_SIZE * (1.5 * mapHeight - 0.5);
+    const mapPixelHeight = maxWorldY - minWorldY;
+    return { mapWidth, mapHeight, mapPixelWidth, mapPixelHeight, minWorldY };
+  }, [tiles]);
+
+  /** Apply globe-style pan constraints: vertical clamp at the north/south
+   *  map edges, horizontal canonicalization so pan.x stays within one wrap
+   *  period of the origin. Used from every call site that writes offsetRef.
+   *  Callers that own drag state are responsible for rebasing dragStartRef
+   *  against the returned offset to preserve the drag invariant. */
+  const applyPanConstraints = useCallback((
+    off: { x: number; y: number },
+    scl: number,
+  ): { x: number; y: number } => {
+    const { mapPixelWidth, mapPixelHeight, minWorldY } = mapDims;
+    const canvasH = canvasSize.h;
+    if (mapPixelHeight === 0 || canvasH === 0) return off;
+    const maxY = -minWorldY * scl;
+    const minY = canvasH - (minWorldY + mapPixelHeight) * scl;
+    let y: number;
+    if (minY >= maxY) {
+      y = (maxY + minY) / 2;
+    } else {
+      y = Math.min(maxY, Math.max(minY, off.y));
+    }
+    let x = off.x;
+    if (mapPixelWidth > 0) {
+      const periodScreen = mapPixelWidth * scl;
+      if (periodScreen > 0) {
+        let wrapped = x % periodScreen;
+        if (wrapped < -periodScreen / 2) wrapped += periodScreen;
+        else if (wrapped >= periodScreen / 2) wrapped -= periodScreen;
+        x = wrapped;
+      }
+    }
+    return { x, y };
+  }, [mapDims, canvasSize]);
+
+  /** Wrap a hex coord returned by pixelToHex back into the primary map copy
+   *  so clicks / hovers on a wrap copy resolve to the correct underlying
+   *  tile. No-op until map dims are known. */
+  const wrapHex = useCallback((q: number, r: number): [number, number] => {
+    const w = mapDims.mapWidth;
+    if (w > 0) return [((q % w) + w) % w, r];
+    return [q, r];
+  }, [mapDims]);
+
+  /** Wrap a world-space x coordinate into the primary map copy. Used for
+   *  hit-testing anything that lives at world-space positions (navy markers)
+   *  so clicks in a wrap copy map to the same underlying entity. */
+  const wrapWorldX = useCallback((x: number): number => {
+    const period = mapDims.mapPixelWidth;
+    if (period <= 0) return x;
+    return ((x % period) + period) % period;
+  }, [mapDims]);
+
+  // When map dims first become valid (tiles loaded) or the canvas resizes,
+  // retroactively snap scale/offset into the clamp range. Without this, a
+  // user who zoomed out while tiles were still loading ends up with scale
+  // below the height-fit minimum — vertical clamp would then leave black
+  // bars above/below the map, and the wrap renderer would be asked to draw
+  // dozens of horizontal copies per frame.
+  useEffect(() => {
+    const { mapPixelHeight } = mapDims;
+    const canvasH = canvasSize.h;
+    if (mapPixelHeight === 0 || canvasH === 0) return;
+    const fitScale = canvasH / mapPixelHeight;
+    let nextScale = scaleRef.current;
+    if (nextScale < fitScale) nextScale = fitScale;
+    if (nextScale > 4) nextScale = 4;
+    const nextOffset = applyPanConstraints(offsetRef.current, nextScale);
+    const changedScale = nextScale !== scaleRef.current;
+    const changedOffset = nextOffset.x !== offsetRef.current.x || nextOffset.y !== offsetRef.current.y;
+    if (!changedScale && !changedOffset) return;
+    scaleRef.current = nextScale;
+    offsetRef.current = nextOffset;
+    if (changedScale) setScale(nextScale);
+    if (changedOffset) setOffset(nextOffset);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapDims, canvasSize, applyPanConstraints]);
+
   // If a pinned tooltip's hex has been panned/zoomed (or the canvas resized)
-  // off-screen, dismiss it.
+  // off-screen, dismiss it. With globe-style wrap, the hex may also be
+  // on-screen via a wrap copy, so check vertical only for dismissal and
+  // confirm horizontal against the nearest wrap copy.
   useEffect(() => {
     if (!tooltip) return;
     const cw = canvasSize.w;
     const ch = canvasSize.h;
     if (cw === 0 || ch === 0) return;
     const [px, py] = hexToPixel(tooltip.hexQ, tooltip.hexR);
-    const sx = px * scale + offset.x;
     const sy = py * scale + offset.y;
     const pad = HEX_SIZE * scale;
-    if (sx < -pad || sy < -pad || sx > cw + pad || sy > ch + pad) {
+    if (sy < -pad || sy > ch + pad) {
+      setTooltip(null);
+      return;
+    }
+    const periodScreen = mapDims.mapPixelWidth * scale;
+    let sxPrimary = px * scale + offset.x;
+    if (periodScreen > 0) {
+      // Shift sxPrimary into the same wrap copy that's closest to the viewport.
+      const viewportCenter = cw / 2;
+      const offsetFromCenter = sxPrimary - viewportCenter;
+      const shifts = Math.round(offsetFromCenter / periodScreen);
+      sxPrimary -= shifts * periodScreen;
+    }
+    if (sxPrimary < -pad || sxPrimary > cw + pad) {
       setTooltip(null);
     }
-  }, [tooltip, scale, offset, canvasSize]);
+  }, [tooltip, scale, offset, canvasSize, mapDims]);
 
-  /** Pure zoom-to-point math: returns clamped new scale and adjusted offset. */
+  /** Pure zoom-to-point math: returns clamped new scale and adjusted offset.
+   *  Min-zoom is dynamic — clamped so the map's vertical extent fully fills
+   *  the canvas (no sky/sea bars above or below). Horizontally the world is
+   *  treated as a globe: the wrap renderer always tiles copies across the
+   *  canvas, so any horizontal "gap" beyond one map width is filled by the
+   *  wrap copies regardless of where the user is panned. */
   const computeZoom = (cx: number, cy: number, oldScale: number, oldOffset: { x: number; y: number }, newScale: number) => {
-    const clamped = Math.max(0.3, Math.min(4, newScale));
+    const { mapPixelHeight } = mapDims;
+    const canvasH = canvasSize.h;
+    const fitScale = (mapPixelHeight > 0 && canvasH > 0)
+      ? (canvasH / mapPixelHeight)
+      : 0.1;
+    const clamped = Math.max(fitScale, Math.min(4, newScale));
     const ratio = clamped / oldScale;
-    return {
-      scale: clamped,
-      offset: { x: cx - (cx - oldOffset.x) * ratio, y: cy - (cy - oldOffset.y) * ratio },
-    };
+    const rawOffset = { x: cx - (cx - oldOffset.x) * ratio, y: cy - (cy - oldOffset.y) * ratio };
+    return { scale: clamped, offset: applyPanConstraints(rawOffset, clamped) };
   };
 
   /** Zoom toward a screen-space point, adjusting offset so that point stays fixed.
@@ -497,6 +619,14 @@ export default function HexMap({
     scheduleFrameRef.current();
     scheduleGestureCommit();
   };
+  // Mirror zoomAt / computeZoom into refs so listeners that are bound once
+  // via useEffect with a narrow dep list (native wheel, keydown) always invoke
+  // the freshest closure — otherwise computeZoom uses a stale mapDims /
+  // canvasSize after a window resize and the zoom-out clamp ends up too high.
+  const zoomAtRef = useRef(zoomAt);
+  zoomAtRef.current = zoomAt;
+  const computeZoomRef = useRef(computeZoom);
+  computeZoomRef.current = computeZoom;
 
   const showPoliticalColors = mapMode !== 'terrain';
 
@@ -557,6 +687,20 @@ export default function HexMap({
     const verts = hexVertices(HEX_SIZE);
     const tileMapLocal = new Map<string, TileData>();
     for (const tile of tiles) tileMapLocal.set(`${tile.q},${tile.r}`, tile);
+    // Wrap-aware neighbor lookup: the world is a globe, so when a neighbor's
+    // q is out of [0, mapWidth), it wraps around — (q=-1) lives in the wrap
+    // copy at (q=mapWidth-1). Without this, tiles on the east / west map
+    // seam are treated as coastlines and their component clip paths close
+    // off with a vertical seam, so land / country color gets clipped at an
+    // unnatural straight line where the seam sits. With it, adjacent tiles
+    // across the seam are correctly identified as interior neighbours and
+    // the border / coast generation skips the seam entirely.
+    const mw = tiles[0]?.map_width ?? 0;
+    const wrapNeighbor = (nq: number, nr: number): TileData | undefined => {
+      if (mw <= 0) return tileMapLocal.get(`${nq},${nr}`);
+      const wq = ((nq % mw) + mw) % mw;
+      return tileMapLocal.get(`${wq},${nr}`);
+    };
 
     // Collect coastline hex edges (land facing sea or map edge) plus political
     // edges (province and country-interior), and a canonical outward normal
@@ -596,7 +740,7 @@ export default function HexMap({
       const tileVG = tile.visual_group || tile.owner;
       for (let i = 0; i < 6; i++) {
         const [nq, nr] = neighbors[i];
-        const neighbor = tileMapLocal.get(`${nq},${nr}`);
+        const neighbor = wrapNeighbor(nq, nr);
         const v1 = verts[i];
         const v2 = verts[(i + 1) % 6];
         const x1 = px + v1[0], y1 = py + v1[1];
@@ -758,7 +902,7 @@ export default function HexMap({
         const t = queue.shift()!;
         members.push(t);
         for (const [nq, nr] of hexNeighbors(t.q, t.r)) {
-          const n = tileMapLocal.get(`${nq},${nr}`);
+          const n = wrapNeighbor(nq, nr);
           if (!n || n.terrain === 'Sea') continue;
           const nvg = n.visual_group || n.owner || '';
           if (nvg !== vg) continue;
@@ -782,7 +926,7 @@ export default function HexMap({
       const tileVG = tile.visual_group || tile.owner || '';
       for (let i = 0; i < 6; i++) {
         const [nq, nr] = neighbors[i];
-        const n = tileMapLocal.get(`${nq},${nr}`);
+        const n = wrapNeighbor(nq, nr);
         let type: 'coast' | 'country' | null = null;
         if (!n || n.terrain === 'Sea') type = 'coast';
         else {
@@ -931,6 +1075,16 @@ export default function HexMap({
     const normalEdges: number[] = [];
     const provinceEdges: number[] = [];
     const countryEdges: number[] = [];
+    // Wrap-aware neighbor lookup: same rationale as mapGeometry — the east /
+    // west map edges are wrap seams, not coastlines, so edge classification
+    // must follow the wrapped neighbour (else the non-organic fallback also
+    // shows a phantom country stroke at the seam).
+    const mw = tiles[0]?.map_width ?? 0;
+    const neighborAt = (nq: number, nr: number): TileData | undefined => {
+      if (mw <= 0) return tileMap.get(`${nq},${nr}`);
+      const wq = ((nq % mw) + mw) % mw;
+      return tileMap.get(`${wq},${nr}`);
+    };
     for (const tile of tiles) {
       if (tile.terrain === 'Sea') continue;
       const [px, py] = hexToPixel(tile.q, tile.r);
@@ -938,7 +1092,7 @@ export default function HexMap({
       const tileVG = tile.visual_group || tile.owner;
       for (let i = 0; i < 6; i++) {
         const [nq, nr] = neighbors[i];
-        const neighbor = tileMap.get(`${nq},${nr}`);
+        const neighbor = neighborAt(nq, nr);
         const neighborVG = neighbor ? (neighbor.visual_group || neighbor.owner) : '';
         const v1 = verts[i];
         const v2 = verts[(i + 1) % 6];
@@ -979,8 +1133,14 @@ export default function HexMap({
     if (!ctx) return;
 
     // Canvas size is assigned by the ResizeObserver (not every frame).
+    // Fill the whole canvas with sea color so any region outside the map's
+    // own seaBox (north / south vertical bars when the map is shorter than
+    // the canvas, plus the usual seam zones at wrap boundaries) inherits the
+    // same backdrop as the map's oceans — the map reads as a continental
+    // region floating on an endless sea, not a sprite on the app background.
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = TERRAIN_COLORS.Sea;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // Read gesture-authoritative transform from refs so zoom/pan during
     // a gesture can update refs directly and schedule a frame without a
@@ -988,7 +1148,41 @@ export default function HexMap({
     const scale = scaleRef.current;
     const offset = offsetRef.current;
 
-    ctx.setTransform(scale, 0, 0, scale, offset.x, offset.y);
+    // Horizontal wrap: draw the entire per-frame content once per wrap copy
+    // whose screen rect overlaps the viewport. The transform shifts world x
+    // by k*mapPixelWidth per copy; everything drawn in world space (tiles,
+    // borders, labels, units, overlays) automatically duplicates. Overlays
+    // drawn in screen space are outside this loop.
+    //
+    // A single copy's tiles span world x wider than one wrap period because
+    // pointy-top rows shift by SQRT3/2*HEX_SIZE per r. At r=mapHeight-1 the
+    // row is offset right by (mapHeight-1)*SQRT3/2*HEX_SIZE, leaving the
+    // viewport's bottom-left corner uncovered unless we also draw copy k-ext
+    // (whose own high-r tiles reach back into that column). The overflow
+    // fraction (rowOffset / mapPixelWidth) is ≈0.3 for typical aspect
+    // ratios; we extend kMin by ceil(overflow) so the full viewport is
+    // covered at every row.
+    const { mapPixelWidth, mapHeight } = mapDims;
+    const periodScreen = mapPixelWidth * scale;
+    let kMin = 0, kMax = 0;
+    if (periodScreen > 0 && canvas.width > 0) {
+      const rowOffsetSpan = Math.max(0, mapHeight - 1) * (SQRT3 / 2) * HEX_SIZE;
+      const kExtraLeft = mapPixelWidth > 0
+        ? Math.ceil(rowOffsetSpan / mapPixelWidth)
+        : 0;
+      kMin = Math.floor(-offset.x / periodScreen) - kExtraLeft;
+      kMax = Math.ceil((canvas.width - offset.x) / periodScreen);
+      // Safety cap: if the clamp effect has't run yet (transient state during
+      // tile-load), the computed range could be dozens of copies wide and
+      // each copy re-walks every tile. Clamp to 8 copies centered on the
+      // viewport so a malformed state only drops extra copies, not frames.
+      const MAX_COPIES = 8;
+      if (kMax - kMin + 1 > MAX_COPIES) {
+        const viewportCenterK = Math.round(((canvas.width / 2) - offset.x) / periodScreen);
+        kMin = viewportCenterK - Math.floor(MAX_COPIES / 2);
+        kMax = kMin + MAX_COPIES - 1;
+      }
+    }
 
     // Helper: pick the right political fill based on incorporated status
     const pickPoliticalColor = (tile: TileData): string => {
@@ -1017,13 +1211,13 @@ export default function HexMap({
       return pickPoliticalColor(tile);
     };
 
+    for (let k = kMin; k <= kMax; k++) {
+      ctx.setTransform(scale, 0, 0, scale, offset.x + k * periodScreen, offset.y);
+
     if (mapGeometry) {
-      // ── Pass 0: Sea background ──
-      {
-        const { x, y, w, h } = mapGeometry.seaBox;
-        ctx.fillStyle = TERRAIN_COLORS.Sea;
-        ctx.fillRect(x, y, w, h);
-      }
+      // Sea backdrop is the canvas-wide fill above the loop. Drawing the
+      // per-copy seaBox here would overpaint the previous copy's land where
+      // their world rects overlap on the canvas (wrap-copy land vanishes).
 
       // ── Pass 1: Land fills, clipped PER visual-group component so a
       // nation's color can't leak past its smoothed border onto the neighbour.
@@ -1585,11 +1779,13 @@ export default function HexMap({
       ctx.setLineDash([]);
     }
 
+    } // end wrap-copies loop
+
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   }, [tiles, showPoliticalColors, showHiddenResources, showAiCivilians, mapMode, nationFillMap,
       isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves, nationLabels, disableFogOfWar,
       navyMarkers, selectedNavyKey, mapGeometry, tileMap, diplomacyOverlay,
-      hideHexGrid, highlightedNationId, classifiedEdges, maxArmyFP]);
+      hideHexGrid, highlightedNationId, classifiedEdges, maxArmyFP, mapDims]);
 
   const scheduleFrame = useCallback(() => {
     if (rafIdRef.current != null) return;
@@ -1657,7 +1853,7 @@ export default function HexMap({
       if (e.key === '+' || e.key === '=') delta = 0.2;
       else if (e.key === '-') delta = -0.2;
       if (delta === 0) return;
-      const z = computeZoom(cx, cy, scaleRef.current, offsetRef.current, scaleRef.current + delta);
+      const z = computeZoomRef.current(cx, cy, scaleRef.current, offsetRef.current, scaleRef.current + delta);
       setOffset(z.offset);
       setScale(z.scale);
     };
@@ -1677,7 +1873,7 @@ export default function HexMap({
     setDragging(true);
     // Use offsetRef so dragStart is relative to the gesture-authoritative
     // offset (which may differ from state mid-commit).
-    setDragStart({ x: e.clientX - offsetRef.current.x, y: e.clientY - offsetRef.current.y });
+    dragStartRef.current = { x: e.clientX - offsetRef.current.x, y: e.clientY - offsetRef.current.y };
     // A mousedown starts a new gesture; cancel any pending commit so it
     // doesn't fire mid-drag and cause a React render.
     cancelCommitTimer();
@@ -1718,7 +1914,13 @@ export default function HexMap({
       // Write the new offset to the ref and schedule a single frame; do not
       // setState per mousemove (would cascade through App and re-render
       // everything). State commit happens on mouseup.
-      offsetRef.current = { x: e.clientX - dragStart.x, y: e.clientY - dragStart.y };
+      const raw = { x: e.clientX - dragStartRef.current.x, y: e.clientY - dragStartRef.current.y };
+      const constrained = applyPanConstraints(raw, scaleRef.current);
+      offsetRef.current = constrained;
+      // Rebase the drag origin against any clamp / wrap adjustment so the
+      // next mousemove computes a delta from the constrained position, not
+      // the pre-constraint one.
+      dragStartRef.current = { x: e.clientX - constrained.x, y: e.clientY - constrained.y };
       scheduleFrame();
       // Dragging dismisses a non-sticky tooltip; sticky persists until click /
       // off-screen.
@@ -1727,8 +1929,11 @@ export default function HexMap({
     }
     if (!canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
-    const mx = (e.clientX - rect.left - offsetRef.current.x) / scaleRef.current;
+    const rawMx = (e.clientX - rect.left - offsetRef.current.x) / scaleRef.current;
     const my = (e.clientY - rect.top - offsetRef.current.y) / scaleRef.current;
+    // Wrap world x into the primary map copy so hovers on a wrap copy still
+    // resolve to the original tile / marker at that q-column.
+    const mx = wrapWorldX(rawMx);
     const wrapperX = e.clientX - rect.left;
     const wrapperY = e.clientY - rect.top;
 
@@ -1739,7 +1944,7 @@ export default function HexMap({
     // effects (navy marker outline) but never rearm the open/pin timers.
     if (tooltip?.sticky) {
       if (!marker && onTileHover) {
-        const [hq, hr] = pixelToHex(mx, my);
+        const [hq, hr] = wrapHex(...pixelToHex(mx, my));
         onTileHover(tileMap.get(`${hq},${hr}`) || null);
       } else if (marker && onTileHover) {
         onTileHover(null);
@@ -1754,7 +1959,7 @@ export default function HexMap({
       target = { marker, hexQ: marker.q, hexR: marker.r };
       if (onTileHover) onTileHover(null);
     } else {
-      const [hq, hr] = pixelToHex(mx, my);
+      const [hq, hr] = wrapHex(...pixelToHex(mx, my));
       const tile = tileMap.get(`${hq},${hr}`) || null;
       if (onTileHover) onTileHover(tile);
       if (!tile) {
@@ -1800,7 +2005,7 @@ export default function HexMap({
       const touch = e.touches[0];
       lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
       setDragging(true);
-      setDragStart({ x: touch.clientX - offsetRef.current.x, y: touch.clientY - offsetRef.current.y });
+      dragStartRef.current = { x: touch.clientX - offsetRef.current.x, y: touch.clientY - offsetRef.current.y };
     } else if (e.touches.length === 2) {
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
@@ -1813,7 +2018,11 @@ export default function HexMap({
     e.preventDefault();
     if (e.touches.length === 1 && lastTouchRef.current) {
       const touch = e.touches[0];
-      offsetRef.current = { x: touch.clientX - dragStart.x, y: touch.clientY - dragStart.y };
+      const raw = { x: touch.clientX - dragStartRef.current.x, y: touch.clientY - dragStartRef.current.y };
+      const constrained = applyPanConstraints(raw, scaleRef.current);
+      offsetRef.current = constrained;
+      // Rebase drag origin — same invariant as mouse drag.
+      dragStartRef.current = { x: touch.clientX - constrained.x, y: touch.clientY - constrained.y };
       scheduleFrame();
       lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
     } else if (e.touches.length === 2 && lastPinchDistRef.current !== null) {
@@ -1842,7 +2051,7 @@ export default function HexMap({
       lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
       lastPinchDistRef.current = null;
       setDragging(true);
-      setDragStart({ x: touch.clientX - offsetRef.current.x, y: touch.clientY - offsetRef.current.y });
+      dragStartRef.current = { x: touch.clientX - offsetRef.current.x, y: touch.clientY - offsetRef.current.y };
     }
   };
 
@@ -1858,7 +2067,7 @@ export default function HexMap({
       const rect = canvas.getBoundingClientRect();
       const cx = e.clientX - rect.left;
       const cy = e.clientY - rect.top;
-      zoomAt(cx, cy, scaleRef.current - e.deltaY * 0.001);
+      zoomAtRef.current(cx, cy, scaleRef.current - e.deltaY * 0.001);
       closeNonStickyTooltip();
     };
     canvas.addEventListener('wheel', onWheel, { passive: false });
@@ -1879,8 +2088,11 @@ export default function HexMap({
       hoverTargetRef.current = null;
     }
     const rect = canvasRef.current.getBoundingClientRect();
-    const mx = (e.clientX - rect.left - offsetRef.current.x) / scaleRef.current;
+    const rawMx = (e.clientX - rect.left - offsetRef.current.x) / scaleRef.current;
     const my = (e.clientY - rect.top - offsetRef.current.y) / scaleRef.current;
+    // Wrap world x into the primary map copy so clicks on wrap copies
+    // resolve to the original tile / marker.
+    const mx = wrapWorldX(rawMx);
     const marker = markerAtPoint(mx, my);
     if (marker) {
       if (onNavyMarkerClick) onNavyMarkerClick(marker);
@@ -1888,7 +2100,7 @@ export default function HexMap({
     }
     if (onNavyMarkerClick) onNavyMarkerClick(null);
     if (onTileClick) {
-      const [hq, hr] = pixelToHex(mx, my);
+      const [hq, hr] = wrapHex(...pixelToHex(mx, my));
       const tile = tileMap.get(`${hq},${hr}`);
       if (tile) onTileClick(tile);
     }
