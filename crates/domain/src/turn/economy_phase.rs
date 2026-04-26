@@ -38,8 +38,9 @@ pub enum EconomicOrderKind {
 }
 
 /// An economic order that has been validated and whose resource requirements
-/// have been pre-committed. In Phase 3 this is a structural placeholder;
-/// per-commodity `ReservationId`s are added in Trello #162.
+/// have been pre-committed. In Phase 3 this is a structural placeholder —
+/// the `ReservationId` API is implemented (#162) but full per-commodity wiring
+/// into the execution pipeline is deferred to Trello #169 and #174.
 #[derive(Debug, Clone)]
 pub struct ReservedAction {
     pub order: EconomicOrder,
@@ -60,8 +61,9 @@ pub(super) fn collect_economic_orders(_game: &GameState) -> Vec<EconomicOrder> {
 /// Validate orders and mark resource reservations.
 ///
 /// Returns the subset of orders that are feasible and ready to execute.
-/// In Phase 3 this is a thin pass-through; per-commodity reservation IDs
-/// are added in Trello #162.
+/// In Phase 3 this is a thin pass-through — the structural seam exists so
+/// Phase 4 can add real per-commodity reservation logic without a refactor
+/// (tracked under Trello #169: pre-execution observability).
 pub(super) fn validate_and_reserve(
     _game: &mut GameState,
     orders: Vec<EconomicOrder>,

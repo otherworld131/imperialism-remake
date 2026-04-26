@@ -1346,6 +1346,19 @@ fn expand_building(game: &mut GameState, nation_id: NationId, bt: BuildingType, 
         None => return,
     };
 
+    // Guard against double-expansion when the caller's snapshot is stale (F-001/#163).
+    // The snapshot is built once before the multi-phase expansion loop; by the time the
+    // high-treasury pass runs, earlier phases may have already started an expansion.
+    if nation
+        .economy
+        .buildings
+        .iter()
+        .find(|b| b.building_type == bt)
+        .map_or(false, |b| b.pending_capacity > 0)
+    {
+        return;
+    }
+
     let increase = if use_tier {
         nation
             .economy.buildings
@@ -2431,5 +2444,40 @@ mod tests {
             }
             other => panic!("expected KeepCommitment on turn 2, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn expand_building_idempotent_within_turn() {
+        // F-010 regression: expand_building must not charge materials twice when
+        // called for the same building in the same turn (guards stale-snapshot risk).
+        let mut game = test_game_with_ai();
+        let nation_id = NationId(2);
+
+        // Give nation a LumberMill and ample materials for multiple expansions.
+        game.get_nation_mut(nation_id)
+            .unwrap()
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 4));
+        *game.get_nation_mut(nation_id).unwrap().economy.materials.entry(MaterialType::Lumber).or_insert(0) = 20;
+        *game.get_nation_mut(nation_id).unwrap().economy.materials.entry(MaterialType::Steel).or_insert(0) = 20;
+
+        // Call expand_building twice — second call must be a no-op.
+        expand_building(&mut game, nation_id, BuildingType::LumberMill, true);
+        let lumber_after_first = game.get_nation(nation_id).unwrap().material_amount(MaterialType::Lumber);
+        let steel_after_first = game.get_nation(nation_id).unwrap().material_amount(MaterialType::Steel);
+
+        expand_building(&mut game, nation_id, BuildingType::LumberMill, true);
+        let lumber_after_second = game.get_nation(nation_id).unwrap().material_amount(MaterialType::Lumber);
+        let steel_after_second = game.get_nation(nation_id).unwrap().material_amount(MaterialType::Steel);
+
+        // Materials must not have been charged a second time.
+        assert_eq!(lumber_after_first, lumber_after_second, "second expand_building call should not charge lumber again");
+        assert_eq!(steel_after_first, steel_after_second, "second expand_building call should not charge steel again");
+
+        // Exactly one pending expansion in the building.
+        let nation = game.get_nation(nation_id).unwrap();
+        let mill = nation.economy.buildings.iter().find(|b| b.building_type == BuildingType::LumberMill).unwrap();
+        assert!(mill.pending_capacity > 0, "building should have one pending expansion");
     }
 }

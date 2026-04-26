@@ -62,19 +62,19 @@ pub struct NationEconomy {
     // ── Reservation accounting (Trello #162) ─────────────────────────
     /// Per-resource reserved amounts (sum of active reservations).
     #[serde(default)]
-    pub reserved_warehouse: BTreeMap<ResourceType, u32>,
+    pub(crate) reserved_warehouse: BTreeMap<ResourceType, u32>,
     /// Per-material reserved amounts.
     #[serde(default)]
-    pub reserved_materials: BTreeMap<MaterialType, u32>,
+    pub(crate) reserved_materials: BTreeMap<MaterialType, u32>,
     /// Per-goods reserved amounts.
     #[serde(default)]
-    pub reserved_goods: BTreeMap<GoodsType, u32>,
+    pub(crate) reserved_goods: BTreeMap<GoodsType, u32>,
     /// Active reservation ledger: id → (commodity, quantity).
     #[serde(default)]
-    pub reservation_ledger: BTreeMap<ReservationId, (Commodity, u32)>,
+    pub(crate) reservation_ledger: BTreeMap<ReservationId, (Commodity, u32)>,
     /// Monotonically increasing counter for generating unique ReservationIds.
     #[serde(default)]
-    pub next_reservation_id: u64,
+    pub(crate) next_reservation_id: u64,
 }
 
 impl NationEconomy {
@@ -119,40 +119,52 @@ impl NationEconomy {
     pub fn consume(&mut self, key: Commodity, qty: u32) -> bool {
         match key {
             Commodity::Resource(r) => {
-                let cur = self.warehouse.entry(r).or_insert(0);
-                if *cur >= qty {
-                    *cur -= qty;
-                    true
-                } else {
-                    false
+                if let Some(cur) = self.warehouse.get_mut(&r) {
+                    if *cur >= qty {
+                        *cur -= qty;
+                        return true;
+                    }
                 }
+                false
             }
             Commodity::Material(m) => {
-                let cur = self.materials.entry(m).or_insert(0);
-                if *cur >= qty {
-                    *cur -= qty;
-                    true
-                } else {
-                    false
+                if let Some(cur) = self.materials.get_mut(&m) {
+                    if *cur >= qty {
+                        *cur -= qty;
+                        return true;
+                    }
                 }
+                false
             }
             Commodity::Goods(g) => {
-                let cur = self.goods.entry(g).or_insert(0);
-                if *cur >= qty {
-                    *cur -= qty;
-                    true
-                } else {
-                    false
+                if let Some(cur) = self.goods.get_mut(&g) {
+                    if *cur >= qty {
+                        *cur -= qty;
+                        return true;
+                    }
                 }
+                false
             }
         }
     }
 
     /// Iterate over all commodities with non-zero total quantity.
     pub fn iter_all(&self) -> impl Iterator<Item = (Commodity, u32)> + '_ {
-        let resources = self.warehouse.iter().map(|(&k, &v)| (Commodity::Resource(k), v));
-        let materials = self.materials.iter().map(|(&k, &v)| (Commodity::Material(k), v));
-        let goods = self.goods.iter().map(|(&k, &v)| (Commodity::Goods(k), v));
+        let resources = self
+            .warehouse
+            .iter()
+            .filter(|&(_, v)| *v > 0)
+            .map(|(&k, &v)| (Commodity::Resource(k), v));
+        let materials = self
+            .materials
+            .iter()
+            .filter(|&(_, v)| *v > 0)
+            .map(|(&k, &v)| (Commodity::Material(k), v));
+        let goods = self
+            .goods
+            .iter()
+            .filter(|&(_, v)| *v > 0)
+            .map(|(&k, &v)| (Commodity::Goods(k), v));
         resources.chain(materials).chain(goods)
     }
 
@@ -204,12 +216,23 @@ impl NationEconomy {
     /// and remove the reservation entry.
     ///
     /// Fails with `DomainError::ReservationNotFound` if `id` is unknown.
+    /// Fails with `DomainError::InsufficientInventory` if inventory was externally
+    /// depleted below the reserved amount after the reservation was made.
     pub fn commit(&mut self, id: ReservationId) -> Result<(), crate::DomainError> {
-        let (key, qty) = self
+        // Peek before mutating the ledger so we can return an error cleanly.
+        let &(key, qty) = self
             .reservation_ledger
-            .remove(&id)
+            .get(&id)
             .ok_or(crate::DomainError::ReservationNotFound(id))?;
-        // Reduce aggregate reserved counter
+        let available = self.amount(key);
+        if available < qty {
+            return Err(crate::DomainError::InsufficientInventory {
+                requested: qty,
+                available,
+            });
+        }
+        // Now safe: remove from ledger, decrement reserved counter, consume inventory.
+        self.reservation_ledger.remove(&id);
         match key {
             Commodity::Resource(r) => {
                 let e = self.reserved_warehouse.entry(r).or_insert(0);
@@ -224,7 +247,6 @@ impl NationEconomy {
                 *e = e.saturating_sub(qty);
             }
         }
-        // Deduct from total inventory
         self.consume(key, qty);
         Ok(())
     }
@@ -1298,5 +1320,29 @@ mod tests {
         n.economy.add(Commodity::Resource(ResourceType::Wool), 7);
         n.economy.reserve(Commodity::Resource(ResourceType::Wool), 4).unwrap();
         assert!(n.economy.reserved(Commodity::Resource(ResourceType::Wool)) <= n.economy.amount(Commodity::Resource(ResourceType::Wool)));
+    }
+
+    #[test]
+    fn commit_returns_error_if_inventory_externally_depleted() {
+        // F-009 regression: commit must fail if stock was depleted after reservation.
+        let mut n = sample_great_power();
+        n.economy.add(Commodity::Material(MaterialType::Lumber), 10);
+        let id = n.economy.reserve(Commodity::Material(MaterialType::Lumber), 8).unwrap();
+
+        // External depletion via legacy mutator bypasses reservation invariants.
+        n.consume_material(MaterialType::Lumber, 5);
+
+        // Inventory is now 5, but we reserved 8 — commit must fail.
+        let result = n.economy.commit(id);
+        assert!(
+            matches!(result, Err(crate::DomainError::InsufficientInventory { .. })),
+            "expected InsufficientInventory, got {:?}",
+            result
+        );
+        // Reservation must not have been removed from the ledger.
+        assert!(
+            n.economy.reservation_ledger.contains_key(&id),
+            "reservation should remain in ledger after failed commit"
+        );
     }
 }
