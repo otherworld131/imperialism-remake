@@ -817,7 +817,7 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
         .as_ref()
         .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
     #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
+    let lua_cfg: Option<super::lua_bridge::LuaAiConfig> = None;
 
     let base_infrastructure_budget: Money = 'val: {
         #[cfg(feature = "lua")]

@@ -1,5 +1,6 @@
 use crate::events::TreatyType;
 use crate::types::*;
+use crate::DomainError;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -281,10 +282,10 @@ impl DiplomacyState {
 
     /// Build a trade consulate from a Great Power to a Minor Nation.
     /// Costs $500. Returns the cost on success.
-    pub fn build_consulate(&mut self, gp: NationId, mn: NationId) -> Result<Money, String> {
+    pub fn build_consulate(&mut self, gp: NationId, mn: NationId) -> Result<Money, DomainError> {
         let rel = self.ensure_relation(gp, mn);
         if rel.has_consulate {
-            return Err("Consulate already established".to_string());
+            return Err(DomainError::illegal("Consulate already established"));
         }
         rel.has_consulate = true;
         Ok(Money::dollars(500))
@@ -293,13 +294,13 @@ impl DiplomacyState {
     /// Build an embassy from a Great Power to a Minor Nation.
     /// Costs $5,000. Requires a consulate to be established first.
     /// Returns the cost on success.
-    pub fn build_embassy(&mut self, gp: NationId, mn: NationId) -> Result<Money, String> {
+    pub fn build_embassy(&mut self, gp: NationId, mn: NationId) -> Result<Money, DomainError> {
         let rel = self.ensure_relation(gp, mn);
         if !rel.has_consulate {
-            return Err("Must build consulate before embassy".to_string());
+            return Err(DomainError::illegal("Must build consulate before embassy"));
         }
         if rel.has_embassy {
-            return Err("Embassy already established".to_string());
+            return Err(DomainError::illegal("Embassy already established"));
         }
         rel.has_embassy = true;
         Ok(Money::dollars(5000))
@@ -310,22 +311,22 @@ impl DiplomacyState {
     /// `from` must be a Great Power and `to` must be a Minor Nation.
     /// The caller is responsible for verifying nation types before calling this.
     /// Rejects if the proposer's standing is below 30.
-    pub fn propose_pact(&mut self, from: NationId, to: NationId) -> Result<(), String> {
+    pub fn propose_pact(&mut self, from: NationId, to: NationId) -> Result<(), DomainError> {
         if !self.would_accept_treaty(from) {
-            return Err("Standing too low to propose treaties".to_string());
+            return Err(DomainError::illegal("Standing too low to propose treaties"));
         }
         let rel = self.ensure_relation(from, to);
         if !rel.has_embassy {
-            return Err("Embassy required before proposing a non-aggression pact".to_string());
+            return Err(DomainError::illegal("Embassy required before proposing a non-aggression pact"));
         }
         if rel.at_war {
-            return Err("Cannot propose pact while at war".to_string());
+            return Err(DomainError::illegal("Cannot propose pact while at war"));
         }
         if rel.has_treaty(TreatyType::NonAggressionPact) {
-            return Err("Non-aggression pact already active".to_string());
+            return Err(DomainError::illegal("Non-aggression pact already active"));
         }
         if rel.has_treaty(TreatyType::Alliance) {
-            return Err("Alliance already active — NAP is redundant".to_string());
+            return Err(DomainError::illegal("Alliance already active — NAP is redundant"));
         }
         rel.add_treaty(TreatyType::NonAggressionPact);
         rel.improve_score(10);
@@ -336,19 +337,19 @@ impl DiplomacyState {
     /// Requires embassy (GP pairs have embassies from game start).
     /// Both nations must be Great Powers — the caller is responsible for verifying this.
     /// Rejects if the proposer's standing is below 30.
-    pub fn propose_alliance(&mut self, from: NationId, to: NationId) -> Result<(), String> {
+    pub fn propose_alliance(&mut self, from: NationId, to: NationId) -> Result<(), DomainError> {
         if !self.would_accept_treaty(from) {
-            return Err("Standing too low to propose treaties".to_string());
+            return Err(DomainError::illegal("Standing too low to propose treaties"));
         }
         let rel = self.ensure_relation(from, to);
         if !rel.has_embassy {
-            return Err("Embassy required before proposing an alliance".to_string());
+            return Err(DomainError::illegal("Embassy required before proposing an alliance"));
         }
         if rel.at_war {
-            return Err("Cannot propose alliance while at war".to_string());
+            return Err(DomainError::illegal("Cannot propose alliance while at war"));
         }
         if rel.has_treaty(TreatyType::Alliance) {
-            return Err("Alliance already active".to_string());
+            return Err(DomainError::illegal("Alliance already active"));
         }
         rel.add_treaty(TreatyType::Alliance);
         rel.improve_score(15);
@@ -530,9 +531,9 @@ impl DiplomacyState {
         from: NationId,
         to: NationId,
         turn: TurnNumber,
-    ) -> Result<(), String> {
+    ) -> Result<(), DomainError> {
         if !self.is_at_war(from, to) {
-            return Err("Not at war".to_string());
+            return Err(DomainError::illegal("Not at war"));
         }
         // No duplicate pending peace proposals between these two nations
         let already_pending = self.pending_proposals.iter().any(|p| {
@@ -540,7 +541,7 @@ impl DiplomacyState {
                 && ((p.from == from && p.to == to) || (p.from == to && p.to == from))
         });
         if already_pending {
-            return Err("Peace proposal already pending".to_string());
+            return Err(DomainError::illegal("Peace proposal already pending"));
         }
         self.pending_proposals.push(DiplomaticProposal {
             from,
@@ -561,60 +562,60 @@ impl DiplomacyState {
         to: NationId,
         treaty_type: TreatyType,
         turn: TurnNumber,
-    ) -> Result<(), String> {
+    ) -> Result<(), DomainError> {
         // Reject unsupported treaty types first (before any state checks)
         match treaty_type {
             TreatyType::NonAggressionPact | TreatyType::Alliance => {}
             _ => {
-                return Err(format!(
+                return Err(DomainError::illegal(format!(
                     "{:?} cannot be proposed via propose_treaty — use the dedicated method",
                     treaty_type
-                ));
+                )));
             }
         }
 
         if self.is_at_war(from, to) {
-            return Err("Cannot propose treaty while at war".to_string());
+            return Err(DomainError::illegal("Cannot propose treaty while at war"));
         }
 
         // Treaty-type-specific preconditions
         match treaty_type {
             TreatyType::NonAggressionPact => {
                 if !self.would_accept_treaty(from) {
-                    return Err("Standing too low to propose treaties".to_string());
+                    return Err(DomainError::illegal("Standing too low to propose treaties"));
                 }
                 let rel = self.get_relation(from, to);
                 if !rel.map(|r| r.has_embassy).unwrap_or(false) {
-                    return Err(
-                        "Embassy required before proposing a non-aggression pact".to_string()
-                    );
+                    return Err(DomainError::illegal(
+                        "Embassy required before proposing a non-aggression pact",
+                    ));
                 }
                 if rel
                     .map(|r| r.has_treaty(TreatyType::NonAggressionPact))
                     .unwrap_or(false)
                 {
-                    return Err("Non-aggression pact already active".to_string());
+                    return Err(DomainError::illegal("Non-aggression pact already active"));
                 }
                 if rel
                     .map(|r| r.has_treaty(TreatyType::Alliance))
                     .unwrap_or(false)
                 {
-                    return Err("Alliance already active — NAP is redundant".to_string());
+                    return Err(DomainError::illegal("Alliance already active — NAP is redundant"));
                 }
             }
             TreatyType::Alliance => {
                 if !self.would_accept_treaty(from) {
-                    return Err("Standing too low to propose treaties".to_string());
+                    return Err(DomainError::illegal("Standing too low to propose treaties"));
                 }
                 let rel = self.get_relation(from, to);
                 if !rel.map(|r| r.has_embassy).unwrap_or(false) {
-                    return Err("Embassy required before proposing an alliance".to_string());
+                    return Err(DomainError::illegal("Embassy required before proposing an alliance"));
                 }
                 if rel
                     .map(|r| r.has_treaty(TreatyType::Alliance))
                     .unwrap_or(false)
                 {
-                    return Err("Alliance already active".to_string());
+                    return Err(DomainError::illegal("Alliance already active"));
                 }
             }
             // Unreachable — unsupported types are rejected above
@@ -627,7 +628,7 @@ impl DiplomacyState {
                 && ((p.from == from && p.to == to) || (p.from == to && p.to == from))
         });
         if already_pending {
-            return Err("Proposal already pending".to_string());
+            return Err(DomainError::illegal("Proposal already pending"));
         }
         self.pending_proposals.push(DiplomaticProposal {
             from,

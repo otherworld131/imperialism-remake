@@ -12,7 +12,7 @@ pub use buildings::{Building, BuildingType};
 pub use civilians::{BuildTask, Civilian, CivilianType, parse_civilian_type};
 #[cfg(test)]
 pub use civilians::next_civilian_id;
-pub use labor::{LaborPool, WorkerType};
+pub use labor::{LaborPool, TemporaryPenalty, TierState, WorkerType};
 pub use ledger::{
     CashEntry, CashFlow, CashSink, CashSource, FlowCategory, ResourceFlow, ResourceIn, ResourceOut,
     Stockpile,

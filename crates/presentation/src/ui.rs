@@ -1,3 +1,5 @@
+use application::domain::hex::HexCoord;
+use application::domain::turn::process_turn;
 use bevy::prelude::*;
 
 use crate::hex_renderer::GameStateResource;
@@ -149,7 +151,7 @@ pub fn handle_tile_hover(
     };
 
     // Convert pixel to hex coordinate
-    let coord = domain::hex::HexCoord::from_pixel(
+    let coord = HexCoord::from_pixel(
         world_pos.x as f64,
         -world_pos.y as f64, // flip Y back
         crate::hex_renderer::HEX_SIZE as f64,
@@ -220,7 +222,7 @@ pub fn handle_input(
 ) {
     // Space = end turn
     if keys.just_pressed(KeyCode::Space) {
-        let _report = domain::turn::process_turn(&mut game.0);
+        let _report = process_turn(&mut game.0);
     }
 
     // Escape = quit

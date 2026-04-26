@@ -5,7 +5,6 @@ edition.workspace = true
 
 [dependencies]
 application = { path = "../application" }
-domain = { path = "../domain" }
 
 # Bevy game engine. Uses default features which auto-detect the platform:
 # - Windows: DirectX 12 / Vulkan

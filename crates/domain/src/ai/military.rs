@@ -7,6 +7,8 @@ use crate::types::*;
 
 #[cfg(test)]
 use super::common::next_unit_id;
+#[cfg(test)]
+use super::common::{PersonalityConfig, lua_or};
 use super::common::{AiPersonality, get_personality};
 
 /// Build military units when the nation has sufficient treasury.
@@ -45,7 +47,9 @@ pub(crate) fn ai_build_military(
         .as_ref()
         .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
     #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
+    let lua_cfg: Option<super::lua_bridge::LuaAiConfig> = None;
+
+    let defaults = PersonalityConfig::for_personality(personality);
 
     let nation = match game.get_nation_mut(nation_id) {
         Some(n) => n,
@@ -63,67 +67,12 @@ pub(crate) fn ai_build_military(
     // Deterministic per-nation seed for unit-type variety
     let variety_seed = (turn_number as usize).wrapping_mul(nation_id.0 as usize + 7);
 
-    // Thresholds vary by personality (Lua overrides Rust defaults)
-    let tier1_max: usize = 'val: {
-        #[cfg(feature = "lua")]
-        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.tier1_army_max) {
-            break 'val v;
-        }
-        match personality {
-            AiPersonality::Aggressive => 4,
-            AiPersonality::Diplomatic => 2,
-            AiPersonality::Economic => 3,
-            AiPersonality::Balanced => 3,
-        }
-    };
-    let tier1_treasury: Money = 'val: {
-        #[cfg(feature = "lua")]
-        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.tier1_treasury) {
-            break 'val Money::dollars(v);
-        }
-        match personality {
-            AiPersonality::Aggressive => Money::dollars(1500),
-            AiPersonality::Diplomatic => Money::dollars(3000),
-            AiPersonality::Economic => Money::dollars(2500),
-            AiPersonality::Balanced => Money::dollars(2000),
-        }
-    };
-    let tier2_max: usize = 'val: {
-        #[cfg(feature = "lua")]
-        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.tier2_army_max) {
-            break 'val v;
-        }
-        match personality {
-            AiPersonality::Aggressive => 7,
-            AiPersonality::Diplomatic => 4,
-            AiPersonality::Economic => 5,
-            AiPersonality::Balanced => 5,
-        }
-    };
-    let tier2_treasury: Money = 'val: {
-        #[cfg(feature = "lua")]
-        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.tier2_treasury) {
-            break 'val Money::dollars(v);
-        }
-        match personality {
-            AiPersonality::Aggressive => Money::dollars(3000),
-            AiPersonality::Diplomatic => Money::dollars(8000),
-            AiPersonality::Economic => Money::dollars(6000),
-            AiPersonality::Balanced => Money::dollars(5000),
-        }
-    };
-    let tier3_treasury: Money = 'val: {
-        #[cfg(feature = "lua")]
-        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.tier3_treasury) {
-            break 'val Money::dollars(v);
-        }
-        match personality {
-            AiPersonality::Aggressive => Money::dollars(6000),
-            AiPersonality::Diplomatic => Money::dollars(15000),
-            AiPersonality::Economic => Money::dollars(12000),
-            AiPersonality::Balanced => Money::dollars(10000),
-        }
-    };
+    // Thresholds: Lua overrides personality defaults via lua_or.
+    let tier1_max = lua_or(lua_cfg.as_ref().and_then(|c| c.tier1_army_max), defaults.tier1_army_max);
+    let tier1_treasury = lua_or(lua_cfg.as_ref().and_then(|c| c.tier1_treasury.map(Money::dollars)), defaults.tier1_treasury);
+    let tier2_max = lua_or(lua_cfg.as_ref().and_then(|c| c.tier2_army_max), defaults.tier2_army_max);
+    let tier2_treasury = lua_or(lua_cfg.as_ref().and_then(|c| c.tier2_treasury.map(Money::dollars)), defaults.tier2_treasury);
+    let tier3_treasury = lua_or(lua_cfg.as_ref().and_then(|c| c.tier3_treasury.map(Money::dollars)), defaults.tier3_treasury);
 
     if army_count < tier1_max && treasury > tier1_treasury {
         // Tier 1: pick from basic unit types with personality bias + variety
@@ -414,7 +363,7 @@ pub(crate) fn ai_declare_wars(
             .as_ref()
             .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
         #[cfg(not(feature = "lua"))]
-        let _lua_cfg: Option<()> = None;
+        let lua_cfg: Option<super::lua_bridge::LuaAiConfig> = None;
 
         #[cfg(feature = "lua")]
         let war_cooldown = lua_cfg

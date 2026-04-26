@@ -979,7 +979,8 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
         // Remote resources are capped by freight car capacity
         let overflow = if remote_delivery > freight_capacity {
             let ov = remote_delivery - freight_capacity;
-            let nation = game.world.nations.iter_mut().find(|n| n.id == nation_id).unwrap();
+            let nation = game.world.nations.iter_mut().find(|n| n.id == nation_id)
+                .expect("nation must exist: was iterated over a few lines above");
             let mut remaining_to_remove = ov;
 
             // Remove overflow from remote resources (approximation: remove proportionally)
@@ -1009,7 +1010,8 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
         // Use Bresenham-style proportional split so sum(requested)=remote_delivery
         // and sum(delivered)=delivered_remote exactly, preserving freight invariants.
         {
-            let nation = game.world.nations.iter_mut().find(|n| n.id == nation_id).unwrap();
+            let nation = game.world.nations.iter_mut().find(|n| n.id == nation_id)
+                .expect("nation must exist: was iterated over a few lines above");
             if remote_delivery > 0 && total_produced > 0 {
                 let delivered_remote = remote_delivery.saturating_sub(overflow);
                 let requested_items = proportional_split(&produced_this_turn, remote_delivery);
@@ -1122,7 +1124,8 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
 
         // Recruit immigrants (up to max_immigrants, consuming 1 set of materials per immigrant)
         let mut recruited = 0;
-        let nation = game.world.nations.iter_mut().find(|n| n.id == nation_id).unwrap();
+        let nation = game.world.nations.iter_mut().find(|n| n.id == nation_id)
+            .expect("nation must exist: was iterated from the same collection");
 
         for _ in 0..max_immigrants {
             // Check materials for each immigrant
@@ -1258,7 +1261,7 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
                     .get_nation(work.nation_id)
                     .map(|n| n.researched_techs.clone())
                     .unwrap_or_default();
-                let result: Result<Money, String> = match task {
+                let result: Result<Money, crate::DomainError> = match task {
                     crate::economy::civilians::BuildTask::Railroad => {
                         crate::map::infrastructure::build_railroad(
                             &mut game.world.hex_map,
@@ -1521,7 +1524,8 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
         };
 
         // Apply mill results: consume resources, produce materials
-        let nation = game.world.nations.iter_mut().find(|n| n.id == nation_id).unwrap();
+        let nation = game.world.nations.iter_mut().find(|n| n.id == nation_id)
+            .expect("nation must exist: was iterated from the same collection");
 
         // Collect newly produced materials to feed into factories
         let mut new_materials: Vec<(MaterialType, u32)> = Vec::new();
@@ -1854,7 +1858,8 @@ fn process_food(game: &mut GameState, report: &mut TurnReport) {
         let livestock_used = livestock.min(remaining_to_consume);
         // remaining_to_consume should be 0 now
 
-        let nation = game.world.nations.iter_mut().find(|n| n.id == nation_id).unwrap();
+        let nation = game.world.nations.iter_mut().find(|n| n.id == nation_id)
+            .expect("nation must exist: was iterated from the same collection");
         if grain_used > 0 {
             nation.remove_resource(ResourceType::Grain, grain_used);
         }

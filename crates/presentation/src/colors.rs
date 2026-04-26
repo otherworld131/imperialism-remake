@@ -1,6 +1,6 @@
 use bevy::color::Color;
-use domain::nation::NationColor;
-use domain::types::TerrainType;
+use application::domain::nation::NationColor;
+use application::domain::types::TerrainType;
 
 /// Map NationColor to Bevy RGBA color.
 pub fn nation_color(color: NationColor) -> Color {

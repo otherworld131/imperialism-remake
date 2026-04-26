@@ -1,3 +1,4 @@
+use crate::PersistenceError;
 use domain::data::GameData;
 use domain::game_state::GameState;
 use serde::{Deserialize, Serialize};
@@ -97,7 +98,7 @@ fn is_leap(year: i64) -> bool {
 ///
 /// The game state is wrapped in a [`SaveFile`] with the current format version
 /// and metadata (nation name, turn display, difficulty, timestamp).
-pub fn save_game(game: &GameState, path: &Path) -> Result<(), String> {
+pub fn save_game(game: &GameState, path: &Path) -> Result<(), PersistenceError> {
     let nation_name = game
         .get_nation(game.human_player_nation)
         .map(|n| n.name.clone())
@@ -114,35 +115,34 @@ pub fn save_game(game: &GameState, path: &Path) -> Result<(), String> {
         timestamp,
         game: clone_game_state_for_save(game),
     };
-    let json =
-        serde_json::to_string_pretty(&save).map_err(|e| format!("Serialization error: {}", e))?;
-    std::fs::write(path, json).map_err(|e| format!("Write error: {}", e))?;
+    let json = serde_json::to_string_pretty(&save)
+        .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+    std::fs::write(path, json)?;
     Ok(())
 }
 
 /// Load a game state from a JSON file at the given path.
 ///
-/// Checks the save file version and rejects files from future versions.
+/// Rejects any file whose version does not exactly match `CURRENT_SAVE_VERSION`
+/// (both old and future versions are rejected — no backward compatibility).
 /// After deserialization, transient fields (`tech_tree`, `events`) are
 /// reconstructed since they are skipped during serialization.
-pub fn load_game(path: &Path) -> Result<GameState, String> {
-    let json = std::fs::read_to_string(path).map_err(|e| format!("Read error: {}", e))?;
+pub fn load_game(path: &Path) -> Result<GameState, PersistenceError> {
+    let json = std::fs::read_to_string(path)?;
 
-    // Try to load as versioned SaveFile first.
     if let Ok(save) = serde_json::from_str::<SaveFile>(&json) {
-        if save.version > CURRENT_SAVE_VERSION {
-            return Err(format!(
-                "Save file version {} is newer than the supported version {}. \
-                 Please update the game to load this save.",
-                save.version, CURRENT_SAVE_VERSION
-            ));
+        if save.version != CURRENT_SAVE_VERSION {
+            return Err(PersistenceError::UnsupportedVersion {
+                found: save.version,
+                max_supported: CURRENT_SAVE_VERSION,
+            });
         }
         let mut game = save.game;
         game.game_data = GameData::default();
         return Ok(game);
     }
 
-    Err("Unrecognized save format".to_string())
+    Err(PersistenceError::UnrecognizedFormat)
 }
 
 /// Read save file metadata without loading the full game state.
@@ -172,8 +172,9 @@ pub struct SaveFileMetadata {
 }
 
 /// Delete a save file.
-pub fn delete_save(path: &Path) -> Result<(), String> {
-    std::fs::remove_file(path).map_err(|e| format!("Delete error: {}", e))
+pub fn delete_save(path: &Path) -> Result<(), PersistenceError> {
+    std::fs::remove_file(path)?;
+    Ok(())
 }
 
 /// List all save files (`.json`) in a directory, sorted by modification time (newest first).
@@ -310,11 +311,8 @@ mod tests {
     fn load_nonexistent_file_returns_error() {
         let result = load_game(Path::new("/tmp/nonexistent_save_12345.json"));
         match result {
-            Err(e) => assert!(
-                e.contains("Read error"),
-                "Expected 'Read error', got: {}",
-                e
-            ),
+            Err(PersistenceError::Io(_)) => {}
+            Err(e) => panic!("Expected Io error, got: {}", e),
             Ok(_) => panic!("Expected error for nonexistent file"),
         }
     }
@@ -327,14 +325,11 @@ mod tests {
         std::fs::write(&path, "this is not valid json").unwrap();
 
         let result = load_game(&path);
-        match result {
-            Err(e) => assert!(
-                e.contains("Deserialization error"),
-                "Expected 'Deserialization error', got: {}",
-                e
-            ),
-            Ok(_) => panic!("Expected error for invalid JSON"),
-        }
+        assert!(
+            matches!(result, Err(PersistenceError::UnrecognizedFormat)),
+            "Expected UnrecognizedFormat error, got: {:?}",
+            result.err()
+        );
 
         // Cleanup
         let _ = std::fs::remove_file(&path);
@@ -392,13 +387,11 @@ mod tests {
         // Loading should fail with a version error
         let result = load_game(&path);
         match result {
-            Err(e) => {
-                assert!(
-                    e.contains("newer than the supported version"),
-                    "Expected version mismatch error, got: {}",
-                    e
-                );
+            Err(PersistenceError::UnsupportedVersion { found, max_supported }) => {
+                assert_eq!(found, CURRENT_SAVE_VERSION + 1);
+                assert_eq!(max_supported, CURRENT_SAVE_VERSION);
             }
+            Err(e) => panic!("Expected UnsupportedVersion error, got: {}", e),
             Ok(_) => panic!("Expected error for future save version"),
         }
 
@@ -408,53 +401,44 @@ mod tests {
     }
 
     #[test]
-    fn backwards_compatibility_version_1_loads() {
-        // Simulate a v1 save file (has version + game, but no metadata fields)
+    fn old_version_save_is_rejected() {
+        // Old saves (version != CURRENT_VERSION) are not supported per project policy.
+        // A v1-format JSON (version + game, no metadata) must be rejected.
         let game = new_game("test", Difficulty::Easy, 0);
-
-        let dir = std::env::temp_dir().join("imperialism_test_backwards_compat");
+        let dir = std::env::temp_dir().join("imperialism_test_old_version");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("v1_save.json");
-
-        // Build a v1-style JSON manually (version + game, no metadata)
         let game_copy = clone_game_state_for_save(&game);
         let v1_json = serde_json::json!({
             "version": 1,
             "game": serde_json::to_value(&game_copy).unwrap()
         });
         std::fs::write(&path, serde_json::to_string_pretty(&v1_json).unwrap()).unwrap();
-
-        // Verify it loads successfully
-        let loaded = load_game(&path).unwrap();
-        assert_eq!(loaded.turn, game.turn);
-        assert_eq!(loaded.difficulty, game.difficulty);
-        assert_eq!(loaded.world.map_key, game.world.map_key);
-        assert_eq!(loaded.world.nations.len(), game.world.nations.len());
-
-        // Cleanup
+        let result = load_game(&path);
+        assert!(
+            matches!(result, Err(PersistenceError::UnsupportedVersion { .. }) | Err(PersistenceError::UnrecognizedFormat)),
+            "Expected version-mismatch or unrecognized-format error, got {:?}",
+            result.err()
+        );
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]
-    fn unversioned_save_loads_via_fallback() {
-        // Simulate an old save file that has no version wrapper — just raw GameState.
+    fn unversioned_save_is_rejected() {
+        // Old saves with no version wrapper are not supported per project policy.
         let game = new_game("test", Difficulty::Normal, 0);
-
         let dir = std::env::temp_dir().join("imperialism_test_unversioned");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("old_save.json");
-
-        // Write raw GameState JSON (no SaveFile wrapper)
         let raw_json = serde_json::to_string_pretty(&game).unwrap();
         std::fs::write(&path, &raw_json).unwrap();
-
-        // Should still load via backwards-compatible fallback
-        let loaded = load_game(&path).unwrap();
-        assert_eq!(loaded.turn, game.turn);
-        assert_eq!(loaded.difficulty, game.difficulty);
-
-        // Cleanup
+        let result = load_game(&path);
+        assert!(
+            matches!(result, Err(PersistenceError::UnsupportedVersion { .. }) | Err(PersistenceError::UnrecognizedFormat)),
+            "Expected version-mismatch or unrecognized-format error, got {:?}",
+            result.err()
+        );
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
     }
@@ -517,8 +501,7 @@ mod tests {
     #[test]
     fn delete_save_nonexistent_returns_error() {
         let result = delete_save(Path::new("/tmp/nonexistent_save_99999.json"));
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Delete error"));
+        assert!(matches!(result, Err(PersistenceError::Io(_))));
     }
 
     // ── list_saves tests ────────────────────────────────────────

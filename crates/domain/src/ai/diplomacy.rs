@@ -2,6 +2,8 @@
 use crate::game_state::GameState;
 use crate::types::*;
 
+#[cfg(test)]
+use super::common::{PersonalityConfig, lua_or};
 use super::common::{AiPersonality, get_personality};
 
 /// AI builds trade consulates with Minor Nations, prioritizing those with
@@ -20,18 +22,10 @@ pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
         .as_ref()
         .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
     #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
+    let lua_cfg: Option<super::lua_bridge::LuaAiConfig> = None;
 
-    let max_per_turn: u32 = 'val: {
-        #[cfg(feature = "lua")]
-        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.consulate_max_per_turn) {
-            break 'val v;
-        }
-        match personality {
-            AiPersonality::Diplomatic => 4,
-            _ => 2,
-        }
-    };
+    let defaults = PersonalityConfig::for_personality(personality);
+    let max_per_turn = lua_or(lua_cfg.as_ref().and_then(|c| c.consulate_max_per_turn), defaults.consulate_max_per_turn);
 
     // Check treasury threshold
     let treasury = match game.get_nation(nation_id) {
@@ -193,7 +187,7 @@ pub fn ai_manage_diplomacy(
         .as_ref()
         .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
     #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
+    let lua_cfg: Option<super::lua_bridge::LuaAiConfig> = None;
 
     // Determine behavior parameters based on personality (Lua overrides Rust defaults)
     let propose_pact_chance: bool = 'val: {
@@ -638,7 +632,7 @@ pub fn ai_pre_election_strategy(
         .as_ref()
         .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
     #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
+    let lua_cfg: Option<super::lua_bridge::LuaAiConfig> = None;
 
     let grant_amount: Money = 'val: {
         #[cfg(feature = "lua")]

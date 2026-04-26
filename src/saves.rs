@@ -66,7 +66,7 @@ pub(crate) fn atomic_save_game(game: &GameState, filename: &str) -> Result<(), S
     {
         std::fs::remove_file(&tmp_path).ok();
     }
-    persistence::save_game(game, &tmp_path)?;
+    persistence::save_game(game, &tmp_path).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp_path, &target).map_err(|e| format!("Failed to finalize save: {}", e))?;
     Ok(())
 }
@@ -192,7 +192,7 @@ pub(crate) fn print_save_list(dir: &std::path::Path) {
 
 pub(crate) fn load_saved_game(filename: &str) -> Result<GameState, String> {
     let path = sanitize_save_filename(filename)?;
-    persistence::load_game(&path)
+    persistence::load_game(&path).map_err(|e| e.to_string())
 }
 
 pub(crate) fn delete_saved_game(filename: &str) {

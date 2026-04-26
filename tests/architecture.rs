@@ -267,6 +267,70 @@ fn domain_does_not_import_infrastructure() {
     }
 }
 
+// ── Test: Presentation does not reference domain directly ──────────
+//
+// Presentation must access domain types through the application layer
+// (via `application::domain::`). This test scans ALL source lines —
+// not just `use` statements — to catch inline path expressions like
+// `domain::hex::HexCoord::from_pixel(...)`.
+
+fn find_domain_references(dir: &str) -> Vec<(String, String)> {
+    let mut results = Vec::new();
+    let dir_path = std::path::Path::new(dir);
+    if !dir_path.exists() {
+        return results;
+    }
+    collect_domain_references(dir_path, &mut results);
+    results
+}
+
+fn collect_domain_references(dir: &std::path::Path, results: &mut Vec<(String, String)>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_domain_references(&path, results);
+            } else if path.extension().is_some_and(|ext| ext == "rs")
+                && let Ok(content) = fs::read_to_string(&path)
+            {
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    // Skip comment lines
+                    if trimmed.starts_with("//") {
+                        continue;
+                    }
+                    // Flag any `domain::` reference that is NOT preceded by `application::`
+                    // (i.e., not `application::domain::`)
+                    let mut search = trimmed;
+                    while let Some(pos) = search.find("domain::") {
+                        let prefix = &search[..pos];
+                        if !prefix.ends_with("application::") {
+                            results.push((path.display().to_string(), trimmed.to_string()));
+                            break;
+                        }
+                        search = &search[pos + 8..];
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn presentation_does_not_import_domain_directly() {
+    let refs = find_domain_references("crates/presentation/src");
+
+    for (file, line) in &refs {
+        panic!(
+            "Presentation crate must not reference domain directly. \
+             Route through application::domain:: instead. \
+             Found '{}' in {}",
+            line,
+            file
+        );
+    }
+}
+
 // ── Test: Domain does not import bevy or any framework crate ───────
 
 #[test]

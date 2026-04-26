@@ -4,6 +4,7 @@ use crate::map::hex_map::HexMap;
 use crate::map::province::Province;
 use crate::nation::Nation;
 use crate::types::*;
+use crate::DomainError;
 use std::collections::{HashSet, VecDeque};
 
 /// Name of the tech (from Lua `game_config`) that gates railroad construction
@@ -97,22 +98,22 @@ pub fn build_railroad(
     provinces: &[Province],
     game_data: &GameData,
     cfg: &GameConfig,
-) -> Result<Money, String> {
+) -> Result<Money, DomainError> {
     if !tile_owned_by(hex_map, coord, provinces, nation_id) {
-        return Err("Cannot build railroad on tile not owned by this nation".to_string());
+        return Err(DomainError::illegal("Cannot build railroad on tile not owned by this nation"));
     }
-    let tile = hex_map.get_tile(coord).ok_or("Tile not found")?;
+    let tile = hex_map.get_tile(coord).ok_or(DomainError::TileNotFound(coord))?;
     if tile.infrastructure.has_railroad {
-        return Err("Railroad already exists".to_string());
+        return Err(DomainError::illegal("Railroad already exists"));
     }
     let terrain = tile.terrain();
-    let cost = railroad_cost(terrain, cfg).ok_or("Cannot build railroad on sea")?;
+    let cost = railroad_cost(terrain, cfg).ok_or(DomainError::illegal("Cannot build railroad on sea"))?;
     if !rail_terrain_enabled(terrain, researched_techs, game_data, cfg) {
         let tech = railroad_required_tech(terrain, cfg).unwrap_or("?");
-        return Err(format!("Railroad on {:?} requires tech: {}", terrain, tech));
+        return Err(DomainError::illegal(format!("Railroad on {:?} requires tech: {}", terrain, tech)));
     }
 
-    let tile = hex_map.get_tile_mut(coord).ok_or("Tile not found")?;
+    let tile = hex_map.get_tile_mut(coord).ok_or(DomainError::TileNotFound(coord))?;
     tile.infrastructure.has_railroad = true;
     Ok(cost)
 }
@@ -125,31 +126,31 @@ pub fn build_depot(
     nation_id: NationId,
     provinces: &[Province],
     cfg: &GameConfig,
-) -> Result<Money, String> {
+) -> Result<Money, DomainError> {
     if !tile_owned_by(hex_map, coord, provinces, nation_id) {
-        return Err("Cannot build depot on tile not owned by this nation".to_string());
+        return Err(DomainError::illegal("Cannot build depot on tile not owned by this nation"));
     }
-    let tile = hex_map.get_tile(coord).ok_or("Tile not found")?;
+    let tile = hex_map.get_tile(coord).ok_or(DomainError::TileNotFound(coord))?;
     if !tile.terrain().is_land() {
-        return Err("Cannot build depot on sea".to_string());
+        return Err(DomainError::illegal("Cannot build depot on sea"));
     }
     if tile.infrastructure.has_depot {
-        return Err("Depot already exists".to_string());
+        return Err(DomainError::illegal("Depot already exists"));
     }
     if !tile.infrastructure.has_railroad {
-        return Err("Depot requires a railroad on the tile".to_string());
+        return Err(DomainError::illegal("Depot requires a railroad on the tile"));
     }
-    let tile = hex_map.get_tile_mut(coord).ok_or("Tile not found")?;
+    let tile = hex_map.get_tile_mut(coord).ok_or(DomainError::TileNotFound(coord))?;
     tile.infrastructure.has_depot = true;
     Ok(Money::dollars(cfg.depot_cost))
 }
 
 /// Unchecked depot placement used during scenario setup (pre-builds the capital's
 /// depot before the prerequisite rules are in force).
-pub fn place_depot_unchecked(hex_map: &mut HexMap, coord: HexCoord) -> Result<(), String> {
-    let tile = hex_map.get_tile_mut(coord).ok_or("Tile not found")?;
+pub fn place_depot_unchecked(hex_map: &mut HexMap, coord: HexCoord) -> Result<(), DomainError> {
+    let tile = hex_map.get_tile_mut(coord).ok_or(DomainError::TileNotFound(coord))?;
     if !tile.terrain().is_land() {
-        return Err("Cannot place depot on sea".to_string());
+        return Err(DomainError::illegal("Cannot place depot on sea"));
     }
     tile.infrastructure.has_depot = true;
     Ok(())
@@ -162,36 +163,36 @@ pub fn build_port(
     nation_id: NationId,
     provinces: &[Province],
     cfg: &GameConfig,
-) -> Result<Money, String> {
+) -> Result<Money, DomainError> {
     if !tile_owned_by(hex_map, coord, provinces, nation_id) {
-        return Err("Cannot build port on tile not owned by this nation".to_string());
+        return Err(DomainError::illegal("Cannot build port on tile not owned by this nation"));
     }
-    let tile = hex_map.get_tile(coord).ok_or("Tile not found")?;
+    let tile = hex_map.get_tile(coord).ok_or(DomainError::TileNotFound(coord))?;
     if !tile.terrain().is_land() {
-        return Err("Cannot build port on sea".to_string());
+        return Err(DomainError::illegal("Cannot build port on sea"));
     }
     if tile.infrastructure.has_port {
-        return Err("Port already exists".to_string());
+        return Err(DomainError::illegal("Port already exists"));
     }
     let is_coastal = coord
         .neighbors()
         .iter()
         .any(|n| hex_map.get_tile(*n).is_some_and(|t| !t.terrain().is_land()));
     if !is_coastal {
-        return Err("Port must be on a coastal tile".to_string());
+        return Err(DomainError::illegal("Port must be on a coastal tile"));
     }
-    let tile = hex_map.get_tile_mut(coord).ok_or("Tile not found")?;
+    let tile = hex_map.get_tile_mut(coord).ok_or(DomainError::TileNotFound(coord))?;
     tile.infrastructure.has_port = true;
     Ok(Money::dollars(cfg.port_cost))
 }
 
 /// Cost to build or upgrade a fort.
-pub fn fort_cost(level: u8, cfg: &GameConfig) -> Result<Money, String> {
+pub fn fort_cost(level: u8, cfg: &GameConfig) -> Result<Money, DomainError> {
     match level {
         1 => Ok(Money::dollars(cfg.fort_cost_level_1)),
         2 => Ok(Money::dollars(cfg.fort_cost_level_2)),
         3 => Ok(Money::dollars(cfg.fort_cost_level_3)),
-        _ => Err("Fort level must be 1-3".to_string()),
+        _ => Err(DomainError::illegal("Fort level must be 1-3")),
     }
 }
 
@@ -200,19 +201,19 @@ pub fn build_fort(
     hex_map: &mut HexMap,
     coord: HexCoord,
     cfg: &GameConfig,
-) -> Result<(u8, Money), String> {
-    let tile = hex_map.get_tile(coord).ok_or("Tile not found")?;
+) -> Result<(u8, Money), DomainError> {
+    let tile = hex_map.get_tile(coord).ok_or(DomainError::TileNotFound(coord))?;
     if !tile.terrain().is_land() {
-        return Err("Cannot build fort on sea".to_string());
+        return Err(DomainError::illegal("Cannot build fort on sea"));
     }
     let current_level = tile.infrastructure.fort_level;
     if current_level >= 3 {
-        return Err("Fort already at maximum level (3)".to_string());
+        return Err(DomainError::illegal("Fort already at maximum level (3)"));
     }
     let new_level = current_level + 1;
     let cost = fort_cost(new_level, cfg)?;
 
-    let tile = hex_map.get_tile_mut(coord).ok_or("Tile not found")?;
+    let tile = hex_map.get_tile_mut(coord).ok_or(DomainError::TileNotFound(coord))?;
     tile.infrastructure.has_fort = true;
     tile.infrastructure.fort_level = new_level;
     Ok((new_level, cost))
@@ -367,7 +368,7 @@ mod tests {
         coord: HexCoord,
         nation_id: NationId,
         provinces: &[Province],
-    ) -> Result<Money, String> {
+    ) -> Result<Money, DomainError> {
         build_railroad(
             map,
             coord,

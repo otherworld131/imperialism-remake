@@ -288,7 +288,7 @@ fn low_standing_prevents_treaty_proposals() {
     // Alliance proposal should fail due to low standing
     let result = game.world.diplomacy.propose_alliance(proposer, target);
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), "Standing too low to propose treaties");
+    assert!(result.unwrap_err().to_string().contains("Standing too low to propose treaties"));
 }
 
 #[test]
@@ -308,7 +308,7 @@ fn low_standing_prevents_pact_proposals() {
     // Pact proposal should fail due to low standing
     let result = game.world.diplomacy.propose_pact(player, mn_id);
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), "Standing too low to propose treaties");
+    assert!(result.unwrap_err().to_string().contains("Standing too low to propose treaties"));
 }
 
 // ── Convenience method tests ──────────────────────────────────────

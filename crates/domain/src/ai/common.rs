@@ -5,6 +5,112 @@ use crate::types::*;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU32, Ordering};
 
+/// Per-personality threshold and weight defaults.
+///
+/// Instantiate once per AI tick with `PersonalityConfig::for_personality(p)`.
+/// AI functions read values from this struct instead of dispatching on the
+/// personality enum at every decision point, eliminating 40+ duplicate `match`
+/// blocks across the AI modules.
+#[derive(Debug, Clone)]
+pub struct PersonalityConfig {
+    // Military build tiers
+    pub tier1_army_max: usize,
+    pub tier2_army_max: usize,
+    pub tier1_treasury: Money,
+    pub tier2_treasury: Money,
+    pub tier3_treasury: Money,
+    // Diplomacy
+    pub consulate_max_per_turn: u32,
+    // Spending weights
+    pub spending_military_weight: f64,
+    pub spending_economy_weight: f64,
+    pub spending_diplomacy_weight: f64,
+    pub spending_reserve: Money,
+    pub spending_min_threshold: f64,
+    // Worker training
+    pub worker_train_threshold: u32,
+    pub worker_promote_threshold: u32,
+}
+
+impl PersonalityConfig {
+    /// Construct the default config for a given personality.
+    /// AI functions can then call `lua_or` to override individual fields from Lua.
+    pub fn for_personality(personality: AiPersonality) -> Self {
+        match personality {
+            AiPersonality::Aggressive => Self {
+                tier1_army_max: 4,
+                tier2_army_max: 7,
+                tier1_treasury: Money::dollars(1500),
+                tier2_treasury: Money::dollars(3000),
+                tier3_treasury: Money::dollars(6000),
+                consulate_max_per_turn: 2,
+                spending_military_weight: 1.8,
+                spending_economy_weight: 0.6,
+                spending_diplomacy_weight: 0.3,
+                spending_reserve: Money::dollars(500),
+                spending_min_threshold: 3.0,
+                worker_train_threshold: 6,
+                worker_promote_threshold: 3,
+            },
+            AiPersonality::Diplomatic => Self {
+                tier1_army_max: 2,
+                tier2_army_max: 4,
+                tier1_treasury: Money::dollars(3000),
+                tier2_treasury: Money::dollars(8000),
+                tier3_treasury: Money::dollars(15000),
+                consulate_max_per_turn: 4,
+                spending_military_weight: 0.5,
+                spending_economy_weight: 1.2,
+                spending_diplomacy_weight: 1.8,
+                spending_reserve: Money::dollars(1000),
+                spending_min_threshold: 5.0,
+                worker_train_threshold: 4,
+                worker_promote_threshold: 2,
+            },
+            AiPersonality::Economic => Self {
+                tier1_army_max: 3,
+                tier2_army_max: 5,
+                tier1_treasury: Money::dollars(2500),
+                tier2_treasury: Money::dollars(6000),
+                tier3_treasury: Money::dollars(12000),
+                consulate_max_per_turn: 2,
+                spending_military_weight: 0.7,
+                spending_economy_weight: 1.5,
+                spending_diplomacy_weight: 0.8,
+                spending_reserve: Money::dollars(1500),
+                spending_min_threshold: 5.0,
+                worker_train_threshold: 3,
+                worker_promote_threshold: 2,
+            },
+            AiPersonality::Balanced => Self {
+                tier1_army_max: 3,
+                tier2_army_max: 5,
+                tier1_treasury: Money::dollars(2000),
+                tier2_treasury: Money::dollars(5000),
+                tier3_treasury: Money::dollars(10000),
+                consulate_max_per_turn: 2,
+                spending_military_weight: 1.0,
+                spending_economy_weight: 1.0,
+                spending_diplomacy_weight: 0.8,
+                spending_reserve: Money::dollars(1000),
+                spending_min_threshold: 5.0,
+                worker_train_threshold: 4,
+                worker_promote_threshold: 2,
+            },
+        }
+    }
+}
+
+/// Apply a Lua config override if present, otherwise return the default.
+///
+/// Usage: `lua_or(lua_cfg.as_ref().and_then(|c| c.tier1_army_max), cfg.tier1_army_max)`
+///
+/// This replaces the repeated `#[cfg(feature = "lua")] if let Some(v) = ... { break 'val v; }`
+/// pattern present at 6+ sites across the AI modules.
+pub fn lua_or<T>(lua_value: Option<T>, default: T) -> T {
+    lua_value.unwrap_or(default)
+}
+
 /// AI personality types that affect decision-making priorities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum AiPersonality {

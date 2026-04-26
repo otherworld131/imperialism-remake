@@ -106,7 +106,7 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
         .as_ref()
         .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
     #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
+    let lua_cfg: Option<super::lua_bridge::LuaAiConfig> = None;
 
     // Ship cap depends on personality; wealthy nations always aim for 5
     let max_ships: usize = if treasury > Money::dollars(5_000) {
@@ -230,7 +230,7 @@ pub fn ai_naval_strategy(
         .as_ref()
         .and_then(|e| super::lua_bridge::lua_get_config(e, _personality));
     #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
+    let lua_cfg: Option<super::lua_bridge::LuaAiConfig> = None;
 
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,

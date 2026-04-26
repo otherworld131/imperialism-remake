@@ -4099,7 +4099,6 @@ version = "0.1.0"
 dependencies = [
  "application",
  "bevy",
- "domain",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 use bevy::prelude::*;
-use domain::game_state::new_game;
-use domain::types::Difficulty;
+use application::domain::game_state::new_game;
+use application::domain::types::Difficulty;
 
 use crate::camera;
 use crate::hex_renderer::{self, GameStateResource};

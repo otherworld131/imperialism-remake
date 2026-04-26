@@ -1,5 +1,6 @@
 use crate::map::UnitId;
 use crate::types::*;
+use crate::DomainError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum UnitCategory {
@@ -540,17 +541,17 @@ pub fn disband_unit(
     game: &mut crate::game_state::GameState,
     nation_id: NationId,
     unit_id: UnitId,
-) -> Result<(), String> {
+) -> Result<(), DomainError> {
     let nation = game
         .get_nation_mut(nation_id)
-        .ok_or_else(|| "nation not found".to_string())?;
+        .ok_or(DomainError::NationNotFound(nation_id))?;
     let pos = nation
         .military.army
         .iter()
         .position(|u| u.id == unit_id)
-        .ok_or_else(|| "unit not found".to_string())?;
+        .ok_or_else(|| DomainError::illegal("unit not found"))?;
     if nation.military.army[pos].unit_type.category() == UnitCategory::Garrison {
-        return Err("garrison units cannot be dismissed".to_string());
+        return Err(DomainError::illegal("garrison units cannot be dismissed"));
     }
     nation.military.army.remove(pos);
     game.transient.pending_moves

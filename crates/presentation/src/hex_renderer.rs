@@ -1,7 +1,7 @@
+use application::domain::game_state::GameState;
+use application::domain::hex::HexCoord;
+use application::domain::types::*;
 use bevy::prelude::*;
-use domain::game_state::GameState;
-use domain::hex::HexCoord;
-use domain::types::*;
 
 use crate::colors;
 

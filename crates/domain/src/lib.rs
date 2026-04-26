@@ -1,6 +1,6 @@
 #![deny(warnings, clippy::all)]
 
-/// Domain-level errors for inventory and reservation operations.
+/// Domain-level errors covering invariant violations, illegal moves, and lookup failures.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DomainError {
     /// Attempted to reserve/consume more of a commodity than is available.
@@ -12,6 +12,27 @@ pub enum DomainError {
     ReservationNotFound(crate::types::ReservationId),
     /// An operation was called with an invalid argument (e.g. negative amount).
     InvalidOperation(String),
+    /// A referenced nation does not exist (e.g. eliminated or invalid id).
+    NationNotFound(crate::types::NationId),
+    /// A referenced province does not exist.
+    ProvinceNotFound(crate::types::ProvinceId),
+    /// A referenced tile coordinate is out of bounds or not present on the map.
+    TileNotFound(crate::hex::HexCoord),
+    /// A move, build, or diplomatic action is prohibited by game rules.
+    IllegalMove { reason: String },
+}
+
+impl DomainError {
+    /// Construct an `IllegalMove` error from any `Display`-able value.
+    pub fn illegal(reason: impl std::fmt::Display) -> Self {
+        Self::IllegalMove { reason: reason.to_string() }
+    }
+}
+
+impl From<DomainError> for String {
+    fn from(e: DomainError) -> String {
+        e.to_string()
+    }
 }
 
 impl std::fmt::Display for DomainError {
@@ -23,6 +44,10 @@ impl std::fmt::Display for DomainError {
             ),
             Self::ReservationNotFound(id) => write!(f, "reservation not found: {id}"),
             Self::InvalidOperation(msg) => write!(f, "invalid operation: {msg}"),
+            Self::NationNotFound(id) => write!(f, "nation not found: {id:?}"),
+            Self::ProvinceNotFound(id) => write!(f, "province not found: {id:?}"),
+            Self::TileNotFound(coord) => write!(f, "tile not found at {coord:?}"),
+            Self::IllegalMove { reason } => write!(f, "illegal move: {reason}"),
         }
     }
 }
