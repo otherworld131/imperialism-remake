@@ -16,7 +16,7 @@ use std::collections::HashMap;
 /// Applied uniformly to both `CashSource`/`CashSink` and
 /// `ResourceIn`/`ResourceOut` so CLI, batch JSON, and web UI can group
 /// flows into the same buckets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FlowCategory {
     /// Output of the nation's own economy — things you produced, or
     /// investments into building more productive capacity.
@@ -39,7 +39,7 @@ impl FlowCategory {
 }
 
 /// Every per-turn cash income source we currently account for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CashSource {
     /// Gold and Gems resources auto-converted to treasury ($500/$1000 per unit).
     GoldGemsConversion,
@@ -97,7 +97,7 @@ impl CashSource {
 }
 
 /// Every per-turn cash expense bucket.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CashSink {
     ArmyMaintenance,
     TradePurchase,
@@ -183,14 +183,14 @@ impl CashSink {
 
 /// One atomic cash movement. `partner` is set when the counterparty is known
 /// (trade partner, subsidy target) and `None` otherwise.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CashEntry {
     pub amount: Money,
     pub partner: Option<NationId>,
 }
 
 /// Per-nation, per-turn cash ledger.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CashFlow {
     pub opening_treasury: Money,
     pub closing_treasury: Money,
@@ -335,7 +335,7 @@ impl CashFlow {
 // correctness guarantee — only key categories are tracked.
 // ──────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Stockpile {
     Resource(ResourceType),
     Material(MaterialType),
@@ -352,7 +352,7 @@ impl Stockpile {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResourceIn {
     /// Raw resources gathered from owned tiles this turn.
     HomeProduction,
@@ -392,7 +392,7 @@ impl ResourceIn {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResourceOut {
     /// Lost because owning province was disconnected from capital.
     DisconnectedLoss,
@@ -445,21 +445,21 @@ impl ResourceOut {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ResourceInflowEntry {
     pub stockpile: Stockpile,
     pub source: ResourceIn,
     pub amount: u32,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ResourceOutflowEntry {
     pub stockpile: Stockpile,
     pub sink: ResourceOut,
     pub amount: u32,
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct ResourceFlow {
     pub inflow: Vec<ResourceInflowEntry>,
     pub outflow: Vec<ResourceOutflowEntry>,

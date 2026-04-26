@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WorkerType {
     Untrained,
     Trained,
@@ -7,7 +7,7 @@ pub enum WorkerType {
 
 /// Per-turn penalty applied to a tier (famine, plague, unrest, etc.).
 /// Reduces effective labor output but doesn't remove workers from the pool.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TemporaryPenalty {
     /// Fraction of the tier's labor that is suppressed (0.0–1.0).
     pub fraction: f32,
@@ -21,7 +21,7 @@ pub struct TemporaryPenalty {
 /// Sick workers consume food but do not contribute labor units.
 /// Fields are `Option`-gated so they default to zero / absent and add no
 /// allocation overhead until a feature actually populates them.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct TierState {
     /// Workers currently able to work.
     pub healthy: u32,
@@ -47,7 +47,7 @@ impl TierState {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LaborPool {
     /// Healthy-and-active count for each tier.
     /// These are the authoritative worker counts used by all production logic.
@@ -56,7 +56,6 @@ pub struct LaborPool {
     pub expert: u32,
     /// Optional rich per-tier metadata. Absent entries are implicitly all-healthy
     /// with no training queue or penalties.
-    #[serde(default)]
     pub tier_meta: std::collections::HashMap<WorkerType, TierState>,
 }
 

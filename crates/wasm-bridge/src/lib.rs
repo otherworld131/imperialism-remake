@@ -24,6 +24,27 @@ use domain::military::units::{ArmyUnit, ArmyUnitType};
 use domain::scenarios::{list_scenarios, new_scenario_game};
 use domain::turn::process_turn;
 use domain::types::*;
+use domain_snapshot::game_state::GameState as SnapshotGameState;
+
+// ── Snapshot helpers ─────────────────────────────────────────────────────
+
+fn game_to_json(game: &GameState) -> String {
+    let snap: SnapshotGameState = game.into();
+    serde_json::to_string(&snap).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+}
+
+fn game_to_value(game: &GameState) -> serde_json::Value {
+    let snap: SnapshotGameState = game.into();
+    serde_json::to_value(&snap).unwrap_or(serde_json::Value::Null)
+}
+
+fn game_from_json(json: &str) -> Result<GameState, String> {
+    let snap: SnapshotGameState = serde_json::from_str(json)
+        .map_err(|e| format!("deserialize: {e}"))?;
+    let mut game: GameState = snap.into();
+    game.game_data = domain::data::GameData::default();
+    Ok(game)
+}
 
 /// Build a `MapGenConfig` from raw frontend values, clamped to safe ranges.
 fn build_map_config(
@@ -57,7 +78,7 @@ pub fn wasm_new_game(
     let cfg = build_map_config(map_width, map_height, num_great_powers, num_minor_nations);
     let mut game = new_game_with_config(map_key, diff, nation_index, cfg);
     flavor_bridge::apply_flavor(&mut game, flavor_key);
-    serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+    game_to_json(&game)
 }
 
 /// Create a new game from a historical scenario.
@@ -79,7 +100,7 @@ pub fn wasm_new_scenario_game(
     match new_scenario_game(scenario_id, diff, nation_index) {
         Ok(mut game) => {
             flavor_bridge::apply_flavor(&mut game, flavor_key);
-            serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+            game_to_json(&game)
         }
         Err(e) => format!("{{\"error\":\"{}\"}}", e),
     }
@@ -112,7 +133,7 @@ pub fn wasm_new_observer_game(
     let cfg = build_map_config(map_width, map_height, num_great_powers, num_minor_nations);
     let mut game = new_observer_game_with_config(map_key, difficulty_from_u8(difficulty), cfg);
     flavor_bridge::apply_flavor(&mut game, flavor_key);
-    serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+    game_to_json(&game)
 }
 
 /// Create a new observer-mode scenario game.
@@ -145,7 +166,7 @@ pub fn wasm_new_observer_scenario_game(
             }
             game.observer_mode = true;
             flavor_bridge::apply_flavor(&mut game, flavor_key);
-            serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+            game_to_json(&game)
         }
         Err(e) => format!("{{\"error\":\"{}\"}}", e),
     }
@@ -156,13 +177,13 @@ pub fn wasm_new_observer_scenario_game(
 /// "Re-roll Names" button.
 #[wasm_bindgen]
 pub fn wasm_apply_flavor(game_json: &str, flavor_key: &str) -> String {
-    let mut game: GameState = match serde_json::from_str(game_json) {
+    let mut game = match game_from_json(game_json) {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
     flavor_bridge::clear_flavor(&mut game);
     flavor_bridge::apply_flavor(&mut game, flavor_key);
-    serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+    game_to_json(&game)
 }
 
 /// Switch which nation is the "viewpoint" (a.k.a. human player).
@@ -171,11 +192,10 @@ pub fn wasm_apply_flavor(game_json: &str, flavor_key: &str) -> String {
 /// GP is already AI-controlled.
 #[wasm_bindgen]
 pub fn wasm_set_human_player(game_json: &str, nation_index: usize) -> String {
-    let mut game: GameState = match serde_json::from_str(game_json) {
+    let mut game = match game_from_json(game_json) {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"deserialize: {}\"}}", e),
     };
-    game.game_data = domain::data::GameData::default();
 
     // Identify GP nation ids by their index ordering in `nations`.
     let gp_ids: Vec<NationId> = game
@@ -192,13 +212,13 @@ pub fn wasm_set_human_player(game_json: &str, nation_index: usize) -> String {
 
     if new_human_id == old_human_id {
         // no-op
-        return serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e));
+        return game_to_json(&game);
     }
 
     if game.observer_mode {
         // Just move the viewpoint. All personalities and bonuses stay intact.
         game.human_player_nation = new_human_id;
-        return serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e));
+        return game_to_json(&game);
     }
 
     // Normal mode: swap personality + Hard/NOI bonus.
@@ -224,7 +244,7 @@ pub fn wasm_set_human_player(game_json: &str, nation_index: usize) -> String {
     }
     game.human_player_nation = new_human_id;
 
-    serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+    game_to_json(&game)
 }
 
 /// Process N turns in a row. Clamped to 1..=50.
@@ -232,11 +252,10 @@ pub fn wasm_set_human_player(game_json: &str, nation_index: usize) -> String {
 /// per-turn report summaries in chronological order.
 #[wasm_bindgen]
 pub fn wasm_process_turns(game_json: &str, count: u32) -> String {
-    let mut game: GameState = match serde_json::from_str(game_json) {
+    let mut game = match game_from_json(game_json) {
         Ok(g) => g,
-        Err(e) => return serde_json::json!({"error": format!("deserialize: {e}")}).to_string(),
+        Err(e) => return serde_json::json!({"error": e}).to_string(),
     };
-    game.game_data = domain::data::GameData::default();
 
     let n = count.clamp(1, 50);
     let mut reports: Vec<serde_json::Value> = Vec::with_capacity(n as usize);
@@ -254,7 +273,7 @@ pub fn wasm_process_turns(game_json: &str, count: u32) -> String {
             "quarter": report.quarter,
             "headlines": report.newspaper_headlines.iter()
                 .map(|h| {
-                    let mut obj = serde_json::json!({"text": &h.text, "category": &h.category});
+                    let mut obj = serde_json::json!({"text": &h.text, "category": format!("{:?}", h.category)});
                     if let Some(ref reason) = h.reason {
                         obj["reason"] = serde_json::json!(reason);
                     }
@@ -262,7 +281,7 @@ pub fn wasm_process_turns(game_json: &str, count: u32) -> String {
                         obj["is_non_action"] = serde_json::json!(true);
                     }
                     if !h.nation_ids.is_empty() {
-                        obj["nation_ids"] = serde_json::json!(&h.nation_ids);
+                        obj["nation_ids"] = serde_json::json!(h.nation_ids.iter().map(|id| id.0).collect::<Vec<_>>());
                     }
                     obj
                 })
@@ -273,16 +292,13 @@ pub fn wasm_process_turns(game_json: &str, count: u32) -> String {
             "naval_battles": report.naval_battles.iter()
                 .map(|nb| serialize_naval_battle(nb, &game))
                 .collect::<Vec<_>>(),
-            "scores": report.scores,
+            "scores": report.scores.iter().map(|(id, name, score)| serde_json::json!({"nation_id": id.0, "name": name, "score": score})).collect::<Vec<_>>(),
         });
         reports.push(entry);
     }
 
     let response = serde_json::json!({
-        "game": match serde_json::to_value(&game) {
-            Ok(v) => v,
-            Err(e) => return serde_json::json!({"error": format!("serialize game: {e}")}).to_string(),
-        },
+        "game": game_to_value(&game),
         "reports": reports,
         "stopped_early": stopped_early,
     });
@@ -292,29 +308,23 @@ pub fn wasm_process_turns(game_json: &str, count: u32) -> String {
 /// Process one turn. Accepts game state JSON, returns JSON with updated state + turn report.
 #[wasm_bindgen]
 pub fn wasm_process_turn(game_json: &str) -> String {
-    let mut game: GameState = match serde_json::from_str(game_json) {
+    let mut game = match game_from_json(game_json) {
         Ok(g) => g,
-        Err(e) => return serde_json::json!({"error": format!("deserialize: {e}")}).to_string(),
+        Err(e) => return serde_json::json!({"error": e}).to_string(),
     };
-
-    // Reconstruct tech tree (skipped in serialization)
-    game.game_data = domain::data::GameData::default();
 
     let report = process_turn(&mut game);
 
     // Build response with game state + report summary
     let response = serde_json::json!({
-        "game": match serde_json::to_value(&game) {
-            Ok(v) => v,
-            Err(e) => return serde_json::json!({"error": format!("serialize game: {e}")}).to_string(),
-        },
+        "game": game_to_value(&game),
         "report": {
             "turn": format!("{}", report.turn),
             "year": report.year,
             "quarter": report.quarter,
             "headlines": report.newspaper_headlines.iter()
                 .map(|h| {
-                    let mut obj = serde_json::json!({"text": &h.text, "category": &h.category});
+                    let mut obj = serde_json::json!({"text": &h.text, "category": format!("{:?}", h.category)});
                     if let Some(ref reason) = h.reason {
                         obj["reason"] = serde_json::json!(reason);
                     }
@@ -322,7 +332,7 @@ pub fn wasm_process_turn(game_json: &str) -> String {
                         obj["is_non_action"] = serde_json::json!(true);
                     }
                     if !h.nation_ids.is_empty() {
-                        obj["nation_ids"] = serde_json::json!(&h.nation_ids);
+                        obj["nation_ids"] = serde_json::json!(h.nation_ids.iter().map(|id| id.0).collect::<Vec<_>>());
                     }
                     obj
                 })
@@ -344,7 +354,7 @@ pub fn wasm_process_turn(game_json: &str) -> String {
             "naval_battles": report.naval_battles.iter()
                 .map(|nb| serialize_naval_battle(nb, &game))
                 .collect::<Vec<_>>(),
-            "scores": report.scores,
+            "scores": report.scores.iter().map(|(id, name, score)| serde_json::json!({"nation_id": id.0, "name": name, "score": score})).collect::<Vec<_>>(),
         }
     });
 
@@ -404,7 +414,7 @@ fn compute_visible_hexes(
 /// `disable_fog` — when true, all tiles are visible and enemy data is not filtered.
 #[wasm_bindgen]
 pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
-    let game: GameState = match serde_json::from_str(game_json) {
+    let game = match game_from_json(game_json) {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
@@ -646,7 +656,7 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
 pub fn wasm_get_navy_markers(game_json: &str, disable_fog: bool) -> String {
     use domain::military::navy_placement::{beachhead_anchor, beachhead_coast_tile, fleet_anchor};
 
-    let game: GameState = match serde_json::from_str(game_json) {
+    let game = match game_from_json(game_json) {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
@@ -818,11 +828,10 @@ fn format_operation(op: Option<domain::military::naval::NavalOperation>) -> Stri
 /// Get available technologies for the human player.
 #[wasm_bindgen]
 pub fn wasm_get_available_techs(game_json: &str) -> String {
-    let mut game: GameState = match serde_json::from_str(game_json) {
+    let game = match game_from_json(game_json) {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
-    game.game_data = domain::data::GameData::default();
 
     let nation = match game.get_nation(game.human_player_nation) {
         Some(n) => n,
@@ -851,11 +860,10 @@ pub fn wasm_get_available_techs(game_json: &str) -> String {
 /// Research a technology by name.
 #[wasm_bindgen]
 pub fn wasm_research_tech(game_json: &str, tech_name: &str) -> String {
-    let mut game: GameState = match serde_json::from_str(game_json) {
+    let mut game = match game_from_json(game_json) {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
-    game.game_data = domain::data::GameData::default();
 
     let nation = match game.get_nation(game.human_player_nation) {
         Some(n) => n,
@@ -883,7 +891,7 @@ pub fn wasm_research_tech(game_json: &str, tech_name: &str) -> String {
             }
             nation.economy.treasury -= cost;
             nation.research_tech(tech_id);
-            serde_json::to_string(&game).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+            game_to_json(&game)
         }
         None => format!("{{\"error\":\"tech not found: {}\" }}", tech_name),
     }
@@ -912,7 +920,7 @@ pub fn wasm_get_scenarios() -> String {
 /// Returns JSON with relations from the selected nation to all others.
 #[wasm_bindgen]
 pub fn wasm_get_diplomacy_overlay(game_json: &str, nation_id: u32) -> String {
-    let game: GameState = match serde_json::from_str(game_json) {
+    let game = match game_from_json(game_json) {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
@@ -990,7 +998,7 @@ pub fn wasm_get_diplomacy_overlay(game_json: &str, nation_id: u32) -> String {
 /// Get military overlay data for all nations (army + naval strength summaries).
 #[wasm_bindgen]
 pub fn wasm_get_military_overlay(game_json: &str) -> String {
-    let game: GameState = match serde_json::from_str(game_json) {
+    let game = match game_from_json(game_json) {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
@@ -1065,15 +1073,12 @@ fn parse_ship_type(name: &str) -> Option<ShipType> {
 }
 
 fn deserialize_game(game_json: &str) -> Result<GameState, String> {
-    let mut game: GameState = serde_json::from_str(game_json)
-        .map_err(|e| serde_json::json!({"error": format!("deserialize: {e}")}).to_string())?;
-    game.game_data = domain::data::GameData::default();
-    Ok(game)
+    game_from_json(game_json)
+        .map_err(|e| serde_json::json!({"error": e}).to_string())
 }
 
 fn serialize_game(game: &GameState) -> String {
-    serde_json::to_string(game)
-        .unwrap_or_else(|e| serde_json::json!({"error": format!("serialize: {e}")}).to_string())
+    game_to_json(game)
 }
 
 /// Returns an error JSON string if the target nation is in anarchy — no
@@ -2719,7 +2724,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
                 .map(|n| n.name.as_str())
                 .unwrap_or("Unknown");
             serde_json::json!({
-                "turn": entry.turn,
+                "turn": entry.turn.0,
                 "partner_name": partner_name,
                 "partner_id": entry.partner.0,
                 "resource": format!("{:?}", entry.resource),
@@ -3716,7 +3721,7 @@ pub fn wasm_get_pending_proposals(game_json: &str, nation_id: u32) -> String {
                 "from_nation_color": from_color,
                 "proposal_type": format!("{:?}", p.proposal_type),
                 "display_text": display_text,
-                "turn_proposed": p.turn_proposed,
+                "turn_proposed": p.turn_proposed.0,
                 "turns_until_expiry": turns_until_expiry.max(0),
             })
         })
@@ -3825,7 +3830,7 @@ pub fn wasm_reject_proposal(game_json: &str, nation_id: u32, proposal_index: u32
 /// Return comprehensive ledger/statistics data for a nation.
 #[wasm_bindgen]
 pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
-    let game: GameState = match serde_json::from_str(game_json) {
+    let game = match game_from_json(game_json) {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
@@ -3987,7 +3992,7 @@ pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
 /// Return ledger data for ALL Great Powers.
 #[wasm_bindgen]
 pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
-    let game: GameState = match serde_json::from_str(game_json) {
+    let game = match game_from_json(game_json) {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
@@ -4260,7 +4265,7 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
 /// requested turn has no snapshot.
 #[wasm_bindgen]
 pub fn wasm_get_political_snapshot(game_json: &str, turn: u32) -> String {
-    let game: GameState = match serde_json::from_str(game_json) {
+    let game = match game_from_json(game_json) {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
@@ -4371,7 +4376,7 @@ pub fn wasm_get_political_snapshot(game_json: &str, turn: u32) -> String {
 /// Return the newspaper headline archive for all past turns.
 #[wasm_bindgen]
 pub fn wasm_get_newspaper_archive(game_json: &str) -> String {
-    let game: GameState = match serde_json::from_str(game_json) {
+    let game = match game_from_json(game_json) {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
@@ -4383,7 +4388,7 @@ pub fn wasm_get_newspaper_archive(game_json: &str) -> String {
             let items: Vec<serde_json::Value> = headlines
                 .iter()
                 .map(|h| {
-                    let mut obj = serde_json::json!({"text": &h.text, "category": &h.category});
+                    let mut obj = serde_json::json!({"text": &h.text, "category": format!("{:?}", h.category)});
                     if let Some(ref reason) = h.reason {
                         obj["reason"] = serde_json::json!(reason);
                     }
@@ -4391,7 +4396,7 @@ pub fn wasm_get_newspaper_archive(game_json: &str) -> String {
                         obj["is_non_action"] = serde_json::json!(true);
                     }
                     if !h.nation_ids.is_empty() {
-                        obj["nation_ids"] = serde_json::json!(&h.nation_ids);
+                        obj["nation_ids"] = serde_json::json!(h.nation_ids.iter().map(|id| id.0).collect::<Vec<_>>());
                     }
                     obj
                 })
@@ -4526,7 +4531,7 @@ fn serialize_naval_battle(nb: &NavalBattleResult, game: &GameState) -> serde_jso
 /// Return the battle archive for all past turns.
 #[wasm_bindgen]
 pub fn wasm_get_battle_data(game_json: &str) -> String {
-    let game: GameState = match serde_json::from_str(game_json) {
+    let game = match game_from_json(game_json) {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
@@ -4818,7 +4823,7 @@ mod tests {
     #[test]
     fn queue_move_rejects_nonexistent_unit() {
         let json = make_game_json();
-        let game: GameState = serde_json::from_str(&json).unwrap();
+        let game = game_from_json(&json).unwrap();
         let nid = game.human_player_nation.0;
         let result = wasm_queue_unit_move(&json, nid, 9999999, 1);
         assert!(result.contains("error"));
@@ -4827,7 +4832,7 @@ mod tests {
     #[test]
     fn queue_move_replaces_duplicate() {
         let json = make_game_json();
-        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        let mut game = game_from_json(&json).unwrap();
         game.game_data = domain::data::GameData::default();
         let nid = game.human_player_nation;
 
@@ -4855,7 +4860,7 @@ mod tests {
 
         let result2 = wasm_queue_unit_move(&result1, nid.0, uid, own_provs[1]);
         assert!(!result2.contains("error"));
-        let game2: GameState = serde_json::from_str(&result2).unwrap();
+        let game2 = game_from_json(&result2).unwrap();
         let moves_for_unit = game2
             .transient.pending_moves
             .iter()
@@ -4896,7 +4901,7 @@ mod tests {
         });
 
         let accepted_json = wasm_accept_proposal(&serialize_game(&game), human.0, 0);
-        let mut accepted_game: GameState = serde_json::from_str(&accepted_json).unwrap();
+        let mut accepted_game = game_from_json(&accepted_json).unwrap();
 
         assert!(
             !accepted_game.world.diplomacy.is_at_war(human, enemy),
@@ -4929,7 +4934,7 @@ mod tests {
     #[test]
     fn recruit_general_rejected() {
         let json = make_game_json();
-        let game: GameState = serde_json::from_str(&json).unwrap();
+        let game = game_from_json(&json).unwrap();
         let nid = game.human_player_nation.0;
         let result = wasm_recruit_army_unit(&json, nid, "General");
         assert!(result.contains("error"));
@@ -4938,7 +4943,7 @@ mod tests {
     #[test]
     fn hire_civilian_insufficient_funds() {
         let json = make_game_json();
-        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        let mut game = game_from_json(&json).unwrap();
         game.game_data = domain::data::GameData::default();
         let nation = game.get_nation_mut(game.human_player_nation).unwrap();
         nation.economy.treasury = Money::ZERO;
@@ -4951,7 +4956,7 @@ mod tests {
     #[test]
     fn buildable_units_includes_tech_met_for_civilians() {
         let json = make_game_json();
-        let game: GameState = serde_json::from_str(&json).unwrap();
+        let game = game_from_json(&json).unwrap();
         let result = wasm_get_buildable_units(&json, game.human_player_nation.0);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         let civilians = parsed["civilians"].as_array().unwrap();
@@ -4963,7 +4968,7 @@ mod tests {
     #[test]
     fn get_civilians_undeployed_has_null_position() {
         let json = make_game_json();
-        let game: GameState = serde_json::from_str(&json).unwrap();
+        let game = game_from_json(&json).unwrap();
         let result = wasm_get_civilians(&json, game.human_player_nation.0);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         for civ in parsed["undeployed"].as_array().unwrap_or(&vec![]) {
@@ -4975,7 +4980,7 @@ mod tests {
     #[test]
     fn cancel_move_removes_pending() {
         let json = make_game_json();
-        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        let mut game = game_from_json(&json).unwrap();
         game.game_data = domain::data::GameData::default();
 
         let nid = game.human_player_nation;
@@ -4985,7 +4990,7 @@ mod tests {
 
         let result = wasm_cancel_unit_move(&json, 12345);
         assert!(!result.contains("error"));
-        let game2: GameState = serde_json::from_str(&result).unwrap();
+        let game2 = game_from_json(&result).unwrap();
         assert!(!game2.transient.pending_moves.iter().any(|(_, id, _)| id.0 == 12345));
     }
 
@@ -4994,7 +4999,7 @@ mod tests {
     #[test]
     fn valid_move_targets_includes_anarchic_provinces() {
         let json = make_game_json();
-        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        let mut game = game_from_json(&json).unwrap();
         game.game_data = domain::data::GameData::default();
         let nid = game.human_player_nation;
 
@@ -5029,7 +5034,7 @@ mod tests {
     #[test]
     fn queue_move_allows_anarchic_target() {
         let json = make_game_json();
-        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        let mut game = game_from_json(&json).unwrap();
         game.game_data = domain::data::GameData::default();
         let nid = game.human_player_nation;
 
@@ -5059,7 +5064,7 @@ mod tests {
     #[test]
     fn queue_move_rejects_neutral_non_anarchic_target() {
         let json = make_game_json();
-        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        let mut game = game_from_json(&json).unwrap();
         game.game_data = domain::data::GameData::default();
         let nid = game.human_player_nation;
 
@@ -5091,7 +5096,7 @@ mod tests {
     #[test]
     fn command_error_returns_structured_json() {
         let json = make_game_json();
-        let game: GameState = serde_json::from_str(&json).unwrap();
+        let game = game_from_json(&json).unwrap();
         let result = wasm_recruit_army_unit(&json, game.human_player_nation.0, "General");
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(
@@ -5107,7 +5112,7 @@ mod tests {
         use domain::events::{Headline, HeadlineCategory};
 
         let json = make_game_json();
-        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        let mut game = game_from_json(&json).unwrap();
         game.game_data = domain::data::GameData::default();
 
         // Seed the archive with one AI-reasoned headline and one plain headline.
@@ -5158,7 +5163,7 @@ mod tests {
         use domain::events::{Headline, HeadlineCategory};
 
         let json = make_game_json();
-        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        let mut game = game_from_json(&json).unwrap();
         game.game_data = domain::data::GameData::default();
 
         game.archive.newspaper_archive.push((
@@ -5211,7 +5216,7 @@ mod tests {
         use domain::types::NationId;
 
         let json = make_game_json();
-        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        let mut game = game_from_json(&json).unwrap();
         game.game_data = domain::data::GameData::default();
 
         game.archive.newspaper_archive.push((
@@ -5479,7 +5484,7 @@ mod tests {
     #[test]
     fn diplomacy_screen_anarchy_splits_display_from_gating() {
         let json = make_game_json();
-        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        let mut game = game_from_json(&json).unwrap();
         let player_id = game.human_player_nation;
 
         // Force the player into anarchy without touching relations.
@@ -5522,7 +5527,7 @@ mod tests {
         use domain::game_state::PoliticalSnapshot;
 
         let json = make_game_json();
-        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        let mut game = game_from_json(&json).unwrap();
         game.game_data = domain::data::GameData::default();
 
         // Seed a snapshot at turn 5 using current province ownership + capitals.
@@ -5584,7 +5589,7 @@ mod tests {
         use domain::game_state::PoliticalSnapshot;
 
         let json = make_game_json();
-        let mut game: GameState = serde_json::from_str(&json).unwrap();
+        let mut game = game_from_json(&json).unwrap();
         game.game_data = domain::data::GameData::default();
 
         // Archive at turn 5 with the *current* capitals and ownership.

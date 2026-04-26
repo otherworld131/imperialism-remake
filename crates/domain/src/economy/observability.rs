@@ -15,7 +15,7 @@ use crate::types::*;
 /// Returned by `NationEconomy::block_reason_for_commodity` and
 /// `NationEconomy::block_reason_for_treasury` to let the UI explain to the
 /// player why a build or trade action is blocked.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockReason {
     /// The nation does not hold enough of the required commodity.
     InsufficientInventory {

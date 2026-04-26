@@ -107,21 +107,20 @@ pub fn wasm_session_active() -> bool {
 /// Use this to restore a saved game.
 #[wasm_bindgen]
 pub fn wasm_session_load(game_json: &str) -> String {
-    let mut game: GameState = match serde_json::from_str(game_json) {
-        Ok(g) => g,
-        Err(e) => return err_json(&format!("deserialize failed: {e}")),
-    };
-    game.game_data = domain::data::GameData::default();
-    SESSION.with(|s| *s.borrow_mut() = Some(game));
-    ok_json()
+    match crate::game_from_json(game_json) {
+        Ok(game) => {
+            SESSION.with(|s| *s.borrow_mut() = Some(game));
+            ok_json()
+        }
+        Err(e) => err_json(&format!("deserialize failed: {e}")),
+    }
 }
 
 /// Serialize the current session state to JSON (for saving).
 #[wasm_bindgen]
 pub fn wasm_session_save() -> String {
-    match with_session(|g| serde_json::to_string(g)) {
-        Ok(Ok(json)) => json,
-        Ok(Err(e)) => err_json(&format!("serialize failed: {e}")),
+    match with_session(|g| crate::game_to_json(g)) {
+        Ok(json) => json,
         Err(e) => err_json(&e),
     }
 }
@@ -142,10 +141,10 @@ pub fn wasm_session_process_turn() -> String {
                 "quarter": report.quarter,
                 "headlines": report.newspaper_headlines.iter()
                     .map(|h| {
-                        let mut obj = serde_json::json!({"text": &h.text, "category": &h.category});
+                        let mut obj = serde_json::json!({"text": &h.text, "category": format!("{:?}", h.category)});
                         if let Some(ref reason) = h.reason { obj["reason"] = serde_json::json!(reason); }
                         if h.is_non_action { obj["is_non_action"] = serde_json::json!(true); }
-                        if !h.nation_ids.is_empty() { obj["nation_ids"] = serde_json::json!(&h.nation_ids); }
+                        if !h.nation_ids.is_empty() { obj["nation_ids"] = serde_json::json!(h.nation_ids.iter().map(|id| id.0).collect::<Vec<_>>()); }
                         obj
                     })
                     .collect::<Vec<_>>(),
@@ -153,7 +152,7 @@ pub fn wasm_session_process_turn() -> String {
                     .filter(|(nid, _, _)| *nid == human)
                     .map(|(_, r, q)| serde_json::json!({"resource": format!("{:?}", r), "quantity": q}))
                     .collect::<Vec<_>>(),
-                "scores": report.scores,
+                "scores": report.scores.iter().map(|(id, name, score)| serde_json::json!({"nation_id": id.0, "name": name, "score": score})).collect::<Vec<_>>(),
             }
         })
         .to_string()
@@ -211,14 +210,13 @@ pub fn wasm_session_query(query_json: &str) -> String {
 /// and Goods in order. Accepts plain names like "Timber", "Steel", "Cloth".
 fn parse_commodity(name: &str) -> Option<domain::economy::trade::Commodity> {
     use domain::economy::trade::Commodity;
-    let quoted = format!("\"{}\"", name);
-    if let Ok(r) = serde_json::from_str::<domain::types::ResourceType>(&quoted) {
+    if let Ok(r) = name.parse::<domain::types::ResourceType>() {
         return Some(Commodity::Resource(r));
     }
-    if let Ok(m) = serde_json::from_str::<domain::types::MaterialType>(&quoted) {
+    if let Ok(m) = name.parse::<domain::types::MaterialType>() {
         return Some(Commodity::Material(m));
     }
-    if let Ok(g) = serde_json::from_str::<domain::types::GoodsType>(&quoted) {
+    if let Ok(g) = name.parse::<domain::types::GoodsType>() {
         return Some(Commodity::Goods(g));
     }
     None
@@ -253,7 +251,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         QueueUnitMove { unit_id, target_province } => {
             let uid = domain::map::UnitId(unit_id);
             let nid = game.human_player_nation;
-            let dest = target_province;
+            let dest = ProvinceId(target_province);
             match game.get_province(dest) {
                 None => return CommandResult::error("province not found"),
                 Some(p) => {
@@ -293,6 +291,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         RecruitArmyUnit { nation_id, unit_type } => {
+            let nation_id = NationId(nation_id);
             use domain::military::units::ArmyUnitType;
             let unit_type = match unit_type.as_str() {
                 "Regulars" => ArmyUnitType::Regulars,
@@ -313,7 +312,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         AssignBeachhead { nation_id, target_province } => {
-            game.transient.pending_landings.push((nation_id, target_province, game.turn));
+            game.transient.pending_landings.push((NationId(nation_id), ProvinceId(target_province), game.turn));
             CommandResult::success()
         }
 
@@ -347,6 +346,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         BuildFreightCar { nation_id } => {
+            let nation_id = NationId(nation_id);
             let nation = match game.get_nation_mut(nation_id) {
                 Some(n) => n,
                 None => return CommandResult::error("nation not found"),
@@ -356,9 +356,10 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         ExpandBuilding { nation_id, building_type } => {
+            let nation_id = NationId(nation_id);
             use domain::economy::buildings::{Building, BuildingType};
             use domain::types::MaterialType;
-            let bt: BuildingType = match serde_json::from_str(&format!("\"{}\"", building_type)) {
+            let bt: BuildingType = match building_type.parse::<BuildingType>() {
                 Ok(b) => b,
                 Err(_) => return CommandResult::error("unknown building type"),
             };
@@ -388,6 +389,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         HireCivilian { nation_id, civilian_type } => {
+            let nation_id = NationId(nation_id);
             use domain::economy::civilians::parse_civilian_type;
             let ct = match parse_civilian_type(&civilian_type) {
                 Some(t) => t,
@@ -448,8 +450,9 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         BuildShip { nation_id, ship_type } => {
+            let nation_id = NationId(nation_id);
             use domain::military::ships::{ShipCategory, ShipType};
-            let st: ShipType = match serde_json::from_str(&format!("\"{}\"", ship_type)) {
+            let st: ShipType = match ship_type.parse::<ShipType>() {
                 Ok(s) => s,
                 Err(_) => return CommandResult::error("unknown ship type"),
             };
@@ -480,6 +483,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         SetPlayerSellOrder { nation_id, commodity, quantity, price_cents: _ } => {
+            let nation_id = NationId(nation_id);
             let c = match parse_commodity(&commodity) {
                 Some(c) => c,
                 None => return CommandResult::error("unknown commodity"),
@@ -497,8 +501,8 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         SetPlayerBuyOrder { nation_id, commodity, quantity, price_cents } => {
-            use domain::types::ResourceType;
-            let r: ResourceType = match serde_json::from_str(&format!("\"{}\"", commodity)) {
+            let nation_id = NationId(nation_id);
+            let r: ResourceType = match commodity.parse::<ResourceType>() {
                 Ok(r) => r,
                 Err(_) => return CommandResult::error("unknown resource"),
             };
@@ -517,6 +521,8 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         SetTradeSubsidy { from_nation, to_nation, subsidy_dollars } => {
+            let from_nation = NationId(from_nation);
+            let to_nation = NationId(to_nation);
             let nation = match game.get_nation_mut(from_nation) {
                 Some(n) => n,
                 None => return CommandResult::error("nation not found"),
@@ -531,6 +537,8 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         DiplomacyBuildConsulate { player, target } => {
+            let player = NationId(player);
+            let target = NationId(target);
             match game.world.diplomacy.build_consulate(player, target) {
                 Ok(_) => {
                     let cost = Money::dollars(game.game_data.game_config.consulate_cost as i64);
@@ -544,6 +552,8 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         DiplomacyBuildEmbassy { player, target } => {
+            let player = NationId(player);
+            let target = NationId(target);
             match game.world.diplomacy.build_embassy(player, target) {
                 Ok(_) => {
                     let cost = Money::dollars(game.game_data.game_config.embassy_cost as i64);
@@ -557,6 +567,8 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         DiplomacyProposeNap { from, to } => {
+            let from = NationId(from);
+            let to = NationId(to);
             match game.world.diplomacy.propose_pact(from, to) {
                 Ok(_) => CommandResult::success(),
                 Err(e) => CommandResult::error(e),
@@ -564,6 +576,8 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         DiplomacyProposeAlliance { from, to } => {
+            let from = NationId(from);
+            let to = NationId(to);
             match game.world.diplomacy.propose_alliance(from, to) {
                 Ok(_) => CommandResult::success(),
                 Err(e) => CommandResult::error(e),
@@ -571,11 +585,15 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         DiplomacyDeclareWar { from, to } => {
+            let from = NationId(from);
+            let to = NationId(to);
             game.world.diplomacy.declare_war(from, to);
             CommandResult::success()
         }
 
         DiplomacySendGrant { from, to, amount_dollars } => {
+            let from = NationId(from);
+            let to = NationId(to);
             let amount = Money::dollars(amount_dollars as i64);
             if let Some(n) = game.get_nation_mut(from) {
                 if n.economy.treasury < amount {
@@ -590,6 +608,8 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         DiplomacyBreakTreaty { from, to } => {
+            let from = NationId(from);
+            let to = NationId(to);
             use domain::events::TreatyType;
             game.world.diplomacy.break_treaty(from, to, TreatyType::Alliance);
             game.world.diplomacy.break_treaty(from, to, TreatyType::NonAggressionPact);
@@ -597,6 +617,8 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         DiplomacyProposePeace { from, to } => {
+            let from = NationId(from);
+            let to = NationId(to);
             match game.world.diplomacy.propose_peace(from, to, game.turn) {
                 Ok(_) => CommandResult::success(),
                 Err(e) => CommandResult::error(e),
@@ -604,6 +626,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         AcceptProposal { nation_id, proposal_index } => {
+            let nation_id = NationId(nation_id);
             use domain::events::TreatyType;
             let proposals: Vec<_> = game.world.diplomacy
                 .pending_proposals
@@ -640,6 +663,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         RejectProposal { nation_id, proposal_index } => {
+            let nation_id = NationId(nation_id);
             let proposals: Vec<_> = game.world.diplomacy
                 .pending_proposals
                 .iter()
@@ -753,7 +777,7 @@ mod tests {
         let own_province = game.get_nation(nid).unwrap().capital_province_id;
         let unit_id = game.get_nation(nid).unwrap().military.army[0].id.0;
 
-        let cmd = FrontendCommand::QueueUnitMove { unit_id, target_province: own_province };
+        let cmd = FrontendCommand::QueueUnitMove { unit_id, target_province: own_province.0 };
         let result = apply_command(&mut game, cmd);
         assert!(result.ok, "move to own province should succeed");
         assert!(!game.transient.pending_moves.is_empty());
@@ -766,7 +790,7 @@ mod tests {
         let own_province = game.get_nation(nid).unwrap().capital_province_id;
         let unit_id = game.get_nation(nid).unwrap().military.army[0].id.0;
 
-        apply_command(&mut game, FrontendCommand::QueueUnitMove { unit_id, target_province: own_province });
+        apply_command(&mut game, FrontendCommand::QueueUnitMove { unit_id, target_province: own_province.0 });
         assert!(!game.transient.pending_moves.is_empty());
 
         let result = apply_command(&mut game, FrontendCommand::CancelUnitMove { unit_id });
@@ -784,7 +808,7 @@ mod tests {
         let before_count = game.get_nation(nid).unwrap().military.civilians.len();
 
         let result = apply_command(&mut game, FrontendCommand::HireCivilian {
-            nation_id: nid,
+            nation_id: nid.0,
             civilian_type: "Farmer".to_string(),
         });
         assert!(result.ok, "{:?}", result.message);
@@ -800,7 +824,7 @@ mod tests {
         game.get_nation_mut(nid).unwrap().economy.treasury = domain::types::Money::ZERO;
 
         let result = apply_command(&mut game, FrontendCommand::HireCivilian {
-            nation_id: nid,
+            nation_id: nid.0,
             civilian_type: "Farmer".to_string(),
         });
         assert!(!result.ok, "should fail with no funds");
@@ -815,7 +839,7 @@ mod tests {
         let before = game.get_nation(nid).unwrap().military.warships.len();
 
         let result = apply_command(&mut game, FrontendCommand::BuildShip {
-            nation_id: nid,
+            nation_id: nid.0,
             ship_type: "Frigate".to_string(),
         });
         assert!(result.ok, "{:?}", result.message);
@@ -829,7 +853,7 @@ mod tests {
         let before = game.get_nation(nid).unwrap().military.merchant_fleet.len();
 
         let result = apply_command(&mut game, FrontendCommand::BuildShip {
-            nation_id: nid,
+            nation_id: nid.0,
             ship_type: "Trader".to_string(),
         });
         assert!(result.ok, "{:?}", result.message);
@@ -844,7 +868,7 @@ mod tests {
         let nid = game.human_player_nation;
 
         let result = apply_command(&mut game, FrontendCommand::SetPlayerSellOrder {
-            nation_id: nid,
+            nation_id: nid.0,
             commodity: "Timber".to_string(),
             quantity: 5,
             price_cents: 1000,
@@ -874,7 +898,7 @@ mod tests {
         });
 
         let result = apply_command(&mut game, FrontendCommand::AcceptProposal {
-            nation_id: nid,
+            nation_id: nid.0,
             proposal_index: 0,
         });
         assert!(result.ok, "{:?}", result.message);
@@ -900,7 +924,7 @@ mod tests {
         }
 
         let result = apply_command(&mut game, FrontendCommand::ExpandBuilding {
-            nation_id: nid,
+            nation_id: nid.0,
             building_type: "LumberMill".to_string(),
         });
         assert!(!result.ok, "re-entry should be rejected when expansion is in progress");
@@ -928,7 +952,7 @@ mod tests {
         });
 
         let result = apply_command(&mut game, FrontendCommand::AcceptProposal {
-            nation_id: nid,
+            nation_id: nid.0,
             proposal_index: 0,
         });
         assert!(result.ok, "{:?}", result.message);
@@ -958,7 +982,7 @@ mod tests {
         });
 
         let result = apply_command(&mut game, FrontendCommand::AcceptProposal {
-            nation_id: nid,
+            nation_id: nid.0,
             proposal_index: 0,
         });
         assert!(!result.ok, "unsupported proposal type should fail");

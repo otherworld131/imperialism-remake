@@ -112,7 +112,7 @@ pub fn lua_or<T>(lua_value: Option<T>, default: T) -> T {
 }
 
 /// AI personality types that affect decision-making priorities.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AiPersonality {
     /// Prioritizes military, declares wars early.
     Aggressive,

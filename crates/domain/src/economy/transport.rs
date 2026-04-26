@@ -4,7 +4,7 @@ use crate::types::*;
 use std::collections::BTreeMap;
 
 /// Per-commodity freight allocation result: how much was requested vs granted (Trello #165).
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FreightDemand {
     /// Freight capacity requested for this commodity.
     pub requested: u32,
@@ -19,7 +19,7 @@ pub struct FreightDemand {
 /// Populated by the turn processor after transport resolution completes.
 /// Exposes the codebase answer to "what freight is available?", "what is committed?",
 /// and "which resources are starved by transport capacity?".
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct LogisticsState {
     /// Total freight capacity owned by this nation.
     pub freight_total: u32,
@@ -28,7 +28,6 @@ pub struct LogisticsState {
     /// Remaining freight capacity after all deliveries: `freight_total - freight_committed`.
     pub freight_unused: u32,
     /// Per-resource freight demand: how much was requested vs actually delivered.
-    #[serde(default)]
     pub per_resource: BTreeMap<ResourceType, FreightDemand>,
 }
 
@@ -63,11 +62,10 @@ impl LogisticsState {
         }
         // Resources delivered but not in `requested` (shouldn't happen but be safe).
         for &(resource, granted) in delivered {
-            if !self.per_resource.contains_key(&resource) {
+            self.per_resource.entry(resource).or_insert_with(|| {
                 committed += granted;
-                self.per_resource
-                    .insert(resource, FreightDemand { requested: granted, granted, unmet: 0 });
-            }
+                FreightDemand { requested: granted, granted, unmet: 0 }
+            });
         }
         self.freight_committed = committed;
         self.freight_unused = capacity.saturating_sub(committed);
@@ -75,7 +73,7 @@ impl LogisticsState {
 }
 
 /// The transport system for a nation — freight cars carrying resources.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TransportSystem {
     /// Total freight cars owned
     pub freight_cars: u32,

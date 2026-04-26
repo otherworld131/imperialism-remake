@@ -1,7 +1,7 @@
 use crate::military::ships::{Ship, ShipCategory, ShipType};
 use crate::types::*;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NavalBattleResult {
     pub attacker: NationId,
     pub defender: NationId,
@@ -18,7 +18,7 @@ pub struct NavalBattleResult {
 ///
 /// Ships operate globally (simplified: no per-zone movement). Operations
 /// are resolved automatically at the end of each turn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NavalOperation {
     /// Warship patrols — attacks enemies encountered.
     Patrol,

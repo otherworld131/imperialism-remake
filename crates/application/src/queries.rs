@@ -40,7 +40,7 @@ pub struct TradeScreenData {
 /// Data about a trade partner for the Trade Screen.
 pub struct TradePartnerData {
     pub nation_name: String,
-    pub nation_id: NationId,
+    pub nation_id: u32,
     pub has_consulate: bool,
     pub relationship_score: i32,
     pub available_resources: Vec<(String, u32, String)>, // resource, qty, price
@@ -49,14 +49,12 @@ pub struct TradePartnerData {
 /// Data for the Diplomacy Screen (Screen 5).
 pub struct DiplomacyScreenData {
     pub standing: i32,
-    pub great_power_relations: Vec<(String, NationId, String, i32)>, // name, id, status, score
-    pub minor_nation_relations: Vec<(String, NationId, String, i32)>, // name, id, infra, score
-    pub council_projection: Vec<(String, u32)>,                      // nation, projected votes
+    pub great_power_relations: Vec<(String, u32, String, i32)>, // name, id, status, score
+    pub minor_nation_relations: Vec<(String, u32, String, i32)>, // name, id, infra, score
+    pub council_projection: Vec<(String, u32)>,                  // nation, projected votes
 }
 
 // ── Typed query enum ─────────────────────────────────────────────
-
-use domain::types::NationId;
 
 /// A read-only request the frontend sends to the application layer.
 /// Tagged union serialized with `"type"` discriminant for easy JSON dispatch.
@@ -214,7 +212,7 @@ pub fn get_trade_screen(game: &GameState) -> TradeScreenData {
 
         partners.push(TradePartnerData {
             nation_name: minor.name.clone(),
-            nation_id: minor.id,
+            nation_id: minor.id.0,
             has_consulate,
             relationship_score,
             available_resources,
@@ -234,26 +232,26 @@ pub fn get_diplomacy_screen(game: &GameState) -> DiplomacyScreenData {
     let standing = game.world.diplomacy.get_standing(human_id);
 
     // Great Power relations
-    let great_power_relations: Vec<(String, NationId, String, i32)> = game
+    let great_power_relations: Vec<(String, u32, String, i32)> = game
         .great_powers()
         .iter()
         .filter(|gp| gp.id != human_id)
         .map(|gp| {
             let relation = game.world.diplomacy.get_relation(human_id, gp.id);
             let (status, score) = diplomat_status(relation);
-            (gp.name.clone(), gp.id, status, score)
+            (gp.name.clone(), gp.id.0, status, score)
         })
         .collect();
 
     // Minor Nation relations
-    let minor_nation_relations: Vec<(String, NationId, String, i32)> = game
+    let minor_nation_relations: Vec<(String, u32, String, i32)> = game
         .minor_nations()
         .iter()
         .map(|mn| {
             let relation = game.world.diplomacy.get_relation(human_id, mn.id);
             let infra = diplomatic_infrastructure(relation);
             let score = relation.map(|r| r.score).unwrap_or(0);
-            (mn.name.clone(), mn.id, infra, score)
+            (mn.name.clone(), mn.id.0, infra, score)
         })
         .collect();
 
@@ -312,6 +310,8 @@ mod tests {
     use super::*;
     use domain::economy::buildings::BuildingType;
     use domain::game_state::new_game;
+    use domain::types::Difficulty;
+    use domain::types::{NationId, Money, ResourceType, TurnNumber};
 
     // ── Map Screen ──────────────────────────────────────────────────
 
@@ -473,7 +473,7 @@ mod tests {
             1,
             "Should have exactly 1 trade partner after building 1 consulate"
         );
-        assert_eq!(data.partners[0].nation_id, first_minor_id);
+        assert_eq!(data.partners[0].nation_id, first_minor_id.0);
         assert!(data.partners[0].has_consulate);
     }
 
@@ -505,7 +505,7 @@ mod tests {
 
         // All partners should be minor nations (no great powers)
         for partner in &data.partners {
-            let nation = game.get_nation(partner.nation_id).unwrap();
+            let nation = game.get_nation(NationId(partner.nation_id)).unwrap();
             assert!(
                 !nation.is_great_power(),
                 "Trade screen should not include Great Powers"

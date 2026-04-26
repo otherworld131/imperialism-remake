@@ -2,13 +2,23 @@
 ///
 /// These reduce boilerplate in integration and simulation tests by
 /// providing pre-configured game states at common configurations.
-use domain::game_state::{GameState, new_game};
+use domain::game_state::{GameState, new_game, new_game_with_data};
 use domain::turn::process_turn;
 use domain::types::Difficulty;
+
+/// Load real game data (tech tree, unit stats, ship stats) from the data directory.
+pub fn real_game_data() -> domain::data::GameData {
+    infrastructure::data_loader::load_game_data(std::path::Path::new("data"))
+}
 
 /// Create a minimal game with Normal difficulty and default settings.
 pub fn minimal_game() -> GameState {
     new_game("test", Difficulty::Normal, 0)
+}
+
+/// Create a game with a real tech tree (from disk) at Normal difficulty.
+pub fn game_with_real_data(map_key: &str) -> GameState {
+    new_game_with_data(map_key, Difficulty::Normal, 0, real_game_data())
 }
 
 /// Create a game and advance it to the given turn number.

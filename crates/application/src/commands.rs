@@ -2,10 +2,11 @@
 //! Every mutation the frontend can request is represented here.
 //! Commands are dispatched via `apply_command` in `session.rs` (wasm-bridge).
 
-use domain::types::{NationId, ProvinceId};
-
 /// A mutation the frontend sends to the application layer.
 /// Tagged union serialized with `"type"` discriminant for easy JSON dispatch.
+///
+/// Domain IDs (NationId, ProvinceId) are represented as raw u32 here to keep
+/// serde out of the domain crate. Handlers wrap them back into typed IDs.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FrontendCommand {
@@ -15,7 +16,7 @@ pub enum FrontendCommand {
     // ── Military ─────────────────────────────────────────────────────────
     QueueUnitMove {
         unit_id: u32,
-        target_province: ProvinceId,
+        target_province: u32,
     },
     CancelUnitMove {
         unit_id: u32,
@@ -24,25 +25,25 @@ pub enum FrontendCommand {
         unit_id: u32,
     },
     RecruitArmyUnit {
-        nation_id: NationId,
+        nation_id: u32,
         unit_type: String,
     },
     AssignBeachhead {
-        nation_id: NationId,
-        target_province: ProvinceId,
+        nation_id: u32,
+        target_province: u32,
     },
     SetShipOperation {
         ship_id: u32,
         operation: String,
     },
     BuildShip {
-        nation_id: NationId,
+        nation_id: u32,
         ship_type: String,
     },
 
     // ── Civilians ─────────────────────────────────────────────────────────
     HireCivilian {
-        nation_id: NationId,
+        nation_id: u32,
         civilian_type: String,
     },
     DeployCivilian {
@@ -60,32 +61,32 @@ pub enum FrontendCommand {
 
     // ── Economy ───────────────────────────────────────────────────────────
     ExpandBuilding {
-        nation_id: NationId,
+        nation_id: u32,
         building_type: String,
     },
     BuildFreightCar {
-        nation_id: NationId,
+        nation_id: u32,
     },
     SetTransportAllocation {
-        nation_id: NationId,
+        nation_id: u32,
         commodity: String,
         amount: u32,
     },
     SetPlayerSellOrder {
-        nation_id: NationId,
+        nation_id: u32,
         commodity: String,
         quantity: u32,
         price_cents: u32,
     },
     SetPlayerBuyOrder {
-        nation_id: NationId,
+        nation_id: u32,
         commodity: String,
         quantity: u32,
         price_cents: u32,
     },
     SetTradeSubsidy {
-        from_nation: NationId,
-        to_nation: NationId,
+        from_nation: u32,
+        to_nation: u32,
         subsidy_dollars: u32,
     },
 
@@ -96,51 +97,49 @@ pub enum FrontendCommand {
 
     // ── Diplomacy ────────────────────────────────────────────────────────
     DiplomacyBuildConsulate {
-        player: NationId,
-        target: NationId,
+        player: u32,
+        target: u32,
     },
     DiplomacyBuildEmbassy {
-        player: NationId,
-        target: NationId,
+        player: u32,
+        target: u32,
     },
     DiplomacyProposeNap {
-        from: NationId,
-        to: NationId,
+        from: u32,
+        to: u32,
     },
     DiplomacyProposeAlliance {
-        from: NationId,
-        to: NationId,
+        from: u32,
+        to: u32,
     },
     DiplomacyDeclareWar {
-        from: NationId,
-        to: NationId,
+        from: u32,
+        to: u32,
     },
     DiplomacySendGrant {
-        from: NationId,
-        to: NationId,
+        from: u32,
+        to: u32,
         amount_dollars: u32,
     },
     DiplomacyBreakTreaty {
-        from: NationId,
-        to: NationId,
+        from: u32,
+        to: u32,
     },
     DiplomacyProposePeace {
-        from: NationId,
-        to: NationId,
+        from: u32,
+        to: u32,
     },
     AcceptProposal {
-        nation_id: NationId,
+        nation_id: u32,
         proposal_index: u32,
     },
     RejectProposal {
-        nation_id: NationId,
+        nation_id: u32,
         proposal_index: u32,
     },
 }
 
 /// Result returned after applying a `FrontendCommand`.
-/// A successful command may carry an optional message (e.g., error details for
-/// `ok: false`, or a human-readable confirmation for `ok: true`).
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct CommandResult {
     pub ok: bool,

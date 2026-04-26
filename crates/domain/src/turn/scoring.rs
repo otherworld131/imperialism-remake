@@ -4,7 +4,7 @@ use crate::nation::Nation;
 use crate::types::*;
 
 /// Score breakdown for a nation.
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default)]
 pub struct NationScore {
     pub military_score: u32,
     pub labor_score: u32,

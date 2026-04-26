@@ -1,26 +1,23 @@
 use crate::events::TreatyType;
 use crate::types::*;
 use crate::DomainError;
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A diplomatic proposal awaiting evaluation by the target nation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DiplomaticProposal {
     pub from: NationId,
     pub to: NationId,
     pub proposal_type: TreatyType,
     pub turn_proposed: TurnNumber,
     /// For PactDefenseRequest: the nation that attacked the minor.
-    #[serde(default)]
     pub attacker: Option<NationId>,
     /// For PactDefenseRequest: remaining candidate protectors if this one declines.
-    #[serde(default)]
     pub cascade_remaining: Option<Vec<NationId>>,
 }
 
 /// Tracks the diplomatic relationship between two nations.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DiplomaticRelation {
     pub nation_a: NationId,
     pub nation_b: NationId,
@@ -33,12 +30,11 @@ pub struct DiplomaticRelation {
     /// grace period before naval combat begins (card #104). `None` means
     /// either there is no war, or the war is older than the just-declared
     /// turn — combat resolves normally.
-    #[serde(default)]
     pub turn_war_declared: Option<TurnNumber>,
 }
 
 /// Records an alliance that was broken because one side made separate peace.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BrokenAlliance {
     pub peacemaker: NationId,
     pub former_ally: NationId,
@@ -116,77 +112,21 @@ impl DiplomaticRelation {
 }
 
 /// Manages all diplomatic relationships in the game.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DiplomacyState {
-    #[serde(
-        serialize_with = "serialize_relations",
-        deserialize_with = "deserialize_relations"
-    )]
     relations: BTreeMap<(NationId, NationId), DiplomaticRelation>,
     /// Per-nation diplomatic standing (global reputation).
     pub standing: HashMap<NationId, i32>,
     /// Proposals awaiting evaluation by the target nation.
-    #[serde(default)]
     pub pending_proposals: Vec<DiplomaticProposal>,
     /// Separate-peace alliance breaks recorded this turn and finalized after all
     /// peace outcomes for the turn are known.
-    #[serde(default)]
     pending_separate_peace_breaks: Vec<BrokenAlliance>,
     /// (attacker, minor) pairs for which a pact-defense protection request
     /// has already been raised in the current war. Prevents re-triggering
     /// the cascade every combat (card #68). Cleared when the attacker/minor
     /// war ends (peace, incorporation, anarchy).
-    #[serde(default, with = "pact_defense_set_serde")]
     pact_defense_requested: HashSet<(NationId, NationId)>,
-}
-
-mod pact_defense_set_serde {
-    use super::NationId;
-    use serde::{Deserialize, Serialize};
-    use std::collections::HashSet;
-
-    pub fn serialize<S>(
-        set: &HashSet<(NationId, NationId)>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let v: Vec<(NationId, NationId)> = set.iter().copied().collect();
-        v.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<HashSet<(NationId, NationId)>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let v: Vec<(NationId, NationId)> = Vec::deserialize(deserializer)?;
-        Ok(v.into_iter().collect())
-    }
-}
-
-/// Serialize BTreeMap<(NationId, NationId), DiplomaticRelation> as a Vec of pairs
-/// because tuple keys cannot be used directly as JSON object keys.
-fn serialize_relations<S>(
-    relations: &BTreeMap<(NationId, NationId), DiplomaticRelation>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    let entries: Vec<(&(NationId, NationId), &DiplomaticRelation)> = relations.iter().collect();
-    entries.serialize(serializer)
-}
-
-/// Deserialize Vec of ((NationId, NationId), DiplomaticRelation) pairs back into BTreeMap.
-fn deserialize_relations<'de, D>(
-    deserializer: D,
-) -> Result<BTreeMap<(NationId, NationId), DiplomaticRelation>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let entries: Vec<((NationId, NationId), DiplomaticRelation)> = Vec::deserialize(deserializer)?;
-    Ok(entries.into_iter().collect())
 }
 
 /// Normalize a pair of NationIds to a canonical order so (a,b) and (b,a) map to the same key.
@@ -211,6 +151,33 @@ impl DiplomacyState {
             pending_separate_peace_breaks: Vec::new(),
             pact_defense_requested: HashSet::new(),
         }
+    }
+
+    /// Reconstruct DiplomacyState from raw parts (used by domain-snapshot restore).
+    /// `pending_separate_peace_breaks` is transient per-turn state and not persisted.
+    pub fn from_raw(
+        relations: BTreeMap<(NationId, NationId), DiplomaticRelation>,
+        standing: HashMap<NationId, i32>,
+        pending_proposals: Vec<DiplomaticProposal>,
+        pact_defense_requested: HashSet<(NationId, NationId)>,
+    ) -> Self {
+        Self {
+            relations,
+            standing,
+            pending_proposals,
+            pending_separate_peace_breaks: Vec::new(),
+            pact_defense_requested,
+        }
+    }
+
+    /// Iterate over all stored diplomatic relations.
+    pub fn all_relations(&self) -> impl Iterator<Item = ((NationId, NationId), &DiplomaticRelation)> {
+        self.relations.iter().map(|(k, v)| (*k, v))
+    }
+
+    /// Iterate over all (attacker, minor) pairs that have had a pact-defense request raised.
+    pub fn pact_defense_pairs(&self) -> impl Iterator<Item = (NationId, NationId)> + '_ {
+        self.pact_defense_requested.iter().copied()
     }
 
     /// Has a pact-defense protection request already been raised for the given

@@ -3,7 +3,7 @@ use crate::map::hex_map::HexMap;
 use crate::types::*;
 
 /// The level of industrialization of a province's settlement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SettlementLevel {
     /// Smallest settlement — starting state for newly connected provinces.
     Hamlet,
@@ -14,7 +14,7 @@ pub enum SettlementLevel {
 }
 
 /// A province: a contiguous group of hex tiles owned by a nation.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Province {
     /// Unique identifier.
     pub id: ProvinceId,
@@ -43,26 +43,22 @@ pub struct Province {
     /// `Some(n)` means upgrade in progress; starts at 12 when a province
     /// first reaches Village status while connected.
     /// `None` means not yet a Village or already a Town.
-    #[serde(default)]
     pub town_countdown: Option<u8>,
     /// Whether this province has at least one tile adjacent to a Sea tile.
     /// Computed at map generation time. Coastal provinces can be targeted
     /// by naval landings (beachhead operations).
-    #[serde(default)]
     pub coastal: bool,
     /// If this province was diplomatically incorporated from a minor nation,
     /// tracks the original minor nation's ID. Used for map rendering only:
     /// incorporated provinces keep separate borders and show a lighter shade
     /// of the overlord's color. `None` for native GP provinces, independent
     /// minor provinces, and militarily conquered provinces.
-    #[serde(default)]
     pub incorporated_from: Option<NationId>,
     /// If this province was originally owned by a minor nation that later
     /// lost it purely through military conquest (no diplomatic integration),
     /// tracks that original minor. Purely mechanical — used by card #79 to
     /// restore the province when the current overlord falls into anarchy.
     /// Does NOT affect map rendering (unlike `incorporated_from`).
-    #[serde(default)]
     pub conquest_origin: Option<NationId>,
 }
 

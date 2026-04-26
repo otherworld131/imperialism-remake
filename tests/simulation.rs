@@ -1,9 +1,9 @@
 mod test_helpers;
 
-use domain::game_state::new_game;
+use domain::game_state::{new_game, new_game_with_data};
 use domain::turn::process_turn;
 use domain::types::*;
-use test_helpers::{game_at_turn, game_with_difficulty, minimal_game};
+use test_helpers::{game_at_turn, game_with_difficulty, minimal_game, real_game_data};
 
 /// Run a full game simulation and verify invariants hold throughout.
 fn run_simulation(
@@ -12,7 +12,8 @@ fn run_simulation(
     difficulty: Difficulty,
     human_nation_index: usize,
 ) -> domain::game_state::GameState {
-    let mut game = new_game(map_key, difficulty, human_nation_index);
+    let game_data = real_game_data();
+    let mut game = new_game_with_data(map_key, difficulty, human_nation_index, game_data);
     for _ in 0..turns {
         process_turn(&mut game);
         // Invariants that must hold every turn:

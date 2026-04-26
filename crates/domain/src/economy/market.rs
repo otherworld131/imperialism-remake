@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 const HISTORY_DEPTH: usize = 20;
 
 /// A single turn's market observation for one commodity.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct MarketTick {
     pub turn: TurnNumber,
     /// Effective market price this turn (may differ from base price due to supply pressure).
@@ -30,7 +30,7 @@ pub struct MarketTick {
 }
 
 /// Direction of recent price movement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Trend {
     Rising,
     Falling,
@@ -55,21 +55,15 @@ impl std::fmt::Display for Trend {
 /// Separate maps per commodity tier (Resource/Material/Goods) mirror the pattern
 /// in `NationEconomy` and sidestep the JSON restriction that map keys must be strings
 /// (the `Commodity` enum serialises as an object, not a string).
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct MarketState {
     /// Most recently recorded price per resource (base price until first tick).
-    #[serde(default)]
     pub resource_prices: BTreeMap<ResourceType, Money>,
-    #[serde(default)]
     pub material_prices: BTreeMap<MaterialType, Money>,
-    #[serde(default)]
     pub goods_prices: BTreeMap<GoodsType, Money>,
     /// Per-resource ring buffer of the last `HISTORY_DEPTH` ticks.
-    #[serde(default)]
     pub resource_history: BTreeMap<ResourceType, VecDeque<MarketTick>>,
-    #[serde(default)]
     pub material_history: BTreeMap<MaterialType, VecDeque<MarketTick>>,
-    #[serde(default)]
     pub goods_history: BTreeMap<GoodsType, VecDeque<MarketTick>>,
 }
 
@@ -300,12 +294,10 @@ mod tests {
     }
 
     #[test]
-    fn market_state_serializes_and_deserializes() {
+    fn market_state_records_price_and_history() {
         let mut ms = MarketState::new();
         ms.record_tick(coal(), TurnNumber::new(3), Money::dollars(80), 5, 7, 5);
-        let json = serde_json::to_string(&ms).unwrap();
-        let restored: MarketState = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.current_price(coal()), Money::dollars(80));
-        assert_eq!(restored.resource_history[&ResourceType::Coal].len(), 1);
+        assert_eq!(ms.current_price(coal()), Money::dollars(80));
+        assert_eq!(ms.resource_history[&ResourceType::Coal].len(), 1);
     }
 }

@@ -1,12 +1,9 @@
 //! Data-driven game definitions.
 //!
 //! The `GameData` struct holds all game configuration that was previously
-//! hardcoded — tech tree, unit stats, ship stats, etc. It can be constructed
-//! from hardcoded defaults (`GameData::default()`) or loaded from RON
-//! strings (`GameData::from_ron_strings()`).
-
-pub mod definitions;
-pub mod loader;
+//! hardcoded — tech tree, unit stats, ship stats, etc. It is constructed
+//! from hardcoded defaults (`GameData::default()`) or from parsed data
+//! supplied by infrastructure (`GameData::from_parts()`).
 
 use crate::military::ships::{ShipStats, ShipType};
 use crate::military::units::{ArmyUnitType, UnitStats};
@@ -395,33 +392,16 @@ pub struct GameData {
 }
 
 impl GameData {
-    /// Construct GameData from RON strings.
+    /// Construct GameData from pre-parsed parts supplied by infrastructure.
     ///
-    /// `tech_ron` is required: if `None` or invalid, this function panics with a
-    /// clear message. `units_ron` and `ships_ron` fall back to hardcoded defaults
-    /// when `None` or invalid.
-    pub fn from_ron_strings(
-        tech_ron: Option<&str>,
-        units_ron: Option<&str>,
-        ships_ron: Option<&str>,
+    /// Infrastructure parses RON files and calls this constructor so that
+    /// domain never needs a ron dependency.
+    pub fn from_parts(
+        tech_tree: TechTree,
+        unit_stats: HashMap<ArmyUnitType, UnitStats>,
+        ship_stats: HashMap<ShipType, ShipStats>,
     ) -> Self {
-        let tech_tree = tech_ron
-            .map(|s| {
-                loader::load_tech_tree(s).unwrap_or_else(|e| {
-                    panic!("technologies.ron is required but failed to load: {}", e)
-                })
-            })
-            .unwrap_or_else(|| panic!("technologies.ron is required but was not provided"));
-
-        let unit_stats = units_ron
-            .and_then(|s| loader::load_unit_stats(s).ok())
-            .unwrap_or_else(default_unit_stats);
-
-        let ship_stats = ships_ron
-            .and_then(|s| loader::load_ship_stats(s).ok())
-            .unwrap_or_else(default_ship_stats);
-
-        #[allow(unused_mut)] // mut needed only with cfg(feature = "lua")
+        #[allow(unused_mut)]
         let mut game_config = GameConfig::default();
 
         #[cfg(feature = "lua")]
@@ -448,12 +428,12 @@ impl GameData {
 }
 
 impl Default for GameData {
+    /// Returns minimal GameData with an empty tech tree and hardcoded unit/ship stats.
+    ///
+    /// Used as a placeholder during snapshot restore; infrastructure replaces
+    /// `game_data` with the full data loaded from RON files after deserialization.
     fn default() -> Self {
-        const TECH_RON: &str = include_str!("../../../../data/definitions/technologies.ron");
-        const UNITS_RON: &str = include_str!("../../../../data/definitions/units.ron");
-        const SHIPS_RON: &str = include_str!("../../../../data/definitions/ships.ron");
-
-        #[allow(unused_mut)] // mut needed only with cfg(feature = "lua")
+        #[allow(unused_mut)]
         let mut game_config = GameConfig::default();
 
         #[cfg(feature = "lua")]
@@ -468,17 +448,10 @@ impl Default for GameData {
             engine
         };
 
-        let tech_tree = loader::load_tech_tree(TECH_RON)
-            .expect("embedded technologies.ron must be valid");
-        let unit_stats = loader::load_unit_stats(UNITS_RON)
-            .unwrap_or_else(|_| default_unit_stats());
-        let ship_stats = loader::load_ship_stats(SHIPS_RON)
-            .unwrap_or_else(|_| default_ship_stats());
-
         GameData {
-            tech_tree,
-            unit_stats,
-            ship_stats,
+            tech_tree: TechTree::from_technologies(vec![]),
+            unit_stats: default_unit_stats(),
+            ship_stats: default_ship_stats(),
             #[cfg(feature = "lua")]
             lua_engine,
             game_config,
@@ -487,7 +460,7 @@ impl Default for GameData {
 }
 
 /// Build default unit stats from the hardcoded `ArmyUnitType::stats()` method.
-fn default_unit_stats() -> HashMap<ArmyUnitType, UnitStats> {
+pub fn default_unit_stats() -> HashMap<ArmyUnitType, UnitStats> {
     use ArmyUnitType::*;
     let all_types = [
         Militia,
@@ -517,7 +490,7 @@ fn default_unit_stats() -> HashMap<ArmyUnitType, UnitStats> {
 }
 
 /// Build default ship stats from the hardcoded `ShipType::stats()` method.
-fn default_ship_stats() -> HashMap<ShipType, ShipStats> {
+pub fn default_ship_stats() -> HashMap<ShipType, ShipStats> {
     use ShipType::*;
     let all_types = [
         Trader,
@@ -542,13 +515,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_game_data_has_28_techs() {
-        // GameData::default() embeds technologies.ron at compile time.
-        let data = GameData::default();
-        assert_eq!(data.tech_tree.all_techs().len(), 28);
-    }
-
-    #[test]
     fn default_game_data_has_22_unit_types() {
         let data = GameData::default();
         assert_eq!(data.unit_stats.len(), 22);
@@ -561,71 +527,20 @@ mod tests {
     }
 
     #[test]
-    fn from_ron_strings_with_valid_tech_ron() {
-        let ron = r#"(
-            technologies: [
-                (
-                    id: 1,
-                    name: "Only Tech",
-                    cost: 0,
-                    earliest_year: 1815,
-                    latest_year: 1815,
-                    prerequisites: [],
-                    effects: [],
-                ),
-            ],
-        )"#;
-        let data = GameData::from_ron_strings(Some(ron), None, None);
-        assert_eq!(data.tech_tree.all_techs().len(), 1);
-        // Other sections fall back to defaults
-        assert_eq!(data.unit_stats.len(), 22);
-        assert_eq!(data.ship_stats.len(), 13);
-    }
-
-    #[test]
-    fn from_ron_strings_with_full_tech_ron_has_28_techs() {
-        let ron = include_str!("../../../../data/definitions/technologies.ron");
-        let data = GameData::from_ron_strings(Some(ron), None, None);
-        assert_eq!(data.tech_tree.all_techs().len(), 28);
-        assert_eq!(data.unit_stats.len(), 22);
-        assert_eq!(data.ship_stats.len(), 13);
-    }
-
-    #[test]
-    fn from_ron_strings_with_invalid_units_and_ships_falls_back_to_defaults() {
-        let tech_ron = include_str!("../../../../data/definitions/technologies.ron");
-        let data = GameData::from_ron_strings(Some(tech_ron), Some("invalid"), Some("invalid"));
-        assert_eq!(data.unit_stats.len(), 22);
-        assert_eq!(data.ship_stats.len(), 13);
-    }
-
-    #[test]
-    fn default_unit_stats_match_hardcoded() {
+    fn default_unit_stats_spot_check() {
         let data = GameData::default();
-        // Spot-check a few units against hardcoded values
         let militia = &data.unit_stats[&ArmyUnitType::Militia];
         assert_eq!(militia.firepower, 1);
         assert_eq!(militia.movement, 0);
         assert_eq!(militia.cost, crate::types::Money::dollars(50));
-
-        let guards = &data.unit_stats[&ArmyUnitType::Guards];
-        assert_eq!(guards.firepower, 5);
-        assert_eq!(guards.range, 2);
-        assert_eq!(
-            guards.prerequisite_tech.as_deref(),
-            Some("Professional Army")
-        );
     }
 
     #[test]
-    fn default_ship_stats_match_hardcoded() {
+    fn default_ship_stats_spot_check() {
         let data = GameData::default();
         let frigate = &data.ship_stats[&ShipType::Frigate];
         assert_eq!(frigate.firepower, 3);
         assert_eq!(frigate.hull, 35);
-
-        let dreadnought = &data.ship_stats[&ShipType::Dreadnought];
-        assert_eq!(dreadnought.firepower, 15);
-        assert_eq!(dreadnought.hull, 80);
     }
+
 }

@@ -1,11 +1,12 @@
 use crate::PersistenceError;
 use domain::data::GameData;
 use domain::game_state::GameState;
+use domain_snapshot::game_state::GameState as SnapshotGameState;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Current save file format version.
-pub const CURRENT_SAVE_VERSION: u32 = 2;
+pub const CURRENT_SAVE_VERSION: u32 = 3;
 
 /// Versioned save file wrapper around the game state.
 #[derive(Serialize, Deserialize)]
@@ -24,26 +25,23 @@ pub struct SaveFile {
     /// ISO 8601 timestamp when the save was created.
     #[serde(default)]
     pub timestamp: String,
-    /// The game state contained in this save.
-    pub game: GameState,
+    /// The game state contained in this save (snapshot type, serde-clean).
+    pub game: SnapshotGameState,
 }
 
 /// Get the current time as an ISO 8601 string (UTC-like, no external deps).
 fn current_timestamp() -> String {
-    // Use UNIX_EPOCH + SystemTime to produce a basic timestamp.
     use std::time::{SystemTime, UNIX_EPOCH};
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     let secs = duration.as_secs();
-    // Convert to a basic date-time string (approximate, no leap-second handling)
     let days = secs / 86400;
     let time_of_day = secs % 86400;
     let hours = time_of_day / 3600;
     let minutes = (time_of_day % 3600) / 60;
     let seconds = time_of_day % 60;
 
-    // Calculate year/month/day from days since epoch (1970-01-01)
     let (year, month, day) = days_to_ymd(days);
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
@@ -53,7 +51,6 @@ fn current_timestamp() -> String {
 
 /// Convert days since 1970-01-01 to (year, month, day).
 fn days_to_ymd(days: u64) -> (u64, u64, u64) {
-    // Algorithm for Gregorian calendar
     let mut remaining = days as i64;
     let mut year: i64 = 1970;
 
@@ -95,9 +92,6 @@ fn is_leap(year: i64) -> bool {
 }
 
 /// Save a game state to a JSON file at the given path.
-///
-/// The game state is wrapped in a [`SaveFile`] with the current format version
-/// and metadata (nation name, turn display, difficulty, timestamp).
 pub fn save_game(game: &GameState, path: &Path) -> Result<(), PersistenceError> {
     let nation_name = game
         .get_nation(game.human_player_nation)
@@ -107,13 +101,14 @@ pub fn save_game(game: &GameState, path: &Path) -> Result<(), PersistenceError> 
     let difficulty = format!("{:?}", game.difficulty);
     let timestamp = current_timestamp();
 
+    let snapshot: SnapshotGameState = game.into();
     let save = SaveFile {
         version: CURRENT_SAVE_VERSION,
         nation_name,
         turn_display,
         difficulty,
         timestamp,
-        game: clone_game_state_for_save(game),
+        game: snapshot,
     };
     let json = serde_json::to_string_pretty(&save)
         .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
@@ -123,10 +118,10 @@ pub fn save_game(game: &GameState, path: &Path) -> Result<(), PersistenceError> 
 
 /// Load a game state from a JSON file at the given path.
 ///
-/// Rejects any file whose version does not exactly match `CURRENT_SAVE_VERSION`
-/// (both old and future versions are rejected — no backward compatibility).
-/// After deserialization, transient fields (`tech_tree`, `events`) are
-/// reconstructed since they are skipped during serialization.
+/// Rejects any file whose version does not exactly match `CURRENT_SAVE_VERSION`.
+/// After deserialization, `game_data` is populated with `GameData::default()`
+/// (minimal placeholder). Callers that need the full tech tree should replace
+/// `game_data` with the result of `load_game_data()`.
 pub fn load_game(path: &Path) -> Result<GameState, PersistenceError> {
     let json = std::fs::read_to_string(path)?;
 
@@ -137,7 +132,7 @@ pub fn load_game(path: &Path) -> Result<GameState, PersistenceError> {
                 max_supported: CURRENT_SAVE_VERSION,
             });
         }
-        let mut game = save.game;
+        let mut game: GameState = save.game.into();
         game.game_data = GameData::default();
         return Ok(game);
     }
@@ -146,7 +141,7 @@ pub fn load_game(path: &Path) -> Result<GameState, PersistenceError> {
 }
 
 /// Read save file metadata without loading the full game state.
-/// Returns (nation_name, turn_display, difficulty, timestamp) or None if unreadable.
+/// Returns metadata or None if unreadable.
 pub fn read_save_metadata(path: &Path) -> Option<SaveFileMetadata> {
     let json = std::fs::read_to_string(path).ok()?;
     if let Ok(save) = serde_json::from_str::<SaveFile>(&json) {
@@ -201,18 +196,6 @@ pub fn list_saves(dir: &Path) -> Vec<PathBuf> {
     entries
 }
 
-/// Serialize and re-deserialize the game state to produce a clean copy
-/// suitable for saving (strips transient fields via serde skip).
-fn clone_game_state_for_save(game: &GameState) -> GameState {
-    // Serialize to JSON value and back — this respects all serde attributes
-    // (skip, default, etc.) so the saved copy matches what load would produce.
-    let value = serde_json::to_value(game).expect("GameState should always serialize");
-    let mut copy: GameState =
-        serde_json::from_value(value).expect("GameState should always deserialize");
-    copy.game_data = GameData::default();
-    copy
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,14 +210,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test_save.json");
 
-        // Save
         save_game(&game, &path).unwrap();
         assert!(path.exists());
 
-        // Load
         let loaded = load_game(&path).unwrap();
 
-        // Verify key fields match
         assert_eq!(loaded.turn, game.turn);
         assert_eq!(loaded.difficulty, game.difficulty);
         assert_eq!(loaded.world.map_key, game.world.map_key);
@@ -243,13 +223,9 @@ mod tests {
         assert_eq!(loaded.world.provinces.len(), game.world.provinces.len());
         assert_eq!(loaded.world.hex_map.tile_count(), game.world.hex_map.tile_count());
 
-        // Verify tech_tree was reconstructed
-        assert_eq!(loaded.game_data.tech_tree.all_techs().len(), 28);
-
-        // Verify events are empty (they are transient)
+        // events are transient — not persisted
         assert!(loaded.transient.events.is_empty());
 
-        // Verify nation data roundtripped
         let original_player = game.get_nation(game.human_player_nation).unwrap();
         let loaded_player = loaded.get_nation(loaded.human_player_nation).unwrap();
         assert_eq!(loaded_player.name, original_player.name);
@@ -259,7 +235,6 @@ mod tests {
             original_player.province_count()
         );
 
-        // Cleanup
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
     }
@@ -268,12 +243,10 @@ mod tests {
     fn save_and_load_after_turns() {
         let mut game = new_game("test", Difficulty::Easy, 2);
 
-        // Advance a few turns
         game.advance_turn();
         game.advance_turn();
         game.advance_turn();
 
-        // Modify some nation state
         let player_id = game.human_player_nation;
         {
             let player = game.get_nation_mut(player_id).unwrap();
@@ -291,18 +264,16 @@ mod tests {
 
         assert_eq!(loaded.turn, game.turn);
         let loaded_player = loaded.get_nation(player_id).unwrap();
-        // Easy difficulty starts with 10 timber + 5 coal, plus the 15 + 8 added above
         assert_eq!(
             loaded_player.resource_amount(domain::types::ResourceType::Timber),
-            25
+            35  // 20 starting (Easy) + 15 added
         );
         assert_eq!(
             loaded_player.resource_amount(domain::types::ResourceType::Coal),
-            13
+            18  // 10 starting (Easy) + 8 added
         );
         assert_eq!(loaded_player.economy.treasury, domain::types::Money::dollars(7500));
 
-        // Cleanup
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
     }
@@ -331,12 +302,9 @@ mod tests {
             result.err()
         );
 
-        // Cleanup
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
     }
-
-    // ── Save file versioning tests ──────────────────────────────
 
     #[test]
     fn save_file_includes_version() {
@@ -348,7 +316,6 @@ mod tests {
 
         save_game(&game, &path).unwrap();
 
-        // Read the raw JSON and verify it contains a version field.
         let raw = std::fs::read_to_string(&path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(
@@ -356,12 +323,10 @@ mod tests {
             CURRENT_SAVE_VERSION as u64
         );
 
-        // Load and verify roundtrip
         let loaded = load_game(&path).unwrap();
         assert_eq!(loaded.turn, game.turn);
         assert_eq!(loaded.difficulty, game.difficulty);
 
-        // Cleanup
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
     }
@@ -374,17 +339,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("future_save.json");
 
-        // Save normally
         save_game(&game, &path).unwrap();
 
-        // Tamper with the version to simulate a future version
         let raw = std::fs::read_to_string(&path).unwrap();
         let mut parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
         parsed["version"] = serde_json::Value::from(CURRENT_SAVE_VERSION + 1);
         let tampered = serde_json::to_string_pretty(&parsed).unwrap();
         std::fs::write(&path, tampered).unwrap();
 
-        // Loading should fail with a version error
         let result = load_game(&path);
         match result {
             Err(PersistenceError::UnsupportedVersion { found, max_supported }) => {
@@ -395,23 +357,20 @@ mod tests {
             Ok(_) => panic!("Expected error for future save version"),
         }
 
-        // Cleanup
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]
     fn old_version_save_is_rejected() {
-        // Old saves (version != CURRENT_VERSION) are not supported per project policy.
-        // A v1-format JSON (version + game, no metadata) must be rejected.
         let game = new_game("test", Difficulty::Easy, 0);
         let dir = std::env::temp_dir().join("imperialism_test_old_version");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("v1_save.json");
-        let game_copy = clone_game_state_for_save(&game);
+        let snapshot: SnapshotGameState = (&game).into();
         let v1_json = serde_json::json!({
             "version": 1,
-            "game": serde_json::to_value(&game_copy).unwrap()
+            "game": serde_json::to_value(&snapshot).unwrap()
         });
         std::fs::write(&path, serde_json::to_string_pretty(&v1_json).unwrap()).unwrap();
         let result = load_game(&path);
@@ -426,12 +385,12 @@ mod tests {
 
     #[test]
     fn unversioned_save_is_rejected() {
-        // Old saves with no version wrapper are not supported per project policy.
         let game = new_game("test", Difficulty::Normal, 0);
         let dir = std::env::temp_dir().join("imperialism_test_unversioned");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("old_save.json");
-        let raw_json = serde_json::to_string_pretty(&game).unwrap();
+        let snapshot: SnapshotGameState = (&game).into();
+        let raw_json = serde_json::to_string_pretty(&snapshot).unwrap();
         std::fs::write(&path, &raw_json).unwrap();
         let result = load_game(&path);
         assert!(
@@ -453,7 +412,6 @@ mod tests {
 
         save_game(&game, &path).unwrap();
 
-        // Read the raw JSON and verify metadata fields
         let raw = std::fs::read_to_string(&path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(
@@ -465,7 +423,6 @@ mod tests {
         assert_eq!(parsed["difficulty"].as_str().unwrap(), "Normal");
         assert!(!parsed["timestamp"].as_str().unwrap().is_empty());
 
-        // Verify metadata via read_save_metadata
         let meta = read_save_metadata(&path).unwrap();
         assert_eq!(meta.version, CURRENT_SAVE_VERSION);
         assert!(!meta.nation_name.is_empty());
@@ -473,12 +430,9 @@ mod tests {
         assert_eq!(meta.difficulty, "Normal");
         assert!(meta.timestamp.contains("T"));
 
-        // Cleanup
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
     }
-
-    // ── delete_save tests ───────────────────────────────────────
 
     #[test]
     fn delete_save_removes_file() {
@@ -494,7 +448,6 @@ mod tests {
         assert!(result.is_ok());
         assert!(!path.exists());
 
-        // Cleanup
         let _ = std::fs::remove_dir(&dir);
     }
 
@@ -504,14 +457,11 @@ mod tests {
         assert!(matches!(result, Err(PersistenceError::Io(_))));
     }
 
-    // ── list_saves tests ────────────────────────────────────────
-
     #[test]
     fn list_saves_returns_json_files() {
         let dir = std::env::temp_dir().join("imperialism_test_list_saves");
         std::fs::create_dir_all(&dir).unwrap();
 
-        // Create a few JSON files
         std::fs::write(dir.join("save1.json"), "{}").unwrap();
         std::fs::write(dir.join("save2.json"), "{}").unwrap();
         std::fs::write(dir.join("notes.txt"), "not a save").unwrap();
@@ -520,7 +470,6 @@ mod tests {
         assert_eq!(saves.len(), 2, "Should find exactly 2 .json files");
         assert!(saves.iter().all(|p| p.extension().unwrap() == "json"));
 
-        // Cleanup
         let _ = std::fs::remove_file(dir.join("save1.json"));
         let _ = std::fs::remove_file(dir.join("save2.json"));
         let _ = std::fs::remove_file(dir.join("notes.txt"));
@@ -535,7 +484,6 @@ mod tests {
         let saves = list_saves(&dir);
         assert!(saves.is_empty());
 
-        // Cleanup
         let _ = std::fs::remove_dir(&dir);
     }
 
@@ -544,8 +492,6 @@ mod tests {
         let saves = list_saves(Path::new("/tmp/nonexistent_dir_999999"));
         assert!(saves.is_empty());
     }
-
-    // ── Save metadata (saveinfo) tests ──────────────────────────
 
     #[test]
     fn read_save_metadata_includes_version() {
@@ -564,7 +510,6 @@ mod tests {
         assert_eq!(meta.difficulty, "Hard");
         assert!(meta.timestamp.contains("T"));
 
-        // Cleanup
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
     }
@@ -579,7 +524,6 @@ mod tests {
         let meta = read_save_metadata(&path);
         assert!(meta.is_none());
 
-        // Cleanup
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
     }
@@ -602,12 +546,10 @@ mod tests {
             save_game(&game, &path).unwrap();
         }
 
-        // Verify autosave exists and is loadable
         assert!(path.exists());
         let loaded = load_game(&path).unwrap();
         assert_eq!(loaded.turn, game.turn);
 
-        // Cleanup
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
     }

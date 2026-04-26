@@ -1,7 +1,7 @@
 /// Macro for generating strongly-typed ID wrappers.
 macro_rules! define_id {
     ($name:ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(pub u32);
 
         impl std::fmt::Display for $name {
@@ -18,9 +18,7 @@ define_id!(ProvinceId);
 // ── Turn number ─────────────────────────────────────────────────
 
 /// A turn number. Turn 1 = 1815 Q1, Turn 4 = 1815 Q4, Turn 5 = 1816 Q1, etc.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TurnNumber(pub u32);
 
 const BASE_YEAR: u32 = 1815;
@@ -89,9 +87,7 @@ impl std::fmt::Display for TurnNumber {
 
 /// Money value in game currency. Stored as integer cents to avoid floating-point issues.
 /// Display shows dollars (e.g., $1,500).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Money(i64);
 
 impl Money {
@@ -117,7 +113,7 @@ impl Money {
         self.0 < 0
     }
 
-    /// Returns `Money::ZERO`. Used as a `#[serde(default)]` function pointer.
+    /// Returns `Money::ZERO`.
     pub fn zero() -> Self {
         Self::ZERO
     }
@@ -173,7 +169,7 @@ impl std::fmt::Display for Money {
 
 // ── Resource / Material / Goods enums ───────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ResourceType {
     Timber,
     Coal,
@@ -226,7 +222,28 @@ impl ResourceType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+impl std::str::FromStr for ResourceType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Timber" => Ok(Self::Timber),
+            "Coal" => Ok(Self::Coal),
+            "Iron" => Ok(Self::Iron),
+            "Cotton" => Ok(Self::Cotton),
+            "Wool" => Ok(Self::Wool),
+            "Grain" => Ok(Self::Grain),
+            "Fruit" => Ok(Self::Fruit),
+            "Livestock" => Ok(Self::Livestock),
+            "Horses" => Ok(Self::Horses),
+            "Oil" => Ok(Self::Oil),
+            "Gold" => Ok(Self::Gold),
+            "Gems" => Ok(Self::Gems),
+            other => Err(format!("unknown resource type: {}", other)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MaterialType {
     Lumber,
     Steel,
@@ -245,11 +262,38 @@ impl std::fmt::Display for MaterialType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+impl std::str::FromStr for MaterialType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Lumber" => Ok(Self::Lumber),
+            "Steel" => Ok(Self::Steel),
+            "Fabric" => Ok(Self::Fabric),
+            "Paper" => Ok(Self::Paper),
+            "Arms" => Ok(Self::Arms),
+            "CannedFood" => Ok(Self::CannedFood),
+            other => Err(format!("unknown material type: {}", other)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GoodsType {
     Furniture,
     Clothing,
     Hardware,
+}
+
+impl std::str::FromStr for GoodsType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Furniture" => Ok(Self::Furniture),
+            "Clothing" => Ok(Self::Clothing),
+            "Hardware" => Ok(Self::Hardware),
+            other => Err(format!("unknown goods type: {}", other)),
+        }
+    }
 }
 
 // ── ReservationId ───────────────────────────────────────────────
@@ -258,7 +302,7 @@ pub enum GoodsType {
 ///
 /// Created by `NationEconomy::reserve()`, consumed by `commit()` or `release()`.
 /// Reservations auto-release at end-of-turn if not committed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ReservationId(pub u64);
 
 impl std::fmt::Display for ReservationId {
@@ -270,7 +314,7 @@ impl std::fmt::Display for ReservationId {
 // ── Terrain ─────────────────────────────────────────────────────
 
 /// Landscape terrain types. Resources are a separate overlay on tiles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TerrainType {
     Grassland,
     Hills,
@@ -309,7 +353,7 @@ impl TerrainType {
 
 // ── ResourceAmount ──────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResourceAmount {
     pub resource: ResourceType,
     pub quantity: u32,
@@ -323,7 +367,7 @@ impl ResourceAmount {
 
 // ── Nation type ──────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NationType {
     GreatPower,
     MinorNation,
@@ -331,7 +375,7 @@ pub enum NationType {
 
 // ── Difficulty ──────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Difficulty {
     Introductory,
     Easy,

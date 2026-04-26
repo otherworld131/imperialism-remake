@@ -3,14 +3,13 @@ use crate::types::*;
 // ── TechId ─────────────────────────────────────────────────────
 
 /// Identifies a technology in the tech tree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TechId(pub u32);
 
 // ── Headline categories ─────────────────────────────────────────
 
 /// Category for newspaper headlines, used for color-coded display.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HeadlineCategory {
     War,
     Battle,
@@ -26,26 +25,19 @@ pub enum HeadlineCategory {
 // ── Headline struct ────────────────────────────────────────────
 
 /// A newspaper headline with optional AI reasoning.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Headline {
     pub text: String,
     pub category: HeadlineCategory,
     /// AI decision rationale; `None` for non-AI headlines.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// When `true`, this headline describes a decision the AI *declined* to make
     /// (e.g., "X did not declare war this turn"). Hidden from the newspaper by
     /// default; revealed by the "Show AI non-actions" debug toggle.
-    #[serde(default, skip_serializing_if = "is_false")]
     pub is_non_action: bool,
     /// Nation IDs involved in this headline. Used by the newspaper filter to
     /// match by ID instead of text substring.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nation_ids: Vec<crate::types::NationId>,
-}
-
-fn is_false(b: &bool) -> bool {
-    !*b
 }
 
 impl Headline {
@@ -92,7 +84,7 @@ impl Headline {
 
 // ── Treaty & Victory enums ─────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TreatyType {
     NonAggressionPact,
     Alliance,
@@ -102,7 +94,7 @@ pub enum TreatyType {
     PactDefenseRequest,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VictoryType {
     CouncilVote,
     CouncilDefault,
@@ -221,7 +213,7 @@ pub struct MinorRegainedIndependence {
 // ── Persistent history events ──────────────────────────────────
 
 /// Reason a minor nation became part of a great power.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IncorporationReason {
     /// Forced via pact-defense protection cascade.
     JoinedEmpire,
@@ -236,13 +228,12 @@ pub enum IncorporationReason {
 /// the player-facing wording stays consistent and nation/province names are
 /// looked up live (a nation rename or province change would otherwise leave
 /// stale text in the log).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum HistoryEvent {
     /// "{attacker} declared war on {defender}", optionally "to protect {protectee}".
     WarDeclared {
         attacker: NationId,
         defender: NationId,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         protectee: Option<NationId>,
     },
     /// "{joiner} joined war against {target} (alliance obligation)".
@@ -581,36 +572,25 @@ mod tests {
     }
 
     #[test]
-    fn headline_serializes_omits_reason_when_none() {
+    fn headline_reason_none_when_new() {
         let h = Headline::new("Plain headline".to_string(), HeadlineCategory::Default);
-        let json = serde_json::to_string(&h).expect("serialize");
-        // skip_serializing_if should omit the field entirely when None
-        assert!(
-            !json.contains("reason"),
-            "Expected reason omitted, got: {}",
-            json
-        );
-        assert!(json.contains("\"text\":\"Plain headline\""));
+        assert!(h.reason.is_none());
+        assert_eq!(h.text, "Plain headline");
     }
 
     #[test]
-    fn headline_serializes_includes_reason_when_some() {
+    fn headline_reason_some_when_with_reason() {
         let h = Headline::with_reason(
             "Country X declared war".to_string(),
             HeadlineCategory::War,
             "Need score 2.3 > threshold 1.5".to_string(),
         );
-        let json = serde_json::to_string(&h).expect("serialize");
-        assert!(json.contains("\"reason\":\"Need score 2.3 > threshold 1.5\""));
+        assert_eq!(h.reason.as_deref(), Some("Need score 2.3 > threshold 1.5"));
     }
 
     #[test]
-    fn headline_deserializes_without_reason_field() {
-        // Saves produced by this codebase never emit the field when None; make sure
-        // round-tripping a reason-less JSON still works.
-        let json = r#"{"text":"Test","category":"default"}"#;
-        let h: Headline = serde_json::from_str(json).expect("deserialize");
-        assert_eq!(h.text, "Test");
+    fn headline_defaults_reason_to_none() {
+        let h = Headline::new("Test".to_string(), HeadlineCategory::Default);
         assert!(h.reason.is_none());
     }
 }

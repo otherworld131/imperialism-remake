@@ -13,7 +13,7 @@ use crate::types::*;
 use std::collections::{BTreeMap, HashMap};
 
 /// Colors used to distinguish nations on the map and in the UI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NationColor {
     // Great Power colors
     Yellow,
@@ -46,7 +46,7 @@ pub enum NationColor {
 /// Extracted from `Nation` (KEYSTONE refactor). Future economy work
 /// (reservations, snapshots, plan/reserve/execute) adds fields here, not
 /// to `Nation`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NationEconomy {
     pub treasury: Money,
     /// Resource warehouse — stores raw resources.
@@ -63,27 +63,20 @@ pub struct NationEconomy {
     // ── Logistics state (Trello #165) ────────────────────────────────
     /// Freight usage snapshot from the most recently processed turn.
     /// Updated by the turn processor after `calculate_deliveries` completes.
-    #[serde(default)]
     pub logistics: LogisticsState,
 
     // ── Reservation accounting (Trello #162 / #169) ──────────────────
     /// Reserved treasury amount (sum of active treasury reservations).
-    #[serde(default = "Money::zero")]
     pub(crate) reserved_treasury: Money,
     /// Per-resource reserved amounts (sum of active reservations).
-    #[serde(default)]
     pub(crate) reserved_warehouse: BTreeMap<ResourceType, u32>,
     /// Per-material reserved amounts.
-    #[serde(default)]
     pub(crate) reserved_materials: BTreeMap<MaterialType, u32>,
     /// Per-goods reserved amounts.
-    #[serde(default)]
     pub(crate) reserved_goods: BTreeMap<GoodsType, u32>,
     /// Active reservation ledger: id → (commodity, quantity).
-    #[serde(default)]
     pub(crate) reservation_ledger: BTreeMap<ReservationId, (Commodity, u32)>,
     /// Monotonically increasing counter for generating unique ReservationIds.
-    #[serde(default)]
     pub(crate) next_reservation_id: u64,
 }
 
@@ -131,29 +124,23 @@ impl NationEconomy {
     pub fn consume(&mut self, key: Commodity, qty: u32) -> bool {
         match key {
             Commodity::Resource(r) => {
-                if let Some(cur) = self.warehouse.get_mut(&r) {
-                    if *cur >= qty {
-                        *cur -= qty;
-                        return true;
-                    }
+                if let Some(cur) = self.warehouse.get_mut(&r) && *cur >= qty {
+                    *cur -= qty;
+                    return true;
                 }
                 false
             }
             Commodity::Material(m) => {
-                if let Some(cur) = self.materials.get_mut(&m) {
-                    if *cur >= qty {
-                        *cur -= qty;
-                        return true;
-                    }
+                if let Some(cur) = self.materials.get_mut(&m) && *cur >= qty {
+                    *cur -= qty;
+                    return true;
                 }
                 false
             }
             Commodity::Goods(g) => {
-                if let Some(cur) = self.goods.get_mut(&g) {
-                    if *cur >= qty {
-                        *cur -= qty;
-                        return true;
-                    }
+                if let Some(cur) = self.goods.get_mut(&g) && *cur >= qty {
+                    *cur -= qty;
+                    return true;
                 }
                 false
             }
@@ -298,6 +285,32 @@ impl NationEconomy {
             }
         }
         Ok(())
+    }
+
+    // ── Snapshot access (used by domain-snapshot for save/load) ─────────
+
+    pub fn snapshot_reserved_treasury(&self) -> Money { self.reserved_treasury }
+    pub fn snapshot_reserved_warehouse(&self) -> &BTreeMap<ResourceType, u32> { &self.reserved_warehouse }
+    pub fn snapshot_reserved_materials(&self) -> &BTreeMap<MaterialType, u32> { &self.reserved_materials }
+    pub fn snapshot_reserved_goods(&self) -> &BTreeMap<GoodsType, u32> { &self.reserved_goods }
+    pub fn snapshot_reservation_ledger(&self) -> &BTreeMap<ReservationId, (Commodity, u32)> { &self.reservation_ledger }
+    pub fn snapshot_next_reservation_id(&self) -> u64 { self.next_reservation_id }
+
+    pub fn restore_reservation_state(
+        &mut self,
+        reserved_treasury: Money,
+        reserved_warehouse: BTreeMap<ResourceType, u32>,
+        reserved_materials: BTreeMap<MaterialType, u32>,
+        reserved_goods: BTreeMap<GoodsType, u32>,
+        reservation_ledger: BTreeMap<ReservationId, (Commodity, u32)>,
+        next_reservation_id: u64,
+    ) {
+        self.reserved_treasury = reserved_treasury;
+        self.reserved_warehouse = reserved_warehouse;
+        self.reserved_materials = reserved_materials;
+        self.reserved_goods = reserved_goods;
+        self.reservation_ledger = reservation_ledger;
+        self.next_reservation_id = next_reservation_id;
     }
 
     /// Release all active reservations for this nation (end-of-turn safety net).
@@ -466,138 +479,88 @@ impl Default for NationEconomy {
 /// Military forces, civilian improvers, and transport.
 ///
 /// Extracted from `Nation` (Phase 5 Lesson 8 refactor).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct NationMilitary {
     /// Field army and garrison units.
-    #[serde(default)]
     pub army: Vec<ArmyUnit>,
     /// Civilian improver units (Farmers, Foresters, Miners, Engineers).
-    #[serde(default)]
     pub civilians: Vec<Civilian>,
     /// Freight transport system.
-    #[serde(default)]
     pub transport: TransportSystem,
     /// Merchant fleet — ships used for trade.
-    #[serde(default)]
     pub merchant_fleet: Vec<Ship>,
     /// Warship fleet — military naval vessels.
-    #[serde(default)]
     pub warships: Vec<Ship>,
     /// Total arms built (tracks General reward thresholds).
-    #[serde(default)]
     pub total_arms_built: u32,
     /// Number of Generals earned.
-    #[serde(default)]
     pub generals_earned: u32,
     /// Total warships built (naval telemetry).
-    #[serde(default)]
     pub warships_built: u32,
     /// Total warships lost in combat (naval telemetry).
-    #[serde(default)]
     pub warships_lost: u32,
     /// Total Ships-of-the-Line built (tracks Admiral reward thresholds).
-    #[serde(default)]
     pub total_ships_of_the_line_built: u32,
     /// Number of Admirals earned.
-    #[serde(default)]
     pub admirals_earned: u32,
     /// Conquest bonus from capturing GP capitals: each +1 improves worker rate.
-    #[serde(default)]
     pub capitol_bonus_capacity: u32,
     /// Whether this nation has established its first colony.
-    #[serde(default)]
     pub has_colony: bool,
     /// Expert worker rewards already earned (thresholds at 10 and 30 experts).
-    #[serde(default)]
     pub expert_rewards_earned: u8,
 }
 
-impl Default for NationMilitary {
-    fn default() -> Self {
-        Self {
-            army: Vec::new(),
-            civilians: Vec::new(),
-            transport: TransportSystem::new(),
-            merchant_fleet: Vec::new(),
-            warships: Vec::new(),
-            total_arms_built: 0,
-            generals_earned: 0,
-            warships_built: 0,
-            warships_lost: 0,
-            total_ships_of_the_line_built: 0,
-            admirals_earned: 0,
-            capitol_bonus_capacity: 0,
-            has_colony: false,
-            expert_rewards_earned: 0,
-        }
-    }
-}
 
 /// Diplomatic and political state.
 ///
 /// Extracted from `Nation` (Phase 5 Lesson 8 refactor).
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct NationDiplomacy {
     /// AI personality for this nation (`None` for human player).
-    #[serde(default)]
     pub ai_personality: Option<AiPersonality>,
     /// Per-Minor-Nation trade subsidy amounts (GP pays per turn).
-    #[serde(default)]
     pub trade_subsidies: HashMap<NationId, Money>,
     /// Whether this nation has fallen into anarchy (lost its capital).
-    #[serde(default)]
     pub is_in_anarchy: bool,
     /// Overlord GP if this minor nation has been diplomatically integrated.
-    #[serde(default)]
     pub integrated_by: Option<NationId>,
     /// Player sell orders for this turn (cleared after turn resolution).
-    #[serde(default)]
     pub player_sell_orders: Vec<crate::economy::trade::PlayerSellOrder>,
     /// Player buy orders for this turn (cleared after turn resolution).
-    #[serde(default)]
     pub player_buy_orders: Vec<crate::economy::trade::PlayerBuyOrder>,
     /// AI scratch state for the scored-spending loop.
-    #[serde(default)]
     pub ai_priority_state: AiPriorityState,
 }
 
 /// Historical records, telemetry, and display data.
 ///
 /// Extracted from `Nation` (Phase 5 Lesson 8 refactor).
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct NationArchives {
     /// Records of past trade transactions for player reference.
-    #[serde(default)]
     pub trade_history: Vec<crate::economy::trade::TradeHistoryEntry>,
     /// Cumulative per-source income totals (dollars).
-    #[serde(default)]
     pub cash_income_totals: HashMap<CashSource, i64>,
     /// Cumulative per-sink expense totals (dollars).
-    #[serde(default)]
     pub cash_expense_totals: HashMap<CashSink, i64>,
     /// Cumulative revenue from auto-sold materials/goods (dollars).
-    #[serde(default)]
     pub goods_sales_revenue_dollars: i64,
     /// Adjective form of the nation name (e.g. "Devronian").
-    #[serde(default)]
     pub adjective: String,
     /// Singular demonym ("a Devronian").
-    #[serde(default)]
     pub demonym_singular: String,
     /// Plural demonym ("the Devronians").
-    #[serde(default)]
     pub demonym_plural: String,
     /// Full formal title ("Empire of Devronia").
-    #[serde(default)]
     pub government_title: String,
     /// Procedurally generated flag SVG (60×40 viewBox).
-    #[serde(default)]
     pub flag_svg: String,
 }
 
 /// A nation in the game — either a Great Power (player-controlled or AI)
 /// or a Minor Nation (AI-only, can be annexed or allied).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Nation {
     pub id: NationId,
     pub name: String,
@@ -610,18 +573,15 @@ pub struct Nation {
     /// Technologies that have been researched by this nation.
     pub researched_techs: Vec<TechId>,
     /// Military forces, civilian improvers, and transport.
-    #[serde(default)]
     pub military: NationMilitary,
     /// Diplomatic and political state.
-    #[serde(default)]
     pub diplomacy: NationDiplomacy,
     /// Historical records, telemetry, and display data.
-    #[serde(default)]
     pub archives: NationArchives,
 }
 
 /// Persistent per-nation AI state used by the scored-spending loop.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct AiPriorityState {
     /// Minor-nation IDs the AI has selected as high-priority diplomacy
     /// targets (consulate + embassy). Picked once at game init based on
@@ -637,7 +597,6 @@ pub struct AiPriorityState {
     /// `t.origin_capital` every turn until the depot is built there or
     /// the path becomes unreachable. Absence of a commitment means the
     /// planner is free to pick the best candidate this turn.
-    #[serde(default)]
     pub committed_infra_target: Option<CommittedInfraTarget>,
 }
 
@@ -645,7 +604,7 @@ pub struct AiPriorityState {
 /// `origin_capital`. Created by `plan_next_depot` when it selects a new
 /// target, cleared by the spending loop when the planner reports
 /// "reached" or "unreachable".
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommittedInfraTarget {
     pub candidate: crate::hex::HexCoord,
     pub origin_capital: crate::hex::HexCoord,
@@ -1330,7 +1289,7 @@ mod tests {
     }
 
     #[test]
-    fn trade_history_survives_serialization() {
+    fn trade_history_stores_all_fields() {
         use crate::economy::trade::TradeHistoryEntry;
 
         let mut n = sample_great_power();
@@ -1343,11 +1302,10 @@ mod tests {
             bought: true,
         });
 
-        let json = serde_json::to_string(&n).unwrap();
-        let deserialized: Nation = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.trade_history.len(), 1);
-        assert_eq!(deserialized.trade_history[0].turn, TurnNumber::new(7));
-        assert_eq!(deserialized.trade_history[0].partner, NationId(5));
+        let cloned = n.clone();
+        assert_eq!(cloned.trade_history.len(), 1);
+        assert_eq!(cloned.trade_history[0].turn, TurnNumber::new(7));
+        assert_eq!(cloned.trade_history[0].partner, NationId(5));
     }
 
     // ── Bankruptcy ──────────────────────────────────────────────
@@ -1487,14 +1445,13 @@ mod tests {
     }
 
     #[test]
-    fn reservation_survives_serde_round_trip() {
+    fn reservation_ledger_tracks_quantity() {
         let mut n = sample_great_power();
         n.economy.add(Commodity::Resource(ResourceType::Iron), 12);
         let id = n.economy.reserve(Commodity::Resource(ResourceType::Iron), 4).unwrap();
-        let json = serde_json::to_string(&n.economy).unwrap();
-        let restored: NationEconomy = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.reservation_ledger.get(&id).map(|(_, q)| *q), Some(4));
-        assert_eq!(restored.reserved(Commodity::Resource(ResourceType::Iron)), 4);
+        assert_eq!(n.economy.reservation_ledger.get(&id).map(|(_, q)| *q), Some(4));
+        assert_eq!(n.economy.reserved(Commodity::Resource(ResourceType::Iron)), 4);
+        let _ = n.economy.release(id);
     }
 
     #[test]

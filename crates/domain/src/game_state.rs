@@ -26,7 +26,7 @@ pub type PoliticalSnapshotEntry = (ProvinceId, NationId, Option<NationId>);
 /// that turn. Capitals are archived separately because they can change during
 /// the game (minor-nation capital reassignment on conquest), and rendering
 /// historical capital markers from current nation state would be wrong.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct PoliticalSnapshot {
     pub provinces: Vec<PoliticalSnapshotEntry>,
     pub capitals: Vec<(NationId, ProvinceId)>,
@@ -34,7 +34,6 @@ pub struct PoliticalSnapshot {
 
 /// Live world snapshot: everything that describes "what is true right now"
 /// in the game world — map, provinces, nations, diplomacy, and market state.
-#[derive(serde::Serialize, serde::Deserialize)]
 pub struct WorldState {
     /// Key identifying which map is loaded.
     pub map_key: String,
@@ -48,70 +47,55 @@ pub struct WorldState {
     pub diplomacy: DiplomacyState,
     /// Persistent market state: per-commodity price history and trend data
     /// updated at the end of each turn's trade phase.
-    #[serde(default)]
     pub market_state: MarketState,
 }
 
 /// Historical records accumulated over the course of the game.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Default)]
 pub struct GameArchive {
     /// History of major game events. Use `render_history_event` for player-facing text.
-    #[serde(default)]
     pub history: Vec<(TurnNumber, HistoryEvent)>,
     /// High score table: (nation_name, score, date_string).
-    #[serde(default)]
     pub high_scores: Vec<(String, u32, String)>,
     /// Archived newspaper headlines from past turns.
-    #[serde(default)]
     pub newspaper_archive: Vec<(TurnNumber, Vec<Headline>)>,
     /// Archived battle results from past turns: (turn, land battles, naval battles).
-    #[serde(default)]
     pub battle_archive: Vec<(TurnNumber, Vec<BattleResult>, Vec<NavalBattleResult>)>,
     /// Archived political-map snapshots from past turns: province ownership
     /// and per-nation capitals at the end of each turn. Used to render the
     /// political map at any past turn from the news archive.
-    #[serde(default)]
     pub political_archive: Vec<(TurnNumber, PoliticalSnapshot)>,
 }
 
 /// In-turn state that is either not serialized or rebuilt each turn.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Default)]
 pub struct TransientState {
     /// Event log for the current turn (not saved).
-    #[serde(skip, default)]
     pub events: Vec<DomainEvent>,
     /// Pending attacks to resolve this turn: (attacker NationId, target ProvinceId).
-    #[serde(default)]
     pub pending_attacks: Vec<(NationId, ProvinceId)>,
     /// Pending unit movements to resolve this turn: (nation, unit_id, destination province).
-    #[serde(default)]
     pub pending_moves: Vec<(NationId, crate::map::UnitId, ProvinceId)>,
     /// Active naval landing sites: (attacking_nation, target_province, turn_established).
     /// Established by assigning warships to Beachhead operation.
     /// Troops can attack the target province on **subsequent** turns only
     /// (not the same turn the landing was established).
-    #[serde(default)]
     pub pending_landings: Vec<(NationId, ProvinceId, TurnNumber)>,
     /// Transient collector for AI-side treasury mutations. Drained into
     /// `TurnReport.ai_cash_spending` at end of turn (not saved).
-    #[serde(skip, default)]
     pub pending_ai_cash_spending: Vec<(NationId, CashSink, Money, Option<NationId>)>,
     /// Transient collector for AI-side cash income entries. Drained at end of turn (not saved).
-    #[serde(skip, default)]
     pub pending_ai_cash_income: Vec<(NationId, Money)>,
     /// Per-nation cash flow breakdown from the most recently processed turn.
     /// Populated at the end of `process_turn`; read by the WASM bridge.
-    #[serde(default)]
     pub last_cash_flow: HashMap<NationId, CashFlow>,
     /// Per-nation resource flow from the most recently processed turn.
-    #[serde(default)]
     pub last_resource_flow: HashMap<NationId, ResourceFlow>,
 }
 
 /// Top-level aggregate root representing the complete state of a game.
 /// Owns `world` (live snapshot), `archive` (history), and `transient`
 /// (current-turn working state), plus game-loop scalars.
-#[derive(serde::Serialize, serde::Deserialize)]
 pub struct GameState {
     /// Current turn number.
     pub turn: TurnNumber,
@@ -120,31 +104,21 @@ pub struct GameState {
     /// The NationId of the human player's nation.
     pub human_player_nation: NationId,
     /// When true, AI functions print detailed decision traces to stderr.
-    #[serde(skip, default)]
     pub ai_debug: bool,
     /// When true, all 7 Great Powers are controlled by AI and the human player
     /// only observes. `human_player_nation` remains set as the "viewpoint" nation.
-    #[serde(default)]
     pub observer_mode: bool,
     /// Monotonically-increasing counter used to allocate unique `UnitId`s.
-    #[serde(default = "default_next_unit_id")]
     pub next_unit_id: u32,
     /// All data-driven game definitions (tech tree, unit stats, etc.).
     /// Reconstructed on load — not serialized.
-    #[serde(skip, default = "GameData::default")]
     pub game_data: GameData,
     /// Live world snapshot: map, provinces, nations, diplomacy, market.
     pub world: WorldState,
     /// Historical records: newspapers, battles, political snapshots, history log.
-    #[serde(default)]
     pub archive: GameArchive,
     /// In-turn working state: events, pending actions, last-turn flows.
-    #[serde(default)]
     pub transient: TransientState,
-}
-
-fn default_next_unit_id() -> u32 {
-    6_000_000
 }
 
 impl GameState {
@@ -405,6 +379,43 @@ pub fn new_game(map_key: &str, difficulty: Difficulty, human_nation_index: usize
     )
 }
 
+/// Create a new game with caller-supplied `GameData` (tech tree, unit/ship stats).
+///
+/// Use this instead of `new_game` when a real tech tree is required (e.g. in
+/// integration tests or production entry points that loaded data from disk).
+pub fn new_game_with_data(
+    map_key: &str,
+    difficulty: Difficulty,
+    human_nation_index: usize,
+    game_data: crate::data::GameData,
+) -> GameState {
+    new_game_with_data_and_config(
+        map_key,
+        difficulty,
+        human_nation_index,
+        game_data,
+        crate::map::MapGenConfig::default(),
+    )
+}
+
+/// `new_game_with_data` + custom map-generation config.
+pub fn new_game_with_data_and_config(
+    map_key: &str,
+    difficulty: Difficulty,
+    human_nation_index: usize,
+    game_data: crate::data::GameData,
+    cfg: crate::map::MapGenConfig,
+) -> GameState {
+    let personality_seed = {
+        let mut h: u64 = 5381;
+        for b in map_key.bytes() {
+            h = h.wrapping_mul(33).wrapping_add(b as u64);
+        }
+        h ^ 0xA1CA_FE42
+    };
+    new_game_inner(map_key, difficulty, human_nation_index, personality_seed, cfg, game_data)
+}
+
 /// Create a new game with a custom map-generation config.
 pub fn new_game_with_config(
     map_key: &str,
@@ -454,6 +465,17 @@ pub fn new_game_with_seed_and_config(
     personality_seed: u64,
     cfg: crate::map::MapGenConfig,
 ) -> GameState {
+    new_game_inner(map_key, difficulty, human_nation_index, personality_seed, cfg, GameData::default())
+}
+
+fn new_game_inner(
+    map_key: &str,
+    difficulty: Difficulty,
+    human_nation_index: usize,
+    personality_seed: u64,
+    cfg: crate::map::MapGenConfig,
+    game_data: GameData,
+) -> GameState {
     let generated = crate::map::generate_map_with_config(map_key, &cfg);
 
     assert!(
@@ -468,7 +490,6 @@ pub fn new_game_with_seed_and_config(
     let ai_count = gp_count - 1; // minus human
     let personalities = random_personalities(personality_seed, ai_count);
 
-    let game_data = GameData::default();
     let mut nations = Vec::new();
     let mut ai_personality_idx = 0;
     // Per-game unit-ID counter. Starts at 6_000_000 to stay above the

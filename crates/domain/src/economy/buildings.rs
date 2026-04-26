@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BuildingType {
     Armory,
     Capitol,
@@ -70,7 +70,7 @@ impl std::str::FromStr for BuildingType {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Building {
     pub building_type: BuildingType,
     pub capacity: u32,

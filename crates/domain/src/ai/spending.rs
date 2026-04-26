@@ -21,7 +21,7 @@ use super::common::{AiPersonality, get_personality};
 
 // ── Types ────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SpendingCategory {
     Military,
     Infrastructure,

@@ -1354,7 +1354,7 @@ fn expand_building(game: &mut GameState, nation_id: NationId, bt: BuildingType, 
         .buildings
         .iter()
         .find(|b| b.building_type == bt)
-        .map_or(false, |b| b.pending_capacity > 0)
+        .is_some_and(|b| b.pending_capacity > 0)
     {
         return;
     }

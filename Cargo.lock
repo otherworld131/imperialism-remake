@@ -2358,9 +2358,14 @@ name = "domain"
 version = "0.1.0"
 dependencies = [
  "mlua",
- "ron 0.8.1",
+]
+
+[[package]]
+name = "domain-snapshot"
+version = "0.1.0"
+dependencies = [
+ "domain",
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -3042,6 +3047,8 @@ version = "0.1.0"
 dependencies = [
  "application",
  "domain",
+ "domain-snapshot",
+ "ron 0.8.1",
  "serde",
  "serde_json",
 ]
@@ -5180,6 +5187,7 @@ version = "0.1.0"
 dependencies = [
  "application",
  "domain",
+ "domain-snapshot",
  "flavor",
  "serde",
  "serde_json",

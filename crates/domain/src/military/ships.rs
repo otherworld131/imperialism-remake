@@ -1,13 +1,13 @@
 use crate::map::UnitId;
 use crate::types::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ShipCategory {
     Merchant,
     Warship,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ShipType {
     // Merchant
     Trader,
@@ -44,7 +44,7 @@ pub struct ShipStats {
     pub prerequisite_tech: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Ship {
     pub id: UnitId,
     pub ship_type: ShipType,
@@ -52,7 +52,6 @@ pub struct Ship {
     pub hull_remaining: u32,
     pub sea_zone: Option<u32>,
     /// Current naval operation assignment (Patrol, Blockade, Beachhead, etc.).
-    #[serde(default)]
     pub operation: Option<crate::military::naval::NavalOperation>,
 }
 
@@ -312,6 +311,28 @@ impl ShipType {
             ShipType::Freighter => None,
             ShipType::Dreadnought => None,
             ShipType::Battlecruiser => None,
+        }
+    }
+}
+
+impl std::str::FromStr for ShipType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Trader" => Ok(Self::Trader),
+            "Indiaman" => Ok(Self::Indiaman),
+            "Clipper" => Ok(Self::Clipper),
+            "Paddlewheeler" => Ok(Self::Paddlewheeler),
+            "Freighter" => Ok(Self::Freighter),
+            "Frigate" => Ok(Self::Frigate),
+            "ShipOfTheLine" => Ok(Self::ShipOfTheLine),
+            "Raider" => Ok(Self::Raider),
+            "Ironclad" => Ok(Self::Ironclad),
+            "AdvancedIronclad" => Ok(Self::AdvancedIronclad),
+            "ArmouredCruiser" => Ok(Self::ArmouredCruiser),
+            "Dreadnought" => Ok(Self::Dreadnought),
+            "Battlecruiser" => Ok(Self::Battlecruiser),
+            other => Err(format!("unknown ship type: {}", other)),
         }
     }
 }

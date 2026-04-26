@@ -3,7 +3,7 @@ use crate::types::*;
 // ── UnitId ─────────────────────────────────────────────────────
 
 /// Unique identifier for a unit (civilian or military).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UnitId(pub u32);
 
 impl std::fmt::Display for UnitId {
@@ -15,7 +15,7 @@ impl std::fmt::Display for UnitId {
 // ── Infrastructure ─────────────────────────────────────────────
 
 /// Infrastructure built on a tile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Infrastructure {
     pub has_railroad: bool,
     pub has_depot: bool,
@@ -48,7 +48,7 @@ impl Default for Infrastructure {
 /// Terrain describes the landscape (Grassland, Hills, Forest, etc.).
 /// Resources are an optional overlay — most tiles have no resource.
 /// Hidden resources (Coal, Iron, Gold, Gems, Oil) require prospecting to reveal.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tile {
     /// The landscape terrain type (immutable after creation).
     terrain: TerrainType,
@@ -59,7 +59,6 @@ pub struct Tile {
     resource_deposit: Option<ResourceType>,
 
     /// Whether this tile has been prospected (only meaningful for deposit-capable terrain).
-    #[serde(default)]
     prospected: bool,
 
     /// Improvement level: 0 (unimproved) through 3 (fully developed).
@@ -82,7 +81,6 @@ pub struct Tile {
     /// Set once at game setup and never cleared, so captured foreign capitals
     /// continue to function as implicit depots and rail-network seeds even
     /// after they change hands.
-    #[serde(default)]
     pub is_country_capital: bool,
 }
 

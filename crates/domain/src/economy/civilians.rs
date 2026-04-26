@@ -2,12 +2,11 @@ use crate::data::GameConfig;
 use crate::hex::HexCoord;
 use crate::map::UnitId;
 use crate::types::*;
-use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Engineer work tasks — kinds of infrastructure an Engineer civilian can build.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BuildTask {
     Railroad,
     Depot,
@@ -50,7 +49,7 @@ pub fn next_civilian_id() -> UnitId {
 /// The type of civilian specialist unit.
 ///
 /// Each type can improve specific terrain types to increase resource output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CivilianType {
     /// Reveals hidden minerals on hills/mountains/swamp/desert/tundra.
     Prospector,
@@ -153,7 +152,7 @@ impl std::str::FromStr for CivilianType {
 }
 
 /// A civilian unit that can be deployed to improve terrain tiles.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Civilian {
     /// Unique identifier.
     pub id: UnitId,
@@ -169,7 +168,6 @@ pub struct Civilian {
     pub turns_remaining: u8,
     /// Engineer-only: the build task that completes when this civilian finishes.
     /// `None` for non-engineer civilians and for engineers not currently building.
-    #[serde(default)]
     pub build_task: Option<BuildTask>,
 }
 

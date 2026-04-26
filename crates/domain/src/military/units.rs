@@ -2,7 +2,7 @@ use crate::map::UnitId;
 use crate::types::*;
 use crate::DomainError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnitCategory {
     Infantry,
     Cavalry,
@@ -11,7 +11,7 @@ pub enum UnitCategory {
     Garrison, // Militia/Minutemen - immovable
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArmyUnitType {
     // Garrison
     Militia,
@@ -88,7 +88,7 @@ pub struct UnitStats {
     pub prerequisite_tech: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ArmyUnit {
     pub id: UnitId,
     pub unit_type: ArmyUnitType,

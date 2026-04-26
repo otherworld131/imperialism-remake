@@ -22,7 +22,7 @@ pub struct TradeBid {
 }
 
 /// Result of a single trade transaction.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TradeTransaction {
     pub buyer: NationId,
     pub seller: NationId,
@@ -33,7 +33,7 @@ pub struct TradeTransaction {
 }
 
 /// A record of a past trade transaction, stored in a nation's trade history.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TradeHistoryEntry {
     pub turn: TurnNumber,
     pub partner: NationId,
@@ -41,13 +41,12 @@ pub struct TradeHistoryEntry {
     pub quantity: u32,
     pub total_cost: Money,
     /// Whether this nation was the buyer (true) or seller (false) in this transaction.
-    #[serde(default)]
     pub bought: bool,
 }
 
 /// A unified commodity type covering resources, materials, and goods.
 /// Used for player trade orders where any commodity can be sold.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Commodity {
     Resource(ResourceType),
     Material(MaterialType),
@@ -95,14 +94,14 @@ pub fn commodity_price(commodity: Commodity, cfg: &crate::data::GameConfig) -> M
 }
 
 /// A player's order to sell a commodity on the world market.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct PlayerSellOrder {
     pub commodity: Commodity,
     pub quantity: u32,
 }
 
 /// A player's order to buy a resource from minor nations.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct PlayerBuyOrder {
     pub resource: ResourceType,
     pub quantity: u32,
@@ -916,7 +915,7 @@ mod tests {
     }
 
     #[test]
-    fn trade_history_entry_serializes_and_deserializes() {
+    fn trade_history_entry_stores_all_fields_clone() {
         let entry = TradeHistoryEntry {
             turn: TurnNumber(12),
             partner: NationId(5),
@@ -925,12 +924,11 @@ mod tests {
             total_cost: Money::dollars(525),
             bought: true,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let deserialized: TradeHistoryEntry = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.turn, entry.turn);
-        assert_eq!(deserialized.partner, entry.partner);
-        assert_eq!(deserialized.resource, entry.resource);
-        assert_eq!(deserialized.quantity, entry.quantity);
-        assert_eq!(deserialized.total_cost, entry.total_cost);
+        let cloned = entry.clone();
+        assert_eq!(cloned.turn, entry.turn);
+        assert_eq!(cloned.partner, entry.partner);
+        assert_eq!(cloned.resource, entry.resource);
+        assert_eq!(cloned.quantity, entry.quantity);
+        assert_eq!(cloned.total_cost, entry.total_cost);
     }
 }

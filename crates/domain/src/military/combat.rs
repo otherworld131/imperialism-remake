@@ -156,7 +156,7 @@ pub struct CombatForce {
 }
 
 /// Result of a battle.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct BattleResult {
     pub attacker: NationId,
     pub defender: NationId,
@@ -203,7 +203,6 @@ pub struct BattleResult {
     pub attacker_origin_provinces: Vec<ProvinceId>,
     /// True when the battle was an amphibious assault (units arrived via warship
     /// landing). False for land attacks across an adjacent border.
-    #[serde(default)]
     pub is_naval_landing: bool,
 }
 
