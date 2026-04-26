@@ -47,7 +47,7 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<AiAction> {
     // Collect AI nation IDs. In observer mode, all 7 Great Powers are AI-controlled
     // (the human seat is just a viewpoint; it also gets an AI personality at setup).
     let ai_nation_ids: Vec<NationId> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| {
             (game.observer_mode || n.id != human_id) && n.is_great_power() && !n.diplomacy.is_in_anarchy
@@ -178,7 +178,7 @@ mod tests {
             vec![HexCoord::new(6, 6)],
             2,
         );
-        game.provinces.push(province3);
+        game.world.provinces.push(province3);
 
         let mut ally = Nation::new(
             NationId(3),
@@ -189,26 +189,26 @@ mod tests {
         );
         ally.economy.treasury = Money::dollars(10000);
         ally.diplomacy.ai_personality = Some(AiPersonality::Balanced);
-        game.nations.push(ally);
+        game.world.nations.push(ally);
 
-        game.diplomacy
+        game.world.diplomacy
             .initialize_great_powers(&[NationId(1), NationId(2), NationId(3)]);
-        game.diplomacy
+        game.world.diplomacy
             .propose_alliance(NationId(2), NationId(3))
             .unwrap();
-        game.diplomacy.declare_war(NationId(2), NationId(1));
-        game.diplomacy.declare_war(NationId(3), NationId(1));
-        game.diplomacy.queue_peace(NationId(2), NationId(1));
+        game.world.diplomacy.declare_war(NationId(2), NationId(1));
+        game.world.diplomacy.declare_war(NationId(3), NationId(1));
+        game.world.diplomacy.queue_peace(NationId(2), NationId(1));
 
         assert!(
             !game
-                .diplomacy
+                .world.diplomacy
                 .get_allies(NationId(2))
                 .contains(&NationId(3)),
             "queued separate peace should hide suspended allies from AI war planning"
         );
         assert!(
-            game.diplomacy
+            game.world.diplomacy
                 .has_treaty(NationId(2), NationId(3), TreatyType::Alliance),
             "the alliance treaty should remain active until same-turn reconciliation finalizes it"
         );

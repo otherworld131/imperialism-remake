@@ -175,7 +175,7 @@ pub fn get_trade_screen(game: &GameState) -> TradeScreenData {
     let mut partners = Vec::new();
 
     for minor in game.minor_nations() {
-        let relation = game.diplomacy.get_relation(human_id, minor.id);
+        let relation = game.world.diplomacy.get_relation(human_id, minor.id);
 
         let has_consulate = relation.map(|r| r.has_consulate).unwrap_or(false);
 
@@ -216,7 +216,7 @@ pub fn get_trade_screen(game: &GameState) -> TradeScreenData {
 /// Extract data for the Diplomacy Screen from the current game state.
 pub fn get_diplomacy_screen(game: &GameState) -> DiplomacyScreenData {
     let human_id = game.human_player_nation;
-    let standing = game.diplomacy.get_standing(human_id);
+    let standing = game.world.diplomacy.get_standing(human_id);
 
     // Great Power relations
     let great_power_relations: Vec<(String, NationId, String, i32)> = game
@@ -224,7 +224,7 @@ pub fn get_diplomacy_screen(game: &GameState) -> DiplomacyScreenData {
         .iter()
         .filter(|gp| gp.id != human_id)
         .map(|gp| {
-            let relation = game.diplomacy.get_relation(human_id, gp.id);
+            let relation = game.world.diplomacy.get_relation(human_id, gp.id);
             let (status, score) = diplomat_status(relation);
             (gp.name.clone(), gp.id, status, score)
         })
@@ -235,7 +235,7 @@ pub fn get_diplomacy_screen(game: &GameState) -> DiplomacyScreenData {
         .minor_nations()
         .iter()
         .map(|mn| {
-            let relation = game.diplomacy.get_relation(human_id, mn.id);
+            let relation = game.world.diplomacy.get_relation(human_id, mn.id);
             let infra = diplomatic_infrastructure(relation);
             let score = relation.map(|r| r.score).unwrap_or(0);
             (mn.name.clone(), mn.id, infra, score)
@@ -447,7 +447,7 @@ mod tests {
 
         // Build a consulate with the first minor nation
         let first_minor_id = game.minor_nations()[0].id;
-        game.diplomacy
+        game.world.diplomacy
             .build_consulate(human_id, first_minor_id)
             .unwrap();
 
@@ -479,10 +479,10 @@ mod tests {
 
         // Build consulates with two minor nations
         let minor_ids: Vec<NationId> = game.minor_nations().iter().map(|n| n.id).collect();
-        game.diplomacy
+        game.world.diplomacy
             .build_consulate(human_id, minor_ids[0])
             .unwrap();
-        game.diplomacy
+        game.world.diplomacy
             .build_consulate(human_id, minor_ids[1])
             .unwrap();
 
@@ -618,7 +618,7 @@ mod tests {
         let human_id = game.human_player_nation;
 
         // Reduce standing
-        game.diplomacy.reduce_standing(human_id, 30);
+        game.world.diplomacy.reduce_standing(human_id, 30);
 
         let data = get_diplomacy_screen(&game);
         assert_eq!(data.standing, 70);

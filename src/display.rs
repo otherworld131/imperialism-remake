@@ -212,12 +212,12 @@ pub(crate) fn print_warehouse(game: &GameState) {
 
 pub(crate) fn print_provinces(game: &GameState) {
     println!("  YOUR PROVINCES:");
-    for province in &game.provinces {
+    for province in &game.world.provinces {
         if province.owner == game.human_player_nation {
             let mut terrain_counts: std::collections::BTreeMap<char, u32> =
                 std::collections::BTreeMap::new();
             for tile_coord in &province.tiles {
-                if let Some(tile) = game.hex_map.get_tile(*tile_coord) {
+                if let Some(tile) = game.world.hex_map.get_tile(*tile_coord) {
                     *terrain_counts
                         .entry(terrain_char(tile.terrain()))
                         .or_insert(0) += 1;
@@ -410,7 +410,7 @@ pub(crate) fn print_trade(game: &GameState) {
     );
     println!();
 
-    let offers = trade::generate_minor_nation_offers(&game.nations, &game.provinces, &game.hex_map);
+    let offers = trade::generate_minor_nation_offers(&game.world.nations, &game.world.provinces, &game.world.hex_map);
 
     if offers.is_empty() {
         println!("  No trade offerings available from Minor Nations.");
@@ -435,7 +435,7 @@ pub(crate) fn print_trade(game: &GameState) {
     for (name, (seller_id, nation_offers)) in &by_seller {
         // Check consulate status
         let has_consulate = game
-            .diplomacy
+            .world.diplomacy
             .get_relation(game.human_player_nation, *seller_id)
             .is_some_and(|r| r.has_consulate);
         let status = if has_consulate {
@@ -578,7 +578,7 @@ pub(crate) fn print_scores(game: &GameState) {
 
 pub(crate) fn print_diplomacy(game: &GameState) {
     let player_id = game.human_player_nation;
-    let standing = game.diplomacy.get_standing(player_id);
+    let standing = game.world.diplomacy.get_standing(player_id);
 
     println!("  DIPLOMATIC STATUS (Standing: {})", standing);
     println!();
@@ -589,7 +589,7 @@ pub(crate) fn print_diplomacy(game: &GameState) {
         if gp.id == player_id {
             continue;
         }
-        let status = match game.diplomacy.get_relation(player_id, gp.id) {
+        let status = match game.world.diplomacy.get_relation(player_id, gp.id) {
             Some(rel) => {
                 if rel.at_war {
                     "AT WAR".to_string()
@@ -609,7 +609,7 @@ pub(crate) fn print_diplomacy(game: &GameState) {
     let player = game.get_nation(player_id).unwrap();
     println!("  MINOR NATIONS:");
     for mn in game.minor_nations() {
-        let status = match game.diplomacy.get_relation(player_id, mn.id) {
+        let status = match game.world.diplomacy.get_relation(player_id, mn.id) {
             Some(rel) => {
                 if rel.at_war {
                     "AT WAR".to_string()
@@ -731,7 +731,7 @@ pub(crate) fn print_overview(game: &GameState) {
     // Count province types
     let total_provinces = player.province_count();
     let homeland_provinces = game
-        .provinces
+        .world.provinces
         .iter()
         .filter(|p| p.owner == player_id)
         .count();
@@ -876,7 +876,7 @@ pub(crate) fn print_overview(game: &GameState) {
 }
 
 pub(crate) fn print_history(game: &GameState) {
-    if game.history.is_empty() {
+    if game.archive.history.is_empty() {
         println!("  No major events recorded yet.");
         return;
     }
@@ -884,13 +884,13 @@ pub(crate) fn print_history(game: &GameState) {
     println!("  {}", color_bold("HISTORY (last 20 events):"));
     println!();
 
-    let start = if game.history.len() > 20 {
-        game.history.len() - 20
+    let start = if game.archive.history.len() > 20 {
+        game.archive.history.len() - 20
     } else {
         0
     };
 
-    for (turn, event) in &game.history[start..] {
+    for (turn, event) in &game.archive.history[start..] {
         println!(
             "  {} Q{} (Turn {}): {}",
             turn.year(),
@@ -907,7 +907,7 @@ pub(crate) fn print_pending_orders(game: &GameState) {
 
     // Pending attacks
     let player_attacks: Vec<_> = game
-        .pending_attacks
+        .transient.pending_attacks
         .iter()
         .filter(|(nid, _)| *nid == player_id)
         .collect();
@@ -925,7 +925,7 @@ pub(crate) fn print_pending_orders(game: &GameState) {
 
     // Pending unit movements
     let player_moves: Vec<_> = game
-        .pending_moves
+        .transient.pending_moves
         .iter()
         .filter(|(nid, _, _)| *nid == player_id)
         .collect();
@@ -1179,7 +1179,7 @@ pub(crate) fn print_turn_report(game: &GameState, report: &TurnReport) {
         }
         // Find the producing province names
         let producing_provinces: Vec<String> = game
-            .provinces
+            .world.provinces
             .iter()
             .filter(|p| p.owner == player_id && p.can_produce())
             .map(|p| format!("{} ({:?})", p.name, p.settlement_level))
@@ -1687,7 +1687,7 @@ pub(crate) fn print_game_end_summary(game: &GameState, report: Option<&TurnRepor
     if report.is_some() {
         println!("  Diplomatic Standings:");
         for gp in game.great_powers() {
-            let standing = game.diplomacy.get_standing(gp.id);
+            let standing = game.world.diplomacy.get_standing(gp.id);
             let marker = if gp.id == game.human_player_nation {
                 " <-- YOU"
             } else {
@@ -1742,12 +1742,12 @@ pub(crate) fn print_game_end_summary(game: &GameState, report: Option<&TurnRepor
     }
 
     // Show high scores
-    if !game.high_scores.is_empty() {
+    if !game.archive.high_scores.is_empty() {
         if report.is_some() {
             println!();
         }
         println!("  High Scores:");
-        for (i, (name, score, date)) in game.high_scores.iter().enumerate() {
+        for (i, (name, score, date)) in game.archive.high_scores.iter().enumerate() {
             println!(
                 "    {}. {} - {} ({})",
                 i + 1,
@@ -1790,10 +1790,10 @@ pub(crate) fn print_military(game: &GameState) {
         );
     }
 
-    if !game.pending_attacks.is_empty() {
+    if !game.transient.pending_attacks.is_empty() {
         println!();
         println!("  PENDING ATTACKS:");
-        for (attacker_id, province_id) in &game.pending_attacks {
+        for (attacker_id, province_id) in &game.transient.pending_attacks {
             if *attacker_id == game.human_player_nation {
                 let province_name = game
                     .get_province(*province_id)
@@ -1832,7 +1832,7 @@ pub(crate) fn print_transport(game: &GameState) {
     // Calculate total production from connected tiles
     let mut total_production: std::collections::HashMap<ResourceType, u32> =
         std::collections::HashMap::new();
-    for province in &game.provinces {
+    for province in &game.world.provinces {
         if province.owner != game.human_player_nation {
             continue;
         }
@@ -1840,7 +1840,7 @@ pub(crate) fn print_transport(game: &GameState) {
             continue;
         }
         for tile_coord in &province.tiles {
-            if let Some(tile) = game.hex_map.get_tile(*tile_coord)
+            if let Some(tile) = game.world.hex_map.get_tile(*tile_coord)
                 && let Some(yield_amount) = tile.calculate_yield()
             {
                 *total_production.entry(yield_amount.resource).or_insert(0) +=
@@ -1907,7 +1907,7 @@ pub(crate) fn print_infrastructure(game: &GameState) {
         let mut total_land = 0u32;
 
         for coord in &province.tiles {
-            if let Some(tile) = game.hex_map.get_tile(*coord)
+            if let Some(tile) = game.world.hex_map.get_tile(*coord)
                 && tile.terrain().is_land()
             {
                 total_land += 1;
@@ -1924,12 +1924,12 @@ pub(crate) fn print_infrastructure(game: &GameState) {
         }
 
         let connected = infrastructure::is_province_connected(
-            &game.hex_map,
+            &game.world.hex_map,
             game.get_province(player.capital_province_id)
                 .unwrap()
                 .capital_tile,
             *province_id,
-            &game.provinces,
+            &game.world.provinces,
         );
         let conn_str = if *province_id == player.capital_province_id {
             "(capital)"
@@ -2046,7 +2046,7 @@ pub(crate) fn print_nation_info(game: &GameState, query: &str) {
 
     // Province count and names
     let owned_provinces: Vec<_> = game
-        .provinces
+        .world.provinces
         .iter()
         .filter(|p| p.owner == target_id)
         .collect();
@@ -2090,7 +2090,7 @@ pub(crate) fn print_nation_info(game: &GameState, query: &str) {
 
     // Diplomatic relations with player
     if target_id != player_id {
-        let status = match game.diplomacy.get_relation(player_id, target_id) {
+        let status = match game.world.diplomacy.get_relation(player_id, target_id) {
             Some(rel) => {
                 if rel.at_war {
                     "AT WAR".to_string()
@@ -2191,7 +2191,7 @@ pub(crate) fn print_treasury_ledger(game: &GameState, report: &TurnReport) {
     println!();
     println!("  {}", color_bold("Treasury ledger — all Great Powers"));
 
-    let mut gps: Vec<&Nation> = game.nations.iter().filter(|n| n.is_great_power()).collect();
+    let mut gps: Vec<&Nation> = game.world.nations.iter().filter(|n| n.is_great_power()).collect();
     gps.sort_by_key(|n| n.id.0);
 
     for nation in gps {

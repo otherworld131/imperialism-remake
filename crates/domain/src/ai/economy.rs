@@ -227,12 +227,12 @@ pub(super) fn importable_via_trade(
         *history.entry(entry.resource).or_default() += entry.quantity as f64;
     }
 
-    for other in &game.nations {
+    for other in &game.world.nations {
         if other.id == nation.id || other.is_great_power() || other.province_ids.is_empty() {
             continue;
         }
         let has_consulate = game
-            .diplomacy
+            .world.diplomacy
             .get_relation(nation.id, other.id)
             .is_some_and(|r| r.has_consulate);
         if !has_consulate {
@@ -241,7 +241,7 @@ pub(super) fn importable_via_trade(
         for pid in &other.province_ids {
             if let Some(p) = game.get_province(*pid) {
                 for &coord in &p.tiles {
-                    if let Some(tile) = game.hex_map.get_tile(coord)
+                    if let Some(tile) = game.world.hex_map.get_tile(coord)
                         && let Some(y) = tile.calculate_yield()
                         && y.resource.is_tradeable()
                     {
@@ -367,11 +367,11 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
 
     let connected = connected_provinces(game, nation_id);
     let owned_provinces: Vec<&Province> = game
-        .provinces
+        .world.provinces
         .iter()
         .filter(|p| p.owner == nation_id)
         .collect();
-    let already_covered = collectable_hexes(&game.hex_map, &owned_provinces, &connected);
+    let already_covered = collectable_hexes(&game.world.hex_map, &owned_provinces, &connected);
 
     let owned_hexes: HashSet<HexCoord> = owned_provinces
         .iter()
@@ -391,7 +391,7 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
         if h == capital_tile {
             continue;
         }
-        if let Some(tile) = game.hex_map.get_tile(h)
+        if let Some(tile) = game.world.hex_map.get_tile(h)
             && tile.is_country_capital
         {
             capital_seeds.push(h);
@@ -400,7 +400,7 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
 
     // ── Check existing commitment first ───────────────────────
     if let Some(t) = nation.diplomacy.ai_priority_state.committed_infra_target.as_ref() {
-        let cand_tile = game.hex_map.get_tile(t.candidate);
+        let cand_tile = game.world.hex_map.get_tile(t.candidate);
         let fulfilled = cand_tile.is_some_and(|tile| tile.infrastructure.has_depot);
         let candidate_ownership_ok = owned_hexes.contains(&t.candidate);
         // Accept the origin as valid if (a) the tile still has
@@ -410,7 +410,7 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
         // somehow unset on the home-capital tile, the planner still treats
         // it as a valid origin, and commitment validation must agree —
         // otherwise the commitment would clear every turn (F-001).
-        let origin_tile = game.hex_map.get_tile(t.origin_capital);
+        let origin_tile = game.world.hex_map.get_tile(t.origin_capital);
         let origin_is_home_capital = t.origin_capital == capital_tile;
         let origin_ok = owned_hexes.contains(&t.origin_capital)
             && (origin_is_home_capital
@@ -424,7 +424,7 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
             let mut origin_seed = HashSet::new();
             origin_seed.insert(t.origin_capital);
             let (dist, prev, _source) = dijkstra_from_seeds(
-                &game.hex_map,
+                &game.world.hex_map,
                 &origin_seed,
                 &owned_hexes,
                 cfg,
@@ -432,10 +432,10 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
                 &game.game_data,
             );
             if t.candidate == t.origin_capital || dist.contains_key(&t.candidate) {
-                let path = reconstruct_path(&game.hex_map, &prev, t.candidate);
-                let path_cost = sum_path_cost(&game.hex_map, &path, cfg);
+                let path = reconstruct_path(&game.world.hex_map, &prev, t.candidate);
+                let path_cost = sum_path_cost(&game.world.hex_map, &path, cfg);
                 let coverage_value = coverage_around(
-                    &game.hex_map,
+                    &game.world.hex_map,
                     t.candidate,
                     &owned_hexes,
                     &already_covered,
@@ -461,7 +461,7 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
 
     let seed_set: HashSet<HexCoord> = capital_seeds.iter().copied().collect();
     let (dist, prev, source_of) = dijkstra_from_seeds(
-        &game.hex_map,
+        &game.world.hex_map,
         &seed_set,
         &owned_hexes,
         cfg,
@@ -476,7 +476,7 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
     sorted_candidates.sort_unstable_by_key(|c| (c.q, c.r));
 
     for candidate in sorted_candidates {
-        let tile = match game.hex_map.get_tile(candidate) {
+        let tile = match game.world.hex_map.get_tile(candidate) {
             Some(t) => t,
             None => continue,
         };
@@ -485,7 +485,7 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
         }
 
         let coverage_value = coverage_around(
-            &game.hex_map,
+            &game.world.hex_map,
             candidate,
             &owned_hexes,
             &already_covered,
@@ -500,8 +500,8 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
             continue;
         }
 
-        let path = reconstruct_path(&game.hex_map, &prev, candidate);
-        let path_cost = sum_path_cost(&game.hex_map, &path, cfg);
+        let path = reconstruct_path(&game.world.hex_map, &prev, candidate);
+        let path_cost = sum_path_cost(&game.world.hex_map, &path, cfg);
 
         // Origin capital = the seed this candidate was reached from. If the
         // candidate is itself a seed (a country-capital tile), it's its own
@@ -874,16 +874,16 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
         .unwrap_or_default();
 
     let capital_has_depot = capital_tiles.iter().any(|coord| {
-        game.hex_map
+        game.world.hex_map
             .get_tile(*coord)
             .is_some_and(|t| t.infrastructure.has_depot)
     });
 
     if !capital_has_depot {
-        let provinces_snapshot = game.provinces.clone();
+        let provinces_snapshot = game.world.provinces.clone();
         let cfg = game.game_data.game_config.clone();
         if let Ok(cost) = build_depot(
-            &mut game.hex_map,
+            &mut game.world.hex_map,
             capital_tile,
             nation_id,
             &provinces_snapshot,
@@ -892,7 +892,7 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
             if let Some(nation) = game.get_nation_mut(nation_id) {
                 nation.economy.treasury -= cost;
             }
-            game.pending_ai_cash_spending.push((
+            game.transient.pending_ai_cash_spending.push((
                 nation_id,
                 crate::economy::ledger::CashSink::AiInfrastructure,
                 cost,
@@ -914,7 +914,7 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
         .filter_map(|&pid| {
             let score = game
                 .get_province(pid)
-                .map(|p| score_province(&game.hex_map, p, nation_ref, game, &cfg_for_scoring))?;
+                .map(|p| score_province(&game.world.hex_map, p, nation_ref, game, &cfg_for_scoring))?;
             if score > 0 { Some((pid, score)) } else { None }
         })
         .collect();
@@ -929,7 +929,7 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
     );
 
     for (pid, _score) in &province_scores {
-        if is_province_connected(&game.hex_map, capital_tile, *pid, &game.provinces) {
+        if is_province_connected(&game.world.hex_map, capital_tile, *pid, &game.world.provinces) {
             continue;
         }
 
@@ -939,16 +939,16 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
             None => continue,
         };
         let has_depot = game
-            .hex_map
+            .world.hex_map
             .get_tile(target_depot_tile)
             .is_some_and(|t| t.infrastructure.has_depot);
 
-        let provinces_snapshot = game.provinces.clone();
+        let provinces_snapshot = game.world.provinces.clone();
         let cfg = game.game_data.game_config.clone();
         if !has_depot
             && budget - spent >= Money::dollars(2000)
             && let Ok(cost) = build_depot(
-                &mut game.hex_map,
+                &mut game.world.hex_map,
                 target_depot_tile,
                 nation_id,
                 &provinces_snapshot,
@@ -958,7 +958,7 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
             if let Some(nation) = game.get_nation_mut(nation_id) {
                 nation.economy.treasury -= cost;
             }
-            game.pending_ai_cash_spending.push((
+            game.transient.pending_ai_cash_spending.push((
                 nation_id,
                 crate::economy::ledger::CashSink::AiInfrastructure,
                 cost,
@@ -973,13 +973,13 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
             .filter(|p| p.owner == nation_id)
             .flat_map(|p| p.tiles.iter().copied())
             .collect();
-        let network = get_railroad_network(&game.hex_map, capital_tile);
+        let network = get_railroad_network(&game.world.hex_map, capital_tile);
         let researched: Vec<crate::events::TechId> = game
             .get_nation(nation_id)
             .map(|n| n.researched_techs.clone())
             .unwrap_or_default();
         if let Some(path) = find_cheapest_path(
-            &game.hex_map,
+            &game.world.hex_map,
             &network,
             target_depot_tile,
             &cfg,
@@ -992,7 +992,7 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
                     break;
                 }
                 if let Ok(cost) = build_railroad(
-                    &mut game.hex_map,
+                    &mut game.world.hex_map,
                     coord,
                     nation_id,
                     &researched,
@@ -1003,7 +1003,7 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
                     if let Some(nation) = game.get_nation_mut(nation_id) {
                         nation.economy.treasury -= cost;
                     }
-                    game.pending_ai_cash_spending.push((
+                    game.transient.pending_ai_cash_spending.push((
                         nation_id,
                         crate::economy::ledger::CashSink::AiInfrastructure,
                         cost,
@@ -1105,7 +1105,7 @@ pub fn ai_manage_resources(
     }
 
     if total_revenue > Money::ZERO {
-        game.pending_ai_cash_income.push((nation_id, total_revenue));
+        game.transient.pending_ai_cash_income.push((nation_id, total_revenue));
         actions.push(super::AiAction {
             text: format!(
                 "{} sold excess goods for ${}",
@@ -1470,7 +1470,7 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
         }
     }
     if total_revenue > Money::ZERO {
-        game.pending_ai_cash_income.push((nation_id, total_revenue));
+        game.transient.pending_ai_cash_income.push((nation_id, total_revenue));
     }
 }
 
@@ -1784,7 +1784,7 @@ mod tests {
         let cap_tile = cap_province.tiles[0];
 
         // If the tile doesn't exist in the map, skip (test map too small)
-        if game.hex_map.get_tile(cap_tile).is_none() {
+        if game.world.hex_map.get_tile(cap_tile).is_none() {
             // Still verify the function doesn't panic on missing tiles
             ai_build_map_infrastructure(&mut game, ai_id);
             return;
@@ -1792,7 +1792,7 @@ mod tests {
 
         assert!(
             !game
-                .hex_map
+                .world.hex_map
                 .get_tile(cap_tile)
                 .unwrap()
                 .infrastructure
@@ -1804,7 +1804,7 @@ mod tests {
 
         // After one call, should have built a depot on capital
         assert!(
-            game.hex_map
+            game.world.hex_map
                 .get_tile(cap_tile)
                 .unwrap()
                 .infrastructure
@@ -2154,7 +2154,7 @@ mod tests {
             ],
         );
         // Place a depot at `a` so the commitment is "fulfilled".
-        if let Some(t) = game.hex_map.get_tile_mut(a) {
+        if let Some(t) = game.world.hex_map.get_tile_mut(a) {
             t.infrastructure.has_depot = true;
         }
         game.get_nation_mut(NationId(1))
@@ -2337,7 +2337,7 @@ mod tests {
         );
         // Mark the intermediate hex AND the target as existing rail.
         for h in [rail_hex, target] {
-            if let Some(t) = game.hex_map.get_tile_mut(h) {
+            if let Some(t) = game.world.hex_map.get_tile_mut(h) {
                 t.infrastructure.has_railroad = true;
             }
         }
@@ -2376,7 +2376,7 @@ mod tests {
         // Replace the intermediate hex with swamp terrain (tech-gated).
         let mut swamp_tile = Tile::with_province(TerrainType::Swamp, ProvinceId(1));
         swamp_tile.set_resource(ResourceType::Grain);
-        game.hex_map.set_tile(swamp_coord, swamp_tile);
+        game.world.hex_map.set_tile(swamp_coord, swamp_tile);
 
         // Install commitment to the candidate.
         game.get_nation_mut(NationId(1))

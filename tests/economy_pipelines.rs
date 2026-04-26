@@ -438,7 +438,7 @@ fn immigration_occurs_with_food_surplus_and_goods() {
     let mut game = new_observer_game("immigration_test", Difficulty::Normal);
 
     // Give all nations massive food surplus and the required goods to trigger immigration.
-    for nation in &mut game.nations {
+    for nation in &mut game.world.nations {
         if !nation.is_great_power() {
             continue;
         }
@@ -480,7 +480,7 @@ fn immigration_does_not_occur_without_food_surplus() {
     let mut game = new_observer_game("no_immigration_test", Difficulty::Normal);
 
     // Remove all food from all Great Powers.
-    for nation in &mut game.nations {
+    for nation in &mut game.world.nations {
         if !nation.is_great_power() {
             continue;
         }

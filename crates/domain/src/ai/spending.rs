@@ -486,12 +486,12 @@ fn is_military_priority(game: &GameState, nation_id: NationId) -> bool {
         None => return false,
     };
     // (a) At war with anyone
-    for other in &game.nations {
+    for other in &game.world.nations {
         if other.id == nation_id {
             continue;
         }
         if game
-            .diplomacy
+            .world.diplomacy
             .get_relation(nation_id, other.id)
             .is_some_and(|r| r.at_war)
         {
@@ -502,7 +502,7 @@ fn is_military_priority(game: &GameState, nation_id: NationId) -> bool {
     // Garrison militia stay home and are excluded from the comparison.
     let my_army = nation.field_army_count() as f64;
     let strongest_rival = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.id != nation_id && n.is_great_power())
         .map(|n| n.field_army_count() as f64)
@@ -525,13 +525,13 @@ fn score_military(
     // Threat: based on relative military strength vs other Great Powers
     let mut threat = 0.0f64;
     let mut strongest_rival_army = 0usize;
-    for other in &game.nations {
+    for other in &game.world.nations {
         if other.id == nation_id || !other.is_great_power() {
             continue;
         }
         strongest_rival_army = strongest_rival_army.max(other.field_army_count());
         let at_war = game
-            .diplomacy
+            .world.diplomacy
             .get_relation(nation_id, other.id)
             .is_some_and(|r| r.at_war);
         if at_war {
@@ -612,7 +612,7 @@ fn score_infrastructure(
     // cheapest next hex on the path, or the depot cost if the path is empty.
     let cfg = &game.game_data.game_config;
     let next_cost = if let Some(next_coord) = plan.path.first() {
-        game.hex_map
+        game.world.hex_map
             .get_tile(*next_coord)
             .and_then(|t| crate::map::infrastructure::railroad_cost(t.terrain(), cfg))
             .unwrap_or_else(|| Money::dollars(cfg.railroad_cost_grassland))
@@ -655,7 +655,7 @@ fn score_consulate(
                 .is_some_and(|n| !n.province_ids.is_empty())
         })
         .any(|mn_id| {
-            game.diplomacy
+            game.world.diplomacy
                 .get_relation(nation_id, *mn_id)
                 .is_none_or(|r| !r.has_consulate)
         });
@@ -672,11 +672,11 @@ fn score_consulate(
     let mut trade_potential = 0u32;
     let mut existing_consulates = 0u32;
 
-    for n in &game.nations {
+    for n in &game.world.nations {
         if n.is_great_power() || n.province_ids.is_empty() {
             continue;
         }
-        if let Some(rel) = game.diplomacy.get_relation(nation_id, n.id)
+        if let Some(rel) = game.world.diplomacy.get_relation(nation_id, n.id)
             && rel.has_consulate
         {
             existing_consulates += 1;
@@ -684,12 +684,12 @@ fn score_consulate(
         }
         // Count tradeable resource tiles
         let potential: u32 = game
-            .provinces
+            .world.provinces
             .iter()
             .filter(|p| p.owner == n.id)
             .flat_map(|p| &p.tiles)
             .filter_map(|coord| {
-                game.hex_map
+                game.world.hex_map
                     .get_tile(*coord)
                     .and_then(|t| t.calculate_yield())
             })
@@ -744,7 +744,7 @@ fn score_embassy(
                 .is_some_and(|n| !n.province_ids.is_empty())
         })
         .any(|mn_id| {
-            game.diplomacy
+            game.world.diplomacy
                 .get_relation(nation_id, *mn_id)
                 .is_some_and(|r| r.has_consulate && !r.has_embassy)
         });
@@ -758,11 +758,11 @@ fn score_embassy(
 
     // Count minor nations with consulate but no embassy
     let mut upgradeable = 0u32;
-    for n in &game.nations {
+    for n in &game.world.nations {
         if n.is_great_power() || n.province_ids.is_empty() {
             continue;
         }
-        if let Some(rel) = game.diplomacy.get_relation(nation_id, n.id)
+        if let Some(rel) = game.world.diplomacy.get_relation(nation_id, n.id)
             && rel.has_consulate
             && !rel.has_embassy
         {
@@ -806,7 +806,7 @@ fn score_civilian(
     for &pid in &nation.province_ids {
         if let Some(province) = game.get_province(pid) {
             for &coord in &province.tiles {
-                if let Some(tile) = game.hex_map.get_tile(coord) {
+                if let Some(tile) = game.world.hex_map.get_tile(coord) {
                     let max_level = tile
                         .resource_deposit()
                         .map(|r| r.max_improvement_level())
@@ -953,12 +953,12 @@ fn score_warship(
     // At-war bonus, per enemy we're facing.
     let mut max_enemy_naval_fp: u32 = 0;
     let mut any_at_war = false;
-    for other in &game.nations {
+    for other in &game.world.nations {
         if other.id == nation_id {
             continue;
         }
         let at_war = game
-            .diplomacy
+            .world.diplomacy
             .get_relation(nation_id, other.id)
             .is_some_and(|r| r.at_war);
         if at_war {
@@ -1057,7 +1057,7 @@ fn execute_hire_engineer(game: &mut GameState, nation_id: NationId) {
         }
         nation.military.civilians.push(Civilian::new(civ_id, CivilianType::Engineer, nation_id));
     }
-    game.pending_ai_cash_spending.push((
+    game.transient.pending_ai_cash_spending.push((
         nation_id,
         crate::economy::ledger::CashSink::AiCivilianBuild,
         cost,
@@ -1129,7 +1129,7 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
                 nation_id,
             });
         }
-        game.pending_ai_cash_spending.push((
+        game.transient.pending_ai_cash_spending.push((
             nation_id,
             crate::economy::ledger::CashSink::AiArmyBuild,
             cost,
@@ -1217,7 +1217,7 @@ fn execute_infrastructure(
                 }
                 nation.military.civilians.push(Civilian::new(civ_id, CivilianType::Engineer, nation_id));
             }
-            game.pending_ai_cash_spending.push((
+            game.transient.pending_ai_cash_spending.push((
                 nation_id,
                 crate::economy::ledger::CashSink::AiCivilianBuild,
                 cost,
@@ -1231,7 +1231,7 @@ fn execute_infrastructure(
     // no longer owns, clear its position (will redeploy this turn).
     {
         let owned_hexes: HashSet<HexCoord> = game
-            .provinces
+            .world.provinces
             .iter()
             .filter(|p| p.owner == nation_id)
             .flat_map(|p| p.tiles.iter().copied())
@@ -1250,7 +1250,7 @@ fn execute_infrastructure(
                 (civ.id, civ.position)
             };
             if let Some(pos) = old_pos
-                && let Some(tile) = game.hex_map.get_tile_mut(pos)
+                && let Some(tile) = game.world.hex_map.get_tile_mut(pos)
                 && tile.assigned_civilian == Some(civ_id)
             {
                 tile.assigned_civilian = None;
@@ -1312,7 +1312,7 @@ fn execute_infrastructure(
 
     // If the next-hex choice already has a rail, advance one further along path.
     let already_has_rail = game
-        .hex_map
+        .world.hex_map
         .get_tile(next_hex)
         .is_some_and(|t| t.infrastructure.has_railroad);
     let build_coord = if already_has_rail {
@@ -1330,7 +1330,7 @@ fn execute_infrastructure(
     // second engineer this same turn), the path is effectively exhausted —
     // place the depot rather than spinning on already-built tiles.
     let build_coord_already_built = game
-        .hex_map
+        .world.hex_map
         .get_tile(build_coord)
         .is_some_and(|t| t.infrastructure.has_railroad || t.infrastructure.has_depot);
 
@@ -1374,14 +1374,14 @@ fn start_engineer_task(
         None => return,
     };
     if let Some(old) = old_pos
-        && let Some(tile) = game.hex_map.get_tile_mut(old)
+        && let Some(tile) = game.world.hex_map.get_tile_mut(old)
         && tile.assigned_civilian == Some(civ_id)
     {
         tile.assigned_civilian = None;
     }
     // Target hex must be owned and empty of another civilian.
     let owned = game
-        .provinces
+        .world.provinces
         .iter()
         .filter(|p| p.owner == nation_id)
         .any(|p| p.tiles.contains(&coord));
@@ -1389,7 +1389,7 @@ fn start_engineer_task(
         return;
     }
     let target_ok = game
-        .hex_map
+        .world.hex_map
         .get_tile(coord)
         .is_some_and(|t| t.assigned_civilian.is_none() || t.assigned_civilian == Some(civ_id));
     if !target_ok {
@@ -1399,7 +1399,7 @@ fn start_engineer_task(
     // debited when the build finishes, so we guard at order time.
     let cost = match task {
         BuildTask::Railroad => {
-            let terrain = match game.hex_map.get_tile(coord) {
+            let terrain = match game.world.hex_map.get_tile(coord) {
                 Some(t) => t.terrain(),
                 None => return,
             };
@@ -1418,7 +1418,7 @@ fn start_engineer_task(
     if treasury.checked_sub(cost).is_none() {
         return;
     }
-    if let Some(tile) = game.hex_map.get_tile_mut(coord) {
+    if let Some(tile) = game.world.hex_map.get_tile_mut(coord) {
         tile.assigned_civilian = Some(civ_id);
     }
     if let Some(nation) = game.get_nation_mut(nation_id) {
@@ -1441,7 +1441,7 @@ fn execute_consulate(game: &mut GameState, nation_id: NationId) {
                 game.get_nation(**mn_id)
                     .is_some_and(|m| !m.province_ids.is_empty() && !m.diplomacy.is_in_anarchy)
                     && game
-                        .diplomacy
+                        .world.diplomacy
                         .get_relation(nation_id, **mn_id)
                         .is_none_or(|r| !r.has_consulate)
             })
@@ -1451,24 +1451,24 @@ fn execute_consulate(game: &mut GameState, nation_id: NationId) {
     let best_mn = priority_pick.or_else(|| {
         let mut best: Option<NationId> = None;
         let mut best_potential = 0u32;
-        for n in &game.nations {
+        for n in &game.world.nations {
             if n.is_great_power() || n.province_ids.is_empty() || n.diplomacy.is_in_anarchy {
                 continue;
             }
             if game
-                .diplomacy
+                .world.diplomacy
                 .get_relation(nation_id, n.id)
                 .is_some_and(|r| r.has_consulate)
             {
                 continue;
             }
             let potential: u32 = game
-                .provinces
+                .world.provinces
                 .iter()
                 .filter(|p| p.owner == n.id)
                 .flat_map(|p| &p.tiles)
                 .filter_map(|coord| {
-                    game.hex_map
+                    game.world.hex_map
                         .get_tile(*coord)
                         .and_then(|t| t.calculate_yield())
                 })
@@ -1484,12 +1484,12 @@ fn execute_consulate(game: &mut GameState, nation_id: NationId) {
     });
 
     if let Some(mn_id) = best_mn
-        && game.diplomacy.build_consulate(nation_id, mn_id).is_ok()
+        && game.world.diplomacy.build_consulate(nation_id, mn_id).is_ok()
     {
         if let Some(nation) = game.get_nation_mut(nation_id) {
             nation.economy.treasury -= cost;
         }
-        game.pending_ai_cash_spending.push((
+        game.transient.pending_ai_cash_spending.push((
             nation_id,
             crate::economy::ledger::CashSink::AiDiplomacyConsulate,
             cost,
@@ -1511,7 +1511,7 @@ fn execute_embassy(game: &mut GameState, nation_id: NationId) {
                 game.get_nation(**mn_id)
                     .is_some_and(|m| !m.province_ids.is_empty() && !m.diplomacy.is_in_anarchy)
                     && game
-                        .diplomacy
+                        .world.diplomacy
                         .get_relation(nation_id, **mn_id)
                         .is_some_and(|r| r.has_consulate && !r.has_embassy)
             })
@@ -1521,11 +1521,11 @@ fn execute_embassy(game: &mut GameState, nation_id: NationId) {
     let best_mn = priority_pick.or_else(|| {
         let mut best: Option<NationId> = None;
         let mut best_relation = i32::MIN;
-        for n in &game.nations {
+        for n in &game.world.nations {
             if n.is_great_power() || n.province_ids.is_empty() || n.diplomacy.is_in_anarchy {
                 continue;
             }
-            if let Some(rel) = game.diplomacy.get_relation(nation_id, n.id)
+            if let Some(rel) = game.world.diplomacy.get_relation(nation_id, n.id)
                 && rel.has_consulate
                 && !rel.has_embassy
                 && rel.score > best_relation
@@ -1538,12 +1538,12 @@ fn execute_embassy(game: &mut GameState, nation_id: NationId) {
     });
 
     if let Some(mn_id) = best_mn
-        && game.diplomacy.build_embassy(nation_id, mn_id).is_ok()
+        && game.world.diplomacy.build_embassy(nation_id, mn_id).is_ok()
     {
         if let Some(nation) = game.get_nation_mut(nation_id) {
             nation.economy.treasury -= cost;
         }
-        game.pending_ai_cash_spending.push((
+        game.transient.pending_ai_cash_spending.push((
             nation_id,
             crate::economy::ledger::CashSink::AiDiplomacyEmbassy,
             cost,
@@ -1605,7 +1605,7 @@ fn execute_hire_improver(game: &mut GameState, nation_id: NationId) {
         }
         nation.military.civilians.push(Civilian::new(civ_id, civ_type, nation_id));
     }
-    game.pending_ai_cash_spending.push((
+    game.transient.pending_ai_cash_spending.push((
         nation_id,
         crate::economy::ledger::CashSink::AiCivilianBuild,
         cost,
@@ -1676,7 +1676,7 @@ pub fn pick_priority_minor_targets(
     let demand = super::economy::compute_resource_demand(nation, game, &game.game_data.game_config);
 
     let mut scored: Vec<(NationId, f64)> = Vec::new();
-    for minor in &game.nations {
+    for minor in &game.world.nations {
         if minor.is_great_power() || minor.province_ids.is_empty() {
             continue;
         }
@@ -1684,11 +1684,11 @@ pub fn pick_priority_minor_targets(
             continue;
         }
         let score: f64 = game
-            .provinces
+            .world.provinces
             .iter()
             .filter(|p| p.owner == minor.id)
             .flat_map(|p| &p.tiles)
-            .filter_map(|c| game.hex_map.get_tile(*c).and_then(|t| t.calculate_yield()))
+            .filter_map(|c| game.world.hex_map.get_tile(*c).and_then(|t| t.calculate_yield()))
             .filter(|y| y.resource.is_tradeable())
             .map(|y| {
                 let w = demand.get(&y.resource).copied().unwrap_or(0.0);

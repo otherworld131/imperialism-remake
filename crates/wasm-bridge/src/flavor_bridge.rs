@@ -29,10 +29,10 @@ fn nation_seed(base_seed: u64, nation_index: u32) -> u64 {
 /// in-game. Existing flavor fields are skipped (so save reloads don't churn).
 ///
 /// `flavor_key` seeds name + flag generation. An empty string falls back to
-/// `game.map_key`, keeping replays stable on the same map.
+/// `game.world.map_key`, keeping replays stable on the same map.
 pub fn apply_flavor(game: &mut GameState, flavor_key: &str) {
     let key = if flavor_key.is_empty() {
-        game.map_key.as_str()
+        game.world.map_key.as_str()
     } else {
         flavor_key
     };
@@ -40,7 +40,7 @@ pub fn apply_flavor(game: &mut GameState, flavor_key: &str) {
     let rules = FlagRules::default();
     let (gp_mix, mn_mix) = load_default_mixes();
 
-    for nation in game.nations.iter_mut() {
+    for nation in game.world.nations.iter_mut() {
         if !nation.archives.flag_svg.is_empty() {
             continue;
         }
@@ -65,19 +65,19 @@ pub fn apply_flavor(game: &mut GameState, flavor_key: &str) {
 /// owner's own provinces.
 fn apply_province_names(game: &mut GameState, base_seed: u64) {
     let mut by_owner: HashMap<NationId, Vec<usize>> = HashMap::new();
-    for (i, prov) in game.provinces.iter().enumerate() {
+    for (i, prov) in game.world.provinces.iter().enumerate() {
         by_owner.entry(prov.owner).or_default().push(i);
     }
     for (owner_id, mut indices) in by_owner {
         // Sort by province id so the name assignment is stable across
         // HashMap iteration orders.
-        indices.sort_by_key(|i| game.provinces[*i].id.0);
+        indices.sort_by_key(|i| game.world.provinces[*i].id.0);
         let owner_seed = nation_seed(base_seed, owner_id.0);
         let mut rng = Rng::from_seed(owner_seed);
         let names = generate_city_names(&mut rng, indices.len());
         for (k, prov_idx) in indices.iter().enumerate() {
             if let Some(name) = names.get(k) {
-                game.provinces[*prov_idx].name = name.clone();
+                game.world.provinces[*prov_idx].name = name.clone();
             }
         }
     }
@@ -86,7 +86,7 @@ fn apply_province_names(game: &mut GameState, base_seed: u64) {
 /// Wipe the flavor fields on every nation so a subsequent `apply_flavor`
 /// regenerates them. Used by the "re-roll names" preview path.
 pub fn clear_flavor(game: &mut GameState) {
-    for nation in game.nations.iter_mut() {
+    for nation in game.world.nations.iter_mut() {
         nation.archives.adjective.clear();
         nation.archives.demonym_singular.clear();
         nation.archives.demonym_plural.clear();

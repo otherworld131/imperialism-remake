@@ -121,7 +121,7 @@ fn take_snapshot(
         for &pid in &nation.province_ids {
             if let Some(province) = game.get_province(pid) {
                 for &coord in &province.tiles {
-                    if let Some(tile) = game.hex_map.get_tile(coord) {
+                    if let Some(tile) = game.world.hex_map.get_tile(coord) {
                         if tile.infrastructure.has_depot {
                             let counts = pid == nation.capital_province_id
                                 || tile.is_country_capital
@@ -175,24 +175,24 @@ fn take_snapshot(
         let mut alliances = 0usize;
         let mut naps = 0usize;
         let mut active_wars = 0usize;
-        for other in &game.nations {
+        for other in &game.world.nations {
             if other.id == nation.id {
                 continue;
             }
             if game
-                .diplomacy
+                .world.diplomacy
                 .has_treaty(nation.id, other.id, domain::events::TreatyType::Alliance)
             {
                 alliances += 1;
             }
-            if game.diplomacy.has_treaty(
+            if game.world.diplomacy.has_treaty(
                 nation.id,
                 other.id,
                 domain::events::TreatyType::NonAggressionPact,
             ) {
                 naps += 1;
             }
-            if let Some(rel) = game.diplomacy.get_relation(nation.id, other.id)
+            if let Some(rel) = game.world.diplomacy.get_relation(nation.id, other.id)
                 && rel.at_war
             {
                 active_wars += 1;
@@ -247,10 +247,10 @@ fn take_snapshot(
 
 fn get_war_pairs(game: &GameState) -> HashSet<(NationId, NationId)> {
     let mut pairs = HashSet::new();
-    for a in &game.nations {
-        for b in &game.nations {
+    for a in &game.world.nations {
+        for b in &game.world.nations {
             if a.id.0 < b.id.0
-                && let Some(rel) = game.diplomacy.get_relation(a.id, b.id)
+                && let Some(rel) = game.world.diplomacy.get_relation(a.id, b.id)
                 && rel.at_war
             {
                 pairs.insert((a.id, b.id));
@@ -571,14 +571,14 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
             .map(|p| p.tiles.clone())
             .unwrap_or_default();
         // Build railroads first, then depot (depot now requires railroad or capital tile)
-        let provinces_snapshot = game.provinces.clone();
+        let provinces_snapshot = game.world.provinces.clone();
         let cfg_snapshot = game.game_data.game_config.clone();
         let researched: Vec<domain::events::TechId> = game
             .get_nation(player_id)
             .map(|n| n.researched_techs.clone())
             .unwrap_or_default();
         for &tile_coord in &capital_tiles {
-            let terrain = match game.hex_map.get_tile(tile_coord) {
+            let terrain = match game.world.hex_map.get_tile(tile_coord) {
                 Some(t) if !t.infrastructure.has_railroad => t.terrain(),
                 _ => continue,
             };
@@ -594,7 +594,7 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
                 continue;
             }
             if let Ok(cost) = infrastructure::build_railroad(
-                &mut game.hex_map,
+                &mut game.world.hex_map,
                 tile_coord,
                 player_id,
                 &researched,
@@ -609,7 +609,7 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
         // Build depot on first capital tile if affordable
         if let Some(&tile_coord) = capital_tiles.first() {
             let has_depot = game
-                .hex_map
+                .world.hex_map
                 .get_tile(tile_coord)
                 .is_some_and(|t| t.infrastructure.has_depot);
             let depot_cost = Money::dollars(cfg_snapshot.depot_cost);
@@ -619,7 +619,7 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
             if !has_depot
                 && can_afford
                 && let Ok(cost) = infrastructure::build_depot(
-                    &mut game.hex_map,
+                    &mut game.world.hex_map,
                     tile_coord,
                     player_id,
                     &provinces_snapshot,
@@ -662,14 +662,14 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
                 .get_province(pid)
                 .map(|p| p.tiles.clone())
                 .unwrap_or_default();
-            let provinces_snapshot = game.provinces.clone();
+            let provinces_snapshot = game.world.provinces.clone();
             let researched: Vec<domain::events::TechId> = game
                 .get_nation(player_id)
                 .map(|n| n.researched_techs.clone())
                 .unwrap_or_default();
             // Build railroads on tiles first (depot needs a railroad hex now)
             for &tile_coord in &tiles {
-                let terrain = match game.hex_map.get_tile(tile_coord) {
+                let terrain = match game.world.hex_map.get_tile(tile_coord) {
                     Some(t) => t.terrain(),
                     None => continue,
                 };
@@ -684,12 +684,12 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
                     continue;
                 }
                 let needs_rr = game
-                    .hex_map
+                    .world.hex_map
                     .get_tile(tile_coord)
                     .is_some_and(|t| !t.infrastructure.has_railroad);
                 if needs_rr
                     && let Ok(cost) = infrastructure::build_railroad(
-                        &mut game.hex_map,
+                        &mut game.world.hex_map,
                         tile_coord,
                         player_id,
                         &researched,
@@ -706,7 +706,7 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
             // Build depot on first tile
             if let Some(&tile_coord) = tiles.first() {
                 let has_depot = game
-                    .hex_map
+                    .world.hex_map
                     .get_tile(tile_coord)
                     .is_some_and(|t| t.infrastructure.has_depot);
                 let depot_cost = Money::dollars(cfg_snapshot.depot_cost);
@@ -716,7 +716,7 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
                 if !has_depot
                     && depot_affordable
                     && let Ok(cost) = infrastructure::build_depot(
-                        &mut game.hex_map,
+                        &mut game.world.hex_map,
                         tile_coord,
                         player_id,
                         &provinces_snapshot,
@@ -853,9 +853,9 @@ pub(crate) fn cmd_auto(game: &mut GameState, turns: u32) {
             .map(|gp| (gp.name.clone(), calculate_score(gp).total))
             .collect();
         for (name, total) in gp_scores {
-            game.high_scores.push((name, total, date_str.clone()));
+            game.archive.high_scores.push((name, total, date_str.clone()));
         }
-        game.high_scores.sort_by(|a, b| b.1.cmp(&a.1));
+        game.archive.high_scores.sort_by(|a, b| b.1.cmp(&a.1));
 
         println!();
         println!("  ══════════════════════════════════════");

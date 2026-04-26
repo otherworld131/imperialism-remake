@@ -187,7 +187,7 @@ fn clear_stale_beachheads(game: &mut GameState, nation_id: NationId, enemies: &[
         let still_hostile = enemies.contains(&target_prov.owner);
         let reachable_overland = our_province_ids.iter().any(|&our_pid| {
             game.get_province(our_pid).is_some_and(|our_p| {
-                crate::map::provinces_are_adjacent(&game.hex_map, our_p, target_prov)
+                crate::map::provinces_are_adjacent(&game.world.hex_map, our_p, target_prov)
             })
         });
         if !still_hostile || reachable_overland {
@@ -251,11 +251,11 @@ pub fn ai_naval_strategy(
 
     // Find enemies we are at war with
     let enemies: Vec<NationId> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.id != nation_id)
         .filter(|n| {
-            game.diplomacy
+            game.world.diplomacy
                 .get_relation(nation_id, n.id)
                 .map(|r| r.at_war)
                 .unwrap_or(false)
@@ -374,10 +374,10 @@ pub fn ai_naval_strategy(
             let mut any_land_adjacent = false;
             let mut any_soft_land_target = false;
             let strength_cap = (our_army_size as f64 * adj_strength_ratio).ceil() as usize;
-            for enemy_prov in game.provinces.iter().filter(|p| p.owner == enemy_id) {
+            for enemy_prov in game.world.provinces.iter().filter(|p| p.owner == enemy_id) {
                 let is_land_adj = our_province_ids.iter().any(|&our_pid| {
                     game.get_province(our_pid).is_some_and(|our_prov| {
-                        crate::map::provinces_are_adjacent(&game.hex_map, our_prov, enemy_prov)
+                        crate::map::provinces_are_adjacent(&game.world.hex_map, our_prov, enemy_prov)
                     })
                 });
                 if !is_land_adj {
@@ -414,7 +414,7 @@ pub fn ai_naval_strategy(
 
             // Find coastal enemy province to target
             let coastal_target = game
-                .provinces
+                .world.provinces
                 .iter()
                 .find(|p| p.owner == enemy_id && p.coastal);
 
@@ -646,7 +646,7 @@ mod tests {
         let mut game = test_game_with_ai_and_minor();
 
         // Put AI at war with minor nation
-        game.diplomacy.declare_war(NationId(2), NationId(3));
+        game.world.diplomacy.declare_war(NationId(2), NationId(3));
 
         // Give the minor nation 2 warships (more than AI's 0)
         let minor = game.get_nation_mut(NationId(3)).unwrap();
@@ -692,13 +692,13 @@ mod tests {
 
         let mut game = test_game_with_adjacent_provinces();
         // Mark the AI's border province coastal so "we_have_coast" is true.
-        game.provinces.iter_mut().for_each(|p| {
+        game.world.provinces.iter_mut().for_each(|p| {
             if p.id == ProvinceId(2) {
                 p.coastal = true;
             }
         });
         // Make the enemy province coastal too, so it would be a viable beachhead.
-        game.provinces.iter_mut().for_each(|p| {
+        game.world.provinces.iter_mut().for_each(|p| {
             if p.id == ProvinceId(3) {
                 p.coastal = true;
             }
@@ -751,7 +751,7 @@ mod tests {
 
         let mut game = test_game_with_adjacent_provinces();
         // Make the AI's border province coastal (required for embark).
-        game.provinces.iter_mut().for_each(|p| {
+        game.world.provinces.iter_mut().for_each(|p| {
             if p.id == ProvinceId(2) {
                 p.coastal = true;
             }
@@ -808,7 +808,7 @@ mod tests {
         use crate::ai::common::test_helpers::test_game_with_adjacent_provinces;
         let mut game = test_game_with_adjacent_provinces();
         // End the war seeded by the test helper.
-        game.diplomacy.make_peace(NationId(2), NationId(3));
+        game.world.diplomacy.make_peace(NationId(2), NationId(3));
 
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
@@ -837,7 +837,7 @@ mod tests {
         // returns early to build more ships.
         use crate::ai::common::test_helpers::test_game_with_adjacent_provinces;
         let mut game = test_game_with_adjacent_provinces();
-        game.provinces.iter_mut().for_each(|p| {
+        game.world.provinces.iter_mut().for_each(|p| {
             if p.id == ProvinceId(2) {
                 p.coastal = true;
             }
@@ -881,7 +881,7 @@ mod tests {
         // land-adjacent to our territory — the op should be cleared.
         use crate::ai::common::test_helpers::test_game_with_adjacent_provinces;
         let mut game = test_game_with_adjacent_provinces();
-        game.provinces.iter_mut().for_each(|p| {
+        game.world.provinces.iter_mut().for_each(|p| {
             if p.id == ProvinceId(2) {
                 p.coastal = true;
             }

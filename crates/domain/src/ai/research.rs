@@ -88,7 +88,7 @@ pub(crate) fn ai_research_tech(
                     }
                 };
                 if did_spend {
-                    game.pending_ai_cash_spending.push((
+                    game.transient.pending_ai_cash_spending.push((
                         nation_id,
                         crate::economy::ledger::CashSink::AiResearch,
                         tech_cost,
@@ -122,11 +122,11 @@ pub(crate) fn ai_research_tech(
                         tech_name: tech_name.clone(),
                     };
                     if !game
-                        .history
+                        .archive.history
                         .iter()
                         .any(|(t, ev)| *t == turn && *ev == entry)
                     {
-                        game.history.push((turn, entry));
+                        game.archive.history.push((turn, entry));
                     }
                     return;
                 }
@@ -232,7 +232,7 @@ pub(crate) fn ai_research_tech(
         }
     };
     if did_spend {
-        game.pending_ai_cash_spending.push((
+        game.transient.pending_ai_cash_spending.push((
             nation_id,
             crate::economy::ledger::CashSink::AiResearch,
             tech_cost,
@@ -259,11 +259,11 @@ pub(crate) fn ai_research_tech(
         };
         // Deduplicate: only push if this exact event doesn't already exist for this turn
         if !game
-            .history
+            .archive.history
             .iter()
             .any(|(t, ev)| *t == turn && *ev == entry)
         {
-            game.history.push((turn, entry));
+            game.archive.history.push((turn, entry));
         }
         return; // Successfully researched
     }
@@ -292,7 +292,7 @@ pub(crate) fn ai_research_tech(
                 }
             };
             if did_spend {
-                game.pending_ai_cash_spending.push((
+                game.transient.pending_ai_cash_spending.push((
                     nation_id,
                     crate::economy::ledger::CashSink::AiResearch,
                     *cand_cost,
@@ -317,11 +317,11 @@ pub(crate) fn ai_research_tech(
                     tech_name: cand_name.clone(),
                 };
                 if !game
-                    .history
+                    .archive.history
                     .iter()
                     .any(|(t, ev)| *t == turn && *ev == entry)
                 {
-                    game.history.push((turn, entry));
+                    game.archive.history.push((turn, entry));
                 }
                 return;
             }

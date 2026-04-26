@@ -75,11 +75,11 @@ impl NationEconomySnapshot {
 
         // Snapshot market prices and trends for all commodities with history (#164).
         let market_prices: HashMap<Commodity, Money> =
-            state.market_state.commodities_with_price().collect();
+            state.world.market_state.commodities_with_price().collect();
         let market_trends: HashMap<Commodity, Trend> = state
-            .market_state
+            .world.market_state
             .commodities_with_history()
-            .map(|c| (c, state.market_state.trend(c, 4)))
+            .map(|c| (c, state.world.market_state.trend(c, 4)))
             .collect();
 
         Self {
@@ -224,10 +224,10 @@ mod tests {
     #[test]
     fn snapshot_reflects_inventory() {
         let mut game = minimal_game();
-        let nation_id = game.nations[0].id;
-        game.nations[0].add_resource(ResourceType::Timber, 10);
-        game.nations[0].add_material(MaterialType::Lumber, 5);
-        game.nations[0].add_goods(GoodsType::Furniture, 2);
+        let nation_id = game.world.nations[0].id;
+        game.world.nations[0].add_resource(ResourceType::Timber, 10);
+        game.world.nations[0].add_material(MaterialType::Lumber, 5);
+        game.world.nations[0].add_goods(GoodsType::Furniture, 2);
 
         let snap = NationEconomySnapshot::build(&game, nation_id);
         assert_eq!(snap.resource(ResourceType::Timber), 10);
@@ -238,8 +238,8 @@ mod tests {
     #[test]
     fn snapshot_reflects_buildings() {
         let mut game = minimal_game();
-        let nation_id = game.nations[0].id;
-        game.nations[0]
+        let nation_id = game.world.nations[0].id;
+        game.world.nations[0]
             .economy
             .buildings
             .push(Building::new(BuildingType::LumberMill, 4));
@@ -253,8 +253,8 @@ mod tests {
     #[test]
     fn snapshot_treasury_matches_nation() {
         let mut game = minimal_game();
-        let nation_id = game.nations[0].id;
-        game.nations[0].economy.treasury = Money::dollars(5000);
+        let nation_id = game.world.nations[0].id;
+        game.world.nations[0].economy.treasury = Money::dollars(5000);
 
         let snap = NationEconomySnapshot::build(&game, nation_id);
         assert_eq!(snap.treasury, Money::dollars(5000));

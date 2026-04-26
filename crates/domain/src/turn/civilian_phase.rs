@@ -14,7 +14,7 @@ use crate::types::*;
 
 pub(super) fn update_province_connectivity(game: &mut GameState) {
     let nation_ids: Vec<NationId> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.is_great_power() && !n.diplomacy.is_in_anarchy)
         .map(|n| n.id)
@@ -22,7 +22,7 @@ pub(super) fn update_province_connectivity(game: &mut GameState) {
 
     for nation_id in nation_ids {
         let connected = connected_provinces(game, nation_id);
-        for prov in game.provinces.iter_mut() {
+        for prov in game.world.provinces.iter_mut() {
             // Only upgrade connectivity (false → true), never downgrade.
             // Full disconnection tracking will be added with the transport system.
             if prov.owner == nation_id && connected.contains(&prov.id) {
@@ -35,15 +35,15 @@ pub(super) fn update_province_connectivity(game: &mut GameState) {
 pub(super) fn update_settlements(game: &mut GameState, report: &mut TurnReport) {
     // Collect province IDs and their owner for processing
     let province_data: Vec<(ProvinceId, NationId)> =
-        game.provinces.iter().map(|p| (p.id, p.owner)).collect();
+        game.world.provinces.iter().map(|p| (p.id, p.owner)).collect();
 
     for (province_id, owner_id) in &province_data {
-        let province = match game.provinces.iter().find(|p| p.id == *province_id) {
+        let province = match game.world.provinces.iter().find(|p| p.id == *province_id) {
             Some(p) => p,
             None => continue,
         };
 
-        let owner_nation = game.nations.iter().find(|n| n.id == *owner_id);
+        let owner_nation = game.world.nations.iter().find(|n| n.id == *owner_id);
 
         // Skip settlement progression for Minor Nation provinces or anarchic nations
         let skip = owner_nation
@@ -61,7 +61,7 @@ pub(super) fn update_settlements(game: &mut GameState, report: &mut TurnReport) 
                     // Just connected or already industrialized; if still Hamlet, start countdown
                     if province.settlement_level == SettlementLevel::Hamlet {
                         let prov = game
-                            .provinces
+                            .world.provinces
                             .iter_mut()
                             .find(|p| p.id == *province_id)
                             .unwrap();
@@ -72,7 +72,7 @@ pub(super) fn update_settlements(game: &mut GameState, report: &mut TurnReport) 
                     if remaining <= 1 {
                         // Countdown complete: upgrade settlement
                         let prov = game
-                            .provinces
+                            .world.provinces
                             .iter_mut()
                             .find(|p| p.id == *province_id)
                             .unwrap();
@@ -97,7 +97,7 @@ pub(super) fn update_settlements(game: &mut GameState, report: &mut TurnReport) 
                     } else {
                         // Tick down
                         let prov = game
-                            .provinces
+                            .world.provinces
                             .iter_mut()
                             .find(|p| p.id == *province_id)
                             .unwrap();
@@ -110,7 +110,7 @@ pub(super) fn update_settlements(game: &mut GameState, report: &mut TurnReport) 
             // Skip if the province just became a Village this turn
             if !just_became_village {
                 let prov_level = game
-                    .provinces
+                    .world.provinces
                     .iter()
                     .find(|p| p.id == *province_id)
                     .map(|p| (p.settlement_level, p.town_countdown));
@@ -118,7 +118,7 @@ pub(super) fn update_settlements(game: &mut GameState, report: &mut TurnReport) 
                 if let Some((SettlementLevel::Village, Some(remaining))) = prov_level {
                     if remaining <= 1 {
                         let prov = game
-                            .provinces
+                            .world.provinces
                             .iter_mut()
                             .find(|p| p.id == *province_id)
                             .unwrap();
@@ -134,7 +134,7 @@ pub(super) fn update_settlements(game: &mut GameState, report: &mut TurnReport) 
                             .push((*province_id, "Town".to_string()));
                     } else {
                         let prov = game
-                            .provinces
+                            .world.provinces
                             .iter_mut()
                             .find(|p| p.id == *province_id)
                             .unwrap();

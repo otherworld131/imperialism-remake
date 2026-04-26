@@ -553,7 +553,7 @@ pub fn disband_unit(
         return Err("garrison units cannot be dismissed".to_string());
     }
     nation.military.army.remove(pos);
-    game.pending_moves
+    game.transient.pending_moves
         .retain(|(nid, id, _)| *nid != nation_id || *id != unit_id);
     Ok(())
 }

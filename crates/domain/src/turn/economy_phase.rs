@@ -109,7 +109,7 @@ const BANKRUPTCY_FLOOR: Money = Money::ZERO;
 
 /// Tick all buildings for all nations, advancing expansion timers.
 pub(super) fn tick_buildings(game: &mut GameState) {
-    for nation in &mut game.nations {
+    for nation in &mut game.world.nations {
         for building in &mut nation.economy.buildings {
             building.tick();
         }
@@ -118,7 +118,7 @@ pub(super) fn tick_buildings(game: &mut GameState) {
 
 /// Apply army maintenance, bankruptcy clamp, and bankruptcy headline.
 pub(super) fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
-    for nation in &mut game.nations {
+    for nation in &mut game.world.nations {
         if nation.diplomacy.is_in_anarchy {
             continue;
         }
@@ -167,7 +167,7 @@ pub(super) fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
 pub(super) fn compute_blockade_capacity(game: &GameState) -> HashMap<NationId, u32> {
     // Only consider active Great Powers (not anarchic, not eliminated)
     let active_gp_ids: Vec<NationId> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.is_great_power() && !n.diplomacy.is_in_anarchy && !n.province_ids.is_empty())
         .map(|n| n.id)
@@ -191,7 +191,7 @@ pub(super) fn compute_blockade_capacity(game: &GameState) -> HashMap<NationId, u
                 continue;
             }
             let hostile = game
-                .diplomacy
+                .world.diplomacy
                 .get_relation(nation_id, other_id)
                 .is_some_and(|r| r.hostilities_active_on(game.turn));
             if hostile && let Some(other) = game.get_nation(other_id) {
@@ -218,7 +218,7 @@ pub(super) fn compute_blockade_capacity(game: &GameState) -> HashMap<NationId, u
 /// facing newspaper line.
 pub(super) fn apply_blockade_effects(game: &GameState, report: &mut TurnReport) {
     let gp_ids: Vec<NationId> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.is_great_power())
         .map(|n| n.id)
@@ -243,7 +243,7 @@ pub(super) fn apply_blockade_effects(game: &GameState, report: &mut TurnReport) 
                 continue;
             }
             let hostile = game
-                .diplomacy
+                .world.diplomacy
                 .get_relation(nation_id, other_id)
                 .is_some_and(|r| r.hostilities_active_on(game.turn));
             if hostile && let Some(other) = game.get_nation(other_id) {
@@ -281,7 +281,7 @@ pub(super) fn apply_blockade_effects(game: &GameState, report: &mut TurnReport) 
 /// Excess resources above the cap are silently lost (spoilage/waste).
 /// Nations without a Warehouse building use a default capacity of 1.
 pub(super) fn apply_warehouse_caps(game: &mut GameState) {
-    for nation in &mut game.nations {
+    for nation in &mut game.world.nations {
         let warehouse_capacity = nation
             .economy
             .buildings

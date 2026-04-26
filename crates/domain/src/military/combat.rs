@@ -119,7 +119,7 @@ pub fn spawn_garrison_artillery_unit(
 /// cached count.
 pub fn seed_militia_from_garrison_count(game: &mut crate::game_state::GameState) {
     let snapshots: Vec<(NationId, ProvinceId, u8)> = game
-        .provinces
+        .world.provinces
         .iter()
         .map(|p| (p.owner, p.id, p.garrison_count))
         .collect();

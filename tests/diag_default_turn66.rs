@@ -35,7 +35,7 @@ fn diag_default_turn66() {
     // Personality map (id → (name, personality))
     let mut gp_personality: std::collections::HashMap<NationId, (String, String)> =
         std::collections::HashMap::new();
-    for n in &game.nations {
+    for n in &game.world.nations {
         if n.is_great_power() {
             gp_personality.insert(
                 n.id,
@@ -51,7 +51,7 @@ fn diag_default_turn66() {
 
     println!("=== DIPLOMACY (turn 66 = 1831 Q2) — GP ↔ GP ===");
     let gp_ids: Vec<NationId> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.is_great_power())
         .map(|n| n.id)
@@ -61,11 +61,11 @@ fn diag_default_turn66() {
             if a.0 >= b.0 {
                 continue;
             }
-            let rel = game.diplomacy.get_relation(a, b);
+            let rel = game.world.diplomacy.get_relation(a, b);
             let nap = game
-                .diplomacy
+                .world.diplomacy
                 .has_treaty(a, b, TreatyType::NonAggressionPact);
-            let ali = game.diplomacy.has_treaty(a, b, TreatyType::Alliance);
+            let ali = game.world.diplomacy.has_treaty(a, b, TreatyType::Alliance);
             let war = rel.is_some_and(|r| r.at_war);
             let score = rel.map(|r| r.score).unwrap_or(0);
             let (na, pa) = &gp_personality[&a];
@@ -93,11 +93,11 @@ fn diag_default_turn66() {
         let mut emb = 0usize;
         let mut naps = 0usize;
         let mut targets: Vec<String> = Vec::new();
-        for mn in &game.nations {
+        for mn in &game.world.nations {
             if mn.is_great_power() || mn.province_ids.is_empty() {
                 continue;
             }
-            let rel = game.diplomacy.get_relation(gp, mn.id);
+            let rel = game.world.diplomacy.get_relation(gp, mn.id);
             if let Some(r) = rel {
                 if r.has_consulate {
                     cons += 1;
@@ -107,7 +107,7 @@ fn diag_default_turn66() {
                 }
             }
             if game
-                .diplomacy
+                .world.diplomacy
                 .has_treaty(gp, mn.id, TreatyType::NonAggressionPact)
             {
                 naps += 1;
@@ -152,7 +152,7 @@ fn diag_default_turn66() {
         for &pid in &nation.province_ids {
             if let Some(p) = game.get_province(pid) {
                 for &c in &p.tiles {
-                    if let Some(t) = game.hex_map.get_tile(c) {
+                    if let Some(t) = game.world.hex_map.get_tile(c) {
                         if t.infrastructure.has_railroad {
                             rails += 1;
                             rail_coords.push(c);
@@ -207,15 +207,15 @@ fn diag_default_turn66() {
             .collect();
         let connected = connected_provinces(&game, gp);
         let owned: Vec<&domain::map::Province> =
-            game.provinces.iter().filter(|p| p.owner == gp).collect();
+            game.world.provinces.iter().filter(|p| p.owner == gp).collect();
         let collectable =
-            domain::map::infrastructure::collectable_hexes(&game.hex_map, &owned, &connected);
+            domain::map::infrastructure::collectable_hexes(&game.world.hex_map, &owned, &connected);
         let mut connected_timber = 0;
         let mut disconnected_timber = 0;
         for &pid in &nation.province_ids {
             if let Some(p) = game.get_province(pid) {
                 for &c in &p.tiles {
-                    if let Some(t) = game.hex_map.get_tile(c)
+                    if let Some(t) = game.world.hex_map.get_tile(c)
                         && t.resource_deposit() == Some(ResourceType::Timber)
                     {
                         if collectable.contains(&c) {

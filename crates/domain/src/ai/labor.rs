@@ -199,11 +199,11 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
         }
         let connected = super::super::turn::connected_provinces(game, nation_id);
         let owned_provinces: Vec<&crate::map::Province> = game
-            .provinces
+            .world.provinces
             .iter()
             .filter(|p| p.owner == nation_id)
             .collect();
-        crate::map::infrastructure::collectable_hexes(&game.hex_map, &owned_provinces, &connected)
+        crate::map::infrastructure::collectable_hexes(&game.world.hex_map, &owned_provinces, &connected)
     };
 
     // Find all improvable tiles across the nation's provinces.
@@ -217,7 +217,7 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
         bool,
     )> = Vec::new();
     for &pid in &province_ids {
-        for (coord, tile) in game.hex_map.tiles_in_province(pid) {
+        for (coord, tile) in game.world.hex_map.tiles_in_province(pid) {
             let terrain = tile.terrain();
             let resource = tile.resource_deposit();
             let max_level = resource.map(|r| r.max_improvement_level()).unwrap_or(0);
@@ -281,7 +281,7 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
             // Clear the old tile's slot before redeploying so stale IDs don't
             // block the engineer from building railroad on previously-worked hexes.
             if let Some(old_pos) = nation.military.civilians[civ_idx].position
-                && let Some(old_tile) = game.hex_map.get_tile_mut(old_pos)
+                && let Some(old_tile) = game.world.hex_map.get_tile_mut(old_pos)
                 && old_tile.assigned_civilian == Some(civilian_id)
             {
                 old_tile.assigned_civilian = None;
@@ -293,7 +293,7 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
             nation.military.civilians[civ_idx].start_work(2);
 
             // Mark the tile on the map
-            if let Some(tile) = game.hex_map.get_tile_mut(coord) {
+            if let Some(tile) = game.world.hex_map.get_tile_mut(coord) {
                 tile.assigned_civilian = Some(civilian_id);
             }
         }
@@ -549,7 +549,7 @@ mod tests {
         let farm_coord = HexCoord::new(3, 3);
         let mut tile = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
         tile.set_resource(ResourceType::Grain);
-        game.hex_map.set_tile(farm_coord, tile);
+        game.world.hex_map.set_tile(farm_coord, tile);
 
         // Give AI a Farmer civilian (idle), clear pre-populated ones
         let ai = game.get_nation_mut(NationId(2)).unwrap();
@@ -573,7 +573,7 @@ mod tests {
         );
 
         // Check that the tile has the civilian assigned
-        let tile = game.hex_map.get_tile(farm_coord).unwrap();
+        let tile = game.world.hex_map.get_tile(farm_coord).unwrap();
         assert_eq!(
             tile.assigned_civilian,
             Some(UnitId(950)),
@@ -590,7 +590,7 @@ mod tests {
         let mut tile = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
         tile.set_resource(ResourceType::Grain);
         tile.set_improvement_level(3); // max for Grain
-        game.hex_map.set_tile(farm_coord, tile);
+        game.world.hex_map.set_tile(farm_coord, tile);
 
         // Give AI a Farmer civilian (idle), clear pre-populated ones
         let ai = game.get_nation_mut(NationId(2)).unwrap();

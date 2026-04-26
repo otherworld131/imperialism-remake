@@ -171,14 +171,14 @@ fn memory_test_400_turn_game() {
     // After 400 turns, resources should be bounded (not growing infinitely)
     // History should be bounded too
     assert!(
-        game.history.len() < 10000,
+        game.archive.history.len() < 10000,
         "History grew too large: {}",
-        game.history.len()
+        game.archive.history.len()
     );
     println!(
         "After 400 turns: {} resources in warehouse, {} history entries",
         total_resources,
-        game.history.len()
+        game.archive.history.len()
     );
 }
 
@@ -191,12 +191,12 @@ fn stress_test_all_nations_at_war() {
     let gp_ids: Vec<NationId> = game.great_powers().iter().map(|n| n.id).collect();
     for i in 0..gp_ids.len() {
         for j in (i + 1)..gp_ids.len() {
-            game.diplomacy.declare_war(gp_ids[i], gp_ids[j]);
+            game.world.diplomacy.declare_war(gp_ids[i], gp_ids[j]);
         }
     }
 
     // Build maximum units for each nation
-    for nation in &mut game.nations {
+    for nation in &mut game.world.nations {
         if nation.is_great_power() {
             for k in 0..10 {
                 let unit = ArmyUnit::new(

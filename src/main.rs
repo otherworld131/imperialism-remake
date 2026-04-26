@@ -70,16 +70,16 @@ fn main() {
     game.ai_debug = ai_debug;
 
     // Show initial map
-    println!("  Map key: \"{}\"", game.map_key);
+    println!("  Map key: \"{}\"", game.world.map_key);
     display::print_status(&game);
     println!();
     println!(
         "  MAP ({} x {}):",
-        game.hex_map.width(),
-        game.hex_map.height()
+        game.world.hex_map.width(),
+        game.world.hex_map.height()
     );
     println!();
-    display::render_map(&game.hex_map, &game.nations);
+    display::render_map(&game.world.hex_map, &game.world.nations);
     println!();
     display::print_provinces(&game);
     println!();
@@ -125,9 +125,9 @@ fn main() {
                         .map(|gp| (gp.name.clone(), calculate_score(gp).total))
                         .collect();
                     for (name, total) in gp_scores {
-                        game.high_scores.push((name, total, date_str.clone()));
+                        game.archive.high_scores.push((name, total, date_str.clone()));
                     }
-                    game.high_scores.sort_by(|a, b| b.1.cmp(&a.1));
+                    game.archive.high_scores.sort_by(|a, b| b.1.cmp(&a.1));
 
                     println!("  ══════════════════════════════════════");
                     println!("  The year is 1915. The game has ended!");
@@ -147,7 +147,7 @@ fn main() {
             }
             "m" | "map" => {
                 println!();
-                display::render_map(&game.hex_map, &game.nations);
+                display::render_map(&game.world.hex_map, &game.world.nations);
                 println!();
                 display::print_legend();
             }

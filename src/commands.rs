@@ -595,7 +595,7 @@ pub(crate) fn cmd_blockade(game: &GameState, query: &str) {
 
     // Find the target nation by name
     let target = game
-        .nations
+        .world.nations
         .iter()
         .find(|n| n.name.to_lowercase().contains(&query.to_lowercase()) && n.id != player_id);
 
@@ -612,7 +612,7 @@ pub(crate) fn cmd_blockade(game: &GameState, query: &str) {
 
     // Check if at war
     let at_war = game
-        .diplomacy
+        .world.diplomacy
         .get_relation(player_id, target.id)
         .is_some_and(|r| r.at_war);
 
@@ -776,11 +776,11 @@ pub(crate) fn research_tech(game: &mut GameState, query: &str) {
                 tech_name: tech_name.clone(),
             };
             if !game
-                .history
+                .archive.history
                 .iter()
                 .any(|(t, ev)| *t == turn && *ev == entry)
             {
-                game.history.push((turn, entry));
+                game.archive.history.push((turn, entry));
             }
         }
         _ => {
@@ -893,7 +893,7 @@ pub(crate) fn cmd_deploy_civilian(game: &mut GameState, args: &str) {
         // Find the province by name (case-insensitive partial match)
         let lower_name = province_name.to_lowercase();
         let matching_provinces: Vec<_> = game
-            .provinces
+            .world.provinces
             .iter()
             .filter(|p| p.owner == player_id && p.name.to_lowercase().contains(&lower_name))
             .collect();
@@ -918,7 +918,7 @@ pub(crate) fn cmd_deploy_civilian(game: &mut GameState, args: &str) {
         // Find the first workable tile in the province for this civilian type
         let mut target_coord = None;
         for tile_coord in &province.tiles {
-            if let Some(tile) = game.hex_map.get_tile(*tile_coord)
+            if let Some(tile) = game.world.hex_map.get_tile(*tile_coord)
                 && civ_type.can_improve(tile.terrain(), tile.resource_deposit())
                 && tile.assigned_civilian.is_none()
             {
@@ -964,7 +964,7 @@ pub(crate) fn cmd_deploy_civilian(game: &mut GameState, args: &str) {
     let civ_id = civilian.id;
 
     // Assign civilian to tile
-    if let Some(tile) = game.hex_map.get_tile_mut(coord) {
+    if let Some(tile) = game.world.hex_map.get_tile_mut(coord) {
         tile.assigned_civilian = Some(civ_id);
     }
 
@@ -1010,7 +1010,7 @@ pub(crate) fn cmd_consulate(game: &mut GameState, query: &str) {
         return;
     }
 
-    match game.diplomacy.build_consulate(player_id, target_id) {
+    match game.world.diplomacy.build_consulate(player_id, target_id) {
         Ok(_) => {
             let player = game.get_nation_mut(player_id).unwrap();
             player.economy.treasury -= cost;
@@ -1024,7 +1024,7 @@ pub(crate) fn cmd_consulate(game: &mut GameState, query: &str) {
 
             // Record history event
             let turn = game.turn;
-            game.history.push((
+            game.archive.history.push((
                 turn,
                 domain::events::HistoryEvent::ConsulateBuilt {
                     player: player_id,
@@ -1074,7 +1074,7 @@ pub(crate) fn cmd_embassy(game: &mut GameState, query: &str) {
         return;
     }
 
-    match game.diplomacy.build_embassy(player_id, target_id) {
+    match game.world.diplomacy.build_embassy(player_id, target_id) {
         Ok(_) => {
             let player = game.get_nation_mut(player_id).unwrap();
             player.economy.treasury -= cost;
@@ -1088,7 +1088,7 @@ pub(crate) fn cmd_embassy(game: &mut GameState, query: &str) {
 
             // Record history event
             let turn = game.turn;
-            game.history.push((
+            game.archive.history.push((
                 turn,
                 domain::events::HistoryEvent::EmbassyBuilt {
                     player: player_id,
@@ -1122,13 +1122,13 @@ pub(crate) fn cmd_war(game: &mut GameState, query: &str) {
     let target_name = target.name.clone();
 
     // Check if already at war with anyone
-    if game.diplomacy.is_at_war_with_anyone(player_id) {
+    if game.world.diplomacy.is_at_war_with_anyone(player_id) {
         println!("  You are already at war. You cannot declare another war while fighting.");
         return;
     }
 
     // Check if already at war with this target
-    if let Some(rel) = game.diplomacy.get_relation(player_id, target_id)
+    if let Some(rel) = game.world.diplomacy.get_relation(player_id, target_id)
         && rel.at_war
     {
         println!("  You are already at war with {}.", target_name);
@@ -1136,7 +1136,7 @@ pub(crate) fn cmd_war(game: &mut GameState, query: &str) {
     }
 
     let turn = game.turn;
-    game.diplomacy.declare_war_at(player_id, target_id, turn);
+    game.world.diplomacy.declare_war_at(player_id, target_id, turn);
     println!();
     println!("  ╔════════════════════════════════════════╗");
     println!("  ║  DECLARATION OF WAR                    ║");
@@ -1153,7 +1153,7 @@ pub(crate) fn cmd_war(game: &mut GameState, query: &str) {
 
     // Record history event
     let turn = game.turn;
-    game.history.push((
+    game.archive.history.push((
         turn,
         domain::events::HistoryEvent::WarDeclared {
             attacker: player_id,
@@ -1178,7 +1178,7 @@ pub(crate) fn cmd_peace(game: &mut GameState, query: &str) {
     let target_name = target.name.clone();
 
     // Check if actually at war
-    match game.diplomacy.get_relation(player_id, target_id) {
+    match game.world.diplomacy.get_relation(player_id, target_id) {
         Some(rel) if rel.at_war => {}
         _ => {
             println!("  You are not at war with {}.", target_name);
@@ -1186,7 +1186,7 @@ pub(crate) fn cmd_peace(game: &mut GameState, query: &str) {
         }
     }
 
-    let _ = game.diplomacy.make_peace(player_id, target_id);
+    let _ = game.world.diplomacy.make_peace(player_id, target_id);
     println!(
         "  {}",
         crate::display::color_green(&format!("Peace has been established with {}.", target_name))
@@ -1195,7 +1195,7 @@ pub(crate) fn cmd_peace(game: &mut GameState, query: &str) {
 
     // Record history event
     let turn = game.turn;
-    game.history.push((
+    game.archive.history.push((
         turn,
         domain::events::HistoryEvent::PeaceSigned {
             a: player_id,
@@ -1230,7 +1230,7 @@ pub(crate) fn cmd_pact(game: &mut GameState, query: &str) {
     let target_id = target.id;
     let target_name = target.name.clone();
 
-    match game.diplomacy.propose_pact(player_id, target_id) {
+    match game.world.diplomacy.propose_pact(player_id, target_id) {
         Ok(()) => {
             println!(
                 "  {}",
@@ -1240,7 +1240,7 @@ pub(crate) fn cmd_pact(game: &mut GameState, query: &str) {
                 ))
             );
             let turn = game.turn;
-            game.history.push((
+            game.archive.history.push((
                 turn,
                 domain::events::HistoryEvent::NonAggressionPactSigned {
                     signer: player_id,
@@ -1285,14 +1285,14 @@ pub(crate) fn cmd_alliance(game: &mut GameState, query: &str) {
     let target_id = target.id;
     let target_name = target.name.clone();
 
-    match game.diplomacy.propose_alliance(player_id, target_id) {
+    match game.world.diplomacy.propose_alliance(player_id, target_id) {
         Ok(()) => {
             println!(
                 "  {}",
                 crate::display::color_green(&format!("Alliance formed with {}!", target_name))
             );
             let turn = game.turn;
-            game.history.push((
+            game.archive.history.push((
                 turn,
                 domain::events::HistoryEvent::AllianceFormed {
                     signer: player_id,
@@ -1364,12 +1364,12 @@ pub(crate) fn cmd_grant(game: &mut GameState, args: &str) {
         return;
     }
 
-    game.diplomacy.send_grant(player_id, target_id, grant);
+    game.world.diplomacy.send_grant(player_id, target_id, grant);
     let player = game.get_nation_mut(player_id).unwrap();
     player.economy.treasury -= grant;
     let new_treasury = player.economy.treasury;
     let score = game
-        .diplomacy
+        .world.diplomacy
         .get_relation(player_id, target_id)
         .map(|r| r.score)
         .unwrap_or(0);
@@ -1478,7 +1478,7 @@ pub(crate) fn cmd_attack(game: &mut GameState, query: &str) {
 
     // Check at war
     let at_war = game
-        .diplomacy
+        .world.diplomacy
         .get_relation(player_id, target_id)
         .is_some_and(|rel| rel.at_war);
     if !at_war {
@@ -1501,14 +1501,14 @@ pub(crate) fn cmd_attack(game: &mut GameState, query: &str) {
         .get_nation(player_id)
         .map(|n| n.province_ids.clone())
         .unwrap_or_default();
-    let target_province = game.provinces.iter().find(|p| {
+    let target_province = game.world.provinces.iter().find(|p| {
         p.owner == target_id
             && (player_province_ids.iter().any(|&our_pid| {
                 game.get_province(our_pid).is_some_and(|our_prov| {
-                    domain::map::provinces_are_adjacent(&game.hex_map, our_prov, p)
+                    domain::map::provinces_are_adjacent(&game.world.hex_map, our_prov, p)
                 })
             }) || game
-                .pending_landings
+                .transient.pending_landings
                 .iter()
                 .any(|(nid, pid, _)| *nid == player_id && *pid == p.id))
     });
@@ -1529,14 +1529,14 @@ pub(crate) fn cmd_attack(game: &mut GameState, query: &str) {
         .map(|p| p.name.clone())
         .unwrap_or_else(|| "Unknown".to_string());
 
-    game.pending_attacks.push((player_id, province_id));
+    game.transient.pending_attacks.push((player_id, province_id));
     println!(
         "  Attack ordered! Your army will assault {} (province of {}) at end of turn.",
         province_name, target_name
     );
     println!(
         "  {} pending attack(s) queued. End turn to resolve.",
-        game.pending_attacks.len()
+        game.transient.pending_attacks.len()
     );
 }
 
@@ -1561,7 +1561,7 @@ pub(crate) fn cmd_beachhead(game: &mut GameState, query: &str) {
 
     // Must be at war
     let at_war = game
-        .diplomacy
+        .world.diplomacy
         .get_relation(player_id, target_id)
         .map(|r| r.at_war)
         .unwrap_or(false);
@@ -1590,7 +1590,7 @@ pub(crate) fn cmd_beachhead(game: &mut GameState, query: &str) {
 
     // Find first coastal province of the target
     let coastal_province = game
-        .provinces
+        .world.provinces
         .iter()
         .find(|p| p.owner == target_id && p.coastal);
     let coastal_pid = match coastal_province {
@@ -1690,7 +1690,7 @@ fn assign_engineer_task(
 
     // Pre-flight: the target tile must be owned by the player.
     let owns_target = game
-        .hex_map
+        .world.hex_map
         .get_tile(coord)
         .and_then(|t| t.province_id)
         .and_then(|pid| game.get_province(pid))
@@ -1733,7 +1733,7 @@ fn assign_engineer_task(
     // Check treasury against the task's cost so we don't start work we can't pay for.
     let cost = match task {
         BuildTask::Railroad => {
-            let terrain = match game.hex_map.get_tile(coord) {
+            let terrain = match game.world.hex_map.get_tile(coord) {
                 Some(t) => t.terrain(),
                 None => {
                     println!("  Invalid tile at ({},{}).", coord.q, coord.r);
@@ -1775,12 +1775,12 @@ fn assign_engineer_task(
         .get_nation(player_id)
         .and_then(|n| n.military.civilians[engineer_idx].position);
     if let Some(old) = old_pos
-        && let Some(tile) = game.hex_map.get_tile_mut(old)
+        && let Some(tile) = game.world.hex_map.get_tile_mut(old)
         && tile.assigned_civilian == Some(engineer_id)
     {
         tile.assigned_civilian = None;
     }
-    if let Some(tile) = game.hex_map.get_tile(coord)
+    if let Some(tile) = game.world.hex_map.get_tile(coord)
         && tile.assigned_civilian.is_some()
         && tile.assigned_civilian != Some(engineer_id)
     {
@@ -1790,7 +1790,7 @@ fn assign_engineer_task(
         );
         return;
     }
-    if let Some(tile) = game.hex_map.get_tile_mut(coord) {
+    if let Some(tile) = game.world.hex_map.get_tile_mut(coord) {
         tile.assigned_civilian = Some(engineer_id);
     }
     if let Some(nation) = game.get_nation_mut(player_id) {
@@ -1822,7 +1822,7 @@ pub(crate) fn cmd_build_railroad(game: &mut GameState) {
 
     // First rail-less land tile in the capital province.
     let coord = tiles.iter().copied().find(|c| {
-        game.hex_map
+        game.world.hex_map
             .get_tile(*c)
             .is_some_and(|t| t.terrain().is_land() && !t.infrastructure.has_railroad)
     });
@@ -1870,7 +1870,7 @@ pub(crate) fn cmd_build_port(game: &mut GameState) {
         .unwrap_or_default();
 
     let coord = tiles.iter().copied().find(|c| {
-        let tile = match game.hex_map.get_tile(*c) {
+        let tile = match game.world.hex_map.get_tile(*c) {
             Some(t) => t,
             None => return false,
         };
@@ -1878,7 +1878,7 @@ pub(crate) fn cmd_build_port(game: &mut GameState) {
             return false;
         }
         c.neighbors().iter().any(|n| {
-            game.hex_map
+            game.world.hex_map
                 .get_tile(*n)
                 .is_some_and(|t| !t.terrain().is_land())
         })
@@ -1906,7 +1906,7 @@ pub(crate) fn cmd_build_fort(game: &mut GameState, province_query: Option<&str>)
     let target_province_id = if let Some(query) = province_query {
         let lower = query.to_lowercase();
         let matches: Vec<_> = game
-            .provinces
+            .world.provinces
             .iter()
             .filter(|p| p.owner == player_id && p.name.to_lowercase().contains(&lower))
             .collect();
@@ -1931,7 +1931,7 @@ pub(crate) fn cmd_build_fort(game: &mut GameState, province_query: Option<&str>)
 
     // Check current fort level
     let current_level = game
-        .hex_map
+        .world.hex_map
         .get_tile(capital_tile_coord)
         .map(|t| t.infrastructure.fort_level)
         .unwrap_or(0);
@@ -1953,7 +1953,7 @@ pub(crate) fn cmd_build_fort(game: &mut GameState, province_query: Option<&str>)
     }
 
     let cfg_snapshot = game.game_data.game_config.clone();
-    match domain::map::build_fort(&mut game.hex_map, capital_tile_coord, &cfg_snapshot) {
+    match domain::map::build_fort(&mut game.world.hex_map, capital_tile_coord, &cfg_snapshot) {
         Ok((level, cost)) => {
             let player = game.get_nation_mut(player_id).unwrap();
             player.economy.treasury -= cost;
@@ -2022,7 +2022,7 @@ pub(crate) fn cmd_move_unit(game: &mut GameState, args: &str) {
     // Find target province by partial name match (any province, not just owned)
     let lower_name = province_name.to_lowercase();
     let matching_provinces: Vec<_> = game
-        .provinces
+        .world.provinces
         .iter()
         .filter(|p| p.name.to_lowercase().contains(&lower_name))
         .collect();
@@ -2060,12 +2060,12 @@ pub(crate) fn cmd_move_unit(game: &mut GameState, args: &str) {
     } else {
         // Check if at war with the province owner
         let at_war = game
-            .diplomacy
+            .world.diplomacy
             .get_relation(player_id, target_owner)
             .is_some_and(|r| r.at_war);
         if at_war {
             // Queue as a pending move (will become an attack at turn resolution)
-            game.pending_moves
+            game.transient.pending_moves
                 .push((player_id, unit_id, target_province_id));
             let owner_name = game
                 .get_nation(target_owner)
@@ -2077,7 +2077,7 @@ pub(crate) fn cmd_move_unit(game: &mut GameState, args: &str) {
             );
             println!(
                 "  {} pending attack(s) queued. End turn to resolve.",
-                game.pending_attacks.len() + game.pending_moves.len()
+                game.transient.pending_attacks.len() + game.transient.pending_moves.len()
             );
         } else {
             let owner_name = game

@@ -18,16 +18,16 @@ fn run_game(
     for _ in 0..turns {
         process_turn(&mut game);
         // Core invariants must hold every turn:
-        assert_eq!(game.nations.len(), 23, "Nation count must stay at 23");
-        assert_eq!(game.provinces.len(), 120, "Province count must stay at 120");
+        assert_eq!(game.world.nations.len(), 23, "Nation count must stay at 23");
+        assert_eq!(game.world.provinces.len(), 120, "Province count must stay at 120");
     }
     game
 }
 
 /// Verify common post-game invariants.
 fn assert_state_valid(game: &GameState) {
-    let nation_ids: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
-    for province in &game.provinces {
+    let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
+    for province in &game.world.provinces {
         assert!(
             nation_ids.contains(&province.owner),
             "Province {} has invalid owner {}",
@@ -48,21 +48,21 @@ fn all_ai_declare_war_on_human_game_survives() {
 
     // Every other Great Power declares war on the human player.
     let ai_gp_ids: Vec<NationId> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.is_great_power() && n.id != human_id)
         .map(|n| n.id)
         .collect();
 
     for ai_id in &ai_gp_ids {
-        game.diplomacy.declare_war(*ai_id, human_id);
+        game.world.diplomacy.declare_war(*ai_id, human_id);
     }
 
     // Run 50 turns — the game should not panic despite being at war with everyone.
     for _ in 0..50 {
         process_turn(&mut game);
-        assert_eq!(game.nations.len(), 23);
-        assert_eq!(game.provinces.len(), 120);
+        assert_eq!(game.world.nations.len(), 23);
+        assert_eq!(game.world.provinces.len(), 120);
     }
 
     assert_state_valid(&game);
@@ -121,14 +121,14 @@ fn save_load_cycle_preserves_state() {
 
     assert_eq!(loaded.turn, game.turn);
     assert_eq!(loaded.difficulty, game.difficulty);
-    assert_eq!(loaded.map_key, game.map_key);
+    assert_eq!(loaded.world.map_key, game.world.map_key);
     assert_eq!(loaded.human_player_nation, game.human_player_nation);
-    assert_eq!(loaded.nations.len(), game.nations.len());
-    assert_eq!(loaded.provinces.len(), game.provinces.len());
-    assert_eq!(loaded.hex_map.tile_count(), game.hex_map.tile_count());
+    assert_eq!(loaded.world.nations.len(), game.world.nations.len());
+    assert_eq!(loaded.world.provinces.len(), game.world.provinces.len());
+    assert_eq!(loaded.world.hex_map.tile_count(), game.world.hex_map.tile_count());
 
     // Verify nation state roundtripped.
-    for (orig, load) in game.nations.iter().zip(loaded.nations.iter()) {
+    for (orig, load) in game.world.nations.iter().zip(loaded.world.nations.iter()) {
         assert_eq!(orig.id, load.id);
         assert_eq!(orig.name, load.name);
         assert_eq!(orig.economy.treasury, load.economy.treasury);
@@ -163,11 +163,11 @@ fn multiple_save_load_cycles_preserve_state() {
 
         assert_eq!(loaded.turn, game.turn, "Turn mismatch at cycle {cycle}");
         assert_eq!(
-            loaded.nations.len(),
-            game.nations.len(),
+            loaded.world.nations.len(),
+            game.world.nations.len(),
             "Nation count mismatch at cycle {cycle}"
         );
-        for (orig, load) in game.nations.iter().zip(loaded.nations.iter()) {
+        for (orig, load) in game.world.nations.iter().zip(loaded.world.nations.iter()) {
             assert_eq!(
                 orig.economy.treasury, load.economy.treasury,
                 "Treasury mismatch for {} at cycle {cycle}",
@@ -230,7 +230,7 @@ fn extreme_nation_index_clamps_gracefully() {
     assert_state_valid(&game);
     // Should have selected the last Great Power (index 6).
     let gp_ids: Vec<NationId> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.is_great_power())
         .map(|n| n.id)
@@ -280,7 +280,7 @@ fn war_peace_cycle_does_not_corrupt_state() {
     let mut game = new_game("war_peace_cycle", Difficulty::Normal, 0);
 
     let gp_ids: Vec<NationId> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.is_great_power())
         .map(|n| n.id)
@@ -288,9 +288,9 @@ fn war_peace_cycle_does_not_corrupt_state() {
 
     // Cycle war and peace between first two GPs 10 times.
     for _ in 0..10 {
-        game.diplomacy.declare_war(gp_ids[0], gp_ids[1]);
+        game.world.diplomacy.declare_war(gp_ids[0], gp_ids[1]);
         process_turn(&mut game);
-        game.diplomacy.make_peace(gp_ids[0], gp_ids[1]);
+        game.world.diplomacy.make_peace(gp_ids[0], gp_ids[1]);
         process_turn(&mut game);
     }
 
@@ -306,28 +306,28 @@ fn save_load_roundtrip_with_wars_and_treaties() {
 
     let mut game = new_game("war_save", Difficulty::Normal, 0);
     let gp_ids: Vec<NationId> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.is_great_power())
         .map(|n| n.id)
         .collect();
     let mn_ids: Vec<NationId> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| !n.is_great_power())
         .map(|n| n.id)
         .collect();
 
     // Set up complex diplomatic state
-    game.diplomacy.declare_war(gp_ids[0], gp_ids[1]);
-    game.diplomacy
+    game.world.diplomacy.declare_war(gp_ids[0], gp_ids[1]);
+    game.world.diplomacy
         .propose_alliance(gp_ids[2], gp_ids[3])
         .unwrap();
-    game.diplomacy
+    game.world.diplomacy
         .build_consulate(gp_ids[0], mn_ids[0])
         .unwrap();
-    game.diplomacy.build_embassy(gp_ids[0], mn_ids[0]).unwrap();
-    game.diplomacy.propose_pact(gp_ids[0], mn_ids[0]).unwrap();
+    game.world.diplomacy.build_embassy(gp_ids[0], mn_ids[0]).unwrap();
+    game.world.diplomacy.propose_pact(gp_ids[0], mn_ids[0]).unwrap();
 
     // Run a few turns to build up economic/military state
     for _ in 0..10 {
@@ -342,22 +342,22 @@ fn save_load_roundtrip_with_wars_and_treaties() {
     let loaded = load_game(&path).unwrap();
 
     // Verify diplomatic state roundtripped
-    assert!(loaded.diplomacy.is_at_war(gp_ids[0], gp_ids[1]));
+    assert!(loaded.world.diplomacy.is_at_war(gp_ids[0], gp_ids[1]));
     assert!(
         loaded
-            .diplomacy
+            .world.diplomacy
             .has_treaty(gp_ids[2], gp_ids[3], TreatyType::Alliance)
     );
-    assert!(loaded.diplomacy.has_consulate(gp_ids[0], mn_ids[0]));
-    assert!(loaded.diplomacy.has_embassy(gp_ids[0], mn_ids[0]));
+    assert!(loaded.world.diplomacy.has_consulate(gp_ids[0], mn_ids[0]));
+    assert!(loaded.world.diplomacy.has_embassy(gp_ids[0], mn_ids[0]));
     assert!(
         loaded
-            .diplomacy
+            .world.diplomacy
             .has_treaty(gp_ids[0], mn_ids[0], TreatyType::NonAggressionPact)
     );
 
     // Verify military state roundtripped
-    for (orig, load) in game.nations.iter().zip(loaded.nations.iter()) {
+    for (orig, load) in game.world.nations.iter().zip(loaded.world.nations.iter()) {
         assert_eq!(
             orig.military.army.len(),
             load.military.army.len(),
@@ -405,7 +405,7 @@ fn negative_treasury_does_not_panic() {
     // Run turns — should not panic even with negative treasury.
     for _ in 0..20 {
         process_turn(&mut game);
-        assert_eq!(game.nations.len(), 23);
+        assert_eq!(game.world.nations.len(), 23);
     }
 
     assert_state_valid(&game);
