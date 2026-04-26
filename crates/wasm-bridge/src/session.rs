@@ -205,6 +205,25 @@ pub fn wasm_session_query(query_json: &str) -> String {
     }
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Parse a commodity name string into a `Commodity`, trying Resource, Material,
+/// and Goods in order. Accepts plain names like "Timber", "Steel", "Cloth".
+fn parse_commodity(name: &str) -> Option<domain::economy::trade::Commodity> {
+    use domain::economy::trade::Commodity;
+    let quoted = format!("\"{}\"", name);
+    if let Ok(r) = serde_json::from_str::<domain::types::ResourceType>(&quoted) {
+        return Some(Commodity::Resource(r));
+    }
+    if let Ok(m) = serde_json::from_str::<domain::types::MaterialType>(&quoted) {
+        return Some(Commodity::Material(m));
+    }
+    if let Ok(g) = serde_json::from_str::<domain::types::GoodsType>(&quoted) {
+        return Some(Commodity::Goods(g));
+    }
+    None
+}
+
 // ── Command application ──────────────────────────────────────────────────────
 
 fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
@@ -337,7 +356,8 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         ExpandBuilding { nation_id, building_type } => {
-            use domain::economy::buildings::BuildingType;
+            use domain::economy::buildings::{Building, BuildingType};
+            use domain::types::MaterialType;
             let bt: BuildingType = match serde_json::from_str(&format!("\"{}\"", building_type)) {
                 Ok(b) => b,
                 Err(_) => return CommandResult::error("unknown building type"),
@@ -346,10 +366,23 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
                 Some(n) => n,
                 None => return CommandResult::error("nation not found"),
             };
-            let building = match nation.economy.buildings.iter_mut().find(|b| b.building_type == bt) {
+            let building = match nation.economy.buildings.iter().find(|b| b.building_type == bt) {
                 Some(b) => b,
                 None => return CommandResult::error("building not found"),
             };
+            if building.is_expanding() {
+                return CommandResult::error("building expansion already in progress");
+            }
+            let increase = building.next_capacity().saturating_sub(building.capacity);
+            let (lumber_needed, steel_needed) = Building::expansion_cost(increase);
+            let lumber_have = nation.economy.materials.get(&MaterialType::Lumber).copied().unwrap_or(0);
+            let steel_have = nation.economy.materials.get(&MaterialType::Steel).copied().unwrap_or(0);
+            if lumber_have < lumber_needed || steel_have < steel_needed {
+                return CommandResult::error("insufficient materials for expansion");
+            }
+            *nation.economy.materials.entry(MaterialType::Lumber).or_insert(0) -= lumber_needed;
+            *nation.economy.materials.entry(MaterialType::Steel).or_insert(0) -= steel_needed;
+            let building = nation.economy.buildings.iter_mut().find(|b| b.building_type == bt).unwrap();
             building.start_expansion_to_next_tier();
             CommandResult::success()
         }
@@ -415,7 +448,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         BuildShip { nation_id, ship_type } => {
-            use domain::military::ships::ShipType;
+            use domain::military::ships::{ShipCategory, ShipType};
             let st: ShipType = match serde_json::from_str(&format!("\"{}\"", ship_type)) {
                 Ok(s) => s,
                 Err(_) => return CommandResult::error("unknown ship type"),
@@ -425,8 +458,14 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
                 Some(n) => n,
                 None => return CommandResult::error("nation not found"),
             };
-            nation.military.warships.push(domain::military::ships::Ship::new(id, st, nation_id));
-            nation.military.warships_built += 1;
+            let ship = domain::military::ships::Ship::new(id, st, nation_id);
+            match st.category() {
+                ShipCategory::Merchant => nation.military.merchant_fleet.push(ship),
+                ShipCategory::Warship => {
+                    nation.military.warships.push(ship);
+                    nation.military.warships_built += 1;
+                }
+            }
             CommandResult::success()
         }
 
@@ -441,10 +480,9 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         SetPlayerSellOrder { nation_id, commodity, quantity, price_cents: _ } => {
-            use domain::economy::trade::Commodity;
-            let c: Commodity = match serde_json::from_str(&format!("\"{}\"", commodity)) {
-                Ok(c) => c,
-                Err(_) => return CommandResult::error("unknown commodity"),
+            let c = match parse_commodity(&commodity) {
+                Some(c) => c,
+                None => return CommandResult::error("unknown commodity"),
             };
             let nation = match game.get_nation_mut(nation_id) {
                 Some(n) => n,
@@ -566,6 +604,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         }
 
         AcceptProposal { nation_id, proposal_index } => {
+            use domain::events::TreatyType;
             let proposals: Vec<_> = game.world.diplomacy
                 .pending_proposals
                 .iter()
@@ -577,10 +616,26 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
                 return CommandResult::error("proposal index out of range");
             }
             let proposal = proposals[idx].clone();
+            // Apply first; only remove from pending on success.
+            match proposal.proposal_type {
+                TreatyType::NonAggressionPact => {
+                    if let Err(e) = game.world.diplomacy.propose_pact(proposal.from, proposal.to) {
+                        return CommandResult::error(e);
+                    }
+                }
+                TreatyType::Alliance => {
+                    if let Err(e) = game.world.diplomacy.propose_alliance(proposal.from, proposal.to) {
+                        return CommandResult::error(e);
+                    }
+                }
+                TreatyType::PeaceTreaty => {
+                    game.world.diplomacy.queue_peace(proposal.from, proposal.to);
+                }
+                _ => return CommandResult::error("proposal type not supported in session API"),
+            }
             game.world.diplomacy.pending_proposals.retain(|p| {
                 !(p.to == proposal.to && p.from == proposal.from && p.proposal_type == proposal.proposal_type)
             });
-            let _ = game.world.diplomacy.propose_treaty(proposal.from, proposal.to, proposal.proposal_type, game.turn);
             CommandResult::success()
         }
 
@@ -609,7 +664,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
 fn respond_to_query(game: &GameState, query: FrontendQuery) -> String {
     use FrontendQuery::*;
     match query {
-        MapScreen { nation_id: _ } => {
+        MapScreen => {
             let data = get_map_screen(game);
             serde_json::to_string(&serde_json::json!({
                 "ok": true,
@@ -622,7 +677,7 @@ fn respond_to_query(game: &GameState, query: FrontendQuery) -> String {
             }))
             .unwrap_or_else(|_| ok_json())
         }
-        TransportScreen { nation_id: _ } => {
+        TransportScreen => {
             let data = get_transport_screen(game);
             serde_json::to_string(&serde_json::json!({
                 "ok": true,
@@ -633,7 +688,7 @@ fn respond_to_query(game: &GameState, query: FrontendQuery) -> String {
             }))
             .unwrap_or_else(|_| ok_json())
         }
-        IndustryScreen { nation_id: _ } => {
+        IndustryScreen => {
             let data = get_industry_screen(game);
             serde_json::to_string(&serde_json::json!({
                 "ok": true,
@@ -643,7 +698,7 @@ fn respond_to_query(game: &GameState, query: FrontendQuery) -> String {
             }))
             .unwrap_or_else(|_| ok_json())
         }
-        TradeScreen { nation_id: _ } => {
+        TradeScreen => {
             let data = get_trade_screen(game);
             serde_json::to_string(&serde_json::json!({
                 "ok": true,
@@ -659,7 +714,7 @@ fn respond_to_query(game: &GameState, query: FrontendQuery) -> String {
             }))
             .unwrap_or_else(|_| ok_json())
         }
-        DiplomacyScreen { nation_id: _ } => {
+        DiplomacyScreen => {
             let data = get_diplomacy_screen(game);
             serde_json::to_string(&serde_json::json!({
                 "ok": true,
@@ -670,5 +725,281 @@ fn respond_to_query(game: &GameState, query: FrontendQuery) -> String {
             }))
             .unwrap_or_else(|_| ok_json())
         }
+    }
+}
+
+// ── Session command tests ────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use domain::game_state::new_game;
+    use domain::types::Difficulty;
+
+    fn setup() -> GameState {
+        new_game("default", Difficulty::Normal, 0)
+    }
+
+    fn cmd(json: &str) -> serde_json::Value {
+        serde_json::from_str(json).unwrap()
+    }
+
+    // ── QueueUnitMove ────────────────────────────────────────────
+
+    #[test]
+    fn queue_unit_move_to_own_province_succeeds() {
+        let mut game = setup();
+        let nid = game.human_player_nation;
+        let own_province = game.get_nation(nid).unwrap().capital_province_id;
+        let unit_id = game.get_nation(nid).unwrap().military.army[0].id.0;
+
+        let cmd = FrontendCommand::QueueUnitMove { unit_id, target_province: own_province };
+        let result = apply_command(&mut game, cmd);
+        assert!(result.ok, "move to own province should succeed");
+        assert!(!game.transient.pending_moves.is_empty());
+    }
+
+    #[test]
+    fn cancel_unit_move_removes_pending() {
+        let mut game = setup();
+        let nid = game.human_player_nation;
+        let own_province = game.get_nation(nid).unwrap().capital_province_id;
+        let unit_id = game.get_nation(nid).unwrap().military.army[0].id.0;
+
+        apply_command(&mut game, FrontendCommand::QueueUnitMove { unit_id, target_province: own_province });
+        assert!(!game.transient.pending_moves.is_empty());
+
+        let result = apply_command(&mut game, FrontendCommand::CancelUnitMove { unit_id });
+        assert!(result.ok);
+        assert!(game.transient.pending_moves.is_empty());
+    }
+
+    // ── HireCivilian ─────────────────────────────────────────────
+
+    #[test]
+    fn hire_civilian_deducts_treasury() {
+        let mut game = setup();
+        let nid = game.human_player_nation;
+        let before = game.get_nation(nid).unwrap().economy.treasury;
+        let before_count = game.get_nation(nid).unwrap().military.civilians.len();
+
+        let result = apply_command(&mut game, FrontendCommand::HireCivilian {
+            nation_id: nid,
+            civilian_type: "Farmer".to_string(),
+        });
+        assert!(result.ok, "{:?}", result.message);
+        let after = game.get_nation(nid).unwrap().economy.treasury;
+        assert!(after < before, "treasury should decrease after hiring");
+        assert_eq!(game.get_nation(nid).unwrap().military.civilians.len(), before_count + 1);
+    }
+
+    #[test]
+    fn hire_civilian_fails_if_insufficient_funds() {
+        let mut game = setup();
+        let nid = game.human_player_nation;
+        game.get_nation_mut(nid).unwrap().economy.treasury = domain::types::Money::ZERO;
+
+        let result = apply_command(&mut game, FrontendCommand::HireCivilian {
+            nation_id: nid,
+            civilian_type: "Farmer".to_string(),
+        });
+        assert!(!result.ok, "should fail with no funds");
+    }
+
+    // ── BuildShip — category routing ─────────────────────────────
+
+    #[test]
+    fn build_warship_goes_to_warships() {
+        let mut game = setup();
+        let nid = game.human_player_nation;
+        let before = game.get_nation(nid).unwrap().military.warships.len();
+
+        let result = apply_command(&mut game, FrontendCommand::BuildShip {
+            nation_id: nid,
+            ship_type: "Frigate".to_string(),
+        });
+        assert!(result.ok, "{:?}", result.message);
+        assert_eq!(game.get_nation(nid).unwrap().military.warships.len(), before + 1);
+    }
+
+    #[test]
+    fn build_merchant_ship_goes_to_merchant_fleet() {
+        let mut game = setup();
+        let nid = game.human_player_nation;
+        let before = game.get_nation(nid).unwrap().military.merchant_fleet.len();
+
+        let result = apply_command(&mut game, FrontendCommand::BuildShip {
+            nation_id: nid,
+            ship_type: "Trader".to_string(),
+        });
+        assert!(result.ok, "{:?}", result.message);
+        assert_eq!(game.get_nation(nid).unwrap().military.merchant_fleet.len(), before + 1);
+    }
+
+    // ── SetPlayerSellOrder ────────────────────────────────────────
+
+    #[test]
+    fn set_player_sell_order_stores_order() {
+        let mut game = setup();
+        let nid = game.human_player_nation;
+
+        let result = apply_command(&mut game, FrontendCommand::SetPlayerSellOrder {
+            nation_id: nid,
+            commodity: "Timber".to_string(),
+            quantity: 5,
+            price_cents: 1000,
+        });
+        assert!(result.ok, "{:?}", result.message);
+        assert_eq!(game.get_nation(nid).unwrap().diplomacy.player_sell_orders.len(), 1);
+    }
+
+    // ── AcceptProposal — NAP ──────────────────────────────────────
+
+    #[test]
+    fn accept_nap_proposal_applies_treaty() {
+        use domain::diplomacy::DiplomaticProposal;
+        use domain::events::TreatyType;
+
+        let mut game = setup();
+        let nid = game.human_player_nation;
+        let other = game.great_powers().iter().find(|n| n.id != nid).unwrap().id;
+
+        game.world.diplomacy.pending_proposals.push(DiplomaticProposal {
+            from: other,
+            to: nid,
+            proposal_type: TreatyType::NonAggressionPact,
+            turn_proposed: game.turn,
+            attacker: None,
+            cascade_remaining: None,
+        });
+
+        let result = apply_command(&mut game, FrontendCommand::AcceptProposal {
+            nation_id: nid,
+            proposal_index: 0,
+        });
+        assert!(result.ok, "{:?}", result.message);
+        assert!(game.world.diplomacy.pending_proposals.is_empty(), "proposal should be removed");
+        let rel = game.world.diplomacy.get_relation(nid, other).unwrap();
+        assert!(rel.has_treaty(TreatyType::NonAggressionPact), "NAP treaty should be applied");
+    }
+
+    // ── ExpandBuilding re-entry guard ────────────────────────────
+
+    #[test]
+    fn expand_building_rejects_while_already_expanding() {
+        use domain::economy::buildings::BuildingType;
+
+        let mut game = setup();
+        let nid = game.human_player_nation;
+
+        // Manually start an expansion on LumberMill
+        if let Some(mill) = game.get_nation_mut(nid).unwrap().get_building_mut(BuildingType::LumberMill) {
+            mill.start_expansion(1);
+        } else {
+            return; // no LumberMill on this difficulty — test is N/A
+        }
+
+        let result = apply_command(&mut game, FrontendCommand::ExpandBuilding {
+            nation_id: nid,
+            building_type: "LumberMill".to_string(),
+        });
+        assert!(!result.ok, "re-entry should be rejected when expansion is in progress");
+    }
+
+    // ── PeaceTreaty acceptance ────────────────────────────────────
+
+    #[test]
+    fn accept_peace_calls_queue_peace() {
+        use domain::diplomacy::DiplomaticProposal;
+        use domain::events::TreatyType;
+
+        let mut game = setup();
+        let nid = game.human_player_nation;
+        let other = game.great_powers().iter().find(|n| n.id != nid).unwrap().id;
+
+        game.world.diplomacy.declare_war(other, nid);
+        game.world.diplomacy.pending_proposals.push(DiplomaticProposal {
+            from: other,
+            to: nid,
+            proposal_type: TreatyType::PeaceTreaty,
+            turn_proposed: game.turn,
+            attacker: None,
+            cascade_remaining: None,
+        });
+
+        let result = apply_command(&mut game, FrontendCommand::AcceptProposal {
+            nation_id: nid,
+            proposal_index: 0,
+        });
+        assert!(result.ok, "{:?}", result.message);
+        assert!(!game.world.diplomacy.is_at_war(nid, other), "war should end after peace acceptance");
+        assert!(game.world.diplomacy.pending_proposals.is_empty());
+    }
+
+    // ── AcceptProposal failure keeps proposal ────────────────────
+
+    #[test]
+    fn accept_proposal_failure_keeps_proposal_in_pending() {
+        use domain::diplomacy::DiplomaticProposal;
+        use domain::events::TreatyType;
+
+        let mut game = setup();
+        let nid = game.human_player_nation;
+        let other = game.great_powers().iter().find(|n| n.id != nid).unwrap().id;
+
+        // PactDefenseRequest is unsupported — apply will return error
+        game.world.diplomacy.pending_proposals.push(DiplomaticProposal {
+            from: other,
+            to: nid,
+            proposal_type: TreatyType::PactDefenseRequest,
+            turn_proposed: game.turn,
+            attacker: None,
+            cascade_remaining: None,
+        });
+
+        let result = apply_command(&mut game, FrontendCommand::AcceptProposal {
+            nation_id: nid,
+            proposal_index: 0,
+        });
+        assert!(!result.ok, "unsupported proposal type should fail");
+        assert_eq!(game.world.diplomacy.pending_proposals.len(), 1, "proposal should remain on failure");
+    }
+
+    // ── Observer mode blocks mutations ───────────────────────────
+
+    #[test]
+    fn observer_mode_blocks_all_mutations() {
+        let mut game = setup();
+        game.observer_mode = true;
+
+        let result = apply_command(&mut game, FrontendCommand::EndTurn);
+        assert!(!result.ok, "mutations should be blocked in observer mode");
+    }
+
+    // ── Queries ───────────────────────────────────────────────────
+
+    #[test]
+    fn map_screen_query_returns_ok() {
+        let game = setup();
+        let resp = respond_to_query(&game, FrontendQuery::MapScreen);
+        let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["ok"], true);
+        assert!(v["turn"].is_string());
+    }
+
+    #[test]
+    fn invalid_command_json_returns_error() {
+        SESSION.with(|s| *s.borrow_mut() = Some(setup()));
+        let result = wasm_session_command("not valid json");
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["ok"], false);
+    }
+
+    #[test]
+    fn query_without_session_returns_error() {
+        SESSION.with(|s| *s.borrow_mut() = None);
+        let result = wasm_session_query("{\"type\":\"map_screen\"}");
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["ok"], false);
     }
 }

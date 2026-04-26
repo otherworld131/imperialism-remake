@@ -177,8 +177,14 @@ pub fn compute_battle_outcome(params: BattleParams<'_>) -> BattleOutcome {
     debug_assert!(
         attacker_units
             .iter()
-            .all(|u| u.owner == attacker_id || u.owner != defender_id),
-        "attacker_units contain units owned by the defender"
+            .all(|u| u.owner == attacker_id),
+        "attacker_units contain units not owned by the attacker"
+    );
+    debug_assert!(
+        defender_units
+            .iter()
+            .all(|u| u.owner == defender_id),
+        "defender_units contain units not owned by the defender"
     );
 
     // Snapshot initial unit health and medals before the battle so we can

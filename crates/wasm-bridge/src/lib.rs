@@ -4857,7 +4857,7 @@ mod tests {
         assert!(!result2.contains("error"));
         let game2: GameState = serde_json::from_str(&result2).unwrap();
         let moves_for_unit = game2
-            .pending_moves
+            .transient.pending_moves
             .iter()
             .filter(|(_, id, _)| id.0 == uid)
             .count();
@@ -4899,12 +4899,12 @@ mod tests {
         let mut accepted_game: GameState = serde_json::from_str(&accepted_json).unwrap();
 
         assert!(
-            !accepted_game.diplomacy.is_at_war(human, enemy),
+            !accepted_game.world.diplomacy.is_at_war(human, enemy),
             "human peace acceptance should clear the war immediately"
         );
         assert!(
             accepted_game
-                .diplomacy
+                .world.diplomacy
                 .has_treaty(human, ally, TreatyType::Alliance),
             "alliance should remain pending same-turn reconciliation"
         );
@@ -4913,7 +4913,7 @@ mod tests {
 
         assert!(
             accepted_game
-                .diplomacy
+                .world.diplomacy
                 .has_treaty(human, ally, TreatyType::Alliance),
             "coordinated same-turn coalition peace via wasm should preserve the alliance"
         );
@@ -4986,7 +4986,7 @@ mod tests {
         let result = wasm_cancel_unit_move(&json, 12345);
         assert!(!result.contains("error"));
         let game2: GameState = serde_json::from_str(&result).unwrap();
-        assert!(!game2.pending_moves.iter().any(|(_, id, _)| id.0 == 12345));
+        assert!(!game2.transient.pending_moves.iter().any(|(_, id, _)| id.0 == 12345));
     }
 
     // ── F-018: Anarchic target + deploy occupancy tests ───────

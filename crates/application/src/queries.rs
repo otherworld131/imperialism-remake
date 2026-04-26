@@ -63,11 +63,11 @@ use domain::types::NationId;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FrontendQuery {
-    MapScreen { nation_id: NationId },
-    TransportScreen { nation_id: NationId },
-    IndustryScreen { nation_id: NationId },
-    TradeScreen { nation_id: NationId },
-    DiplomacyScreen { nation_id: NationId },
+    MapScreen,
+    TransportScreen,
+    IndustryScreen,
+    TradeScreen,
+    DiplomacyScreen,
 }
 
 // ── Query functions ──────────────────────────────────────────────
