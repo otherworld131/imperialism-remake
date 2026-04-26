@@ -4,7 +4,6 @@
 use domain::diplomacy::DiplomaticRelation;
 use domain::economy::trade::base_price;
 use domain::game_state::GameState;
-use domain::types::*;
 
 /// Data for the Map Screen (Screen 1).
 pub struct MapScreenData {
@@ -53,6 +52,22 @@ pub struct DiplomacyScreenData {
     pub great_power_relations: Vec<(String, NationId, String, i32)>, // name, id, status, score
     pub minor_nation_relations: Vec<(String, NationId, String, i32)>, // name, id, infra, score
     pub council_projection: Vec<(String, u32)>,                      // nation, projected votes
+}
+
+// ── Typed query enum ─────────────────────────────────────────────
+
+use domain::types::NationId;
+
+/// A read-only request the frontend sends to the application layer.
+/// Tagged union serialized with `"type"` discriminant for easy JSON dispatch.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FrontendQuery {
+    MapScreen { nation_id: NationId },
+    TransportScreen { nation_id: NationId },
+    IndustryScreen { nation_id: NationId },
+    TradeScreen { nation_id: NationId },
+    DiplomacyScreen { nation_id: NationId },
 }
 
 // ── Query functions ──────────────────────────────────────────────

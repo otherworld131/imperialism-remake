@@ -228,6 +228,8 @@ name = "application"
 version = "0.1.0"
 dependencies = [
  "domain",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5177,6 +5179,7 @@ dependencies = [
 name = "wasm-bridge"
 version = "0.1.0"
 dependencies = [
+ "application",
  "domain",
  "flavor",
  "serde",

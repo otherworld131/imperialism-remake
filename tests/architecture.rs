@@ -108,7 +108,7 @@ fn domain_has_only_serde_dependency() {
 #[test]
 fn application_depends_only_on_domain() {
     let deps = get_dependencies("crates/application/Cargo.toml");
-    let allowed = ["domain"];
+    let allowed = ["domain", "serde", "serde_json"];
     for dep in &deps {
         assert!(
             allowed.contains(&dep.as_str()),

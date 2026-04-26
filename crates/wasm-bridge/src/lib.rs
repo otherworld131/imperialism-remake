@@ -1,6 +1,7 @@
 use wasm_bindgen::prelude::*;
 
 mod flavor_bridge;
+mod session;
 
 use domain::ai::common::{AiPersonality, personality_for_nation_index};
 use domain::economy::buildings::BuildingType;
