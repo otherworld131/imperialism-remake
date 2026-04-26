@@ -186,7 +186,7 @@ pub fn new_scenario_game(
     // For 1820, pre-research the first 2 free techs (High Pressure Steam Engine, Seed Drill)
     if scenario.year >= 1820 && scenario.year < 1848 {
         let free_techs = vec![crate::events::TechId(1), crate::events::TechId(2)];
-        for nation in &mut game.nations {
+        for nation in &mut game.world.nations {
             if nation.is_great_power() {
                 for tech_id in &free_techs {
                     if !nation.has_researched(*tech_id) {
@@ -226,7 +226,7 @@ pub fn new_scenario_game(
             }
         }
 
-        for nation in &mut game.nations {
+        for nation in &mut game.world.nations {
             if nation.is_great_power() {
                 for tech_id in &auto_researched {
                     if !nation.has_researched(*tech_id) {

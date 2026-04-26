@@ -16,10 +16,10 @@ fn run_simulation(
     for _ in 0..turns {
         process_turn(&mut game);
         // Invariants that must hold every turn:
-        assert_eq!(game.nations.len(), 23, "Nation count must stay at 23");
-        assert!(!game.nations.is_empty());
+        assert_eq!(game.world.nations.len(), 23, "Nation count must stay at 23");
+        assert!(!game.world.nations.is_empty());
         // Total provinces should stay at 120 (provinces don't get created/destroyed, just change owners)
-        assert_eq!(game.provinces.len(), 120, "Province count must stay at 120");
+        assert_eq!(game.world.provinces.len(), 120, "Province count must stay at 120");
     }
     game
 }
@@ -27,8 +27,8 @@ fn run_simulation(
 /// Verify common invariants on a game state that has been simulated.
 fn assert_valid_game_state(game: &domain::game_state::GameState) {
     // All provinces must have an owner that exists in the nations list.
-    let nation_ids: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
-    for province in &game.provinces {
+    let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
+    for province in &game.world.provinces {
         assert!(
             nation_ids.contains(&province.owner),
             "Province {} has owner {} which is not a valid nation",
@@ -52,7 +52,7 @@ fn test_10_turn_smoke_test() {
 
     // No nation should have an absurdly negative treasury (maintenance can cause
     // small negatives, but check for reasonable bounds).
-    for nation in &game.nations {
+    for nation in &game.world.nations {
         if nation.economy.treasury.is_negative() {
             // Negative treasury is allowed by the game (maintenance costs can push it
             // negative), but it should not be catastrophically negative.
@@ -66,8 +66,8 @@ fn test_10_turn_smoke_test() {
     }
 
     // All provinces should have valid owners.
-    let nation_ids: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
-    for province in &game.provinces {
+    let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
+    for province in &game.world.provinces {
         assert!(
             nation_ids.contains(&province.owner),
             "Province {} has invalid owner {}",
@@ -89,7 +89,7 @@ fn test_100_turn_endurance() {
     // At least one AI nation should have researched at least one technology
     // after 100 turns. The AI researches the cheapest available tech each turn.
     let any_ai_researched = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.is_great_power() && n.id != game.human_player_nation)
         .any(|n| !n.researched_techs.is_empty());
@@ -100,10 +100,10 @@ fn test_100_turn_endurance() {
 
     // AI nations should have built some army units (total across all AI > 0).
     let total_ai_army: usize = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.is_great_power() && n.id != game.human_player_nation)
-        .map(|n| n.army.len())
+        .map(|n| n.military.army.len())
         .sum();
     assert!(
         total_ai_army > 0,
@@ -146,8 +146,8 @@ fn test_full_game_to_1915() {
     );
 
     // All provinces should still have valid owners
-    let nation_ids: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
-    for province in &game.provinces {
+    let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
+    for province in &game.world.provinces {
         assert!(
             nation_ids.contains(&province.owner),
             "Province {} has invalid owner {} at end of game",
@@ -167,17 +167,17 @@ fn test_determinism() {
 
     // Static structure must match
     assert_eq!(game_a.turn, game_b.turn, "Turn numbers should be identical");
-    assert_eq!(game_a.nations.len(), game_b.nations.len());
+    assert_eq!(game_a.world.nations.len(), game_b.world.nations.len());
     assert_eq!(
-        game_a.hex_map.tile_count(),
-        game_b.hex_map.tile_count(),
+        game_a.world.hex_map.tile_count(),
+        game_b.world.hex_map.tile_count(),
         "Map tile counts should be identical"
     );
-    assert_eq!(game_a.provinces.len(), game_b.provinces.len());
+    assert_eq!(game_a.world.provinces.len(), game_b.world.provinces.len());
 
     // Dynamic state must also match — the game uses seeded RNG so two runs
     // with the same map key should produce identical outcomes.
-    for (nation_a, nation_b) in game_a.nations.iter().zip(game_b.nations.iter()) {
+    for (nation_a, nation_b) in game_a.world.nations.iter().zip(game_b.world.nations.iter()) {
         assert_eq!(nation_a.id, nation_b.id, "Nation IDs should match");
         assert_eq!(nation_a.name, nation_b.name, "Nation names should match");
         assert_eq!(
@@ -186,14 +186,14 @@ fn test_determinism() {
             nation_a.name
         );
         assert_eq!(
-            nation_a.army.len(),
-            nation_b.army.len(),
+            nation_a.military.army.len(),
+            nation_b.military.army.len(),
             "Army size should be identical for {}",
             nation_a.name
         );
         assert_eq!(
-            nation_a.warships.len(),
-            nation_b.warships.len(),
+            nation_a.military.warships.len(),
+            nation_b.military.warships.len(),
             "Warship count should be identical for {}",
             nation_a.name
         );
@@ -206,7 +206,7 @@ fn test_determinism() {
     }
 
     // Province ownership must match
-    for (prov_a, prov_b) in game_a.provinces.iter().zip(game_b.provinces.iter()) {
+    for (prov_a, prov_b) in game_a.world.provinces.iter().zip(game_b.world.provinces.iter()) {
         assert_eq!(
             prov_a.owner, prov_b.owner,
             "Province {} ownership should be deterministic",
@@ -229,18 +229,18 @@ fn test_different_map_keys_diverge() {
     // The games should produce different resource totals because the maps
     // are different (different terrain placement, different tile yields).
     let total_resources_a: u32 = game_a
-        .nations
+        .world.nations
         .iter()
         .flat_map(|n| n.economy.warehouse.values())
         .sum();
     let total_resources_b: u32 = game_b
-        .nations
+        .world.nations
         .iter()
         .flat_map(|n| n.economy.warehouse.values())
         .sum();
 
-    let total_treasury_a: i64 = game_a.nations.iter().map(|n| n.economy.treasury.as_dollars()).sum();
-    let total_treasury_b: i64 = game_b.nations.iter().map(|n| n.economy.treasury.as_dollars()).sum();
+    let total_treasury_a: i64 = game_a.world.nations.iter().map(|n| n.economy.treasury.as_dollars()).sum();
+    let total_treasury_b: i64 = game_b.world.nations.iter().map(|n| n.economy.treasury.as_dollars()).sum();
 
     // At least one of these aggregate metrics should differ between the two map keys.
     let diverged = total_resources_a != total_resources_b || total_treasury_a != total_treasury_b;
@@ -299,7 +299,7 @@ fn test_all_nations_as_player() {
         // The human player nation should correspond to the selected index.
         // Each index selects a different Great Power.
         let great_power_ids: Vec<NationId> = game
-            .nations
+            .world.nations
             .iter()
             .filter(|n| n.is_great_power())
             .map(|n| n.id)
@@ -411,9 +411,9 @@ fn ai_does_not_declare_war_on_allies() {
         // After each turn, verify no two nations that are allies are also at war
         let gp_ids: Vec<NationId> = game.great_powers().iter().map(|n| n.id).collect();
         for &a in &gp_ids {
-            let allies = game.diplomacy.get_allies(a);
+            let allies = game.world.diplomacy.get_allies(a);
             for &ally in &allies {
-                let rel = game.diplomacy.get_relation(a, ally);
+                let rel = game.world.diplomacy.get_relation(a, ally);
                 if let Some(r) = rel {
                     assert!(
                         !r.at_war,
@@ -440,7 +440,7 @@ fn minor_nations_respond_to_trade_offers() {
         .great_powers()
         .iter()
         .filter(|n| n.id != game.human_player_nation)
-        .any(|n| !n.trade_history.is_empty() || !n.economy.warehouse.is_empty());
+        .any(|n| !n.archives.trade_history.is_empty() || !n.economy.warehouse.is_empty());
     assert!(
         any_ai_traded,
         "After 10 turns, at least one AI should have engaged in trade or collected resources"
@@ -665,10 +665,10 @@ fn profile_memory_late_game() {
     }
 
     // Check bounded growth
-    let total_history = game.history.len();
-    let total_nations = game.nations.len();
-    let total_provinces = game.provinces.len();
-    let total_tiles = game.hex_map.tile_count();
+    let total_history = game.archive.history.len();
+    let total_nations = game.world.nations.len();
+    let total_provinces = game.world.provinces.len();
+    let total_tiles = game.world.hex_map.tile_count();
 
     println!("=== Late Game (Turn 300) Memory Profile ===");
     println!("History entries: {}", total_history);
@@ -680,10 +680,10 @@ fn profile_memory_late_game() {
         println!(
             "  {}: army={}, civilians={}, buildings={}, warships={}",
             nation.name,
-            nation.army.len(),
-            nation.civilians.len(),
+            nation.military.army.len(),
+            nation.military.civilians.len(),
             nation.economy.buildings.len(),
-            nation.warships.len()
+            nation.military.warships.len()
         );
     }
 
@@ -703,7 +703,7 @@ fn trade_simulation_20_turns_economic_growth() {
     // Build consulates with first 3 MNs
     let mn_ids: Vec<NationId> = game.minor_nations().iter().take(3).map(|n| n.id).collect();
     for mn_id in &mn_ids {
-        game.diplomacy.build_consulate(player, *mn_id).ok();
+        game.world.diplomacy.build_consulate(player, *mn_id).ok();
     }
 
     let _initial_treasury = game.get_nation(player).unwrap().economy.treasury;

@@ -1,3 +1,5 @@
+pub mod battle_outcome;
+pub use battle_outcome::{BattleOutcome, BattleParams, BattleSite, ProvinceConquest, compute_battle_outcome};
 pub mod combat;
 pub mod naval;
 pub mod navy_placement;

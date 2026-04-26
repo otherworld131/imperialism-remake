@@ -4,7 +4,6 @@
 use domain::diplomacy::DiplomaticRelation;
 use domain::economy::trade::base_price;
 use domain::game_state::GameState;
-use domain::types::*;
 
 /// Data for the Map Screen (Screen 1).
 pub struct MapScreenData {
@@ -55,6 +54,22 @@ pub struct DiplomacyScreenData {
     pub council_projection: Vec<(String, u32)>,                      // nation, projected votes
 }
 
+// ── Typed query enum ─────────────────────────────────────────────
+
+use domain::types::NationId;
+
+/// A read-only request the frontend sends to the application layer.
+/// Tagged union serialized with `"type"` discriminant for easy JSON dispatch.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FrontendQuery {
+    MapScreen,
+    TransportScreen,
+    IndustryScreen,
+    TradeScreen,
+    DiplomacyScreen,
+}
+
 // ── Query functions ──────────────────────────────────────────────
 
 /// Extract data for the Map Screen from the current game state.
@@ -68,8 +83,8 @@ pub fn get_map_screen(game: &GameState) -> MapScreenData {
         nation_name: nation.name.clone(),
         treasury: format!("${}", nation.economy.treasury.as_dollars()),
         province_count: nation.province_count(),
-        army_count: nation.army.len(),
-        civilian_count: nation.civilians.len(),
+        army_count: nation.military.army.len(),
+        civilian_count: nation.military.civilians.len(),
     }
 }
 
@@ -79,8 +94,8 @@ pub fn get_transport_screen(game: &GameState) -> TransportScreenData {
         .get_nation(game.human_player_nation)
         .expect("Human player nation must exist");
 
-    let freight_cars = nation.transport.freight_cars;
-    let total_capacity = nation.transport.total_capacity();
+    let freight_cars = nation.military.transport.freight_cars;
+    let total_capacity = nation.military.transport.total_capacity();
 
     // Total production is the sum of all raw resources in the warehouse.
     let total_production: u32 = nation.economy.warehouse.values().sum();
@@ -164,7 +179,7 @@ pub fn get_trade_screen(game: &GameState) -> TradeScreenData {
 
     let cargo_capacity = nation.total_cargo_capacity();
     let cargo_used: u32 = nation
-        .trade_history
+        .archives.trade_history
         .iter()
         .filter(|th| th.turn.0 <= game.turn.0 && game.turn.0.saturating_sub(th.turn.0) <= 1)
         .filter(|th| th.partner != nation.id)
@@ -175,7 +190,7 @@ pub fn get_trade_screen(game: &GameState) -> TradeScreenData {
     let mut partners = Vec::new();
 
     for minor in game.minor_nations() {
-        let relation = game.diplomacy.get_relation(human_id, minor.id);
+        let relation = game.world.diplomacy.get_relation(human_id, minor.id);
 
         let has_consulate = relation.map(|r| r.has_consulate).unwrap_or(false);
 
@@ -216,7 +231,7 @@ pub fn get_trade_screen(game: &GameState) -> TradeScreenData {
 /// Extract data for the Diplomacy Screen from the current game state.
 pub fn get_diplomacy_screen(game: &GameState) -> DiplomacyScreenData {
     let human_id = game.human_player_nation;
-    let standing = game.diplomacy.get_standing(human_id);
+    let standing = game.world.diplomacy.get_standing(human_id);
 
     // Great Power relations
     let great_power_relations: Vec<(String, NationId, String, i32)> = game
@@ -224,7 +239,7 @@ pub fn get_diplomacy_screen(game: &GameState) -> DiplomacyScreenData {
         .iter()
         .filter(|gp| gp.id != human_id)
         .map(|gp| {
-            let relation = game.diplomacy.get_relation(human_id, gp.id);
+            let relation = game.world.diplomacy.get_relation(human_id, gp.id);
             let (status, score) = diplomat_status(relation);
             (gp.name.clone(), gp.id, status, score)
         })
@@ -235,7 +250,7 @@ pub fn get_diplomacy_screen(game: &GameState) -> DiplomacyScreenData {
         .minor_nations()
         .iter()
         .map(|mn| {
-            let relation = game.diplomacy.get_relation(human_id, mn.id);
+            let relation = game.world.diplomacy.get_relation(human_id, mn.id);
             let infra = diplomatic_infrastructure(relation);
             let score = relation.map(|r| r.score).unwrap_or(0);
             (mn.name.clone(), mn.id, infra, score)
@@ -337,8 +352,8 @@ mod tests {
         nation.economy.warehouse.clear();
 
         // Reset freight cars and build exactly 10 for a clean test
-        nation.transport.freight_cars = 0;
-        nation.transport.build_freight_cars(10);
+        nation.military.transport.freight_cars = 0;
+        nation.military.transport.build_freight_cars(10);
         nation.add_resource(ResourceType::Timber, 3);
         nation.add_resource(ResourceType::Coal, 2);
 
@@ -358,7 +373,7 @@ mod tests {
         let nation = game.get_nation_mut(human_id).unwrap();
 
         // More resources than capacity
-        nation.transport.build_freight_cars(5);
+        nation.military.transport.build_freight_cars(5);
         nation.add_resource(ResourceType::Timber, 10);
 
         let data = get_transport_screen(&game);
@@ -447,7 +462,7 @@ mod tests {
 
         // Build a consulate with the first minor nation
         let first_minor_id = game.minor_nations()[0].id;
-        game.diplomacy
+        game.world.diplomacy
             .build_consulate(human_id, first_minor_id)
             .unwrap();
 
@@ -479,10 +494,10 @@ mod tests {
 
         // Build consulates with two minor nations
         let minor_ids: Vec<NationId> = game.minor_nations().iter().map(|n| n.id).collect();
-        game.diplomacy
+        game.world.diplomacy
             .build_consulate(human_id, minor_ids[0])
             .unwrap();
-        game.diplomacy
+        game.world.diplomacy
             .build_consulate(human_id, minor_ids[1])
             .unwrap();
 
@@ -509,10 +524,10 @@ mod tests {
         game.turn = TurnNumber(5);
 
         let nation = game.get_nation_mut(human_id).unwrap();
-        nation.trade_history.clear();
+        nation.archives.trade_history.clear();
 
         // Turn 5 (current) — should count
-        nation.trade_history.push(TradeHistoryEntry {
+        nation.archives.trade_history.push(TradeHistoryEntry {
             turn: TurnNumber(5),
             partner,
             resource: ResourceType::Timber,
@@ -520,7 +535,7 @@ mod tests {
             total_cost: Money::dollars(30),
                 bought: true,});
         // Turn 4 (previous) — should count
-        nation.trade_history.push(TradeHistoryEntry {
+        nation.archives.trade_history.push(TradeHistoryEntry {
             turn: TurnNumber(4),
             partner,
             resource: ResourceType::Coal,
@@ -528,7 +543,7 @@ mod tests {
             total_cost: Money::dollars(20),
                 bought: true,});
         // Turn 3 (older) — should NOT count
-        nation.trade_history.push(TradeHistoryEntry {
+        nation.archives.trade_history.push(TradeHistoryEntry {
             turn: TurnNumber(3),
             partner,
             resource: ResourceType::Iron,
@@ -618,7 +633,7 @@ mod tests {
         let human_id = game.human_player_nation;
 
         // Reduce standing
-        game.diplomacy.reduce_standing(human_id, 30);
+        game.world.diplomacy.reduce_standing(human_id, 30);
 
         let data = get_diplomacy_screen(&game);
         assert_eq!(data.standing, 70);

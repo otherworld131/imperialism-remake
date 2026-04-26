@@ -169,7 +169,7 @@ fn run_names(n: usize, seed: u64) {
     for name in &names {
         println!(
             "{:<16} {:<16} {:<16} {:<16}",
-            name.name, name.adjective, name.demonym_singular, name.demonym_plural
+            name.name, name.archives.adjective, name.archives.demonym_singular, name.archives.demonym_plural
         );
     }
 }
@@ -239,8 +239,8 @@ fn run_nations(n: usize, seed: u64, mix: Option<GovernmentMix>) {
             "{:<14} {:<24} {:<14} {:<40} {:?}",
             f.name,
             f.government.short_label(),
-            f.adjective,
-            f.government_title,
+            f.archives.adjective,
+            f.archives.government_title,
             f.flag.pattern
         );
     }

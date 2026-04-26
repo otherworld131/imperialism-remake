@@ -159,8 +159,8 @@ pub fn collect_war_coalition(
     enemy_id: NationId,
 ) -> Vec<NationId> {
     let mut coalition = vec![nation_id];
-    for ally_id in game.diplomacy.get_allies(nation_id) {
-        if game.diplomacy.is_at_war(ally_id, enemy_id) {
+    for ally_id in game.world.diplomacy.get_allies(nation_id) {
+        if game.world.diplomacy.is_at_war(ally_id, enemy_id) {
             coalition.push(ally_id);
         }
     }
@@ -174,9 +174,9 @@ pub fn collect_hypothetical_coalition(
     attacker: NationId,
     target: NationId,
 ) -> Vec<NationId> {
-    let target_allies = game.diplomacy.get_allies(target);
+    let target_allies = game.world.diplomacy.get_allies(target);
     let mut coalition = vec![attacker];
-    for ally_id in game.diplomacy.get_allies(attacker) {
+    for ally_id in game.world.diplomacy.get_allies(attacker) {
         if !target_allies.contains(&ally_id) {
             coalition.push(ally_id);
         }
@@ -195,7 +195,7 @@ pub fn collect_target_hypothetical_coalition(
 ) -> Vec<NationId> {
     let mut defenders = vec![target];
     // Add Alliance partners
-    for ally_id in game.diplomacy.get_allies(target) {
+    for ally_id in game.world.diplomacy.get_allies(target) {
         if ally_id != attacker && !defenders.contains(&ally_id) {
             defenders.push(ally_id);
         }
@@ -204,7 +204,7 @@ pub fn collect_target_hypothetical_coalition(
     // only triggers when a minor nation with a NAP is attacked)
     let is_minor = game.get_nation(target).is_some_and(|n| !n.is_great_power());
     if is_minor {
-        for pact_id in game.diplomacy.get_pact_holders(target) {
+        for pact_id in game.world.diplomacy.get_pact_holders(target) {
             if pact_id != attacker && !defenders.contains(&pact_id) {
                 defenders.push(pact_id);
             }
@@ -228,7 +228,7 @@ fn compute_momentum(
     let min_turn = game.turn.0.saturating_sub(window);
     let mut captured = 0usize;
     let mut lost = 0usize;
-    for (turn_entry, event) in &game.history {
+    for (turn_entry, event) in &game.archive.history {
         if turn_entry.0 < min_turn {
             continue;
         }
@@ -255,7 +255,7 @@ fn compute_momentum(
 /// distinct from the war participants.
 pub fn find_war_start_turn(game: &GameState, a: NationId, b: NationId) -> Option<u32> {
     use crate::events::HistoryEvent;
-    game.history
+    game.archive.history
         .iter()
         .filter(|(_, ev)| match ev {
             HistoryEvent::WarDeclared {
@@ -421,48 +421,51 @@ pub fn evaluate_pact_defense(
     personality: AiPersonality,
     #[cfg(feature = "lua")] lua_cfg: Option<&LuaAiConfig>,
 ) -> bool {
+    let cfg = &game.game_data.game_config;
+
     // Standing gate
-    let standing = game.diplomacy.get_standing(protector_id);
-    if standing < 30 {
+    let standing = game.world.diplomacy.get_standing(protector_id);
+    if standing < cfg.pact_defense_standing_gate {
         return false;
     }
 
     // Already at war with attacker — already fighting, no need to re-declare
-    if game.diplomacy.is_at_war(protector_id, attacker_id) {
+    if game.world.diplomacy.is_at_war(protector_id, attacker_id) {
         return false;
     }
 
     // Relationship factor: how much does the protector care about the minor?
     let rel_score = game
-        .diplomacy
+        .world.diplomacy
         .get_relation(protector_id, _minor_id)
         .map(|r| r.score)
         .unwrap_or(0);
-    let relationship_factor = (rel_score as f64 / 100.0).clamp(0.0, 1.0) * 0.4;
+    let relationship_factor =
+        (rel_score as f64 / 100.0).clamp(0.0, 1.0) * cfg.pact_defense_relationship_weight;
 
     // Military factor: can the protector beat the attacker?
     #[cfg(feature = "lua")]
     let assessment = evaluate_hypothetical_war(game, protector_id, attacker_id, lua_cfg);
     #[cfg(not(feature = "lua"))]
     let assessment = evaluate_hypothetical_war(game, protector_id, attacker_id);
-    let military_factor = assessment.win_likelihood * 0.4;
+    let military_factor = assessment.win_likelihood * cfg.pact_defense_military_weight;
 
     // Personality bias
     let personality_bias = match personality {
-        AiPersonality::Aggressive => 0.2,
-        AiPersonality::Diplomatic => 0.1,
-        AiPersonality::Balanced => 0.0,
-        AiPersonality::Economic => -0.15,
+        AiPersonality::Aggressive => cfg.pact_defense_bias_aggressive,
+        AiPersonality::Diplomatic => cfg.pact_defense_bias_diplomatic,
+        AiPersonality::Balanced => cfg.pact_defense_bias_balanced,
+        AiPersonality::Economic => cfg.pact_defense_bias_economic,
     };
 
     let combined = relationship_factor + military_factor + personality_bias;
 
     // Personality-dependent threshold
     let threshold = match personality {
-        AiPersonality::Aggressive => 0.2,
-        AiPersonality::Diplomatic => 0.3,
-        AiPersonality::Balanced => 0.35,
-        AiPersonality::Economic => 0.5,
+        AiPersonality::Aggressive => cfg.pact_defense_threshold_aggressive,
+        AiPersonality::Diplomatic => cfg.pact_defense_threshold_diplomatic,
+        AiPersonality::Balanced => cfg.pact_defense_threshold_balanced,
+        AiPersonality::Economic => cfg.pact_defense_threshold_economic,
     };
 
     combined >= threshold
@@ -484,7 +487,7 @@ pub fn evaluate_war_worthiness(
     // Count captures and losses since war start
     let mut provinces_captured = 0usize;
     let mut provinces_lost = 0usize;
-    for (turn_entry, event) in &game.history {
+    for (turn_entry, event) in &game.archive.history {
         if turn_entry.0 < war_start {
             continue;
         }
@@ -507,7 +510,7 @@ pub fn evaluate_war_worthiness(
     // and warships generate upkeep pressure.
     let ongoing_cost = game
         .get_nation(nation_id)
-        .map(|n| n.field_army_count() as f64 * 500.0 + n.warships.len() as f64 * 300.0)
+        .map(|n| n.field_army_count() as f64 * 500.0 + n.military.warships.len() as f64 * 300.0)
         .unwrap_or(0.0);
 
     // Marginal value: how much is left to gain?
@@ -612,7 +615,7 @@ pub fn evaluate_peace_proposal(
     #[cfg(feature = "lua")]
     {
         let relationship = game
-            .diplomacy
+            .world.diplomacy
             .get_relation(from, to)
             .map(|r| r.score)
             .unwrap_or(0);
@@ -738,7 +741,7 @@ pub fn evaluate_nap_proposal(
     #[cfg(feature = "lua")]
     {
         let relationship = game
-            .diplomacy
+            .world.diplomacy
             .get_relation(from, to)
             .map(|r| r.score)
             .unwrap_or(0);
@@ -769,7 +772,7 @@ pub fn evaluate_nap_proposal(
     let mut score = 0.0f64;
 
     // Relationship factor
-    if let Some(rel) = game.diplomacy.get_relation(from, to) {
+    if let Some(rel) = game.world.diplomacy.get_relation(from, to) {
         score += rel.score as f64 / 100.0 * 0.3;
         // Trust from diplomatic infrastructure
         if rel.has_embassy {
@@ -780,12 +783,12 @@ pub fn evaluate_nap_proposal(
     }
 
     // Common enemy bonus
-    let nations: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
+    let nations: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
     let has_common_enemy = nations.iter().any(|&third| {
         third != from
             && third != to
-            && game.diplomacy.is_at_war(from, third)
-            && game.diplomacy.is_at_war(to, third)
+            && game.world.diplomacy.is_at_war(from, third)
+            && game.world.diplomacy.is_at_war(to, third)
     });
     if has_common_enemy {
         score += 0.2;
@@ -827,7 +830,7 @@ pub fn evaluate_alliance_proposal(
     #[cfg(feature = "lua")]
     {
         let relationship = game
-            .diplomacy
+            .world.diplomacy
             .get_relation(from, to)
             .map(|r| r.score)
             .unwrap_or(0);
@@ -858,23 +861,23 @@ pub fn evaluate_alliance_proposal(
     let mut score = 0.0f64;
 
     // Relationship factor (higher weight for alliances)
-    if let Some(rel) = game.diplomacy.get_relation(from, to) {
+    if let Some(rel) = game.world.diplomacy.get_relation(from, to) {
         score += rel.score as f64 / 100.0 * 0.4;
     }
 
     // Common enemy bonus
-    let nations: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
+    let nations: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
     let has_common_enemy = nations.iter().any(|&third| {
         third != from
             && third != to
-            && game.diplomacy.is_at_war(from, third)
-            && game.diplomacy.is_at_war(to, third)
+            && game.world.diplomacy.is_at_war(from, third)
+            && game.world.diplomacy.is_at_war(to, third)
     });
     let has_common_threat = !has_common_enemy
         && nations.iter().any(|&third| {
             third != from
                 && third != to
-                && (game.diplomacy.is_at_war(from, third) || game.diplomacy.is_at_war(to, third))
+                && (game.world.diplomacy.is_at_war(from, third) || game.world.diplomacy.is_at_war(to, third))
         });
     if has_common_enemy {
         score += 0.3;
@@ -938,7 +941,7 @@ pub fn evaluate_alliance_proposal(
         }
         0.2
     };
-    let existing_alliances = game.diplomacy.get_allies(to).len();
+    let existing_alliances = game.world.diplomacy.get_allies(to).len();
     if existing_alliances > 1 {
         score -= overcommit_penalty * (existing_alliances - 1) as f64;
     }
@@ -990,7 +993,7 @@ mod tests {
     fn hypothetical_war_basic() {
         let mut game = test_game_with_adjacent_provinces();
         // Make peace so we can test hypothetical
-        game.diplomacy.make_peace(NationId(2), NationId(3));
+        game.world.diplomacy.make_peace(NationId(2), NationId(3));
 
         let assessment = evaluate_hypothetical_war(
             &game,
@@ -1059,7 +1062,7 @@ mod tests {
         use crate::events::HistoryEvent;
         let mut game = test_game_with_adjacent_provinces();
         // Simulate war→peace→war: two war declarations between same nations
-        game.history.push((
+        game.archive.history.push((
             TurnNumber(5),
             HistoryEvent::WarDeclared {
                 attacker: NationId(2),
@@ -1067,7 +1070,7 @@ mod tests {
                 protectee: None,
             },
         ));
-        game.history.push((
+        game.archive.history.push((
             TurnNumber(15),
             HistoryEvent::WarDeclared {
                 attacker: NationId(2),
@@ -1084,7 +1087,7 @@ mod tests {
     fn find_war_start_matches_alliance_join() {
         use crate::events::HistoryEvent;
         let mut game = test_game_with_adjacent_provinces();
-        game.history.push((
+        game.archive.history.push((
             TurnNumber(10),
             HistoryEvent::JoinedWar {
                 joiner: NationId(2),
@@ -1101,7 +1104,7 @@ mod tests {
         let mut game = test_game_with_adjacent_provinces();
         // "A declared war on B to protect C" should NOT match pair (B, C):
         // attacker=1, defender=2, protectee=3
-        game.history.push((
+        game.archive.history.push((
             TurnNumber(8),
             HistoryEvent::WarDeclared {
                 attacker: NationId(1),

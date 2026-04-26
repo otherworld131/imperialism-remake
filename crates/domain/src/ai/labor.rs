@@ -12,6 +12,12 @@ pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
     // First, process food if possible
     ai_process_food(game, nation_id);
 
+    // Extract config values before borrowing nation mutably.
+    let wealthy_threshold = Money::dollars(game.game_data.game_config.labor_wealthy_treasury_threshold);
+    let workers_per_province_base = game.game_data.game_config.labor_workers_per_province_base;
+    let workers_per_province_wealthy = game.game_data.game_config.labor_workers_per_province_wealthy;
+    let min_workers_floor = game.game_data.game_config.labor_min_workers_floor;
+
     let nation = match game.get_nation_mut(nation_id) {
         Some(n) => n,
         None => return,
@@ -23,14 +29,14 @@ pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
     let livestock = nation.resource_amount(ResourceType::Livestock);
     let total_food = grain + fruit + livestock;
 
-    // Scale max workers with province count (2 per province, min 5)
-    // Wealthy nations invest in workforce growth (3 per province)
-    let workers_per_province: u32 = if nation.economy.treasury > Money::dollars(20_000) {
-        3
+    // Scale max workers with province count, min floor.
+    // Wealthy nations invest in workforce growth.
+    let workers_per_province: u32 = if nation.economy.treasury > wealthy_threshold {
+        workers_per_province_wealthy
     } else {
-        2
+        workers_per_province_base
     };
-    let max_workers = (nation.province_count() as u32 * workers_per_province).max(5);
+    let max_workers = (nation.province_count() as u32 * workers_per_province).max(min_workers_floor);
 
     // Only recruit if workforce is below target AND there is surplus food
     if total_workers < max_workers && total_food > total_workers {
@@ -128,29 +134,35 @@ pub(crate) fn ai_manage_civilians(game: &mut GameState, nation_id: NationId) {
 /// Hire new civilian units if the nation can afford them.
 #[cfg(test)]
 fn ai_hire_civilians(game: &mut GameState, nation_id: NationId) {
+    // Extract config values before borrowing nation mutably.
     let cfg = game.game_data.game_config.clone();
+    let tier1_threshold = Money::dollars(cfg.labor_hire_civilian_tier1_treasury);
+    let tier1_max = cfg.labor_hire_civilian_tier1_max as usize;
+    let tier2_threshold = Money::dollars(cfg.labor_hire_civilian_tier2_treasury);
+    let tier2_max = cfg.labor_hire_civilian_tier2_max as usize;
+
     let nation = match game.get_nation_mut(nation_id) {
         Some(n) => n,
         None => return,
     };
 
-    let civilian_count = nation.civilians.len();
+    let civilian_count = nation.military.civilians.len();
     let treasury = nation.economy.treasury;
 
-    // Rule 1: If < 2 civilians and treasury > $1,000, hire a Farmer
-    if civilian_count < 2 && treasury > Money::dollars(1000) {
+    // Rule 1: below tier-1 cap and treasury above tier-1 threshold → hire a Farmer
+    if civilian_count < tier1_max && treasury > tier1_threshold {
         let cost = CivilianType::Farmer.creation_cost(&cfg);
         nation.economy.treasury -= cost;
         let farmer = Civilian::new(next_civilian_id(), CivilianType::Farmer, nation_id);
-        nation.civilians.push(farmer);
+        nation.military.civilians.push(farmer);
         return; // Only hire one per turn
     }
 
-    // Rule 2: If < 4 civilians and treasury > $2,000, hire Forester or Miner
-    if civilian_count < 4 && treasury > Money::dollars(2000) {
+    // Rule 2: below tier-2 cap and treasury above tier-2 threshold → hire Forester or Miner
+    if civilian_count < tier2_max && treasury > tier2_threshold {
         // Prefer Forester (cheaper) unless we already have one
         let has_forester = nation
-            .civilians
+            .military.civilians
             .iter()
             .any(|c| c.civilian_type == CivilianType::Forester);
         let civ_type = if has_forester {
@@ -163,7 +175,7 @@ fn ai_hire_civilians(game: &mut GameState, nation_id: NationId) {
         if let Some(remaining) = nation.economy.treasury.checked_sub(cost) {
             nation.economy.treasury = remaining;
             let civilian = Civilian::new(next_civilian_id(), civ_type, nation_id);
-            nation.civilians.push(civilian);
+            nation.military.civilians.push(civilian);
         }
     }
 }
@@ -187,11 +199,11 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
         }
         let connected = super::super::turn::connected_provinces(game, nation_id);
         let owned_provinces: Vec<&crate::map::Province> = game
-            .provinces
+            .world.provinces
             .iter()
             .filter(|p| p.owner == nation_id)
             .collect();
-        crate::map::infrastructure::collectable_hexes(&game.hex_map, &owned_provinces, &connected)
+        crate::map::infrastructure::collectable_hexes(&game.world.hex_map, &owned_provinces, &connected)
     };
 
     // Find all improvable tiles across the nation's provinces.
@@ -205,7 +217,7 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
         bool,
     )> = Vec::new();
     for &pid in &province_ids {
-        for (coord, tile) in game.hex_map.tiles_in_province(pid) {
+        for (coord, tile) in game.world.hex_map.tiles_in_province(pid) {
             let terrain = tile.terrain();
             let resource = tile.resource_deposit();
             let max_level = resource.map(|r| r.max_improvement_level()).unwrap_or(0);
@@ -229,7 +241,7 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
     // generic `start_work` with no `build_task`, producing a no-op completion.
     let idle_civilians: Vec<(usize, CivilianType)> = match game.get_nation(nation_id) {
         Some(n) => n
-            .civilians
+            .military.civilians
             .iter()
             .enumerate()
             .filter(|(_, c)| {
@@ -265,11 +277,11 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
             let Some(nation) = game.get_nation_mut(nation_id) else {
                 return;
             };
-            let civilian_id = nation.civilians[civ_idx].id;
+            let civilian_id = nation.military.civilians[civ_idx].id;
             // Clear the old tile's slot before redeploying so stale IDs don't
             // block the engineer from building railroad on previously-worked hexes.
-            if let Some(old_pos) = nation.civilians[civ_idx].position
-                && let Some(old_tile) = game.hex_map.get_tile_mut(old_pos)
+            if let Some(old_pos) = nation.military.civilians[civ_idx].position
+                && let Some(old_tile) = game.world.hex_map.get_tile_mut(old_pos)
                 && old_tile.assigned_civilian == Some(civilian_id)
             {
                 old_tile.assigned_civilian = None;
@@ -277,11 +289,11 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
             let Some(nation) = game.get_nation_mut(nation_id) else {
                 return;
             };
-            nation.civilians[civ_idx].deploy(coord);
-            nation.civilians[civ_idx].start_work(2);
+            nation.military.civilians[civ_idx].deploy(coord);
+            nation.military.civilians[civ_idx].start_work(2);
 
             // Mark the tile on the map
-            if let Some(tile) = game.hex_map.get_tile_mut(coord) {
+            if let Some(tile) = game.world.hex_map.get_tile_mut(coord) {
                 tile.assigned_civilian = Some(civilian_id);
             }
         }
@@ -432,17 +444,17 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.treasury = Money::dollars(5000);
-        ai.civilians.clear(); // Start with 0 civilians
+        ai.military.civilians.clear(); // Start with 0 civilians
 
         ai_manage_civilians(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
-            ai.civilians.len(),
+            ai.military.civilians.len(),
             1,
             "AI should hire 1 Farmer when it has < 2 civilians"
         );
-        assert_eq!(ai.civilians[0].civilian_type, CivilianType::Farmer);
+        assert_eq!(ai.military.civilians[0].civilian_type, CivilianType::Farmer);
         assert_eq!(
             ai.economy.treasury,
             Money::dollars(4900),
@@ -455,13 +467,13 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.treasury = Money::dollars(500); // Below $1,000 threshold
-        ai.civilians.clear(); // Start with 0 civilians
+        ai.military.civilians.clear(); // Start with 0 civilians
 
         ai_manage_civilians(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert!(
-            ai.civilians.is_empty(),
+            ai.military.civilians.is_empty(),
             "AI should not hire civilians when treasury <= $1,000"
         );
     }
@@ -471,14 +483,14 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.treasury = Money::dollars(5000);
-        ai.civilians.clear();
+        ai.military.civilians.clear();
         // Give AI 2 existing civilians (both farmers)
-        ai.civilians.push(Civilian::new(
+        ai.military.civilians.push(Civilian::new(
             UnitId(900),
             CivilianType::Farmer,
             NationId(2),
         ));
-        ai.civilians.push(Civilian::new(
+        ai.military.civilians.push(Civilian::new(
             UnitId(901),
             CivilianType::Farmer,
             NationId(2),
@@ -488,12 +500,12 @@ mod tests {
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
-            ai.civilians.len(),
+            ai.military.civilians.len(),
             3,
             "AI should hire a 3rd civilian (Forester)"
         );
         assert_eq!(
-            ai.civilians[2].civilian_type,
+            ai.military.civilians[2].civilian_type,
             CivilianType::Forester,
             "3rd civilian should be a Forester"
         );
@@ -504,14 +516,14 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.treasury = Money::dollars(5000);
-        ai.civilians.clear();
+        ai.military.civilians.clear();
         // Give AI 2 existing civilians including a forester
-        ai.civilians.push(Civilian::new(
+        ai.military.civilians.push(Civilian::new(
             UnitId(900),
             CivilianType::Farmer,
             NationId(2),
         ));
-        ai.civilians.push(Civilian::new(
+        ai.military.civilians.push(Civilian::new(
             UnitId(901),
             CivilianType::Forester,
             NationId(2),
@@ -520,9 +532,9 @@ mod tests {
         ai_manage_civilians(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(ai.civilians.len(), 3);
+        assert_eq!(ai.military.civilians.len(), 3);
         assert_eq!(
-            ai.civilians[2].civilian_type,
+            ai.military.civilians[2].civilian_type,
             CivilianType::Miner,
             "Should hire Miner when Forester already exists"
         );
@@ -537,13 +549,13 @@ mod tests {
         let farm_coord = HexCoord::new(3, 3);
         let mut tile = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
         tile.set_resource(ResourceType::Grain);
-        game.hex_map.set_tile(farm_coord, tile);
+        game.world.hex_map.set_tile(farm_coord, tile);
 
         // Give AI a Farmer civilian (idle), clear pre-populated ones
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.treasury = Money::dollars(500); // Not enough for hiring
-        ai.civilians.clear();
-        ai.civilians.push(Civilian::new(
+        ai.military.civilians.clear();
+        ai.military.civilians.push(Civilian::new(
             UnitId(950),
             CivilianType::Farmer,
             NationId(2),
@@ -552,16 +564,16 @@ mod tests {
         ai_manage_civilians(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(ai.civilians.len(), 1, "Should still have 1 civilian");
-        assert!(ai.civilians[0].working, "Civilian should be working");
+        assert_eq!(ai.military.civilians.len(), 1, "Should still have 1 civilian");
+        assert!(ai.military.civilians[0].working, "Civilian should be working");
         assert_eq!(
-            ai.civilians[0].position,
+            ai.military.civilians[0].position,
             Some(farm_coord),
             "Civilian should be deployed to the farm tile"
         );
 
         // Check that the tile has the civilian assigned
-        let tile = game.hex_map.get_tile(farm_coord).unwrap();
+        let tile = game.world.hex_map.get_tile(farm_coord).unwrap();
         assert_eq!(
             tile.assigned_civilian,
             Some(UnitId(950)),
@@ -578,13 +590,13 @@ mod tests {
         let mut tile = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
         tile.set_resource(ResourceType::Grain);
         tile.set_improvement_level(3); // max for Grain
-        game.hex_map.set_tile(farm_coord, tile);
+        game.world.hex_map.set_tile(farm_coord, tile);
 
         // Give AI a Farmer civilian (idle), clear pre-populated ones
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.treasury = Money::dollars(500);
-        ai.civilians.clear();
-        ai.civilians.push(Civilian::new(
+        ai.military.civilians.clear();
+        ai.military.civilians.push(Civilian::new(
             UnitId(960),
             CivilianType::Farmer,
             NationId(2),
@@ -595,11 +607,11 @@ mod tests {
         let ai = game.get_nation(NationId(2)).unwrap();
         // Civilian should stay idle because no improvable tiles
         assert!(
-            !ai.civilians[0].working,
+            !ai.military.civilians[0].working,
             "Civilian should remain idle when no improvable tiles exist"
         );
         assert_eq!(
-            ai.civilians[0].position, None,
+            ai.military.civilians[0].position, None,
             "Civilian should not be deployed"
         );
     }

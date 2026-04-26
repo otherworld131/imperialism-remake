@@ -13,7 +13,7 @@ fn observer_game_assigns_personality_to_all_seven_gps() {
     assert_eq!(gps.len(), 7);
     for nation in &gps {
         assert!(
-            nation.ai_personality.is_some(),
+            nation.diplomacy.ai_personality.is_some(),
             "nation {} missing AI personality in observer mode",
             nation.name
         );

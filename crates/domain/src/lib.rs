@@ -10,6 +10,8 @@ pub enum DomainError {
     },
     /// Attempted to commit or release a reservation that does not exist.
     ReservationNotFound(crate::types::ReservationId),
+    /// An operation was called with an invalid argument (e.g. negative amount).
+    InvalidOperation(String),
 }
 
 impl std::fmt::Display for DomainError {
@@ -20,6 +22,7 @@ impl std::fmt::Display for DomainError {
                 "insufficient inventory: requested {requested}, available {available}"
             ),
             Self::ReservationNotFound(id) => write!(f, "reservation not found: {id}"),
+            Self::InvalidOperation(msg) => write!(f, "invalid operation: {msg}"),
         }
     }
 }

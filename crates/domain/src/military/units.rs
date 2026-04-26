@@ -545,15 +545,15 @@ pub fn disband_unit(
         .get_nation_mut(nation_id)
         .ok_or_else(|| "nation not found".to_string())?;
     let pos = nation
-        .army
+        .military.army
         .iter()
         .position(|u| u.id == unit_id)
         .ok_or_else(|| "unit not found".to_string())?;
-    if nation.army[pos].unit_type.category() == UnitCategory::Garrison {
+    if nation.military.army[pos].unit_type.category() == UnitCategory::Garrison {
         return Err("garrison units cannot be dismissed".to_string());
     }
-    nation.army.remove(pos);
-    game.pending_moves
+    nation.military.army.remove(pos);
+    game.transient.pending_moves
         .retain(|(nid, id, _)| *nid != nation_id || *id != unit_id);
     Ok(())
 }

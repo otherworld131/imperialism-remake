@@ -4,6 +4,7 @@ use crate::diplomacy::DiplomacyState;
 use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::civilians::{Civilian, CivilianType};
 use crate::economy::ledger::{CashFlow, CashSink, ResourceFlow};
+use crate::economy::market::MarketState;
 use crate::events::{DomainEvent, Headline, HistoryEvent};
 use crate::map::{HexMap, Province, UnitId};
 use crate::military::combat::BattleResult;
@@ -31,13 +32,10 @@ pub struct PoliticalSnapshot {
     pub capitals: Vec<(NationId, ProvinceId)>,
 }
 
-/// Top-level aggregate root representing the complete state of a game.
+/// Live world snapshot: everything that describes "what is true right now"
+/// in the game world — map, provinces, nations, diplomacy, and market state.
 #[derive(serde::Serialize, serde::Deserialize)]
-pub struct GameState {
-    /// Current turn number.
-    pub turn: TurnNumber,
-    /// Difficulty setting for this game.
-    pub difficulty: Difficulty,
+pub struct WorldState {
     /// Key identifying which map is loaded.
     pub map_key: String,
     /// The hex map containing all tiles.
@@ -46,29 +44,17 @@ pub struct GameState {
     pub provinces: Vec<Province>,
     /// All nations in the game (Great Powers + Minor Nations).
     pub nations: Vec<Nation>,
-    /// The NationId of the human player's nation.
-    pub human_player_nation: NationId,
-    /// Event log for the current turn (transient, not saved).
-    #[serde(skip)]
-    pub events: Vec<DomainEvent>,
-    /// All data-driven game definitions (tech tree, unit stats, etc.).
-    /// Reconstructed on load — not serialized.
-    #[serde(skip, default = "GameData::default")]
-    pub game_data: GameData,
     /// Diplomatic relations and standing between nations.
     pub diplomacy: DiplomacyState,
-    /// Pending attacks to resolve this turn: (attacker NationId, target ProvinceId).
+    /// Persistent market state: per-commodity price history and trend data
+    /// updated at the end of each turn's trade phase.
     #[serde(default)]
-    pub pending_attacks: Vec<(NationId, ProvinceId)>,
-    /// Pending unit movements to resolve this turn: (nation, unit_id, destination province).
-    #[serde(default)]
-    pub pending_moves: Vec<(NationId, crate::map::UnitId, ProvinceId)>,
-    /// Active naval landing sites: (attacking_nation, target_province, turn_established).
-    /// Established by assigning warships to Beachhead operation.
-    /// Troops can attack the target province on **subsequent** turns only
-    /// (not the same turn the landing was established).
-    #[serde(default)]
-    pub pending_landings: Vec<(NationId, ProvinceId, TurnNumber)>,
+    pub market_state: MarketState,
+}
+
+/// Historical records accumulated over the course of the game.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+pub struct GameArchive {
     /// History of major game events. Use `render_history_event` for player-facing text.
     #[serde(default)]
     pub history: Vec<(TurnNumber, HistoryEvent)>,
@@ -86,6 +72,53 @@ pub struct GameState {
     /// political map at any past turn from the news archive.
     #[serde(default)]
     pub political_archive: Vec<(TurnNumber, PoliticalSnapshot)>,
+}
+
+/// In-turn state that is either not serialized or rebuilt each turn.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+pub struct TransientState {
+    /// Event log for the current turn (not saved).
+    #[serde(skip, default)]
+    pub events: Vec<DomainEvent>,
+    /// Pending attacks to resolve this turn: (attacker NationId, target ProvinceId).
+    #[serde(default)]
+    pub pending_attacks: Vec<(NationId, ProvinceId)>,
+    /// Pending unit movements to resolve this turn: (nation, unit_id, destination province).
+    #[serde(default)]
+    pub pending_moves: Vec<(NationId, crate::map::UnitId, ProvinceId)>,
+    /// Active naval landing sites: (attacking_nation, target_province, turn_established).
+    /// Established by assigning warships to Beachhead operation.
+    /// Troops can attack the target province on **subsequent** turns only
+    /// (not the same turn the landing was established).
+    #[serde(default)]
+    pub pending_landings: Vec<(NationId, ProvinceId, TurnNumber)>,
+    /// Transient collector for AI-side treasury mutations. Drained into
+    /// `TurnReport.ai_cash_spending` at end of turn (not saved).
+    #[serde(skip, default)]
+    pub pending_ai_cash_spending: Vec<(NationId, CashSink, Money, Option<NationId>)>,
+    /// Transient collector for AI-side cash income entries. Drained at end of turn (not saved).
+    #[serde(skip, default)]
+    pub pending_ai_cash_income: Vec<(NationId, Money)>,
+    /// Per-nation cash flow breakdown from the most recently processed turn.
+    /// Populated at the end of `process_turn`; read by the WASM bridge.
+    #[serde(default)]
+    pub last_cash_flow: HashMap<NationId, CashFlow>,
+    /// Per-nation resource flow from the most recently processed turn.
+    #[serde(default)]
+    pub last_resource_flow: HashMap<NationId, ResourceFlow>,
+}
+
+/// Top-level aggregate root representing the complete state of a game.
+/// Owns `world` (live snapshot), `archive` (history), and `transient`
+/// (current-turn working state), plus game-loop scalars.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct GameState {
+    /// Current turn number.
+    pub turn: TurnNumber,
+    /// Difficulty setting for this game.
+    pub difficulty: Difficulty,
+    /// The NationId of the human player's nation.
+    pub human_player_nation: NationId,
     /// When true, AI functions print detailed decision traces to stderr.
     #[serde(skip, default)]
     pub ai_debug: bool,
@@ -93,35 +126,21 @@ pub struct GameState {
     /// only observes. `human_player_nation` remains set as the "viewpoint" nation.
     #[serde(default)]
     pub observer_mode: bool,
-    /// Per-nation cash flow breakdown from the most recently processed turn.
-    /// Populated at the end of `process_turn`; read by the WASM bridge to
-    /// surface the ledger-tab cash-flow view in the web UI. Transient and
-    /// rebuilt each turn — saved for WASM consistency; `#[serde(default)]`
-    /// handles saves taken before this field existed.
-    #[serde(default)]
-    pub last_cash_flow: HashMap<NationId, CashFlow>,
-    /// Per-nation resource flow (inflows and outflows, per stockpile) from
-    /// the most recently processed turn. Best-effort visibility aggregated
-    /// from existing `TurnReport` fields — NOT a reconciled invariant.
-    #[serde(default)]
-    pub last_resource_flow: HashMap<NationId, ResourceFlow>,
-    /// Transient collector for AI-side treasury mutations. AI paths push an
-    /// entry here each time they spend or receive cash; the turn processor
-    /// drains it into `TurnReport.ai_cash_spending` (or the income equivalent)
-    /// at end of turn. `#[serde(skip)]` — purely in-turn state.
-    #[serde(skip, default)]
-    pub pending_ai_cash_spending: Vec<(NationId, CashSink, Money, Option<NationId>)>,
-    /// Transient collector for AI-side cash income entries (e.g. goods sales
-    /// triggered by AI economy code). Drained into the report at end of turn.
-    #[serde(skip, default)]
-    pub pending_ai_cash_income: Vec<(NationId, Money)>,
-    /// Monotonically-increasing counter used to allocate unique `UnitId`s
-    /// for all entities created during this game (army units, civilians,
-    /// garrison militia, warships). Stored in `GameState` so two games
-    /// started from the same map key produce identical ID sequences and
-    /// therefore identical turn outcomes (determinism).
+    /// Monotonically-increasing counter used to allocate unique `UnitId`s.
     #[serde(default = "default_next_unit_id")]
     pub next_unit_id: u32,
+    /// All data-driven game definitions (tech tree, unit stats, etc.).
+    /// Reconstructed on load — not serialized.
+    #[serde(skip, default = "GameData::default")]
+    pub game_data: GameData,
+    /// Live world snapshot: map, provinces, nations, diplomacy, market.
+    pub world: WorldState,
+    /// Historical records: newspapers, battles, political snapshots, history log.
+    #[serde(default)]
+    pub archive: GameArchive,
+    /// In-turn working state: events, pending actions, last-turn flows.
+    #[serde(default)]
+    pub transient: TransientState,
 }
 
 fn default_next_unit_id() -> u32 {
@@ -140,22 +159,22 @@ impl GameState {
 
     /// Look up a nation by its ID.
     pub fn get_nation(&self, id: NationId) -> Option<&Nation> {
-        self.nations.iter().find(|n| n.id == id)
+        self.world.nations.iter().find(|n| n.id == id)
     }
 
     /// Look up a nation by its ID (mutable).
     pub fn get_nation_mut(&mut self, id: NationId) -> Option<&mut Nation> {
-        self.nations.iter_mut().find(|n| n.id == id)
+        self.world.nations.iter_mut().find(|n| n.id == id)
     }
 
     /// Look up a province by its ID.
     pub fn get_province(&self, id: ProvinceId) -> Option<&Province> {
-        self.provinces.iter().find(|p| p.id == id)
+        self.world.provinces.iter().find(|p| p.id == id)
     }
 
     /// Look up a province by its ID (mutable).
     pub fn get_province_mut(&mut self, id: ProvinceId) -> Option<&mut Province> {
-        self.provinces.iter_mut().find(|p| p.id == id)
+        self.world.provinces.iter_mut().find(|p| p.id == id)
     }
 
     /// Display string for difficulty.
@@ -171,12 +190,12 @@ impl GameState {
 
     /// Returns all Great Power nations.
     pub fn great_powers(&self) -> Vec<&Nation> {
-        self.nations.iter().filter(|n| n.is_great_power()).collect()
+        self.world.nations.iter().filter(|n| n.is_great_power()).collect()
     }
 
     /// Returns all Minor Nations.
     pub fn minor_nations(&self) -> Vec<&Nation> {
-        self.nations
+        self.world.nations
             .iter()
             .filter(|n| !n.is_great_power())
             .collect()
@@ -189,7 +208,7 @@ impl GameState {
 
     /// Record a domain event.
     pub fn push_event(&mut self, event: DomainEvent) {
-        self.events.push(event);
+        self.transient.events.push(event);
     }
 
     /// Whether the game is over (turn >= 1915 Q1).
@@ -333,7 +352,7 @@ impl GameState {
     pub fn find_nation_by_name(&self, partial: &str) -> Option<&Nation> {
         let lower = partial.to_lowercase();
         let matches: Vec<&Nation> = self
-            .nations
+            .world.nations
             .iter()
             .filter(|n| n.name.to_lowercase().contains(&lower))
             .collect();
@@ -587,7 +606,7 @@ pub fn new_game_with_seed_and_config(
 
         // Starting freight cars (from game config)
         let starting_cars = game_data.game_config.starting_freight_cars;
-        nation.transport.build_freight_cars(starting_cars);
+        nation.military.transport.build_freight_cars(starting_cars);
 
         // Starting civilians: 1 Farmer + 1 Forester + N Engineers for each Great Power
         let farmer = Civilian::new(
@@ -602,10 +621,10 @@ pub fn new_game_with_seed_and_config(
             setup.nation_id,
         );
         id_counter += 1;
-        nation.civilians.push(farmer);
-        nation.civilians.push(forester);
+        nation.military.civilians.push(farmer);
+        nation.military.civilians.push(forester);
         for _ in 0..game_data.game_config.starting_engineers {
-            nation.civilians.push(Civilian::new(
+            nation.military.civilians.push(Civilian::new(
                 crate::map::UnitId(id_counter),
                 CivilianType::Engineer,
                 setup.nation_id,
@@ -619,7 +638,7 @@ pub fn new_game_with_seed_and_config(
             ShipType::Trader,
             setup.nation_id,
         );
-        nation.merchant_fleet.push(trader);
+        nation.military.merchant_fleet.push(trader);
 
         // Starting warship: 1 Frigate for each Great Power
         let frigate = Ship::new(
@@ -627,18 +646,18 @@ pub fn new_game_with_seed_and_config(
             ShipType::Frigate,
             setup.nation_id,
         );
-        nation.warships.push(frigate);
+        nation.military.warships.push(frigate);
 
         // Starting army: 4 Regulars + 1 Light Artillery at capital
         for j in 0..4u32 {
-            nation.army.push(crate::military::units::ArmyUnit::new(
+            nation.military.army.push(crate::military::units::ArmyUnit::new(
                 UnitId(1_000_000 + i as u32 * 10 + j),
                 crate::military::units::ArmyUnitType::Regulars,
                 setup.nation_id,
                 setup.capital_province,
             ));
         }
-        nation.army.push(crate::military::units::ArmyUnit::new(
+        nation.military.army.push(crate::military::units::ArmyUnit::new(
             UnitId(1_000_000 + i as u32 * 10 + 4),
             crate::military::units::ArmyUnitType::LightArtillery,
             setup.nation_id,
@@ -653,7 +672,7 @@ pub fn new_game_with_seed_and_config(
         for &pid in &setup.province_ids {
             for _ in 0..default_garrison {
                 nation
-                    .army
+                    .military.army
                     .push(crate::military::combat::spawn_militia_unit(
                         &mut id_counter,
                         setup.nation_id,
@@ -664,7 +683,7 @@ pub fn new_game_with_seed_and_config(
 
         // Assign AI personality for non-human Great Powers
         if i != human_idx {
-            nation.ai_personality = Some(personalities[ai_personality_idx]);
+            nation.diplomacy.ai_personality = Some(personalities[ai_personality_idx]);
             ai_personality_idx += 1;
 
             // AI difficulty bonuses (applied to AI nations only, not human)
@@ -697,14 +716,14 @@ pub fn new_game_with_seed_and_config(
 
         // Starting army: 4 Regulars + 1 Light Artillery at capital
         for j in 0..4u32 {
-            nation.army.push(crate::military::units::ArmyUnit::new(
+            nation.military.army.push(crate::military::units::ArmyUnit::new(
                 UnitId(1_100_000 + i as u32 * 10 + j),
                 crate::military::units::ArmyUnitType::Regulars,
                 setup.nation_id,
                 setup.capital_province,
             ));
         }
-        nation.army.push(crate::military::units::ArmyUnit::new(
+        nation.military.army.push(crate::military::units::ArmyUnit::new(
             UnitId(1_100_000 + i as u32 * 10 + 4),
             crate::military::units::ArmyUnitType::LightArtillery,
             setup.nation_id,
@@ -716,7 +735,7 @@ pub fn new_game_with_seed_and_config(
         for &pid in &setup.province_ids {
             for _ in 0..minor_default_garrison {
                 nation
-                    .army
+                    .military.army
                     .push(crate::military::combat::spawn_militia_unit(
                         &mut id_counter,
                         setup.nation_id,
@@ -726,7 +745,7 @@ pub fn new_game_with_seed_and_config(
         }
         // A single GarrisonArtillery at the minor nation's capital.
         nation
-            .army
+            .military.army
             .push(crate::military::combat::spawn_garrison_artillery_unit(
                 &mut id_counter,
                 setup.nation_id,
@@ -749,29 +768,21 @@ pub fn new_game_with_seed_and_config(
     let mut game_state = GameState {
         turn: TurnNumber::new(1),
         difficulty,
-        map_key: map_key.to_string(),
-        hex_map: generated.hex_map,
-        provinces: generated.provinces,
-        nations,
         human_player_nation: human_nation_id,
-        events: Vec::new(),
-        game_data,
-        diplomacy,
-        pending_attacks: Vec::new(),
-        pending_moves: Vec::new(),
-        pending_landings: Vec::new(),
-        history: Vec::new(),
-        high_scores: Vec::new(),
-        newspaper_archive: Vec::new(),
-        battle_archive: Vec::new(),
-        political_archive: Vec::new(),
         ai_debug: false,
         observer_mode: false,
-        last_cash_flow: HashMap::new(),
-        last_resource_flow: HashMap::new(),
-        pending_ai_cash_spending: Vec::new(),
-        pending_ai_cash_income: Vec::new(),
         next_unit_id: id_counter,
+        game_data,
+        world: WorldState {
+            map_key: map_key.to_string(),
+            hex_map: generated.hex_map,
+            provinces: generated.provinces,
+            nations,
+            diplomacy,
+            market_state: MarketState::new(),
+        },
+        archive: GameArchive::default(),
+        transient: TransientState::default(),
     };
 
     // Refresh the per-province `garrison_count` cache now that militia have
@@ -780,7 +791,7 @@ pub fn new_game_with_seed_and_config(
     // this step. Each province's cache is recomputed from the authoritative
     // live militia count in the owning nation's army.
     {
-        let snapshot: Vec<ProvinceId> = game_state.provinces.iter().map(|p| p.id).collect();
+        let snapshot: Vec<ProvinceId> = game_state.world.provinces.iter().map(|p| p.id).collect();
         for pid in snapshot {
             let owner = match game_state.get_province(pid) {
                 Some(p) => p.owner,
@@ -801,11 +812,11 @@ pub fn new_game_with_seed_and_config(
     // nations alike). Capitals act as implicit depots so the capital province is
     // always harvesting from turn 1 without requiring the player to build one.
     let capital_tiles: Vec<crate::hex::HexCoord> = game_state
-        .nations
+        .world.nations
         .iter()
         .filter_map(|n| {
             game_state
-                .provinces
+                .world.provinces
                 .iter()
                 .find(|p| p.id == n.capital_province_id)
                 .map(|p| p.capital_tile)
@@ -813,24 +824,24 @@ pub fn new_game_with_seed_and_config(
         .collect();
     for cap_tile in capital_tiles {
         let _ =
-            crate::map::infrastructure::place_depot_unchecked(&mut game_state.hex_map, cap_tile);
+            crate::map::infrastructure::place_depot_unchecked(&mut game_state.world.hex_map, cap_tile);
         // Persistent "this tile was a country capital" flag. Survives conquest
         // so captured foreign capitals keep acting as implicit depots.
-        if let Some(tile) = game_state.hex_map.get_tile_mut(cap_tile) {
+        if let Some(tile) = game_state.world.hex_map.get_tile_mut(cap_tile) {
             tile.is_country_capital = true;
         }
     }
 
     // Give minor nation capitals a level 1 fort (original Imperialism defensive mechanic).
     // This makes minor nations harder to conquer early, requiring real military buildup.
-    for nation in &game_state.nations {
+    for nation in &game_state.world.nations {
         if nation.is_great_power() {
             continue;
         }
         let cap_pid = nation.capital_province_id;
-        if let Some(province) = game_state.provinces.iter().find(|p| p.id == cap_pid) {
+        if let Some(province) = game_state.world.provinces.iter().find(|p| p.id == cap_pid) {
             let cap_tile = province.capital_tile;
-            if let Some(tile) = game_state.hex_map.get_tile_mut(cap_tile) {
+            if let Some(tile) = game_state.world.hex_map.get_tile_mut(cap_tile) {
                 tile.infrastructure.has_fort = true;
                 tile.infrastructure.fort_level = 1;
             }
@@ -843,9 +854,9 @@ pub fn new_game_with_seed_and_config(
     // Human-slot nations (no personality yet at this point) are skipped; the
     // observer-mode promotion in batch.rs reassigns them before the first turn.
     let gp_ids_for_targets: Vec<(NationId, crate::ai::AiPersonality)> = game_state
-        .nations
+        .world.nations
         .iter()
-        .filter_map(|n| n.ai_personality.map(|p| (n.id, p)))
+        .filter_map(|n| n.diplomacy.ai_personality.map(|p| (n.id, p)))
         .filter(|(id, _)| {
             game_state
                 .get_nation(*id)
@@ -857,7 +868,7 @@ pub fn new_game_with_seed_and_config(
             crate::ai::priority_target_count(&game_state.game_data.game_config, personality);
         let targets = crate::ai::pick_priority_minor_targets(&game_state, gp_id, count, &[]);
         if let Some(nation) = game_state.get_nation_mut(gp_id) {
-            nation.ai_priority_state.priority_minor_targets = targets;
+            nation.diplomacy.ai_priority_state.priority_minor_targets = targets;
         }
     }
 
@@ -877,7 +888,7 @@ pub fn new_game_with_seed_and_config(
                 .unwrap_or_default();
 
             for tile_coord in &capital_tiles {
-                if let Some(tile) = game_state.hex_map.get_tile_mut(*tile_coord) {
+                if let Some(tile) = game_state.world.hex_map.get_tile_mut(*tile_coord) {
                     // Only auto-reveal on tiles that require prospecting and already
                     // have a deposit placed by the map generator. We don't fabricate
                     // deposits — we just reveal what the generator already placed.
@@ -936,7 +947,7 @@ pub fn new_observer_game_with_config(
     let human_id = game.human_player_nation;
     let extra = random_personalities(personality_seed ^ 0xDEAD_BEEF, 1)[0];
     if let Some(nation) = game.get_nation_mut(human_id) {
-        nation.ai_personality = Some(extra);
+        nation.diplomacy.ai_personality = Some(extra);
         match difficulty {
             Difficulty::Hard => nation.economy.treasury += Money::dollars(1000),
             Difficulty::NighOnImpossible => nation.economy.treasury += Money::dollars(5000),
@@ -948,7 +959,7 @@ pub fn new_observer_game_with_config(
     let count = crate::ai::priority_target_count(&game.game_data.game_config, extra);
     let targets = crate::ai::pick_priority_minor_targets(&game, human_id, count, &[]);
     if let Some(nation) = game.get_nation_mut(human_id) {
-        nation.ai_priority_state.priority_minor_targets = targets;
+        nation.diplomacy.ai_priority_state.priority_minor_targets = targets;
     }
     game.observer_mode = true;
     game
@@ -1001,29 +1012,22 @@ mod tests {
         GameState {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
-            map_key: "europe".to_string(),
-            hex_map: HexMap::new(10, 10),
-            provinces: vec![province1, province2],
-            nations: vec![nation1, nation2],
             human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
             ai_debug: false,
             observer_mode: false,
-            last_cash_flow: HashMap::new(),
-            last_resource_flow: HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,}
+            next_unit_id: 6_000_000,
+            game_data: GameData::default(),
+            world: WorldState {
+                map_key: "europe".to_string(),
+                hex_map: HexMap::new(10, 10),
+                provinces: vec![province1, province2],
+                nations: vec![nation1, nation2],
+                diplomacy: DiplomacyState::new(),
+                market_state: MarketState::new(),
+            },
+            archive: GameArchive::default(),
+            transient: TransientState::default(),
+        }
     }
 
     #[test]
@@ -1031,7 +1035,7 @@ mod tests {
         let gs = new_game("test", Difficulty::Normal, 0);
         assert_eq!(gs.great_powers().len(), 7);
         assert_eq!(gs.minor_nations().len(), 16);
-        assert_eq!(gs.provinces.len(), 120);
+        assert_eq!(gs.world.provinces.len(), 120);
         assert_eq!(gs.turn, TurnNumber::new(1));
         assert!(!gs.is_game_over());
     }
@@ -1053,9 +1057,9 @@ mod tests {
 
     fn render_test_game() -> GameState {
         let mut g = sample_game_state();
-        g.nations[0].name = "Devron".to_string();
-        g.nations[1].name = "Smallton".to_string();
-        g.provinces[0].name = "Capital Province".to_string();
+        g.world.nations[0].name = "Devron".to_string();
+        g.world.nations[1].name = "Smallton".to_string();
+        g.world.provinces[0].name = "Capital Province".to_string();
         g
     }
 
@@ -1073,7 +1077,7 @@ mod tests {
     #[test]
     fn render_history_event_war_declared_with_protectee() {
         let mut g = render_test_game();
-        g.nations.push(Nation::new(
+        g.world.nations.push(Nation::new(
             NationId(3),
             "Patagon".to_string(),
             NationColor::Yellow,
@@ -1547,7 +1551,7 @@ mod tests {
                 difficulty
             );
             assert_eq!(
-                gs.provinces.len(),
+                gs.world.provinces.len(),
                 120,
                 "Failed for difficulty {:?}",
                 difficulty
@@ -1655,11 +1659,11 @@ mod tests {
     #[test]
     fn push_event_stores_event() {
         let mut gs = sample_game_state();
-        assert!(gs.events.is_empty());
+        assert!(gs.transient.events.is_empty());
         gs.push_event(DomainEvent::TurnStarted(TurnStarted {
             turn: TurnNumber::new(1),
         }));
-        assert_eq!(gs.events.len(), 1);
+        assert_eq!(gs.transient.events.len(), 1);
     }
 
     // ── Game over ─────────────────────────────────────────────
@@ -1699,7 +1703,7 @@ mod tests {
         let expected = 2 + gs.game_data.game_config.starting_engineers as usize;
         for nation in gs.great_powers() {
             assert_eq!(
-                nation.civilians.len(),
+                nation.military.civilians.len(),
                 expected,
                 "Great Power {} should start with {} civilians",
                 nation.name,
@@ -1707,20 +1711,20 @@ mod tests {
             );
             // First should be a Farmer
             assert_eq!(
-                nation.civilians[0].civilian_type,
+                nation.military.civilians[0].civilian_type,
                 CivilianType::Farmer,
                 "{} should have a Farmer as first civilian",
                 nation.name
             );
             // Second should be a Forester
             assert_eq!(
-                nation.civilians[1].civilian_type,
+                nation.military.civilians[1].civilian_type,
                 CivilianType::Forester,
                 "{} should have a Forester as second civilian",
                 nation.name
             );
             // Remaining should be Engineers
-            for (i, civ) in nation.civilians.iter().enumerate().skip(2) {
+            for (i, civ) in nation.military.civilians.iter().enumerate().skip(2) {
                 assert_eq!(
                     civ.civilian_type,
                     CivilianType::Engineer,
@@ -1737,7 +1741,7 @@ mod tests {
         let gs = new_game("test", Difficulty::Normal, 0);
         for nation in gs.minor_nations() {
             assert!(
-                nation.civilians.is_empty(),
+                nation.military.civilians.is_empty(),
                 "Minor Nation {} should have no civilians",
                 nation.name
             );
@@ -1750,7 +1754,7 @@ mod tests {
         let all_ids: Vec<crate::map::UnitId> = gs
             .great_powers()
             .iter()
-            .flat_map(|n| n.civilians.iter().map(|c| c.id))
+            .flat_map(|n| n.military.civilians.iter().map(|c| c.id))
             .collect();
         for i in 0..all_ids.len() {
             for j in (i + 1)..all_ids.len() {
@@ -1811,7 +1815,7 @@ mod tests {
     #[test]
     fn high_scores_default_empty() {
         let gs = sample_game_state();
-        assert!(gs.high_scores.is_empty());
+        assert!(gs.archive.high_scores.is_empty());
     }
 
     #[test]
@@ -1823,12 +1827,12 @@ mod tests {
         // Record a high score
         let score = crate::turn::calculate_score(gs.get_nation(NationId(1)).unwrap());
         let date_str = format!("{} Q{}", gs.turn.year(), gs.turn.quarter());
-        gs.high_scores
+        gs.archive.high_scores
             .push(("France".to_string(), score.total, date_str));
 
-        assert_eq!(gs.high_scores.len(), 1);
-        assert_eq!(gs.high_scores[0].0, "France");
-        assert_eq!(gs.high_scores[0].2, "1915 Q1");
+        assert_eq!(gs.archive.high_scores.len(), 1);
+        assert_eq!(gs.archive.high_scores[0].0, "France");
+        assert_eq!(gs.archive.high_scores[0].2, "1915 Q1");
     }
 
     // ── Starting warehouse by difficulty ──────────────────────────
@@ -1903,7 +1907,7 @@ mod tests {
         // Check that any tiles with deposits in the capital province
         // have improvement_level >= 1 (meaning they were auto-prospected).
         for tile_coord in &province.tiles {
-            if let Some(tile) = gs.hex_map.get_tile(*tile_coord)
+            if let Some(tile) = gs.world.hex_map.get_tile(*tile_coord)
                 && tile.terrain().can_have_deposits()
                 && tile.resource_deposit().is_some()
             {
@@ -1927,7 +1931,7 @@ mod tests {
         // On Hard, tiles with deposits should NOT be auto-prospected
         // (improvement_level should still be 0 for prospectable terrain).
         for tile_coord in &province.tiles {
-            if let Some(tile) = gs.hex_map.get_tile(*tile_coord)
+            if let Some(tile) = gs.world.hex_map.get_tile(*tile_coord)
                 && tile.terrain().can_have_deposits()
             {
                 assert_eq!(

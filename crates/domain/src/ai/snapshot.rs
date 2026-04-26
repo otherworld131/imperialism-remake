@@ -7,6 +7,7 @@
 //! mid-tick state drift.
 
 use crate::economy::buildings::BuildingType;
+use crate::economy::market::Trend;
 use crate::economy::trade::Commodity;
 use crate::game_state::GameState;
 use crate::types::*;
@@ -37,6 +38,12 @@ pub struct NationEconomySnapshot {
     // ── Logistics ───────────────────────────────────────────────────────────
     /// Total freight-car transport capacity for this nation.
     pub freight_capacity: u32,
+
+    // ── Market view (#164) ───────────────────────────────────────────────────
+    /// Current market price per commodity (empty until the first trade turn).
+    pub market_prices: HashMap<Commodity, Money>,
+    /// Price trend per commodity over the last 4 turns.
+    pub market_trends: HashMap<Commodity, Trend>,
 }
 
 impl NationEconomySnapshot {
@@ -66,6 +73,15 @@ impl NationEconomySnapshot {
             .map(|b| (b.building_type, b.pending_capacity))
             .collect();
 
+        // Snapshot market prices and trends for all commodities with history (#164).
+        let market_prices: HashMap<Commodity, Money> =
+            state.world.market_state.commodities_with_price().collect();
+        let market_trends: HashMap<Commodity, Trend> = state
+            .world.market_state
+            .commodities_with_history()
+            .map(|c| (c, state.world.market_state.trend(c, 4)))
+            .collect();
+
         Self {
             nation_id,
             treasury: nation.economy.treasury,
@@ -73,7 +89,9 @@ impl NationEconomySnapshot {
             buildings,
             pending_capacities,
             total_workers: nation.economy.labor.total_workers(),
-            freight_capacity: nation.transport.total_capacity(),
+            freight_capacity: nation.military.transport.total_capacity(),
+            market_prices,
+            market_trends,
         }
     }
 
@@ -87,6 +105,8 @@ impl NationEconomySnapshot {
             pending_capacities: HashMap::new(),
             total_workers: 0,
             freight_capacity: 0,
+            market_prices: HashMap::new(),
+            market_trends: HashMap::new(),
         }
     }
 
@@ -132,6 +152,20 @@ impl NationEconomySnapshot {
     pub fn building_capacity(&self, bt: BuildingType) -> u32 {
         self.buildings.get(&bt).copied().unwrap_or(0)
     }
+
+    // ── Market helpers (#164) ────────────────────────────────────────────────
+
+    /// Current market price for a commodity (Money::ZERO if no data yet).
+    pub fn market_price(&self, c: Commodity) -> Money {
+        self.market_prices.get(&c).copied().unwrap_or(Money::ZERO)
+    }
+
+    /// Price trend for a commodity over the last 4 turns.
+    pub fn market_trend(&self, c: Commodity) -> Trend {
+        self.market_trends.get(&c).copied().unwrap_or(Trend::Stable)
+    }
+
+    // ── Food helpers ─────────────────────────────────────────────────────────
 
     /// Total food (Grain + Fruit + Livestock) in inventory.
     pub fn total_food(&self) -> u32 {
@@ -183,16 +217,17 @@ mod tests {
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
             next_unit_id: 0,
+            market_state: crate::economy::market::MarketState::new(),
         }
     }
 
     #[test]
     fn snapshot_reflects_inventory() {
         let mut game = minimal_game();
-        let nation_id = game.nations[0].id;
-        game.nations[0].add_resource(ResourceType::Timber, 10);
-        game.nations[0].add_material(MaterialType::Lumber, 5);
-        game.nations[0].add_goods(GoodsType::Furniture, 2);
+        let nation_id = game.world.nations[0].id;
+        game.world.nations[0].add_resource(ResourceType::Timber, 10);
+        game.world.nations[0].add_material(MaterialType::Lumber, 5);
+        game.world.nations[0].add_goods(GoodsType::Furniture, 2);
 
         let snap = NationEconomySnapshot::build(&game, nation_id);
         assert_eq!(snap.resource(ResourceType::Timber), 10);
@@ -203,8 +238,8 @@ mod tests {
     #[test]
     fn snapshot_reflects_buildings() {
         let mut game = minimal_game();
-        let nation_id = game.nations[0].id;
-        game.nations[0]
+        let nation_id = game.world.nations[0].id;
+        game.world.nations[0]
             .economy
             .buildings
             .push(Building::new(BuildingType::LumberMill, 4));
@@ -218,8 +253,8 @@ mod tests {
     #[test]
     fn snapshot_treasury_matches_nation() {
         let mut game = minimal_game();
-        let nation_id = game.nations[0].id;
-        game.nations[0].economy.treasury = Money::dollars(5000);
+        let nation_id = game.world.nations[0].id;
+        game.world.nations[0].economy.treasury = Money::dollars(5000);
 
         let snap = NationEconomySnapshot::build(&game, nation_id);
         assert_eq!(snap.treasury, Money::dollars(5000));

@@ -73,7 +73,7 @@ fn observer_cash_flow_populates_cumulative_totals_on_nations() {
     let any_activity = game
         .great_powers()
         .iter()
-        .any(|n| !n.cash_income_totals.is_empty() || !n.cash_expense_totals.is_empty());
+        .any(|n| !n.archives.cash_income_totals.is_empty() || !n.archives.cash_expense_totals.is_empty());
     assert!(
         any_activity,
         "expected at least one GP to have non-empty cash totals after 3 observer turns"
@@ -86,14 +86,14 @@ fn debug_dump_turn_one() {
     let mut game = new_observer_game("cashflow_debug", Difficulty::Normal);
     println!(
         "Starting treasuries: {:?}",
-        game.nations
+        game.world.nations
             .iter()
             .filter(|n| n.is_great_power())
             .map(|n| (n.name.clone(), n.economy.treasury.as_dollars()))
             .collect::<Vec<_>>()
     );
     let report = process_turn(&mut game);
-    for n in game.nations.iter().filter(|n| n.is_great_power()) {
+    for n in game.world.nations.iter().filter(|n| n.is_great_power()) {
         let flow = report.cash_flow.get(&n.id).unwrap();
         println!(
             "  {}: opening=${} closing=${} mismatch=${} income={:?} expense={:?}",
@@ -194,12 +194,12 @@ fn observer_cash_flow_persists_last_turn_snapshot_on_game_state() {
     let mut game = new_observer_game("cashflow_last", Difficulty::Normal);
     process_turn(&mut game);
     assert!(
-        !game.last_cash_flow.is_empty(),
-        "game.last_cash_flow should be populated after a turn"
+        !game.transient.last_cash_flow.is_empty(),
+        "game.transient.last_cash_flow should be populated after a turn"
     );
     for nation in game.great_powers() {
         assert!(
-            game.last_cash_flow.contains_key(&nation.id),
+            game.transient.last_cash_flow.contains_key(&nation.id),
             "missing last_cash_flow entry for GP {}",
             nation.name
         );

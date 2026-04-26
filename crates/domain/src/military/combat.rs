@@ -1,3 +1,4 @@
+use crate::data::GameConfig;
 use crate::map::UnitId;
 use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::types::*;
@@ -42,29 +43,29 @@ pub struct BattleConfig {
 }
 
 impl BattleConfig {
-    pub fn with_targeting(targeting: TargetingPriority) -> Self {
+    pub fn with_targeting(targeting: TargetingPriority, config: &GameConfig) -> Self {
         Self {
             targeting,
             attacker_can_retreat: true,
             defender_can_retreat: false,
             attacker_retreat_ratio: f64::INFINITY,
             defender_retreat_ratio: f64::INFINITY,
-            attacker_postbattle_fp_loss: 0.60,
-            defender_postbattle_fp_loss: 2.0,
+            attacker_postbattle_fp_loss: config.battle_attacker_fp_loss_ratio,
+            defender_postbattle_fp_loss: config.battle_defender_fp_loss_ratio,
         }
     }
 }
 
 /// Calculate defense bonus percentage from terrain type.
 ///
-/// Mountain: +50%, Hills (FertileHills/BarrenHills): +30%, Forest: +20%,
-/// Swamp: +15%, all others: 0%.
-pub fn terrain_defense_bonus(terrain: TerrainType) -> f64 {
+/// Mountain: +50%, Hills: +30%, Forest: +20%, Swamp: +15%, all others: 0%.
+/// Values are read from the provided [`GameConfig`] (Lua-tunable via D-5).
+pub fn terrain_defense_bonus(terrain: TerrainType, config: &GameConfig) -> f64 {
     match terrain {
-        TerrainType::Mountain => 0.50,
-        TerrainType::Hills => 0.30,
-        TerrainType::Forest => 0.20,
-        TerrainType::Swamp => 0.15,
+        TerrainType::Mountain => config.terrain_defense_mountain,
+        TerrainType::Hills => config.terrain_defense_hills,
+        TerrainType::Forest => config.terrain_defense_forest,
+        TerrainType::Swamp => config.terrain_defense_swamp,
         _ => 0.0,
     }
 }
@@ -72,11 +73,12 @@ pub fn terrain_defense_bonus(terrain: TerrainType) -> f64 {
 /// Calculate defense bonus multiplier from fort level.
 ///
 /// Level 0: no bonus, Level 1: +20%, Level 2: +40%, Level 3: +60%.
-pub fn fort_defense_bonus(fort_level: u8) -> f64 {
+/// Values are read from the provided [`GameConfig`] (Lua-tunable via D-5).
+pub fn fort_defense_bonus(fort_level: u8, config: &GameConfig) -> f64 {
     match fort_level {
-        1 => 0.20,
-        2 => 0.40,
-        3 => 0.60,
+        1 => config.fort_defense_level1,
+        2 => config.fort_defense_level2,
+        3 => config.fort_defense_level3,
         _ => 0.0,
     }
 }
@@ -117,7 +119,7 @@ pub fn spawn_garrison_artillery_unit(
 /// cached count.
 pub fn seed_militia_from_garrison_count(game: &mut crate::game_state::GameState) {
     let snapshots: Vec<(NationId, ProvinceId, u8)> = game
-        .provinces
+        .world.provinces
         .iter()
         .map(|p| (p.owner, p.id, p.garrison_count))
         .collect();
@@ -128,7 +130,7 @@ pub fn seed_militia_from_garrison_count(game: &mut crate::game_state::GameState)
         let existing = game
             .get_nation(owner)
             .map(|n| {
-                n.army
+                n.military.army
                     .iter()
                     .filter(|u| u.position == pid && u.unit_type == ArmyUnitType::Militia)
                     .count()
@@ -140,7 +142,7 @@ pub fn seed_militia_from_garrison_count(game: &mut crate::game_state::GameState)
         for _ in existing..(target as usize) {
             let unit = spawn_militia_unit(&mut game.next_unit_id, owner, pid);
             if let Some(nation) = game.get_nation_mut(owner) {
-                nation.army.push(unit);
+                nation.military.army.push(unit);
             }
         }
     }
@@ -244,8 +246,8 @@ fn has_siege_artillery(units: &[ArmyUnit]) -> bool {
 }
 
 /// Calculate the effective fort defense bonus, reduced by 50% if attacker has siege artillery.
-pub fn effective_fort_bonus(fort_level: u8, attacker_has_siege: bool) -> f64 {
-    let base = fort_defense_bonus(fort_level);
+pub fn effective_fort_bonus(fort_level: u8, attacker_has_siege: bool, config: &GameConfig) -> f64 {
+    let base = fort_defense_bonus(fort_level, config);
     if attacker_has_siege && base > 0.0 {
         base * 0.5
     } else {
@@ -281,13 +283,15 @@ pub fn resolve_battle(
     terrain: Option<TerrainType>,
     fort_level: u8,
 ) -> BattleResult {
-    resolve_battle_with_targeting(
+    let game_cfg = GameConfig::default();
+    resolve_battle_with_config(
         attacker,
         defender,
         province,
         terrain,
         fort_level,
-        TargetingPriority::StrongestFirst,
+        BattleConfig::with_targeting(TargetingPriority::StrongestFirst, &game_cfg),
+        &game_cfg,
     )
 }
 
@@ -303,13 +307,15 @@ pub fn resolve_battle_with_targeting(
     fort_level: u8,
     targeting: TargetingPriority,
 ) -> BattleResult {
+    let game_cfg = GameConfig::default();
     resolve_battle_with_config(
         attacker,
         defender,
         province,
         terrain,
         fort_level,
-        BattleConfig::with_targeting(targeting),
+        BattleConfig::with_targeting(targeting, &game_cfg),
+        &game_cfg,
     )
 }
 
@@ -334,6 +340,7 @@ pub fn resolve_battle_with_config(
     terrain: Option<TerrainType>,
     fort_level: u8,
     config: BattleConfig,
+    game_config: &GameConfig,
 ) -> BattleResult {
     let mut atk_units = attacker.units.clone();
     let mut def_units = defender.units.clone();
@@ -341,10 +348,12 @@ pub fn resolve_battle_with_config(
     let attacker_initial_count = atk_units.len();
     let defender_initial_count = def_units.len();
     let attacker_initial_fp = total_firepower(&atk_units);
-    let terrain_bonus_init = terrain.map(terrain_defense_bonus).unwrap_or(0.0);
+    let terrain_bonus_init = terrain
+        .map(|t| terrain_defense_bonus(t, game_config))
+        .unwrap_or(0.0);
     let attacker_has_siege = has_siege_artillery(&atk_units);
     let siege_reduced_fort = attacker_has_siege && fort_level > 0;
-    let fort_bonus_init = effective_fort_bonus(fort_level, attacker_has_siege);
+    let fort_bonus_init = effective_fort_bonus(fort_level, attacker_has_siege, game_config);
     let defender_initial_fp =
         total_firepower(&def_units) * 1.2 * (1.0 + terrain_bonus_init) * (1.0 + fort_bonus_init)
             + militia_count(&def_units) as f64 * 8.0;
@@ -551,8 +560,10 @@ pub fn resolve_battle_with_config(
 
         // Calculate firepower for this round
         let atk_fp = total_firepower(&atk_units);
-        let terrain_bonus = terrain.map(terrain_defense_bonus).unwrap_or(0.0);
-        let fort_bonus = effective_fort_bonus(fort_level, attacker_has_siege);
+        let terrain_bonus = terrain
+            .map(|t| terrain_defense_bonus(t, game_config))
+            .unwrap_or(0.0);
+        let fort_bonus = effective_fort_bonus(fort_level, attacker_has_siege, game_config);
         let def_fp = total_firepower(&def_units) * 1.2 * (1.0 + terrain_bonus) * (1.0 + fort_bonus)
             + militia_count(&def_units) as f64 * 8.0;
 
@@ -1058,14 +1069,15 @@ mod tests {
     #[test]
     fn terrain_defense_bonus_values() {
         use super::terrain_defense_bonus;
+        let cfg = GameConfig::default();
 
-        assert!((terrain_defense_bonus(TerrainType::Mountain) - 0.50).abs() < f64::EPSILON);
-        assert!((terrain_defense_bonus(TerrainType::Hills) - 0.30).abs() < f64::EPSILON);
-        assert!((terrain_defense_bonus(TerrainType::Forest) - 0.20).abs() < f64::EPSILON);
-        assert!((terrain_defense_bonus(TerrainType::Swamp) - 0.15).abs() < f64::EPSILON);
-        assert!((terrain_defense_bonus(TerrainType::Grassland) - 0.0).abs() < f64::EPSILON);
-        assert!((terrain_defense_bonus(TerrainType::Desert) - 0.0).abs() < f64::EPSILON);
-        assert!((terrain_defense_bonus(TerrainType::Sea) - 0.0).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Mountain, &cfg) - 0.50).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Hills, &cfg) - 0.30).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Forest, &cfg) - 0.20).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Swamp, &cfg) - 0.15).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Grassland, &cfg) - 0.0).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Desert, &cfg) - 0.0).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Sea, &cfg) - 0.0).abs() < f64::EPSILON);
     }
 
     // ── Fort defense bonus ──────────────────────────────────────
@@ -1073,12 +1085,13 @@ mod tests {
     #[test]
     fn fort_defense_bonus_values() {
         use super::fort_defense_bonus;
+        let cfg = GameConfig::default();
 
-        assert!((fort_defense_bonus(0) - 0.0).abs() < f64::EPSILON);
-        assert!((fort_defense_bonus(1) - 0.20).abs() < f64::EPSILON);
-        assert!((fort_defense_bonus(2) - 0.40).abs() < f64::EPSILON);
-        assert!((fort_defense_bonus(3) - 0.60).abs() < f64::EPSILON);
-        assert!((fort_defense_bonus(4) - 0.0).abs() < f64::EPSILON); // out of range
+        assert!((fort_defense_bonus(0, &cfg) - 0.0).abs() < f64::EPSILON);
+        assert!((fort_defense_bonus(1, &cfg) - 0.20).abs() < f64::EPSILON);
+        assert!((fort_defense_bonus(2, &cfg) - 0.40).abs() < f64::EPSILON);
+        assert!((fort_defense_bonus(3, &cfg) - 0.60).abs() < f64::EPSILON);
+        assert!((fort_defense_bonus(4, &cfg) - 0.0).abs() < f64::EPSILON); // out of range
     }
 
     // ── Mountain terrain helps defender win ──────────────────────
@@ -1379,23 +1392,26 @@ mod tests {
     #[test]
     fn effective_fort_bonus_without_siege() {
         // Without siege, fort bonus is unchanged
-        assert!((effective_fort_bonus(1, false) - 0.20).abs() < f64::EPSILON);
-        assert!((effective_fort_bonus(2, false) - 0.40).abs() < f64::EPSILON);
-        assert!((effective_fort_bonus(3, false) - 0.60).abs() < f64::EPSILON);
+        let cfg = GameConfig::default();
+        assert!((effective_fort_bonus(1, false, &cfg) - 0.20).abs() < f64::EPSILON);
+        assert!((effective_fort_bonus(2, false, &cfg) - 0.40).abs() < f64::EPSILON);
+        assert!((effective_fort_bonus(3, false, &cfg) - 0.60).abs() < f64::EPSILON);
     }
 
     #[test]
     fn effective_fort_bonus_with_siege_reduces_by_half() {
         // With siege, fort bonus is halved
-        assert!((effective_fort_bonus(1, true) - 0.10).abs() < f64::EPSILON);
-        assert!((effective_fort_bonus(2, true) - 0.20).abs() < f64::EPSILON);
-        assert!((effective_fort_bonus(3, true) - 0.30).abs() < f64::EPSILON);
+        let cfg = GameConfig::default();
+        assert!((effective_fort_bonus(1, true, &cfg) - 0.10).abs() < f64::EPSILON);
+        assert!((effective_fort_bonus(2, true, &cfg) - 0.20).abs() < f64::EPSILON);
+        assert!((effective_fort_bonus(3, true, &cfg) - 0.30).abs() < f64::EPSILON);
     }
 
     #[test]
     fn effective_fort_bonus_no_fort_unaffected_by_siege() {
-        assert!((effective_fort_bonus(0, false) - 0.0).abs() < f64::EPSILON);
-        assert!((effective_fort_bonus(0, true) - 0.0).abs() < f64::EPSILON);
+        let cfg = GameConfig::default();
+        assert!((effective_fort_bonus(0, false, &cfg) - 0.0).abs() < f64::EPSILON);
+        assert!((effective_fort_bonus(0, true, &cfg) - 0.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -1677,21 +1693,22 @@ mod tests {
         assert!((guards.effective_firepower() - 7.5).abs() < f64::EPSILON);
 
         // Terrain defense bonus applied to defender
-        let terrain_bonus = terrain_defense_bonus(TerrainType::Mountain);
+        let cfg = GameConfig::default();
+        let terrain_bonus = terrain_defense_bonus(TerrainType::Mountain, &cfg);
         assert!((terrain_bonus - 0.50).abs() < f64::EPSILON);
 
-        let terrain_bonus_hills = terrain_defense_bonus(TerrainType::Hills);
+        let terrain_bonus_hills = terrain_defense_bonus(TerrainType::Hills, &cfg);
         assert!((terrain_bonus_hills - 0.30).abs() < f64::EPSILON);
 
-        let terrain_bonus_forest = terrain_defense_bonus(TerrainType::Forest);
+        let terrain_bonus_forest = terrain_defense_bonus(TerrainType::Forest, &cfg);
         assert!((terrain_bonus_forest - 0.20).abs() < f64::EPSILON);
 
         // Fort defense bonus
-        let fort_bonus = fort_defense_bonus(3);
+        let fort_bonus = fort_defense_bonus(3, &cfg);
         assert!((fort_bonus - 0.60).abs() < f64::EPSILON);
 
         // Siege artillery reduces fort bonus by 50%
-        let effective = effective_fort_bonus(3, true);
+        let effective = effective_fort_bonus(3, true, &cfg);
         assert!((effective - 0.30).abs() < f64::EPSILON);
     }
 
@@ -1725,7 +1742,7 @@ mod tests {
             attacker_postbattle_fp_loss: 0.60,
             defender_postbattle_fp_loss: 0.60,
         };
-        let result = resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg);
+        let result = resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg, &GameConfig::default());
         assert!(
             result.defender_retreated,
             "defender should evacuate before a hopeless battle"
@@ -1769,7 +1786,7 @@ mod tests {
             attacker_postbattle_fp_loss: 0.60,
             defender_postbattle_fp_loss: 0.60,
         };
-        let result = resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg);
+        let result = resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg, &GameConfig::default());
         assert!(
             !result.defender_retreated,
             "defender with no retreat option must fight"
@@ -1809,7 +1826,7 @@ mod tests {
             attacker_postbattle_fp_loss: 0.60,
             defender_postbattle_fp_loss: 0.60,
         };
-        let result = resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg);
+        let result = resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg, &GameConfig::default());
         assert!(result.retreated, "attacker should bail pre-battle");
         assert!(!result.attacker_won);
         assert!(
@@ -1849,7 +1866,7 @@ mod tests {
             attacker_postbattle_fp_loss: 0.60,
             defender_postbattle_fp_loss: 0.60,
         };
-        let result = resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg);
+        let result = resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg, &GameConfig::default());
         assert!(
             !result.retreated,
             "raw-strength ratio should keep a clearly superior attacker in the fight"
@@ -1888,7 +1905,7 @@ mod tests {
             attacker_postbattle_fp_loss: 0.60,
             defender_postbattle_fp_loss: 0.60,
         };
-        let result = resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg);
+        let result = resolve_battle_with_config(&attacker, &defender, ProvinceId(1), None, 0, cfg, &GameConfig::default());
         assert!(
             result.retreated,
             "outmatched attacker should still bail pre-battle"

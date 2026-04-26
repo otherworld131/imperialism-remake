@@ -1,6 +1,7 @@
 use wasm_bindgen::prelude::*;
 
 mod flavor_bridge;
+mod session;
 
 use domain::ai::common::{AiPersonality, personality_for_nation_index};
 use domain::economy::buildings::BuildingType;
@@ -128,14 +129,14 @@ pub fn wasm_new_observer_scenario_game(
             // Promote to observer mode: give seat 0 an AI personality + bonus.
             let human_id = game.human_player_nation;
             let gp_index = game
-                .nations
+                .world.nations
                 .iter()
                 .filter(|n| n.is_great_power())
                 .position(|n| n.id == human_id)
                 .unwrap_or(0);
             let personality = personality_for_nation_index(gp_index);
             if let Some(nation) = game.get_nation_mut(human_id) {
-                nation.ai_personality = Some(personality);
+                nation.diplomacy.ai_personality = Some(personality);
                 match diff {
                     Difficulty::Hard => nation.economy.treasury += Money::dollars(1000),
                     Difficulty::NighOnImpossible => nation.economy.treasury += Money::dollars(5000),
@@ -178,7 +179,7 @@ pub fn wasm_set_human_player(game_json: &str, nation_index: usize) -> String {
 
     // Identify GP nation ids by their index ordering in `nations`.
     let gp_ids: Vec<NationId> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.is_great_power())
         .map(|n| n.id)
@@ -214,11 +215,11 @@ pub fn wasm_set_human_player(game_json: &str, nation_index: usize) -> String {
     };
 
     if let Some(nation) = game.get_nation_mut(old_human_id) {
-        nation.ai_personality = Some(old_personality);
+        nation.diplomacy.ai_personality = Some(old_personality);
         nation.economy.treasury += bonus;
     }
     if let Some(nation) = game.get_nation_mut(new_human_id) {
-        nation.ai_personality = None;
+        nation.diplomacy.ai_personality = None;
         nation.economy.treasury -= bonus;
     }
     game.human_player_nation = new_human_id;
@@ -370,7 +371,7 @@ fn compute_visible_hexes(
 
     let mut border_ring: std::collections::HashSet<domain::hex::HexCoord> =
         std::collections::HashSet::new();
-    for province in &game.provinces {
+    for province in &game.world.provinces {
         if province.owner == human_nation_id {
             for &coord in &province.tiles {
                 visible.insert(coord);
@@ -381,7 +382,7 @@ fn compute_visible_hexes(
         }
     }
 
-    for province in &game.provinces {
+    for province in &game.world.provinces {
         if province.owner == human_nation_id {
             continue;
         }
@@ -413,34 +414,34 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
     // Build province→nation lookup using Province.owner (the ground truth)
     // and identify country capitals
     let nation_lookup: std::collections::HashMap<NationId, (&str, String)> = game
-        .nations
+        .world.nations
         .iter()
         .map(|n| (n.id, (n.name.as_str(), format!("{:?}", n.color))))
         .collect();
     let nation_type_lookup: std::collections::HashMap<NationId, NationType> =
-        game.nations.iter().map(|n| (n.id, n.nation_type)).collect();
+        game.world.nations.iter().map(|n| (n.id, n.nation_type)).collect();
     let nation_anarchy_lookup: std::collections::HashMap<NationId, bool> = game
-        .nations
+        .world.nations
         .iter()
-        .map(|n| (n.id, n.is_in_anarchy))
+        .map(|n| (n.id, n.diplomacy.is_in_anarchy))
         .collect();
     let mut province_nation: std::collections::HashMap<ProvinceId, (String, String, NationId)> =
         std::collections::HashMap::new();
-    for prov in &game.provinces {
+    for prov in &game.world.provinces {
         if let Some((name, color)) = nation_lookup.get(&prov.owner) {
             province_nation.insert(prov.id, (name.to_string(), color.clone(), prov.owner));
         }
     }
     // Build province → incorporated_from lookup
     let province_incorporated: std::collections::HashMap<ProvinceId, Option<NationId>> = game
-        .provinces
+        .world.provinces
         .iter()
         .map(|p| (p.id, p.incorporated_from))
         .collect();
 
     let mut country_capital_provinces: std::collections::HashSet<ProvinceId> =
         std::collections::HashSet::new();
-    for nation in &game.nations {
+    for nation in &game.world.nations {
         country_capital_provinces.insert(nation.capital_province_id);
     }
 
@@ -453,8 +454,8 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
         ProvinceId,
         std::collections::BTreeMap<String, u32>,
     > = std::collections::HashMap::new();
-    for nation in &game.nations {
-        for unit in &nation.army {
+    for nation in &game.world.nations {
+        for unit in &nation.military.army {
             let e = province_army.entry(unit.position).or_insert((0.0, 0));
             e.0 += unit.effective_firepower();
             e.1 += 1;
@@ -465,7 +466,7 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
 
     // Build nation → (naval FP, warship count) lookup
     let nation_naval: std::collections::HashMap<NationId, (u32, usize)> = game
-        .nations
+        .world.nations
         .iter()
         .map(|n| (n.id, (n.total_naval_firepower(), n.warship_count())))
         .collect();
@@ -473,13 +474,13 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
     // Build hex coord → civilian lookup for ALL nations
     let mut civilian_on_tile: std::collections::HashMap<domain::hex::HexCoord, serde_json::Value> =
         std::collections::HashMap::new();
-    for nation in &game.nations {
+    for nation in &game.world.nations {
         let (nation_name, nation_color) = nation_lookup
             .get(&nation.id)
             .map(|(name, color)| (*name, color.as_str()))
             .unwrap_or(("", ""));
         let is_human = nation.id == human_nation_id;
-        for civ in &nation.civilians {
+        for civ in &nation.military.civilians {
             if let Some(pos) = civ.position {
                 // If tile already has a civilian, only overwrite if this is the human player
                 if civilian_on_tile.contains_key(&pos) && !is_human {
@@ -504,11 +505,11 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
 
     let visible_hexes = compute_visible_hexes(&game, disable_fog);
 
-    let map_width = game.hex_map.width();
-    let map_height = game.hex_map.height();
+    let map_width = game.world.hex_map.width();
+    let map_height = game.world.hex_map.height();
 
     let tiles: Vec<serde_json::Value> = game
-        .hex_map
+        .world.hex_map
         .all_tiles()
         .map(|(coord, tile)| {
             let is_visible = disable_fog || visible_hexes.contains(&coord);
@@ -654,15 +655,15 @@ pub fn wasm_get_navy_markers(game_json: &str, disable_fog: bool) -> String {
     let visible_hexes = compute_visible_hexes(&game, disable_fog);
 
     let province_name_by_id: std::collections::HashMap<ProvinceId, &str> = game
-        .provinces
+        .world.provinces
         .iter()
         .map(|p| (p.id, p.name.as_str()))
         .collect();
 
     let mut markers: Vec<serde_json::Value> = Vec::new();
 
-    for nation in &game.nations {
-        if nation.warships.is_empty() {
+    for nation in &game.world.nations {
+        if nation.military.warships.is_empty() {
             continue;
         }
 
@@ -673,7 +674,7 @@ pub fn wasm_get_navy_markers(game_json: &str, disable_fog: bool) -> String {
         let mut fleet_group: Vec<&Ship> = Vec::new();
         let mut beachhead_groups: std::collections::BTreeMap<u32, Vec<&Ship>> =
             std::collections::BTreeMap::new();
-        for ship in &nation.warships {
+        for ship in &nation.military.warships {
             if ship.ship_type.category() != ShipCategory::Warship {
                 continue;
             }
@@ -687,7 +688,7 @@ pub fn wasm_get_navy_markers(game_json: &str, disable_fog: bool) -> String {
 
         // ── Fleet marker ─────────────────────────────────────────
         if !fleet_group.is_empty()
-            && let Some(anchor) = fleet_anchor(nation, &game.hex_map, &game.provinces)
+            && let Some(anchor) = fleet_anchor(nation, &game.world.hex_map, &game.world.provinces)
         {
             let is_human = nation.id == human_nation_id;
             let is_visible = disable_fog || is_human || visible_hexes.contains(&anchor);
@@ -714,7 +715,7 @@ pub fn wasm_get_navy_markers(game_json: &str, disable_fog: bool) -> String {
                 Some(p) => p,
                 None => continue,
             };
-            let anchor = match beachhead_anchor(&game.hex_map, target) {
+            let anchor = match beachhead_anchor(&game.world.hex_map, target) {
                 Some(a) => a,
                 None => continue,
             };
@@ -723,7 +724,7 @@ pub fn wasm_get_navy_markers(game_json: &str, disable_fog: bool) -> String {
             if !is_visible {
                 continue;
             }
-            let coast_tile = beachhead_coast_tile(&game.hex_map, target);
+            let coast_tile = beachhead_coast_tile(&game.world.hex_map, target);
             let target_province_name = province_name_by_id
                 .get(&pid)
                 .copied()
@@ -923,19 +924,19 @@ pub fn wasm_get_diplomacy_overlay(game_json: &str, nation_id: u32) -> String {
         .unwrap_or("Unknown");
     let selected_in_anarchy = game
         .get_nation(selected_nid)
-        .is_some_and(|n| n.is_in_anarchy);
+        .is_some_and(|n| n.diplomacy.is_in_anarchy);
 
     let relations: Vec<serde_json::Value> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.id != selected_nid)
         .map(|n| {
-            let rel = game.diplomacy.get_relation(selected_nid, n.id);
+            let rel = game.world.diplomacy.get_relation(selected_nid, n.id);
             // Card #31: a nation in anarchy is displayed as at war with
             // everyone regardless of the underlying relation record. This
             // must match the diplomacy-screen override so the two surfaces
             // agree. Either side being anarchic forces "At War".
-            let target_in_anarchy = n.is_in_anarchy;
+            let target_in_anarchy = n.diplomacy.is_in_anarchy;
             let raw_at_war = rel.map(|r| r.at_war).unwrap_or(false);
             let at_war = raw_at_war || target_in_anarchy || selected_in_anarchy;
             let (status, score) = match rel {
@@ -995,7 +996,7 @@ pub fn wasm_get_military_overlay(game_json: &str) -> String {
     };
 
     let entries: Vec<serde_json::Value> = game
-        .nations
+        .world.nations
         .iter()
         .map(|n| {
             serde_json::json!({
@@ -1004,7 +1005,7 @@ pub fn wasm_get_military_overlay(game_json: &str) -> String {
                 "nation_color": format!("{:?}", n.color),
                 "total_army_fp": n.total_military_firepower(),
                 "total_naval_fp": n.total_naval_firepower(),
-                "army_unit_count": n.army.len(),
+                "army_unit_count": n.military.army.len(),
                 "warship_count": n.warship_count(),
             })
         })
@@ -1079,7 +1080,7 @@ fn serialize_game(game: &GameState) -> String {
 /// diplomatic interaction (proposals, grants, declarations, peace, treaties)
 /// is permitted with a country whose government has collapsed (card #81).
 fn reject_if_target_in_anarchy(game: &GameState, target: NationId) -> Option<String> {
-    if game.get_nation(target).is_some_and(|n| n.is_in_anarchy) {
+    if game.get_nation(target).is_some_and(|n| n.diplomacy.is_in_anarchy) {
         Some("{\"error\":\"target nation is in anarchy\"}".to_string())
     } else {
         None
@@ -1119,8 +1120,8 @@ pub fn wasm_get_units_in_province(game_json: &str, province_id: u32) -> String {
     let garrison_count = province.garrison_count;
 
     let mut units: Vec<serde_json::Value> = Vec::new();
-    for nation in &game.nations {
-        for unit in &nation.army {
+    for nation in &game.world.nations {
+        for unit in &nation.military.army {
             if unit.position == pid {
                 let stats = unit.unit_type.stats();
                 units.push(serde_json::json!({
@@ -1167,10 +1168,10 @@ pub fn wasm_get_civilians(game_json: &str, nation_id: u32) -> String {
     let mut deployed: Vec<serde_json::Value> = Vec::new();
     let mut undeployed: Vec<serde_json::Value> = Vec::new();
 
-    for civ in &nation.civilians {
+    for civ in &nation.military.civilians {
         match civ.position {
             Some(pos) => {
-                let tile = game.hex_map.get_tile(pos);
+                let tile = game.world.hex_map.get_tile(pos);
                 let terrain_str = tile
                     .map(|t| format!("{:?}", t.terrain()))
                     .unwrap_or_default();
@@ -1226,7 +1227,7 @@ pub fn wasm_get_ships(game_json: &str, nation_id: u32) -> String {
     };
 
     let merchants: Vec<serde_json::Value> = nation
-        .merchant_fleet
+        .military.merchant_fleet
         .iter()
         .map(|s| {
             let stats = s.ship_type.stats();
@@ -1242,7 +1243,7 @@ pub fn wasm_get_ships(game_json: &str, nation_id: u32) -> String {
         .collect();
 
     let warships: Vec<serde_json::Value> = nation
-        .warships
+        .military.warships
         .iter()
         .map(|s| {
             let stats = s.ship_type.stats();
@@ -1284,7 +1285,7 @@ pub fn wasm_get_valid_move_targets(game_json: &str, nation_id: u32, unit_id: u32
         Some(n) => n,
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
-    let unit = match nation.army.iter().find(|u| u.id == uid) {
+    let unit = match nation.military.army.iter().find(|u| u.id == uid) {
         Some(u) => u,
         None => return "{\"error\":\"unit not found\"}".to_string(),
     };
@@ -1295,7 +1296,7 @@ pub fn wasm_get_valid_move_targets(game_json: &str, nation_id: u32, unit_id: u32
     let mut friendly: Vec<serde_json::Value> = Vec::new();
     let mut hostile: Vec<serde_json::Value> = Vec::new();
 
-    for prov in &game.provinces {
+    for prov in &game.world.provinces {
         if prov.id == unit.position {
             continue; // Skip current province
         }
@@ -1307,17 +1308,17 @@ pub fn wasm_get_valid_move_targets(game_json: &str, nation_id: u32, unit_id: u32
             }));
         } else {
             // F-011: Allow attacking provinces at war OR owned by anarchic nations
-            let at_war = game.diplomacy.is_at_war(nid, prov.owner);
-            let target_anarchic = game.get_nation(prov.owner).is_some_and(|n| n.is_in_anarchy);
+            let at_war = game.world.diplomacy.is_at_war(nid, prov.owner);
+            let target_anarchic = game.get_nation(prov.owner).is_some_and(|n| n.diplomacy.is_in_anarchy);
             if at_war || target_anarchic {
                 // Adjacency check: nation must own a province adjacent to
                 // the target, or have an active landing site (matching backend logic).
                 let nation_adjacent = nation.province_ids.iter().any(|&our_pid| {
                     game.get_province(our_pid).is_some_and(|our_prov| {
-                        domain::map::provinces_are_adjacent(&game.hex_map, our_prov, prov)
+                        domain::map::provinces_are_adjacent(&game.world.hex_map, our_prov, prov)
                     })
                 });
-                let has_landing = game.pending_landings.iter().any(|(lid, pid, established)| {
+                let has_landing = game.transient.pending_landings.iter().any(|(lid, pid, established)| {
                     *lid == nid && *pid == prov.id && *established < game.turn
                 });
                 if !nation_adjacent && !has_landing {
@@ -1570,7 +1571,7 @@ pub fn wasm_queue_unit_move(
         Some(n) => n,
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
-    let unit = match nation.army.iter().find(|u| u.id == uid) {
+    let unit = match nation.military.army.iter().find(|u| u.id == uid) {
         Some(u) => u,
         None => return "{\"error\":\"unit not found\"}".to_string(),
     };
@@ -1586,17 +1587,17 @@ pub fn wasm_queue_unit_move(
 
     // F-003+F-011: Validate target legality — own province, at-war, or anarchic target
     let target_is_own = dest_prov.owner == nid;
-    let target_at_war = game.diplomacy.is_at_war(nid, dest_prov.owner);
+    let target_at_war = game.world.diplomacy.is_at_war(nid, dest_prov.owner);
     let target_anarchic = game
         .get_nation(dest_prov.owner)
-        .is_some_and(|n| n.is_in_anarchy);
+        .is_some_and(|n| n.diplomacy.is_in_anarchy);
     if !target_is_own && !target_at_war && !target_anarchic {
         return "{\"error\":\"cannot move to that province\"}".to_string();
     }
 
     // F-003: Replace existing pending move for this unit (prevent duplicates)
-    game.pending_moves.retain(|(_, id, _)| *id != uid);
-    game.pending_moves.push((nid, uid, dest));
+    game.transient.pending_moves.retain(|(_, id, _)| *id != uid);
+    game.transient.pending_moves.push((nid, uid, dest));
     serialize_game(&game)
 }
 
@@ -1615,7 +1616,7 @@ pub fn wasm_cancel_unit_move(game_json: &str, unit_id: u32) -> String {
     }
     let uid = domain::map::UnitId(unit_id);
     let player = game.human_player_nation;
-    game.pending_moves
+    game.transient.pending_moves
         .retain(|(nid, id, _)| !(*nid == player && *id == uid));
     serialize_game(&game)
 }
@@ -1658,7 +1659,7 @@ pub fn wasm_deploy_civilian(game_json: &str, civilian_id: u32, hex_q: i32, hex_r
     let human_nid = game.human_player_nation;
 
     // Validate tile exists and is owned by the player
-    let tile = match game.hex_map.get_tile(coord) {
+    let tile = match game.world.hex_map.get_tile(coord) {
         Some(t) => t,
         None => return "{\"error\":\"tile not found\"}".to_string(),
     };
@@ -1695,7 +1696,7 @@ pub fn wasm_deploy_civilian(game_json: &str, civilian_id: u32, hex_q: i32, hex_r
         Some(n) => n,
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
-    let civ = match nation.civilians.iter_mut().find(|c| c.id == cid) {
+    let civ = match nation.military.civilians.iter_mut().find(|c| c.id == cid) {
         Some(c) => c,
         None => return "{\"error\":\"civilian not found\"}".to_string(),
     };
@@ -1715,7 +1716,7 @@ pub fn wasm_deploy_civilian(game_json: &str, civilian_id: u32, hex_q: i32, hex_r
     }
 
     // F-006: Set assigned_civilian on the tile
-    if let Some(tile_mut) = game.hex_map.get_tile_mut(coord) {
+    if let Some(tile_mut) = game.world.hex_map.get_tile_mut(coord) {
         tile_mut.assigned_civilian = Some(cid);
     }
 
@@ -1741,7 +1742,7 @@ pub fn wasm_recall_civilian(game_json: &str, civilian_id: u32) -> String {
             Some(n) => n,
             None => return "{\"error\":\"nation not found\"}".to_string(),
         };
-        let civ = match nation.civilians.iter().find(|c| c.id == cid) {
+        let civ = match nation.military.civilians.iter().find(|c| c.id == cid) {
             Some(c) => c,
             None => return "{\"error\":\"civilian not found\"}".to_string(),
         };
@@ -1750,7 +1751,7 @@ pub fn wasm_recall_civilian(game_json: &str, civilian_id: u32) -> String {
 
     // F-006: Clear assigned_civilian on the old tile
     if let Some(pos) = old_pos
-        && let Some(tile_mut) = game.hex_map.get_tile_mut(pos)
+        && let Some(tile_mut) = game.world.hex_map.get_tile_mut(pos)
     {
         tile_mut.assigned_civilian = None;
     }
@@ -1760,7 +1761,7 @@ pub fn wasm_recall_civilian(game_json: &str, civilian_id: u32) -> String {
         Some(n) => n,
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
-    let civ = match nation.civilians.iter_mut().find(|c| c.id == cid) {
+    let civ = match nation.military.civilians.iter_mut().find(|c| c.id == cid) {
         Some(c) => c,
         None => return "{\"error\":\"civilian not found\"}".to_string(),
     };
@@ -1801,7 +1802,7 @@ pub fn wasm_engineer_build(game_json: &str, civilian_id: u32, build_kind: &str) 
             Some(n) => n,
             None => return "{\"error\":\"nation not found\"}".to_string(),
         };
-        let civ = match nation.civilians.iter().find(|c| c.id == cid) {
+        let civ = match nation.military.civilians.iter().find(|c| c.id == cid) {
             Some(c) => c,
             None => return "{\"error\":\"civilian not found\"}".to_string(),
         };
@@ -1821,7 +1822,7 @@ pub fn wasm_engineer_build(game_json: &str, civilian_id: u32, build_kind: &str) 
 
     // Validate tile ownership + prerequisites (depot needs railroad or capital,
     // port needs coastal tile). Railroad only needs ownership + land.
-    let tile = match game.hex_map.get_tile(pos) {
+    let tile = match game.world.hex_map.get_tile(pos) {
         Some(t) => t,
         None => return "{\"error\":\"tile not found\"}".to_string(),
     };
@@ -1880,7 +1881,7 @@ pub fn wasm_engineer_build(game_json: &str, civilian_id: u32, build_kind: &str) 
                 return "{\"error\":\"port already exists\"}".to_string();
             }
             let is_coastal = pos.neighbors().iter().any(|n| {
-                game.hex_map
+                game.world.hex_map
                     .get_tile(*n)
                     .is_some_and(|t| !t.terrain().is_land())
             });
@@ -1916,7 +1917,7 @@ pub fn wasm_engineer_build(game_json: &str, civilian_id: u32, build_kind: &str) 
         Some(n) => n,
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
-    if let Some(civ) = nation.civilians.iter_mut().find(|c| c.id == cid) {
+    if let Some(civ) = nation.military.civilians.iter_mut().find(|c| c.id == cid) {
         civ.start_build(task, &cfg);
     }
     serialize_game(&game)
@@ -1976,7 +1977,7 @@ pub fn wasm_recruit_army_unit(game_json: &str, nation_id: u32, unit_type_str: &s
     let uid = game.alloc_unit_id();
     let new_unit = ArmyUnit::new(uid, unit_type, nid, capital);
     if let Some(nation) = game.get_nation_mut(nid) {
-        nation.army.push(new_unit);
+        nation.military.army.push(new_unit);
     }
 
     serialize_game(&game)
@@ -2018,7 +2019,7 @@ pub fn wasm_hire_civilian(game_json: &str, nation_id: u32, civilian_type_str: &s
     let cid = game.alloc_unit_id();
     if let Some(nation) = game.get_nation_mut(nid) {
         let new_civ = domain::economy::civilians::Civilian::new(cid, civ_type, nid);
-        nation.civilians.push(new_civ);
+        nation.military.civilians.push(new_civ);
     }
 
     serialize_game(&game)
@@ -2087,8 +2088,8 @@ pub fn wasm_build_ship(game_json: &str, nation_id: u32, ship_type_str: &str) -> 
     let new_ship = Ship::new(sid, ship_type, nid);
     if let Some(nation) = game.get_nation_mut(nid) {
         match ship_type.category() {
-            ShipCategory::Merchant => nation.merchant_fleet.push(new_ship),
-            ShipCategory::Warship => nation.warships.push(new_ship),
+            ShipCategory::Merchant => nation.military.merchant_fleet.push(new_ship),
+            ShipCategory::Warship => nation.military.warships.push(new_ship),
         }
     }
 
@@ -2111,8 +2112,8 @@ pub fn wasm_assign_beachhead(game_json: &str, nation_id: u32, target_province_id
     // Validate the target province is coastal and owned by an enemy at war
     let valid = game.get_province(target_pid).is_some_and(|p| {
         p.coastal && {
-            let at_war = game.diplomacy.is_at_war(nid, p.owner);
-            let target_anarchic = game.get_nation(p.owner).is_some_and(|n| n.is_in_anarchy);
+            let at_war = game.world.diplomacy.is_at_war(nid, p.owner);
+            let target_anarchic = game.get_nation(p.owner).is_some_and(|n| n.diplomacy.is_in_anarchy);
             at_war || target_anarchic
         }
     });
@@ -2121,7 +2122,7 @@ pub fn wasm_assign_beachhead(game_json: &str, nation_id: u32, target_province_id
     }
 
     // Must have warships
-    let has_warships = game.get_nation(nid).is_some_and(|n| !n.warships.is_empty());
+    let has_warships = game.get_nation(nid).is_some_and(|n| !n.military.warships.is_empty());
     if !has_warships {
         return "{\"error\":\"no warships available\"}".to_string();
     }
@@ -2138,7 +2139,7 @@ pub fn wasm_assign_beachhead(game_json: &str, nation_id: u32, target_province_id
 
     // Assign all warships to beachhead targeting the specific province
     if let Some(nation) = game.get_nation_mut(nid) {
-        for ship in &mut nation.warships {
+        for ship in &mut nation.military.warships {
             ship.operation = Some(domain::military::naval::NavalOperation::Beachhead(
                 target_pid,
             ));
@@ -2252,7 +2253,7 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
 
-    let transport = &nation.transport;
+    let transport = &nation.military.transport;
     let (labor_cost, lumber_cost, steel_cost) = TransportSystem::build_freight_car_cost();
     let available_lumber = nation.material_amount(MaterialType::Lumber);
     let available_steel = nation.material_amount(MaterialType::Steel);
@@ -2360,7 +2361,7 @@ pub fn wasm_build_freight_car(game_json: &str, nation_id: u32) -> String {
 
     nation.consume_material(MaterialType::Lumber, lumber_cost);
     nation.consume_material(MaterialType::Steel, steel_cost);
-    nation.transport.build_freight_cars(1);
+    nation.military.transport.build_freight_cars(1);
 
     serialize_game(&game)
 }
@@ -2388,7 +2389,7 @@ pub fn wasm_set_transport_allocation(
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
 
-    nation.transport.set_allocation(res, percentage.min(100));
+    nation.military.transport.set_allocation(res, percentage.min(100));
     serialize_game(&game)
 }
 
@@ -2708,7 +2709,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
 
     // Trade history (last 20)
     let history: Vec<serde_json::Value> = nation
-        .trade_history
+        .archives.trade_history
         .iter()
         .rev()
         .take(20)
@@ -2731,7 +2732,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
 
     // Subsidies
     let subsidies: Vec<serde_json::Value> = nation
-        .trade_subsidies
+        .diplomacy.trade_subsidies
         .iter()
         .map(|(&target_nid, &amount)| {
             let target_name = game
@@ -2739,7 +2740,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
                 .map(|n| n.name.as_str())
                 .unwrap_or("Unknown");
             let has_consulate = game
-                .diplomacy
+                .world.diplomacy
                 .get_relation(nid, target_nid)
                 .map(|r| r.has_consulate)
                 .unwrap_or(false);
@@ -2755,29 +2756,29 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
     // Trade balance from history + auto-sold goods revenue
     let mut total_bought: i64 = 0;
     let mut total_sold: i64 = 0;
-    for entry in &nation.trade_history {
+    for entry in &nation.archives.trade_history {
         if entry.bought {
             total_bought += entry.total_cost.as_dollars();
         } else {
             total_sold += entry.total_cost.as_dollars();
         }
     }
-    total_sold += nation.goods_sales_revenue_dollars;
+    total_sold += nation.archives.goods_sales_revenue_dollars;
 
     // Cargo capacity from merchant fleet
     let total_cargo: u32 = nation
-        .merchant_fleet
+        .military.merchant_fleet
         .iter()
         .map(|s| s.ship_type.stats().cargo)
         .sum();
 
     // Minor nations with consulates
     let minor_nations: Vec<serde_json::Value> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.nation_type == NationType::MinorNation && n.id != nid)
         .map(|n| {
-            let rel = game.diplomacy.get_relation(nid, n.id);
+            let rel = game.world.diplomacy.get_relation(nid, n.id);
             let has_consulate = rel.map(|r| r.has_consulate).unwrap_or(false);
             let has_embassy = rel.map(|r| r.has_embassy).unwrap_or(false);
             // Collect resources available in minor nation's provinces
@@ -2785,7 +2786,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
             for &pid in &n.province_ids {
                 if let Some(prov) = game.get_province(pid) {
                     for &coord in &prov.tiles {
-                        if let Some(tile) = game.hex_map.get_tile(coord)
+                        if let Some(tile) = game.world.hex_map.get_tile(coord)
                             && tile.has_visible_resource()
                             && let Some(r) = tile.resource_deposit()
                         {
@@ -2810,7 +2811,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
     // Player sell orders
     let cfg = &game.game_data.game_config;
     let player_sell_orders: Vec<serde_json::Value> = nation
-        .player_sell_orders
+        .diplomacy.player_sell_orders
         .iter()
         .map(|o| {
             let (ctype, cname) = match o.commodity {
@@ -2829,7 +2830,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
 
     // Player buy orders
     let player_buy_orders: Vec<serde_json::Value> = nation
-        .player_buy_orders
+        .diplomacy.player_buy_orders
         .iter()
         .map(|o| {
             serde_json::json!({
@@ -2843,9 +2844,9 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
     // Available offers from minor nations
     let mut available_offers: Vec<serde_json::Value> =
         domain::economy::trade::generate_minor_nation_offers(
-            &game.nations,
-            &game.provinces,
-            &game.hex_map,
+            &game.world.nations,
+            &game.world.provinces,
+            &game.world.hex_map,
         )
         .iter()
         .map(|o| {
@@ -2865,7 +2866,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         .collect();
 
     // Add surplus offers from other Great Powers
-    for gp in &game.nations {
+    for gp in &game.world.nations {
         if gp.id == nid || !gp.is_great_power() {
             continue;
         }
@@ -2949,10 +2950,10 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
 
     // Remaining cargo after current orders
     let orders_qty: u32 = nation
-        .player_sell_orders
+        .diplomacy.player_sell_orders
         .iter()
         .map(|o| o.quantity)
-        .chain(nation.player_buy_orders.iter().map(|o| o.quantity))
+        .chain(nation.diplomacy.player_buy_orders.iter().map(|o| o.quantity))
         .sum();
     let remaining_cargo = total_cargo.saturating_sub(orders_qty);
 
@@ -3012,10 +3013,10 @@ pub fn wasm_set_trade_subsidy(
     };
 
     if amount <= 0 {
-        nation.trade_subsidies.remove(&target_nid);
+        nation.diplomacy.trade_subsidies.remove(&target_nid);
     } else {
         nation
-            .trade_subsidies
+            .diplomacy.trade_subsidies
             .insert(target_nid, Money::dollars(amount));
     }
 
@@ -3060,11 +3061,11 @@ pub fn wasm_set_player_sell_order(
     // Validate cargo capacity
     let total_cargo: u32 = nation.total_cargo_capacity();
     let other_orders: u32 = nation
-        .player_sell_orders
+        .diplomacy.player_sell_orders
         .iter()
         .filter(|o| o.commodity != commodity)
         .map(|o| o.quantity)
-        .chain(nation.player_buy_orders.iter().map(|o| o.quantity))
+        .chain(nation.diplomacy.player_buy_orders.iter().map(|o| o.quantity))
         .sum();
     if other_orders + quantity > total_cargo {
         return r#"{"error":"exceeds cargo capacity"}"#.to_string();
@@ -3072,11 +3073,11 @@ pub fn wasm_set_player_sell_order(
 
     // Upsert: remove existing for this commodity, add new if qty > 0
     nation
-        .player_sell_orders
+        .diplomacy.player_sell_orders
         .retain(|o| o.commodity != commodity);
     if quantity > 0 {
         nation
-            .player_sell_orders
+            .diplomacy.player_sell_orders
             .push(domain::economy::trade::PlayerSellOrder {
                 commodity,
                 quantity,
@@ -3114,12 +3115,12 @@ pub fn wasm_set_player_buy_order(
     // Validate cargo capacity
     let total_cargo: u32 = nation.total_cargo_capacity();
     let other_orders: u32 = nation
-        .player_sell_orders
+        .diplomacy.player_sell_orders
         .iter()
         .map(|o| o.quantity)
         .chain(
             nation
-                .player_buy_orders
+                .diplomacy.player_buy_orders
                 .iter()
                 .filter(|o| o.resource != resource_type)
                 .map(|o| o.quantity),
@@ -3139,11 +3140,11 @@ pub fn wasm_set_player_buy_order(
 
     // Upsert: remove existing for this resource, add new if qty > 0
     nation
-        .player_buy_orders
+        .diplomacy.player_buy_orders
         .retain(|o| o.resource != resource_type);
     if quantity > 0 {
         nation
-            .player_buy_orders
+            .diplomacy.player_buy_orders
             .push(domain::economy::trade::PlayerBuyOrder {
                 resource: resource_type,
                 quantity,
@@ -3171,18 +3172,18 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
 
-    let player_standing = game.diplomacy.standing.get(&nid).copied().unwrap_or(100);
+    let player_standing = game.world.diplomacy.standing.get(&nid).copied().unwrap_or(100);
     let treasury = nation.economy.treasury.as_dollars();
     let player_is_gp = nation.nation_type == NationType::GreatPower;
-    let player_already_at_war = game.diplomacy.is_at_war_with_anyone(nid);
-    let player_in_anarchy = nation.is_in_anarchy;
+    let player_already_at_war = game.world.diplomacy.is_at_war_with_anyone(nid);
+    let player_in_anarchy = nation.diplomacy.is_in_anarchy;
 
     let relations: Vec<serde_json::Value> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.id != nid)
         .map(|n| {
-            let rel = game.diplomacy.get_relation(nid, n.id);
+            let rel = game.world.diplomacy.get_relation(nid, n.id);
             let score = rel.map(|r| r.score).unwrap_or(0);
             let raw_at_war = rel.map(|r| r.at_war).unwrap_or(false);
             let has_consulate = rel.map(|r| r.has_consulate).unwrap_or(false);
@@ -3207,7 +3208,7 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
             // `at_war` flag the UI reads. `raw_at_war` remains authoritative
             // for every action-gating decision so button availability stays
             // aligned with what the backend commands will accept.
-            let target_in_anarchy = n.is_in_anarchy;
+            let target_in_anarchy = n.diplomacy.is_in_anarchy;
             let display_at_war = raw_at_war || target_in_anarchy || player_in_anarchy;
 
             let status = if target_in_anarchy {
@@ -3225,30 +3226,30 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
             let target_is_gp = n.nation_type == NationType::GreatPower;
 
             // Outgoing pending proposals (for badge display)
-            let has_pending_nap = game.diplomacy.pending_proposals.iter().any(|p| {
+            let has_pending_nap = game.world.diplomacy.pending_proposals.iter().any(|p| {
                 p.proposal_type == TreatyType::NonAggressionPact && p.from == nid && p.to == n.id
             });
             let has_pending_alliance =
-                game.diplomacy.pending_proposals.iter().any(|p| {
+                game.world.diplomacy.pending_proposals.iter().any(|p| {
                     p.proposal_type == TreatyType::Alliance && p.from == nid && p.to == n.id
                 });
-            let has_pending_peace = game.diplomacy.pending_proposals.iter().any(|p| {
+            let has_pending_peace = game.world.diplomacy.pending_proposals.iter().any(|p| {
                 p.proposal_type == TreatyType::PeaceTreaty && p.from == nid && p.to == n.id
             });
 
             // Any pending proposal in either direction (for action gating, matches backend)
             let any_pending_nap = has_pending_nap
-                || game.diplomacy.pending_proposals.iter().any(|p| {
+                || game.world.diplomacy.pending_proposals.iter().any(|p| {
                     p.proposal_type == TreatyType::NonAggressionPact
                         && p.from == n.id
                         && p.to == nid
                 });
             let any_pending_alliance = has_pending_alliance
-                || game.diplomacy.pending_proposals.iter().any(|p| {
+                || game.world.diplomacy.pending_proposals.iter().any(|p| {
                     p.proposal_type == TreatyType::Alliance && p.from == n.id && p.to == nid
                 });
             let any_pending_peace = has_pending_peace
-                || game.diplomacy.pending_proposals.iter().any(|p| {
+                || game.world.diplomacy.pending_proposals.iter().any(|p| {
                     p.proposal_type == TreatyType::PeaceTreaty && p.from == n.id && p.to == nid
                 });
 
@@ -3361,7 +3362,7 @@ pub fn wasm_diplomacy_build_consulate(
         return "{\"error\":\"not enough treasury\"}".to_string();
     }
 
-    let cost = match game.diplomacy.build_consulate(nid, target) {
+    let cost = match game.world.diplomacy.build_consulate(nid, target) {
         Ok(c) => c,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
@@ -3412,7 +3413,7 @@ pub fn wasm_diplomacy_build_embassy(
         return "{\"error\":\"not enough treasury\"}".to_string();
     }
 
-    let cost = match game.diplomacy.build_embassy(nid, target) {
+    let cost = match game.world.diplomacy.build_embassy(nid, target) {
         Ok(c) => c,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     };
@@ -3453,7 +3454,7 @@ pub fn wasm_diplomacy_propose_nap(
 
     let turn = game.turn;
     match game
-        .diplomacy
+        .world.diplomacy
         .propose_treaty(nid, target, TreatyType::NonAggressionPact, turn)
     {
         Ok(()) => {}
@@ -3492,7 +3493,7 @@ pub fn wasm_diplomacy_propose_alliance(
 
     let turn = game.turn;
     match game
-        .diplomacy
+        .world.diplomacy
         .propose_treaty(nid, target, TreatyType::Alliance, turn)
     {
         Ok(()) => {}
@@ -3529,12 +3530,12 @@ pub fn wasm_diplomacy_declare_war(
         return err;
     }
 
-    if game.diplomacy.is_at_war(nid, target) {
+    if game.world.diplomacy.is_at_war(nid, target) {
         return "{\"error\":\"already at war\"}".to_string();
     }
 
     let turn = game.turn;
-    game.diplomacy.declare_war_at(nid, target, turn);
+    game.world.diplomacy.declare_war_at(nid, target, turn);
     serialize_game(&game)
 }
 
@@ -3586,7 +3587,7 @@ pub fn wasm_diplomacy_send_grant(
         nation.economy.treasury -= money;
     }
 
-    game.diplomacy.send_grant(nid, target, money);
+    game.world.diplomacy.send_grant(nid, target, money);
     serialize_game(&game)
 }
 
@@ -3617,7 +3618,7 @@ pub fn wasm_diplomacy_break_treaty(
         None => return "{\"error\":\"unknown treaty type\"}".to_string(),
     };
 
-    game.diplomacy.break_treaty(nid, target, tt);
+    game.world.diplomacy.break_treaty(nid, target, tt);
     serialize_game(&game)
 }
 
@@ -3647,7 +3648,7 @@ pub fn wasm_diplomacy_propose_peace(
 
     let turn = game.turn;
 
-    match game.diplomacy.propose_peace(nid, target, turn) {
+    match game.world.diplomacy.propose_peace(nid, target, turn) {
         Ok(()) => {}
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
     }
@@ -3669,7 +3670,7 @@ pub fn wasm_get_pending_proposals(game_json: &str, nation_id: u32) -> String {
     let nid = NationId(nation_id);
 
     let proposals: Vec<serde_json::Value> = game
-        .diplomacy
+        .world.diplomacy
         .pending_proposals
         .iter()
         .enumerate()
@@ -3734,11 +3735,11 @@ pub fn wasm_accept_proposal(game_json: &str, nation_id: u32, proposal_index: u32
     let nid = NationId(nation_id);
     let idx = proposal_index as usize;
 
-    if idx >= game.diplomacy.pending_proposals.len() {
+    if idx >= game.world.diplomacy.pending_proposals.len() {
         return "{\"error\":\"proposal index out of range\"}".to_string();
     }
 
-    let proposal = game.diplomacy.pending_proposals[idx].clone();
+    let proposal = game.world.diplomacy.pending_proposals[idx].clone();
     if proposal.to != nid {
         return "{\"error\":\"proposal not addressed to you\"}".to_string();
     }
@@ -3746,17 +3747,17 @@ pub fn wasm_accept_proposal(game_json: &str, nation_id: u32, proposal_index: u32
     // Execute the treaty action — propagate errors
     match proposal.proposal_type {
         TreatyType::NonAggressionPact => {
-            if let Err(e) = game.diplomacy.propose_pact(proposal.from, proposal.to) {
+            if let Err(e) = game.world.diplomacy.propose_pact(proposal.from, proposal.to) {
                 return format!("{{\"error\":\"{}\"}}", e);
             }
         }
         TreatyType::Alliance => {
-            if let Err(e) = game.diplomacy.propose_alliance(proposal.from, proposal.to) {
+            if let Err(e) = game.world.diplomacy.propose_alliance(proposal.from, proposal.to) {
                 return format!("{{\"error\":\"{}\"}}", e);
             }
         }
         TreatyType::PeaceTreaty => {
-            game.diplomacy.queue_peace(proposal.from, proposal.to);
+            game.world.diplomacy.queue_peace(proposal.from, proposal.to);
         }
         TreatyType::PactDefenseRequest => {
             if let Some(attacker_id) = proposal.attacker {
@@ -3778,7 +3779,7 @@ pub fn wasm_accept_proposal(game_json: &str, nation_id: u32, proposal_index: u32
     }
 
     // Remove the proposal
-    game.diplomacy.pending_proposals.remove(idx);
+    game.world.diplomacy.pending_proposals.remove(idx);
 
     serialize_game(&game)
 }
@@ -3793,15 +3794,15 @@ pub fn wasm_reject_proposal(game_json: &str, nation_id: u32, proposal_index: u32
     let nid = NationId(nation_id);
     let idx = proposal_index as usize;
 
-    if idx >= game.diplomacy.pending_proposals.len() {
+    if idx >= game.world.diplomacy.pending_proposals.len() {
         return "{\"error\":\"proposal index out of range\"}".to_string();
     }
 
-    if game.diplomacy.pending_proposals[idx].to != nid {
+    if game.world.diplomacy.pending_proposals[idx].to != nid {
         return "{\"error\":\"proposal not addressed to you\"}".to_string();
     }
 
-    let proposal = game.diplomacy.pending_proposals.remove(idx);
+    let proposal = game.world.diplomacy.pending_proposals.remove(idx);
 
     // For PactDefenseRequest: continue the cascade with remaining candidates
     if proposal.proposal_type == TreatyType::PactDefenseRequest {
@@ -3838,7 +3839,7 @@ pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
     // Economy
     let treasury_dollars = nation.economy.treasury.as_dollars();
     let subsidies: Vec<serde_json::Value> = nation
-        .trade_subsidies
+        .diplomacy.trade_subsidies
         .iter()
         .map(|(target_id, amount)| {
             let name = game
@@ -3885,7 +3886,7 @@ pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
     // Military — army by type
     let mut army_counts: std::collections::HashMap<String, (u32, u32)> =
         std::collections::HashMap::new();
-    for unit in &nation.army {
+    for unit in &nation.military.army {
         let type_name = format!("{:?}", unit.unit_type);
         let fp = unit.unit_type.stats().firepower;
         let entry = army_counts.entry(type_name).or_insert((0, 0));
@@ -3903,7 +3904,7 @@ pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
     // Warships by type
     let mut warship_counts: std::collections::HashMap<String, u32> =
         std::collections::HashMap::new();
-    for ship in &nation.warships {
+    for ship in &nation.military.warships {
         let type_name = format!("{:?}", ship.ship_type);
         *warship_counts.entry(type_name).or_insert(0) += 1;
     }
@@ -3913,17 +3914,17 @@ pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
         .collect();
 
     // Diplomacy summary
-    let standing = game.diplomacy.get_standing(nid);
+    let standing = game.world.diplomacy.get_standing(nid);
     let mut consulate_count = 0u32;
     let mut embassy_count = 0u32;
     let mut treaties: Vec<serde_json::Value> = Vec::new();
     let mut wars: Vec<String> = Vec::new();
 
-    for other in &game.nations {
+    for other in &game.world.nations {
         if other.id == nid {
             continue;
         }
-        if let Some(rel) = game.diplomacy.get_relation(nid, other.id) {
+        if let Some(rel) = game.world.diplomacy.get_relation(nid, other.id) {
             if rel.has_consulate {
                 consulate_count += 1;
             }
@@ -3944,7 +3945,7 @@ pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
     let result = serde_json::json!({
         "economy": {
             "treasury": treasury_dollars,
-            "goods_revenue": nation.goods_sales_revenue_dollars,
+            "goods_revenue": nation.archives.goods_sales_revenue_dollars,
             "subsidies": subsidies,
         },
         "production": {
@@ -3956,14 +3957,14 @@ pub fn wasm_get_ledger_data(game_json: &str, nation_id: u32) -> String {
         "military": {
             "army_by_type": army_by_type,
             "total_army_fp": total_army_fp,
-            "total_army_count": nation.army.len(),
+            "total_army_count": nation.military.army.len(),
             "field_army_count": nation.field_army_count(),
-            "militia_count": nation.army.len() - nation.field_army_count(),
+            "militia_count": nation.military.army.len() - nation.field_army_count(),
             "warships_by_type": warships_by_type,
-            "total_warship_count": nation.warships.len(),
-            "merchant_ships": nation.merchant_fleet.len(),
-            "total_arms_built": nation.total_arms_built,
-            "generals_earned": nation.generals_earned,
+            "total_warship_count": nation.military.warships.len(),
+            "merchant_ships": nation.military.merchant_fleet.len(),
+            "total_arms_built": nation.military.total_arms_built,
+            "generals_earned": nation.military.generals_earned,
         },
         "diplomacy": {
             "standing": standing,
@@ -3992,7 +3993,7 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
     };
 
     let entries: Vec<serde_json::Value> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.is_great_power())
         .map(|nation| {
@@ -4006,16 +4007,16 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
             let provinces = nation.province_ids.len();
 
             let mut total_army_fp: u32 = 0;
-            let total_army_count = nation.army.len();
-            for unit in &nation.army {
+            let total_army_count = nation.military.army.len();
+            for unit in &nation.military.army {
                 total_army_fp += unit.unit_type.stats().firepower;
             }
-            let total_warship_count = nation.warships.len();
-            let merchant_ships = nation.merchant_fleet.len();
+            let total_warship_count = nation.military.warships.len();
+            let merchant_ships = nation.military.merchant_fleet.len();
 
             let building_count = nation.economy.buildings.len();
 
-            let standing = game.diplomacy.get_standing(nid);
+            let standing = game.world.diplomacy.get_standing(nid);
             let mut consulate_count = 0u32;
             let mut embassy_count = 0u32;
             let mut alliance_count = 0u32;
@@ -4023,11 +4024,11 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
             let mut wars: Vec<String> = Vec::new();
             let mut alliances: Vec<String> = Vec::new();
 
-            for other in &game.nations {
+            for other in &game.world.nations {
                 if other.id == nid {
                     continue;
                 }
-                if let Some(rel) = game.diplomacy.get_relation(nid, other.id) {
+                if let Some(rel) = game.world.diplomacy.get_relation(nid, other.id) {
                     if rel.has_consulate {
                         consulate_count += 1;
                     }
@@ -4087,8 +4088,8 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
                 .collect();
 
             // Per-nation cash-flow breakdown (last processed turn) — read from
-            // `game.last_cash_flow`, populated by the turn processor.
-            let cash_flow_json = if let Some(flow) = game.last_cash_flow.get(&nid) {
+            // `game.transient.last_cash_flow`, populated by the turn processor.
+            let cash_flow_json = if let Some(flow) = game.transient.last_cash_flow.get(&nid) {
                 let income_map: serde_json::Map<String, serde_json::Value> = flow
                     .income_totals_by_source()
                     .into_iter()
@@ -4127,18 +4128,18 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
                 serde_json::Value::Null
             };
             let cumulative_income: serde_json::Map<String, serde_json::Value> = nation
-                .cash_income_totals
+                .archives.cash_income_totals
                 .iter()
                 .map(|(k, v)| (format!("{:?}", k), serde_json::json!(*v)))
                 .collect();
             let cumulative_expense: serde_json::Map<String, serde_json::Value> = nation
-                .cash_expense_totals
+                .archives.cash_expense_totals
                 .iter()
                 .map(|(k, v)| (format!("{:?}", k), serde_json::json!(*v)))
                 .collect();
 
             // Resource-flow (last turn) — best-effort visibility, NOT reconciled.
-            let resource_flow_json = if let Some(flow) = game.last_resource_flow.get(&nid) {
+            let resource_flow_json = if let Some(flow) = game.transient.last_resource_flow.get(&nid) {
                 let inflow: Vec<serde_json::Value> = flow
                     .inflow
                     .iter()
@@ -4201,7 +4202,7 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
                     "treasury": treasury_dollars,
                     "provinces": provinces,
                     "buildings": building_count,
-                    "goods_revenue": nation.goods_sales_revenue_dollars,
+                    "goods_revenue": nation.archives.goods_sales_revenue_dollars,
                     "total_resources": total_resources,
                     "total_materials": total_materials,
                     "total_goods": total_goods,
@@ -4225,8 +4226,8 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
                     "militia_count": total_army_count - nation.field_army_count(),
                     "total_warship_count": total_warship_count,
                     "merchant_ships": merchant_ships,
-                    "generals_earned": nation.generals_earned,
-                    "total_arms_built": nation.total_arms_built,
+                    "generals_earned": nation.military.generals_earned,
+                    "total_arms_built": nation.military.total_arms_built,
                 },
                 "diplomacy": {
                     "standing": standing,
@@ -4265,7 +4266,7 @@ pub fn wasm_get_political_snapshot(game_json: &str, turn: u32) -> String {
     };
 
     let target = TurnNumber::new(turn);
-    let Some((_, snapshot)) = game.political_archive.iter().find(|(t, _)| *t == target) else {
+    let Some((_, snapshot)) = game.archive.political_archive.iter().find(|(t, _)| *t == target) else {
         return format!("{{\"error\":\"no political snapshot for turn {}\"}}", turn);
     };
 
@@ -4277,7 +4278,7 @@ pub fn wasm_get_political_snapshot(game_json: &str, turn: u32) -> String {
         .collect();
 
     let nation_lookup: std::collections::HashMap<NationId, (&str, String, NationType)> = game
-        .nations
+        .world.nations
         .iter()
         .map(|n| {
             (
@@ -4293,16 +4294,16 @@ pub fn wasm_get_political_snapshot(game_json: &str, turn: u32) -> String {
         snapshot.capitals.iter().map(|&(_, pid)| pid).collect();
 
     let province_name: std::collections::HashMap<ProvinceId, &str> = game
-        .provinces
+        .world.provinces
         .iter()
         .map(|p| (p.id, p.name.as_str()))
         .collect();
 
-    let map_width = game.hex_map.width();
-    let map_height = game.hex_map.height();
+    let map_width = game.world.hex_map.width();
+    let map_height = game.world.hex_map.height();
 
     let tiles: Vec<serde_json::Value> = game
-        .hex_map
+        .world.hex_map
         .all_tiles()
         .map(|(coord, tile)| {
             let (owner_name, owner_color, is_minor, is_incorporated_minor, visual_group) = tile
@@ -4376,7 +4377,7 @@ pub fn wasm_get_newspaper_archive(game_json: &str) -> String {
     };
 
     let archive: Vec<serde_json::Value> = game
-        .newspaper_archive
+        .archive.newspaper_archive
         .iter()
         .map(|(turn, headlines)| {
             let items: Vec<serde_json::Value> = headlines
@@ -4531,7 +4532,7 @@ pub fn wasm_get_battle_data(game_json: &str) -> String {
     };
 
     let archive: Vec<serde_json::Value> = game
-        .battle_archive
+        .archive.battle_archive
         .iter()
         .map(|(turn, battles, naval_battles)| {
             let land: Vec<serde_json::Value> =
@@ -4607,7 +4608,7 @@ mod tests {
         // for coastal provinces.
         let human = game.human_player_nation;
         let coastal_pid: Option<ProvinceId> = game
-            .provinces
+            .world.provinces
             .iter()
             .find(|p| p.owner == human && p.is_coastal())
             .map(|p| p.id);
@@ -4618,7 +4619,7 @@ mod tests {
             let prov = game.get_province(pid).unwrap();
             prov.tiles.first().copied().unwrap()
         };
-        if let Some(t) = game.hex_map.get_tile_mut(tile_coord) {
+        if let Some(t) = game.world.hex_map.get_tile_mut(tile_coord) {
             t.infrastructure.has_port = true;
         }
 
@@ -4631,18 +4632,18 @@ mod tests {
                 s.operation = op;
                 s
             };
-        nation.warships.clear();
-        nation.warships.push(mk_ship(
+        nation.military.warships.clear();
+        nation.military.warships.push(mk_ship(
             9000,
             ShipType::Frigate,
             Some(domain::military::naval::NavalOperation::Patrol),
         ));
-        nation.warships.push(mk_ship(
+        nation.military.warships.push(mk_ship(
             9001,
             ShipType::Frigate,
             Some(domain::military::naval::NavalOperation::Patrol),
         ));
-        nation.warships.push(mk_ship(
+        nation.military.warships.push(mk_ship(
             9002,
             ShipType::Ironclad,
             Some(domain::military::naval::NavalOperation::Escort),
@@ -4688,13 +4689,13 @@ mod tests {
         // Re-assign the Ironclad to Beachhead a hostile coastal province.
         let human = game.human_player_nation;
         let beachhead_pid: ProvinceId = game
-            .provinces
+            .world.provinces
             .iter()
             .find(|p| p.owner != human && p.is_coastal())
             .map(|p| p.id)
             .expect("need a hostile coastal province for beachhead");
         let nation = game.get_nation_mut(human).unwrap();
-        nation.warships[2].operation = Some(domain::military::naval::NavalOperation::Beachhead(
+        nation.military.warships[2].operation = Some(domain::military::naval::NavalOperation::Beachhead(
             beachhead_pid,
         ));
         let json = serde_json::to_string(&game).unwrap();
@@ -4733,13 +4734,13 @@ mod tests {
         let human = game.human_player_nation;
         let enemy_id: NationId = {
             let enemy = game
-                .nations
+                .world.nations
                 .iter()
                 .find(|n| {
                     n.id != human
                         && n.nation_type == NationType::GreatPower
                         && game
-                            .provinces
+                            .world.provinces
                             .iter()
                             .any(|p| p.owner == n.id && p.is_coastal())
                 })
@@ -4751,8 +4752,8 @@ mod tests {
         let mut enemy_ship = Ship::new(domain::map::UnitId(9500), ShipType::Frigate, enemy_id);
         enemy_ship.operation = Some(domain::military::naval::NavalOperation::Patrol);
         let enemy = game.get_nation_mut(enemy_id).unwrap();
-        enemy.warships.clear();
-        enemy.warships.push(enemy_ship);
+        enemy.military.warships.clear();
+        enemy.military.warships.push(enemy_ship);
 
         // Compute where that fleet marker would land and confirm the anchor
         // is outside the human's visible set, so the fog filter is the only
@@ -4760,8 +4761,8 @@ mod tests {
         let enemy_nation = game.get_nation(enemy_id).unwrap();
         let anchor = domain::military::navy_placement::fleet_anchor(
             enemy_nation,
-            &game.hex_map,
-            &game.provinces,
+            &game.world.hex_map,
+            &game.world.provinces,
         )
         .expect("enemy should have a fleet anchor");
         let visible_hexes = compute_visible_hexes(&game, false);
@@ -4831,14 +4832,14 @@ mod tests {
         let nid = game.human_player_nation;
 
         let nation = game.get_nation(nid).unwrap();
-        let unit = nation.army.iter().find(|u| u.unit_type.can_move());
+        let unit = nation.military.army.iter().find(|u| u.unit_type.can_move());
         if unit.is_none() {
             return;
         }
         let uid = unit.unwrap().id.0;
 
         let own_provs: Vec<u32> = game
-            .provinces
+            .world.provinces
             .iter()
             .filter(|p| p.owner == nid)
             .take(2)
@@ -4856,7 +4857,7 @@ mod tests {
         assert!(!result2.contains("error"));
         let game2: GameState = serde_json::from_str(&result2).unwrap();
         let moves_for_unit = game2
-            .pending_moves
+            .transient.pending_moves
             .iter()
             .filter(|(_, id, _)| id.0 == uid)
             .count();
@@ -4871,10 +4872,10 @@ mod tests {
         let enemy = gp_ids[1];
         let ally = gp_ids[2];
 
-        game.diplomacy.propose_alliance(human, ally).unwrap();
-        game.diplomacy.declare_war(enemy, human);
-        game.diplomacy.declare_war(ally, enemy);
-        game.diplomacy.pending_proposals.push(DiplomaticProposal {
+        game.world.diplomacy.propose_alliance(human, ally).unwrap();
+        game.world.diplomacy.declare_war(enemy, human);
+        game.world.diplomacy.declare_war(ally, enemy);
+        game.world.diplomacy.pending_proposals.push(DiplomaticProposal {
             from: enemy,
             to: human,
             proposal_type: TreatyType::PeaceTreaty,
@@ -4882,10 +4883,10 @@ mod tests {
             attacker: None,
             cascade_remaining: None,
         });
-        game.diplomacy
+        game.world.diplomacy
             .propose_peace(ally, enemy, game.turn)
             .unwrap();
-        game.diplomacy.pending_proposals.push(DiplomaticProposal {
+        game.world.diplomacy.pending_proposals.push(DiplomaticProposal {
             from: enemy,
             to: ally,
             proposal_type: TreatyType::PeaceTreaty,
@@ -4898,12 +4899,12 @@ mod tests {
         let mut accepted_game: GameState = serde_json::from_str(&accepted_json).unwrap();
 
         assert!(
-            !accepted_game.diplomacy.is_at_war(human, enemy),
+            !accepted_game.world.diplomacy.is_at_war(human, enemy),
             "human peace acceptance should clear the war immediately"
         );
         assert!(
             accepted_game
-                .diplomacy
+                .world.diplomacy
                 .has_treaty(human, ally, TreatyType::Alliance),
             "alliance should remain pending same-turn reconciliation"
         );
@@ -4912,7 +4913,7 @@ mod tests {
 
         assert!(
             accepted_game
-                .diplomacy
+                .world.diplomacy
                 .has_treaty(human, ally, TreatyType::Alliance),
             "coordinated same-turn coalition peace via wasm should preserve the alliance"
         );
@@ -4978,14 +4979,14 @@ mod tests {
         game.game_data = domain::data::GameData::default();
 
         let nid = game.human_player_nation;
-        game.pending_moves
+        game.transient.pending_moves
             .push((nid, domain::map::UnitId(12345), ProvinceId(1)));
         let json = serde_json::to_string(&game).unwrap();
 
         let result = wasm_cancel_unit_move(&json, 12345);
         assert!(!result.contains("error"));
         let game2: GameState = serde_json::from_str(&result).unwrap();
-        assert!(!game2.pending_moves.iter().any(|(_, id, _)| id.0 == 12345));
+        assert!(!game2.transient.pending_moves.iter().any(|(_, id, _)| id.0 == 12345));
     }
 
     // ── F-018: Anarchic target + deploy occupancy tests ───────
@@ -4998,13 +4999,13 @@ mod tests {
         let nid = game.human_player_nation;
 
         // Find an enemy nation and make it anarchic
-        if let Some(enemy) = game.nations.iter_mut().find(|n| n.id != nid) {
-            enemy.is_in_anarchy = true;
+        if let Some(enemy) = game.world.nations.iter_mut().find(|n| n.id != nid) {
+            enemy.diplomacy.is_in_anarchy = true;
             let enemy_id = enemy.id;
 
             // Ensure we have a movable unit
             let nation = game.get_nation(nid).unwrap();
-            let unit = nation.army.iter().find(|u| u.unit_type.can_move());
+            let unit = nation.military.army.iter().find(|u| u.unit_type.can_move());
             if let Some(unit) = unit {
                 let uid = unit.id.0;
                 let json = serde_json::to_string(&game).unwrap();
@@ -5013,8 +5014,8 @@ mod tests {
                 let hostile = parsed["hostile"].as_array().unwrap();
                 // Anarchic nation's provinces should appear in hostile targets
                 let has_anarchic =
-                    game.provinces.iter().any(|p| p.owner == enemy_id) && !hostile.is_empty();
-                if game.provinces.iter().any(|p| p.owner == enemy_id) {
+                    game.world.provinces.iter().any(|p| p.owner == enemy_id) && !hostile.is_empty();
+                if game.world.provinces.iter().any(|p| p.owner == enemy_id) {
                     assert!(
                         !hostile.is_empty(),
                         "Anarchic provinces should appear as hostile targets"
@@ -5034,16 +5035,16 @@ mod tests {
 
         // Find an enemy province and make its owner anarchic
         let enemy_prov = game
-            .provinces
+            .world.provinces
             .iter()
             .find(|p| p.owner != nid)
             .map(|p| (p.id, p.owner));
         if let Some((pid, enemy_nid)) = enemy_prov {
-            if let Some(enemy) = game.nations.iter_mut().find(|n| n.id == enemy_nid) {
-                enemy.is_in_anarchy = true;
+            if let Some(enemy) = game.world.nations.iter_mut().find(|n| n.id == enemy_nid) {
+                enemy.diplomacy.is_in_anarchy = true;
             }
             let nation = game.get_nation(nid).unwrap();
-            if let Some(unit) = nation.army.iter().find(|u| u.unit_type.can_move()) {
+            if let Some(unit) = nation.military.army.iter().find(|u| u.unit_type.can_move()) {
                 let uid = unit.id.0;
                 let json = serde_json::to_string(&game).unwrap();
                 let result = wasm_queue_unit_move(&json, nid.0, uid, pid.0);
@@ -5064,18 +5065,18 @@ mod tests {
 
         // Find an enemy province not at war and not anarchic
         let enemy_prov = game
-            .provinces
+            .world.provinces
             .iter()
             .find(|p| {
                 p.owner != nid
-                    && !game.diplomacy.is_at_war(nid, p.owner)
-                    && !game.get_nation(p.owner).is_some_and(|n| n.is_in_anarchy)
+                    && !game.world.diplomacy.is_at_war(nid, p.owner)
+                    && !game.get_nation(p.owner).is_some_and(|n| n.diplomacy.is_in_anarchy)
             })
             .map(|p| p.id);
 
         if let Some(pid) = enemy_prov {
             let nation = game.get_nation(nid).unwrap();
-            if let Some(unit) = nation.army.iter().find(|u| u.unit_type.can_move()) {
+            if let Some(unit) = nation.military.army.iter().find(|u| u.unit_type.can_move()) {
                 let uid = unit.id.0;
                 let json = serde_json::to_string(&game).unwrap();
                 let result = wasm_queue_unit_move(&json, nid.0, uid, pid.0);
@@ -5110,7 +5111,7 @@ mod tests {
         game.game_data = domain::data::GameData::default();
 
         // Seed the archive with one AI-reasoned headline and one plain headline.
-        game.newspaper_archive.push((
+        game.archive.newspaper_archive.push((
             game.turn,
             vec![
                 Headline::with_reason(
@@ -5160,7 +5161,7 @@ mod tests {
         let mut game: GameState = serde_json::from_str(&json).unwrap();
         game.game_data = domain::data::GameData::default();
 
-        game.newspaper_archive.push((
+        game.archive.newspaper_archive.push((
             game.turn,
             vec![
                 Headline::non_action(
@@ -5213,7 +5214,7 @@ mod tests {
         let mut game: GameState = serde_json::from_str(&json).unwrap();
         game.game_data = domain::data::GameData::default();
 
-        game.newspaper_archive.push((
+        game.archive.newspaper_archive.push((
             game.turn,
             vec![
                 Headline::new("War breaks out!".to_string(), HeadlineCategory::War)
@@ -5344,7 +5345,7 @@ mod tests {
             defender_retreated_to: Vec::new(),
         };
 
-        game.battle_archive
+        game.archive.battle_archive
             .push((TurnNumber::new(1), vec![battle], Vec::new()));
 
         let game_json = serde_json::to_string(&game).unwrap();
@@ -5438,7 +5439,7 @@ mod tests {
             defender_survivors: Vec::new(),
         };
 
-        game.battle_archive
+        game.archive.battle_archive
             .push((TurnNumber::new(2), Vec::new(), vec![naval]));
 
         let game_json = serde_json::to_string(&game).unwrap();
@@ -5483,12 +5484,12 @@ mod tests {
 
         // Force the player into anarchy without touching relations.
         if let Some(player) = game.get_nation_mut(player_id) {
-            player.is_in_anarchy = true;
+            player.diplomacy.is_in_anarchy = true;
         }
         // Pick another nation as the counterparty.
-        let target_id = game.nations.iter().find(|n| n.id != player_id).unwrap().id;
+        let target_id = game.world.nations.iter().find(|n| n.id != player_id).unwrap().id;
         // Ensure raw_at_war is false for the pair.
-        assert!(!game.diplomacy.is_at_war(player_id, target_id));
+        assert!(!game.world.diplomacy.is_at_war(player_id, target_id));
 
         let json = serde_json::to_string(&game).unwrap();
         let out = wasm_get_diplomacy_screen_data(&json, player_id.0);
@@ -5526,16 +5527,16 @@ mod tests {
 
         // Seed a snapshot at turn 5 using current province ownership + capitals.
         let provinces: Vec<(ProvinceId, NationId, Option<NationId>)> = game
-            .provinces
+            .world.provinces
             .iter()
             .map(|p| (p.id, p.owner, p.incorporated_from))
             .collect();
         let capitals: Vec<(NationId, ProvinceId)> = game
-            .nations
+            .world.nations
             .iter()
             .map(|n| (n.id, n.capital_province_id))
             .collect();
-        game.political_archive.push((
+        game.archive.political_archive.push((
             TurnNumber::new(5),
             PoliticalSnapshot {
                 provinces,
@@ -5549,7 +5550,7 @@ mod tests {
 
         assert_eq!(parsed["turn"].as_u64(), Some(5));
         let tiles = parsed["tiles"].as_array().expect("tiles array");
-        assert_eq!(tiles.len() as i64, game.hex_map.tile_count() as i64);
+        assert_eq!(tiles.len() as i64, game.world.hex_map.tile_count() as i64);
         // At least one tile must show a non-empty owner for a normal game.
         assert!(
             tiles
@@ -5588,18 +5589,18 @@ mod tests {
 
         // Archive at turn 5 with the *current* capitals and ownership.
         let provinces: Vec<(ProvinceId, NationId, Option<NationId>)> = game
-            .provinces
+            .world.provinces
             .iter()
             .map(|p| (p.id, p.owner, p.incorporated_from))
             .collect();
         let capitals: Vec<(NationId, ProvinceId)> = game
-            .nations
+            .world.nations
             .iter()
             .map(|n| (n.id, n.capital_province_id))
             .collect();
         let archived_capitals: std::collections::HashSet<ProvinceId> =
             capitals.iter().map(|&(_, pid)| pid).collect();
-        game.political_archive.push((
+        game.archive.political_archive.push((
             TurnNumber::new(5),
             PoliticalSnapshot {
                 provinces,
@@ -5611,19 +5612,19 @@ mod tests {
         // province that was not previously a capital, and mark a province as
         // newly incorporated in live state. The archive must ignore both.
         let non_capital_pid = game
-            .provinces
+            .world.provinces
             .iter()
             .map(|p| p.id)
             .find(|pid| !archived_capitals.contains(pid))
             .expect("at least one non-capital province");
-        for n in &mut game.nations {
+        for n in &mut game.world.nations {
             n.capital_province_id = non_capital_pid;
         }
         // Pick a province and give it a fake `incorporated_from` in live state;
         // archive should NOT pick up this change because the archived tuple
         // was already captured with incorporated=None.
         let mutated_pid = game
-            .provinces
+            .world.provinces
             .iter()
             .map(|p| p.id)
             .find(|pid| !archived_capitals.contains(pid))

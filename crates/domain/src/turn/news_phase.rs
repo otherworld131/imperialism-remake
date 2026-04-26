@@ -118,7 +118,7 @@ pub(super) fn generate_newspaper(game: &GameState, report: &mut TurnReport) {
     // Human player anarchy game-over notice
     if game
         .get_nation(game.human_player_nation)
-        .is_some_and(|n| n.is_in_anarchy)
+        .is_some_and(|n| n.diplomacy.is_in_anarchy)
     {
         report.newspaper_headlines.push(
             Headline::new(

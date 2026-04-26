@@ -88,7 +88,7 @@ pub(crate) fn ai_research_tech(
                     }
                 };
                 if did_spend {
-                    game.pending_ai_cash_spending.push((
+                    game.transient.pending_ai_cash_spending.push((
                         nation_id,
                         crate::economy::ledger::CashSink::AiResearch,
                         tech_cost,
@@ -122,11 +122,11 @@ pub(crate) fn ai_research_tech(
                         tech_name: tech_name.clone(),
                     };
                     if !game
-                        .history
+                        .archive.history
                         .iter()
                         .any(|(t, ev)| *t == turn && *ev == entry)
                     {
-                        game.history.push((turn, entry));
+                        game.archive.history.push((turn, entry));
                     }
                     return;
                 }
@@ -232,7 +232,7 @@ pub(crate) fn ai_research_tech(
         }
     };
     if did_spend {
-        game.pending_ai_cash_spending.push((
+        game.transient.pending_ai_cash_spending.push((
             nation_id,
             crate::economy::ledger::CashSink::AiResearch,
             tech_cost,
@@ -259,11 +259,11 @@ pub(crate) fn ai_research_tech(
         };
         // Deduplicate: only push if this exact event doesn't already exist for this turn
         if !game
-            .history
+            .archive.history
             .iter()
             .any(|(t, ev)| *t == turn && *ev == entry)
         {
-            game.history.push((turn, entry));
+            game.archive.history.push((turn, entry));
         }
         return; // Successfully researched
     }
@@ -292,7 +292,7 @@ pub(crate) fn ai_research_tech(
                 }
             };
             if did_spend {
-                game.pending_ai_cash_spending.push((
+                game.transient.pending_ai_cash_spending.push((
                     nation_id,
                     crate::economy::ledger::CashSink::AiResearch,
                     *cand_cost,
@@ -317,11 +317,11 @@ pub(crate) fn ai_research_tech(
                     tech_name: cand_name.clone(),
                 };
                 if !game
-                    .history
+                    .archive.history
                     .iter()
                     .any(|(t, ev)| *t == turn && *ev == entry)
                 {
-                    game.history.push((turn, entry));
+                    game.archive.history.push((turn, entry));
                 }
                 return;
             }
@@ -369,7 +369,7 @@ mod tests {
         let mut game = test_game_with_ai();
         // Set Economic personality
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Economic);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Economic);
         ai.economy.treasury = Money::dollars(50000);
 
         // At year 1821, multiple techs with different costs are available
@@ -395,7 +395,7 @@ mod tests {
     fn aggressive_ai_prefers_military_tech() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Aggressive);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         ai.economy.treasury = Money::dollars(100000);
 
         // Set year to 1841 when Breech-Loading Rifles (military) is available
@@ -424,7 +424,7 @@ mod tests {
     fn balanced_ai_picks_cheapest_tech() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         ai.economy.treasury = Money::dollars(50000);
 
         // At 1815, two free techs (ID 1 and 2) are available

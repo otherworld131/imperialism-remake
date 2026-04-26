@@ -64,8 +64,8 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
         nation.consume_material(MaterialType::Fabric, fabric_need);
         nation.consume_material(MaterialType::Lumber, lumber_need);
         nation.consume_material(MaterialType::Arms, arms_need);
-        nation.warships.push(ship);
-        nation.warships_built += 1;
+        nation.military.warships.push(ship);
+        nation.military.warships_built += 1;
         return true;
     }
     false
@@ -148,7 +148,7 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
         };
         nation.consume_material(MaterialType::Fabric, 2);
         nation.consume_material(MaterialType::Lumber, 4);
-        nation.merchant_fleet.push(ship);
+        nation.military.merchant_fleet.push(ship);
     }
 }
 
@@ -166,7 +166,7 @@ fn clear_stale_beachheads(game: &mut GameState, nation_id: NationId, enemies: &[
     let beachhead_targets: Vec<ProvinceId> = game
         .get_nation(nation_id)
         .map(|n| {
-            n.warships
+            n.military.warships
                 .iter()
                 .filter_map(|s| match s.operation {
                     Some(crate::military::naval::NavalOperation::Beachhead(pid)) => Some(pid),
@@ -187,7 +187,7 @@ fn clear_stale_beachheads(game: &mut GameState, nation_id: NationId, enemies: &[
         let still_hostile = enemies.contains(&target_prov.owner);
         let reachable_overland = our_province_ids.iter().any(|&our_pid| {
             game.get_province(our_pid).is_some_and(|our_p| {
-                crate::map::provinces_are_adjacent(&game.hex_map, our_p, target_prov)
+                crate::map::provinces_are_adjacent(&game.world.hex_map, our_p, target_prov)
             })
         });
         if !still_hostile || reachable_overland {
@@ -198,7 +198,7 @@ fn clear_stale_beachheads(game: &mut GameState, nation_id: NationId, enemies: &[
         return;
     }
     if let Some(nation) = game.get_nation_mut(nation_id) {
-        for ship in &mut nation.warships {
+        for ship in &mut nation.military.warships {
             if let Some(crate::military::naval::NavalOperation::Beachhead(pid)) = ship.operation
                 && stale_targets.contains(&pid)
             {
@@ -251,11 +251,11 @@ pub fn ai_naval_strategy(
 
     // Find enemies we are at war with
     let enemies: Vec<NationId> = game
-        .nations
+        .world.nations
         .iter()
         .filter(|n| n.id != nation_id)
         .filter(|n| {
-            game.diplomacy
+            game.world.diplomacy
                 .get_relation(nation_id, n.id)
                 .map(|r| r.at_war)
                 .unwrap_or(false)
@@ -374,10 +374,10 @@ pub fn ai_naval_strategy(
             let mut any_land_adjacent = false;
             let mut any_soft_land_target = false;
             let strength_cap = (our_army_size as f64 * adj_strength_ratio).ceil() as usize;
-            for enemy_prov in game.provinces.iter().filter(|p| p.owner == enemy_id) {
+            for enemy_prov in game.world.provinces.iter().filter(|p| p.owner == enemy_id) {
                 let is_land_adj = our_province_ids.iter().any(|&our_pid| {
                     game.get_province(our_pid).is_some_and(|our_prov| {
-                        crate::map::provinces_are_adjacent(&game.hex_map, our_prov, enemy_prov)
+                        crate::map::provinces_are_adjacent(&game.world.hex_map, our_prov, enemy_prov)
                     })
                 });
                 if !is_land_adj {
@@ -414,7 +414,7 @@ pub fn ai_naval_strategy(
 
             // Find coastal enemy province to target
             let coastal_target = game
-                .provinces
+                .world.provinces
                 .iter()
                 .find(|p| p.owner == enemy_id && p.coastal);
 
@@ -423,7 +423,7 @@ pub fn ai_naval_strategy(
                 let target_pid = target_prov.id;
                 let target_prov_name = target_prov.name.clone();
                 if let Some(nation) = game.get_nation_mut(nation_id) {
-                    for ship in &mut nation.warships {
+                    for ship in &mut nation.military.warships {
                         ship.operation = Some(crate::military::naval::NavalOperation::Beachhead(
                             target_pid,
                         ));
@@ -471,7 +471,7 @@ mod tests {
     fn ai_builds_warship_with_arms() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         ai.add_material(MaterialType::Fabric, 4);
         ai.add_material(MaterialType::Lumber, 10);
         ai.add_material(MaterialType::Arms, 4);
@@ -488,7 +488,7 @@ mod tests {
     fn ai_produces_arms_from_steel_for_warships() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         ai.add_material(MaterialType::Fabric, 4);
         ai.add_material(MaterialType::Lumber, 10);
         ai.add_material(MaterialType::Steel, 5);
@@ -509,7 +509,7 @@ mod tests {
     fn ai_does_not_build_warship_without_materials() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         // No materials at all
 
         assert!(!build_one_warship(&mut game, NationId(2)));
@@ -526,7 +526,7 @@ mod tests {
         // `build_one_warship` should keep producing Frigates.
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         ai.economy.treasury = Money::dollars(5_000);
         ai.add_material(MaterialType::Fabric, 20);
         ai.add_material(MaterialType::Lumber, 40);
@@ -546,7 +546,7 @@ mod tests {
     fn ai_produces_partial_arms_from_steel() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         ai.add_material(MaterialType::Fabric, 4);
         ai.add_material(MaterialType::Lumber, 10);
         ai.add_material(MaterialType::Arms, 1); // have 1, need 2
@@ -566,7 +566,7 @@ mod tests {
     fn ai_does_not_produce_arms_when_no_steel() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         ai.add_material(MaterialType::Fabric, 4);
         ai.add_material(MaterialType::Lumber, 10);
         // No arms and no steel
@@ -583,7 +583,7 @@ mod tests {
     fn economic_ai_builds_merchant_ships() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Economic);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Economic);
         ai.economy.treasury = Money::dollars(3_000); // below $5K threshold: cap is 3
         ai.add_material(MaterialType::Fabric, 10);
         ai.add_material(MaterialType::Lumber, 20);
@@ -621,7 +621,7 @@ mod tests {
     fn balanced_ai_only_builds_one_merchant_ship() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         ai.economy.treasury = Money::dollars(3_000); // below $5K threshold: cap is 1
         ai.add_material(MaterialType::Fabric, 10);
         ai.add_material(MaterialType::Lumber, 20);
@@ -646,15 +646,15 @@ mod tests {
         let mut game = test_game_with_ai_and_minor();
 
         // Put AI at war with minor nation
-        game.diplomacy.declare_war(NationId(2), NationId(3));
+        game.world.diplomacy.declare_war(NationId(2), NationId(3));
 
         // Give the minor nation 2 warships (more than AI's 0)
         let minor = game.get_nation_mut(NationId(3)).unwrap();
         minor
-            .warships
+            .military.warships
             .push(Ship::new(UnitId(50001), ShipType::Frigate, NationId(3)));
         minor
-            .warships
+            .military.warships
             .push(Ship::new(UnitId(50002), ShipType::Frigate, NationId(3)));
 
         // Give AI materials to build a warship (2 fabric + 5 lumber + 2 arms)
@@ -692,13 +692,13 @@ mod tests {
 
         let mut game = test_game_with_adjacent_provinces();
         // Mark the AI's border province coastal so "we_have_coast" is true.
-        game.provinces.iter_mut().for_each(|p| {
+        game.world.provinces.iter_mut().for_each(|p| {
             if p.id == ProvinceId(2) {
                 p.coastal = true;
             }
         });
         // Make the enemy province coastal too, so it would be a viable beachhead.
-        game.provinces.iter_mut().for_each(|p| {
+        game.world.provinces.iter_mut().for_each(|p| {
             if p.id == ProvinceId(3) {
                 p.coastal = true;
             }
@@ -706,9 +706,9 @@ mod tests {
 
         // Give AI 5 army units and 3 warships (naval superiority).
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         for i in 0..5 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(9100 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -716,7 +716,7 @@ mod tests {
             ));
         }
         for i in 0..3 {
-            ai.warships
+            ai.military.warships
                 .push(Ship::new(UnitId(9200 + i), ShipType::Frigate, NationId(2)));
         }
         // Enemy has no warships and a small garrison (garrison_count=3 by default).
@@ -726,7 +726,7 @@ mod tests {
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert!(
-            ai.warships.iter().all(|s| !matches!(
+            ai.military.warships.iter().all(|s| !matches!(
                 s.operation,
                 Some(crate::military::naval::NavalOperation::Beachhead(_))
             )),
@@ -751,7 +751,7 @@ mod tests {
 
         let mut game = test_game_with_adjacent_provinces();
         // Make the AI's border province coastal (required for embark).
-        game.provinces.iter_mut().for_each(|p| {
+        game.world.provinces.iter_mut().for_each(|p| {
             if p.id == ProvinceId(2) {
                 p.coastal = true;
             }
@@ -766,9 +766,9 @@ mod tests {
 
         // AI: small army (5), naval superiority.
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         for i in 0..5 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(9500 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -776,7 +776,7 @@ mod tests {
             ));
         }
         for i in 0..3 {
-            ai.warships
+            ai.military.warships
                 .push(Ship::new(UnitId(9600 + i), ShipType::Frigate, NationId(2)));
         }
         // Enemy stacked with a fat garrison already (20). Attacker army=5,
@@ -787,7 +787,7 @@ mod tests {
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert!(
-            ai.warships.iter().any(|s| matches!(
+            ai.military.warships.iter().any(|s| matches!(
                 s.operation,
                 Some(crate::military::naval::NavalOperation::Beachhead(_))
             )),
@@ -808,22 +808,22 @@ mod tests {
         use crate::ai::common::test_helpers::test_game_with_adjacent_provinces;
         let mut game = test_game_with_adjacent_provinces();
         // End the war seeded by the test helper.
-        game.diplomacy.make_peace(NationId(2), NationId(3));
+        game.world.diplomacy.make_peace(NationId(2), NationId(3));
 
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         let mut stale_ship = Ship::new(UnitId(9800), ShipType::Frigate, NationId(2));
         stale_ship.operation = Some(crate::military::naval::NavalOperation::Beachhead(
             ProvinceId(3),
         ));
-        ai.warships.push(stale_ship);
+        ai.military.warships.push(stale_ship);
 
         let mut actions = Vec::new();
         ai_naval_strategy(&mut game, NationId(2), &mut actions);
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert!(
-            ai.warships.iter().all(|s| !matches!(
+            ai.military.warships.iter().all(|s| !matches!(
                 s.operation,
                 Some(crate::military::naval::NavalOperation::Beachhead(_))
             )),
@@ -837,7 +837,7 @@ mod tests {
         // returns early to build more ships.
         use crate::ai::common::test_helpers::test_game_with_adjacent_provinces;
         let mut game = test_game_with_adjacent_provinces();
-        game.provinces.iter_mut().for_each(|p| {
+        game.world.provinces.iter_mut().for_each(|p| {
             if p.id == ProvinceId(2) {
                 p.coastal = true;
             }
@@ -845,17 +845,17 @@ mod tests {
 
         // AI has a stale Beachhead op and zero warship firepower.
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         let mut stale_ship = Ship::new(UnitId(9700), ShipType::Frigate, NationId(2));
         stale_ship.operation = Some(crate::military::naval::NavalOperation::Beachhead(
             ProvinceId(3),
         ));
-        ai.warships.push(stale_ship);
+        ai.military.warships.push(stale_ship);
 
         // Give enemy several strong warships so max_enemy_naval_fp > our_naval_fp.
         let enemy = game.get_nation_mut(NationId(3)).unwrap();
         for i in 0..3 {
-            enemy.warships.push(Ship::new(
+            enemy.military.warships.push(Ship::new(
                 UnitId(9700 + 100 + i),
                 ShipType::ShipOfTheLine,
                 NationId(3),
@@ -867,7 +867,7 @@ mod tests {
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert!(
-            ai.warships.iter().all(|s| !matches!(
+            ai.military.warships.iter().all(|s| !matches!(
                 s.operation,
                 Some(crate::military::naval::NavalOperation::Beachhead(_))
             )),
@@ -881,26 +881,26 @@ mod tests {
         // land-adjacent to our territory — the op should be cleared.
         use crate::ai::common::test_helpers::test_game_with_adjacent_provinces;
         let mut game = test_game_with_adjacent_provinces();
-        game.provinces.iter_mut().for_each(|p| {
+        game.world.provinces.iter_mut().for_each(|p| {
             if p.id == ProvinceId(2) {
                 p.coastal = true;
             }
         });
 
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         let mut stale_ship = Ship::new(UnitId(9300), ShipType::Frigate, NationId(2));
         stale_ship.operation = Some(crate::military::naval::NavalOperation::Beachhead(
             ProvinceId(3),
         ));
-        ai.warships.push(stale_ship);
+        ai.military.warships.push(stale_ship);
 
         let mut actions = Vec::new();
         ai_naval_strategy(&mut game, NationId(2), &mut actions);
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert!(
-            ai.warships.iter().all(|s| !matches!(
+            ai.military.warships.iter().all(|s| !matches!(
                 s.operation,
                 Some(crate::military::naval::NavalOperation::Beachhead(_))
             )),

@@ -8,6 +8,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 domain = { path = "../domain", default-features = false }
+application = { path = "../application" }
 flavor = { path = "../flavor" }
 wasm-bindgen = "0.2"
 serde = { version = "1", features = ["derive"] }

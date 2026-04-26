@@ -241,6 +241,53 @@ game_config = {
     spending_naval_base = 2.0,
     spending_naval_war_bonus = 10.0,
     spending_naval_gap_coeff = 1.5,
+
+    -- D-4: Pact-defense evaluation (evaluate_pact_defense).
+    -- A nation's global "standing" must exceed this gate before pact defense is considered.
+    pact_defense_standing_gate = 30,
+    -- Weight of the minor-nation relationship score in the combined factor.
+    pact_defense_relationship_weight = 0.4,
+    -- Weight of the hypothetical-war win-likelihood in the combined factor.
+    pact_defense_military_weight = 0.4,
+    -- Per-personality additive bias to the combined factor.
+    pact_defense_bias_aggressive = 0.2,
+    pact_defense_bias_diplomatic = 0.1,
+    pact_defense_bias_balanced = 0.0,
+    pact_defense_bias_economic = -0.15,
+    -- Per-personality minimum combined threshold to trigger pact defense.
+    pact_defense_threshold_aggressive = 0.2,
+    pact_defense_threshold_diplomatic = 0.3,
+    pact_defense_threshold_balanced = 0.35,
+    pact_defense_threshold_economic = 0.5,
+
+    -- D-5: Terrain and fort defense bonuses (fraction added to defender FP).
+    terrain_defense_mountain = 0.50,
+    terrain_defense_hills = 0.30,
+    terrain_defense_forest = 0.20,
+    terrain_defense_swamp = 0.15,
+    fort_defense_level1 = 0.20,
+    fort_defense_level2 = 0.40,
+    fort_defense_level3 = 0.60,
+    -- Fraction of starting FP lost that triggers a mid-battle retreat for each side.
+    battle_attacker_fp_loss_ratio = 0.60,
+    battle_defender_fp_loss_ratio = 2.0,
+
+    -- D-6: AI worker/civilian hiring thresholds.
+    -- Workers recruited per province for normal vs. wealthy nations.
+    labor_workers_per_province_base = 2,
+    labor_workers_per_province_wealthy = 3,
+    -- Treasury threshold (dollars) above which a nation is considered "wealthy" for labor.
+    labor_wealthy_treasury_threshold = 20000,
+    -- Minimum total worker target regardless of province count.
+    labor_min_workers_floor = 5,
+    -- Treasury thresholds and civilian-count caps for each hiring tier.
+    labor_hire_civilian_tier1_treasury = 1000,
+    labor_hire_civilian_tier1_max = 2,
+    labor_hire_civilian_tier2_treasury = 2000,
+    labor_hire_civilian_tier2_max = 4,
+
+    -- D-7: Minimum treasury required before the AI will build consulates.
+    ai_consulate_treasury_threshold = 2000,
 }
 
 return game_config

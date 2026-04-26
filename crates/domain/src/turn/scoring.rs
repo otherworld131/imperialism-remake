@@ -60,16 +60,16 @@ pub struct CouncilVoteResult {
 /// - **Diplomatic**: placeholder — currently 50
 /// - **Province**: number of provinces * 100
 pub fn calculate_score(nation: &Nation) -> NationScore {
-    if nation.is_in_anarchy {
+    if nation.diplomacy.is_in_anarchy {
         return NationScore::default();
     }
     let military_score = nation
-        .army
+        .military.army
         .iter()
         .map(|u| u.effective_firepower() as u32)
         .sum::<u32>();
     let labor_score = nation.economy.labor.total_workers() * 10;
-    let transport_score = nation.transport.freight_cars * 5;
+    let transport_score = nation.military.transport.freight_cars * 5;
     let merchant_marine_score = nation.total_cargo_capacity() * 20;
     let diplomatic_score = 50; // placeholder
     let province_score = nation.province_count() as u32 * 75;
@@ -158,7 +158,7 @@ pub fn run_council_vote(
     // Collect Great Power IDs (exclude anarchic nations).
     let great_power_ids: Vec<NationId> = nations
         .iter()
-        .filter(|n| n.is_great_power() && !n.is_in_anarchy)
+        .filter(|n| n.is_great_power() && !n.diplomacy.is_in_anarchy)
         .map(|n| n.id)
         .collect();
 
@@ -180,7 +180,7 @@ pub fn run_council_vote(
     for province in provinces {
         // Anarchic nation provinces have no functioning governance — governors abstain.
         let owner_nation = nations.iter().find(|n| n.id == province.owner);
-        if owner_nation.is_some_and(|n| n.is_in_anarchy) {
+        if owner_nation.is_some_and(|n| n.diplomacy.is_in_anarchy) {
             continue;
         }
 

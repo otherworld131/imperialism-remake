@@ -236,17 +236,17 @@ mod tests {
         // Verify key fields match
         assert_eq!(loaded.turn, game.turn);
         assert_eq!(loaded.difficulty, game.difficulty);
-        assert_eq!(loaded.map_key, game.map_key);
+        assert_eq!(loaded.world.map_key, game.world.map_key);
         assert_eq!(loaded.human_player_nation, game.human_player_nation);
-        assert_eq!(loaded.nations.len(), game.nations.len());
-        assert_eq!(loaded.provinces.len(), game.provinces.len());
-        assert_eq!(loaded.hex_map.tile_count(), game.hex_map.tile_count());
+        assert_eq!(loaded.world.nations.len(), game.world.nations.len());
+        assert_eq!(loaded.world.provinces.len(), game.world.provinces.len());
+        assert_eq!(loaded.world.hex_map.tile_count(), game.world.hex_map.tile_count());
 
         // Verify tech_tree was reconstructed
         assert_eq!(loaded.game_data.tech_tree.all_techs().len(), 28);
 
         // Verify events are empty (they are transient)
-        assert!(loaded.events.is_empty());
+        assert!(loaded.transient.events.is_empty());
 
         // Verify nation data roundtripped
         let original_player = game.get_nation(game.human_player_nation).unwrap();
@@ -428,8 +428,8 @@ mod tests {
         let loaded = load_game(&path).unwrap();
         assert_eq!(loaded.turn, game.turn);
         assert_eq!(loaded.difficulty, game.difficulty);
-        assert_eq!(loaded.map_key, game.map_key);
-        assert_eq!(loaded.nations.len(), game.nations.len());
+        assert_eq!(loaded.world.map_key, game.world.map_key);
+        assert_eq!(loaded.world.nations.len(), game.world.nations.len());
 
         // Cleanup
         let _ = std::fs::remove_file(&path);
