@@ -71,6 +71,9 @@ pub(super) fn validate_and_reserve(
     _game: &mut GameState,
     orders: Vec<EconomicOrder>,
 ) -> Vec<ReservedAction> {
+    // DEFERRED (#169/#174): no reservation guarantees are active. Phase 4 replaces
+    // this with per-nation NationEconomy::reserve calls; callers must not assume
+    // executing a ReservedAction has committed any inventory.
     orders.into_iter().map(|order| ReservedAction { order }).collect()
 }
 
@@ -129,6 +132,10 @@ pub(super) fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
             report.maintenance_costs.push((nation.id, total_cost));
         }
 
+        // Track negativity BEFORE clamping — is_bankrupt() checks treasury < 0,
+        // which is always false after the floor is applied (F-017 fix).
+        let went_bankrupt = nation.economy.treasury < Money::ZERO;
+
         // Bankruptcy protection: treasury cannot go below $0. The clamp
         // represents debt forgiven mid-turn — we surface it as income in the
         // cash-flow ledger so the reconciliation invariant closes.
@@ -140,8 +147,7 @@ pub(super) fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
             }
         }
 
-        // Generate bankruptcy headline if treasury went negative
-        if nation.is_bankrupt() {
+        if went_bankrupt {
             report.newspaper_headlines.push(
                 Headline::new(
                     format!("FINANCIAL CRISIS: {} faces bankruptcy!", nation.name),

@@ -3984,7 +3984,12 @@ fn release_integrated_minors(
             for pid in &provinces_to_restore {
                 minor.add_province(*pid);
             }
-            minor.integrated_by = None;
+            // Only clear integration pointer when this overlord was the integrator.
+            // A minor can hold provinces with conquest_origin == minor_id even if
+            // it is currently integrated by a *different* GP (F-016 fix).
+            if minor.integrated_by == Some(overlord_id) {
+                minor.integrated_by = None;
+            }
             // Card #96: a released subject must come back as a functioning
             // independent nation, never as an anarchic black-banner state.
             // If its original capital didn't come back (e.g. a third power
@@ -9960,14 +9965,15 @@ mod tests {
             nation.economy.treasury
         );
 
-        // With floor at $0, nation is NOT bankrupt (treasury == $0, not negative)
+        // Treasury went negative before the floor clamped it — a FINANCIAL CRISIS
+        // headline should have been generated (F-017 fix: headline tracked pre-clamp).
         let has_crisis_headline = report
             .newspaper_headlines
             .iter()
             .any(|h| h.text.contains("FINANCIAL CRISIS"));
         assert!(
-            !has_crisis_headline,
-            "Should NOT have FINANCIAL CRISIS headline when floor is $0"
+            has_crisis_headline,
+            "Should have FINANCIAL CRISIS headline when maintenance exceeds treasury"
         );
     }
 
