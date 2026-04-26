@@ -1357,9 +1357,10 @@ pub(crate) fn print_turn_report(game: &GameState, report: &TurnReport) {
                 color_red("DEFEAT")
             };
 
+            let game_cfg = &game.game_data.game_config;
             let terrain_str = match battle.terrain {
                 Some(t) => {
-                    let bonus = domain::military::terrain_defense_bonus(t);
+                    let bonus = domain::military::terrain_defense_bonus(t, game_cfg);
                     if bonus > 0.0 {
                         format!("{:?} (+{:.0}% defense)", t, bonus * 100.0)
                     } else {
@@ -1371,9 +1372,9 @@ pub(crate) fn print_turn_report(game: &GameState, report: &TurnReport) {
 
             let fort_str = if battle.fort_level > 0 {
                 if battle.siege_reduced_fort {
-                    let full_bonus = domain::military::fort_defense_bonus(battle.fort_level);
+                    let full_bonus = domain::military::fort_defense_bonus(battle.fort_level, game_cfg);
                     let reduced_bonus =
-                        domain::military::effective_fort_bonus(battle.fort_level, true);
+                        domain::military::effective_fort_bonus(battle.fort_level, true, game_cfg);
                     format!(
                         "Level {} (+{:.0}% -> +{:.0}% defense, reduced by siege artillery)",
                         battle.fort_level,
@@ -1381,7 +1382,7 @@ pub(crate) fn print_turn_report(game: &GameState, report: &TurnReport) {
                         reduced_bonus * 100.0,
                     )
                 } else {
-                    let bonus = domain::military::fort_defense_bonus(battle.fort_level);
+                    let bonus = domain::military::fort_defense_bonus(battle.fort_level, game_cfg);
                     format!(
                         "Level {} (+{:.0}% defense)",
                         battle.fort_level,
@@ -1406,7 +1407,7 @@ pub(crate) fn print_turn_report(game: &GameState, report: &TurnReport) {
             let def_fp_str = if battle.fort_level > 0
                 || battle
                     .terrain
-                    .map(|t| domain::military::terrain_defense_bonus(t) > 0.0)
+                    .map(|t| domain::military::terrain_defense_bonus(t, game_cfg) > 0.0)
                     .unwrap_or(false)
             {
                 format!(

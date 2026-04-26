@@ -421,9 +421,11 @@ pub fn evaluate_pact_defense(
     personality: AiPersonality,
     #[cfg(feature = "lua")] lua_cfg: Option<&LuaAiConfig>,
 ) -> bool {
+    let cfg = &game.game_data.game_config;
+
     // Standing gate
     let standing = game.diplomacy.get_standing(protector_id);
-    if standing < 30 {
+    if standing < cfg.pact_defense_standing_gate {
         return false;
     }
 
@@ -438,31 +440,32 @@ pub fn evaluate_pact_defense(
         .get_relation(protector_id, _minor_id)
         .map(|r| r.score)
         .unwrap_or(0);
-    let relationship_factor = (rel_score as f64 / 100.0).clamp(0.0, 1.0) * 0.4;
+    let relationship_factor =
+        (rel_score as f64 / 100.0).clamp(0.0, 1.0) * cfg.pact_defense_relationship_weight;
 
     // Military factor: can the protector beat the attacker?
     #[cfg(feature = "lua")]
     let assessment = evaluate_hypothetical_war(game, protector_id, attacker_id, lua_cfg);
     #[cfg(not(feature = "lua"))]
     let assessment = evaluate_hypothetical_war(game, protector_id, attacker_id);
-    let military_factor = assessment.win_likelihood * 0.4;
+    let military_factor = assessment.win_likelihood * cfg.pact_defense_military_weight;
 
     // Personality bias
     let personality_bias = match personality {
-        AiPersonality::Aggressive => 0.2,
-        AiPersonality::Diplomatic => 0.1,
-        AiPersonality::Balanced => 0.0,
-        AiPersonality::Economic => -0.15,
+        AiPersonality::Aggressive => cfg.pact_defense_bias_aggressive,
+        AiPersonality::Diplomatic => cfg.pact_defense_bias_diplomatic,
+        AiPersonality::Balanced => cfg.pact_defense_bias_balanced,
+        AiPersonality::Economic => cfg.pact_defense_bias_economic,
     };
 
     let combined = relationship_factor + military_factor + personality_bias;
 
     // Personality-dependent threshold
     let threshold = match personality {
-        AiPersonality::Aggressive => 0.2,
-        AiPersonality::Diplomatic => 0.3,
-        AiPersonality::Balanced => 0.35,
-        AiPersonality::Economic => 0.5,
+        AiPersonality::Aggressive => cfg.pact_defense_threshold_aggressive,
+        AiPersonality::Diplomatic => cfg.pact_defense_threshold_diplomatic,
+        AiPersonality::Balanced => cfg.pact_defense_threshold_balanced,
+        AiPersonality::Economic => cfg.pact_defense_threshold_economic,
     };
 
     combined >= threshold

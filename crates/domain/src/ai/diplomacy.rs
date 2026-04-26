@@ -9,8 +9,8 @@ use super::common::{AiPersonality, get_personality};
 #[cfg(test)]
 pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
     let personality = get_personality(game, nation_id);
-    let cost = Money::dollars(500);
-    let treasury_threshold = Money::dollars(2000);
+    let cost = Money::dollars(game.game_data.game_config.consulate_cost);
+    let treasury_threshold = Money::dollars(game.game_data.game_config.ai_consulate_treasury_threshold);
 
     // ── Read Lua config (feature-gated) ──────────────────────
     #[cfg(feature = "lua")]

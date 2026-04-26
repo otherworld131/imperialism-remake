@@ -209,6 +209,65 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         spending_naval_base: table.get::<f64>("spending_naval_base").unwrap_or(2.0),
         spending_naval_war_bonus: table.get::<f64>("spending_naval_war_bonus").unwrap_or(10.0),
         spending_naval_gap_coeff: table.get::<f64>("spending_naval_gap_coeff").unwrap_or(1.5),
+        // D-4: pact-defense thresholds
+        pact_defense_standing_gate: table.get("pact_defense_standing_gate").unwrap_or(30),
+        pact_defense_relationship_weight: table
+            .get("pact_defense_relationship_weight")
+            .unwrap_or(0.4),
+        pact_defense_military_weight: table.get("pact_defense_military_weight").unwrap_or(0.4),
+        pact_defense_bias_aggressive: table.get("pact_defense_bias_aggressive").unwrap_or(0.2),
+        pact_defense_bias_diplomatic: table.get("pact_defense_bias_diplomatic").unwrap_or(0.1),
+        pact_defense_bias_balanced: table.get("pact_defense_bias_balanced").unwrap_or(0.0),
+        pact_defense_bias_economic: table.get("pact_defense_bias_economic").unwrap_or(-0.15),
+        pact_defense_threshold_aggressive: table
+            .get("pact_defense_threshold_aggressive")
+            .unwrap_or(0.2),
+        pact_defense_threshold_diplomatic: table
+            .get("pact_defense_threshold_diplomatic")
+            .unwrap_or(0.3),
+        pact_defense_threshold_balanced: table
+            .get("pact_defense_threshold_balanced")
+            .unwrap_or(0.35),
+        pact_defense_threshold_economic: table
+            .get("pact_defense_threshold_economic")
+            .unwrap_or(0.5),
+        // D-5: combat terrain/fort bonuses and fp-loss ratios
+        terrain_defense_mountain: table.get("terrain_defense_mountain").unwrap_or(0.50),
+        terrain_defense_hills: table.get("terrain_defense_hills").unwrap_or(0.30),
+        terrain_defense_forest: table.get("terrain_defense_forest").unwrap_or(0.20),
+        terrain_defense_swamp: table.get("terrain_defense_swamp").unwrap_or(0.15),
+        fort_defense_level1: table.get("fort_defense_level1").unwrap_or(0.20),
+        fort_defense_level2: table.get("fort_defense_level2").unwrap_or(0.40),
+        fort_defense_level3: table.get("fort_defense_level3").unwrap_or(0.60),
+        battle_attacker_fp_loss_ratio: table
+            .get("battle_attacker_fp_loss_ratio")
+            .unwrap_or(0.60),
+        battle_defender_fp_loss_ratio: table
+            .get("battle_defender_fp_loss_ratio")
+            .unwrap_or(2.0),
+        // D-6: labor/civilian hiring thresholds
+        labor_workers_per_province_base: table
+            .get("labor_workers_per_province_base")
+            .unwrap_or(2),
+        labor_workers_per_province_wealthy: table
+            .get("labor_workers_per_province_wealthy")
+            .unwrap_or(3),
+        labor_wealthy_treasury_threshold: table
+            .get("labor_wealthy_treasury_threshold")
+            .unwrap_or(20_000),
+        labor_min_workers_floor: table.get("labor_min_workers_floor").unwrap_or(5),
+        labor_hire_civilian_tier1_treasury: table
+            .get("labor_hire_civilian_tier1_treasury")
+            .unwrap_or(1000),
+        labor_hire_civilian_tier1_max: table.get("labor_hire_civilian_tier1_max").unwrap_or(2),
+        labor_hire_civilian_tier2_treasury: table
+            .get("labor_hire_civilian_tier2_treasury")
+            .unwrap_or(2000),
+        labor_hire_civilian_tier2_max: table.get("labor_hire_civilian_tier2_max").unwrap_or(4),
+        // D-7: AI consulate treasury threshold
+        ai_consulate_treasury_threshold: table
+            .get("ai_consulate_treasury_threshold")
+            .unwrap_or(2000),
     };
     // Sanitize: ensure no zero-or-negative values for fields used as divisors/multipliers
     let sanitized_default_garrison = cfg.default_garrison_per_province.clamp(0, 20);
@@ -312,6 +371,119 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         } else {
             1.5
         },
+        // D-4: pact-defense thresholds
+        pact_defense_standing_gate: cfg.pact_defense_standing_gate.clamp(-100, 100),
+        pact_defense_relationship_weight: if cfg.pact_defense_relationship_weight.is_finite() {
+            cfg.pact_defense_relationship_weight.clamp(0.0, 1.0)
+        } else {
+            0.4
+        },
+        pact_defense_military_weight: if cfg.pact_defense_military_weight.is_finite() {
+            cfg.pact_defense_military_weight.clamp(0.0, 1.0)
+        } else {
+            0.4
+        },
+        pact_defense_bias_aggressive: if cfg.pact_defense_bias_aggressive.is_finite() {
+            cfg.pact_defense_bias_aggressive.clamp(-1.0, 1.0)
+        } else {
+            0.2
+        },
+        pact_defense_bias_diplomatic: if cfg.pact_defense_bias_diplomatic.is_finite() {
+            cfg.pact_defense_bias_diplomatic.clamp(-1.0, 1.0)
+        } else {
+            0.1
+        },
+        pact_defense_bias_balanced: if cfg.pact_defense_bias_balanced.is_finite() {
+            cfg.pact_defense_bias_balanced.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        },
+        pact_defense_bias_economic: if cfg.pact_defense_bias_economic.is_finite() {
+            cfg.pact_defense_bias_economic.clamp(-1.0, 1.0)
+        } else {
+            -0.15
+        },
+        pact_defense_threshold_aggressive: if cfg.pact_defense_threshold_aggressive.is_finite() {
+            cfg.pact_defense_threshold_aggressive.clamp(0.0, 1.0)
+        } else {
+            0.2
+        },
+        pact_defense_threshold_diplomatic: if cfg.pact_defense_threshold_diplomatic.is_finite() {
+            cfg.pact_defense_threshold_diplomatic.clamp(0.0, 1.0)
+        } else {
+            0.3
+        },
+        pact_defense_threshold_balanced: if cfg.pact_defense_threshold_balanced.is_finite() {
+            cfg.pact_defense_threshold_balanced.clamp(0.0, 1.0)
+        } else {
+            0.35
+        },
+        pact_defense_threshold_economic: if cfg.pact_defense_threshold_economic.is_finite() {
+            cfg.pact_defense_threshold_economic.clamp(0.0, 1.0)
+        } else {
+            0.5
+        },
+        // D-5: terrain/fort bonus and fp-loss sanitization
+        terrain_defense_mountain: if cfg.terrain_defense_mountain.is_finite() {
+            cfg.terrain_defense_mountain.clamp(0.0, 2.0)
+        } else {
+            0.50
+        },
+        terrain_defense_hills: if cfg.terrain_defense_hills.is_finite() {
+            cfg.terrain_defense_hills.clamp(0.0, 2.0)
+        } else {
+            0.30
+        },
+        terrain_defense_forest: if cfg.terrain_defense_forest.is_finite() {
+            cfg.terrain_defense_forest.clamp(0.0, 2.0)
+        } else {
+            0.20
+        },
+        terrain_defense_swamp: if cfg.terrain_defense_swamp.is_finite() {
+            cfg.terrain_defense_swamp.clamp(0.0, 2.0)
+        } else {
+            0.15
+        },
+        fort_defense_level1: if cfg.fort_defense_level1.is_finite() {
+            cfg.fort_defense_level1.clamp(0.0, 2.0)
+        } else {
+            0.20
+        },
+        fort_defense_level2: if cfg.fort_defense_level2.is_finite() {
+            cfg.fort_defense_level2.clamp(0.0, 2.0)
+        } else {
+            0.40
+        },
+        fort_defense_level3: if cfg.fort_defense_level3.is_finite() {
+            cfg.fort_defense_level3.clamp(0.0, 2.0)
+        } else {
+            0.60
+        },
+        battle_attacker_fp_loss_ratio: if cfg.battle_attacker_fp_loss_ratio.is_finite() {
+            cfg.battle_attacker_fp_loss_ratio.clamp(0.0, 10.0)
+        } else {
+            0.60
+        },
+        battle_defender_fp_loss_ratio: if cfg.battle_defender_fp_loss_ratio.is_finite() {
+            cfg.battle_defender_fp_loss_ratio.clamp(0.0, 10.0)
+        } else {
+            2.0
+        },
+        // D-6: labor/civilian thresholds
+        labor_workers_per_province_base: cfg.labor_workers_per_province_base.clamp(1, 10),
+        labor_workers_per_province_wealthy: cfg.labor_workers_per_province_wealthy.clamp(1, 10),
+        labor_wealthy_treasury_threshold: cfg.labor_wealthy_treasury_threshold.clamp(0, 1_000_000),
+        labor_min_workers_floor: cfg.labor_min_workers_floor.clamp(1, 50),
+        labor_hire_civilian_tier1_treasury: cfg
+            .labor_hire_civilian_tier1_treasury
+            .clamp(0, 1_000_000),
+        labor_hire_civilian_tier1_max: cfg.labor_hire_civilian_tier1_max.clamp(0, 20),
+        labor_hire_civilian_tier2_treasury: cfg
+            .labor_hire_civilian_tier2_treasury
+            .clamp(0, 1_000_000),
+        labor_hire_civilian_tier2_max: cfg.labor_hire_civilian_tier2_max.clamp(0, 20),
+        // D-7: AI consulate treasury threshold
+        ai_consulate_treasury_threshold: cfg.ai_consulate_treasury_threshold.clamp(0, 1_000_000),
         ..cfg
     }
 }

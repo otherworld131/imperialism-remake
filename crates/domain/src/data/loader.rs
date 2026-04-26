@@ -10,7 +10,10 @@ use crate::tech::tree::{TechEffect, TechTree, Technology};
 use crate::types::Money;
 use std::collections::HashMap;
 
-/// Parse a RON technology definitions string into a TechTree.
+/// Parse a RON technology definitions string into a validated TechTree.
+///
+/// Returns an error if the RON is malformed, contains duplicate IDs,
+/// references non-existent prerequisite IDs, or contains cycles.
 pub fn load_tech_tree(ron_str: &str) -> Result<TechTree, String> {
     let defs: TechDefsFile =
         ron::from_str(ron_str).map_err(|e| format!("Failed to parse technologies RON: {}", e))?;
@@ -29,7 +32,9 @@ pub fn load_tech_tree(ron_str: &str) -> Result<TechTree, String> {
         })
         .collect();
 
-    Ok(TechTree::from_technologies(technologies))
+    let tree = TechTree::from_technologies(technologies);
+    tree.validate()?;
+    Ok(tree)
 }
 
 /// Parse a RON ship definitions string into a HashMap of ShipType → ShipStats.
@@ -236,28 +241,6 @@ mod tests {
     fn load_tech_tree_invalid_ron_returns_error() {
         let result = load_tech_tree("not valid ron");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn ron_tech_tree_matches_hardcoded() {
-        let ron_content = include_str!("../../../../data/definitions/technologies.ron");
-        let from_ron = load_tech_tree(ron_content).unwrap();
-        let hardcoded = TechTree::new();
-
-        assert_eq!(from_ron.all_techs().len(), hardcoded.all_techs().len());
-        for (r, h) in from_ron
-            .all_techs()
-            .iter()
-            .zip(hardcoded.all_techs().iter())
-        {
-            assert_eq!(r.id, h.id, "ID mismatch for tech {}", h.name);
-            assert_eq!(r.name, h.name);
-            assert_eq!(r.cost, h.cost, "Cost mismatch for {}", h.name);
-            assert_eq!(r.earliest_year, h.earliest_year);
-            assert_eq!(r.latest_year, h.latest_year);
-            assert_eq!(r.prerequisites, h.prerequisites);
-            assert_eq!(r.effects, h.effects, "Effects mismatch for {}", h.name);
-        }
     }
 
     #[test]

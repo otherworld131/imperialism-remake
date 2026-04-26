@@ -2928,6 +2928,7 @@ fn resolve_combat(
             battle_terrain,
             battle_fort_level,
             battle_config,
+            &game.game_data.game_config,
         );
 
         // Track which provinces the attacking units came from (for battle screen arrows
@@ -3355,6 +3356,7 @@ fn resolve_combat(
             battle_terrain,
             battle_fort_level,
             battle_config,
+            &game.game_data.game_config,
         );
 
         // Track which provinces the counter-attacking units came from
@@ -8163,12 +8165,14 @@ mod tests {
 
     #[test]
     fn fort_defense_bonus_applies_correctly() {
+        use crate::data::GameConfig;
         use crate::military::combat::fort_defense_bonus;
+        let cfg = GameConfig::default();
 
-        assert_eq!(fort_defense_bonus(0), 0.0);
-        assert!((fort_defense_bonus(1) - 0.20).abs() < f64::EPSILON);
-        assert!((fort_defense_bonus(2) - 0.40).abs() < f64::EPSILON);
-        assert!((fort_defense_bonus(3) - 0.60).abs() < f64::EPSILON);
+        assert_eq!(fort_defense_bonus(0, &cfg), 0.0);
+        assert!((fort_defense_bonus(1, &cfg) - 0.20).abs() < f64::EPSILON);
+        assert!((fort_defense_bonus(2, &cfg) - 0.40).abs() < f64::EPSILON);
+        assert!((fort_defense_bonus(3, &cfg) - 0.60).abs() < f64::EPSILON);
     }
 
     #[test]

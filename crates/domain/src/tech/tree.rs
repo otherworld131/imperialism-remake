@@ -46,306 +46,6 @@ impl TechTree {
         Self { technologies }
     }
 
-    /// Creates the full tech tree with all 28 technologies from the original game.
-    pub fn new() -> Self {
-        let technologies = vec![
-            Technology {
-                id: TechId(1),
-                name: "High Pressure Steam Engine".to_string(),
-                cost: Money::dollars(0),
-                earliest_year: 1815,
-                latest_year: 1815,
-                prerequisites: vec![],
-                effects: vec![TechEffect::EnableInfrastructure("Railroad".to_string())],
-            },
-            Technology {
-                id: TechId(2),
-                name: "Seed Drill".to_string(),
-                cost: Money::dollars(0),
-                earliest_year: 1815,
-                latest_year: 1815,
-                prerequisites: vec![],
-                effects: vec![TechEffect::EnableTerrainImprovement {
-                    terrain: "Farm".to_string(),
-                    max_level: 1,
-                }],
-            },
-            Technology {
-                id: TechId(3),
-                name: "Cotton Gin".to_string(),
-                cost: Money::dollars(1_000),
-                earliest_year: 1816,
-                latest_year: 1820,
-                prerequisites: vec![],
-                effects: vec![TechEffect::EnableTerrainImprovement {
-                    terrain: "Plantation".to_string(),
-                    max_level: 1,
-                }],
-            },
-            Technology {
-                id: TechId(4),
-                name: "Iron Railroad Bridge".to_string(),
-                cost: Money::dollars(1_500),
-                earliest_year: 1821,
-                latest_year: 1824,
-                prerequisites: vec![],
-                effects: vec![TechEffect::EnableInfrastructure(
-                    "Railroad Bridge".to_string(),
-                )],
-            },
-            Technology {
-                id: TechId(5),
-                name: "Feed Grasses".to_string(),
-                cost: Money::dollars(1_500),
-                earliest_year: 1821,
-                latest_year: 1824,
-                prerequisites: vec![],
-                effects: vec![TechEffect::EnableTerrainImprovement {
-                    terrain: "OpenRange".to_string(),
-                    max_level: 1,
-                }],
-            },
-            Technology {
-                id: TechId(6),
-                name: "Square-Set Timbering".to_string(),
-                cost: Money::dollars(1_500),
-                earliest_year: 1821,
-                latest_year: 1825,
-                prerequisites: vec![],
-                effects: vec![TechEffect::EnableTerrainImprovement {
-                    terrain: "Mountain".to_string(),
-                    max_level: 2,
-                }],
-            },
-            Technology {
-                id: TechId(7),
-                name: "Streamlined Hulls".to_string(),
-                cost: Money::dollars(1_500),
-                earliest_year: 1821,
-                latest_year: 1825,
-                prerequisites: vec![],
-                effects: vec![TechEffect::UnlockShip("Clipper".to_string())],
-            },
-            Technology {
-                id: TechId(8),
-                name: "Spinning Jenny".to_string(),
-                cost: Money::dollars(3_000),
-                earliest_year: 1826,
-                latest_year: 1829,
-                prerequisites: vec![TechId(3), TechId(5)],
-                effects: vec![TechEffect::UnlockBuilding(BuildingType::TextileMill)],
-            },
-            Technology {
-                id: TechId(9),
-                name: "Paddlewheels".to_string(),
-                cost: Money::dollars(3_000),
-                earliest_year: 1826,
-                latest_year: 1830,
-                prerequisites: vec![],
-                effects: vec![TechEffect::UnlockShip("Paddlewheeler".to_string())],
-            },
-            Technology {
-                id: TechId(10),
-                name: "Steel Plows".to_string(),
-                cost: Money::dollars(3_000),
-                earliest_year: 1831,
-                latest_year: 1835,
-                prerequisites: vec![TechId(2)],
-                effects: vec![TechEffect::EnableTerrainImprovement {
-                    terrain: "Farm".to_string(),
-                    max_level: 2,
-                }],
-            },
-            Technology {
-                id: TechId(11),
-                name: "Bessemer Converter".to_string(),
-                cost: Money::dollars(6_000),
-                earliest_year: 1836,
-                latest_year: 1839,
-                prerequisites: vec![],
-                effects: vec![TechEffect::UnlockBuilding(BuildingType::SteelMill)],
-            },
-            Technology {
-                id: TechId(12),
-                name: "Compound Steam Engine".to_string(),
-                cost: Money::dollars(7_000),
-                earliest_year: 1836,
-                latest_year: 1838,
-                prerequisites: vec![TechId(4)],
-                effects: vec![TechEffect::EnableInfrastructure(
-                    "Advanced Railroad".to_string(),
-                )],
-            },
-            Technology {
-                id: TechId(13),
-                name: "Breech-Loading Rifles".to_string(),
-                cost: Money::dollars(12_000),
-                earliest_year: 1841,
-                latest_year: 1845,
-                prerequisites: vec![TechId(11)],
-                effects: vec![TechEffect::UpgradeUnit {
-                    from: ArmyUnitType::Regulars,
-                    to: ArmyUnitType::RifleInfantry,
-                }],
-            },
-            Technology {
-                id: TechId(14),
-                name: "Rifled Artillery".to_string(),
-                cost: Money::dollars(10_000),
-                earliest_year: 1841,
-                latest_year: 1844,
-                prerequisites: vec![],
-                effects: vec![TechEffect::UpgradeUnit {
-                    from: ArmyUnitType::LightArtillery,
-                    to: ArmyUnitType::StandardArtillery,
-                }],
-            },
-            Technology {
-                id: TechId(15),
-                name: "Advanced Iron Working".to_string(),
-                cost: Money::dollars(12_000),
-                earliest_year: 1846,
-                latest_year: 1850,
-                prerequisites: vec![],
-                effects: vec![TechEffect::UnlockShip("Ironclad".to_string())],
-            },
-            Technology {
-                id: TechId(16),
-                name: "Power Loom".to_string(),
-                cost: Money::dollars(12_000),
-                earliest_year: 1846,
-                latest_year: 1851,
-                prerequisites: vec![TechId(8)],
-                effects: vec![TechEffect::UnlockBuilding(BuildingType::AdvancedTextileMill)],
-            },
-            Technology {
-                id: TechId(17),
-                name: "Mechanical Reaper".to_string(),
-                cost: Money::dollars(12_000),
-                earliest_year: 1851,
-                latest_year: 1855,
-                prerequisites: vec![TechId(10)],
-                effects: vec![TechEffect::EnableTerrainImprovement {
-                    terrain: "Farm".to_string(),
-                    max_level: 3,
-                }],
-            },
-            Technology {
-                id: TechId(18),
-                name: "Commercial Fertilizer".to_string(),
-                cost: Money::dollars(12_000),
-                earliest_year: 1856,
-                latest_year: 1860,
-                prerequisites: vec![TechId(10)],
-                effects: vec![TechEffect::EnableTerrainImprovement {
-                    terrain: "Orchard".to_string(),
-                    max_level: 3,
-                }],
-            },
-            Technology {
-                id: TechId(19),
-                name: "Oil Drilling".to_string(),
-                cost: Money::dollars(25_000),
-                earliest_year: 1856,
-                latest_year: 1858,
-                prerequisites: vec![],
-                effects: vec![TechEffect::EnableTerrainImprovement {
-                    terrain: "Desert".to_string(),
-                    max_level: 1,
-                }],
-            },
-            Technology {
-                id: TechId(20),
-                name: "Barbed Wire".to_string(),
-                cost: Money::dollars(20_000),
-                earliest_year: 1862,
-                latest_year: 1862,
-                prerequisites: vec![TechId(5)],
-                effects: vec![TechEffect::EnableTerrainImprovement {
-                    terrain: "OpenRange".to_string(),
-                    max_level: 2,
-                }],
-            },
-            Technology {
-                id: TechId(21),
-                name: "Steel Armour Plate".to_string(),
-                cost: Money::dollars(40_000),
-                earliest_year: 1866,
-                latest_year: 1868,
-                prerequisites: vec![TechId(15)],
-                effects: vec![TechEffect::UnlockShip("Advanced Ironclad".to_string())],
-            },
-            Technology {
-                id: TechId(22),
-                name: "Large Artillery".to_string(),
-                cost: Money::dollars(40_000),
-                earliest_year: 1872,
-                latest_year: 1886,
-                prerequisites: vec![TechId(14)],
-                effects: vec![TechEffect::UnlockUnit(ArmyUnitType::SiegeArtillery)],
-            },
-            Technology {
-                id: TechId(23),
-                name: "Dynamite".to_string(),
-                cost: Money::dollars(40_000),
-                earliest_year: 1874,
-                latest_year: 1887,
-                prerequisites: vec![TechId(12), TechId(6)],
-                effects: vec![TechEffect::EnableTerrainImprovement {
-                    terrain: "Mountain".to_string(),
-                    max_level: 3,
-                }],
-            },
-            Technology {
-                id: TechId(24),
-                name: "Marine Engineering".to_string(),
-                cost: Money::dollars(40_000),
-                earliest_year: 1873,
-                latest_year: 1889,
-                prerequisites: vec![TechId(21)],
-                effects: vec![TechEffect::UnlockShip("Armoured Cruiser".to_string())],
-            },
-            Technology {
-                id: TechId(25),
-                name: "Machine Guns".to_string(),
-                cost: Money::dollars(100_000),
-                earliest_year: 1879,
-                latest_year: 1893,
-                prerequisites: vec![TechId(13)],
-                effects: vec![TechEffect::UnlockUnit(ArmyUnitType::MachineGunners)],
-            },
-            Technology {
-                id: TechId(26),
-                name: "Chemistry".to_string(),
-                cost: Money::dollars(120_000),
-                earliest_year: 1875,
-                latest_year: 1894,
-                prerequisites: vec![TechId(19), TechId(20)],
-                effects: vec![TechEffect::UnlockBuilding(BuildingType::ChemicalPlant)],
-            },
-            Technology {
-                id: TechId(27),
-                name: "Improved Range-Finding".to_string(),
-                cost: Money::dollars(150_000),
-                earliest_year: 1881,
-                latest_year: 1897,
-                prerequisites: vec![TechId(24)],
-                effects: vec![TechEffect::UnlockShip("Dreadnought".to_string())],
-            },
-            Technology {
-                id: TechId(28),
-                name: "Internal Combustion".to_string(),
-                cost: Money::dollars(150_000),
-                earliest_year: 1884,
-                latest_year: 1898,
-                prerequisites: vec![TechId(26)],
-                effects: vec![TechEffect::UnlockUnit(ArmyUnitType::Mechanised)],
-            },
-        ];
-
-        Self { technologies }
-    }
-
     /// Look up a technology by its ID.
     pub fn get(&self, id: TechId) -> Option<&Technology> {
         self.technologies.iter().find(|t| t.id == id)
@@ -557,7 +257,7 @@ impl TechTree {
 
 impl Default for TechTree {
     fn default() -> Self {
-        Self::new()
+        Self::from_technologies(vec![])
     }
 }
 
@@ -565,15 +265,21 @@ impl Default for TechTree {
 mod tests {
     use super::*;
 
+    fn load_ron_tree() -> TechTree {
+        let ron_content = include_str!("../../../../data/definitions/technologies.ron");
+        crate::data::loader::load_tech_tree(ron_content)
+            .expect("technologies.ron must be valid")
+    }
+
     #[test]
     fn tech_tree_has_28_technologies() {
-        let tree = TechTree::new();
+        let tree = load_ron_tree();
         assert_eq!(tree.all_techs().len(), 28);
     }
 
     #[test]
     fn validation_passes() {
-        let tree = TechTree::new();
+        let tree = load_ron_tree();
         assert!(
             tree.validate().is_ok(),
             "Tech tree validation failed: {:?}",
@@ -583,7 +289,7 @@ mod tests {
 
     #[test]
     fn available_techs_at_1815() {
-        let tree = TechTree::new();
+        let tree = load_ron_tree();
         let available = tree.available_techs(&[], 1815);
         let names: Vec<&str> = available.iter().map(|t| t.name.as_str()).collect();
         assert!(
@@ -600,7 +306,7 @@ mod tests {
 
     #[test]
     fn dependent_techs_become_available_after_prereqs() {
-        let tree = TechTree::new();
+        let tree = load_ron_tree();
 
         // Steel Plows (ID 10) requires Seed Drill (ID 2) and year 1831-1835
         let available_before = tree.available_techs(&[], 1831);
@@ -621,7 +327,7 @@ mod tests {
 
     #[test]
     fn techs_outside_year_window_not_available() {
-        let tree = TechTree::new();
+        let tree = load_ron_tree();
 
         // Cotton Gin (ID 3) is available 1816-1820
         // Should NOT be available in 1815
@@ -651,7 +357,7 @@ mod tests {
 
     #[test]
     fn get_by_name_works() {
-        let tree = TechTree::new();
+        let tree = load_ron_tree();
 
         let tech = tree.get_by_name("Bessemer Converter");
         assert!(tech.is_some(), "Should find Bessemer Converter by name");
@@ -670,7 +376,7 @@ mod tests {
 
     #[test]
     fn get_by_id_works() {
-        let tree = TechTree::new();
+        let tree = load_ron_tree();
         let tech = tree.get(TechId(1));
         assert!(tech.is_some());
         assert_eq!(tech.unwrap().name, "High Pressure Steam Engine");
@@ -681,7 +387,7 @@ mod tests {
 
     #[test]
     fn is_researched_works() {
-        let tree = TechTree::new();
+        let tree = load_ron_tree();
         let researched = vec![TechId(1), TechId(2)];
         assert!(tree.is_researched(TechId(1), &researched));
         assert!(tree.is_researched(TechId(2), &researched));
@@ -690,7 +396,7 @@ mod tests {
 
     #[test]
     fn already_researched_techs_not_available() {
-        let tree = TechTree::new();
+        let tree = load_ron_tree();
         let available = tree.available_techs(&[TechId(1), TechId(2)], 1815);
         let ids: Vec<TechId> = available.iter().map(|t| t.id).collect();
         assert!(
@@ -705,7 +411,7 @@ mod tests {
 
     #[test]
     fn multi_prerequisite_tech_requires_all() {
-        let tree = TechTree::new();
+        let tree = load_ron_tree();
 
         // Spinning Jenny (ID 8) requires Cotton Gin (3) AND Feed Grasses (5), years 1826-1829
         // With only one prereq, should NOT be available
@@ -727,7 +433,7 @@ mod tests {
 
     #[test]
     fn tech_data_validation_all_ids_valid() {
-        let tree = TechTree::new();
+        let tree = load_ron_tree();
         let validation = tree.validate();
         assert!(
             validation.is_ok(),
@@ -943,8 +649,8 @@ mod tests {
     }
 
     #[test]
-    fn validate_default_tree_passes() {
-        let tree = TechTree::new();
-        assert!(tree.validate().is_ok(), "Default tech tree should be valid");
+    fn validate_ron_tree_passes() {
+        let tree = load_ron_tree();
+        assert!(tree.validate().is_ok(), "RON tech tree should be valid");
     }
 }

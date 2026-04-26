@@ -189,6 +189,39 @@ pub struct GameConfig {
     pub spending_naval_base: f64,
     pub spending_naval_war_bonus: f64,
     pub spending_naval_gap_coeff: f64,
+    // D-4: Pact-defense evaluation thresholds (evaluate_pact_defense)
+    pub pact_defense_standing_gate: i32,
+    pub pact_defense_relationship_weight: f64,
+    pub pact_defense_military_weight: f64,
+    pub pact_defense_bias_aggressive: f64,
+    pub pact_defense_bias_diplomatic: f64,
+    pub pact_defense_bias_balanced: f64,
+    pub pact_defense_bias_economic: f64,
+    pub pact_defense_threshold_aggressive: f64,
+    pub pact_defense_threshold_diplomatic: f64,
+    pub pact_defense_threshold_balanced: f64,
+    pub pact_defense_threshold_economic: f64,
+    // D-5: Combat terrain / fort defense bonuses
+    pub terrain_defense_mountain: f64,
+    pub terrain_defense_hills: f64,
+    pub terrain_defense_forest: f64,
+    pub terrain_defense_swamp: f64,
+    pub fort_defense_level1: f64,
+    pub fort_defense_level2: f64,
+    pub fort_defense_level3: f64,
+    pub battle_attacker_fp_loss_ratio: f64,
+    pub battle_defender_fp_loss_ratio: f64,
+    // D-6: Civilian/worker hiring thresholds
+    pub labor_workers_per_province_base: u32,
+    pub labor_workers_per_province_wealthy: u32,
+    pub labor_wealthy_treasury_threshold: i64,
+    pub labor_min_workers_floor: u32,
+    pub labor_hire_civilian_tier1_treasury: i64,
+    pub labor_hire_civilian_tier1_max: u32,
+    pub labor_hire_civilian_tier2_treasury: i64,
+    pub labor_hire_civilian_tier2_max: u32,
+    // D-7: AI consulate treasury threshold
+    pub ai_consulate_treasury_threshold: i64,
 }
 
 impl Default for GameConfig {
@@ -314,6 +347,35 @@ impl Default for GameConfig {
             spending_naval_base: 2.0,
             spending_naval_war_bonus: 10.0,
             spending_naval_gap_coeff: 1.5,
+            pact_defense_standing_gate: 30,
+            pact_defense_relationship_weight: 0.4,
+            pact_defense_military_weight: 0.4,
+            pact_defense_bias_aggressive: 0.2,
+            pact_defense_bias_diplomatic: 0.1,
+            pact_defense_bias_balanced: 0.0,
+            pact_defense_bias_economic: -0.15,
+            pact_defense_threshold_aggressive: 0.2,
+            pact_defense_threshold_diplomatic: 0.3,
+            pact_defense_threshold_balanced: 0.35,
+            pact_defense_threshold_economic: 0.5,
+            terrain_defense_mountain: 0.50,
+            terrain_defense_hills: 0.30,
+            terrain_defense_forest: 0.20,
+            terrain_defense_swamp: 0.15,
+            fort_defense_level1: 0.20,
+            fort_defense_level2: 0.40,
+            fort_defense_level3: 0.60,
+            battle_attacker_fp_loss_ratio: 0.60,
+            battle_defender_fp_loss_ratio: 2.0,
+            labor_workers_per_province_base: 2,
+            labor_workers_per_province_wealthy: 3,
+            labor_wealthy_treasury_threshold: 20_000,
+            labor_min_workers_floor: 5,
+            labor_hire_civilian_tier1_treasury: 1000,
+            labor_hire_civilian_tier1_max: 2,
+            labor_hire_civilian_tier2_treasury: 2000,
+            labor_hire_civilian_tier2_max: 4,
+            ai_consulate_treasury_threshold: 2000,
         }
     }
 }
@@ -333,16 +395,23 @@ pub struct GameData {
 }
 
 impl GameData {
-    /// Construct GameData from RON strings, falling back to hardcoded
-    /// defaults for any section that is `None` or fails to parse.
+    /// Construct GameData from RON strings.
+    ///
+    /// `tech_ron` is required: if `None` or invalid, this function panics with a
+    /// clear message. `units_ron` and `ships_ron` fall back to hardcoded defaults
+    /// when `None` or invalid.
     pub fn from_ron_strings(
         tech_ron: Option<&str>,
         units_ron: Option<&str>,
         ships_ron: Option<&str>,
     ) -> Self {
         let tech_tree = tech_ron
-            .and_then(|s| loader::load_tech_tree(s).ok())
-            .unwrap_or_default();
+            .map(|s| {
+                loader::load_tech_tree(s).unwrap_or_else(|e| {
+                    panic!("technologies.ron is required but failed to load: {}", e)
+                })
+            })
+            .unwrap_or_else(|| panic!("technologies.ron is required but was not provided"));
 
         let unit_stats = units_ron
             .and_then(|s| loader::load_unit_stats(s).ok())
@@ -380,6 +449,10 @@ impl GameData {
 
 impl Default for GameData {
     fn default() -> Self {
+        const TECH_RON: &str = include_str!("../../../../data/definitions/technologies.ron");
+        const UNITS_RON: &str = include_str!("../../../../data/definitions/units.ron");
+        const SHIPS_RON: &str = include_str!("../../../../data/definitions/ships.ron");
+
         #[allow(unused_mut)] // mut needed only with cfg(feature = "lua")
         let mut game_config = GameConfig::default();
 
@@ -395,10 +468,17 @@ impl Default for GameData {
             engine
         };
 
+        let tech_tree = loader::load_tech_tree(TECH_RON)
+            .expect("embedded technologies.ron must be valid");
+        let unit_stats = loader::load_unit_stats(UNITS_RON)
+            .unwrap_or_else(|_| default_unit_stats());
+        let ship_stats = loader::load_ship_stats(SHIPS_RON)
+            .unwrap_or_else(|_| default_ship_stats());
+
         GameData {
-            tech_tree: TechTree::default(),
-            unit_stats: default_unit_stats(),
-            ship_stats: default_ship_stats(),
+            tech_tree,
+            unit_stats,
+            ship_stats,
             #[cfg(feature = "lua")]
             lua_engine,
             game_config,
@@ -463,6 +543,7 @@ mod tests {
 
     #[test]
     fn default_game_data_has_28_techs() {
+        // GameData::default() embeds technologies.ron at compile time.
         let data = GameData::default();
         assert_eq!(data.tech_tree.all_techs().len(), 28);
     }
@@ -476,14 +557,6 @@ mod tests {
     #[test]
     fn default_game_data_has_13_ship_types() {
         let data = GameData::default();
-        assert_eq!(data.ship_stats.len(), 13);
-    }
-
-    #[test]
-    fn from_ron_strings_with_none_uses_defaults() {
-        let data = GameData::from_ron_strings(None, None, None);
-        assert_eq!(data.tech_tree.all_techs().len(), 28);
-        assert_eq!(data.unit_stats.len(), 22);
         assert_eq!(data.ship_stats.len(), 13);
     }
 
@@ -510,9 +583,18 @@ mod tests {
     }
 
     #[test]
-    fn from_ron_strings_with_invalid_ron_falls_back_to_default() {
-        let data = GameData::from_ron_strings(Some("invalid"), Some("invalid"), Some("invalid"));
+    fn from_ron_strings_with_full_tech_ron_has_28_techs() {
+        let ron = include_str!("../../../../data/definitions/technologies.ron");
+        let data = GameData::from_ron_strings(Some(ron), None, None);
         assert_eq!(data.tech_tree.all_techs().len(), 28);
+        assert_eq!(data.unit_stats.len(), 22);
+        assert_eq!(data.ship_stats.len(), 13);
+    }
+
+    #[test]
+    fn from_ron_strings_with_invalid_units_and_ships_falls_back_to_defaults() {
+        let tech_ron = include_str!("../../../../data/definitions/technologies.ron");
+        let data = GameData::from_ron_strings(Some(tech_ron), Some("invalid"), Some("invalid"));
         assert_eq!(data.unit_stats.len(), 22);
         assert_eq!(data.ship_stats.len(), 13);
     }

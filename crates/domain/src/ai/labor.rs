@@ -12,6 +12,12 @@ pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
     // First, process food if possible
     ai_process_food(game, nation_id);
 
+    // Extract config values before borrowing nation mutably.
+    let wealthy_threshold = Money::dollars(game.game_data.game_config.labor_wealthy_treasury_threshold);
+    let workers_per_province_base = game.game_data.game_config.labor_workers_per_province_base;
+    let workers_per_province_wealthy = game.game_data.game_config.labor_workers_per_province_wealthy;
+    let min_workers_floor = game.game_data.game_config.labor_min_workers_floor;
+
     let nation = match game.get_nation_mut(nation_id) {
         Some(n) => n,
         None => return,
@@ -23,14 +29,14 @@ pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
     let livestock = nation.resource_amount(ResourceType::Livestock);
     let total_food = grain + fruit + livestock;
 
-    // Scale max workers with province count (2 per province, min 5)
-    // Wealthy nations invest in workforce growth (3 per province)
-    let workers_per_province: u32 = if nation.economy.treasury > Money::dollars(20_000) {
-        3
+    // Scale max workers with province count, min floor.
+    // Wealthy nations invest in workforce growth.
+    let workers_per_province: u32 = if nation.economy.treasury > wealthy_threshold {
+        workers_per_province_wealthy
     } else {
-        2
+        workers_per_province_base
     };
-    let max_workers = (nation.province_count() as u32 * workers_per_province).max(5);
+    let max_workers = (nation.province_count() as u32 * workers_per_province).max(min_workers_floor);
 
     // Only recruit if workforce is below target AND there is surplus food
     if total_workers < max_workers && total_food > total_workers {
@@ -128,7 +134,13 @@ pub(crate) fn ai_manage_civilians(game: &mut GameState, nation_id: NationId) {
 /// Hire new civilian units if the nation can afford them.
 #[cfg(test)]
 fn ai_hire_civilians(game: &mut GameState, nation_id: NationId) {
+    // Extract config values before borrowing nation mutably.
     let cfg = game.game_data.game_config.clone();
+    let tier1_threshold = Money::dollars(cfg.labor_hire_civilian_tier1_treasury);
+    let tier1_max = cfg.labor_hire_civilian_tier1_max as usize;
+    let tier2_threshold = Money::dollars(cfg.labor_hire_civilian_tier2_treasury);
+    let tier2_max = cfg.labor_hire_civilian_tier2_max as usize;
+
     let nation = match game.get_nation_mut(nation_id) {
         Some(n) => n,
         None => return,
@@ -137,8 +149,8 @@ fn ai_hire_civilians(game: &mut GameState, nation_id: NationId) {
     let civilian_count = nation.civilians.len();
     let treasury = nation.economy.treasury;
 
-    // Rule 1: If < 2 civilians and treasury > $1,000, hire a Farmer
-    if civilian_count < 2 && treasury > Money::dollars(1000) {
+    // Rule 1: below tier-1 cap and treasury above tier-1 threshold → hire a Farmer
+    if civilian_count < tier1_max && treasury > tier1_threshold {
         let cost = CivilianType::Farmer.creation_cost(&cfg);
         nation.economy.treasury -= cost;
         let farmer = Civilian::new(next_civilian_id(), CivilianType::Farmer, nation_id);
@@ -146,8 +158,8 @@ fn ai_hire_civilians(game: &mut GameState, nation_id: NationId) {
         return; // Only hire one per turn
     }
 
-    // Rule 2: If < 4 civilians and treasury > $2,000, hire Forester or Miner
-    if civilian_count < 4 && treasury > Money::dollars(2000) {
+    // Rule 2: below tier-2 cap and treasury above tier-2 threshold → hire Forester or Miner
+    if civilian_count < tier2_max && treasury > tier2_threshold {
         // Prefer Forester (cheaper) unless we already have one
         let has_forester = nation
             .civilians
