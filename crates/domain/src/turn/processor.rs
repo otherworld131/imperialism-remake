@@ -841,8 +841,11 @@ pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
 
     // Phase 2: apply connected resources to nations using mutable borrows,
     // with AI difficulty bonus applied to non-human nations.
+    // Record adjusted amounts so report.resource_production reflects what was
+    // actually added to the warehouse (used by resolve_transport for freight accounting).
     let human_id = game.human_player_nation;
     let difficulty = game.difficulty;
+    let mut adjusted_production_data: Vec<(NationId, ResourceType, u32)> = Vec::new();
     for (nation_id, resource, amount) in &production_data {
         if let Some(nation) = game.nations.iter_mut().find(|n| n.id == *nation_id) {
             // Apply AI difficulty bonus multiplier
@@ -865,6 +868,7 @@ pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
             };
             let adjusted = (*amount as f64 * bonus_multiplier).round() as u32;
             nation.add_resource(*resource, adjusted);
+            adjusted_production_data.push((*nation_id, *resource, adjusted));
         }
     }
 
@@ -876,7 +880,7 @@ pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
             ResourceType::Livestock,
         ];
         for nation in game.nations.iter().filter(|n| n.is_great_power()) {
-            let collected: u32 = production_data
+            let collected: u32 = adjusted_production_data
                 .iter()
                 .filter(|(nid, r, _)| *nid == nation.id && food_types.contains(r))
                 .map(|(_, _, a)| a)
@@ -895,8 +899,8 @@ pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
         }
     }
 
-    // Record in report
-    report.resource_production.extend(production_data);
+    // Record adjusted amounts so resolve_transport uses the same quantities as inventory.
+    report.resource_production.extend(adjusted_production_data);
     report.disconnected_resources.extend(disconnected_data);
 }
 

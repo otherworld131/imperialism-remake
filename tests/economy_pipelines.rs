@@ -335,6 +335,47 @@ fn treasury_reservation_prevents_double_spending() {
     assert_eq!(nation.economy.available_treasury(), Money::dollars(1000));
 }
 
+/// Treasury API rejects zero and negative amounts, and blocks over-commit/over-release.
+#[test]
+fn treasury_api_rejects_invalid_amounts() {
+    use domain::DomainError;
+
+    let mut game = new_game("test", Difficulty::Normal, 0);
+    let human_id = game.human_player_nation;
+    let nation = game.get_nation_mut(human_id).unwrap();
+    nation.economy.treasury = Money::dollars(1000);
+
+    // Zero and negative amounts are rejected by reserve_treasury.
+    assert!(
+        nation.economy.reserve_treasury(Money::ZERO).is_err(),
+        "reserve_treasury(ZERO) should fail"
+    );
+    assert!(
+        nation.economy.reserve_treasury(Money::dollars(-1)).is_err(),
+        "reserve_treasury(negative) should fail"
+    );
+
+    // Reserve a valid amount, then try to over-release or over-commit.
+    nation.economy.reserve_treasury(Money::dollars(500)).unwrap();
+
+    assert!(
+        nation.economy.release_treasury(Money::dollars(600)).is_err(),
+        "release_treasury over-release should fail"
+    );
+    assert!(
+        nation.economy.commit_treasury(Money::dollars(600)).is_err(),
+        "commit_treasury over-commit should fail"
+    );
+
+    // Zero/negative also rejected by commit/release.
+    assert!(nation.economy.commit_treasury(Money::ZERO).is_err());
+    assert!(nation.economy.release_treasury(Money::ZERO).is_err());
+
+    // Clean up
+    nation.economy.release_treasury(Money::dollars(500)).unwrap();
+    let _ = DomainError::InvalidOperation("unused".into()); // ensure variant is accessible
+}
+
 // ── 5. AI production decisions ────────────────────────────────────────────────
 
 /// The AI economy snapshot correctly captures inventory, buildings, and freight.
