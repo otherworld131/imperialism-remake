@@ -242,14 +242,17 @@ impl NationEconomy {
         match key {
             Commodity::Resource(r) => {
                 let e = self.reserved_warehouse.entry(r).or_insert(0);
+                debug_assert!(*e >= qty, "reservation counter underflow for Resource({r:?})");
                 *e = e.saturating_sub(qty);
             }
             Commodity::Material(m) => {
                 let e = self.reserved_materials.entry(m).or_insert(0);
+                debug_assert!(*e >= qty, "reservation counter underflow for Material({m:?})");
                 *e = e.saturating_sub(qty);
             }
             Commodity::Goods(g) => {
                 let e = self.reserved_goods.entry(g).or_insert(0);
+                debug_assert!(*e >= qty, "reservation counter underflow for Goods({g:?})");
                 *e = e.saturating_sub(qty);
             }
         }
@@ -268,14 +271,17 @@ impl NationEconomy {
         match key {
             Commodity::Resource(r) => {
                 let e = self.reserved_warehouse.entry(r).or_insert(0);
+                debug_assert!(*e >= qty, "reservation counter underflow for Resource({r:?})");
                 *e = e.saturating_sub(qty);
             }
             Commodity::Material(m) => {
                 let e = self.reserved_materials.entry(m).or_insert(0);
+                debug_assert!(*e >= qty, "reservation counter underflow for Material({m:?})");
                 *e = e.saturating_sub(qty);
             }
             Commodity::Goods(g) => {
                 let e = self.reserved_goods.entry(g).or_insert(0);
+                debug_assert!(*e >= qty, "reservation counter underflow for Goods({g:?})");
                 *e = e.saturating_sub(qty);
             }
         }

@@ -3957,21 +3957,33 @@ fn release_integrated_minors(
             continue;
         }
 
-        // Transfer provinces back to the minor and drop both origin
-        // markers so the map renders them as plain independent territory.
+        // Determine the actual recipient of the restored provinces. If the
+        // minor is currently integrated by a different GP, route the provinces
+        // to that GP so the minor's integration state remains consistent.
+        let minor_current_overlord = game.get_nation(minor_id).and_then(|n| n.integrated_by);
+        let actual_owner = if let Some(other) = minor_current_overlord
+            && other != overlord_id
+        {
+            other
+        } else {
+            minor_id
+        };
+
+        // Transfer provinces to actual_owner. Clear origin markers only when
+        // restoring to the minor itself; preserve them when routing to another
+        // GP so that future releases can still trace the chain back to the minor.
         for pid in &provinces_to_restore {
             if let Some(prov) = game.get_province_mut(*pid) {
-                prov.owner = minor_id;
-                prov.incorporated_from = None;
-                prov.conquest_origin = None;
+                prov.owner = actual_owner;
+                if actual_owner == minor_id {
+                    prov.incorporated_from = None;
+                    prov.conquest_origin = None;
+                }
             }
         }
 
-        // Remove those provinces from the overlord's list and add them to
-        // the minor's. Also scatter any overlord army units positioned on the
-        // restored provinces — when the empire collapses its occupying
-        // garrison disbands rather than squatting as foreign ghosts on
-        // someone else's territory.
+        // Remove those provinces from the collapsing overlord's list and
+        // scatter any army units positioned on them.
         if let Some(overlord) = game.get_nation_mut(overlord_id) {
             overlord
                 .province_ids
@@ -3980,13 +3992,29 @@ fn release_integrated_minors(
                 .army
                 .retain(|u| !provinces_to_restore.contains(&u.position));
         }
+
+        if actual_owner != minor_id {
+            // Provinces route to the GP that currently integrates this minor.
+            // The minor remains integrated — no independence events or garrison seeding.
+            if let Some(other_gp) = game.get_nation_mut(actual_owner) {
+                for pid in &provinces_to_restore {
+                    other_gp.add_province(*pid);
+                }
+            }
+            // Sync garrison cache: the collapsing overlord's army was just
+            // scattered, so garrison_count is stale for the new owner.
+            for &pid in &provinces_to_restore {
+                sync_garrison_cache(game, pid);
+            }
+            continue;
+        }
+
+        // Full restoration: minor resumes as an independent nation.
         if let Some(minor) = game.get_nation_mut(minor_id) {
             for pid in &provinces_to_restore {
                 minor.add_province(*pid);
             }
             // Only clear integration pointer when this overlord was the integrator.
-            // A minor can hold provinces with conquest_origin == minor_id even if
-            // it is currently integrated by a *different* GP (F-016 fix).
             if minor.integrated_by == Some(overlord_id) {
                 minor.integrated_by = None;
             }
@@ -4010,6 +4038,11 @@ fn release_integrated_minors(
         // has no GarrisonArtillery there, spawn one (mirrors the initial minor
         // garrison layout in `create_garrison`).
         seed_released_minor_garrison(game, minor_id, &provinces_to_restore);
+        // Unconditional sync covers provinces already at target garrison
+        // (seed only syncs when it spawns) and the post-artillery case.
+        for &pid in &provinces_to_restore {
+            sync_garrison_cache(game, pid);
+        }
 
         let minor_name = game
             .get_nation(minor_id)
@@ -13659,6 +13692,99 @@ mod tests {
             ally.integrated_by,
             Some(overlord_b),
             "release on overlord A must not clear integrated_by for minors of overlord B"
+        );
+    }
+
+    // F-019: when GP-A collapses and holds provinces stamped with
+    // `incorporated_from = Some(minor_id)`, but the minor is currently
+    // `integrated_by = Some(GP-B)`, the provinces must route to GP-B rather
+    // than being restored to the minor (which would leave it owning territory
+    // while still marked as integrated — inconsistent state).
+    #[test]
+    fn release_integrated_minors_routes_provinces_to_current_integrator() {
+        let (mut game, overlord_a, minor_id, _, minor_cap_pid) = absorbed_minor_scenario();
+
+        let overlord_b = NationId(99);
+        let mut gp_b = Nation::new(
+            overlord_b,
+            "SecondOverlord".into(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(42),
+        );
+        let b_province = Province::new(
+            ProvinceId(42),
+            "BHome".into(),
+            overlord_b,
+            HexCoord::new(5, 0),
+            vec![HexCoord::new(5, 0)],
+            4,
+        );
+        gp_b.province_ids = vec![ProvinceId(42)];
+        game.nations.push(gp_b);
+        game.provinces.push(b_province);
+        game.hex_map.set_tile(
+            HexCoord::new(5, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(42)),
+        );
+
+        // Rewire: minor is now integrated by GP-B, not GP-A
+        game.get_nation_mut(minor_id).unwrap().integrated_by = Some(overlord_b);
+
+        let mut report = TurnReport::empty();
+        release_integrated_minors(&mut game, overlord_a, &mut report);
+
+        // Province must route to GP-B (the current integrator)
+        let prov = game.get_province(minor_cap_pid).unwrap();
+        assert_eq!(
+            prov.owner, overlord_b,
+            "province must route to the GP currently integrating the minor, not the minor itself"
+        );
+        // Origin marker preserved so future GP-B release can trace back to the minor
+        assert_eq!(
+            prov.incorporated_from,
+            Some(minor_id),
+            "incorporated_from marker must be preserved for the future release chain"
+        );
+
+        // Minor remains consistently integrated by GP-B
+        let minor = game.get_nation(minor_id).unwrap();
+        assert_eq!(
+            minor.integrated_by,
+            Some(overlord_b),
+            "minor must remain integrated by GP-B after GP-A collapses"
+        );
+        assert!(
+            !minor.province_ids.contains(&minor_cap_pid),
+            "minor must not own the routed province"
+        );
+
+        // GP-B now holds the routed province
+        let gp_b_nation = game.get_nation(overlord_b).unwrap();
+        assert!(
+            gp_b_nation.province_ids.contains(&minor_cap_pid),
+            "GP-B must hold the province transferred from GP-A"
+        );
+
+        // No independence event for the minor
+        assert!(
+            !report.events.iter().any(|e| {
+                matches!(e, DomainEvent::MinorRegainedIndependence(ev) if ev.minor == minor_id)
+            }),
+            "no MinorRegainedIndependence event when provinces route to the current integrator"
+        );
+
+        // F-022: garrison cache must be coherent after routing (F-021 fix).
+        // GP-B holds the province with no army there, so garrison_count should be 0.
+        let prov_after = game.get_province(minor_cap_pid).unwrap();
+        let expected_garrison = game
+            .get_nation(overlord_b)
+            .map(|n| n.militia_at(minor_cap_pid))
+            .unwrap_or(0) as u8;
+        assert_eq!(
+            prov_after.garrison_count,
+            expected_garrison,
+            "garrison_count must reflect the new owner's actual militia after routing"
         );
     }
 
