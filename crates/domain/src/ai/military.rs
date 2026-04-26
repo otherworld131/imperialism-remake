@@ -47,7 +47,7 @@ pub(crate) fn ai_build_military(
         .as_ref()
         .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
     #[cfg(not(feature = "lua"))]
-    let lua_cfg: Option<super::lua_bridge::LuaAiConfig> = None;
+    let _lua_cfg: Option<()> = None;
 
     let defaults = PersonalityConfig::for_personality(personality);
 
@@ -363,7 +363,7 @@ pub(crate) fn ai_declare_wars(
             .as_ref()
             .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
         #[cfg(not(feature = "lua"))]
-        let lua_cfg: Option<super::lua_bridge::LuaAiConfig> = None;
+        let _lua_cfg: Option<()> = None;
 
         #[cfg(feature = "lua")]
         let war_cooldown = lua_cfg

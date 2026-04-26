@@ -527,7 +527,7 @@ fn ai_build_forts(
         .as_ref()
         .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
     #[cfg(not(feature = "lua"))]
-    let lua_cfg: Option<super::lua_bridge::LuaAiConfig> = None;
+    let _lua_cfg: Option<()> = None;
 
     // Choose which province to fort based on personality / Lua fort_strategy
     let fort_strategy: String = 'val: {
@@ -662,7 +662,7 @@ fn ai_propose_peace(
         .as_ref()
         .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
     #[cfg(not(feature = "lua"))]
-    let lua_cfg: Option<super::lua_bridge::LuaAiConfig> = None;
+    let _lua_cfg: Option<()> = None;
 
     let stalemate_duration: u32 = 'val: {
         #[cfg(feature = "lua")]

@@ -4,5 +4,5 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-domain = { path = "../domain" }
+domain = { path = "../domain", default-features = false }
 serde = { version = "1", features = ["derive"] }
