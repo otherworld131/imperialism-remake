@@ -7,6 +7,7 @@
 //! mid-tick state drift.
 
 use crate::economy::buildings::BuildingType;
+use crate::economy::market::Trend;
 use crate::economy::trade::Commodity;
 use crate::game_state::GameState;
 use crate::types::*;
@@ -37,6 +38,12 @@ pub struct NationEconomySnapshot {
     // ── Logistics ───────────────────────────────────────────────────────────
     /// Total freight-car transport capacity for this nation.
     pub freight_capacity: u32,
+
+    // ── Market view (#164) ───────────────────────────────────────────────────
+    /// Current market price per commodity (empty until the first trade turn).
+    pub market_prices: HashMap<Commodity, Money>,
+    /// Price trend per commodity over the last 4 turns.
+    pub market_trends: HashMap<Commodity, Trend>,
 }
 
 impl NationEconomySnapshot {
@@ -66,6 +73,15 @@ impl NationEconomySnapshot {
             .map(|b| (b.building_type, b.pending_capacity))
             .collect();
 
+        // Snapshot market prices and trends for all commodities with history (#164).
+        let market_prices: HashMap<Commodity, Money> =
+            state.market_state.commodities_with_price().collect();
+        let market_trends: HashMap<Commodity, Trend> = state
+            .market_state
+            .commodities_with_history()
+            .map(|c| (c, state.market_state.trend(c, 4)))
+            .collect();
+
         Self {
             nation_id,
             treasury: nation.economy.treasury,
@@ -74,6 +90,8 @@ impl NationEconomySnapshot {
             pending_capacities,
             total_workers: nation.economy.labor.total_workers(),
             freight_capacity: nation.transport.total_capacity(),
+            market_prices,
+            market_trends,
         }
     }
 
@@ -87,6 +105,8 @@ impl NationEconomySnapshot {
             pending_capacities: HashMap::new(),
             total_workers: 0,
             freight_capacity: 0,
+            market_prices: HashMap::new(),
+            market_trends: HashMap::new(),
         }
     }
 
@@ -132,6 +152,20 @@ impl NationEconomySnapshot {
     pub fn building_capacity(&self, bt: BuildingType) -> u32 {
         self.buildings.get(&bt).copied().unwrap_or(0)
     }
+
+    // ── Market helpers (#164) ────────────────────────────────────────────────
+
+    /// Current market price for a commodity (Money::ZERO if no data yet).
+    pub fn market_price(&self, c: Commodity) -> Money {
+        self.market_prices.get(&c).copied().unwrap_or(Money::ZERO)
+    }
+
+    /// Price trend for a commodity over the last 4 turns.
+    pub fn market_trend(&self, c: Commodity) -> Trend {
+        self.market_trends.get(&c).copied().unwrap_or(Trend::Stable)
+    }
+
+    // ── Food helpers ─────────────────────────────────────────────────────────
 
     /// Total food (Grain + Fruit + Livestock) in inventory.
     pub fn total_food(&self) -> u32 {
@@ -183,6 +217,7 @@ mod tests {
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
             next_unit_id: 0,
+            market_state: crate::economy::market::MarketState::new(),
         }
     }
 

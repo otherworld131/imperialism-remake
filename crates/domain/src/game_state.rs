@@ -4,6 +4,7 @@ use crate::diplomacy::DiplomacyState;
 use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::civilians::{Civilian, CivilianType};
 use crate::economy::ledger::{CashFlow, CashSink, ResourceFlow};
+use crate::economy::market::MarketState;
 use crate::events::{DomainEvent, Headline, HistoryEvent};
 use crate::map::{HexMap, Province, UnitId};
 use crate::military::combat::BattleResult;
@@ -122,6 +123,11 @@ pub struct GameState {
     /// therefore identical turn outcomes (determinism).
     #[serde(default = "default_next_unit_id")]
     pub next_unit_id: u32,
+
+    /// Persistent market state: per-commodity price history and trend data
+    /// updated at the end of each turn's trade phase (Trello #164).
+    #[serde(default)]
+    pub market_state: MarketState,
 }
 
 fn default_next_unit_id() -> u32 {
@@ -772,6 +778,7 @@ pub fn new_game_with_seed_and_config(
         pending_ai_cash_spending: Vec::new(),
         pending_ai_cash_income: Vec::new(),
         next_unit_id: id_counter,
+        market_state: MarketState::new(),
     };
 
     // Refresh the per-province `garrison_count` cache now that militia have
@@ -1023,7 +1030,9 @@ mod tests {
             last_resource_flow: HashMap::new(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,}
+            next_unit_id: 6_000_000,
+            market_state: MarketState::new(),
+        }
     }
 
     #[test]

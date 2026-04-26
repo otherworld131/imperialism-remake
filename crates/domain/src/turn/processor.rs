@@ -972,10 +972,10 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
         let remote_delivery = total_produced - local_delivery;
 
         // Remote resources are capped by freight car capacity
-        if remote_delivery > freight_capacity {
-            let overflow = remote_delivery - freight_capacity;
+        let overflow = if remote_delivery > freight_capacity {
+            let ov = remote_delivery - freight_capacity;
             let nation = game.nations.iter_mut().find(|n| n.id == nation_id).unwrap();
-            let mut remaining_to_remove = overflow;
+            let mut remaining_to_remove = ov;
 
             // Remove overflow from remote resources (approximation: remove proportionally)
             for (resource, produced) in &produced_this_turn {
@@ -993,6 +993,36 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
                         .push((nation_id, *resource, removable));
                     remaining_to_remove -= removable;
                 }
+            }
+            ov
+        } else {
+            0
+        };
+
+        // Update logistics state (#165): record what was requested vs delivered.
+        // Only remote resources consume freight; local deliveries are free.
+        {
+            let nation = game.nations.iter_mut().find(|n| n.id == nation_id).unwrap();
+            if remote_delivery > 0 {
+                let delivered_remote = remote_delivery.saturating_sub(overflow);
+                // Proportional approximation: each resource contributes the same fraction of
+                // its production to remote delivery as the overall remote/total ratio.
+                let delivered_items: Vec<(ResourceType, u32)> = produced_this_turn
+                    .iter()
+                    .map(|&(r, produced)| {
+                        let delivered = (produced as u64 * delivered_remote as u64
+                            / remote_delivery as u64) as u32;
+                        (r, delivered)
+                    })
+                    .collect();
+                nation.economy.logistics.update(
+                    freight_capacity,
+                    &produced_this_turn,
+                    &delivered_items,
+                );
+            } else {
+                // All production was local — no freight was needed or used.
+                nation.economy.logistics.update(freight_capacity, &[], &[]);
             }
         }
     }
@@ -2192,6 +2222,59 @@ pub(super) fn resolve_trade_session(
 
     // 8. Record in report
     report.trade_transactions = transactions;
+    let transactions = &report.trade_transactions;
+
+    // 8b. Update persistent market state (#164): record per-resource supply, demand, sold.
+    {
+        let mut supply_map: std::collections::BTreeMap<ResourceType, u32> =
+            std::collections::BTreeMap::new();
+        let mut demand_map: std::collections::BTreeMap<ResourceType, u32> =
+            std::collections::BTreeMap::new();
+        let mut sold_map: std::collections::BTreeMap<ResourceType, u32> =
+            std::collections::BTreeMap::new();
+        let mut price_sum_map: std::collections::BTreeMap<ResourceType, (i64, u32)> =
+            std::collections::BTreeMap::new(); // (total_price * qty, total_qty)
+
+        for offer in &offers {
+            *supply_map.entry(offer.resource).or_insert(0) += offer.quantity;
+        }
+        for bid in &all_bids {
+            *demand_map.entry(bid.resource).or_insert(0) += bid.quantity;
+        }
+        for txn in transactions {
+            *sold_map.entry(txn.resource).or_insert(0) += txn.quantity;
+            let (ps, pq) = price_sum_map.entry(txn.resource).or_insert((0, 0));
+            *ps += txn.price_per_unit.as_dollars() * txn.quantity as i64;
+            *pq += txn.quantity;
+        }
+
+        // Union all resources that appeared in offers or bids this turn
+        let mut all_resources: std::collections::BTreeSet<ResourceType> =
+            std::collections::BTreeSet::new();
+        all_resources.extend(supply_map.keys().copied());
+        all_resources.extend(demand_map.keys().copied());
+
+        for resource in all_resources {
+            let supply = supply_map.get(&resource).copied().unwrap_or(0);
+            let demand = demand_map.get(&resource).copied().unwrap_or(0);
+            let sold = sold_map.get(&resource).copied().unwrap_or(0);
+            let price = if let Some(&(ps, pq)) = price_sum_map.get(&resource)
+                && pq > 0
+            {
+                Money::dollars(ps / pq as i64)
+            } else {
+                crate::economy::trade::base_price(resource)
+            };
+            game.market_state.record_tick(
+                crate::economy::trade::Commodity::Resource(resource),
+                current_turn,
+                price,
+                supply,
+                demand,
+                sold,
+            );
+        }
+    }
 
     // 9. Clear player trade orders for next turn
     if let Some(human) = game.get_nation_mut(human_id) {

@@ -1,6 +1,78 @@
 use crate::military::ships::Ship;
 use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::types::*;
+use std::collections::BTreeMap;
+
+/// Per-commodity freight allocation result: how much was requested vs granted (Trello #165).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct FreightDemand {
+    /// Freight capacity requested for this commodity.
+    pub requested: u32,
+    /// Freight capacity actually granted (≤ requested, limited by total capacity).
+    pub granted: u32,
+    /// Unmet freight demand: `requested - granted`.
+    pub unmet: u32,
+}
+
+/// Explicit logistics state for a nation — tracks freight capacity usage per turn (Trello #165).
+///
+/// Populated by the turn processor after transport resolution completes.
+/// Exposes the codebase answer to "what freight is available?", "what is committed?",
+/// and "which resources are starved by transport capacity?".
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct LogisticsState {
+    /// Total freight capacity owned by this nation.
+    pub freight_total: u32,
+    /// Freight capacity consumed this turn (sum of `granted` across all resources).
+    pub freight_committed: u32,
+    /// Remaining freight capacity after all deliveries: `freight_total - freight_committed`.
+    pub freight_unused: u32,
+    /// Per-resource freight demand: how much was requested vs actually delivered.
+    #[serde(default)]
+    pub per_resource: BTreeMap<ResourceType, FreightDemand>,
+}
+
+impl LogisticsState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Update logistics state from a completed delivery run.
+    ///
+    /// `capacity` is the total freight capacity. `requested` lists what each
+    /// resource wanted; `delivered` lists what was actually granted.
+    pub fn update(
+        &mut self,
+        capacity: u32,
+        requested: &[(ResourceType, u32)],
+        delivered: &[(ResourceType, u32)],
+    ) {
+        self.freight_total = capacity;
+        self.per_resource.clear();
+
+        let mut committed = 0u32;
+        for &(resource, req) in requested {
+            let granted = delivered
+                .iter()
+                .find(|(r, _)| *r == resource)
+                .map(|(_, q)| *q)
+                .unwrap_or(0);
+            let unmet = req.saturating_sub(granted);
+            committed += granted;
+            self.per_resource.insert(resource, FreightDemand { requested: req, granted, unmet });
+        }
+        // Resources delivered but not in `requested` (shouldn't happen but be safe).
+        for &(resource, granted) in delivered {
+            if !self.per_resource.contains_key(&resource) {
+                committed += granted;
+                self.per_resource
+                    .insert(resource, FreightDemand { requested: granted, granted, unmet: 0 });
+            }
+        }
+        self.freight_committed = committed;
+        self.freight_unused = capacity.saturating_sub(committed);
+    }
+}
 
 /// The transport system for a nation — freight cars carrying resources.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -37,11 +109,13 @@ impl TransportSystem {
 
     /// Set the transport priority for a resource type as a percentage (0-100).
     /// If the resource already has an allocation, it is updated.
+    /// Values above 100 are clamped to 100 (fix: Areas-4 finding #8).
     pub fn set_allocation(&mut self, resource: ResourceType, percentage: u32) {
+        let pct = percentage.min(100);
         if let Some(entry) = self.allocations.iter_mut().find(|(r, _)| *r == resource) {
-            entry.1 = percentage;
+            entry.1 = pct;
         } else {
-            self.allocations.push((resource, percentage));
+            self.allocations.push((resource, pct));
         }
     }
 
@@ -95,9 +169,10 @@ impl TransportSystem {
             return Self::distribute_evenly(&nonempty, capacity);
         }
 
-        let mut result = Vec::new();
+        let mut result: Vec<(ResourceType, u32)> = Vec::new();
         let mut remaining_capacity = capacity;
 
+        // First pass: allocate proportional shares to resources with explicit allocations.
         for (resource, avail) in &nonempty {
             let pct = self
                 .allocations
@@ -120,12 +195,69 @@ impl TransportSystem {
             }
         }
 
+        // Second pass: redistribute any wasted capacity and serve unallocated resources.
+        // Wasted capacity arises when a resource's availability is less than its share
+        // (fix: Areas-4 finding #1). Unallocated resources are those with no explicit
+        // allocation entry but with available quantity (fix: Areas-4 finding #2).
+        if remaining_capacity > 0 {
+            let unallocated: Vec<(ResourceType, u32)> = nonempty
+                .iter()
+                .filter(|(r, _)| {
+                    !self.allocations.iter().any(|(ar, pct)| *ar == *r && *pct > 0)
+                })
+                .map(|(r, avail)| {
+                    // Remaining demand: subtract what was already delivered in pass 1.
+                    let already = result.iter().find(|(dr, _)| *dr == *r).map(|(_, q)| *q).unwrap_or(0);
+                    (*r, avail.saturating_sub(already))
+                })
+                .filter(|(_, demand)| *demand > 0)
+                .collect();
+
+            // Also give already-allocated resources a second bite if they had leftover demand.
+            let second_round: Vec<(ResourceType, u32)> = nonempty
+                .iter()
+                .filter_map(|(r, avail)| {
+                    let already =
+                        result.iter().find(|(dr, _)| *dr == *r).map(|(_, q)| *q).unwrap_or(0);
+                    let remaining_demand = avail.saturating_sub(already);
+                    if remaining_demand > 0 { Some((*r, remaining_demand)) } else { None }
+                })
+                .filter(|(r, _)| !unallocated.iter().any(|(ur, _)| ur == r))
+                .collect();
+
+            let all_leftovers: Vec<(ResourceType, u32)> =
+                unallocated.into_iter().chain(second_round).collect();
+
+            if !all_leftovers.is_empty() {
+                let extra =
+                    Self::distribute_evenly_partial(&all_leftovers, remaining_capacity);
+                for (r, qty) in extra {
+                    if let Some(entry) = result.iter_mut().find(|(dr, _)| *dr == r) {
+                        entry.1 += qty;
+                    } else {
+                        result.push((r, qty));
+                    }
+                    remaining_capacity = remaining_capacity.saturating_sub(qty);
+                }
+            }
+        }
+
         result
     }
 
     /// 1 army unit per 5 freight cars (integer division).
     pub fn military_transport_capacity(&self) -> u32 {
         self.freight_cars / 5
+    }
+
+    /// Distribute `capacity` evenly across `demands`, capping each entry by its
+    /// requested amount. Helper for both even-distribution mode and the second
+    /// pass of allocation-based distribution.
+    fn distribute_evenly_partial(
+        demands: &[(ResourceType, u32)],
+        capacity: u32,
+    ) -> Vec<(ResourceType, u32)> {
+        Self::distribute_evenly(demands, capacity)
     }
 
     /// Distribute capacity evenly across available resources, capped by each

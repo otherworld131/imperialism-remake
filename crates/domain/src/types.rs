@@ -117,6 +117,11 @@ impl Money {
         self.0 < 0
     }
 
+    /// Returns `Money::ZERO`. Used as a `#[serde(default)]` function pointer.
+    pub fn zero() -> Self {
+        Self::ZERO
+    }
+
     pub fn checked_sub(self, other: Self) -> Option<Self> {
         let result = Self(self.0 - other.0);
         if result.is_negative() {

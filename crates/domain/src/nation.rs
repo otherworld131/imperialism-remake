@@ -1,10 +1,11 @@
 use crate::ai::AiPersonality;
 use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::civilians::Civilian;
-use crate::economy::labor::LaborPool;
+use crate::economy::labor::{LaborPool, WorkerType};
 use crate::economy::ledger::{CashSink, CashSource};
+use crate::economy::observability::BlockReason;
 use crate::economy::trade::Commodity;
-use crate::economy::transport::TransportSystem;
+use crate::economy::transport::{LogisticsState, TransportSystem};
 use crate::events::TechId;
 use crate::military::ships::Ship;
 use crate::military::units::ArmyUnit;
@@ -59,7 +60,16 @@ pub struct NationEconomy {
     /// Labor pool (workers available for production).
     pub labor: LaborPool,
 
-    // ── Reservation accounting (Trello #162) ─────────────────────────
+    // ── Logistics state (Trello #165) ────────────────────────────────
+    /// Freight usage snapshot from the most recently processed turn.
+    /// Updated by the turn processor after `calculate_deliveries` completes.
+    #[serde(default)]
+    pub logistics: LogisticsState,
+
+    // ── Reservation accounting (Trello #162 / #169) ──────────────────
+    /// Reserved treasury amount (sum of active treasury reservations).
+    #[serde(default = "Money::zero")]
+    pub(crate) reserved_treasury: Money,
     /// Per-resource reserved amounts (sum of active reservations).
     #[serde(default)]
     pub(crate) reserved_warehouse: BTreeMap<ResourceType, u32>,
@@ -86,6 +96,8 @@ impl NationEconomy {
             goods: BTreeMap::new(),
             buildings: Vec::new(),
             labor: LaborPool::new(),
+            logistics: LogisticsState::new(),
+            reserved_treasury: Money::ZERO,
             reserved_warehouse: BTreeMap::new(),
             reserved_materials: BTreeMap::new(),
             reserved_goods: BTreeMap::new(),
@@ -294,6 +306,123 @@ impl NationEconomy {
         self.reserved_warehouse.clear();
         self.reserved_materials.clear();
         self.reserved_goods.clear();
+        self.reserved_treasury = Money::ZERO;
+    }
+
+    // ── Treasury reservation API (#169) ──────────────────────────────
+
+    /// Mark `amount` of treasury as reserved for a pending action.
+    ///
+    /// Returns `Err` if `available_treasury() < amount`. Unlike commodity
+    /// reservations, treasury reservations are tracked as a running total (no
+    /// per-reservation ID) because the amounts are committed or released in
+    /// the same call frame where they're reserved.
+    pub fn reserve_treasury(&mut self, amount: Money) -> Result<(), crate::DomainError> {
+        let avail = self.available_treasury();
+        if avail < amount {
+            return Err(crate::DomainError::InsufficientInventory {
+                requested: (amount.as_dollars().max(0)) as u32,
+                available: (avail.as_dollars().max(0)) as u32,
+            });
+        }
+        self.reserved_treasury += amount;
+        Ok(())
+    }
+
+    /// Commit a treasury reservation: deduct `amount` from the treasury and release the hold.
+    pub fn commit_treasury(&mut self, amount: Money) {
+        self.reserved_treasury = self.reserved_treasury.checked_sub(amount).unwrap_or(Money::ZERO);
+        self.treasury -= amount;
+    }
+
+    /// Release a treasury reservation without deducting from the treasury.
+    pub fn release_treasury(&mut self, amount: Money) {
+        self.reserved_treasury = self.reserved_treasury.checked_sub(amount).unwrap_or(Money::ZERO);
+    }
+
+    /// How much treasury is currently reserved for pending actions.
+    pub fn reserved_treasury_amount(&self) -> Money {
+        self.reserved_treasury
+    }
+
+    /// How much treasury is free (not reserved) and available for use.
+    pub fn available_treasury(&self) -> Money {
+        if self.treasury > self.reserved_treasury {
+            self.treasury - self.reserved_treasury
+        } else {
+            Money::ZERO
+        }
+    }
+
+    // ── Pre-execution observability query methods (#169) ──────────────
+
+    /// Snapshot of all currently reserved commodity quantities.
+    ///
+    /// Returns only commodities with non-zero reserved amounts.
+    pub fn reserved_inventory(&self) -> std::collections::BTreeMap<Commodity, u32> {
+        let mut out = std::collections::BTreeMap::new();
+        for (r, &qty) in &self.reserved_warehouse {
+            if qty > 0 {
+                out.insert(Commodity::Resource(*r), qty);
+            }
+        }
+        for (m, &qty) in &self.reserved_materials {
+            if qty > 0 {
+                out.insert(Commodity::Material(*m), qty);
+            }
+        }
+        for (g, &qty) in &self.reserved_goods {
+            if qty > 0 {
+                out.insert(Commodity::Goods(*g), qty);
+            }
+        }
+        out
+    }
+
+    /// How much labor (by tier) is currently available for production.
+    ///
+    /// Returns counts by `WorkerType`. Labor reservation is not yet wired into
+    /// the execution pipeline, so this reflects total (unreserved) labor pool.
+    pub fn available_labor(&self) -> std::collections::HashMap<WorkerType, u32> {
+        let mut out = std::collections::HashMap::new();
+        out.insert(WorkerType::Untrained, self.labor.untrained);
+        out.insert(WorkerType::Trained, self.labor.trained);
+        out.insert(WorkerType::Expert, self.labor.expert);
+        out
+    }
+
+    /// Why a commodity reservation of `qty` would fail, or `None` if it would succeed.
+    pub fn block_reason_for_commodity(&self, key: Commodity, qty: u32) -> Option<BlockReason> {
+        let avail = self.available(key);
+        if avail < qty {
+            Some(BlockReason::InsufficientInventory { commodity: key, needed: qty, available: avail })
+        } else {
+            None
+        }
+    }
+
+    /// Why a treasury reservation of `amount` would fail, or `None` if it would succeed.
+    pub fn block_reason_for_treasury(&self, amount: Money) -> Option<BlockReason> {
+        let avail = self.available_treasury();
+        if avail < amount {
+            Some(BlockReason::InsufficientTreasury { needed: amount, available: avail })
+        } else {
+            None
+        }
+    }
+
+    /// Why a labor request of `qty` workers of `tier` would fail, or `None` if feasible.
+    pub fn block_reason_for_labor(&self, tier: WorkerType, qty: u32) -> Option<BlockReason> {
+        let available = match tier {
+            WorkerType::Untrained => self.labor.untrained,
+            WorkerType::Trained => self.labor.trained,
+            WorkerType::Expert => self.labor.expert,
+        };
+        if available < qty {
+            Some(BlockReason::InsufficientLabor { tier, needed: qty, available })
+        } else {
+            None
+        }
     }
 }
 

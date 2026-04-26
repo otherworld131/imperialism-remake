@@ -2,6 +2,8 @@ pub mod buildings;
 pub mod civilians;
 pub mod labor;
 pub mod ledger;
+pub mod market;
+pub mod observability;
 pub mod production;
 pub mod trade;
 pub mod transport;
@@ -20,4 +22,6 @@ pub use trade::{
     Commodity, PlayerBuyOrder, PlayerSellOrder, TradeBid, TradeOffer, TradeTransaction,
     commodity_price,
 };
-pub use transport::TransportSystem;
+pub use market::{MarketState, MarketTick, Trend};
+pub use observability::BlockReason;
+pub use transport::{FreightDemand, LogisticsState, TransportSystem};
