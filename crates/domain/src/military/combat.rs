@@ -130,7 +130,7 @@ pub fn seed_militia_from_garrison_count(game: &mut crate::game_state::GameState)
         let existing = game
             .get_nation(owner)
             .map(|n| {
-                n.army
+                n.military.army
                     .iter()
                     .filter(|u| u.position == pid && u.unit_type == ArmyUnitType::Militia)
                     .count()
@@ -142,7 +142,7 @@ pub fn seed_militia_from_garrison_count(game: &mut crate::game_state::GameState)
         for _ in existing..(target as usize) {
             let unit = spawn_militia_unit(&mut game.next_unit_id, owner, pid);
             if let Some(nation) = game.get_nation_mut(owner) {
-                nation.army.push(unit);
+                nation.military.army.push(unit);
             }
         }
     }

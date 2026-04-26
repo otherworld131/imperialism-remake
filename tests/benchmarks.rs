@@ -205,7 +205,7 @@ fn stress_test_all_nations_at_war() {
                     nation.id,
                     nation.capital_province_id,
                 );
-                nation.army.push(unit);
+                nation.military.army.push(unit);
             }
         }
     }

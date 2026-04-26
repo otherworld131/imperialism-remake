@@ -119,11 +119,11 @@ pub(super) fn tick_buildings(game: &mut GameState) {
 /// Apply army maintenance, bankruptcy clamp, and bankruptcy headline.
 pub(super) fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
     for nation in &mut game.nations {
-        if nation.is_in_anarchy {
+        if nation.diplomacy.is_in_anarchy {
             continue;
         }
         let total_cost: Money = nation
-            .army
+            .military.army
             .iter()
             .map(|u| u.maintenance_cost())
             .fold(Money::ZERO, |acc, c| acc + c);
@@ -169,7 +169,7 @@ pub(super) fn compute_blockade_capacity(game: &GameState) -> HashMap<NationId, u
     let active_gp_ids: Vec<NationId> = game
         .nations
         .iter()
-        .filter(|n| n.is_great_power() && !n.is_in_anarchy && !n.province_ids.is_empty())
+        .filter(|n| n.is_great_power() && !n.diplomacy.is_in_anarchy && !n.province_ids.is_empty())
         .map(|n| n.id)
         .collect();
 

@@ -510,7 +510,7 @@ pub fn evaluate_war_worthiness(
     // and warships generate upkeep pressure.
     let ongoing_cost = game
         .get_nation(nation_id)
-        .map(|n| n.field_army_count() as f64 * 500.0 + n.warships.len() as f64 * 300.0)
+        .map(|n| n.field_army_count() as f64 * 500.0 + n.military.warships.len() as f64 * 300.0)
         .unwrap_or(0.0);
 
     // Marginal value: how much is left to gain?

@@ -593,7 +593,7 @@ pub fn new_game_with_seed_and_config(
 
         // Starting freight cars (from game config)
         let starting_cars = game_data.game_config.starting_freight_cars;
-        nation.transport.build_freight_cars(starting_cars);
+        nation.military.transport.build_freight_cars(starting_cars);
 
         // Starting civilians: 1 Farmer + 1 Forester + N Engineers for each Great Power
         let farmer = Civilian::new(
@@ -608,10 +608,10 @@ pub fn new_game_with_seed_and_config(
             setup.nation_id,
         );
         id_counter += 1;
-        nation.civilians.push(farmer);
-        nation.civilians.push(forester);
+        nation.military.civilians.push(farmer);
+        nation.military.civilians.push(forester);
         for _ in 0..game_data.game_config.starting_engineers {
-            nation.civilians.push(Civilian::new(
+            nation.military.civilians.push(Civilian::new(
                 crate::map::UnitId(id_counter),
                 CivilianType::Engineer,
                 setup.nation_id,
@@ -625,7 +625,7 @@ pub fn new_game_with_seed_and_config(
             ShipType::Trader,
             setup.nation_id,
         );
-        nation.merchant_fleet.push(trader);
+        nation.military.merchant_fleet.push(trader);
 
         // Starting warship: 1 Frigate for each Great Power
         let frigate = Ship::new(
@@ -633,18 +633,18 @@ pub fn new_game_with_seed_and_config(
             ShipType::Frigate,
             setup.nation_id,
         );
-        nation.warships.push(frigate);
+        nation.military.warships.push(frigate);
 
         // Starting army: 4 Regulars + 1 Light Artillery at capital
         for j in 0..4u32 {
-            nation.army.push(crate::military::units::ArmyUnit::new(
+            nation.military.army.push(crate::military::units::ArmyUnit::new(
                 UnitId(1_000_000 + i as u32 * 10 + j),
                 crate::military::units::ArmyUnitType::Regulars,
                 setup.nation_id,
                 setup.capital_province,
             ));
         }
-        nation.army.push(crate::military::units::ArmyUnit::new(
+        nation.military.army.push(crate::military::units::ArmyUnit::new(
             UnitId(1_000_000 + i as u32 * 10 + 4),
             crate::military::units::ArmyUnitType::LightArtillery,
             setup.nation_id,
@@ -659,7 +659,7 @@ pub fn new_game_with_seed_and_config(
         for &pid in &setup.province_ids {
             for _ in 0..default_garrison {
                 nation
-                    .army
+                    .military.army
                     .push(crate::military::combat::spawn_militia_unit(
                         &mut id_counter,
                         setup.nation_id,
@@ -670,7 +670,7 @@ pub fn new_game_with_seed_and_config(
 
         // Assign AI personality for non-human Great Powers
         if i != human_idx {
-            nation.ai_personality = Some(personalities[ai_personality_idx]);
+            nation.diplomacy.ai_personality = Some(personalities[ai_personality_idx]);
             ai_personality_idx += 1;
 
             // AI difficulty bonuses (applied to AI nations only, not human)
@@ -703,14 +703,14 @@ pub fn new_game_with_seed_and_config(
 
         // Starting army: 4 Regulars + 1 Light Artillery at capital
         for j in 0..4u32 {
-            nation.army.push(crate::military::units::ArmyUnit::new(
+            nation.military.army.push(crate::military::units::ArmyUnit::new(
                 UnitId(1_100_000 + i as u32 * 10 + j),
                 crate::military::units::ArmyUnitType::Regulars,
                 setup.nation_id,
                 setup.capital_province,
             ));
         }
-        nation.army.push(crate::military::units::ArmyUnit::new(
+        nation.military.army.push(crate::military::units::ArmyUnit::new(
             UnitId(1_100_000 + i as u32 * 10 + 4),
             crate::military::units::ArmyUnitType::LightArtillery,
             setup.nation_id,
@@ -722,7 +722,7 @@ pub fn new_game_with_seed_and_config(
         for &pid in &setup.province_ids {
             for _ in 0..minor_default_garrison {
                 nation
-                    .army
+                    .military.army
                     .push(crate::military::combat::spawn_militia_unit(
                         &mut id_counter,
                         setup.nation_id,
@@ -732,7 +732,7 @@ pub fn new_game_with_seed_and_config(
         }
         // A single GarrisonArtillery at the minor nation's capital.
         nation
-            .army
+            .military.army
             .push(crate::military::combat::spawn_garrison_artillery_unit(
                 &mut id_counter,
                 setup.nation_id,
@@ -852,7 +852,7 @@ pub fn new_game_with_seed_and_config(
     let gp_ids_for_targets: Vec<(NationId, crate::ai::AiPersonality)> = game_state
         .nations
         .iter()
-        .filter_map(|n| n.ai_personality.map(|p| (n.id, p)))
+        .filter_map(|n| n.diplomacy.ai_personality.map(|p| (n.id, p)))
         .filter(|(id, _)| {
             game_state
                 .get_nation(*id)
@@ -864,7 +864,7 @@ pub fn new_game_with_seed_and_config(
             crate::ai::priority_target_count(&game_state.game_data.game_config, personality);
         let targets = crate::ai::pick_priority_minor_targets(&game_state, gp_id, count, &[]);
         if let Some(nation) = game_state.get_nation_mut(gp_id) {
-            nation.ai_priority_state.priority_minor_targets = targets;
+            nation.diplomacy.ai_priority_state.priority_minor_targets = targets;
         }
     }
 
@@ -943,7 +943,7 @@ pub fn new_observer_game_with_config(
     let human_id = game.human_player_nation;
     let extra = random_personalities(personality_seed ^ 0xDEAD_BEEF, 1)[0];
     if let Some(nation) = game.get_nation_mut(human_id) {
-        nation.ai_personality = Some(extra);
+        nation.diplomacy.ai_personality = Some(extra);
         match difficulty {
             Difficulty::Hard => nation.economy.treasury += Money::dollars(1000),
             Difficulty::NighOnImpossible => nation.economy.treasury += Money::dollars(5000),
@@ -955,7 +955,7 @@ pub fn new_observer_game_with_config(
     let count = crate::ai::priority_target_count(&game.game_data.game_config, extra);
     let targets = crate::ai::pick_priority_minor_targets(&game, human_id, count, &[]);
     if let Some(nation) = game.get_nation_mut(human_id) {
-        nation.ai_priority_state.priority_minor_targets = targets;
+        nation.diplomacy.ai_priority_state.priority_minor_targets = targets;
     }
     game.observer_mode = true;
     game
@@ -1708,7 +1708,7 @@ mod tests {
         let expected = 2 + gs.game_data.game_config.starting_engineers as usize;
         for nation in gs.great_powers() {
             assert_eq!(
-                nation.civilians.len(),
+                nation.military.civilians.len(),
                 expected,
                 "Great Power {} should start with {} civilians",
                 nation.name,
@@ -1716,20 +1716,20 @@ mod tests {
             );
             // First should be a Farmer
             assert_eq!(
-                nation.civilians[0].civilian_type,
+                nation.military.civilians[0].civilian_type,
                 CivilianType::Farmer,
                 "{} should have a Farmer as first civilian",
                 nation.name
             );
             // Second should be a Forester
             assert_eq!(
-                nation.civilians[1].civilian_type,
+                nation.military.civilians[1].civilian_type,
                 CivilianType::Forester,
                 "{} should have a Forester as second civilian",
                 nation.name
             );
             // Remaining should be Engineers
-            for (i, civ) in nation.civilians.iter().enumerate().skip(2) {
+            for (i, civ) in nation.military.civilians.iter().enumerate().skip(2) {
                 assert_eq!(
                     civ.civilian_type,
                     CivilianType::Engineer,
@@ -1746,7 +1746,7 @@ mod tests {
         let gs = new_game("test", Difficulty::Normal, 0);
         for nation in gs.minor_nations() {
             assert!(
-                nation.civilians.is_empty(),
+                nation.military.civilians.is_empty(),
                 "Minor Nation {} should have no civilians",
                 nation.name
             );
@@ -1759,7 +1759,7 @@ mod tests {
         let all_ids: Vec<crate::map::UnitId> = gs
             .great_powers()
             .iter()
-            .flat_map(|n| n.civilians.iter().map(|c| c.id))
+            .flat_map(|n| n.military.civilians.iter().map(|c| c.id))
             .collect();
         for i in 0..all_ids.len() {
             for j in (i + 1)..all_ids.len() {

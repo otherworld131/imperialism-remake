@@ -204,18 +204,18 @@ fn take_snapshot(
             NationSnapshot {
                 treasury: nation.economy.treasury.as_dollars(),
                 provinces: nation.province_count(),
-                army_size: nation.army.len(),
+                army_size: nation.military.army.len(),
                 worker_count: nation.economy.labor.total_workers(),
                 mills,
                 factories,
                 total_mill_capacity,
                 total_factory_capacity,
                 other_buildings,
-                warships: nation.warships.len(),
-                warships_built: nation.warships_built,
-                warships_lost: nation.warships_lost,
-                merchant_ships: nation.merchant_fleet.len(),
-                freight_cars: nation.transport.freight_cars,
+                warships: nation.military.warships.len(),
+                warships_built: nation.military.warships_built,
+                warships_lost: nation.military.warships_lost,
+                merchant_ships: nation.military.merchant_fleet.len(),
+                freight_cars: nation.military.transport.freight_cars,
                 tech_count: nation.researched_techs.len(),
                 depots,
                 railroads,
@@ -230,12 +230,12 @@ fn take_snapshot(
                 arms: nation.material_amount(domain::types::MaterialType::Arms),
                 steel: nation.material_amount(domain::types::MaterialType::Steel),
                 cash_income_totals: nation
-                    .cash_income_totals
+                    .archives.cash_income_totals
                     .iter()
                     .map(|(k, v)| (format!("{:?}", k), *v))
                     .collect(),
                 cash_expense_totals: nation
-                    .cash_expense_totals
+                    .archives.cash_expense_totals
                     .iter()
                     .map(|(k, v)| (format!("{:?}", k), *v))
                     .collect(),
@@ -331,15 +331,15 @@ pub(crate) fn run_batch(n: u32, verbose_cashflow: bool) {
         // skipped by `run_ai_turns`, so it never grows its army/infra.
         let human_id = game.human_player_nation;
         if let Some(nation) = game.get_nation_mut(human_id)
-            && nation.ai_personality.is_none()
+            && nation.diplomacy.ai_personality.is_none()
         {
             let extra =
                 domain::ai::common::random_personalities(personality_seed ^ 0xDEAD_BEEF, 1)[0];
-            nation.ai_personality = Some(extra);
+            nation.diplomacy.ai_personality = Some(extra);
             let count = domain::ai::priority_target_count(&game.game_data.game_config, extra);
             let targets = domain::ai::pick_priority_minor_targets(&game, human_id, count, &[]);
             if let Some(nation) = game.get_nation_mut(human_id) {
-                nation.ai_priority_state.priority_minor_targets = targets;
+                nation.diplomacy.ai_priority_state.priority_minor_targets = targets;
             }
         }
         game.observer_mode = true;
@@ -348,7 +348,7 @@ pub(crate) fn run_batch(n: u32, verbose_cashflow: bool) {
         // Record personality assignments
         let mut personalities = BTreeMap::new();
         for nation in game.great_powers() {
-            if let Some(p) = nation.ai_personality {
+            if let Some(p) = nation.diplomacy.ai_personality {
                 personalities.insert(nation.name.clone(), p.to_string());
             } else {
                 personalities.insert(nation.name.clone(), "Human".to_string());
@@ -797,15 +797,15 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
     // Auto-build freight cars: target province_count.max(5), up to 2 per turn
     if let Some(nation) = game.get_nation_mut(player_id) {
         let target_cars = (nation.province_count() as u32).max(5);
-        if nation.transport.freight_cars < target_cars {
+        if nation.military.transport.freight_cars < target_cars {
             let lumber_avail = nation.material_amount(MaterialType::Lumber);
             let steel_avail = nation.material_amount(MaterialType::Steel);
-            let cars_to_build = (target_cars - nation.transport.freight_cars).min(2);
+            let cars_to_build = (target_cars - nation.military.transport.freight_cars).min(2);
             let affordable = cars_to_build.min(lumber_avail).min(steel_avail);
             if affordable > 0 {
                 nation.consume_material(MaterialType::Lumber, affordable);
                 nation.consume_material(MaterialType::Steel, affordable);
-                nation.transport.build_freight_cars(affordable);
+                nation.military.transport.build_freight_cars(affordable);
             }
         }
     }

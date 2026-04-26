@@ -50,7 +50,7 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<AiAction> {
         .nations
         .iter()
         .filter(|n| {
-            (game.observer_mode || n.id != human_id) && n.is_great_power() && !n.is_in_anarchy
+            (game.observer_mode || n.id != human_id) && n.is_great_power() && !n.diplomacy.is_in_anarchy
         })
         .map(|n| n.id)
         .collect();
@@ -188,7 +188,7 @@ mod tests {
             ProvinceId(3),
         );
         ally.economy.treasury = Money::dollars(10000);
-        ally.ai_personality = Some(AiPersonality::Balanced);
+        ally.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         game.nations.push(ally);
 
         game.diplomacy

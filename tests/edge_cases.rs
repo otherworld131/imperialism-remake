@@ -359,14 +359,14 @@ fn save_load_roundtrip_with_wars_and_treaties() {
     // Verify military state roundtripped
     for (orig, load) in game.nations.iter().zip(loaded.nations.iter()) {
         assert_eq!(
-            orig.army.len(),
-            load.army.len(),
+            orig.military.army.len(),
+            load.military.army.len(),
             "Army mismatch for {}",
             orig.name
         );
         assert_eq!(
-            orig.warships.len(),
-            load.warships.len(),
+            orig.military.warships.len(),
+            load.military.warships.len(),
             "Warship mismatch for {}",
             orig.name
         );

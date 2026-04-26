@@ -369,7 +369,7 @@ mod tests {
         let mut game = test_game_with_ai();
         // Set Economic personality
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Economic);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Economic);
         ai.economy.treasury = Money::dollars(50000);
 
         // At year 1821, multiple techs with different costs are available
@@ -395,7 +395,7 @@ mod tests {
     fn aggressive_ai_prefers_military_tech() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Aggressive);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         ai.economy.treasury = Money::dollars(100000);
 
         // Set year to 1841 when Breech-Loading Rifles (military) is available
@@ -424,7 +424,7 @@ mod tests {
     fn balanced_ai_picks_cheapest_tech() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         ai.economy.treasury = Money::dollars(50000);
 
         // At 1815, two free techs (ID 1 and 2) are available

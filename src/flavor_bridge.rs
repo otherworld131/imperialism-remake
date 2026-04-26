@@ -53,7 +53,7 @@ pub fn apply_flavor(game: &mut GameState, flavor_key: &str) {
     for nation in game.nations.iter_mut() {
         // Skip rehydration: if flavor fields were already populated (e.g.
         // loaded from a save), leave them alone.
-        if !nation.flag_svg.is_empty() {
+        if !nation.archives.flag_svg.is_empty() {
             continue;
         }
         let is_gp = nation.nation_type == NationType::GreatPower;
@@ -61,11 +61,11 @@ pub fn apply_flavor(game: &mut GameState, flavor_key: &str) {
         let s = nation_seed(base_seed, nation.id.0);
         let flavor = generate_for_seed(s, mix, &rules);
         nation.name = flavor.name;
-        nation.adjective = flavor.adjective;
-        nation.demonym_singular = flavor.demonym_singular;
-        nation.demonym_plural = flavor.demonym_plural;
-        nation.government_title = flavor.government_title;
-        nation.flag_svg = flavor.flag_svg;
+        nation.archives.adjective = flavor.adjective;
+        nation.archives.demonym_singular = flavor.demonym_singular;
+        nation.archives.demonym_plural = flavor.demonym_plural;
+        nation.archives.government_title = flavor.government_title;
+        nation.archives.flag_svg = flavor.flag_svg;
     }
 
     apply_province_names(game, base_seed);

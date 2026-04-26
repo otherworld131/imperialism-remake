@@ -73,7 +73,7 @@ fn observer_cash_flow_populates_cumulative_totals_on_nations() {
     let any_activity = game
         .great_powers()
         .iter()
-        .any(|n| !n.cash_income_totals.is_empty() || !n.cash_expense_totals.is_empty());
+        .any(|n| !n.archives.cash_income_totals.is_empty() || !n.archives.cash_expense_totals.is_empty());
     assert!(
         any_activity,
         "expected at least one GP to have non-empty cash totals after 3 observer turns"

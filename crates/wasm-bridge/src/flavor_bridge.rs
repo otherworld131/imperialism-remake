@@ -41,7 +41,7 @@ pub fn apply_flavor(game: &mut GameState, flavor_key: &str) {
     let (gp_mix, mn_mix) = load_default_mixes();
 
     for nation in game.nations.iter_mut() {
-        if !nation.flag_svg.is_empty() {
+        if !nation.archives.flag_svg.is_empty() {
             continue;
         }
         let is_gp = nation.nation_type == NationType::GreatPower;
@@ -49,11 +49,11 @@ pub fn apply_flavor(game: &mut GameState, flavor_key: &str) {
         let s = nation_seed(base_seed, nation.id.0);
         let flavor = generate_for_seed(s, mix, &rules);
         nation.name = flavor.name;
-        nation.adjective = flavor.adjective;
-        nation.demonym_singular = flavor.demonym_singular;
-        nation.demonym_plural = flavor.demonym_plural;
-        nation.government_title = flavor.government_title;
-        nation.flag_svg = flavor.flag_svg;
+        nation.archives.adjective = flavor.adjective;
+        nation.archives.demonym_singular = flavor.demonym_singular;
+        nation.archives.demonym_plural = flavor.demonym_plural;
+        nation.archives.government_title = flavor.government_title;
+        nation.archives.flag_svg = flavor.flag_svg;
     }
 
     apply_province_names(game, base_seed);
@@ -87,10 +87,10 @@ fn apply_province_names(game: &mut GameState, base_seed: u64) {
 /// regenerates them. Used by the "re-roll names" preview path.
 pub fn clear_flavor(game: &mut GameState) {
     for nation in game.nations.iter_mut() {
-        nation.adjective.clear();
-        nation.demonym_singular.clear();
-        nation.demonym_plural.clear();
-        nation.government_title.clear();
-        nation.flag_svg.clear();
+        nation.archives.adjective.clear();
+        nation.archives.demonym_singular.clear();
+        nation.archives.demonym_plural.clear();
+        nation.archives.government_title.clear();
+        nation.archives.flag_svg.clear();
     }
 }

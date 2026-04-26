@@ -456,9 +456,9 @@ pub(crate) fn print_trade(game: &GameState) {
     println!();
 
     // Show active subsidies
-    if !player.trade_subsidies.is_empty() {
+    if !player.diplomacy.trade_subsidies.is_empty() {
         println!("  ACTIVE TRADE SUBSIDIES:");
-        let mut subsidy_entries: Vec<_> = player.trade_subsidies.iter().collect();
+        let mut subsidy_entries: Vec<_> = player.diplomacy.trade_subsidies.iter().collect();
         subsidy_entries.sort_by_key(|(nid, _)| nid.0);
         for (target_id, amount) in subsidy_entries {
             let target_name = game
@@ -468,7 +468,7 @@ pub(crate) fn print_trade(game: &GameState) {
             println!("    {:<12} {} per turn", target_name, amount);
         }
         let total_subsidy: Money = player
-            .trade_subsidies
+            .diplomacy.trade_subsidies
             .values()
             .copied()
             .fold(Money::ZERO, |acc, v| acc + v);
@@ -480,7 +480,7 @@ pub(crate) fn print_trade(game: &GameState) {
     if cargo_capacity > 0 {
         // Count total quantity being traded (sum of last turn's transactions for this player)
         let cargo_used: u32 = player
-            .trade_history
+            .archives.trade_history
             .iter()
             .filter(|th| th.turn == game.turn || th.turn.0 + 1 == game.turn.0)
             .filter(|th| th.partner != player.id) // buyer entries
@@ -497,12 +497,12 @@ pub(crate) fn print_trade(game: &GameState) {
     }
 
     // Show recent trade history (last 10 entries)
-    if !player.trade_history.is_empty() {
+    if !player.archives.trade_history.is_empty() {
         println!();
         println!("  RECENT TRADE HISTORY:");
-        let history_len = player.trade_history.len();
+        let history_len = player.archives.trade_history.len();
         let start = history_len.saturating_sub(10);
-        for entry in &player.trade_history[start..] {
+        for entry in &player.archives.trade_history[start..] {
             let partner_name = game
                 .get_nation(entry.partner)
                 .map(|n| n.name.clone())
@@ -517,13 +517,13 @@ pub(crate) fn print_trade(game: &GameState) {
 
 pub(crate) fn print_civilians(game: &GameState) {
     let player = game.get_nation(game.human_player_nation).unwrap();
-    if player.civilians.is_empty() {
+    if player.military.civilians.is_empty() {
         println!("  No civilian units. Use 'hire <type>' to hire one.");
         println!("  Types: prospector, miner, engineer, farmer, rancher, forester, driller");
         return;
     }
     println!("  CIVILIAN UNITS:");
-    for (i, c) in player.civilians.iter().enumerate() {
+    for (i, c) in player.military.civilians.iter().enumerate() {
         let pos_str = match c.position {
             Some(coord) => format!("({}, {})", coord.q, coord.r),
             None => "Undeployed".to_string(),
@@ -626,7 +626,7 @@ pub(crate) fn print_diplomacy(game: &GameState) {
             None => "No relations".to_string(),
         };
         let subsidy_info = player
-            .trade_subsidies
+            .diplomacy.trade_subsidies
             .get(&mn.id)
             .filter(|s| **s != Money::ZERO)
             .map(|s| format!(" [Subsidy: {}/turn]", s))
@@ -743,22 +743,22 @@ pub(crate) fn print_overview(game: &GameState) {
     let total_workers = player.economy.labor.total_workers();
 
     // Army
-    let army_count = player.army.len();
+    let army_count = player.military.army.len();
     let army_fp = {
         let fp = player.total_military_firepower();
         if fp == 0.0 { 0.0 } else { fp }
     };
 
     // Civilians
-    let civilian_count = player.civilians.len();
+    let civilian_count = player.military.civilians.len();
     let mut civ_types: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
-    for c in &player.civilians {
+    for c in &player.military.civilians {
         *civ_types.entry(format!("{}", c.civilian_type)).or_insert(0) += 1;
     }
 
     // Freight
-    let freight_cars = player.transport.freight_cars;
-    let freight_capacity = player.transport.total_capacity();
+    let freight_cars = player.military.transport.freight_cars;
+    let freight_capacity = player.military.transport.total_capacity();
 
     // Buildings
     let standard_count = player
@@ -934,7 +934,7 @@ pub(crate) fn print_pending_orders(game: &GameState) {
         for (_, unit_id, dest_id) in &player_moves {
             let unit_desc = game
                 .get_nation(player_id)
-                .and_then(|n| n.army.iter().find(|u| u.id == *unit_id))
+                .and_then(|n| n.military.army.iter().find(|u| u.id == *unit_id))
                 .map(|u| format!("{:?}", u.unit_type))
                 .unwrap_or_else(|| format!("Unit#{}", unit_id.0));
             let dest_name = game
@@ -948,7 +948,7 @@ pub(crate) fn print_pending_orders(game: &GameState) {
 
     // Working civilians
     if let Some(player) = game.get_nation(player_id) {
-        let working: Vec<_> = player.civilians.iter().filter(|c| c.working).collect();
+        let working: Vec<_> = player.military.civilians.iter().filter(|c| c.working).collect();
         if !working.is_empty() {
             println!("  WORKING CIVILIANS:");
             for civ in &working {
@@ -1764,11 +1764,11 @@ pub(crate) fn print_game_end_summary(game: &GameState, report: Option<&TurnRepor
 pub(crate) fn print_military(game: &GameState) {
     let player = game.get_nation(game.human_player_nation).unwrap();
 
-    println!("  ARMY ({} units):", player.army.len());
-    if player.army.is_empty() {
+    println!("  ARMY ({} units):", player.military.army.len());
+    if player.military.army.is_empty() {
         println!("    (no units -- use 'build unit <type>' to recruit)");
     } else {
-        for (i, unit) in player.army.iter().enumerate() {
+        for (i, unit) in player.military.army.iter().enumerate() {
             let province_name = game
                 .get_province(unit.position)
                 .map(|p| p.name.as_str())
@@ -1809,7 +1809,7 @@ pub(crate) fn print_military(game: &GameState) {
 
 pub(crate) fn print_transport(game: &GameState) {
     let player = game.get_nation(game.human_player_nation).unwrap();
-    let ts = &player.transport;
+    let ts = &player.military.transport;
     println!("  TRANSPORT SYSTEM:");
     println!("    Freight cars: {}", ts.freight_cars);
     println!("    Total capacity: {} units", ts.total_capacity());
@@ -1952,7 +1952,7 @@ pub(crate) fn print_infrastructure(game: &GameState) {
 pub(crate) fn print_fleet(game: &GameState) {
     let player = game.get_nation(game.human_player_nation).unwrap();
 
-    if player.merchant_fleet.is_empty() {
+    if player.military.merchant_fleet.is_empty() {
         println!(
             "  No merchant ships. Use 'build ship trader' or 'build ship indiaman' to build one."
         );
@@ -1964,7 +1964,7 @@ pub(crate) fn print_fleet(game: &GameState) {
     // Count ships by type
     let mut counts: std::collections::BTreeMap<String, (usize, u32)> =
         std::collections::BTreeMap::new();
-    for ship in &player.merchant_fleet {
+    for ship in &player.military.merchant_fleet {
         let name = format!("{:?}", ship.ship_type);
         let cargo = ship.total_cargo_capacity();
         let entry = counts.entry(name).or_insert((0, cargo));
@@ -1984,7 +1984,7 @@ pub(crate) fn print_fleet(game: &GameState) {
 pub(crate) fn print_navy(game: &GameState) {
     let player = game.get_nation(game.human_player_nation).unwrap();
 
-    if player.warships.is_empty() {
+    if player.military.warships.is_empty() {
         println!(
             "  No warships. Use 'build warship frigate' or 'build warship ship-of-the-line' to build one."
         );
@@ -1996,7 +1996,7 @@ pub(crate) fn print_navy(game: &GameState) {
     // Count ships by type
     let mut counts: std::collections::BTreeMap<String, (usize, u32, u32, u32)> =
         std::collections::BTreeMap::new();
-    for ship in &player.warships {
+    for ship in &player.military.warships {
         let name = format!("{:?}", ship.ship_type);
         let stats = ship.ship_type.stats();
         let entry = counts
@@ -2073,14 +2073,14 @@ pub(crate) fn print_nation_info(game: &GameState, query: &str) {
 
     // AI personality (for AI-controlled Great Powers)
     if target_id != player_id
-        && let Some(personality) = target.ai_personality
+        && let Some(personality) = target.diplomacy.ai_personality
     {
         println!("  AI Personality: {}", personality);
     }
 
     // Army size and total firepower
-    println!("  Army: {} units", target.army.len());
-    if !target.army.is_empty() {
+    println!("  Army: {} units", target.military.army.len());
+    if !target.military.army.is_empty() {
         println!(
             "  Total firepower: {:.1}",
             target.total_military_firepower()

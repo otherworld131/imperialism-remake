@@ -12,8 +12,9 @@ use crate::events::*;
 use crate::game_state::{GameState, PoliticalSnapshot, PoliticalSnapshotEntry};
 use crate::map::SettlementLevel;
 use crate::map::infrastructure::is_province_connected_multi;
+use crate::military::battle_outcome::{BattleParams, compute_battle_outcome};
 use crate::military::combat::{
-    BattleConfig, BattleResult, CombatForce, TargetingPriority, resolve_battle_with_config,
+    BattleConfig, BattleResult, CombatForce, TargetingPriority,
 };
 use crate::military::naval::{NavalBattleResult, resolve_naval_battle};
 use crate::military::ships::Ship;
@@ -163,7 +164,7 @@ impl TurnReport {
 
         let treasury = player.economy.treasury.as_dollars();
         let workers = player.economy.labor.total_workers();
-        let army = player.army.len();
+        let army = player.military.army.len();
         let provinces = player.province_count();
 
         // Find score and rank from the scores list
@@ -211,7 +212,7 @@ fn format_number_with_commas(n: i64) -> String {
 /// Called when a GP either conquers a Minor Nation province or receives one
 /// through voluntary incorporation. Awards 2 Clippers and sets the `has_colony` flag.
 fn award_first_colony_clippers(game: &mut GameState, nation_id: NationId, report: &mut TurnReport) {
-    let already_has_colony = game.get_nation(nation_id).is_some_and(|n| n.has_colony);
+    let already_has_colony = game.get_nation(nation_id).is_some_and(|n| n.military.has_colony);
     if already_has_colony {
         return;
     }
@@ -220,13 +221,13 @@ fn award_first_colony_clippers(game: &mut GameState, nation_id: NationId, report
     };
     use crate::map::UnitId;
     use crate::military::ships::{Ship, ShipType};
-    nation.has_colony = true;
+    nation.military.has_colony = true;
     let base_id = 5_000_000 + nation.id.0 * 100;
     nation
-        .merchant_fleet
+        .military.merchant_fleet
         .push(Ship::new(UnitId(base_id + 1), ShipType::Clipper, nation_id));
     nation
-        .merchant_fleet
+        .military.merchant_fleet
         .push(Ship::new(UnitId(base_id + 2), ShipType::Clipper, nation_id));
     let name = nation.name.clone();
     report.rewards_earned.push((
@@ -502,7 +503,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
 
 /// Derive per-nation `CashFlow` from the scattered per-source fields on
 /// `TurnReport`, write it to `report.cash_flow` and `game.last_cash_flow`,
-/// and update `nation.cash_income_totals` / `cash_expense_totals`
+/// and update `nation.archives.cash_income_totals` / `cash_expense_totals`
 /// cumulative counters.
 ///
 /// Every income source and expense sink we currently know about is aggregated
@@ -598,10 +599,10 @@ fn finalize_cash_flow(game: &mut GameState, report: &mut TurnReport) {
     for nation in &mut game.nations {
         if let Some(flow) = flows.get(&nation.id) {
             for (source, dollars) in flow.income_totals_by_source() {
-                *nation.cash_income_totals.entry(source).or_insert(0) += dollars;
+                *nation.archives.cash_income_totals.entry(source).or_insert(0) += dollars;
             }
             for (sink, dollars) in flow.expense_totals_by_sink() {
-                *nation.cash_expense_totals.entry(sink).or_insert(0) += dollars;
+                *nation.archives.cash_expense_totals.entry(sink).or_insert(0) += dollars;
             }
         }
     }
@@ -795,7 +796,7 @@ pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
         // Anarchic nations produce no resources
         if game
             .get_nation(province.owner)
-            .is_some_and(|n| n.is_in_anarchy)
+            .is_some_and(|n| n.diplomacy.is_in_anarchy)
         {
             continue;
         }
@@ -893,7 +894,7 @@ pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
             if collected > 0 || disconnected > 0 {
                 eprintln!(
                     "[COLLECT:{}] food_delivered={}, food_disconnected={}, freight_cars={}",
-                    nation.name, collected, disconnected, nation.transport.freight_cars
+                    nation.name, collected, disconnected, nation.military.transport.freight_cars
                 );
             }
         }
@@ -924,11 +925,11 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
             Some(n) => n,
             None => continue,
         };
-        if nation.is_in_anarchy {
+        if nation.diplomacy.is_in_anarchy {
             continue;
         }
 
-        let freight_capacity = nation.transport.total_capacity();
+        let freight_capacity = nation.military.transport.total_capacity();
 
         // Aggregate this turn's resource production for this nation, split by source
         let capital_province_id = nation.capital_province_id;
@@ -1071,7 +1072,7 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
         };
 
         // Only Great Powers get immigration; skip anarchic nations
-        if !nation.is_great_power() || nation.is_in_anarchy {
+        if !nation.is_great_power() || nation.diplomacy.is_in_anarchy {
             continue;
         }
 
@@ -1184,7 +1185,7 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
     for nation in &mut game.nations {
         let empty_set: HashSet<crate::hex::HexCoord> = HashSet::new();
         let owned = owned_by_nation.get(&nation.id).unwrap_or(&empty_set);
-        for civilian in &mut nation.civilians {
+        for civilian in &mut nation.military.civilians {
             if civilian.civilian_type != CivilianType::Engineer {
                 continue;
             }
@@ -1220,10 +1221,10 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
     let mut completed: Vec<CompletedWork> = Vec::new();
 
     for nation in &mut game.nations {
-        if nation.is_in_anarchy {
+        if nation.diplomacy.is_in_anarchy {
             continue;
         }
-        for civilian in &mut nation.civilians {
+        for civilian in &mut nation.military.civilians {
             if !civilian.working {
                 continue;
             }
@@ -1328,7 +1329,7 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
             if let Some(tile) = game.hex_map.get_tile_mut(work.position)
                 && let Some(nation) = game.nations.iter().find(|n| n.id == work.nation_id)
                 && let Some(civ) = nation
-                    .civilians
+                    .military.civilians
                     .iter()
                     .find(|c| c.position == Some(work.position))
                 && tile.assigned_civilian == Some(civ.id)
@@ -1393,7 +1394,7 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
 /// Gems: each unit = $1,000
 fn convert_monetary_resources(game: &mut GameState, report: &mut TurnReport) {
     for nation in &mut game.nations {
-        if nation.is_in_anarchy {
+        if nation.diplomacy.is_in_anarchy {
             continue;
         }
         let gold_amount = nation.resource_amount(ResourceType::Gold);
@@ -1440,7 +1441,7 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
             Some(n) => n,
             None => continue,
         };
-        if nation.is_in_anarchy {
+        if nation.diplomacy.is_in_anarchy {
             continue;
         }
 
@@ -1676,7 +1677,7 @@ fn resolve_town_production(game: &mut GameState, report: &mut TurnReport) {
         // Anarchic nations have no town production
         if game
             .get_nation(province.owner)
-            .is_some_and(|n| n.is_in_anarchy)
+            .is_some_and(|n| n.diplomacy.is_in_anarchy)
         {
             continue;
         }
@@ -1880,7 +1881,7 @@ fn process_food(game: &mut GameState, report: &mut TurnReport) {
 fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
     let ai_debug = game.ai_debug;
     for nation in &mut game.nations {
-        if nation.is_in_anarchy {
+        if nation.diplomacy.is_in_anarchy {
             continue;
         }
         let population = nation.economy.labor.total_workers();
@@ -1974,14 +1975,14 @@ pub(super) fn resolve_trade_session(
     let gp_ids: Vec<NationId> = game
         .nations
         .iter()
-        .filter(|n| n.is_great_power() && !n.is_in_anarchy)
+        .filter(|n| n.is_great_power() && !n.diplomacy.is_in_anarchy)
         .map(|n| n.id)
         .collect();
 
     for gp_id in &gp_ids {
         let subsidies: Vec<(NationId, Money)> = game
             .get_nation(*gp_id)
-            .map(|n| n.trade_subsidies.iter().map(|(k, v)| (*k, *v)).collect())
+            .map(|n| n.diplomacy.trade_subsidies.iter().map(|(k, v)| (*k, *v)).collect())
             .unwrap_or_default();
         for (target_id, cost) in subsidies {
             if cost != Money::ZERO {
@@ -1999,7 +2000,7 @@ pub(super) fn resolve_trade_session(
 
     // 1b. Add human player's resource sell offers to the pool
     if let Some(human) = game.get_nation(human_id) {
-        let sell_orders: Vec<trade::PlayerSellOrder> = human.player_sell_orders.clone();
+        let sell_orders: Vec<trade::PlayerSellOrder> = human.diplomacy.player_sell_orders.clone();
         for order in &sell_orders {
             if let trade::Commodity::Resource(r) = order.commodity
                 && human.resource_amount(r) >= order.quantity
@@ -2019,7 +2020,7 @@ pub(super) fn resolve_trade_session(
     let current_turn = game.turn;
     let mut player_goods_revenue = Money::ZERO;
     if let Some(human) = game.get_nation(human_id) {
-        let sell_orders: Vec<trade::PlayerSellOrder> = human.player_sell_orders.clone();
+        let sell_orders: Vec<trade::PlayerSellOrder> = human.diplomacy.player_sell_orders.clone();
         let mut goods_sold: Vec<(trade::Commodity, u32, Money)> = Vec::new();
 
         for order in &sell_orders {
@@ -2050,7 +2051,7 @@ pub(super) fn resolve_trade_session(
         // Apply material/goods sales
         if let Some(human) = game.get_nation_mut(human_id) {
             human.economy.treasury += player_goods_revenue;
-            human.goods_sales_revenue_dollars += player_goods_revenue.as_dollars();
+            human.archives.goods_sales_revenue_dollars += player_goods_revenue.as_dollars();
             if player_goods_revenue != Money::ZERO {
                 report
                     .goods_auto_sale_revenue
@@ -2081,7 +2082,7 @@ pub(super) fn resolve_trade_session(
         if *gp_id == human_id {
             // Use player's manual buy orders instead of auto-generated bids
             if let Some(human) = game.get_nation(*gp_id) {
-                for order in &human.player_buy_orders {
+                for order in &human.diplomacy.player_buy_orders {
                     if order.quantity > 0 {
                         all_bids.push(trade::TradeBid {
                             buyer: *gp_id,
@@ -2108,8 +2109,8 @@ pub(super) fn resolve_trade_session(
     if offers.is_empty() && all_bids.is_empty() {
         // Clear player orders and return
         if let Some(human) = game.get_nation_mut(human_id) {
-            human.player_sell_orders.clear();
-            human.player_buy_orders.clear();
+            human.diplomacy.player_sell_orders.clear();
+            human.diplomacy.player_buy_orders.clear();
         }
         return;
     }
@@ -2123,7 +2124,7 @@ pub(super) fn resolve_trade_session(
     for gp_id in &gp_ids {
         if let Some(nation) = game.get_nation(*gp_id) {
             // Collect subsidies
-            for (target_id, amount) in &nation.trade_subsidies {
+            for (target_id, amount) in &nation.diplomacy.trade_subsidies {
                 subsidies_map.insert((*gp_id, *target_id), *amount);
             }
         }
@@ -2168,7 +2169,7 @@ pub(super) fn resolve_trade_session(
     for txn in &transactions {
         // Record for buyer (partner is seller)
         if let Some(buyer) = game.get_nation_mut(txn.buyer) {
-            buyer.trade_history.push(trade::TradeHistoryEntry {
+            buyer.archives.trade_history.push(trade::TradeHistoryEntry {
                 turn: current_turn,
                 partner: txn.seller,
                 resource: txn.resource,
@@ -2179,7 +2180,7 @@ pub(super) fn resolve_trade_session(
         }
         // Record for seller (partner is buyer)
         if let Some(seller) = game.get_nation_mut(txn.seller) {
-            seller.trade_history.push(trade::TradeHistoryEntry {
+            seller.archives.trade_history.push(trade::TradeHistoryEntry {
                 turn: current_turn,
                 partner: txn.buyer,
                 resource: txn.resource,
@@ -2297,8 +2298,8 @@ pub(super) fn resolve_trade_session(
 
     // 9. Clear player trade orders for next turn
     if let Some(human) = game.get_nation_mut(human_id) {
-        human.player_sell_orders.clear();
-        human.player_buy_orders.clear();
+        human.diplomacy.player_sell_orders.clear();
+        human.diplomacy.player_buy_orders.clear();
     }
 }
 
@@ -2322,7 +2323,7 @@ fn resolve_beachheads(game: &mut GameState, report: &mut TurnReport) {
         .nations
         .iter()
         .flat_map(|nation| {
-            nation.warships.iter().filter_map(move |ship| {
+            nation.military.warships.iter().filter_map(move |ship| {
                 if let Some(NavalOperation::Beachhead(target_pid)) = ship.operation {
                     Some((nation.id, target_pid))
                 } else {
@@ -2351,7 +2352,7 @@ fn resolve_beachheads(game: &mut GameState, report: &mut TurnReport) {
                         .diplomacy
                         .get_relation(*nid, p.owner)
                         .is_some_and(|r| r.at_war);
-                    let target_anarchic = game.get_nation(p.owner).is_some_and(|n| n.is_in_anarchy);
+                    let target_anarchic = game.get_nation(p.owner).is_some_and(|n| n.diplomacy.is_in_anarchy);
                     at_war || target_anarchic
                 }
             });
@@ -2371,7 +2372,7 @@ fn resolve_beachheads(game: &mut GameState, report: &mut TurnReport) {
     // Collect new beachhead assignments: (nation_id, target_province_id)
     let mut new_requests: Vec<(NationId, ProvinceId)> = Vec::new();
     for nation in &game.nations {
-        for ship in &nation.warships {
+        for ship in &nation.military.warships {
             if let Some(NavalOperation::Beachhead(target_pid)) = ship.operation
                 && !new_requests
                     .iter()
@@ -2409,7 +2410,7 @@ fn resolve_beachheads(game: &mut GameState, report: &mut TurnReport) {
                     .diplomacy
                     .get_relation(attacker_id, p.owner)
                     .is_some_and(|r| r.at_war);
-                let target_anarchic = game.get_nation(p.owner).is_some_and(|n| n.is_in_anarchy);
+                let target_anarchic = game.get_nation(p.owner).is_some_and(|n| n.diplomacy.is_in_anarchy);
                 at_war || target_anarchic
             }
         });
@@ -2495,7 +2496,7 @@ fn resolve_military_movement(
 
     for (nation_id, unit_id, dest_province_id) in moves {
         // Anarchic nations' armies don't move
-        if game.get_nation(nation_id).is_some_and(|n| n.is_in_anarchy) {
+        if game.get_nation(nation_id).is_some_and(|n| n.diplomacy.is_in_anarchy) {
             continue;
         }
 
@@ -2513,7 +2514,7 @@ fn resolve_military_movement(
             // Friendly province: move the unit (only if it can move — militia
             // and garrison artillery are locked to their home province).
             if let Some(nation) = game.get_nation_mut(nation_id)
-                && let Some(unit) = nation.army.iter_mut().find(|u| u.id == unit_id)
+                && let Some(unit) = nation.military.army.iter_mut().find(|u| u.id == unit_id)
             {
                 if !unit.unit_type.can_move() {
                     // Silently drop the move — militia cannot leave home.
@@ -2532,7 +2533,7 @@ fn resolve_military_movement(
                 .diplomacy
                 .get_relation(nation_id, dest_owner)
                 .is_some_and(|r| r.at_war);
-            let target_is_anarchic = game.get_nation(dest_owner).is_some_and(|n| n.is_in_anarchy);
+            let target_is_anarchic = game.get_nation(dest_owner).is_some_and(|n| n.diplomacy.is_in_anarchy);
             if at_war || target_is_anarchic {
                 // Validate adjacency: attacker must own an adjacent province
                 // or have an active landing site on the target.
@@ -2581,7 +2582,7 @@ fn resolve_combat(
         .filter(|(attacker_id, _)| {
             !game
                 .get_nation(*attacker_id)
-                .is_some_and(|n| n.is_in_anarchy)
+                .is_some_and(|n| n.diplomacy.is_in_anarchy)
         })
         .collect();
 
@@ -2630,7 +2631,7 @@ fn resolve_combat(
             .is_some_and(|r| r.at_war);
         let defender_anarchic = game
             .get_nation(defender_id)
-            .is_some_and(|n| n.is_in_anarchy);
+            .is_some_and(|n| n.diplomacy.is_in_anarchy);
         if !still_at_war && !defender_anarchic {
             continue;
         }
@@ -2695,7 +2696,7 @@ fn resolve_combat(
             .map(|n| {
                 use crate::military::naval::NavalOperation;
                 let assigned_ships: Vec<_> = n
-                    .warships
+                    .military.warships
                     .iter()
                     .filter(|s| s.operation == Some(NavalOperation::Beachhead(province_id)))
                     .cloned()
@@ -2721,7 +2722,7 @@ fn resolve_combat(
             match game.get_nation(attacker_id) {
                 Some(n) => {
                     let (land, other): (Vec<_>, Vec<_>) = n
-                        .army
+                        .military.army
                         .iter()
                         // Militia / GarrisonArtillery can never join an
                         // outgoing attack — they defend their home province
@@ -2782,11 +2783,11 @@ fn resolve_combat(
         // Create defender force: every army unit (field army + persistent
         // militia + garrison artillery) stationed in the province joins the
         // defence. Militia and GarrisonArtillery are now real `ArmyUnit`s in
-        // `nation.army` (manual page 36), so the position-filter picks them
+        // `nation.military.army` (manual page 36), so the position-filter picks them
         // up automatically — no per-battle synthesis needed.
         let defense_units: Vec<_> = match game.get_nation(defender_id) {
             Some(n) => n
-                .army
+                .military.army
                 .iter()
                 .filter(|u| u.position == province_id)
                 .cloned()
@@ -2824,13 +2825,13 @@ fn resolve_combat(
                     .province_ids
                     .retain(|&pid| pid != province_id);
                 // Destroy any defender units in the conquered province
-                defender_nation.army.retain(|u| u.position != province_id);
+                defender_nation.military.army.retain(|u| u.position != province_id);
             }
             if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
                 attacker_nation.add_province(province_id);
                 // Relocate participating land units into the conquered province
                 if !is_naval_attack {
-                    for unit in &mut attacker_nation.army {
+                    for unit in &mut attacker_nation.military.army {
                         if !moved_unit_ids.contains(&unit.id)
                             && adjacent_attacker_pids.contains(&unit.position)
                         {
@@ -2921,15 +2922,18 @@ fn resolve_combat(
             province_id,
             defender_neighbors.len(),
         );
-        let mut result = resolve_battle_with_config(
-            &attacker_force,
-            &defender_force,
-            province_id,
-            battle_terrain,
-            battle_fort_level,
+        let battle_outcome = compute_battle_outcome(BattleParams {
+            attacker_id,
+            defender_id,
+            target_province: province_id,
+            attacker_units: &attacker_force.units,
+            defender_units: &defender_force.units,
+            terrain: battle_terrain,
+            fort_level: battle_fort_level,
             battle_config,
-            &game.game_data.game_config,
-        );
+            game_config: &game.game_data.game_config,
+        });
+        let mut result = battle_outcome.raw_result;
 
         // Track which provinces the attacking units came from (for battle screen arrows
         // and newspaper headlines). For naval landings, this is the embarkation province
@@ -2952,9 +2956,9 @@ fn resolve_combat(
             let battle_ids: HashSet<crate::map::UnitId> =
                 attacker_force.units.iter().map(|u| u.id).collect();
             if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
-                attacker_nation.army.retain(|u| !battle_ids.contains(&u.id));
+                attacker_nation.military.army.retain(|u| !battle_ids.contains(&u.id));
                 attacker_nation
-                    .army
+                    .military.army
                     .extend(result.attacker_survivors.iter().cloned());
             }
         }
@@ -2964,9 +2968,9 @@ fn resolve_combat(
             let battle_ids: HashSet<crate::map::UnitId> =
                 defender_force.units.iter().map(|u| u.id).collect();
             if let Some(defender_nation) = game.get_nation_mut(defender_id) {
-                defender_nation.army.retain(|u| !battle_ids.contains(&u.id));
+                defender_nation.military.army.retain(|u| !battle_ids.contains(&u.id));
                 defender_nation
-                    .army
+                    .military.army
                     .extend(result.defender_survivors.iter().cloned());
             }
         }
@@ -3028,7 +3032,7 @@ fn resolve_combat(
                 let survivor_ids: HashSet<crate::map::UnitId> =
                     result.attacker_survivors.iter().map(|u| u.id).collect();
                 if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
-                    for unit in &mut attacker_nation.army {
+                    for unit in &mut attacker_nation.military.army {
                         if survivor_ids.contains(&unit.id) && land_unit_ids.contains(&unit.id) {
                             unit.position = province_id;
                         }
@@ -3075,7 +3079,7 @@ fn resolve_combat(
                     .province_ids
                     .retain(|pid| *pid != province_id);
                 // Destroy any remaining defender units in the conquered province
-                defender_nation.army.retain(|u| u.position != province_id);
+                defender_nation.military.army.retain(|u| u.position != province_id);
             }
             if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
                 attacker_nation.add_province(province_id);
@@ -3120,7 +3124,7 @@ fn resolve_combat(
                     .is_some_and(|n| n.capital_province_id == province_id);
             if is_mn_capital
                 && let Some(attacker_nation) = game.get_nation_mut(attacker_id)
-                && let Some(first_unit) = attacker_nation.army.first_mut()
+                && let Some(first_unit) = attacker_nation.military.army.first_mut()
             {
                 first_unit.award_medal();
                 report
@@ -3253,7 +3257,7 @@ fn resolve_combat(
             None => continue,
         };
 
-        let has_adjacent_units = defender_nation.army.iter().any(|u| {
+        let has_adjacent_units = defender_nation.military.army.iter().any(|u| {
             adjacent_province_ids.contains(&u.position)
                 && defender_nation.province_ids.contains(&u.position)
         });
@@ -3283,7 +3287,7 @@ fn resolve_combat(
         // Militia / GarrisonArtillery are locked to their home province.
         let counter_units: Vec<ArmyUnit> = match game.get_nation(counter_attacker_id) {
             Some(n) => n
-                .army
+                .military.army
                 .iter()
                 .filter(|u| {
                     u.unit_type.can_move()
@@ -3309,7 +3313,7 @@ fn resolve_combat(
         // Defender of counter-attack is the new occupier — use units in the target province
         let occupier_units: Vec<ArmyUnit> = match game.get_nation(new_owner_id) {
             Some(n) => n
-                .army
+                .military.army
                 .iter()
                 .filter(|u| u.position == target_province_id)
                 .cloned()
@@ -3349,15 +3353,18 @@ fn resolve_combat(
             target_province_id,
             defender_neighbors.len(),
         );
-        let mut result = resolve_battle_with_config(
-            &counter_force,
-            &defender_force,
-            target_province_id,
-            battle_terrain,
-            battle_fort_level,
+        let counter_outcome = compute_battle_outcome(BattleParams {
+            attacker_id: counter_attacker_id,
+            defender_id: new_owner_id,
+            target_province: target_province_id,
+            attacker_units: &counter_force.units,
+            defender_units: &defender_force.units,
+            terrain: battle_terrain,
+            fort_level: battle_fort_level,
             battle_config,
-            &game.game_data.game_config,
-        );
+            game_config: &game.game_data.game_config,
+        });
+        let mut result = counter_outcome.raw_result;
 
         // Track which provinces the counter-attacking units came from
         {
@@ -3377,9 +3384,9 @@ fn resolve_combat(
             let battle_ids: HashSet<crate::map::UnitId> =
                 counter_force.units.iter().map(|u| u.id).collect();
             if let Some(ca_nation) = game.get_nation_mut(counter_attacker_id) {
-                ca_nation.army.retain(|u| !battle_ids.contains(&u.id));
+                ca_nation.military.army.retain(|u| !battle_ids.contains(&u.id));
                 ca_nation
-                    .army
+                    .military.army
                     .extend(result.attacker_survivors.iter().cloned());
             }
         }
@@ -3389,9 +3396,9 @@ fn resolve_combat(
             let battle_ids: HashSet<crate::map::UnitId> =
                 defender_force.units.iter().map(|u| u.id).collect();
             if let Some(occ_nation) = game.get_nation_mut(new_owner_id) {
-                occ_nation.army.retain(|u| !battle_ids.contains(&u.id));
+                occ_nation.military.army.retain(|u| !battle_ids.contains(&u.id));
                 occ_nation
-                    .army
+                    .military.army
                     .extend(result.defender_survivors.iter().cloned());
             }
         }
@@ -3446,7 +3453,7 @@ fn resolve_combat(
                     .province_ids
                     .retain(|pid| *pid != target_province_id);
                 // Destroy any occupier units in the re-conquered province
-                occ_nation.army.retain(|u| u.position != target_province_id);
+                occ_nation.military.army.retain(|u| u.position != target_province_id);
             }
             // Move surviving counter-attacker units into the recaptured province
             // (counter-attacks are always land-based — from adjacent provinces)
@@ -3455,7 +3462,7 @@ fn resolve_combat(
                     result.attacker_survivors.iter().map(|u| u.id).collect();
                 if let Some(ca_nation) = game.get_nation_mut(counter_attacker_id) {
                     ca_nation.add_province(target_province_id);
-                    for unit in &mut ca_nation.army {
+                    for unit in &mut ca_nation.military.army {
                         if survivor_ids.contains(&unit.id) {
                             unit.position = target_province_id;
                         }
@@ -3644,7 +3651,7 @@ fn place_defender_retreat(
     ) = (Vec::new(), Vec::new(), Vec::new());
     if let Some(nation) = game.get_nation(defender_id) {
         for uid in survivor_ids {
-            if let Some(u) = nation.army.iter().find(|u| u.id == *uid) {
+            if let Some(u) = nation.military.army.iter().find(|u| u.id == *uid) {
                 match u.unit_type {
                     crate::military::units::ArmyUnitType::Militia => militia.push(*uid),
                     crate::military::units::ArmyUnitType::GarrisonArtillery => {
@@ -3694,7 +3701,7 @@ fn place_defender_retreat(
     // Apply placements; destroy overflow militia and dying artillery.
     if let Some(nation) = game.get_nation_mut(defender_id) {
         for (uid, dest) in &placements {
-            for u in &mut nation.army {
+            for u in &mut nation.military.army {
                 if u.id == *uid {
                     u.position = *dest;
                 }
@@ -3704,7 +3711,7 @@ fn place_defender_retreat(
             .into_iter()
             .chain(dying_artillery)
             .collect();
-        nation.army.retain(|u| !doomed.contains(&u.id));
+        nation.military.army.retain(|u| !doomed.contains(&u.id));
     }
     placements
 }
@@ -3795,7 +3802,7 @@ fn rebalance_militia_into(game: &mut GameState, new_owner: NationId, province: P
             let Some(nm) = game.get_nation_mut(new_owner) else {
                 break;
             };
-            let Some(unit) = nm.army.iter_mut().find(|u| {
+            let Some(unit) = nm.military.army.iter_mut().find(|u| {
                 u.position == src_pid
                     && u.unit_type == crate::military::units::ArmyUnitType::Militia
             }) else {
@@ -3828,7 +3835,7 @@ fn heal_resting_units(
 ) {
     let heal_amount = game.game_data.game_config.rest_heal_amount;
     for nation in &mut game.nations {
-        for unit in &mut nation.army {
+        for unit in &mut nation.military.army {
             if !unit.is_alive() {
                 continue;
             }
@@ -3879,7 +3886,7 @@ fn regenerate_garrisons(game: &mut GameState) {
     for (owner, pid) in spawns {
         let unit = crate::military::combat::spawn_militia_unit(&mut game.next_unit_id, owner, pid);
         if let Some(nation) = game.get_nation_mut(owner) {
-            nation.army.push(unit);
+            nation.military.army.push(unit);
         }
         sync_garrison_cache(game, pid);
     }
@@ -3952,7 +3959,7 @@ fn check_and_apply_anarchy(
         Some(n) => n,
         None => return false,
     };
-    if nation.is_in_anarchy {
+    if nation.diplomacy.is_in_anarchy {
         return false; // already in anarchy
     }
     // Absorbed minors are not sovereign polities: they have no provinces
@@ -3961,7 +3968,7 @@ fn check_and_apply_anarchy(
     // skip them here — the sweep in `apply_end_of_combat_anarchy` otherwise
     // flags every absorbed minor as anarchic on the same turn of
     // incorporation.
-    if !nation.is_great_power() && nation.integrated_by.is_some() {
+    if !nation.is_great_power() && nation.diplomacy.integrated_by.is_some() {
         return false;
     }
     // Check if the nation still owns its capital province
@@ -3971,7 +3978,7 @@ fn check_and_apply_anarchy(
     // Enter anarchy
     let name = nation.name.clone();
     if let Some(n) = game.get_nation_mut(nation_id) {
-        n.is_in_anarchy = true;
+        n.diplomacy.is_in_anarchy = true;
     }
     // Card #68: anarchy ends all wars involving this nation for dedup
     // purposes — clear any pact-defense requests so fresh cascades can run
@@ -4052,10 +4059,10 @@ fn release_integrated_minors(
             // must also know to skip this minor on its own iteration, so we
             // add it to the `released` return list.
             if let Some(minor) = game.get_nation_mut(minor_id)
-                && minor.integrated_by == Some(overlord_id)
+                && minor.diplomacy.integrated_by == Some(overlord_id)
             {
-                minor.integrated_by = None;
-                minor.is_in_anarchy = false;
+                minor.diplomacy.integrated_by = None;
+                minor.diplomacy.is_in_anarchy = false;
                 released.push(minor_id);
             }
             continue;
@@ -4064,7 +4071,7 @@ fn release_integrated_minors(
         // Determine the actual recipient of the restored provinces. If the
         // minor is currently integrated by a different GP, route the provinces
         // to that GP so the minor's integration state remains consistent.
-        let minor_current_overlord = game.get_nation(minor_id).and_then(|n| n.integrated_by);
+        let minor_current_overlord = game.get_nation(minor_id).and_then(|n| n.diplomacy.integrated_by);
         let actual_owner = if let Some(other) = minor_current_overlord
             && other != overlord_id
         {
@@ -4093,7 +4100,7 @@ fn release_integrated_minors(
                 .province_ids
                 .retain(|p| !provinces_to_restore.contains(p));
             overlord
-                .army
+                .military.army
                 .retain(|u| !provinces_to_restore.contains(&u.position));
         }
 
@@ -4119,8 +4126,8 @@ fn release_integrated_minors(
                 minor.add_province(*pid);
             }
             // Only clear integration pointer when this overlord was the integrator.
-            if minor.integrated_by == Some(overlord_id) {
-                minor.integrated_by = None;
+            if minor.diplomacy.integrated_by == Some(overlord_id) {
+                minor.diplomacy.integrated_by = None;
             }
             // Card #96: a released subject must come back as a functioning
             // independent nation, never as an anarchic black-banner state.
@@ -4133,7 +4140,7 @@ fn release_integrated_minors(
             {
                 minor.capital_province_id = new_capital;
             }
-            minor.is_in_anarchy = false;
+            minor.diplomacy.is_in_anarchy = false;
         }
 
         // Seed token defenders so the reborn minor isn't immediately overrun
@@ -4214,7 +4221,7 @@ fn seed_released_minor_garrison(
                     *pid,
                 );
                 if let Some(minor) = game.get_nation_mut(minor_id) {
-                    minor.army.push(unit);
+                    minor.military.army.push(unit);
                 }
             }
             sync_garrison_cache(game, *pid);
@@ -4235,7 +4242,7 @@ fn seed_released_minor_garrison(
                 capital_pid,
             );
             if let Some(minor) = game.get_nation_mut(minor_id) {
-                minor.army.push(unit);
+                minor.military.army.push(unit);
             }
         }
     }
@@ -4357,7 +4364,7 @@ fn run_pact_defense_cascade(
 
         let is_ai = game
             .get_nation(gp_id)
-            .is_some_and(|n| n.ai_personality.is_some());
+            .is_some_and(|n| n.diplomacy.ai_personality.is_some());
 
         if is_ai {
             // AI makes a strategic decision
@@ -4593,8 +4600,8 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
             }
 
             // Check if both have warships
-            let a_has_warships = game.get_nation(a).is_some_and(|n| !n.warships.is_empty());
-            let b_has_warships = game.get_nation(b).is_some_and(|n| !n.warships.is_empty());
+            let a_has_warships = game.get_nation(a).is_some_and(|n| !n.military.warships.is_empty());
+            let b_has_warships = game.get_nation(b).is_some_and(|n| !n.military.warships.is_empty());
 
             if a_has_warships && b_has_warships {
                 battles_to_resolve.push((a, b));
@@ -4604,11 +4611,11 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
 
     for (attacker_id, defender_id) in battles_to_resolve {
         let atk_ships = match game.get_nation(attacker_id) {
-            Some(n) => n.warships.clone(),
+            Some(n) => n.military.warships.clone(),
             None => continue,
         };
         let def_ships = match game.get_nation(defender_id) {
-            Some(n) => n.warships.clone(),
+            Some(n) => n.military.warships.clone(),
             None => continue,
         };
 
@@ -4625,12 +4632,12 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
 
         // Update surviving fleets and record losses
         if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
-            attacker_nation.warships = result.attacker_survivors.clone();
-            attacker_nation.warships_lost += result.attacker_ships_lost.len() as u32;
+            attacker_nation.military.warships = result.attacker_survivors.clone();
+            attacker_nation.military.warships_lost += result.attacker_ships_lost.len() as u32;
         }
         if let Some(defender_nation) = game.get_nation_mut(defender_id) {
-            defender_nation.warships = result.defender_survivors.clone();
-            defender_nation.warships_lost += result.defender_ships_lost.len() as u32;
+            defender_nation.military.warships = result.defender_survivors.clone();
+            defender_nation.military.warships_lost += result.defender_ships_lost.len() as u32;
         }
 
         // Add headline
@@ -4663,7 +4670,7 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
 /// Report which technologies are available for research by the human player.
 fn report_available_techs(game: &GameState, report: &mut TurnReport) {
     let nation = match game.get_nation(game.human_player_nation) {
-        Some(n) if !n.is_in_anarchy => n,
+        Some(n) if !n.diplomacy.is_in_anarchy => n,
         _ => return,
     };
     let available = game
@@ -4805,8 +4812,8 @@ fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
         .drain_proposals()
         .into_iter()
         .filter(|p| {
-            !game.get_nation(p.from).is_some_and(|n| n.is_in_anarchy)
-                && !game.get_nation(p.to).is_some_and(|n| n.is_in_anarchy)
+            !game.get_nation(p.from).is_some_and(|n| n.diplomacy.is_in_anarchy)
+                && !game.get_nation(p.to).is_some_and(|n| n.diplomacy.is_in_anarchy)
         })
         .collect();
     if proposals.is_empty() {
@@ -5156,7 +5163,7 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
             continue;
         }
         // Skip alliance obligations for anarchic defenders
-        if game.get_nation(*defender).is_some_and(|n| n.is_in_anarchy) {
+        if game.get_nation(*defender).is_some_and(|n| n.diplomacy.is_in_anarchy) {
             continue;
         }
         // Check defender's allies
@@ -5166,7 +5173,7 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
                 continue;
             }
             // Skip anarchic allies
-            if game.get_nation(*ally).is_some_and(|n| n.is_in_anarchy) {
+            if game.get_nation(*ally).is_some_and(|n| n.diplomacy.is_in_anarchy) {
                 continue;
             }
             // Skip joining wars against nations that have 0 provinces (already defeated)
@@ -5187,7 +5194,7 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
             // Check if this ally is an AI nation (human allies make their own decisions)
             let is_ai = game
                 .get_nation(*ally)
-                .is_some_and(|n| n.ai_personality.is_some());
+                .is_some_and(|n| n.diplomacy.ai_personality.is_some());
             if !is_ai {
                 continue;
             }
@@ -5226,7 +5233,7 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
                 continue;
             }
             // Skip anarchic allies
-            if game.get_nation(*ally).is_some_and(|n| n.is_in_anarchy) {
+            if game.get_nation(*ally).is_some_and(|n| n.diplomacy.is_in_anarchy) {
                 continue;
             }
             // Skip joining wars against nations that have 0 provinces (already defeated)
@@ -5245,7 +5252,7 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
             }
             let is_ai = game
                 .get_nation(*ally)
-                .is_some_and(|n| n.ai_personality.is_some());
+                .is_some_and(|n| n.diplomacy.ai_personality.is_some());
             if !is_ai {
                 continue;
             }
@@ -5372,20 +5379,20 @@ fn incorporate_minor_into_empire(
 
     // Drain the minor's army and warships; transfer ownership to the overlord
     // so the WASM move-target query (which looks up a unit in
-    // `nation.army`/`nation.warships` by nation id) can find them for the
+    // `nation.military.army`/`nation.military.warships` by nation id) can find them for the
     // annexing player. Positions remain unchanged — units stay on the same
     // (now overlord-owned) provinces they were standing on.
     let mut transferred_army: Vec<ArmyUnit> = Vec::new();
     let mut transferred_warships: Vec<Ship> = Vec::new();
     let mut transferred_merchants: Vec<Ship> = Vec::new();
     if let Some(minor) = game.get_nation_mut(minor_id) {
-        transferred_army = std::mem::take(&mut minor.army);
-        transferred_warships = std::mem::take(&mut minor.warships);
-        transferred_merchants = std::mem::take(&mut minor.merchant_fleet);
+        transferred_army = std::mem::take(&mut minor.military.army);
+        transferred_warships = std::mem::take(&mut minor.military.warships);
+        transferred_merchants = std::mem::take(&mut minor.military.merchant_fleet);
         minor.province_ids.clear();
         // Card #79: back-pointer used when the overlord falls into anarchy
         // and integrated minors regain their independence.
-        minor.integrated_by = Some(gp_id);
+        minor.diplomacy.integrated_by = Some(gp_id);
     }
     for unit in &mut transferred_army {
         unit.owner = gp_id;
@@ -5402,9 +5409,9 @@ fn incorporate_minor_into_empire(
         for pid in &provinces_to_transfer {
             gp.add_province(*pid);
         }
-        gp.army.append(&mut transferred_army);
-        gp.warships.append(&mut transferred_warships);
-        gp.merchant_fleet.append(&mut transferred_merchants);
+        gp.military.army.append(&mut transferred_army);
+        gp.military.warships.append(&mut transferred_warships);
+        gp.military.merchant_fleet.append(&mut transferred_merchants);
     }
 
     // Card #68: once absorbed, the minor is no longer an independent war
@@ -5448,7 +5455,7 @@ fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnRepor
     let gp_ids: Vec<NationId> = game
         .nations
         .iter()
-        .filter(|n| n.is_great_power() && !n.is_in_anarchy)
+        .filter(|n| n.is_great_power() && !n.diplomacy.is_in_anarchy)
         .map(|n| n.id)
         .collect();
 
@@ -5459,7 +5466,7 @@ fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnRepor
     for minor_id in &minor_ids {
         if game
             .get_nation(*minor_id)
-            .is_some_and(|n| n.province_ids.is_empty() || n.is_in_anarchy)
+            .is_some_and(|n| n.province_ids.is_empty() || n.diplomacy.is_in_anarchy)
         {
             continue;
         }
@@ -5501,7 +5508,7 @@ fn resolve_unit_upgrades(game: &mut GameState, report: &mut TurnReport) {
     let ai_nation_ids: Vec<NationId> = game
         .nations
         .iter()
-        .filter(|n| n.ai_personality.is_some() && !n.is_in_anarchy)
+        .filter(|n| n.diplomacy.ai_personality.is_some() && !n.diplomacy.is_in_anarchy)
         .map(|n| n.id)
         .collect();
 
@@ -5521,7 +5528,7 @@ fn resolve_unit_upgrades(game: &mut GameState, report: &mut TurnReport) {
 
         // Find upgrades to perform
         let mut upgrades: Vec<(usize, ArmyUnitType, ArmyUnitType)> = Vec::new();
-        for (i, unit) in nation.army.iter().enumerate() {
+        for (i, unit) in nation.military.army.iter().enumerate() {
             if let Some(target_type) = unit.unit_type.upgrade_to()
                 && let Some(required_tech_name) = target_type.required_tech()
                 && researched_tech_names
@@ -5539,10 +5546,10 @@ fn resolve_unit_upgrades(game: &mut GameState, report: &mut TurnReport) {
         };
 
         for (idx, from_type, to_type) in &upgrades {
-            if *idx < nation.army.len() {
-                nation.army[*idx].unit_type = *to_type;
+            if *idx < nation.military.army.len() {
+                nation.military.army[*idx].unit_type = *to_type;
                 // Refresh movement for new type
-                nation.army[*idx].movement_remaining = to_type.stats().movement;
+                nation.military.army[*idx].movement_remaining = to_type.stats().movement;
             }
             report.unit_upgrades.push((
                 *nation_id,
@@ -5582,20 +5589,20 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
         // provinces rather than built from arms, and Generals are the reward,
         // not the input. (Trello card #128.)
         let total_arms: u32 = nation
-            .army
+            .military.army
             .iter()
             .filter(|u| !matches!(u.unit_type, ArmyUnitType::Militia | ArmyUnitType::General))
             .map(|u| u.unit_type.stats().arms_required)
             .sum();
 
         // Update the tracked total
-        let current_total = total_arms.max(nation.total_arms_built);
+        let current_total = total_arms.max(nation.military.total_arms_built);
 
         // General thresholds: 6, 12, 20, 30, ...
         // The nth general is earned at: 6, 12, 20, 30 (6 + 6 + 8 + 10...)
         // Simplified: thresholds are 6, 12, 20, 30, 42, 56, ...
         let general_thresholds = [6u32, 12, 20, 30, 42, 56, 72, 90];
-        let generals_earned_now = nation.generals_earned;
+        let generals_earned_now = nation.military.generals_earned;
 
         let mut new_generals = 0u32;
         for (i, threshold) in general_thresholds.iter().enumerate() {
@@ -5604,23 +5611,23 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
             }
         }
 
-        if new_generals > 0 || current_total != nation.total_arms_built {
+        if new_generals > 0 || current_total != nation.military.total_arms_built {
             let nation = match game.nations.iter_mut().find(|n| n.id == *nation_id) {
                 Some(n) => n,
                 None => continue,
             };
-            nation.total_arms_built = current_total;
+            nation.military.total_arms_built = current_total;
 
             for _ in 0..new_generals {
-                nation.generals_earned += 1;
-                let gen_id = UnitId(3_000_000 + nation.id.0 * 100 + nation.generals_earned);
+                nation.military.generals_earned += 1;
+                let gen_id = UnitId(3_000_000 + nation.id.0 * 100 + nation.military.generals_earned);
                 let general_unit = ArmyUnit::new(
                     gen_id,
                     ArmyUnitType::General,
                     *nation_id,
                     nation.capital_province_id,
                 );
-                nation.army.push(general_unit);
+                nation.military.army.push(general_unit);
 
                 let nation_name = nation.name.clone();
                 report
@@ -5644,13 +5651,13 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
 
         // Count Ships-of-the-Line in warship fleet
         let sol_count: u32 = nation
-            .warships
+            .military.warships
             .iter()
             .filter(|s| s.ship_type == ShipType::ShipOfTheLine)
             .count() as u32;
 
-        let current_sol = sol_count.max(nation.total_ships_of_the_line_built);
-        let admirals_earned_now = nation.admirals_earned;
+        let current_sol = sol_count.max(nation.military.total_ships_of_the_line_built);
+        let admirals_earned_now = nation.military.admirals_earned;
 
         // Admiral thresholds: every 5 Ships-of-the-Line (5, 10, 15, ...)
         let mut new_admirals = 0u32;
@@ -5664,19 +5671,19 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
             threshold += 5;
         }
 
-        if new_admirals > 0 || current_sol != nation.total_ships_of_the_line_built {
+        if new_admirals > 0 || current_sol != nation.military.total_ships_of_the_line_built {
             let nation = match game.nations.iter_mut().find(|n| n.id == *nation_id) {
                 Some(n) => n,
                 None => continue,
             };
-            nation.total_ships_of_the_line_built = current_sol;
+            nation.military.total_ships_of_the_line_built = current_sol;
 
             for _ in 0..new_admirals {
-                nation.admirals_earned += 1;
+                nation.military.admirals_earned += 1;
                 // Award a free Ship-of-the-Line as the Admiral bonus warship
-                let ship_id = UnitId(4_000_000 + nation.id.0 * 100 + nation.admirals_earned);
+                let ship_id = UnitId(4_000_000 + nation.id.0 * 100 + nation.military.admirals_earned);
                 let bonus_ship = Ship::new(ship_id, ShipType::ShipOfTheLine, *nation_id);
-                nation.warships.push(bonus_ship);
+                nation.military.warships.push(bonus_ship);
 
                 let nation_name = nation.name.clone();
                 report.rewards_earned.push((
@@ -5710,7 +5717,7 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
         if is_gp_capital
             && let Some(attacker) = game.nations.iter_mut().find(|n| n.id == attacker_id)
         {
-            attacker.capitol_bonus_capacity += 1;
+            attacker.military.capitol_bonus_capacity += 1;
             let attacker_name = attacker.name.clone();
             report.rewards_earned.push((
                 attacker_id,
@@ -5736,7 +5743,7 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
         };
 
         let expert_count = nation.economy.labor.expert;
-        let already_earned = nation.expert_rewards_earned;
+        let already_earned = nation.military.expert_rewards_earned;
 
         // Determine how many rewards should have been earned by now
         let mut should_have_earned: u8 = 0;
@@ -5752,8 +5759,8 @@ fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                 Some(n) => n,
                 None => continue,
             };
-            nation.expert_rewards_earned = should_have_earned;
-            nation.capitol_bonus_capacity += new_rewards as u32;
+            nation.military.expert_rewards_earned = should_have_earned;
+            nation.military.capitol_bonus_capacity += new_rewards as u32;
 
             let nation_name = nation.name.clone();
             for _ in 0..new_rewards {
@@ -6997,7 +7004,7 @@ mod tests {
         // Give nation freight cars: capacity 10, production is 2 (1 Grain + 1 Timber)
         game.get_nation_mut(NationId(1))
             .unwrap()
-            .transport
+            .military.transport
             .build_freight_cars(10);
 
         let report = process_turn(&mut game);
@@ -8509,17 +8516,17 @@ mod tests {
             ProvinceId(1),
         );
         gp2.economy.treasury = Money::dollars(1000);
-        gp2.warships
+        gp2.military.warships
             .push(Ship::new(UnitId(20), ShipType::Frigate, NationId(2)));
-        gp2.warships
+        gp2.military.warships
             .push(Ship::new(UnitId(21), ShipType::Frigate, NationId(2)));
         game.nations.push(gp2);
 
         // Equip GP1 with warships too.
         let gp1 = game.get_nation_mut(NationId(1)).unwrap();
-        gp1.warships
+        gp1.military.warships
             .push(Ship::new(UnitId(10), ShipType::Frigate, NationId(1)));
-        gp1.warships
+        gp1.military.warships
             .push(Ship::new(UnitId(11), ShipType::Frigate, NationId(1)));
 
         game.diplomacy
@@ -8569,7 +8576,7 @@ mod tests {
         );
         gp2.economy.treasury = Money::dollars(1000);
         for i in 0..4 {
-            gp2.warships
+            gp2.military.warships
                 .push(Ship::new(UnitId(20 + i), ShipType::Frigate, NationId(2)));
         }
         // Give gp2 a real province so it's "active" in the blockade sweep.
@@ -8588,7 +8595,7 @@ mod tests {
         // GP1 gets a merchant fleet so there's cargo to blockade.
         let gp1 = game.get_nation_mut(NationId(1)).unwrap();
         for i in 0..3 {
-            gp1.merchant_fleet
+            gp1.military.merchant_fleet
                 .push(Ship::new(UnitId(100 + i), ShipType::Clipper, NationId(1)));
         }
 
@@ -8655,7 +8662,7 @@ mod tests {
             .initialize_great_powers(&[NationId(1), NationId(3)]);
 
         // Mark GP A (Testlandia) as anarchic, with maxed score to the minor.
-        game.get_nation_mut(NationId(1)).unwrap().is_in_anarchy = true;
+        game.get_nation_mut(NationId(1)).unwrap().diplomacy.is_in_anarchy = true;
         let rel_a = game.diplomacy.ensure_relation(NationId(2), NationId(1));
         rel_a.score = 100;
         // GP B (Healthy Empire) has a below-threshold score.
@@ -8694,7 +8701,7 @@ mod tests {
 
         // Make nation1 an AI so auto-upgrade triggers
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        nation.ai_personality = Some(AiPersonality::Balanced);
+        nation.diplomacy.ai_personality = Some(AiPersonality::Balanced);
 
         // Give the nation a Regulars unit
         let unit = ArmyUnit::new(
@@ -8703,7 +8710,7 @@ mod tests {
             NationId(1),
             ProvinceId(1),
         );
-        nation.army.push(unit);
+        nation.military.army.push(unit);
 
         // Research "Breech-Loading Rifles" (TechId 13) —
         // RifleInfantry.required_tech() returns "Breech-Loading Rifles"
@@ -8756,7 +8763,7 @@ mod tests {
 
         // The Regulars should be upgraded to RifleInfantry
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.army[0].unit_type, ArmyUnitType::RifleInfantry);
+        assert_eq!(nation.military.army[0].unit_type, ArmyUnitType::RifleInfantry);
 
         // Report should record the upgrade
         assert_eq!(report.unit_upgrades.len(), 1);
@@ -8772,7 +8779,7 @@ mod tests {
         let mut game = test_game_state();
 
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        nation.ai_personality = Some(AiPersonality::Balanced);
+        nation.diplomacy.ai_personality = Some(AiPersonality::Balanced);
 
         let mut unit = ArmyUnit::new(
             UnitId(100),
@@ -8782,7 +8789,7 @@ mod tests {
         );
         unit.medals = 3;
         unit.health = 75;
-        nation.army.push(unit);
+        nation.military.army.push(unit);
 
         // Research "Breech-Loading Rifles" (TechId 13)
         nation.research_tech(crate::events::TechId(13));
@@ -8833,9 +8840,9 @@ mod tests {
         resolve_unit_upgrades(&mut game, &mut report);
 
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.army[0].unit_type, ArmyUnitType::RifleInfantry);
-        assert_eq!(nation.army[0].medals, 3, "Medals should be preserved");
-        assert_eq!(nation.army[0].health, 75, "Health should be preserved");
+        assert_eq!(nation.military.army[0].unit_type, ArmyUnitType::RifleInfantry);
+        assert_eq!(nation.military.army[0].medals, 3, "Medals should be preserved");
+        assert_eq!(nation.military.army[0].health, 75, "Health should be preserved");
     }
 
     // ── Pact defense tests ──────────────────────────────────────
@@ -8887,7 +8894,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        attacker.ai_personality = Some(crate::ai::AiPersonality::Aggressive);
+        attacker.diplomacy.ai_personality = Some(crate::ai::AiPersonality::Aggressive);
         attacker.economy.treasury = Money::dollars(10000);
 
         let minor = Nation::new(
@@ -8905,11 +8912,11 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(3),
         );
-        pact_holder.ai_personality = Some(crate::ai::AiPersonality::Aggressive);
+        pact_holder.diplomacy.ai_personality = Some(crate::ai::AiPersonality::Aggressive);
         pact_holder.economy.treasury = Money::dollars(10000);
         // Give the pact holder a strong army so it accepts the defense request
         for i in 0..10 {
-            pact_holder.army.push(crate::military::units::ArmyUnit::new(
+            pact_holder.military.army.push(crate::military::units::ArmyUnit::new(
                 crate::map::UnitId(8000 + i),
                 crate::military::units::ArmyUnitType::Regulars,
                 NationId(4),
@@ -9066,7 +9073,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        nation2.ai_personality = Some(crate::ai::AiPersonality::Balanced);
+        nation2.diplomacy.ai_personality = Some(crate::ai::AiPersonality::Balanced);
         nation2.economy.treasury = Money::dollars(10000);
 
         let mut game = GameState {
@@ -9156,7 +9163,7 @@ mod tests {
         game.nations[0].economy.treasury = Money::dollars(10000);
         // Set a subsidy with a fictional MN
         game.nations[0]
-            .trade_subsidies
+            .diplomacy.trade_subsidies
             .insert(NationId(10), Money::dollars(200));
 
         let report = process_turn(&mut game);
@@ -9224,7 +9231,7 @@ mod tests {
         );
         gp.economy.treasury = Money::dollars(50000);
         // Give merchant ship for cargo
-        gp.merchant_fleet.push(Ship::new(
+        gp.military.merchant_fleet.push(Ship::new(
             crate::map::UnitId(999),
             ShipType::Trader,
             NationId(1),
@@ -9344,7 +9351,7 @@ mod tests {
             ProvinceId(1),
         );
         gp.economy.treasury = Money::dollars(50000);
-        gp.merchant_fleet.push(Ship::new(
+        gp.military.merchant_fleet.push(Ship::new(
             crate::map::UnitId(999),
             ShipType::Trader,
             NationId(1),
@@ -9396,11 +9403,11 @@ mod tests {
         if !report.trade_transactions.is_empty() {
             let gp_nation = game.get_nation(NationId(1)).unwrap();
             assert!(
-                !gp_nation.trade_history.is_empty(),
+                !gp_nation.archives.trade_history.is_empty(),
                 "Great Power should have trade history entries after trade"
             );
             // Check the first entry has correct fields
-            let first = &gp_nation.trade_history[0];
+            let first = &gp_nation.archives.trade_history[0];
             assert_eq!(first.turn, TurnNumber::new(1));
             assert_eq!(first.partner, NationId(10));
             assert!(first.quantity > 0);
@@ -9408,7 +9415,7 @@ mod tests {
 
             let mn_nation = game.get_nation(NationId(10)).unwrap();
             assert!(
-                !mn_nation.trade_history.is_empty(),
+                !mn_nation.archives.trade_history.is_empty(),
                 "Minor Nation should also have trade history entries"
             );
         }
@@ -9597,7 +9604,7 @@ mod tests {
         nation1.economy.treasury = Money::dollars(10000);
         // Give attacker a strong army
         for i in 0..6 {
-            nation1.army.push(ArmyUnit::new(
+            nation1.military.army.push(ArmyUnit::new(
                 UnitId(100 + i),
                 ArmyUnitType::Guards,
                 NationId(1),
@@ -9653,7 +9660,7 @@ mod tests {
         // Give defender army units in Province 3 (adjacent to Province 2)
         let nation2 = game.get_nation_mut(NationId(2)).unwrap();
         for i in 0..5 {
-            nation2.army.push(ArmyUnit::new(
+            nation2.military.army.push(ArmyUnit::new(
                 UnitId(200 + i),
                 ArmyUnitType::Guards,
                 NationId(2),
@@ -10091,7 +10098,7 @@ mod tests {
                 NationId(1),
                 ProvinceId(1),
             );
-            nation.army.push(unit);
+            nation.military.army.push(unit);
         }
 
         let report = process_turn(&mut game);
@@ -10128,7 +10135,7 @@ mod tests {
             NationId(1),
             ProvinceId(1),
         );
-        nation.army.push(unit);
+        nation.military.army.push(unit);
 
         process_turn(&mut game);
 
@@ -10156,7 +10163,7 @@ mod tests {
                 NationId(1),
                 ProvinceId(1),
             );
-            nation.army.push(unit);
+            nation.military.army.push(unit);
         }
 
         process_turn(&mut game);
@@ -10342,7 +10349,7 @@ mod tests {
                 NationId(1),
                 ProvinceId(1),
             );
-            nation_atk.army.push(unit);
+            nation_atk.military.army.push(unit);
         }
 
         let nation_def = Nation::new(
@@ -10398,7 +10405,7 @@ mod tests {
             // Defender should be in anarchy after losing capital
             let defender = game.get_nation(NationId(2)).unwrap();
             assert!(
-                defender.is_in_anarchy(),
+                defender.diplomacy.is_in_anarchy,
                 "Nation that lost its capital should be in anarchy"
             );
         }
@@ -10453,7 +10460,7 @@ mod tests {
                 NationId(1),
                 ProvinceId(1),
             );
-            nation_atk.army.push(unit);
+            nation_atk.military.army.push(unit);
         }
         // Add siege artillery
         for i in 0..3u32 {
@@ -10463,7 +10470,7 @@ mod tests {
                 NationId(1),
                 ProvinceId(1),
             );
-            nation_atk.army.push(unit);
+            nation_atk.military.army.push(unit);
         }
 
         let nation_def = Nation::new(
@@ -10633,7 +10640,7 @@ mod tests {
         nation1.economy.treasury = Money::dollars(10000);
         // Give attacker army units
         for i in 0..4 {
-            nation1.army.push(ArmyUnit::new(
+            nation1.military.army.push(ArmyUnit::new(
                 UnitId(100 + i),
                 ArmyUnitType::Regulars,
                 NationId(1),
@@ -10789,7 +10796,7 @@ mod tests {
 
         // Give enemy warships
         for i in 0..3 {
-            nation2.warships.push(Ship::new(
+            nation2.military.warships.push(Ship::new(
                 UnitId(9000 + i),
                 ShipType::ShipOfTheLine,
                 NationId(2),
@@ -10799,7 +10806,7 @@ mod tests {
         // Give the player merchant fleet (cargo capacity)
         let nation1 = game.get_nation_mut(NationId(1)).unwrap();
         for i in 0..4 {
-            nation1.merchant_fleet.push(Ship::new(
+            nation1.military.merchant_fleet.push(Ship::new(
                 UnitId(8000 + i),
                 ShipType::Clipper,
                 NationId(1),
@@ -10854,9 +10861,9 @@ mod tests {
             ProvinceId(200),
         );
         nation2.economy.treasury = Money::dollars(0);
-        nation2.is_in_anarchy = true;
+        nation2.diplomacy.is_in_anarchy = true;
         for i in 0..5 {
-            nation2.warships.push(Ship::new(
+            nation2.military.warships.push(Ship::new(
                 UnitId(9000 + i),
                 ShipType::ShipOfTheLine,
                 NationId(2),
@@ -10865,7 +10872,7 @@ mod tests {
 
         let nation1 = game.get_nation_mut(NationId(1)).unwrap();
         for i in 0..4 {
-            nation1.merchant_fleet.push(Ship::new(
+            nation1.military.merchant_fleet.push(Ship::new(
                 UnitId(8000 + i),
                 ShipType::Clipper,
                 NationId(1),
@@ -11354,7 +11361,7 @@ mod tests {
             ProvinceId(2),
         );
         n2.economy.treasury = Money::dollars(10_000);
-        n2.ai_personality = Some(AiPersonality::Diplomatic);
+        n2.diplomacy.ai_personality = Some(AiPersonality::Diplomatic);
 
         let mut diplomacy = DiplomacyState::new();
         diplomacy.initialize_great_powers(&[NationId(1), NationId(2)]);
@@ -11481,7 +11488,7 @@ mod tests {
         }
 
         // Make AI aggressive and hostile
-        game.nations[1].ai_personality = Some(AiPersonality::Aggressive);
+        game.nations[1].diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         let rel = game.diplomacy.ensure_relation(human, ai);
         rel.score = -50; // terrible relationship
 
@@ -11608,7 +11615,7 @@ mod tests {
             game.game_data.lua_engine = None;
         }
 
-        game.nations[1].ai_personality = Some(AiPersonality::Aggressive);
+        game.nations[1].diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         let rel = game.diplomacy.ensure_relation(human, ai);
         rel.score = -50;
 
@@ -11734,7 +11741,7 @@ mod tests {
         for i in 0..20 {
             game.get_nation_mut(NationId(2))
                 .unwrap()
-                .army
+                .military.army
                 .push(ArmyUnit::new(
                     UnitId(500 + i),
                     ArmyUnitType::Guards,
@@ -11767,14 +11774,14 @@ mod tests {
         // `retain(|u| u.position != province)` cleanup.
         let n1 = game.get_nation(NationId(1)).unwrap();
         let survivors_at_home = n1
-            .army
+            .military.army
             .iter()
             .filter(|u| u.position == ProvinceId(1))
             .count();
         assert!(
             survivors_at_home > 0,
             "Nation 1 retreating Guards should land at Province 1; army: {:?}",
-            n1.army
+            n1.military.army
                 .iter()
                 .map(|u| (u.id, u.position))
                 .collect::<Vec<_>>()
@@ -11799,7 +11806,7 @@ mod tests {
         let mut game = test_game_for_counter_attack();
         // Attacker sends only 2 Guards — not enough to beat 3 militia.
         let n1 = game.get_nation_mut(NationId(1)).unwrap();
-        n1.army.truncate(2);
+        n1.military.army.truncate(2);
         // Target Province 3 (non-capital, owned by Nation 2).
         game.get_province_mut(ProvinceId(3)).unwrap().owner = NationId(2);
         // Move the 2 Guards to a province adjacent to P3 — use the existing
@@ -11848,7 +11855,7 @@ mod tests {
         let militia_id = game
             .get_nation(NationId(2))
             .unwrap()
-            .army
+            .military.army
             .iter()
             .find(|u| u.position == ProvinceId(2) && u.unit_type == ArmyUnitType::Militia)
             .expect("fixture should seed militia at P2")
@@ -11861,7 +11868,7 @@ mod tests {
         let pos = game
             .get_nation(NationId(2))
             .unwrap()
-            .army
+            .military.army
             .iter()
             .find(|u| u.id == militia_id)
             .expect("militia must still exist")
@@ -11876,7 +11883,7 @@ mod tests {
         let mut game = test_game_for_counter_attack();
         // Strip all militia (keep field army + artillery).
         if let Some(n2) = game.get_nation_mut(NationId(2)) {
-            n2.army.retain(|u| u.unit_type != ArmyUnitType::Militia);
+            n2.military.army.retain(|u| u.unit_type != ArmyUnitType::Militia);
         }
         // Sync caches so we start at 0.
         sync_garrison_cache(&mut game, ProvinceId(2));
@@ -11943,12 +11950,12 @@ mod tests {
             ));
         }
         let n1 = game.get_nation_mut(NationId(1)).unwrap();
-        n1.army.extend(extra);
+        n1.military.army.extend(extra);
         sync_garrison_cache(&mut game, ProvinceId(1));
         // Bump attacker force to guarantee conquest.
         let n1 = game.get_nation_mut(NationId(1)).unwrap();
         for i in 0..8u32 {
-            n1.army.push(ArmyUnit::new(
+            n1.military.army.push(ArmyUnit::new(
                 crate::map::UnitId(900 + i),
                 ArmyUnitType::Guards,
                 NationId(1),
@@ -12002,7 +12009,7 @@ mod tests {
         let mut game = test_game_for_counter_attack();
         let n1 = game.get_nation_mut(NationId(1)).unwrap();
         // Drop field army to none — only militia remain at P1.
-        n1.army.retain(|u| u.unit_type == ArmyUnitType::Militia);
+        n1.military.army.retain(|u| u.unit_type == ArmyUnitType::Militia);
         // Attack P2.
         game.pending_attacks.push((NationId(1), ProvinceId(2)));
         game.diplomacy.declare_war(NationId(1), NationId(2));
@@ -12081,7 +12088,7 @@ mod tests {
             ));
         }
         let n2 = game.get_nation_mut(NationId(2)).unwrap();
-        n2.army.extend(extra);
+        n2.military.army.extend(extra);
         sync_garrison_cache(&mut game, ProvinceId(3));
         assert_eq!(
             game.get_nation(NationId(2))
@@ -12096,7 +12103,7 @@ mod tests {
         let survivor_ids: Vec<UnitId> = game
             .get_nation(NationId(2))
             .unwrap()
-            .army
+            .military.army
             .iter()
             .filter(|u| u.position == ProvinceId(2) && u.unit_type == ArmyUnitType::Militia)
             .map(|u| u.id)
@@ -12113,7 +12120,7 @@ mod tests {
             assert!(
                 game.get_nation(NationId(2))
                     .unwrap()
-                    .army
+                    .military.army
                     .iter()
                     .all(|u| u.id != *uid),
                 "overflow militia {:?} should have been destroyed",
@@ -12131,7 +12138,7 @@ mod tests {
         game.game_data.game_config.garrison_regen_interval_turns = 0;
         // Clear all militia so every province is under-strength.
         if let Some(n) = game.get_nation_mut(NationId(2)) {
-            n.army.retain(|u| u.unit_type != ArmyUnitType::Militia);
+            n.military.army.retain(|u| u.unit_type != ArmyUnitType::Militia);
         }
         sync_garrison_cache(&mut game, ProvinceId(2));
         sync_garrison_cache(&mut game, ProvinceId(3));
@@ -12163,12 +12170,12 @@ mod tests {
         );
         let artillery_id = artillery.id;
         let n2 = game.get_nation_mut(NationId(2)).unwrap();
-        n2.army.push(artillery);
+        n2.military.army.push(artillery);
 
         // Overwhelming attacker: 12 Guards to crush militia + artillery.
         let n1 = game.get_nation_mut(NationId(1)).unwrap();
         for i in 0..6u32 {
-            n1.army.push(ArmyUnit::new(
+            n1.military.army.push(ArmyUnit::new(
                 UnitId(600 + i),
                 ArmyUnitType::Guards,
                 NationId(1),
@@ -12185,7 +12192,7 @@ mod tests {
         let n2_still_has_artillery = game
             .get_nation(NationId(2))
             .unwrap()
-            .army
+            .military.army
             .iter()
             .any(|u| u.id == artillery_id);
         assert!(
@@ -12215,7 +12222,7 @@ mod tests {
         // = 27.6, ratio ~3.6 > prebattle threshold 2.0).
         let n1 = game.get_nation_mut(NationId(1)).unwrap();
         for i in 0..14u32 {
-            n1.army.push(ArmyUnit::new(
+            n1.military.army.push(ArmyUnit::new(
                 UnitId(700 + i),
                 ArmyUnitType::Guards,
                 NationId(1),
@@ -12227,7 +12234,7 @@ mod tests {
         let defender_militia_ids: Vec<UnitId> = game
             .get_nation(NationId(2))
             .unwrap()
-            .army
+            .military.army
             .iter()
             .filter(|u| u.position == ProvinceId(2) && u.unit_type == ArmyUnitType::Militia)
             .map(|u| u.id)
@@ -12265,7 +12272,7 @@ mod tests {
         let defender = game.get_nation(NationId(2)).unwrap();
         for mid in &defender_militia_ids {
             let pos = defender
-                .army
+                .military.army
                 .iter()
                 .find(|u| u.id == *mid)
                 .map(|u| u.position)
@@ -12309,7 +12316,7 @@ mod tests {
         // Verify surviving attacker units are now positioned in the conquered province
         let attacker = game.get_nation(NationId(1)).unwrap();
         let units_in_conquered = attacker
-            .army
+            .military.army
             .iter()
             .filter(|u| u.position == ProvinceId(2))
             .count();
@@ -12329,7 +12336,7 @@ mod tests {
         // Give defender army units in Province 3 (adjacent to Province 2)
         let nation2 = game.get_nation_mut(NationId(2)).unwrap();
         for i in 0..5 {
-            nation2.army.push(ArmyUnit::new(
+            nation2.military.army.push(ArmyUnit::new(
                 UnitId(200 + i),
                 ArmyUnitType::Guards,
                 NationId(2),
@@ -12390,7 +12397,7 @@ mod tests {
             .add_province(ProvinceId(4));
 
         // Move one unit to Province 4 (friendly move)
-        let unit_to_move = game.get_nation(NationId(1)).unwrap().army[0].id;
+        let unit_to_move = game.get_nation(NationId(1)).unwrap().military.army[0].id;
         game.pending_moves
             .push((NationId(1), unit_to_move, ProvinceId(4)));
 
@@ -12437,7 +12444,7 @@ mod tests {
         let nation1 = game.get_nation_mut(NationId(1)).unwrap();
         nation1.add_province(ProvinceId(5));
         for i in 0..2 {
-            nation1.army.push(ArmyUnit::new(
+            nation1.military.army.push(ArmyUnit::new(
                 UnitId(300 + i),
                 ArmyUnitType::Guards,
                 NationId(1),
@@ -12460,7 +12467,7 @@ mod tests {
         // Units in Province 5 should retain their position after victory
         let nation1 = game.get_nation(NationId(1)).unwrap();
         let far_units_still_far = nation1
-            .army
+            .military.army
             .iter()
             .filter(|u| u.id.0 >= 300 && u.id.0 < 302)
             .filter(|u| u.position == ProvinceId(5))
@@ -12531,7 +12538,7 @@ mod tests {
         nation1.economy.treasury = Money::dollars(10000);
         // 4 Guards in adjacent P1
         for i in 0..4 {
-            nation1.army.push(ArmyUnit::new(
+            nation1.military.army.push(ArmyUnit::new(
                 UnitId(100 + i),
                 ArmyUnitType::Guards,
                 NationId(1),
@@ -12593,7 +12600,7 @@ mod tests {
         // Verify Nation 1's units from adjacent P1 are now in P2
         let attacker = game.get_nation(NationId(1)).unwrap();
         let units_in_p2 = attacker
-            .army
+            .military.army
             .iter()
             .filter(|u| u.position == ProvinceId(2))
             .count();
@@ -12623,7 +12630,7 @@ mod tests {
         // so the counter-attack can succeed
         let nation2 = game.get_nation_mut(NationId(2)).unwrap();
         for i in 0..20 {
-            nation2.army.push(ArmyUnit::new(
+            nation2.military.army.push(ArmyUnit::new(
                 UnitId(200 + i),
                 ArmyUnitType::Guards,
                 NationId(2),
@@ -12657,7 +12664,7 @@ mod tests {
         // Verify counter-attack survivors ended up in the recaptured province
         let nation2 = game.get_nation(NationId(2)).unwrap();
         let units_in_recaptured = nation2
-            .army
+            .military.army
             .iter()
             .filter(|u| u.position == ProvinceId(2))
             .count();
@@ -12721,7 +12728,7 @@ mod tests {
         );
         nation1.economy.treasury = Money::dollars(10000);
         for i in 0..4 {
-            nation1.army.push(ArmyUnit::new(
+            nation1.military.army.push(ArmyUnit::new(
                 UnitId(100 + i),
                 ArmyUnitType::Guards,
                 NationId(1),
@@ -12731,7 +12738,7 @@ mod tests {
         // ShipOfTheLine has arms_cost = 5, enough beachhead capacity for 4 Guards
         let mut ship = Ship::new(UnitId(500), ShipType::ShipOfTheLine, NationId(1));
         ship.operation = Some(NavalOperation::Beachhead(ProvinceId(2)));
-        nation1.warships.push(ship);
+        nation1.military.warships.push(ship);
 
         let nation2 = Nation::new(
             NationId(2),
@@ -12783,12 +12790,12 @@ mod tests {
         // Verify all surviving attacker units are at origin (P1), not conquered P2
         let attacker = game.get_nation(NationId(1)).unwrap();
         let units_in_p2 = attacker
-            .army
+            .military.army
             .iter()
             .filter(|u| u.position == ProvinceId(2))
             .count();
         let units_in_p1 = attacker
-            .army
+            .military.army
             .iter()
             .filter(|u| u.position == ProvinceId(1))
             .count();
@@ -12815,7 +12822,7 @@ mod tests {
         // any counter-attack to exist.
         let n1 = game.get_nation_mut(NationId(1)).unwrap();
         for i in 0..8u32 {
-            n1.army.push(ArmyUnit::new(
+            n1.military.army.push(ArmyUnit::new(
                 UnitId(800 + i),
                 ArmyUnitType::Guards,
                 NationId(1),
@@ -12828,7 +12835,7 @@ mod tests {
         // The 5 units in P3 would normally counter-attack.
         let nation2 = game.get_nation_mut(NationId(2)).unwrap();
         for i in 0..5 {
-            nation2.army.push(ArmyUnit::new(
+            nation2.military.army.push(ArmyUnit::new(
                 UnitId(200 + i),
                 ArmyUnitType::Guards,
                 NationId(2),
@@ -12849,7 +12856,7 @@ mod tests {
         let moved_uid = game
             .get_nation(NationId(2))
             .unwrap()
-            .army
+            .military.army
             .iter()
             // Pick a MOVABLE unit at P3 (skip garrison militia — they
             // refuse to move).
@@ -12969,7 +12976,7 @@ mod tests {
         nation1.economy.treasury = Money::dollars(20000);
         // 3 Guards in P1 (port)
         for i in 0..3 {
-            nation1.army.push(ArmyUnit::new(
+            nation1.military.army.push(ArmyUnit::new(
                 UnitId(100 + i),
                 ArmyUnitType::Guards,
                 NationId(1),
@@ -12978,7 +12985,7 @@ mod tests {
         }
         // 2 Guards in P3 (land adjacent)
         for i in 0..2 {
-            nation1.army.push(ArmyUnit::new(
+            nation1.military.army.push(ArmyUnit::new(
                 UnitId(200 + i),
                 ArmyUnitType::Guards,
                 NationId(1),
@@ -12986,7 +12993,7 @@ mod tests {
             ));
         }
         // 1 Guard in P4 (inland non-port)
-        nation1.army.push(ArmyUnit::new(
+        nation1.military.army.push(ArmyUnit::new(
             UnitId(300),
             ArmyUnitType::Guards,
             NationId(1),
@@ -12997,7 +13004,7 @@ mod tests {
         // land cohort doesn't consume beachhead, so naval cap only affects P1 units: 3 <= 5)
         let mut ship = Ship::new(UnitId(500), ShipType::ShipOfTheLine, NationId(1));
         ship.operation = Some(NavalOperation::Beachhead(ProvinceId(2)));
-        nation1.warships.push(ship);
+        nation1.military.warships.push(ship);
 
         let mut nation2 = Nation::new(
             NationId(2),
@@ -13007,7 +13014,7 @@ mod tests {
             ProvinceId(99), // fake capital — P2 gets no auto-garrison
         );
         // Give Nation 2 a defender unit at P2 so a real battle occurs (not auto-conquer)
-        nation2.army.push(ArmyUnit::new(
+        nation2.military.army.push(ArmyUnit::new(
             UnitId(400),
             ArmyUnitType::Militia,
             NationId(2),
@@ -13068,7 +13075,7 @@ mod tests {
 
         // Land cohort (from P3, IDs 200-201) should be in P2 (conquered)
         let land_in_p2 = attacker
-            .army
+            .military.army
             .iter()
             .filter(|u| u.id.0 >= 200 && u.id.0 < 202)
             .filter(|u| u.position == ProvinceId(2))
@@ -13081,7 +13088,7 @@ mod tests {
 
         // Naval cohort (from P1, IDs 100-102) should still be at P1 (origin)
         let naval_still_at_port = attacker
-            .army
+            .military.army
             .iter()
             .filter(|u| u.id.0 >= 100 && u.id.0 < 103)
             .filter(|u| u.position == ProvinceId(1))
@@ -13094,7 +13101,7 @@ mod tests {
 
         // Inland unit (ID 300 at P4) must NOT have participated — still at P4
         let inland_still_at_p4 = attacker
-            .army
+            .military.army
             .iter()
             .find(|u| u.id.0 == 300)
             .map(|u| u.position == ProvinceId(4))
@@ -13124,13 +13131,13 @@ mod tests {
                 NationType::GreatPower,
                 ProvinceId(prov_id),
             );
-            n.ai_personality = Some(crate::ai::common::AiPersonality::Balanced);
+            n.diplomacy.ai_personality = Some(crate::ai::common::AiPersonality::Balanced);
             n.province_ids = vec![ProvinceId(prov_id)];
             nations.push(n);
         }
         // Human player is nation 1 (but personality is set, so alliance logic treats as AI)
         // Actually, make nation 1 human so it doesn't auto-join
-        nations[0].ai_personality = None;
+        nations[0].diplomacy.ai_personality = None;
 
         let provinces: Vec<Province> = (1..=3)
             .map(|i| {
@@ -13228,7 +13235,7 @@ mod tests {
         );
         eng.deploy(target);
         eng.start_build(BuildTask::Railroad, &game.game_data.game_config);
-        game.nations[0].civilians.push(eng);
+        game.nations[0].military.civilians.push(eng);
         if let Some(tile) = game.hex_map.get_tile_mut(target) {
             tile.assigned_civilian = Some(crate::map::UnitId(3_900_000));
         }
@@ -13257,7 +13264,7 @@ mod tests {
         let eng = game
             .nations
             .iter()
-            .flat_map(|n| n.civilians.iter())
+            .flat_map(|n| n.military.civilians.iter())
             .find(|c| c.civilian_type == CivilianType::Engineer)
             .unwrap();
         assert!(!eng.working);
@@ -13314,7 +13321,7 @@ mod tests {
                 4,
             ));
             game.nations[0].add_province(ProvinceId(2));
-            game.nations[0].transport.build_freight_cars(50);
+            game.nations[0].military.transport.build_freight_cars(50);
 
             let before = game.nations[0].resource_amount(ResourceType::Iron);
             let _ = process_turn(&mut game);
@@ -13346,7 +13353,7 @@ mod tests {
         );
         eng.deploy(target);
         eng.start_build(BuildTask::Depot, &game.game_data.game_config); // 2 turns
-        game.nations[0].civilians.push(eng);
+        game.nations[0].military.civilians.push(eng);
         if let Some(tile) = game.hex_map.get_tile_mut(target) {
             tile.assigned_civilian = Some(crate::map::UnitId(3_900_001));
         }
@@ -13360,7 +13367,7 @@ mod tests {
 
         // The in-flight engineer should have been cancelled — not "working" any more.
         let eng = game.nations[0]
-            .civilians
+            .military.civilians
             .iter()
             .find(|c| c.civilian_type == CivilianType::Engineer)
             .expect("engineer still exists");
@@ -13424,7 +13431,7 @@ mod tests {
             ProvinceId(2),
         );
         minor.province_ids.clear(); // absorbed: no provinces
-        minor.integrated_by = Some(NationId(1));
+        minor.diplomacy.integrated_by = Some(NationId(1));
 
         let game = GameState {
             turn: TurnNumber::new(1),
@@ -13470,9 +13477,9 @@ mod tests {
 
         let minor = game.get_nation(minor_id).unwrap();
         assert!(minor.province_ids.contains(&minor_cap_pid));
-        assert_eq!(minor.integrated_by, None);
+        assert_eq!(minor.diplomacy.integrated_by, None);
         assert!(
-            !minor.is_in_anarchy,
+            !minor.diplomacy.is_in_anarchy,
             "minor with its capital back is not anarchic"
         );
 
@@ -13502,18 +13509,18 @@ mod tests {
             prov.owner = NationId(99);
         }
         // Seed the minor as anarchic to prove the release path clears it.
-        game.get_nation_mut(minor_id).unwrap().is_in_anarchy = true;
+        game.get_nation_mut(minor_id).unwrap().diplomacy.is_in_anarchy = true;
         let mut report = TurnReport::empty();
 
         release_integrated_minors(&mut game, overlord_id, &mut report);
 
         let minor = game.get_nation(minor_id).unwrap();
         assert_eq!(
-            minor.integrated_by, None,
+            minor.diplomacy.integrated_by, None,
             "overlord pointer must be cleared on release"
         );
         assert!(
-            !minor.is_in_anarchy,
+            !minor.diplomacy.is_in_anarchy,
             "released minor must not inherit the overlord's anarchy (card #96)"
         );
     }
@@ -13564,7 +13571,7 @@ mod tests {
 
         let minor = game.get_nation(minor_id).unwrap();
         assert_eq!(
-            minor.integrated_by, None,
+            minor.diplomacy.integrated_by, None,
             "overlord pointer must be cleared"
         );
         assert!(
@@ -13576,7 +13583,7 @@ mod tests {
             "capital must be reassigned to the first restored province when the original is lost"
         );
         assert!(
-            !minor.is_in_anarchy,
+            !minor.diplomacy.is_in_anarchy,
             "released minor must not be in anarchy even if its original capital is gone (card #96)"
         );
     }
@@ -13629,17 +13636,17 @@ mod tests {
 
         // Overlord collapsed into anarchy.
         assert!(
-            game.get_nation(overlord_id).unwrap().is_in_anarchy,
+            game.get_nation(overlord_id).unwrap().diplomacy.is_in_anarchy,
             "overlord must enter anarchy after losing its capital"
         );
         // Released minor must NOT be anarchic despite having no provinces.
         let minor = game.get_nation(minor_id).unwrap();
         assert_eq!(
-            minor.integrated_by, None,
+            minor.diplomacy.integrated_by, None,
             "minor's overlord pointer must be cleared"
         );
         assert!(
-            !minor.is_in_anarchy,
+            !minor.diplomacy.is_in_anarchy,
             "released minor with no territory must not be re-flagged anarchic by the sweep (F-001)"
         );
     }
@@ -13683,7 +13690,7 @@ mod tests {
         );
         minor.province_ids.clear(); // lost last province
         // No integrated_by — this minor is independent, not an absorbed one.
-        assert_eq!(minor.integrated_by, None);
+        assert_eq!(minor.diplomacy.integrated_by, None);
 
         let mut conqueror = Nation::new(
             NationId(99),
@@ -13726,7 +13733,7 @@ mod tests {
 
         let minor = game.get_nation(independent_id).unwrap();
         assert!(
-            minor.is_in_anarchy,
+            minor.diplomacy.is_in_anarchy,
             "independent minor that lost its last province must still enter anarchy"
         );
     }
@@ -13787,7 +13794,7 @@ mod tests {
             ProvinceId(99),
         );
         minor_b.province_ids.clear();
-        minor_b.integrated_by = Some(overlord_b);
+        minor_b.diplomacy.integrated_by = Some(overlord_b);
         game.nations.push(minor_b);
 
         let mut report = TurnReport::empty();
@@ -13795,7 +13802,7 @@ mod tests {
 
         let ally = game.get_nation(unrelated_minor).unwrap();
         assert_eq!(
-            ally.integrated_by,
+            ally.diplomacy.integrated_by,
             Some(overlord_b),
             "release on overlord A must not clear integrated_by for minors of overlord B"
         );
@@ -13835,7 +13842,7 @@ mod tests {
         );
 
         // Rewire: minor is now integrated by GP-B, not GP-A
-        game.get_nation_mut(minor_id).unwrap().integrated_by = Some(overlord_b);
+        game.get_nation_mut(minor_id).unwrap().diplomacy.integrated_by = Some(overlord_b);
 
         let mut report = TurnReport::empty();
         release_integrated_minors(&mut game, overlord_a, &mut report);
@@ -13856,7 +13863,7 @@ mod tests {
         // Minor remains consistently integrated by GP-B
         let minor = game.get_nation(minor_id).unwrap();
         assert_eq!(
-            minor.integrated_by,
+            minor.diplomacy.integrated_by,
             Some(overlord_b),
             "minor must remain integrated by GP-B after GP-A collapses"
         );
@@ -13905,7 +13912,7 @@ mod tests {
 
         // Seed the minor with a field army unit on its own province.
         let minor = game.get_nation_mut(NationId(2)).unwrap();
-        minor.army.push(crate::military::units::ArmyUnit::new(
+        minor.military.army.push(crate::military::units::ArmyUnit::new(
             crate::map::UnitId(999),
             crate::military::units::ArmyUnitType::Regulars,
             NationId(2),
@@ -13921,7 +13928,7 @@ mod tests {
 
         let overlord = game.get_nation(NationId(1)).unwrap();
         let moved = overlord
-            .army
+            .military.army
             .iter()
             .find(|u| u.id == crate::map::UnitId(999))
             .expect("minor's army unit must live on the overlord after annexation");
@@ -13933,7 +13940,7 @@ mod tests {
 
         let minor_after = game.get_nation(NationId(2)).unwrap();
         assert!(
-            minor_after.army.is_empty(),
+            minor_after.military.army.is_empty(),
             "absorbed minor should have no lingering units on its (empty) roster"
         );
     }
@@ -13944,7 +13951,7 @@ mod tests {
     fn released_minor_receives_token_garrison() {
         let (mut game, overlord_id, minor_id, _, minor_cap_pid) = absorbed_minor_scenario();
         // Precondition: absorbed minor has an empty army.
-        assert!(game.get_nation(minor_id).unwrap().army.is_empty());
+        assert!(game.get_nation(minor_id).unwrap().military.army.is_empty());
 
         let mut report = TurnReport::empty();
         release_integrated_minors(&mut game, overlord_id, &mut report);
@@ -13995,7 +14002,7 @@ mod tests {
         apply_end_of_combat_anarchy(&mut game, &mut report);
 
         assert!(
-            !game.get_nation(NationId(1)).unwrap().is_in_anarchy,
+            !game.get_nation(NationId(1)).unwrap().diplomacy.is_in_anarchy,
             "capital captured then recaptured within the turn must not leave the owner anarchic"
         );
         assert!(
@@ -14023,7 +14030,7 @@ mod tests {
 
         let absorbed = game.get_nation(NationId(2)).unwrap();
         assert!(
-            !absorbed.is_in_anarchy,
+            !absorbed.diplomacy.is_in_anarchy,
             "an absorbed minor must not be flagged anarchic by the end-of-combat sweep"
         );
         assert!(
@@ -14044,7 +14051,7 @@ mod tests {
         // Plant an overlord unit on the minor's (now overlord-owned) capital —
         // representing a unit transferred during incorporation.
         if let Some(overlord) = game.get_nation_mut(overlord_id) {
-            overlord.army.push(crate::military::units::ArmyUnit::new(
+            overlord.military.army.push(crate::military::units::ArmyUnit::new(
                 crate::map::UnitId(8080),
                 crate::military::units::ArmyUnitType::Regulars,
                 overlord_id,
@@ -14057,7 +14064,7 @@ mod tests {
 
         let overlord = game.get_nation(overlord_id).unwrap();
         assert!(
-            !overlord.army.iter().any(|u| u.position == minor_cap_pid),
+            !overlord.military.army.iter().any(|u| u.position == minor_cap_pid),
             "overlord units on restored provinces must be disbanded when the empire collapses"
         );
     }
@@ -14079,7 +14086,7 @@ mod tests {
         apply_end_of_combat_anarchy(&mut game, &mut report);
 
         assert!(
-            game.get_nation(NationId(1)).unwrap().is_in_anarchy,
+            game.get_nation(NationId(1)).unwrap().diplomacy.is_in_anarchy,
             "nation without its capital at end of combat must enter anarchy"
         );
     }
@@ -14186,7 +14193,7 @@ mod tests {
         attacker.add_province(ProvinceId(2));
         attacker.economy.treasury = Money::dollars(20000);
         for i in 0..2 {
-            attacker.army.push(ArmyUnit::new(
+            attacker.military.army.push(ArmyUnit::new(
                 UnitId(100 + i),
                 ArmyUnitType::Guards,
                 NationId(1),
@@ -14194,7 +14201,7 @@ mod tests {
             ));
         }
         for i in 0..2 {
-            attacker.army.push(ArmyUnit::new(
+            attacker.military.army.push(ArmyUnit::new(
                 UnitId(200 + i),
                 ArmyUnitType::Guards,
                 NationId(1),
@@ -14204,7 +14211,7 @@ mod tests {
         // Frigate: arms_cost = 2 → beachhead_cap = 2 (forces the cap to bite).
         let mut ship = Ship::new(UnitId(500), ShipType::Frigate, NationId(1));
         ship.operation = Some(NavalOperation::Beachhead(ProvinceId(3)));
-        attacker.warships.push(ship);
+        attacker.military.warships.push(ship);
 
         let mut defender = Nation::new(
             NationId(3),
@@ -14213,7 +14220,7 @@ mod tests {
             NationType::MinorNation,
             ProvinceId(99), // fake capital so P3 gets no auto-garrison
         );
-        defender.army.push(ArmyUnit::new(
+        defender.military.army.push(ArmyUnit::new(
             UnitId(400),
             ArmyUnitType::Militia,
             NationId(3),
@@ -14275,12 +14282,12 @@ mod tests {
         // not just one.
         let attacker = game.get_nation(NationId(1)).unwrap();
         let survivors_p1 = attacker
-            .army
+            .military.army
             .iter()
             .filter(|u| (100..102).contains(&u.id.0) && u.position == ProvinceId(1))
             .count();
         let survivors_p2 = attacker
-            .army
+            .military.army
             .iter()
             .filter(|u| (200..202).contains(&u.id.0) && u.position == ProvinceId(2))
             .count();
@@ -14334,7 +14341,7 @@ mod tests {
 
         let nation = game.get_nation_mut(NationId(1)).unwrap();
         nation
-            .army
+            .military.army
             .extend([wounded_idle, wounded_moved, wounded_fought, healthy_idle]);
 
         let mut moved = HashSet::new();
@@ -14347,7 +14354,7 @@ mod tests {
         let nation = game.get_nation(NationId(1)).unwrap();
         let hp = |uid: u32| {
             nation
-                .army
+                .military.army
                 .iter()
                 .find(|u| u.id == UnitId(uid))
                 .map(|u| u.health)
@@ -14376,14 +14383,14 @@ mod tests {
             ProvinceId(1),
         );
         wounded.health = 50;
-        game.get_nation_mut(NationId(1)).unwrap().army.push(wounded);
+        game.get_nation_mut(NationId(1)).unwrap().military.army.push(wounded);
 
         heal_resting_units(&mut game, &HashSet::new(), &HashSet::new());
 
         let hp = game
             .get_nation(NationId(1))
             .unwrap()
-            .army
+            .military.army
             .iter()
             .find(|u| u.id == UnitId(201))
             .unwrap()
@@ -14403,7 +14410,7 @@ mod tests {
         near_full.health = 98;
         game.get_nation_mut(NationId(1))
             .unwrap()
-            .army
+            .military.army
             .push(near_full);
 
         heal_resting_units(&mut game, &HashSet::new(), &HashSet::new());
@@ -14411,7 +14418,7 @@ mod tests {
         let hp2 = game
             .get_nation(NationId(1))
             .unwrap()
-            .army
+            .military.army
             .iter()
             .find(|u| u.id == UnitId(202))
             .unwrap()
@@ -14429,14 +14436,14 @@ mod tests {
         let mut game = test_game_state();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
         // Remove all existing units to start clean
-        nation.army.retain(|_| false);
-        nation.total_arms_built = 0;
-        nation.generals_earned = 0;
+        nation.military.army.retain(|_| false);
+        nation.military.total_arms_built = 0;
+        nation.military.generals_earned = 0;
 
         // Add enough Regulars to reach the first general threshold (6 arms)
         // Regulars cost 1 arm each.
         for i in 0..6 {
-            nation.army.push(ArmyUnit::new(
+            nation.military.army.push(ArmyUnit::new(
                 UnitId(2000 + i),
                 ArmyUnitType::Regulars,
                 NationId(1),
@@ -14445,14 +14452,14 @@ mod tests {
         }
         // Add militia and a general — these must NOT inflate the arms count
         for i in 0..10 {
-            nation.army.push(ArmyUnit::new(
+            nation.military.army.push(ArmyUnit::new(
                 UnitId(3000 + i),
                 ArmyUnitType::Militia,
                 NationId(1),
                 ProvinceId(1),
             ));
         }
-        nation.army.push(ArmyUnit::new(
+        nation.military.army.push(ArmyUnit::new(
             UnitId(4000),
             ArmyUnitType::General,
             NationId(1),
@@ -14465,11 +14472,11 @@ mod tests {
         let nation = game.get_nation(NationId(1)).unwrap();
         // Exactly 6 arms from Regulars → first general awarded; militia/general ignored
         assert_eq!(
-            nation.generals_earned, 1,
+            nation.military.generals_earned, 1,
             "one general should be awarded at the 6-arms threshold"
         );
         assert_eq!(
-            nation.total_arms_built, 6,
+            nation.military.total_arms_built, 6,
             "militia and generals must not count toward total_arms_built"
         );
     }

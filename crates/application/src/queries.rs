@@ -68,8 +68,8 @@ pub fn get_map_screen(game: &GameState) -> MapScreenData {
         nation_name: nation.name.clone(),
         treasury: format!("${}", nation.economy.treasury.as_dollars()),
         province_count: nation.province_count(),
-        army_count: nation.army.len(),
-        civilian_count: nation.civilians.len(),
+        army_count: nation.military.army.len(),
+        civilian_count: nation.military.civilians.len(),
     }
 }
 
@@ -79,8 +79,8 @@ pub fn get_transport_screen(game: &GameState) -> TransportScreenData {
         .get_nation(game.human_player_nation)
         .expect("Human player nation must exist");
 
-    let freight_cars = nation.transport.freight_cars;
-    let total_capacity = nation.transport.total_capacity();
+    let freight_cars = nation.military.transport.freight_cars;
+    let total_capacity = nation.military.transport.total_capacity();
 
     // Total production is the sum of all raw resources in the warehouse.
     let total_production: u32 = nation.economy.warehouse.values().sum();
@@ -164,7 +164,7 @@ pub fn get_trade_screen(game: &GameState) -> TradeScreenData {
 
     let cargo_capacity = nation.total_cargo_capacity();
     let cargo_used: u32 = nation
-        .trade_history
+        .archives.trade_history
         .iter()
         .filter(|th| th.turn.0 <= game.turn.0 && game.turn.0.saturating_sub(th.turn.0) <= 1)
         .filter(|th| th.partner != nation.id)
@@ -337,8 +337,8 @@ mod tests {
         nation.economy.warehouse.clear();
 
         // Reset freight cars and build exactly 10 for a clean test
-        nation.transport.freight_cars = 0;
-        nation.transport.build_freight_cars(10);
+        nation.military.transport.freight_cars = 0;
+        nation.military.transport.build_freight_cars(10);
         nation.add_resource(ResourceType::Timber, 3);
         nation.add_resource(ResourceType::Coal, 2);
 
@@ -358,7 +358,7 @@ mod tests {
         let nation = game.get_nation_mut(human_id).unwrap();
 
         // More resources than capacity
-        nation.transport.build_freight_cars(5);
+        nation.military.transport.build_freight_cars(5);
         nation.add_resource(ResourceType::Timber, 10);
 
         let data = get_transport_screen(&game);
@@ -509,10 +509,10 @@ mod tests {
         game.turn = TurnNumber(5);
 
         let nation = game.get_nation_mut(human_id).unwrap();
-        nation.trade_history.clear();
+        nation.archives.trade_history.clear();
 
         // Turn 5 (current) — should count
-        nation.trade_history.push(TradeHistoryEntry {
+        nation.archives.trade_history.push(TradeHistoryEntry {
             turn: TurnNumber(5),
             partner,
             resource: ResourceType::Timber,
@@ -520,7 +520,7 @@ mod tests {
             total_cost: Money::dollars(30),
                 bought: true,});
         // Turn 4 (previous) — should count
-        nation.trade_history.push(TradeHistoryEntry {
+        nation.archives.trade_history.push(TradeHistoryEntry {
             turn: TurnNumber(4),
             partner,
             resource: ResourceType::Coal,
@@ -528,7 +528,7 @@ mod tests {
             total_cost: Money::dollars(20),
                 bought: true,});
         // Turn 3 (older) — should NOT count
-        nation.trade_history.push(TradeHistoryEntry {
+        nation.archives.trade_history.push(TradeHistoryEntry {
             turn: TurnNumber(3),
             partner,
             resource: ResourceType::Iron,

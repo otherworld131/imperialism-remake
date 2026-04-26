@@ -47,7 +47,7 @@ pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
     let mut candidates: Vec<(NationId, u32)> = game
         .nations
         .iter()
-        .filter(|n| !n.is_great_power() && !n.province_ids.is_empty() && !n.is_in_anarchy)
+        .filter(|n| !n.is_great_power() && !n.province_ids.is_empty() && !n.diplomacy.is_in_anarchy)
         .filter(|n| {
             !game
                 .diplomacy
@@ -126,7 +126,7 @@ pub fn ai_manage_diplomacy(
             .iter()
             .filter(|n| {
                 n.id != nation_id
-                    && !n.is_in_anarchy
+                    && !n.diplomacy.is_in_anarchy
                     && n.province_ids.is_empty()
                     && game
                         .diplomacy
@@ -249,7 +249,7 @@ pub fn ai_manage_diplomacy(
         let minor_ids: Vec<NationId> = game
             .nations
             .iter()
-            .filter(|n| !n.is_great_power() && !n.province_ids.is_empty() && !n.is_in_anarchy)
+            .filter(|n| !n.is_great_power() && !n.province_ids.is_empty() && !n.diplomacy.is_in_anarchy)
             .map(|n| n.id)
             .collect();
 
@@ -406,7 +406,7 @@ pub fn ai_manage_diplomacy(
                     n.is_great_power()
                         && n.id != nation_id
                         && n.id != game.human_player_nation
-                        && !n.is_in_anarchy
+                        && !n.diplomacy.is_in_anarchy
                 })
                 .map(|n| n.id)
                 .collect();
@@ -572,7 +572,7 @@ pub fn ai_manage_diplomacy(
         let minor_ids: Vec<NationId> = game
             .nations
             .iter()
-            .filter(|n| !n.is_great_power() && !n.province_ids.is_empty() && !n.is_in_anarchy)
+            .filter(|n| !n.is_great_power() && !n.province_ids.is_empty() && !n.diplomacy.is_in_anarchy)
             .map(|n| n.id)
             .collect();
 
@@ -655,7 +655,7 @@ pub fn ai_pre_election_strategy(
     let minor_ids: Vec<NationId> = game
         .nations
         .iter()
-        .filter(|n| !n.is_great_power() && !n.province_ids.is_empty() && !n.is_in_anarchy)
+        .filter(|n| !n.is_great_power() && !n.province_ids.is_empty() && !n.diplomacy.is_in_anarchy)
         .map(|n| n.id)
         .collect();
 
@@ -903,7 +903,7 @@ mod tests {
 
         // Set Diplomatic personality
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Diplomatic);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Diplomatic);
         ai.economy.treasury = Money::dollars(10000);
 
         ai_build_consulates(&mut game, NationId(2));
@@ -988,7 +988,7 @@ mod tests {
 
         // Set Balanced personality
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         ai.economy.treasury = Money::dollars(10000);
 
         ai_build_consulates(&mut game, NationId(2));
@@ -1013,7 +1013,7 @@ mod tests {
     fn ai_does_not_build_consulates_when_poor() {
         let mut game = test_game_with_ai_and_minor();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         ai.economy.treasury = Money::dollars(1000); // Below $2,000 threshold
 
         ai_build_consulates(&mut game, NationId(2));
@@ -1035,7 +1035,7 @@ mod tests {
         let mn_id = NationId(3);
 
         // Set AI to Diplomatic personality
-        game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Diplomatic);
+        game.get_nation_mut(ai_id).unwrap().diplomacy.ai_personality = Some(AiPersonality::Diplomatic);
 
         // Build consulate and embassy for the AI with the minor nation
         game.diplomacy.build_consulate(ai_id, mn_id).unwrap();
@@ -1067,7 +1067,7 @@ mod tests {
         let ai_id = NationId(2);
         let mn_id = NationId(3);
 
-        game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Aggressive);
+        game.get_nation_mut(ai_id).unwrap().diplomacy.ai_personality = Some(AiPersonality::Aggressive);
 
         game.diplomacy.build_consulate(ai_id, mn_id).unwrap();
         game.diplomacy.build_embassy(ai_id, mn_id).unwrap();
@@ -1089,7 +1089,7 @@ mod tests {
         let ai_id = NationId(2);
         let mn_id = NationId(3);
 
-        game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Aggressive);
+        game.get_nation_mut(ai_id).unwrap().diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         game.diplomacy.build_consulate(ai_id, mn_id).unwrap();
         game.diplomacy.build_embassy(ai_id, mn_id).unwrap();
 
@@ -1115,7 +1115,7 @@ mod tests {
         let mn_id = NationId(3);
 
         // Set AI to Diplomatic personality
-        game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Diplomatic);
+        game.get_nation_mut(ai_id).unwrap().diplomacy.ai_personality = Some(AiPersonality::Diplomatic);
         // Set turn to multiple of 4 so Diplomatic AI sends grants
         game.turn = TurnNumber::new(4);
 
@@ -1151,7 +1151,7 @@ mod tests {
         let ai_id = NationId(2);
 
         // Set AI to Diplomatic personality
-        game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Diplomatic);
+        game.get_nation_mut(ai_id).unwrap().diplomacy.ai_personality = Some(AiPersonality::Diplomatic);
 
         // Add a third GP that is AI-controlled (non-human, non-current-AI)
         let mut gp3 = Nation::new(
@@ -1161,7 +1161,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(2),
         );
-        gp3.ai_personality = Some(AiPersonality::Diplomatic); // Diplomatic bias +0.4 makes acceptance likely
+        gp3.diplomacy.ai_personality = Some(AiPersonality::Diplomatic); // Diplomatic bias +0.4 makes acceptance likely
         gp3.economy.treasury = Money::dollars(10000);
         game.nations.push(gp3);
 
@@ -1207,7 +1207,7 @@ mod tests {
 
         // Give AI a Balanced personality (not Aggressive, so it will send grants)
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         ai.economy.treasury = Money::dollars(10000);
 
         // Set up embassy between AI(2) and MN(3)
@@ -1254,7 +1254,7 @@ mod tests {
         game.turn = TurnNumber::from_year_quarter(1820, 1);
 
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         ai.economy.treasury = Money::dollars(10000);
 
         // Set up embassy
@@ -1283,7 +1283,7 @@ mod tests {
         game.turn = TurnNumber::from_year_quarter(1824, 2);
 
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Aggressive);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         ai.economy.treasury = Money::dollars(10000);
 
         // Set up embassy
@@ -1311,7 +1311,7 @@ mod tests {
         let ai_id = NationId(2);
 
         // Set AI to Diplomatic personality (the only one that proposes alliances)
-        game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Diplomatic);
+        game.get_nation_mut(ai_id).unwrap().diplomacy.ai_personality = Some(AiPersonality::Diplomatic);
 
         // Add a third GP that is AI-controlled
         let mut gp3 = Nation::new(
@@ -1321,7 +1321,7 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(2),
         );
-        gp3.ai_personality = Some(AiPersonality::Balanced);
+        gp3.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         gp3.economy.treasury = Money::dollars(10000);
         game.nations.push(gp3);
 
@@ -1364,7 +1364,7 @@ mod tests {
         let ai_id = NationId(2);
 
         // Set AI to Diplomatic personality
-        game.get_nation_mut(ai_id).unwrap().ai_personality = Some(AiPersonality::Diplomatic);
+        game.get_nation_mut(ai_id).unwrap().diplomacy.ai_personality = Some(AiPersonality::Diplomatic);
 
         // Add multiple AI-controlled Great Powers
         for i in 4..=7 {
@@ -1375,7 +1375,7 @@ mod tests {
                 NationType::GreatPower,
                 ProvinceId(2),
             );
-            gp.ai_personality = Some(AiPersonality::Balanced);
+            gp.diplomacy.ai_personality = Some(AiPersonality::Balanced);
             gp.economy.treasury = Money::dollars(10000);
             game.nations.push(gp);
         }

@@ -89,7 +89,7 @@ pub fn next_unit_id() -> UnitId {
 /// Get the AI personality for a nation, defaulting to Balanced.
 pub(crate) fn get_personality(game: &GameState, nation_id: NationId) -> AiPersonality {
     game.get_nation(nation_id)
-        .and_then(|n| n.ai_personality)
+        .and_then(|n| n.diplomacy.ai_personality)
         .unwrap_or(AiPersonality::Balanced)
 }
 
@@ -144,7 +144,7 @@ pub(crate) mod test_helpers {
         ai_nation.economy.treasury = Money::dollars(10000);
         // Pre-populate with 4 civilians so AI does not hire more during tests
         for i in 0..4 {
-            ai_nation.civilians.push(Civilian::new(
+            ai_nation.military.civilians.push(Civilian::new(
                 UnitId(10000 + i),
                 CivilianType::Farmer,
                 NationId(2),
@@ -241,7 +241,7 @@ pub(crate) mod test_helpers {
         ai_nation.economy.treasury = Money::dollars(10000);
         // Pre-populate with 4 civilians so AI does not hire more during tests
         for i in 0..4 {
-            ai_nation.civilians.push(Civilian::new(
+            ai_nation.military.civilians.push(Civilian::new(
                 UnitId(10000 + i),
                 CivilianType::Farmer,
                 NationId(2),
@@ -358,10 +358,10 @@ pub(crate) mod test_helpers {
             ProvinceId(2),
         );
         ai_nation.economy.treasury = Money::dollars(20000);
-        ai_nation.ai_personality = Some(AiPersonality::Balanced);
+        ai_nation.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         // Pre-populate with 4 civilians
         for i in 0..4 {
-            ai_nation.civilians.push(Civilian::new(
+            ai_nation.military.civilians.push(Civilian::new(
                 UnitId(10000 + i),
                 CivilianType::Farmer,
                 NationId(2),
@@ -442,7 +442,7 @@ mod tests {
         // Human player (index 0, Deneb) should have no personality
         let human = gs.get_nation(gs.human_player_nation).unwrap();
         assert_eq!(
-            human.ai_personality, None,
+            human.diplomacy.ai_personality, None,
             "Human player should not have an AI personality"
         );
 
@@ -452,7 +452,7 @@ mod tests {
                 continue;
             }
             assert!(
-                nation.ai_personality.is_some(),
+                nation.diplomacy.ai_personality.is_some(),
                 "AI Great Power {} should have a personality",
                 nation.name
             );

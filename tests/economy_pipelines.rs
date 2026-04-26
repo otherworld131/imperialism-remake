@@ -29,7 +29,7 @@ fn freight_overflow_limits_delivery_when_capacity_is_low() {
 
     // Clear freight cars so any remote resource overflows.
     let nation = game.get_nation_mut(human_id).unwrap();
-    nation.transport.freight_cars = 0;
+    nation.military.transport.freight_cars = 0;
 
     let report = process_turn(&mut game);
 
@@ -65,7 +65,7 @@ fn freight_overflow_limits_delivery_when_capacity_is_low() {
 fn adding_freight_cars_reduces_overflow() {
     let mut game_no_freight = new_game("test", Difficulty::Normal, 0);
     let human_id = game_no_freight.human_player_nation;
-    game_no_freight.get_nation_mut(human_id).unwrap().transport.freight_cars = 0;
+    game_no_freight.get_nation_mut(human_id).unwrap().military.transport.freight_cars = 0;
 
     let report_no = process_turn(&mut game_no_freight);
     let overflow_no: u32 = report_no
@@ -77,7 +77,7 @@ fn adding_freight_cars_reduces_overflow() {
 
     let mut game_with_freight = new_game("test", Difficulty::Normal, 0);
     let human_id = game_with_freight.human_player_nation;
-    game_with_freight.get_nation_mut(human_id).unwrap().transport.freight_cars = 100;
+    game_with_freight.get_nation_mut(human_id).unwrap().military.transport.freight_cars = 100;
 
     let report_with = process_turn(&mut game_with_freight);
     let overflow_with: u32 = report_with
@@ -393,7 +393,7 @@ fn snapshot_captures_complete_economy_state() {
         nation.economy.materials.insert(MaterialType::Steel, 8);
         nation.economy.treasury = Money::dollars(3000);
         nation.economy.buildings.push(Building::new(BuildingType::SteelMill, 4));
-        nation.transport.freight_cars = 20;
+        nation.military.transport.freight_cars = 20;
     }
 
     let snap = NationEconomySnapshot::build(&game, human_id);
@@ -614,7 +614,7 @@ fn logistics_freight_committed_never_exceeds_total() {
     let mut game = new_game("test", Difficulty::Normal, 0);
     let human_id = game.human_player_nation;
     // Set a small but non-zero freight capacity so remote resources can partially overflow.
-    game.get_nation_mut(human_id).unwrap().transport.freight_cars = 3;
+    game.get_nation_mut(human_id).unwrap().military.transport.freight_cars = 3;
 
     process_turn(&mut game);
 

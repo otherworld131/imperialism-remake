@@ -103,7 +103,7 @@ fn test_100_turn_endurance() {
         .nations
         .iter()
         .filter(|n| n.is_great_power() && n.id != game.human_player_nation)
-        .map(|n| n.army.len())
+        .map(|n| n.military.army.len())
         .sum();
     assert!(
         total_ai_army > 0,
@@ -186,14 +186,14 @@ fn test_determinism() {
             nation_a.name
         );
         assert_eq!(
-            nation_a.army.len(),
-            nation_b.army.len(),
+            nation_a.military.army.len(),
+            nation_b.military.army.len(),
             "Army size should be identical for {}",
             nation_a.name
         );
         assert_eq!(
-            nation_a.warships.len(),
-            nation_b.warships.len(),
+            nation_a.military.warships.len(),
+            nation_b.military.warships.len(),
             "Warship count should be identical for {}",
             nation_a.name
         );
@@ -440,7 +440,7 @@ fn minor_nations_respond_to_trade_offers() {
         .great_powers()
         .iter()
         .filter(|n| n.id != game.human_player_nation)
-        .any(|n| !n.trade_history.is_empty() || !n.economy.warehouse.is_empty());
+        .any(|n| !n.archives.trade_history.is_empty() || !n.economy.warehouse.is_empty());
     assert!(
         any_ai_traded,
         "After 10 turns, at least one AI should have engaged in trade or collected resources"
@@ -680,10 +680,10 @@ fn profile_memory_late_game() {
         println!(
             "  {}: army={}, civilians={}, buildings={}, warships={}",
             nation.name,
-            nation.army.len(),
-            nation.civilians.len(),
+            nation.military.army.len(),
+            nation.military.civilians.len(),
             nation.economy.buildings.len(),
-            nation.warships.len()
+            nation.military.warships.len()
         );
     }
 

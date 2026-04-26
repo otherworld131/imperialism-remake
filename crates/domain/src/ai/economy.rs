@@ -217,7 +217,7 @@ pub(super) fn importable_via_trade(
     let lookback = cfg.trade_lookback_turns;
     let current = game.turn.0;
     let cutoff = current.saturating_sub(lookback);
-    for entry in &nation.trade_history {
+    for entry in &nation.archives.trade_history {
         if !entry.bought {
             continue;
         }
@@ -399,7 +399,7 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
     }
 
     // ── Check existing commitment first ───────────────────────
-    if let Some(t) = nation.ai_priority_state.committed_infra_target.as_ref() {
+    if let Some(t) = nation.diplomacy.ai_priority_state.committed_infra_target.as_ref() {
         let cand_tile = game.hex_map.get_tile(t.candidate);
         let fulfilled = cand_tile.is_some_and(|tile| tile.infrastructure.has_depot);
         let candidate_ownership_ok = owned_hexes.contains(&t.candidate);
@@ -1486,12 +1486,12 @@ fn ai_build_transport(game: &mut GameState, nation_id: NationId) {
 
     // Build freight cars if we have fewer than needed (scale with province count)
     let target_cars = (nation.province_count() as u32).max(2);
-    if nation.transport.freight_cars >= target_cars {
+    if nation.military.transport.freight_cars >= target_cars {
         return;
     }
 
     // Build up to 2 freight cars per turn (cost: 1 lumber + 1 steel each)
-    let cars_to_build = (target_cars - nation.transport.freight_cars).min(2);
+    let cars_to_build = (target_cars - nation.military.transport.freight_cars).min(2);
     let lumber_available = nation.material_amount(MaterialType::Lumber);
     let steel_available = nation.material_amount(MaterialType::Steel);
     let affordable = cars_to_build.min(lumber_available).min(steel_available);
@@ -1499,7 +1499,7 @@ fn ai_build_transport(game: &mut GameState, nation_id: NationId) {
     if affordable > 0 {
         nation.consume_material(MaterialType::Lumber, affordable);
         nation.consume_material(MaterialType::Steel, affordable);
-        nation.transport.build_freight_cars(affordable);
+        nation.military.transport.build_freight_cars(affordable);
     }
 }
 
@@ -1520,7 +1520,7 @@ pub(crate) fn ai_build_transport_proactive(game: &mut GameState, nation_id: Nati
 
     // Calculate total resources in warehouse
     let total_resources: u32 = nation.economy.warehouse.values().sum();
-    let capacity = nation.transport.total_capacity();
+    let capacity = nation.military.transport.total_capacity();
 
     // If resources exceed capacity, we need more freight cars
     if total_resources <= capacity {
@@ -1539,7 +1539,7 @@ pub(crate) fn ai_build_transport_proactive(game: &mut GameState, nation_id: Nati
         };
         nation.consume_material(MaterialType::Lumber, affordable);
         nation.consume_material(MaterialType::Steel, affordable);
-        nation.transport.build_freight_cars(affordable);
+        nation.military.transport.build_freight_cars(affordable);
     }
 }
 
@@ -1727,9 +1727,9 @@ mod tests {
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert!(
-            ai.transport.freight_cars >= 2,
+            ai.military.transport.freight_cars >= 2,
             "AI should build at least 2 freight cars, got {}",
-            ai.transport.freight_cars
+            ai.military.transport.freight_cars
         );
         // Materials consumed by freight cars + any expansion
         assert!(
@@ -1747,7 +1747,7 @@ mod tests {
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
-            ai.transport.freight_cars, 0,
+            ai.military.transport.freight_cars, 0,
             "AI should not build freight cars without materials"
         );
     }
@@ -1756,7 +1756,7 @@ mod tests {
     fn ai_scales_freight_cars_with_provinces() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.transport.build_freight_cars(1); // start with 1 car
+        ai.military.transport.build_freight_cars(1); // start with 1 car
         // Give plenty of materials (some may be consumed by economy/infra building)
         ai.add_material(MaterialType::Lumber, 20);
         ai.add_material(MaterialType::Steel, 20);
@@ -1767,9 +1767,9 @@ mod tests {
         // With 1 province, target = max(1*2, 5) = 5, so AI builds more
         // (up to 2 per turn, from 1 → 3)
         assert!(
-            ai.transport.freight_cars > 1,
+            ai.military.transport.freight_cars > 1,
             "AI should build more freight cars to meet target (has {})",
-            ai.transport.freight_cars
+            ai.military.transport.freight_cars
         );
     }
 
@@ -1914,9 +1914,9 @@ mod tests {
         let ai = game.get_nation(ai_id).unwrap();
         // Should have built freight cars: first the basic (2), then proactive (up to 2 more)
         assert!(
-            ai.transport.freight_cars >= 2,
+            ai.military.transport.freight_cars >= 2,
             "AI should build freight cars proactively, got {}",
-            ai.transport.freight_cars
+            ai.military.transport.freight_cars
         );
     }
 
@@ -1947,7 +1947,7 @@ mod tests {
         // game_b has recent buy history for timber.
         let nation_b = game_b.get_nation_mut(NationId(2)).unwrap();
         nation_b
-            .trade_history
+            .archives.trade_history
             .push(crate::economy::trade::TradeHistoryEntry {
                 turn: TurnNumber::new(1),
                 partner: NationId(1),
@@ -1980,7 +1980,7 @@ mod tests {
         prime_timber_deficit(&mut game, NationId(2));
         game.get_nation_mut(NationId(2))
             .unwrap()
-            .trade_history
+            .archives.trade_history
             .push(crate::economy::trade::TradeHistoryEntry {
                 turn: TurnNumber::new(1),
                 partner: NationId(1),
@@ -2009,7 +2009,7 @@ mod tests {
         game.turn = TurnNumber::new(50);
         game.get_nation_mut(NationId(2))
             .unwrap()
-            .trade_history
+            .archives.trade_history
             .push(crate::economy::trade::TradeHistoryEntry {
                 turn: TurnNumber::new(1), // 49 turns stale
                 partner: NationId(1),
@@ -2124,7 +2124,7 @@ mod tests {
         // Install a commitment to `a`.
         game.get_nation_mut(NationId(1))
             .unwrap()
-            .ai_priority_state
+            .diplomacy.ai_priority_state
             .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
             candidate: a,
             origin_capital: capital,
@@ -2159,7 +2159,7 @@ mod tests {
         }
         game.get_nation_mut(NationId(1))
             .unwrap()
-            .ai_priority_state
+            .diplomacy.ai_priority_state
             .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
             candidate: a,
             origin_capital: capital,
@@ -2189,7 +2189,7 @@ mod tests {
         let off_map = HexCoord::new(15, 15);
         game.get_nation_mut(NationId(1))
             .unwrap()
-            .ai_priority_state
+            .diplomacy.ai_priority_state
             .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
             candidate: off_map,
             origin_capital: capital,
@@ -2381,7 +2381,7 @@ mod tests {
         // Install commitment to the candidate.
         game.get_nation_mut(NationId(1))
             .unwrap()
-            .ai_priority_state
+            .diplomacy.ai_priority_state
             .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
             candidate,
             origin_capital: capital,
@@ -2425,7 +2425,7 @@ mod tests {
         // Simulate apply_plan_outcome: write the commitment into game state.
         game.get_nation_mut(NationId(1))
             .unwrap()
-            .ai_priority_state
+            .diplomacy.ai_priority_state
             .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
             candidate: plan1.candidate,
             origin_capital: plan1.origin_capital,

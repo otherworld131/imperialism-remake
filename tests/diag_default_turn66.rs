@@ -16,14 +16,14 @@ fn diag_default_turn66() {
     // Promote human slot to AI
     let human_id = game.human_player_nation;
     if let Some(nation) = game.get_nation_mut(human_id)
-        && nation.ai_personality.is_none()
+        && nation.diplomacy.ai_personality.is_none()
     {
         let p = domain::ai::common::random_personalities(0xDEAD_BEEF, 1)[0];
-        nation.ai_personality = Some(p);
+        nation.diplomacy.ai_personality = Some(p);
         let n = domain::ai::priority_target_count(&game.game_data.game_config, p);
         let t = domain::ai::pick_priority_minor_targets(&game, human_id, n, &[]);
         if let Some(nation) = game.get_nation_mut(human_id) {
-            nation.ai_priority_state.priority_minor_targets = t;
+            nation.diplomacy.ai_priority_state.priority_minor_targets = t;
         }
     }
     game.observer_mode = true;
@@ -41,7 +41,7 @@ fn diag_default_turn66() {
                 n.id,
                 (
                     n.name.clone(),
-                    n.ai_personality
+                    n.diplomacy.ai_personality
                         .map(|p| format!("{:?}", p))
                         .unwrap_or_else(|| "-".into()),
                 ),
@@ -124,7 +124,7 @@ fn diag_default_turn66() {
         let priority: Vec<String> = game
             .get_nation(gp)
             .unwrap()
-            .ai_priority_state
+            .diplomacy.ai_priority_state
             .priority_minor_targets
             .iter()
             .filter_map(|id| game.get_nation(*id).map(|n| n.name.clone()))
@@ -166,7 +166,7 @@ fn diag_default_turn66() {
             }
         }
         let engineer_info: Vec<String> = nation
-            .civilians
+            .military.civilians
             .iter()
             .filter(|c| c.civilian_type == domain::economy::civilians::CivilianType::Engineer)
             .map(|c| {
@@ -184,7 +184,7 @@ fn diag_default_turn66() {
             depots,
             nation.province_count(),
             nation
-                .civilians
+                .military.civilians
                 .iter()
                 .filter(|c| c.civilian_type == domain::economy::civilians::CivilianType::Engineer)
                 .count(),
@@ -201,7 +201,7 @@ fn diag_default_turn66() {
         let nation = game.get_nation(gp).unwrap();
         let (name, _) = &gp_personality[&gp];
         let foresters: Vec<_> = nation
-            .civilians
+            .military.civilians
             .iter()
             .filter(|c| c.civilian_type == domain::economy::civilians::CivilianType::Forester)
             .collect();

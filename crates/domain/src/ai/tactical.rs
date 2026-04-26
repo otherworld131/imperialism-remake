@@ -128,7 +128,7 @@ pub(crate) fn capital_threat_level(game: &GameState, nation_id: NationId) -> Cap
         let Some(enemy) = game.get_nation(*enemy_id) else {
             continue;
         };
-        for unit in &enemy.army {
+        for unit in &enemy.military.army {
             if let Some(prov) = game.get_province(unit.position) {
                 let d = capital_tile.distance(prov.capital_tile);
                 if d < min_enemy_dist {
@@ -234,7 +234,7 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
     let unit_counts: std::collections::HashMap<ProvinceId, usize> = {
         let mut m: std::collections::HashMap<ProvinceId, usize> = std::collections::HashMap::new();
         if let Some(n) = game.get_nation(nation_id) {
-            for u in &n.army {
+            for u in &n.military.army {
                 if u.unit_type.can_move() {
                     *m.entry(u.position).or_insert(0) += 1;
                 }
@@ -301,7 +301,7 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
                     return;
                 };
                 let candidate_unit_ids: Vec<crate::map::UnitId> = nation
-                    .army
+                    .military.army
                     .iter()
                     .filter(|u| {
                         u.unit_type.can_move()
@@ -332,7 +332,7 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
     let capital_have_now: usize = {
         let nation = game.get_nation(nation_id).expect("nation present");
         nation
-            .army
+            .military.army
             .iter()
             .filter(|u| u.unit_type.can_move() && u.position == capital_pid)
             .count()
@@ -417,7 +417,7 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
                 return;
             };
             let candidate = nation
-                .army
+                .military.army
                 .iter()
                 .find(|u| {
                     u.unit_type.can_move()
@@ -468,7 +468,7 @@ fn ai_build_forts(
         .nations
         .iter()
         .filter(|n| n.id != nation_id)
-        .filter(|n| !n.is_in_anarchy)
+        .filter(|n| !n.diplomacy.is_in_anarchy)
         .filter(|n| {
             game.diplomacy
                 .get_relation(nation_id, n.id)
@@ -683,7 +683,7 @@ fn ai_propose_peace(
         .nations
         .iter()
         .filter(|n| n.id != nation_id)
-        .filter(|n| !n.is_in_anarchy)
+        .filter(|n| !n.diplomacy.is_in_anarchy)
         .filter(|n| {
             game.diplomacy
                 .get_relation(nation_id, n.id)
@@ -809,7 +809,7 @@ fn ai_propose_peace(
         // ── Determine target type: AI GP, human, or minor nation ─
         let target_is_ai = game
             .get_nation(enemy_id)
-            .is_some_and(|n| n.ai_personality.is_some());
+            .is_some_and(|n| n.diplomacy.ai_personality.is_some());
         let target_is_human = enemy_id == game.human_player_nation;
 
         if target_is_ai {
@@ -1026,7 +1026,7 @@ mod tests {
 
         // Give AI a unit stationed at a non-threatened location (capital)
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.army.push(ArmyUnit::new(
+        ai.military.army.push(ArmyUnit::new(
             UnitId(9000),
             ArmyUnitType::Regulars,
             NationId(2),
@@ -1058,7 +1058,7 @@ mod tests {
         // redeploy deficit (F-007).
         {
             let ai = game.get_nation_mut(NationId(2)).unwrap();
-            for u in ai.army.iter_mut() {
+            for u in ai.military.army.iter_mut() {
                 if u.id == UnitId(9000) {
                     u.position = ProvinceId(4);
                 }
@@ -1151,13 +1151,13 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         ai.add_province(ProvinceId(2));
         ai.add_province(ProvinceId(3));
         ai.add_province(ProvinceId(4));
         // 8 units piled at the capital.
         for i in 0..8 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(7000 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -1323,13 +1323,13 @@ mod tests {
             NationType::GreatPower,
             ProvinceId(1),
         );
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         ai.add_province(ProvinceId(2));
         ai.add_province(ProvinceId(3));
         ai.add_province(ProvinceId(4));
         // 6 units spread across the three non-capital provinces.
         for i in 0..2 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(8000 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -1337,7 +1337,7 @@ mod tests {
             ));
         }
         for i in 0..2 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(8100 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -1345,7 +1345,7 @@ mod tests {
             ));
         }
         for i in 0..2 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(8200 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -1628,7 +1628,7 @@ mod tests {
         game.diplomacy.make_peace(NationId(2), NationId(3));
 
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.army.push(ArmyUnit::new(
+        ai.military.army.push(ArmyUnit::new(
             UnitId(9001),
             ArmyUnitType::Regulars,
             NationId(2),
@@ -1799,7 +1799,7 @@ mod tests {
 
         // Give AI multiple provinces, then simulate heavy losses in history
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         // AI has 1 province (ProvinceId(2)) but lost 3 provinces in history
         use crate::events::HistoryEvent;
         game.history.push((
@@ -1863,7 +1863,7 @@ mod tests {
         let mut game = test_game_with_ai_and_minor();
 
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Diplomatic);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Diplomatic);
         // Diplomatic AI has low lost_enough_losses threshold (1)
         // Simulate losing 1 province
         use crate::events::HistoryEvent;
@@ -1917,7 +1917,7 @@ mod tests {
         let mut game = test_game_with_ai_and_minor();
 
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         // AI has not lost any provinces — no conquest history against it
 
         // Put at war

@@ -157,7 +157,7 @@ pub(crate) fn ai_build_military(
         if treasury > tier1_treasury + cost {
             nation.economy.treasury -= cost;
             let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
-            nation.army.push(unit);
+            nation.military.army.push(unit);
             actions.push(super::AiAction {
                 text: format!("{} has been expanding its military forces", nation_name),
                 reason: format!(
@@ -204,7 +204,7 @@ pub(crate) fn ai_build_military(
         if treasury > tier2_treasury + build_cost {
             nation.economy.treasury -= build_cost;
             let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
-            nation.army.push(unit);
+            nation.military.army.push(unit);
             actions.push(super::AiAction {
                 text: format!("{} has been expanding its military forces", nation_name),
                 reason: format!(
@@ -264,7 +264,7 @@ pub(crate) fn ai_build_military(
                 if let Some(remaining) = nation.economy.treasury.checked_sub(cost) {
                     nation.economy.treasury = remaining;
                     let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
-                    nation.army.push(unit);
+                    nation.military.army.push(unit);
                     if i == 0 {
                         actions.push(super::AiAction {
                             text: format!("{} has been expanding its military forces", nation_name),
@@ -298,7 +298,7 @@ pub(crate) fn ai_build_military(
                 if let Some(remaining) = nation.economy.treasury.checked_sub(cost) {
                     nation.economy.treasury = remaining;
                     let unit = ArmyUnit::new(next_unit_id(), unit_type, nation_id, capital);
-                    nation.army.push(unit);
+                    nation.military.army.push(unit);
                     actions.push(super::AiAction {
                         text: format!("{} has been expanding its military forces", nation_name),
                         reason: format!(
@@ -329,7 +329,7 @@ pub(crate) fn coalition_firepower_for_war_decision(
     attacker: NationId,
     target: NationId,
 ) -> (f64, f64) {
-    let is_anarchic = |id: NationId| game.get_nation(id).is_some_and(|n| n.is_in_anarchy);
+    let is_anarchic = |id: NationId| game.get_nation(id).is_some_and(|n| n.diplomacy.is_in_anarchy);
 
     let our_coalition = super::assessment::collect_hypothetical_coalition(game, attacker, target);
     let target_coalition =
@@ -616,7 +616,7 @@ pub(crate) fn ai_declare_wars(
                 (
                     n.id,
                     n.name.clone(),
-                    n.army.len(),
+                    n.military.army.len(),
                     prov_count,
                     n.capital_province_id,
                 )
@@ -655,7 +655,7 @@ pub(crate) fn ai_declare_wars(
                 continue;
             }
             // Skip anarchic nations (already free to invade, no war declaration needed)
-            if game.get_nation(target_id).is_some_and(|n| n.is_in_anarchy) {
+            if game.get_nation(target_id).is_some_and(|n| n.diplomacy.is_in_anarchy) {
                 continue;
             }
             // Anti-dogpile: skip if another AI targeted this nation this round
@@ -672,7 +672,7 @@ pub(crate) fn ai_declare_wars(
                 let artillery_count = game
                     .get_nation(ai_id)
                     .map(|n| {
-                        n.army
+                        n.military.army
                             .iter()
                             .filter(|u| {
                                 u.unit_type.category()
@@ -776,7 +776,7 @@ pub(crate) fn ai_declare_wars(
             // would not actually intervene, so they should not register as a
             // diplomatic obstacle either — matches the coalition-firepower
             // and pact-defense filters.
-            let is_active = |id: NationId| !game.get_nation(id).is_some_and(|n| n.is_in_anarchy);
+            let is_active = |id: NationId| !game.get_nation(id).is_some_and(|n| n.diplomacy.is_in_anarchy);
             let our_allies: Vec<NationId> = game
                 .diplomacy
                 .get_allies(ai_id)
@@ -810,7 +810,7 @@ pub(crate) fn ai_declare_wars(
                     .get_pact_holders(target_id)
                     .into_iter()
                     .filter(|&pid| {
-                        pid != ai_id && !game.get_nation(pid).is_some_and(|n| n.is_in_anarchy)
+                        pid != ai_id && !game.get_nation(pid).is_some_and(|n| n.diplomacy.is_in_anarchy)
                     })
                     .collect();
                 for &protector_id in &protectors {
@@ -1119,7 +1119,7 @@ pub(crate) fn ai_military_strategy(
         .iter()
         .filter(|n| n.id != nation_id)
         .filter(|n| {
-            n.is_in_anarchy
+            n.diplomacy.is_in_anarchy
                 || game
                     .diplomacy
                     .get_relation(nation_id, n.id)
@@ -1301,7 +1301,7 @@ pub(crate) fn ai_military_strategy(
                         .map(|n| {
                             let mut land_fp = 0.0;
                             let mut naval: Vec<(f64, ProvinceId)> = Vec::new();
-                            for u in &n.army {
+                            for u in &n.military.army {
                                 if !u.unit_type.can_move() {
                                     continue;
                                 }
@@ -1331,7 +1331,7 @@ pub(crate) fn ai_military_strategy(
                                 .map(|n| {
                                     use crate::military::naval::NavalOperation;
                                     let assigned: Vec<_> = n
-                                        .warships
+                                        .military.warships
                                         .iter()
                                         .filter(|s| {
                                             s.operation == Some(NavalOperation::Beachhead(prov.id))
@@ -1449,7 +1449,7 @@ fn ai_upgrade_units(game: &mut GameState, nation_id: NationId) {
 
     // Collect upgrade info: (index, new_type)
     let upgrades: Vec<(usize, ArmyUnitType)> = nation
-        .army
+        .military.army
         .iter()
         .enumerate()
         .filter_map(|(i, unit)| {
@@ -1476,8 +1476,8 @@ fn ai_upgrade_units(game: &mut GameState, nation_id: NationId) {
     // Apply upgrades
     if let Some(nation) = game.get_nation_mut(nation_id) {
         for (idx, new_type) in upgrades {
-            if idx < nation.army.len() {
-                nation.army[idx].unit_type = new_type;
+            if idx < nation.military.army.len() {
+                nation.military.army[idx].unit_type = new_type;
             }
         }
     }
@@ -1543,14 +1543,14 @@ mod tests {
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         // Give large treasury so AI can spend on both infrastructure and military
         ai.economy.treasury = Money::dollars(50000);
-        ai.ai_personality = Some(AiPersonality::Aggressive);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         // Give AI enough provinces that 3 army isn't enough (deficit scoring)
         for i in 10..15 {
             ai.add_province(ProvinceId(i));
         }
         // Give AI 3 existing army units
         for i in 0..3 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(100 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -1562,9 +1562,9 @@ mod tests {
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert!(
-            ai.army.len() >= 4,
+            ai.military.army.len() >= 4,
             "AI should have built at least a 4th unit, has {}",
-            ai.army.len()
+            ai.military.army.len()
         );
         assert!(
             ai.economy.treasury < Money::dollars(50000),
@@ -1577,7 +1577,7 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.treasury = Money::dollars(20000);
-        ai.ai_personality = Some(AiPersonality::Aggressive);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         // Give AI many provinces so it needs a large army
         for i in 10..20 {
             ai.add_province(ProvinceId(i));
@@ -1587,9 +1587,9 @@ mod tests {
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert!(
-            ai.army.len() >= 2,
+            ai.military.army.len() >= 2,
             "AI with large territory should build multiple units, has {}",
-            ai.army.len()
+            ai.military.army.len()
         );
         assert!(
             ai.economy.treasury < Money::dollars(20000),
@@ -1610,7 +1610,7 @@ mod tests {
         }
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        let ids: Vec<UnitId> = ai.army.iter().map(|u| u.id).collect();
+        let ids: Vec<UnitId> = ai.military.army.iter().map(|u| u.id).collect();
         for i in 0..ids.len() {
             for j in (i + 1)..ids.len() {
                 assert_ne!(ids[i], ids[j], "AI army units must have unique IDs");
@@ -1628,9 +1628,9 @@ mod tests {
         // Use Aggressive personality (threshold 0.3) since a nation with this much
         // military is realistically aggressive.
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Aggressive);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         for i in 0..10 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(5000 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -1638,7 +1638,7 @@ mod tests {
             ));
         }
         for i in 0..8 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(5100 + i),
                 ArmyUnitType::LightArtillery,
                 NationId(2),
@@ -1675,7 +1675,7 @@ mod tests {
         game.turn = TurnNumber::new(10);
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         for i in 0..5 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(5000 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -1700,9 +1700,9 @@ mod tests {
     fn ai_respects_war_cooldown() {
         let mut game = test_game_with_ai_and_minor();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced); // cooldown = 12
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced); // cooldown = 12
         for i in 0..5 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(5000 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -1742,12 +1742,12 @@ mod tests {
     fn aggressive_ai_declares_war_easily() {
         let mut game = test_game_with_ai_and_minor();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Aggressive);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         // Aggressive needs artillery for minor targets and enough firepower
         // to overcome garrison defense (≈37 FP).
         // 10 Regulars (20) + 8 LA (24) = 44 FP vs 37 defense.
         for i in 0..10 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(5000 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -1755,7 +1755,7 @@ mod tests {
             ));
         }
         for i in 0..8 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(5100 + i),
                 ArmyUnitType::LightArtillery,
                 NationId(2),
@@ -1780,10 +1780,10 @@ mod tests {
     fn diplomatic_ai_needs_high_score_to_declare_war() {
         let mut game = test_game_with_ai_and_minor();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Diplomatic);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Diplomatic);
         // Diplomatic needs >= 8 army units; give exactly 8
         for i in 0..8 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(5000 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -1824,11 +1824,11 @@ mod tests {
         // emit a non-action citing the gate.
         let mut game = test_game_with_ai_and_minor();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Balanced);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         // Match the minor's field army so opportunity ~ 0 (army_ratio
         // compares raw field firepower like-for-like, no defender bonus).
         for i in 0..4 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(5000 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -1836,7 +1836,7 @@ mod tests {
             ));
         }
         for i in 0..2 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(5100 + i),
                 ArmyUnitType::LightArtillery,
                 NationId(2),
@@ -1845,7 +1845,7 @@ mod tests {
         }
         let minor = game.get_nation_mut(NationId(3)).unwrap();
         for i in 0..4 {
-            minor.army.push(ArmyUnit::new(
+            minor.military.army.push(ArmyUnit::new(
                 UnitId(6000 + i),
                 ArmyUnitType::Regulars,
                 NationId(3),
@@ -1853,7 +1853,7 @@ mod tests {
             ));
         }
         for i in 0..2 {
-            minor.army.push(ArmyUnit::new(
+            minor.military.army.push(ArmyUnit::new(
                 UnitId(6100 + i),
                 ArmyUnitType::LightArtillery,
                 NationId(3),
@@ -1893,11 +1893,11 @@ mod tests {
         // Even on turn 0, overwhelming firepower clears the gate.
         let mut game = test_game_with_ai_and_minor();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Aggressive);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         // Stack a huge army so army_ratio is near 1.0 and easily clears
         // Aggressive's turn-0 floor of 0.25.
         for i in 0..40 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(5000 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -1905,7 +1905,7 @@ mod tests {
             ));
         }
         for i in 0..20 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(5200 + i),
                 ArmyUnitType::LightArtillery,
                 NationId(2),
@@ -1976,7 +1976,7 @@ mod tests {
             );
             tgt.province_ids = vec![ProvinceId(2)];
             for i in 0..4 {
-                tgt.army.push(ArmyUnit::new(
+                tgt.military.army.push(ArmyUnit::new(
                     UnitId(2000 + i),
                     ArmyUnitType::Regulars,
                     NationId(2),
@@ -1992,7 +1992,7 @@ mod tests {
             );
             ally.province_ids = vec![ProvinceId(3)];
             for i in 0..10 {
-                ally.army.push(ArmyUnit::new(
+                ally.military.army.push(ArmyUnit::new(
                     UnitId(3000 + i),
                     ArmyUnitType::Regulars,
                     NationId(3),
@@ -2123,7 +2123,7 @@ mod tests {
         );
         tgt.province_ids = vec![ProvinceId(2)];
         for i in 0..4 {
-            tgt.army.push(ArmyUnit::new(
+            tgt.military.army.push(ArmyUnit::new(
                 UnitId(2000 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -2139,9 +2139,9 @@ mod tests {
             ProvinceId(3),
         );
         ally.province_ids = vec![ProvinceId(3)];
-        ally.is_in_anarchy = true;
+        ally.diplomacy.is_in_anarchy = true;
         for i in 0..10 {
-            ally.army.push(ArmyUnit::new(
+            ally.military.army.push(ArmyUnit::new(
                 UnitId(3000 + i),
                 ArmyUnitType::Regulars,
                 NationId(3),
@@ -2226,9 +2226,9 @@ mod tests {
 
         // Give the AI attacker a strong army (enough to overcome garrison defense)
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.ai_personality = Some(AiPersonality::Aggressive);
+        ai.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         for i in 0..6 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(5000 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -2236,7 +2236,7 @@ mod tests {
             ));
         }
         for i in 0..4 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(5100 + i),
                 ArmyUnitType::LightArtillery,
                 NationId(2),
@@ -2331,9 +2331,9 @@ mod tests {
             ProvinceId(2),
         );
         ai_nation.economy.treasury = Money::dollars(10000);
-        ai_nation.ai_personality = Some(AiPersonality::Aggressive);
+        ai_nation.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         for i in 0..10 {
-            ai_nation.army.push(ArmyUnit::new(
+            ai_nation.military.army.push(ArmyUnit::new(
                 UnitId(5000 + i),
                 ArmyUnitType::Regulars,
                 NationId(2),
@@ -2341,7 +2341,7 @@ mod tests {
             ));
         }
         for i in 0..5 {
-            ai_nation.army.push(ArmyUnit::new(
+            ai_nation.military.army.push(ArmyUnit::new(
                 UnitId(5100 + i),
                 ArmyUnitType::LightArtillery,
                 NationId(2),
@@ -2350,7 +2350,7 @@ mod tests {
         }
         for i in 0..4 {
             ai_nation
-                .civilians
+                .military.civilians
                 .push(crate::economy::civilians::Civilian::new(
                     UnitId(10000 + i),
                     crate::economy::civilians::CivilianType::Farmer,
@@ -2506,7 +2506,7 @@ mod tests {
         ai_nation.economy.treasury = Money::dollars(10000);
         for i in 0..4 {
             ai_nation
-                .civilians
+                .military.civilians
                 .push(crate::economy::civilians::Civilian::new(
                     UnitId(10000 + i),
                     crate::economy::civilians::CivilianType::Farmer,
@@ -2564,7 +2564,7 @@ mod tests {
         // Give AI enough army units
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         for i in 0..6 {
-            ai.army.push(ArmyUnit::new(
+            ai.military.army.push(ArmyUnit::new(
                 UnitId(5000 + i),
                 ArmyUnitType::Guards,
                 NationId(2),

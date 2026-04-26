@@ -349,14 +349,14 @@ pub(crate) fn build_unit(game: &mut GameState, query: &str) {
 
     let player = game.get_nation_mut(player_id).unwrap();
     player.economy.treasury -= cost;
-    player.army.push(unit);
+    player.military.army.push(unit);
 
     println!(
         "  Unit built! {:?} stationed at capital (cost: {}, treasury now: {}). Army size: {}",
         unit_type,
         cost,
         player.economy.treasury,
-        player.army.len()
+        player.military.army.len()
     );
 }
 
@@ -378,17 +378,17 @@ pub(crate) fn cmd_upgrade_unit(game: &mut GameState, index_str: &str) {
     let player_id = game.human_player_nation;
     let player = game.get_nation(player_id).unwrap();
 
-    if idx >= player.army.len() {
+    if idx >= player.military.army.len() {
         println!(
             "  Invalid unit index {}. You have {} units (0-{}).",
             idx,
-            player.army.len(),
-            player.army.len().saturating_sub(1)
+            player.military.army.len(),
+            player.military.army.len().saturating_sub(1)
         );
         return;
     }
 
-    let current_type = player.army[idx].unit_type;
+    let current_type = player.military.army[idx].unit_type;
     let target_type = match current_type.upgrade_to() {
         Some(t) => t,
         None => {
@@ -428,13 +428,13 @@ pub(crate) fn cmd_upgrade_unit(game: &mut GameState, index_str: &str) {
     // Apply upgrade
     let player = game.get_nation_mut(player_id).unwrap();
     player.economy.treasury -= cost;
-    let old_medals = player.army[idx].medals;
-    let old_health = player.army[idx].health;
-    player.army[idx].unit_type = target_type;
-    player.army[idx].movement_remaining = target_type.stats().movement;
+    let old_medals = player.military.army[idx].medals;
+    let old_health = player.military.army[idx].health;
+    player.military.army[idx].unit_type = target_type;
+    player.military.army[idx].movement_remaining = target_type.stats().movement;
     // Preserve medals and health
-    player.army[idx].medals = old_medals;
-    player.army[idx].health = old_health;
+    player.military.army[idx].medals = old_medals;
+    player.military.army[idx].health = old_health;
 
     println!(
         "  Upgraded {:?} -> {:?} (medals: {}, health: {}, cost: {}, treasury: {}).",
@@ -484,13 +484,13 @@ pub(crate) fn cmd_build_ship(game: &mut GameState, query: &str) {
     let player = game.get_nation_mut(player_id).unwrap();
     player.consume_material(MaterialType::Fabric, fabric_needed);
     player.consume_material(MaterialType::Lumber, lumber_needed);
-    player.merchant_fleet.push(ship);
+    player.military.merchant_fleet.push(ship);
 
     println!(
         "  Ship built! {:?} added to merchant fleet (cargo: {}). Fleet size: {}, total cargo: {}",
         ship_type,
         stats.cargo,
-        player.merchant_fleet.len(),
+        player.military.merchant_fleet.len(),
         player.total_cargo_capacity()
     );
 }
@@ -546,7 +546,7 @@ pub(crate) fn cmd_build_warship(game: &mut GameState, query: &str) {
     player.consume_material(MaterialType::Fabric, fabric_needed);
     player.consume_material(MaterialType::Lumber, lumber_needed);
     player.consume_material(MaterialType::Arms, arms_needed);
-    player.warships.push(ship);
+    player.military.warships.push(ship);
 
     println!(
         "  Warship built! {:?} added to navy (FP: {}, Armor: {}, Hull: {}). Navy size: {}, total naval firepower: {}",
@@ -554,7 +554,7 @@ pub(crate) fn cmd_build_warship(game: &mut GameState, query: &str) {
         stats.firepower,
         stats.armor,
         stats.hull,
-        player.warships.len(),
+        player.military.warships.len(),
         player.total_naval_firepower()
     );
 }
@@ -839,7 +839,7 @@ pub(crate) fn cmd_hire_civilian(game: &mut GameState, type_name: &str) {
     if civilian_costs_expert {
         player.economy.labor.expert -= 1;
     }
-    player.civilians.push(civilian);
+    player.military.civilians.push(civilian);
 
     println!(
         "  Hired {} (cost: {}, treasury now: {}). Use 'deploy <index> <province>' to deploy.",
@@ -879,16 +879,16 @@ pub(crate) fn cmd_deploy_civilian(game: &mut GameState, args: &str) {
     let (civ_type, coord, prov_name) = {
         let player = game.get_nation(player_id).unwrap();
 
-        if index >= player.civilians.len() {
+        if index >= player.military.civilians.len() {
             println!(
                 "  Invalid index {}. You have {} civilians.",
                 index,
-                player.civilians.len()
+                player.military.civilians.len()
             );
             return;
         }
 
-        let civ_type = player.civilians[index].civilian_type;
+        let civ_type = player.military.civilians[index].civilian_type;
 
         // Find the province by name (case-insensitive partial match)
         let lower_name = province_name.to_lowercase();
@@ -958,7 +958,7 @@ pub(crate) fn cmd_deploy_civilian(game: &mut GameState, args: &str) {
 
     // Phase 2: apply mutations
     let player = game.get_nation_mut(player_id).unwrap();
-    let civilian = &mut player.civilians[index];
+    let civilian = &mut player.military.civilians[index];
     civilian.deploy(coord);
     civilian.start_work(1); // 1 turn for improvements
     let civ_id = civilian.id;
@@ -1438,7 +1438,7 @@ pub(crate) fn cmd_subsidy(game: &mut GameState, args: &str) {
     if amount == 0 {
         // Remove subsidy
         let player = game.get_nation_mut(player_id).unwrap();
-        player.trade_subsidies.remove(&target_id);
+        player.diplomacy.trade_subsidies.remove(&target_id);
         println!(
             "  {}",
             crate::display::color_green(&format!("Trade subsidy with {} removed.", target_name))
@@ -1446,7 +1446,7 @@ pub(crate) fn cmd_subsidy(game: &mut GameState, args: &str) {
     } else {
         let subsidy = Money::dollars(amount);
         let player = game.get_nation_mut(player_id).unwrap();
-        player.trade_subsidies.insert(target_id, subsidy);
+        player.diplomacy.trade_subsidies.insert(target_id, subsidy);
         println!(
             "  {}",
             crate::display::color_green(&format!(
@@ -1491,7 +1491,7 @@ pub(crate) fn cmd_attack(game: &mut GameState, query: &str) {
 
     // Check player has army units
     let player = game.get_nation(player_id).unwrap();
-    if player.army.is_empty() {
+    if player.military.army.is_empty() {
         println!("  You have no army units! Build units first with 'build unit <type>'.");
         return;
     }
@@ -1565,7 +1565,7 @@ pub(crate) fn cmd_beachhead(game: &mut GameState, query: &str) {
         .get_relation(player_id, target_id)
         .map(|r| r.at_war)
         .unwrap_or(false);
-    let target_anarchic = game.get_nation(target_id).is_some_and(|n| n.is_in_anarchy);
+    let target_anarchic = game.get_nation(target_id).is_some_and(|n| n.diplomacy.is_in_anarchy);
     if !at_war && !target_anarchic {
         println!("  You are not at war with {}.", target_name);
         return;
@@ -1573,7 +1573,7 @@ pub(crate) fn cmd_beachhead(game: &mut GameState, query: &str) {
 
     // Must have warships
     let player = game.get_nation(player_id).unwrap();
-    if player.warships.is_empty() {
+    if player.military.warships.is_empty() {
         println!("  You have no warships! Build warships first.");
         return;
     }
@@ -1607,7 +1607,7 @@ pub(crate) fn cmd_beachhead(game: &mut GameState, query: &str) {
 
     // Assign all warships to beachhead targeting the specific province
     if let Some(nation) = game.get_nation_mut(player_id) {
-        for ship in &mut nation.warships {
+        for ship in &mut nation.military.warships {
             ship.operation = Some(domain::military::naval::NavalOperation::Beachhead(
                 coastal_pid,
             ));
@@ -1665,14 +1665,14 @@ pub(crate) fn build_freight_car(game: &mut GameState) {
     player.consume_material(MaterialType::Steel, steel_needed);
     // Labor is consumed as a workforce requirement, not permanently removed.
     // (Workers are available each turn; this just requires having enough.)
-    player.transport.build_freight_cars(1);
+    player.military.transport.build_freight_cars(1);
 
     println!(
         "  Freight car built! (consumed {} lumber, {} steel). Total cars: {}, capacity: {}.",
         lumber_needed,
         steel_needed,
-        player.transport.freight_cars,
-        player.transport.total_capacity()
+        player.military.transport.freight_cars,
+        player.military.transport.total_capacity()
     );
 }
 
@@ -1710,11 +1710,11 @@ fn assign_engineer_task(
             None => return,
         };
         let idx = nation
-            .civilians
+            .military.civilians
             .iter()
             .position(|c| c.civilian_type == CivilianType::Engineer);
         match idx {
-            Some(i) => (i, nation.civilians[i].id, nation.civilians[i].working),
+            Some(i) => (i, nation.military.civilians[i].id, nation.military.civilians[i].working),
             None => {
                 println!(
                     "  Cannot build {}: your nation has no Engineer civilian. Hire one first.",
@@ -1773,7 +1773,7 @@ fn assign_engineer_task(
     // Free the engineer's old tile, claim the new one, start the build.
     let old_pos = game
         .get_nation(player_id)
-        .and_then(|n| n.civilians[engineer_idx].position);
+        .and_then(|n| n.military.civilians[engineer_idx].position);
     if let Some(old) = old_pos
         && let Some(tile) = game.hex_map.get_tile_mut(old)
         && tile.assigned_civilian == Some(engineer_id)
@@ -1794,7 +1794,7 @@ fn assign_engineer_task(
         tile.assigned_civilian = Some(engineer_id);
     }
     if let Some(nation) = game.get_nation_mut(player_id) {
-        let civ = &mut nation.civilians[engineer_idx];
+        let civ = &mut nation.military.civilians[engineer_idx];
         civ.deploy(coord);
         civ.start_build(task, &cfg);
     }
@@ -2001,17 +2001,17 @@ pub(crate) fn cmd_move_unit(game: &mut GameState, args: &str) {
     let player_id = game.human_player_nation;
     let player = game.get_nation(player_id).unwrap();
 
-    if index >= player.army.len() {
+    if index >= player.military.army.len() {
         println!(
             "  Invalid index {}. You have {} army units.",
             index,
-            player.army.len()
+            player.military.army.len()
         );
         return;
     }
 
-    let unit_type = player.army[index].unit_type;
-    let unit_id = player.army[index].id;
+    let unit_type = player.military.army[index].unit_type;
+    let unit_id = player.military.army[index].id;
 
     // Militia units cannot move
     if !unit_type.can_move() {
@@ -2047,7 +2047,7 @@ pub(crate) fn cmd_move_unit(game: &mut GameState, args: &str) {
     let target_owner = target_province.owner;
 
     // Check the unit is not already in the target province
-    if player.army[index].position == target_province_id {
+    if player.military.army[index].position == target_province_id {
         println!("  Unit is already in {}.", target_name);
         return;
     }
@@ -2055,7 +2055,7 @@ pub(crate) fn cmd_move_unit(game: &mut GameState, args: &str) {
     if target_owner == player_id {
         // Friendly province: move immediately
         let player = game.get_nation_mut(player_id).unwrap();
-        player.army[index].position = target_province_id;
+        player.military.army[index].position = target_province_id;
         println!("  Moved {:?} to {}.", unit_type, target_name);
     } else {
         // Check if at war with the province owner

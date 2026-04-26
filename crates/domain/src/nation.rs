@@ -463,6 +463,138 @@ impl Default for NationEconomy {
     }
 }
 
+/// Military forces, civilian improvers, and transport.
+///
+/// Extracted from `Nation` (Phase 5 Lesson 8 refactor).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NationMilitary {
+    /// Field army and garrison units.
+    #[serde(default)]
+    pub army: Vec<ArmyUnit>,
+    /// Civilian improver units (Farmers, Foresters, Miners, Engineers).
+    #[serde(default)]
+    pub civilians: Vec<Civilian>,
+    /// Freight transport system.
+    #[serde(default)]
+    pub transport: TransportSystem,
+    /// Merchant fleet — ships used for trade.
+    #[serde(default)]
+    pub merchant_fleet: Vec<Ship>,
+    /// Warship fleet — military naval vessels.
+    #[serde(default)]
+    pub warships: Vec<Ship>,
+    /// Total arms built (tracks General reward thresholds).
+    #[serde(default)]
+    pub total_arms_built: u32,
+    /// Number of Generals earned.
+    #[serde(default)]
+    pub generals_earned: u32,
+    /// Total warships built (naval telemetry).
+    #[serde(default)]
+    pub warships_built: u32,
+    /// Total warships lost in combat (naval telemetry).
+    #[serde(default)]
+    pub warships_lost: u32,
+    /// Total Ships-of-the-Line built (tracks Admiral reward thresholds).
+    #[serde(default)]
+    pub total_ships_of_the_line_built: u32,
+    /// Number of Admirals earned.
+    #[serde(default)]
+    pub admirals_earned: u32,
+    /// Conquest bonus from capturing GP capitals: each +1 improves worker rate.
+    #[serde(default)]
+    pub capitol_bonus_capacity: u32,
+    /// Whether this nation has established its first colony.
+    #[serde(default)]
+    pub has_colony: bool,
+    /// Expert worker rewards already earned (thresholds at 10 and 30 experts).
+    #[serde(default)]
+    pub expert_rewards_earned: u8,
+}
+
+impl Default for NationMilitary {
+    fn default() -> Self {
+        Self {
+            army: Vec::new(),
+            civilians: Vec::new(),
+            transport: TransportSystem::new(),
+            merchant_fleet: Vec::new(),
+            warships: Vec::new(),
+            total_arms_built: 0,
+            generals_earned: 0,
+            warships_built: 0,
+            warships_lost: 0,
+            total_ships_of_the_line_built: 0,
+            admirals_earned: 0,
+            capitol_bonus_capacity: 0,
+            has_colony: false,
+            expert_rewards_earned: 0,
+        }
+    }
+}
+
+/// Diplomatic and political state.
+///
+/// Extracted from `Nation` (Phase 5 Lesson 8 refactor).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct NationDiplomacy {
+    /// AI personality for this nation (`None` for human player).
+    #[serde(default)]
+    pub ai_personality: Option<AiPersonality>,
+    /// Per-Minor-Nation trade subsidy amounts (GP pays per turn).
+    #[serde(default)]
+    pub trade_subsidies: HashMap<NationId, Money>,
+    /// Whether this nation has fallen into anarchy (lost its capital).
+    #[serde(default)]
+    pub is_in_anarchy: bool,
+    /// Overlord GP if this minor nation has been diplomatically integrated.
+    #[serde(default)]
+    pub integrated_by: Option<NationId>,
+    /// Player sell orders for this turn (cleared after turn resolution).
+    #[serde(default)]
+    pub player_sell_orders: Vec<crate::economy::trade::PlayerSellOrder>,
+    /// Player buy orders for this turn (cleared after turn resolution).
+    #[serde(default)]
+    pub player_buy_orders: Vec<crate::economy::trade::PlayerBuyOrder>,
+    /// AI scratch state for the scored-spending loop.
+    #[serde(default)]
+    pub ai_priority_state: AiPriorityState,
+}
+
+/// Historical records, telemetry, and display data.
+///
+/// Extracted from `Nation` (Phase 5 Lesson 8 refactor).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct NationArchives {
+    /// Records of past trade transactions for player reference.
+    #[serde(default)]
+    pub trade_history: Vec<crate::economy::trade::TradeHistoryEntry>,
+    /// Cumulative per-source income totals (dollars).
+    #[serde(default)]
+    pub cash_income_totals: HashMap<CashSource, i64>,
+    /// Cumulative per-sink expense totals (dollars).
+    #[serde(default)]
+    pub cash_expense_totals: HashMap<CashSink, i64>,
+    /// Cumulative revenue from auto-sold materials/goods (dollars).
+    #[serde(default)]
+    pub goods_sales_revenue_dollars: i64,
+    /// Adjective form of the nation name (e.g. "Devronian").
+    #[serde(default)]
+    pub adjective: String,
+    /// Singular demonym ("a Devronian").
+    #[serde(default)]
+    pub demonym_singular: String,
+    /// Plural demonym ("the Devronians").
+    #[serde(default)]
+    pub demonym_plural: String,
+    /// Full formal title ("Empire of Devronia").
+    #[serde(default)]
+    pub government_title: String,
+    /// Procedurally generated flag SVG (60×40 viewBox).
+    #[serde(default)]
+    pub flag_svg: String,
+}
+
 /// A nation in the game — either a Great Power (player-controlled or AI)
 /// or a Minor Nation (AI-only, can be annexed or allied).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -477,109 +609,15 @@ pub struct Nation {
     pub economy: NationEconomy,
     /// Technologies that have been researched by this nation.
     pub researched_techs: Vec<TechId>,
-    /// Army units owned by this nation.
+    /// Military forces, civilian improvers, and transport.
     #[serde(default)]
-    pub army: Vec<ArmyUnit>,
-    /// Civilian units owned by this nation (Farmers, Foresters, Miners, Engineers).
+    pub military: NationMilitary,
+    /// Diplomatic and political state.
     #[serde(default)]
-    pub civilians: Vec<Civilian>,
-    /// Transport system (freight cars, allocations).
+    pub diplomacy: NationDiplomacy,
+    /// Historical records, telemetry, and display data.
     #[serde(default)]
-    pub transport: TransportSystem,
-    /// Merchant fleet — ships used for trade.
-    #[serde(default)]
-    pub merchant_fleet: Vec<Ship>,
-    /// Warship fleet — military naval vessels.
-    #[serde(default)]
-    pub warships: Vec<Ship>,
-    /// AI personality for this nation (None for human player).
-    #[serde(default)]
-    pub ai_personality: Option<AiPersonality>,
-    /// Trade subsidies: per-Minor-Nation subsidy amounts (GP pays this per turn).
-    #[serde(default)]
-    pub trade_subsidies: HashMap<NationId, Money>,
-    /// Trade history: records of past trade transactions for player reference.
-    #[serde(default)]
-    pub trade_history: Vec<crate::economy::trade::TradeHistoryEntry>,
-    /// Bonus capitol capacity earned from conquering Great Power capitals.
-    /// Each +1 improves worker recruitment rate (1 per 3 provinces instead of 4).
-    #[serde(default)]
-    pub capitol_bonus_capacity: u32,
-    /// Total arms built across all army units (tracked for General rewards).
-    #[serde(default)]
-    pub total_arms_built: u32,
-    /// Number of Generals already earned (tracks reward thresholds).
-    #[serde(default)]
-    pub generals_earned: u32,
-    /// Total warships built (debug telemetry — tracks AI naval investment).
-    #[serde(default)]
-    pub warships_built: u32,
-    /// Total warships lost in combat (debug telemetry).
-    #[serde(default)]
-    pub warships_lost: u32,
-    /// Total Ships-of-the-Line built (tracked for Admiral rewards).
-    #[serde(default)]
-    pub total_ships_of_the_line_built: u32,
-    /// Number of Admirals already earned (tracks reward thresholds).
-    #[serde(default)]
-    pub admirals_earned: u32,
-    /// Whether this nation has established its first colony (MN province conquered/incorporated).
-    #[serde(default)]
-    pub has_colony: bool,
-    /// Number of expert worker rewards already earned (tracks reward thresholds at 10 and 30 experts).
-    #[serde(default)]
-    pub expert_rewards_earned: u8,
-    /// Whether this nation has fallen into anarchy (lost its capital province).
-    /// An anarchic nation has no economy, diplomacy, or offensive military capability.
-    #[serde(default)]
-    pub is_in_anarchy: bool,
-    /// For a minor nation that has been absorbed into a great power: the id
-    /// of the overlord GP. `None` for independent minors and great powers.
-    /// Set in `incorporate_minor_into_empire` and cleared when the minor
-    /// regains its independence (card #79).
-    #[serde(default)]
-    pub integrated_by: Option<NationId>,
-    /// Cumulative revenue from auto-sold materials/goods on world market (dollars).
-    #[serde(default)]
-    pub goods_sales_revenue_dollars: i64,
-    /// Cumulative per-source income totals (dollars). Debug telemetry for
-    /// tracing where a nation's money has come from over the whole game.
-    #[serde(default)]
-    pub cash_income_totals: HashMap<CashSource, i64>,
-    /// Cumulative per-sink expense totals (dollars). Debug telemetry for
-    /// tracing where a nation's money has gone over the whole game.
-    #[serde(default)]
-    pub cash_expense_totals: HashMap<CashSink, i64>,
-    /// Player sell orders for this turn (cleared after turn resolution).
-    #[serde(default)]
-    pub player_sell_orders: Vec<crate::economy::trade::PlayerSellOrder>,
-    /// Player buy orders for this turn (cleared after turn resolution).
-    #[serde(default)]
-    pub player_buy_orders: Vec<crate::economy::trade::PlayerBuyOrder>,
-    /// Per-nation AI scratch state for the scored-spending loop.
-    /// Tracks early-game priority diplomacy targets and per-category
-    /// "turns since last invested" backlog counters used to prevent any
-    /// spending category from being neglected forever.
-    #[serde(default)]
-    pub ai_priority_state: AiPriorityState,
-    /// Flavor-only display string: the adjective form of the nation name
-    /// (e.g. "Devronian" in "the Devronian army"). Populated at game init
-    /// by the `flavor` crate; never read by game logic.
-    #[serde(default)]
-    pub adjective: String,
-    /// Flavor-only display string: singular demonym ("a Devronian").
-    #[serde(default)]
-    pub demonym_singular: String,
-    /// Flavor-only display string: plural demonym ("the Devronians").
-    #[serde(default)]
-    pub demonym_plural: String,
-    /// Flavor-only display string: full formal title ("Empire of Devronia").
-    #[serde(default)]
-    pub government_title: String,
-    /// Flavor-only SVG string rendering the nation's procedurally generated
-    /// flag. 60×40 viewBox. Empty when no flavor was applied.
-    #[serde(default)]
-    pub flag_svg: String,
+    pub archives: NationArchives,
 }
 
 /// Persistent per-nation AI state used by the scored-spending loop.
@@ -632,36 +670,9 @@ impl Nation {
             capital_province_id,
             economy: NationEconomy::new(),
             researched_techs: Vec::new(),
-            army: Vec::new(),
-            civilians: Vec::new(),
-            transport: TransportSystem::new(),
-            merchant_fleet: Vec::new(),
-            warships: Vec::new(),
-            ai_personality: None,
-            trade_subsidies: HashMap::new(),
-            trade_history: Vec::new(),
-            capitol_bonus_capacity: 0,
-            total_arms_built: 0,
-            generals_earned: 0,
-            warships_built: 0,
-            warships_lost: 0,
-            total_ships_of_the_line_built: 0,
-            admirals_earned: 0,
-            has_colony: false,
-            expert_rewards_earned: 0,
-            is_in_anarchy: false,
-            integrated_by: None,
-            goods_sales_revenue_dollars: 0,
-            cash_income_totals: HashMap::new(),
-            cash_expense_totals: HashMap::new(),
-            player_sell_orders: Vec::new(),
-            player_buy_orders: Vec::new(),
-            ai_priority_state: AiPriorityState::default(),
-            adjective: String::new(),
-            demonym_singular: String::new(),
-            demonym_plural: String::new(),
-            government_title: String::new(),
-            flag_svg: String::new(),
+            military: NationMilitary::default(),
+            diplomacy: NationDiplomacy::default(),
+            archives: NationArchives::default(),
         }
     }
 
@@ -772,7 +783,7 @@ impl Nation {
 
     /// Returns all army units stationed in a given province.
     pub fn units_in_province(&self, province: ProvinceId) -> Vec<&ArmyUnit> {
-        self.army
+        self.military.army
             .iter()
             .filter(|u| u.position == province)
             .collect()
@@ -792,24 +803,24 @@ impl Nation {
     /// garrison (Militia + GarrisonArtillery). Used where full defensive
     /// strength matters.
     pub fn total_firepower_including_garrison(&self) -> f64 {
-        self.army.iter().map(|u| u.effective_firepower()).sum()
+        self.military.army.iter().map(|u| u.effective_firepower()).sum()
     }
 
     /// Number of **field army** units (excludes stationary garrison units:
     /// Militia and GarrisonArtillery). Use this wherever the semantic is
-    /// "units available to attack / move", not "raw entries in nation.army".
+    /// "units available to attack / move", not "raw entries in nation.military.army".
     pub fn field_army_count(&self) -> usize {
-        self.army.iter().filter(|u| u.unit_type.can_move()).count()
+        self.military.army.iter().filter(|u| u.unit_type.can_move()).count()
     }
 
     /// Iterator over field army units (movable — excludes garrison).
     pub fn field_army_iter(&self) -> impl Iterator<Item = &ArmyUnit> + '_ {
-        self.army.iter().filter(|u| u.unit_type.can_move())
+        self.military.army.iter().filter(|u| u.unit_type.can_move())
     }
 
     /// Count of Militia units stationed at a given province.
     pub fn militia_at(&self, province: ProvinceId) -> usize {
-        self.army
+        self.military.army
             .iter()
             .filter(|u| {
                 u.position == province
@@ -820,7 +831,7 @@ impl Nation {
 
     /// Whether the given province has this nation's GarrisonArtillery unit.
     pub fn has_garrison_artillery_at(&self, province: ProvinceId) -> bool {
-        self.army.iter().any(|u| {
+        self.military.army.iter().any(|u| {
             u.position == province
                 && u.unit_type == crate::military::units::ArmyUnitType::GarrisonArtillery
         })
@@ -828,7 +839,7 @@ impl Nation {
 
     /// Total cargo capacity of all merchant ships in the fleet.
     pub fn total_cargo_capacity(&self) -> u32 {
-        self.merchant_fleet
+        self.military.merchant_fleet
             .iter()
             .map(|s| s.total_cargo_capacity())
             .sum()
@@ -836,12 +847,12 @@ impl Nation {
 
     /// Number of merchant ships in the fleet.
     pub fn merchant_ship_count(&self) -> usize {
-        self.merchant_fleet.len()
+        self.military.merchant_fleet.len()
     }
 
     /// Sum of firepower for all warships in the fleet.
     pub fn total_naval_firepower(&self) -> u32 {
-        self.warships
+        self.military.warships
             .iter()
             .map(|s| s.ship_type.stats().firepower)
             .sum()
@@ -849,7 +860,7 @@ impl Nation {
 
     /// Number of warships in the fleet.
     pub fn warship_count(&self) -> usize {
-        self.warships.len()
+        self.military.warships.len()
     }
 
     /// Add a technology to this nation's researched list.
@@ -866,7 +877,7 @@ impl Nation {
 
     /// Whether this nation is in anarchy (lost its capital).
     pub fn is_in_anarchy(&self) -> bool {
-        self.is_in_anarchy
+        self.diplomacy.is_in_anarchy
     }
 }
 

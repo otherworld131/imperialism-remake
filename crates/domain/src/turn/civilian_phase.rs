@@ -16,7 +16,7 @@ pub(super) fn update_province_connectivity(game: &mut GameState) {
     let nation_ids: Vec<NationId> = game
         .nations
         .iter()
-        .filter(|n| n.is_great_power() && !n.is_in_anarchy)
+        .filter(|n| n.is_great_power() && !n.diplomacy.is_in_anarchy)
         .map(|n| n.id)
         .collect();
 
@@ -47,7 +47,7 @@ pub(super) fn update_settlements(game: &mut GameState, report: &mut TurnReport) 
 
         // Skip settlement progression for Minor Nation provinces or anarchic nations
         let skip = owner_nation
-            .map(|n| !n.is_great_power() || n.is_in_anarchy)
+            .map(|n| !n.is_great_power() || n.diplomacy.is_in_anarchy)
             .unwrap_or(false);
         if skip {
             continue;
