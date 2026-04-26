@@ -247,6 +247,21 @@ pub enum GoodsType {
     Hardware,
 }
 
+// ── ReservationId ───────────────────────────────────────────────
+
+/// Opaque handle to an active inventory reservation.
+///
+/// Created by `NationEconomy::reserve()`, consumed by `commit()` or `release()`.
+/// Reservations auto-release at end-of-turn if not committed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+pub struct ReservationId(pub u64);
+
+impl std::fmt::Display for ReservationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Reservation({})", self.0)
+    }
+}
+
 // ── Terrain ─────────────────────────────────────────────────────
 
 /// Landscape terrain types. Resources are a separate overlay on tiles.

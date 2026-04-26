@@ -20,9 +20,10 @@ use crate::military::ships::Ship;
 use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::turn::civilian_phase::{update_province_connectivity, update_settlements};
 use crate::turn::economy_phase::{
-    apply_blockade_effects, apply_maintenance, apply_warehouse_caps, compute_blockade_capacity,
-    tick_buildings,
+    apply_blockade_effects, apply_maintenance, apply_warehouse_caps, tick_buildings,
 };
+#[cfg(test)]
+use crate::turn::economy_phase::compute_blockade_capacity;
 use crate::turn::news_phase::generate_newspaper;
 use crate::turn::scoring::{CouncilVoteResult, calculate_score, run_council_vote};
 use crate::types::*;
@@ -326,8 +327,19 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 0d. Resolve civilian actions (tick working civilians, apply improvements)
     resolve_civilian_actions(game, &mut report);
 
-    // 1. Resource production: gather yields from all owned tiles
-    collect_resources(game, &mut report);
+    // 1. Economy phase: collect tile resources (plan → reserve → execute, Trello #161)
+    // Only collect_resources fires here; production and trade run after their
+    // interleaved steps (transport, monetary conversion, town production).
+    use crate::turn::economy_phase::{
+        EconomicOrderKind, collect_economic_orders, validate_and_reserve,
+        execute_reserved_economy,
+    };
+    let collect_orders: Vec<_> = collect_economic_orders(game)
+        .into_iter()
+        .filter(|o| o.kind == EconomicOrderKind::CollectTileResources)
+        .collect();
+    let reserved_collect = validate_and_reserve(game, collect_orders);
+    execute_reserved_economy(game, &mut report, reserved_collect);
 
     // 1b. Transport resolution: cap resources delivered by freight car capacity
     resolve_transport(game, &mut report);
@@ -335,17 +347,31 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 2. Gold/Gems -> money conversion
     convert_monetary_resources(game, &mut report);
 
-    // 3. Run production chains (mills then factories)
-    run_production(game, &mut report);
+    // 3. Production phase (plan → reserve → execute)
+    let produce_orders: Vec<_> = collect_economic_orders(game)
+        .into_iter()
+        .filter(|o| o.kind == EconomicOrderKind::RunProduction)
+        .collect();
+    let reserved_produce = validate_and_reserve(game, produce_orders);
+    execute_reserved_economy(game, &mut report, reserved_produce);
 
     // 3a. Town production: Villages and Towns produce materials and goods autonomously
     resolve_town_production(game, &mut report);
 
-    // 3b. Pre-trade blockade: compute effective cargo capacity reduced by enemy warships
-    let blockade_capacity = compute_blockade_capacity(game);
+    // 3b. Trade phase (plan → reserve → execute; blockade capacity computed inside)
+    let trade_orders: Vec<_> = collect_economic_orders(game)
+        .into_iter()
+        .filter(|o| o.kind == EconomicOrderKind::ExecuteTrade)
+        .collect();
+    let reserved_trade = validate_and_reserve(game, trade_orders);
+    execute_reserved_economy(game, &mut report, reserved_trade);
 
-    // 3b. Trade session: Minor Nations sell resources to Great Powers
-    resolve_trade_session(game, &mut report, &blockade_capacity);
+    // End-of-economy safety net: release any uncommitted reservations from all
+    // three batches. Reservations intentionally survive across collect → production
+    // → trade; this single call is the documented end-of-phase boundary (#162).
+    for nation in &mut game.nations {
+        nation.economy.release_all_reservations();
+    }
 
     // 3c. Warehouse capacity caps: prevent infinite resource accumulation
     apply_warehouse_caps(game);
@@ -732,7 +758,7 @@ pub fn connected_provinces(game: &GameState, nation_id: NationId) -> HashSet<Pro
 /// calculates yields, and adds resources to the nation's warehouse.
 /// Only resources from provinces connected to the capital are delivered;
 /// resources from disconnected provinces are tracked in `report.disconnected_resources`.
-fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
+pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
     // Phase 0: precompute connected provinces for each nation
     let nation_ids: Vec<NationId> = game.nations.iter().map(|n| n.id).collect();
     let connected_map: Vec<(NationId, HashSet<ProvinceId>)> = nation_ids
@@ -1352,7 +1378,7 @@ fn convert_monetary_resources(game: &mut GameState, report: &mut TurnReport) {
 /// Labor is a shared pool: workers provide labor based on training level (untrained=1,
 /// trained=2, expert=4). Each unit of production costs labor_per_production (default 2).
 /// Mills consume labor first, then remaining labor feeds factories.
-fn run_production(game: &mut GameState, report: &mut TurnReport) {
+pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
     let cfg = &game.game_data.game_config;
     let untrained_mult = cfg.untrained_labor;
     let trained_mult = cfg.trained_labor;
@@ -1887,7 +1913,7 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
 
 /// Resolve a trade session: generate offers from Minor Nations, handle player
 /// sell/buy orders, use smart bids for AI GPs, resolve trades, and apply results.
-fn resolve_trade_session(
+pub(super) fn resolve_trade_session(
     game: &mut GameState,
     report: &mut TurnReport,
     blockade_capacity: &std::collections::HashMap<NationId, u32>,
@@ -3931,21 +3957,33 @@ fn release_integrated_minors(
             continue;
         }
 
-        // Transfer provinces back to the minor and drop both origin
-        // markers so the map renders them as plain independent territory.
+        // Determine the actual recipient of the restored provinces. If the
+        // minor is currently integrated by a different GP, route the provinces
+        // to that GP so the minor's integration state remains consistent.
+        let minor_current_overlord = game.get_nation(minor_id).and_then(|n| n.integrated_by);
+        let actual_owner = if let Some(other) = minor_current_overlord
+            && other != overlord_id
+        {
+            other
+        } else {
+            minor_id
+        };
+
+        // Transfer provinces to actual_owner. Clear origin markers only when
+        // restoring to the minor itself; preserve them when routing to another
+        // GP so that future releases can still trace the chain back to the minor.
         for pid in &provinces_to_restore {
             if let Some(prov) = game.get_province_mut(*pid) {
-                prov.owner = minor_id;
-                prov.incorporated_from = None;
-                prov.conquest_origin = None;
+                prov.owner = actual_owner;
+                if actual_owner == minor_id {
+                    prov.incorporated_from = None;
+                    prov.conquest_origin = None;
+                }
             }
         }
 
-        // Remove those provinces from the overlord's list and add them to
-        // the minor's. Also scatter any overlord army units positioned on the
-        // restored provinces — when the empire collapses its occupying
-        // garrison disbands rather than squatting as foreign ghosts on
-        // someone else's territory.
+        // Remove those provinces from the collapsing overlord's list and
+        // scatter any army units positioned on them.
         if let Some(overlord) = game.get_nation_mut(overlord_id) {
             overlord
                 .province_ids
@@ -3954,11 +3992,32 @@ fn release_integrated_minors(
                 .army
                 .retain(|u| !provinces_to_restore.contains(&u.position));
         }
+
+        if actual_owner != minor_id {
+            // Provinces route to the GP that currently integrates this minor.
+            // The minor remains integrated — no independence events or garrison seeding.
+            if let Some(other_gp) = game.get_nation_mut(actual_owner) {
+                for pid in &provinces_to_restore {
+                    other_gp.add_province(*pid);
+                }
+            }
+            // Sync garrison cache: the collapsing overlord's army was just
+            // scattered, so garrison_count is stale for the new owner.
+            for &pid in &provinces_to_restore {
+                sync_garrison_cache(game, pid);
+            }
+            continue;
+        }
+
+        // Full restoration: minor resumes as an independent nation.
         if let Some(minor) = game.get_nation_mut(minor_id) {
             for pid in &provinces_to_restore {
                 minor.add_province(*pid);
             }
-            minor.integrated_by = None;
+            // Only clear integration pointer when this overlord was the integrator.
+            if minor.integrated_by == Some(overlord_id) {
+                minor.integrated_by = None;
+            }
             // Card #96: a released subject must come back as a functioning
             // independent nation, never as an anarchic black-banner state.
             // If its original capital didn't come back (e.g. a third power
@@ -3979,6 +4038,11 @@ fn release_integrated_minors(
         // has no GarrisonArtillery there, spawn one (mirrors the initial minor
         // garrison layout in `create_garrison`).
         seed_released_minor_garrison(game, minor_id, &provinces_to_restore);
+        // Unconditional sync covers provinces already at target garrison
+        // (seed only syncs when it spawns) and the post-artillery case.
+        for &pid in &provinces_to_restore {
+            sync_garrison_cache(game, pid);
+        }
 
         let minor_name = game
             .get_nation(minor_id)
@@ -9934,14 +9998,15 @@ mod tests {
             nation.economy.treasury
         );
 
-        // With floor at $0, nation is NOT bankrupt (treasury == $0, not negative)
+        // Treasury went negative before the floor clamped it — a FINANCIAL CRISIS
+        // headline should have been generated (F-017 fix: headline tracked pre-clamp).
         let has_crisis_headline = report
             .newspaper_headlines
             .iter()
             .any(|h| h.text.contains("FINANCIAL CRISIS"));
         assert!(
-            !has_crisis_headline,
-            "Should NOT have FINANCIAL CRISIS headline when floor is $0"
+            has_crisis_headline,
+            "Should have FINANCIAL CRISIS headline when maintenance exceeds treasury"
         );
     }
 
@@ -13627,6 +13692,99 @@ mod tests {
             ally.integrated_by,
             Some(overlord_b),
             "release on overlord A must not clear integrated_by for minors of overlord B"
+        );
+    }
+
+    // F-019: when GP-A collapses and holds provinces stamped with
+    // `incorporated_from = Some(minor_id)`, but the minor is currently
+    // `integrated_by = Some(GP-B)`, the provinces must route to GP-B rather
+    // than being restored to the minor (which would leave it owning territory
+    // while still marked as integrated — inconsistent state).
+    #[test]
+    fn release_integrated_minors_routes_provinces_to_current_integrator() {
+        let (mut game, overlord_a, minor_id, _, minor_cap_pid) = absorbed_minor_scenario();
+
+        let overlord_b = NationId(99);
+        let mut gp_b = Nation::new(
+            overlord_b,
+            "SecondOverlord".into(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(42),
+        );
+        let b_province = Province::new(
+            ProvinceId(42),
+            "BHome".into(),
+            overlord_b,
+            HexCoord::new(5, 0),
+            vec![HexCoord::new(5, 0)],
+            4,
+        );
+        gp_b.province_ids = vec![ProvinceId(42)];
+        game.nations.push(gp_b);
+        game.provinces.push(b_province);
+        game.hex_map.set_tile(
+            HexCoord::new(5, 0),
+            Tile::with_province(TerrainType::Grassland, ProvinceId(42)),
+        );
+
+        // Rewire: minor is now integrated by GP-B, not GP-A
+        game.get_nation_mut(minor_id).unwrap().integrated_by = Some(overlord_b);
+
+        let mut report = TurnReport::empty();
+        release_integrated_minors(&mut game, overlord_a, &mut report);
+
+        // Province must route to GP-B (the current integrator)
+        let prov = game.get_province(minor_cap_pid).unwrap();
+        assert_eq!(
+            prov.owner, overlord_b,
+            "province must route to the GP currently integrating the minor, not the minor itself"
+        );
+        // Origin marker preserved so future GP-B release can trace back to the minor
+        assert_eq!(
+            prov.incorporated_from,
+            Some(minor_id),
+            "incorporated_from marker must be preserved for the future release chain"
+        );
+
+        // Minor remains consistently integrated by GP-B
+        let minor = game.get_nation(minor_id).unwrap();
+        assert_eq!(
+            minor.integrated_by,
+            Some(overlord_b),
+            "minor must remain integrated by GP-B after GP-A collapses"
+        );
+        assert!(
+            !minor.province_ids.contains(&minor_cap_pid),
+            "minor must not own the routed province"
+        );
+
+        // GP-B now holds the routed province
+        let gp_b_nation = game.get_nation(overlord_b).unwrap();
+        assert!(
+            gp_b_nation.province_ids.contains(&minor_cap_pid),
+            "GP-B must hold the province transferred from GP-A"
+        );
+
+        // No independence event for the minor
+        assert!(
+            !report.events.iter().any(|e| {
+                matches!(e, DomainEvent::MinorRegainedIndependence(ev) if ev.minor == minor_id)
+            }),
+            "no MinorRegainedIndependence event when provinces route to the current integrator"
+        );
+
+        // F-022: garrison cache must be coherent after routing (F-021 fix).
+        // GP-B holds the province with no army there, so garrison_count should be 0.
+        let prov_after = game.get_province(minor_cap_pid).unwrap();
+        let expected_garrison = game
+            .get_nation(overlord_b)
+            .map(|n| n.militia_at(minor_cap_pid))
+            .unwrap_or(0) as u8;
+        assert_eq!(
+            prov_after.garrison_count,
+            expected_garrison,
+            "garrison_count must reflect the new owner's actual militia after routing"
         );
     }
 

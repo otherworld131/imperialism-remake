@@ -8,6 +8,7 @@ pub(crate) mod lua_bridge;
 mod military;
 mod naval;
 mod research;
+pub mod snapshot;
 mod spending;
 mod tactical;
 
@@ -15,6 +16,7 @@ pub use common::{AiPersonality, personality_for_nation_index};
 pub use diplomacy::{ai_manage_diplomacy, ai_pre_election_strategy, minor_nation_bonus_trade};
 pub use economy::ai_manage_resources;
 pub use naval::ai_naval_strategy;
+pub use snapshot::NationEconomySnapshot;
 pub use spending::{SpendingCategory, pick_priority_minor_targets, priority_target_count};
 pub use tactical::ai_tactical_decisions;
 
