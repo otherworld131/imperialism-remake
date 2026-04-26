@@ -544,6 +544,49 @@ fn reserved_inventory_reflects_active_reservations() {
     let _ = nation.economy.release(id2);
 }
 
+/// Iterative redistribution: capacity freed by a demand-capped resource reaches others.
+///
+/// Regression test for the F-003 finding: a single-pass even-split drops capacity
+/// when the first resource in the list has less demand than its fair share.
+#[test]
+fn iterative_redistribution_exhausts_capacity() {
+    let mut ts = TransportSystem::new();
+    ts.build_freight_cars(10);
+    // No allocations — pure even distribution.
+    // A has demand=1 (less than base share of 5), B has demand=20.
+    // After A gets 1, remaining 9 should all flow to B (not just 5).
+    let available = vec![(ResourceType::Coal, 1), (ResourceType::Timber, 20)];
+    let deliveries = ts.calculate_deliveries(&available);
+
+    let total: u32 = deliveries.iter().map(|(_, q)| q).sum();
+    assert_eq!(
+        total, 10,
+        "all 10 freight-car capacity should be used; got {total}"
+    );
+    let timber = deliveries.iter().find(|(r, _)| *r == ResourceType::Timber).map(|(_, q)| *q);
+    assert_eq!(timber, Some(9), "Timber should receive the 9 remaining after Coal gets 1");
+}
+
+/// freight_committed never exceeds freight_total regardless of production mix.
+#[test]
+fn logistics_freight_committed_never_exceeds_total() {
+    let mut game = new_game("test", Difficulty::Normal, 0);
+    let human_id = game.human_player_nation;
+    // Set a small but non-zero freight capacity so remote resources can partially overflow.
+    game.get_nation_mut(human_id).unwrap().transport.freight_cars = 3;
+
+    process_turn(&mut game);
+
+    let nation = game.get_nation(human_id).unwrap();
+    let logistics = &nation.economy.logistics;
+    assert!(
+        logistics.freight_committed <= logistics.freight_total,
+        "freight_committed ({}) must not exceed freight_total ({})",
+        logistics.freight_committed,
+        logistics.freight_total
+    );
+}
+
 /// After release_all_reservations, reserved_inventory is empty.
 #[test]
 fn reserved_inventory_empty_after_release_all() {

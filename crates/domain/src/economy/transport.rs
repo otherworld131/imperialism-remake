@@ -261,28 +261,57 @@ impl TransportSystem {
     }
 
     /// Distribute capacity evenly across available resources, capped by each
-    /// resource's availability. Uses round-robin to distribute remainders fairly.
+    /// resource's availability.
+    ///
+    /// Iterates until capacity is exhausted or all demand is met so that capacity
+    /// freed by demand-capped resources is redistributed to others rather than wasted.
     fn distribute_evenly(
         available: &[(ResourceType, u32)],
         capacity: u32,
     ) -> Vec<(ResourceType, u32)> {
-        let count = available.len() as u32;
-        let base = capacity / count;
-        let mut extra = capacity % count;
-
-        let mut result = Vec::new();
+        let mut remaining_demand: Vec<(ResourceType, u32)> = available
+            .iter()
+            .filter(|(_, qty)| *qty > 0)
+            .copied()
+            .collect();
+        let mut result: Vec<(ResourceType, u32)> = Vec::new();
         let mut remaining_capacity = capacity;
 
-        for (resource, avail) in available {
-            let mut share = base;
-            if extra > 0 {
-                share += 1;
-                extra -= 1;
+        loop {
+            let active_count = remaining_demand.iter().filter(|(_, d)| *d > 0).count() as u32;
+            if active_count == 0 || remaining_capacity == 0 {
+                break;
             }
-            let delivered = share.min(*avail).min(remaining_capacity);
-            if delivered > 0 {
-                result.push((*resource, delivered));
-                remaining_capacity -= delivered;
+            let base = remaining_capacity / active_count;
+            let mut extra = remaining_capacity % active_count;
+            let mut granted_this_round = 0u32;
+
+            for (resource, demand) in remaining_demand.iter_mut() {
+                if *demand == 0 || remaining_capacity == 0 {
+                    continue;
+                }
+                let mut share = base;
+                if extra > 0 {
+                    share += 1;
+                    extra -= 1;
+                }
+                let granted = share.min(*demand).min(remaining_capacity);
+                if granted > 0 {
+                    *demand -= granted;
+                    remaining_capacity -= granted;
+                    granted_this_round += granted;
+                    if let Some(entry) = result.iter_mut().find(|(r, _)| *r == *resource) {
+                        entry.1 += granted;
+                    } else {
+                        result.push((*resource, granted));
+                    }
+                }
+            }
+
+            // If nothing was granted this round (all active resources have demand=0 or
+            // capacity=0), avoid infinite loop.
+            if granted_this_round == 0 {
+                break;
             }
         }
 

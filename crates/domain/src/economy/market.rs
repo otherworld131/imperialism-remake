@@ -118,7 +118,7 @@ impl MarketState {
 
     /// Most recently recorded price for `commodity`.
     ///
-    /// Falls back to `Money::ZERO` if no ticks have been recorded yet.
+    /// Returns `Money::ZERO` if no ticks have been recorded yet.
     pub fn current_price(&self, commodity: Commodity) -> Money {
         match commodity {
             Commodity::Resource(r) => self.resource_prices.get(&r).copied().unwrap_or(Money::ZERO),

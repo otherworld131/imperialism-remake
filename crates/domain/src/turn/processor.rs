@@ -1001,23 +1001,31 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
 
         // Update logistics state (#165): record what was requested vs delivered.
         // Only remote resources consume freight; local deliveries are free.
+        // Scale by total_produced (not remote_delivery) so sum(requested)=remote_delivery
+        // and sum(delivered)=delivered_remote, guaranteeing freight_committed<=freight_total.
         {
             let nation = game.nations.iter_mut().find(|n| n.id == nation_id).unwrap();
-            if remote_delivery > 0 {
+            if remote_delivery > 0 && total_produced > 0 {
                 let delivered_remote = remote_delivery.saturating_sub(overflow);
-                // Proportional approximation: each resource contributes the same fraction of
-                // its production to remote delivery as the overall remote/total ratio.
+                let requested_items: Vec<(ResourceType, u32)> = produced_this_turn
+                    .iter()
+                    .map(|&(r, produced)| {
+                        let req = (produced as u64 * remote_delivery as u64
+                            / total_produced as u64) as u32;
+                        (r, req)
+                    })
+                    .collect();
                 let delivered_items: Vec<(ResourceType, u32)> = produced_this_turn
                     .iter()
                     .map(|&(r, produced)| {
-                        let delivered = (produced as u64 * delivered_remote as u64
-                            / remote_delivery as u64) as u32;
-                        (r, delivered)
+                        let del = (produced as u64 * delivered_remote as u64
+                            / total_produced as u64) as u32;
+                        (r, del)
                     })
                     .collect();
                 nation.economy.logistics.update(
                     freight_capacity,
-                    &produced_this_turn,
+                    &requested_items,
                     &delivered_items,
                 );
             } else {
