@@ -331,7 +331,7 @@ fn treasury_reservation_prevents_double_spending() {
     assert!(result.is_err(), "over-spending the reserved treasury should fail");
 
     // Release the reservation.
-    nation.economy.release_treasury(Money::dollars(800));
+    nation.economy.release_treasury(Money::dollars(800)).expect("release 800 should succeed");
     assert_eq!(nation.economy.available_treasury(), Money::dollars(1000));
 }
 

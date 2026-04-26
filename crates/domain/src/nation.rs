@@ -313,12 +313,12 @@ impl NationEconomy {
 
     /// Mark `amount` of treasury as reserved for a pending action.
     ///
-    /// Returns `Err` if `available_treasury() < amount` or if `amount <= 0`.
+    /// Returns `Err` if `available_treasury() < amount` or if `amount <= Money::ZERO`.
     /// Unlike commodity reservations, treasury reservations are tracked as a
     /// running total (no per-reservation ID) because the amounts are committed
     /// or released in the same call frame where they're reserved.
     pub fn reserve_treasury(&mut self, amount: Money) -> Result<(), crate::DomainError> {
-        if amount.as_dollars() <= 0 {
+        if amount <= Money::ZERO {
             return Err(crate::DomainError::InvalidOperation(
                 "reserve_treasury amount must be positive".into(),
             ));
@@ -336,31 +336,39 @@ impl NationEconomy {
 
     /// Commit a treasury reservation: deduct `amount` from the treasury and release the hold.
     ///
-    /// Panics in debug builds if `amount <= 0` or `amount > reserved_treasury`.
-    pub fn commit_treasury(&mut self, amount: Money) {
-        debug_assert!(amount.as_dollars() > 0, "commit_treasury amount must be positive");
-        debug_assert!(
-            self.reserved_treasury >= amount,
-            "commit_treasury over-commit: reserved={:?}, amount={:?}",
-            self.reserved_treasury,
-            amount
-        );
-        self.reserved_treasury = self.reserved_treasury.checked_sub(amount).unwrap_or(Money::ZERO);
+    /// Returns `Err` if `amount <= Money::ZERO` or `amount > reserved_treasury`.
+    pub fn commit_treasury(&mut self, amount: Money) -> Result<(), crate::DomainError> {
+        if amount <= Money::ZERO {
+            return Err(crate::DomainError::InvalidOperation(
+                "commit_treasury amount must be positive".into(),
+            ));
+        }
+        if amount > self.reserved_treasury {
+            return Err(crate::DomainError::InvalidOperation(
+                "commit_treasury over-commit: amount exceeds reserved balance".into(),
+            ));
+        }
+        self.reserved_treasury -= amount;
         self.treasury -= amount;
+        Ok(())
     }
 
     /// Release a treasury reservation without deducting from the treasury.
     ///
-    /// Panics in debug builds if `amount <= 0` or `amount > reserved_treasury`.
-    pub fn release_treasury(&mut self, amount: Money) {
-        debug_assert!(amount.as_dollars() > 0, "release_treasury amount must be positive");
-        debug_assert!(
-            self.reserved_treasury >= amount,
-            "release_treasury over-release: reserved={:?}, amount={:?}",
-            self.reserved_treasury,
-            amount
-        );
-        self.reserved_treasury = self.reserved_treasury.checked_sub(amount).unwrap_or(Money::ZERO);
+    /// Returns `Err` if `amount <= Money::ZERO` or `amount > reserved_treasury`.
+    pub fn release_treasury(&mut self, amount: Money) -> Result<(), crate::DomainError> {
+        if amount <= Money::ZERO {
+            return Err(crate::DomainError::InvalidOperation(
+                "release_treasury amount must be positive".into(),
+            ));
+        }
+        if amount > self.reserved_treasury {
+            return Err(crate::DomainError::InvalidOperation(
+                "release_treasury over-release: amount exceeds reserved balance".into(),
+            ));
+        }
+        self.reserved_treasury -= amount;
+        Ok(())
     }
 
     /// How much treasury is currently reserved for pending actions.

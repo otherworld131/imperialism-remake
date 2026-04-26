@@ -1001,28 +1001,14 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
 
         // Update logistics state (#165): record what was requested vs delivered.
         // Only remote resources consume freight; local deliveries are free.
-        // Scale by total_produced (not remote_delivery) so sum(requested)=remote_delivery
-        // and sum(delivered)=delivered_remote, guaranteeing freight_committed<=freight_total.
+        // Use Bresenham-style proportional split so sum(requested)=remote_delivery
+        // and sum(delivered)=delivered_remote exactly, preserving freight invariants.
         {
             let nation = game.nations.iter_mut().find(|n| n.id == nation_id).unwrap();
             if remote_delivery > 0 && total_produced > 0 {
                 let delivered_remote = remote_delivery.saturating_sub(overflow);
-                let requested_items: Vec<(ResourceType, u32)> = produced_this_turn
-                    .iter()
-                    .map(|&(r, produced)| {
-                        let req = (produced as u64 * remote_delivery as u64
-                            / total_produced as u64) as u32;
-                        (r, req)
-                    })
-                    .collect();
-                let delivered_items: Vec<(ResourceType, u32)> = produced_this_turn
-                    .iter()
-                    .map(|&(r, produced)| {
-                        let del = (produced as u64 * delivered_remote as u64
-                            / total_produced as u64) as u32;
-                        (r, del)
-                    })
-                    .collect();
+                let requested_items = proportional_split(&produced_this_turn, remote_delivery);
+                let delivered_items = proportional_split(&produced_this_turn, delivered_remote);
                 nation.economy.logistics.update(
                     freight_capacity,
                     &requested_items,
@@ -1034,6 +1020,27 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
             }
         }
     }
+}
+
+/// Distribute `target` units across resources proportionally to their `produced` quantities.
+///
+/// Uses a Bresenham accumulator so `sum(result) == target` exactly — no truncation loss.
+/// The total of all `produced` values is used as the denominator.
+fn proportional_split(produced: &[(ResourceType, u32)], target: u32) -> Vec<(ResourceType, u32)> {
+    let total: u32 = produced.iter().map(|(_, q)| q).sum();
+    if total == 0 || target == 0 {
+        return produced.iter().map(|&(r, _)| (r, 0)).collect();
+    }
+    let mut acc: u64 = 0;
+    produced
+        .iter()
+        .map(|&(resource, qty)| {
+            acc += qty as u64 * target as u64;
+            let allocated = (acc / total as u64) as u32;
+            acc %= total as u64;
+            (resource, allocated)
+        })
+        .collect()
 }
 
 /// Resolve immigration for all nations.
