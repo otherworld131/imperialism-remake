@@ -22,6 +22,7 @@ import {
   getBattleArchive,
   getLedgerData,
   getAllGPLedgerData,
+  parseGameJson,
 } from './wasm';
 import type {
   TileData, NavyMarker, Headline, MapMode, DiplomacyOverlay, DiplomacyOverlayRelation, MilitaryOverlayEntry,
@@ -290,7 +291,7 @@ function App() {
   const applyGameJson = useCallback(async (json: string): Promise<boolean> => {
     let state;
     try {
-      state = JSON.parse(json);
+      state = parseGameJson(json);
     } catch (err) {
       console.error('Failed to parse game state JSON:', err);
       showError('Failed to parse game state');
@@ -368,7 +369,7 @@ function App() {
       setHideHexGrid(params.hideHexGrid);
       setGameStarted(true);
       try {
-        const state = JSON.parse(json);
+        const state = parseGameJson(json);
         const p = state?.nations?.find((n: any) => n.id === state.human_player_nation);
         if (p) setSelectedNation(p.name);
       } catch {
@@ -399,7 +400,7 @@ function App() {
           ? await newScenarioGame(p.scenario, p.difficulty, idx)
           : await newGame(p.mapKey, p.difficulty, idx, p.mapGenConfig);
       }
-      const parsed = JSON.parse(json);
+      const parsed = parseGameJson(json);
       if (parsed.error) { alert(parsed.error); return; }
       if (!(await applyGameJson(json))) return;
       setGameStartParams({ ...p, nationIdx: idx });
@@ -435,7 +436,7 @@ function App() {
         setCurrentNavalBattles(result.report?.naval_battles || []);
         setActiveScreen('newspaper');
         // Check for pending proposals
-        const newState = JSON.parse(newJson);
+        const newState = parseGameJson(newJson);
         const nid = newState.human_player_nation;
         const proposals = await getPendingProposals(newJson, nid);
         setProposalData(proposals);
@@ -568,7 +569,7 @@ function App() {
       const idx = observerGps.findIndex(g => g.id === nationId);
       if (idx < 0) return;
       const newJson = await setHumanPlayer(gameJson, idx);
-      const parsed = JSON.parse(newJson);
+      const parsed = parseGameJson(newJson);
       if (parsed.error) { alert(parsed.error); return; }
       await applyGameJson(newJson);
     });
@@ -1134,7 +1135,7 @@ function App() {
       if (isObserver) return;
       const result = await researchTech(gameJson, techName);
       try {
-        const parsed = JSON.parse(result);
+        const parsed = parseGameJson(result);
         if (parsed.error) { alert(parsed.error); return; }
       } catch { /* applyGameJson will handle parse errors */ }
       if (!(await applyGameJson(result))) return;

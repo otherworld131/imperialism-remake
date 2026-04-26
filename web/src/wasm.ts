@@ -425,6 +425,30 @@ export interface PendingMove {
   destination_name: string;
 }
 
+// Snapshot shape (post-refactor) places `nations`, `provinces`, `diplomacy`,
+// `hex_map`, `market_state` under `world`, and `pending_moves`/`pending_attacks`
+// under `transient`. Frontend code historically reads these as top-level
+// fields, so we re-expose them here.
+export function parseGameJson(json: string): any {
+  const s: any = JSON.parse(json);
+  if (s && typeof s === 'object' && !s.error) {
+    if (s.world) {
+      if (s.nations === undefined) s.nations = s.world.nations;
+      if (s.provinces === undefined) s.provinces = s.world.provinces;
+      if (s.diplomacy === undefined) s.diplomacy = s.world.diplomacy;
+      if (s.hex_map === undefined) s.hex_map = s.world.hex_map;
+      if (s.market_state === undefined) s.market_state = s.world.market_state;
+      if (s.map_key === undefined) s.map_key = s.world.map_key;
+    }
+    if (s.transient) {
+      if (s.pending_moves === undefined) s.pending_moves = s.transient.pending_moves;
+      if (s.pending_attacks === undefined) s.pending_attacks = s.transient.pending_attacks;
+      if (s.pending_landings === undefined) s.pending_landings = s.transient.pending_landings;
+    }
+  }
+  return s;
+}
+
 // ── Existing wrapper functions ───────────────────────────────────────
 
 export interface MapGenConfig {

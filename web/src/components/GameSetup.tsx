@@ -4,6 +4,7 @@ import {
   newObserverGame, newObserverScenarioGame, setHumanPlayer,
   applyFlavor,
   DEFAULT_MAP_GEN_CONFIG,
+  parseGameJson,
 } from '../wasm';
 import type { TileData, MapGenConfig } from '../wasm';
 import HexMap from './HexMap';
@@ -116,7 +117,7 @@ export default function GameSetup({ onStartGame }: Props) {
         ? await newScenarioGame(selectedScenario, difficulty, 0, fkey)
         : await newGame(key, difficulty, 0, mapGenConfig, fkey);
       // Detect error payloads from the bridge.
-      const parsed = JSON.parse(json);
+      const parsed = parseGameJson(json);
       if (parsed.error) {
         setPreviewError(parsed.error);
         return;
@@ -153,7 +154,7 @@ export default function GameSetup({ onStartGame }: Props) {
     setFlavorKey(fresh);
     try {
       const updated = await applyFlavor(previewJson, fresh);
-      const parsed = JSON.parse(updated);
+      const parsed = parseGameJson(updated);
       if (parsed.error) {
         setPreviewError(parsed.error);
         return;
