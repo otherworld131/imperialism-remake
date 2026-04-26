@@ -194,6 +194,12 @@ impl NationEconomy {
         key: Commodity,
         qty: u32,
     ) -> Result<ReservationId, crate::DomainError> {
+        if qty == 0 {
+            return Err(crate::DomainError::InsufficientInventory {
+                requested: 0,
+                available: self.available(key),
+            });
+        }
         let avail = self.available(key);
         if avail < qty {
             return Err(crate::DomainError::InsufficientInventory {

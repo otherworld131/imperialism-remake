@@ -366,6 +366,13 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     let reserved_trade = validate_and_reserve(game, trade_orders);
     execute_reserved_economy(game, &mut report, reserved_trade);
 
+    // End-of-economy safety net: release any uncommitted reservations from all
+    // three batches. Reservations intentionally survive across collect → production
+    // → trade; this single call is the documented end-of-phase boundary (#162).
+    for nation in &mut game.nations {
+        nation.economy.release_all_reservations();
+    }
+
     // 3c. Warehouse capacity caps: prevent infinite resource accumulation
     apply_warehouse_caps(game);
 

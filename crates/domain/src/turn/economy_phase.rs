@@ -1,7 +1,10 @@
 //! Economy phase of the turn pipeline.
 //!
 //! Implements the plan → reserve → execute structure (Trello #161).
-//! `run_economy_phase` is the single entry point called by `processor.rs`.
+//! `processor.rs` calls `collect_economic_orders` → `validate_and_reserve` →
+//! `execute_reserved_economy` three times (collect, production, trade) interleaved
+//! with non-economy steps, then calls `release_all_reservations` once at the end
+//! of all three batches to honour the documented reservation lifetime contract.
 //!
 //! Lighter helpers (warehouse caps, building tick, blockade capacity,
 //! maintenance, blockade headlines) live here alongside the phase types.
@@ -73,8 +76,10 @@ pub(super) fn validate_and_reserve(
 
 /// Execute a set of reserved economy actions.
 ///
-/// Calls into `processor.rs` for the heavy execution logic and releases
-/// any uncommitted reservations at the end of each batch (#162 safety net).
+/// Calls into `processor.rs` for the heavy execution logic. Does NOT release
+/// reservations — the caller (`processor.rs`) is responsible for calling
+/// `release_all_reservations` once after all economy batches complete so that
+/// reservations survive across collect → production → trade within a single turn.
 pub(super) fn execute_reserved_economy(
     game: &mut GameState,
     report: &mut TurnReport,
@@ -93,10 +98,6 @@ pub(super) fn execute_reserved_economy(
                 super::processor::resolve_trade_session(game, report, &blockade_capacity);
             }
         }
-    }
-    // Release any reservations not committed during execution (#162 safety net).
-    for nation in &mut game.nations {
-        nation.economy.release_all_reservations();
     }
 }
 
