@@ -8,8 +8,8 @@ use crate::types::*;
 #[cfg(test)]
 use super::common::next_unit_id;
 #[cfg(test)]
-use super::common::{PersonalityConfig, lua_or};
-use super::common::{AiPersonality, get_personality};
+use super::common::lua_or;
+use super::common::{PersonalityConfig, get_personality};
 
 /// Build military units when the nation has sufficient treasury.
 /// Personality affects thresholds and unit preferences:
@@ -174,12 +174,7 @@ pub(crate) fn ai_build_military(
             if let Some(v) = lua_cfg.as_ref().and_then(|c| c.tier3_army_max) {
                 break 'val v;
             }
-            match personality {
-                AiPersonality::Aggressive => 15,
-                AiPersonality::Diplomatic => 8,
-                AiPersonality::Economic => 10,
-                AiPersonality::Balanced => 12,
-            }
+            defaults.tier3_army_max
         };
         if army_count < tier3_max {
             let tier3_options: &[ArmyUnitType] = match personality {
@@ -326,34 +321,7 @@ pub(crate) fn ai_declare_wars(
     for &ai_id in ai_nation_ids {
         let personality = get_personality(game, ai_id);
 
-        // ── Per-personality defaults ────────────────────────────
-        let (default_cooldown, default_army_min, default_threshold, default_opportunism) =
-            match personality {
-                AiPersonality::Aggressive => (8u32, 3usize, 0.3f64, 1.2f64),
-                AiPersonality::Balanced => (12, 4, 0.5, 1.0),
-                AiPersonality::Economic => (15, 5, 0.6, 0.8),
-                AiPersonality::Diplomatic => (20, 8, 0.9, 0.6),
-            };
-
-        // Opportunity-gate defaults (decaying minimum opportunity required
-        // to declare war: high early game, relaxes over `decay_turns`).
-        // Mirrors the values in scripts/ai/*.lua; Lua is authoritative when
-        // the feature is enabled.
-        let (default_opp_start, default_opp_end, default_opp_decay_turns) = match personality {
-            AiPersonality::Aggressive => (0.25f64, 0.05f64, 15u32),
-            AiPersonality::Balanced => (0.35, 0.10, 20),
-            AiPersonality::Economic => (0.40, 0.15, 25),
-            AiPersonality::Diplomatic => (0.50, 0.20, 30),
-        };
-
-        // Resource-bonus defaults (reduced from the old 0.15 / 0.4 — trade
-        // satisfies most resource desires without bloodshed).
-        let (default_res_per_missing, default_res_cap) = match personality {
-            AiPersonality::Aggressive => (0.12f64, 0.25f64),
-            AiPersonality::Balanced => (0.10, 0.20),
-            AiPersonality::Economic => (0.08, 0.15),
-            AiPersonality::Diplomatic => (0.06, 0.15),
-        };
+        let pc = PersonalityConfig::for_personality(personality);
 
         // ── Read Lua overrides (feature-gated) ─────────────────
         #[cfg(feature = "lua")]
@@ -366,69 +334,40 @@ pub(crate) fn ai_declare_wars(
         let _lua_cfg: Option<()> = None;
 
         #[cfg(feature = "lua")]
-        let war_cooldown = lua_cfg
-            .as_ref()
-            .and_then(|c| c.war_cooldown)
-            .unwrap_or(default_cooldown);
+        let war_cooldown = lua_cfg.as_ref().and_then(|c| c.war_cooldown).unwrap_or(pc.war_cooldown);
         #[cfg(not(feature = "lua"))]
-        let war_cooldown = default_cooldown;
+        let war_cooldown = pc.war_cooldown;
 
         #[cfg(feature = "lua")]
-        let army_min_for_war = lua_cfg
-            .as_ref()
-            .and_then(|c| c.army_min_for_war)
-            .unwrap_or(default_army_min);
+        let army_min_for_war = lua_cfg.as_ref().and_then(|c| c.army_min_for_war).unwrap_or(pc.army_min_for_war);
         #[cfg(not(feature = "lua"))]
-        let army_min_for_war = default_army_min;
+        let army_min_for_war = pc.army_min_for_war;
 
         #[cfg(feature = "lua")]
-        let war_threshold = lua_cfg
-            .as_ref()
-            .and_then(|c| c.war_threshold)
-            .unwrap_or(default_threshold);
+        let war_threshold = lua_cfg.as_ref().and_then(|c| c.war_threshold).unwrap_or(pc.war_threshold);
         #[cfg(not(feature = "lua"))]
-        let war_threshold = default_threshold;
+        let war_threshold = pc.war_threshold;
 
         #[cfg(feature = "lua")]
-        let opportunism_weight = lua_cfg
-            .as_ref()
-            .and_then(|c| c.opportunism_weight)
-            .unwrap_or(default_opportunism);
+        let opportunism_weight = lua_cfg.as_ref().and_then(|c| c.opportunism_weight).unwrap_or(pc.opportunism_weight);
         #[cfg(not(feature = "lua"))]
-        let opportunism_weight = default_opportunism;
+        let opportunism_weight = pc.opportunism_weight;
 
         // Opportunity gate + resource-bonus tunables (Lua-overridable)
         #[cfg(feature = "lua")]
-        let min_opp_start = lua_cfg
-            .as_ref()
-            .and_then(|c| c.min_opportunity_start)
-            .unwrap_or(default_opp_start);
+        let min_opp_start = lua_cfg.as_ref().and_then(|c| c.min_opportunity_start).unwrap_or(pc.opp_start);
         #[cfg(feature = "lua")]
-        let min_opp_end = lua_cfg
-            .as_ref()
-            .and_then(|c| c.min_opportunity_end)
-            .unwrap_or(default_opp_end);
+        let min_opp_end = lua_cfg.as_ref().and_then(|c| c.min_opportunity_end).unwrap_or(pc.opp_end);
         #[cfg(feature = "lua")]
-        let opp_decay_turns = lua_cfg
-            .as_ref()
-            .and_then(|c| c.min_opportunity_decay_turns)
-            .unwrap_or(default_opp_decay_turns);
+        let opp_decay_turns = lua_cfg.as_ref().and_then(|c| c.min_opportunity_decay_turns).unwrap_or(pc.opp_decay_turns);
         #[cfg(feature = "lua")]
-        let resource_bonus_per_missing = lua_cfg
-            .as_ref()
-            .and_then(|c| c.resource_bonus_per_missing)
-            .unwrap_or(default_res_per_missing);
+        let resource_bonus_per_missing = lua_cfg.as_ref().and_then(|c| c.resource_bonus_per_missing).unwrap_or(pc.res_per_missing);
         #[cfg(feature = "lua")]
-        let resource_bonus_cap = lua_cfg
-            .as_ref()
-            .and_then(|c| c.resource_bonus_cap)
-            .unwrap_or(default_res_cap);
+        let resource_bonus_cap = lua_cfg.as_ref().and_then(|c| c.resource_bonus_cap).unwrap_or(pc.res_cap);
         #[cfg(not(feature = "lua"))]
-        let (min_opp_start, min_opp_end, opp_decay_turns) =
-            (default_opp_start, default_opp_end, default_opp_decay_turns);
+        let (min_opp_start, min_opp_end, opp_decay_turns) = (pc.opp_start, pc.opp_end, pc.opp_decay_turns);
         #[cfg(not(feature = "lua"))]
-        let (resource_bonus_per_missing, resource_bonus_cap) =
-            (default_res_per_missing, default_res_cap);
+        let (resource_bonus_per_missing, resource_bonus_cap) = (pc.res_per_missing, pc.res_cap);
 
         // Linear decay of the opportunity gate. Turns are 1-based (turn 1 is
         // the first turn of the game), so subtract 1 to make turn 1 = start
@@ -631,18 +570,14 @@ pub(crate) fn ai_declare_wars(
                     })
                     .unwrap_or(0);
 
-                let default_min_artillery: usize = match personality {
-                    AiPersonality::Aggressive | AiPersonality::Balanced => 2,
-                    AiPersonality::Economic | AiPersonality::Diplomatic => 3,
-                };
-
+                let pc_inner = PersonalityConfig::for_personality(personality);
                 #[cfg(feature = "lua")]
                 let min_artillery = lua_cfg
                     .as_ref()
                     .and_then(|c| c.min_artillery_for_minor_war)
-                    .unwrap_or(default_min_artillery);
+                    .unwrap_or(pc_inner.min_artillery_for_minor_war);
                 #[cfg(not(feature = "lua"))]
-                let min_artillery = default_min_artillery;
+                let min_artillery = pc_inner.min_artillery_for_minor_war;
 
                 if artillery_count < min_artillery {
                     continue;
@@ -1087,6 +1022,7 @@ pub(crate) fn ai_military_strategy(
     // FP is zero. Aggressive personalities use a lower ratio (willing to
     // engage at less than 1:1 raw FP).
     let personality = get_personality(game, nation_id);
+    let pc_tactical = PersonalityConfig::for_personality(personality);
     #[cfg(feature = "lua")]
     let (attack_fp_vs_minor, attack_fp_vs_gp, rest_health_threshold, capital_save_for_last_penalty) = {
         let cfg = game
@@ -1095,34 +1031,17 @@ pub(crate) fn ai_military_strategy(
             .as_ref()
             .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
         (
-            cfg.as_ref()
-                .and_then(|c| c.attack_fp_vs_minor)
-                .unwrap_or(0.8),
+            cfg.as_ref().and_then(|c| c.attack_fp_vs_minor).unwrap_or(0.8),
             cfg.as_ref().and_then(|c| c.attack_fp_vs_gp).unwrap_or(1.0),
-            cfg.as_ref()
-                .and_then(|c| c.rest_health_threshold)
-                .unwrap_or(50),
+            cfg.as_ref().and_then(|c| c.rest_health_threshold).unwrap_or(50),
             cfg.as_ref()
                 .and_then(|c| c.capital_save_for_last_penalty)
-                .unwrap_or(match personality {
-                    AiPersonality::Aggressive => 10,
-                    _ => 25,
-                }),
+                .unwrap_or(pc_tactical.capital_save_for_last_penalty),
         )
     };
     #[cfg(not(feature = "lua"))]
-    let (attack_fp_vs_minor, attack_fp_vs_gp, rest_health_threshold, capital_save_for_last_penalty) = {
-        let _ = personality;
-        (
-            0.8f64,
-            1.0f64,
-            50u8,
-            match personality {
-                AiPersonality::Aggressive => 10i32,
-                _ => 25i32,
-            },
-        )
-    };
+    let (attack_fp_vs_minor, attack_fp_vs_gp, rest_health_threshold, capital_save_for_last_penalty) =
+        (0.8f64, 1.0f64, 50u8, pc_tactical.capital_save_for_last_penalty);
 
     // Attack only when we actually have a meaningful combat force.
     if !enemies.is_empty() && combat_unit_count >= 4 {

@@ -12,7 +12,7 @@ use crate::types::*;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
-use super::common::{AiPersonality, get_personality};
+use super::common::{PersonalityConfig, get_personality};
 
 /// Build mills and factories when the nation has the required materials.
 fn ai_build_infrastructure(game: &mut GameState, nation_id: NationId) {
@@ -819,17 +819,13 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
     #[cfg(not(feature = "lua"))]
     let _lua_cfg: Option<()> = None;
 
+    let pc = PersonalityConfig::for_personality(personality);
     let base_infrastructure_budget: Money = 'val: {
         #[cfg(feature = "lua")]
         if let Some(budget) = lua_cfg.as_ref().map(|c| c.infrastructure_budget) {
             break 'val Money::dollars(budget);
         }
-        match personality {
-            AiPersonality::Economic => Money::dollars(3000),
-            AiPersonality::Diplomatic => Money::dollars(2500),
-            AiPersonality::Aggressive => Money::dollars(1500),
-            AiPersonality::Balanced => Money::dollars(2000),
-        }
+        Money::dollars(pc.infra_base_budget_dollars as u64)
     };
 
     // Scale budget with treasury: spend more aggressively when cash-rich
@@ -1158,7 +1154,7 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
         .as_ref()
         .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
 
-    // Economic personality expands more aggressively (Lua overrides Rust defaults)
+    let pc_eco = PersonalityConfig::for_personality(personality);
     let expansion_threshold_multiplier: u32 = 'val: {
         #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg
@@ -1167,10 +1163,7 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
         {
             break 'val v;
         }
-        match personality {
-            AiPersonality::Economic => 1,
-            _ => 2,
-        }
+        pc_eco.expansion_threshold_multiplier
     };
 
     let use_tier_expansion: bool = 'val: {

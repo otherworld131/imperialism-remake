@@ -41,6 +41,7 @@ required-features = ["gui"]
 gui = ["presentation"]
 
 [dependencies]
+application = { path = "crates/application" }
 clap = { version = "4", features = ["derive"] }
 domain = { path = "crates/domain" }
 flavor = { path = "crates/flavor" }

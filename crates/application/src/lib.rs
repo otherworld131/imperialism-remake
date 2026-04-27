@@ -3,7 +3,12 @@
 pub mod commands;
 pub mod queries;
 
-pub use domain;
+pub use domain::game_state::{GameState, new_game, new_game_with_data};
+pub use domain::hex::HexCoord;
+pub use domain::nation::NationColor;
+pub use domain::turn::{process_turn, calculate_score};
+pub use domain::types::*;
+pub use domain::scenarios;
 
 /// Application-layer errors covering command/query validation failures and
 /// wrapped domain errors.
