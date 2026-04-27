@@ -181,7 +181,10 @@ pub fn wasm_session_command(cmd_json: &str) -> String {
 
     let result = with_session_mut(|game| apply_command(game, cmd));
     match result {
-        Ok(r) => serde_json::to_string(&r).unwrap_or_else(|_| ok_json()),
+        Ok(r) => match serde_json::to_string(&r) {
+            Ok(json) => json,
+            Err(e) => err_json(&format!("command serialization failed: {e}")),
+        },
         Err(e) => err_json(&e),
     }
 }
@@ -199,7 +202,8 @@ pub fn wasm_session_query(query_json: &str) -> String {
 
     let result = with_session(|game| respond_to_query(game, query));
     match result {
-        Ok(s) => s,
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => err_json(&e.to_string()),
         Err(e) => err_json(&e),
     }
 }
@@ -685,11 +689,14 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
 
 // ── Query responses ──────────────────────────────────────────────────────────
 
-fn respond_to_query(game: &GameState, query: FrontendQuery) -> String {
+fn respond_to_query(
+    game: &GameState,
+    query: FrontendQuery,
+) -> Result<String, application::ApplicationError> {
     use FrontendQuery::*;
     match query {
         MapScreen => {
-            let data = get_map_screen(game);
+            let data = get_map_screen(game)?;
             serde_json::to_string(&serde_json::json!({
                 "ok": true,
                 "turn": data.turn,
@@ -699,10 +706,10 @@ fn respond_to_query(game: &GameState, query: FrontendQuery) -> String {
                 "army_count": data.army_count,
                 "civilian_count": data.civilian_count,
             }))
-            .unwrap_or_else(|_| ok_json())
+            .map_err(|e| application::ApplicationError::invalid(format!("query serialization failed: {e}")))
         }
         TransportScreen => {
-            let data = get_transport_screen(game);
+            let data = get_transport_screen(game)?;
             serde_json::to_string(&serde_json::json!({
                 "ok": true,
                 "freight_cars": data.freight_cars,
@@ -710,20 +717,20 @@ fn respond_to_query(game: &GameState, query: FrontendQuery) -> String {
                 "total_production": data.total_production,
                 "utilization_percent": data.utilization_percent,
             }))
-            .unwrap_or_else(|_| ok_json())
+            .map_err(|e| application::ApplicationError::invalid(format!("query serialization failed: {e}")))
         }
         IndustryScreen => {
-            let data = get_industry_screen(game);
+            let data = get_industry_screen(game)?;
             serde_json::to_string(&serde_json::json!({
                 "ok": true,
                 "buildings": data.buildings,
                 "workers": data.workers,
                 "warehouse_summary": data.warehouse_summary,
             }))
-            .unwrap_or_else(|_| ok_json())
+            .map_err(|e| application::ApplicationError::invalid(format!("query serialization failed: {e}")))
         }
         TradeScreen => {
-            let data = get_trade_screen(game);
+            let data = get_trade_screen(game)?;
             serde_json::to_string(&serde_json::json!({
                 "ok": true,
                 "cargo_capacity": data.cargo_capacity,
@@ -736,10 +743,10 @@ fn respond_to_query(game: &GameState, query: FrontendQuery) -> String {
                     "available_resources": &p.available_resources,
                 })).collect::<Vec<_>>(),
             }))
-            .unwrap_or_else(|_| ok_json())
+            .map_err(|e| application::ApplicationError::invalid(format!("query serialization failed: {e}")))
         }
         DiplomacyScreen => {
-            let data = get_diplomacy_screen(game);
+            let data = get_diplomacy_screen(game)?;
             serde_json::to_string(&serde_json::json!({
                 "ok": true,
                 "standing": data.standing,
@@ -747,7 +754,7 @@ fn respond_to_query(game: &GameState, query: FrontendQuery) -> String {
                 "minor_nation_relations": data.minor_nation_relations,
                 "council_projection": data.council_projection,
             }))
-            .unwrap_or_else(|_| ok_json())
+            .map_err(|e| application::ApplicationError::invalid(format!("query serialization failed: {e}")))
         }
     }
 }
@@ -1005,7 +1012,7 @@ mod tests {
     #[test]
     fn map_screen_query_returns_ok() {
         let game = setup();
-        let resp = respond_to_query(&game, FrontendQuery::MapScreen);
+        let resp = respond_to_query(&game, FrontendQuery::MapScreen).unwrap();
         let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["ok"], true);
         assert!(v["turn"].is_string());

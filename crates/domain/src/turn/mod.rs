@@ -1,3 +1,6 @@
+pub(crate) mod trade_phase;
+pub(crate) mod rewards_phase;
+pub(crate) mod diplomacy_phase;
 pub(crate) mod civilian_phase;
 pub(crate) mod economy_phase;
 pub(crate) mod news_phase;

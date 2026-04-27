@@ -8,9 +8,8 @@
 //!
 //! Lighter helpers (warehouse caps, building tick, blockade capacity,
 //! maintenance, blockade headlines) live here alongside the phase types.
-//! The heavy execution functions (`collect_resources`, `run_production`,
-//! `resolve_trade_session`) remain in `processor.rs` and are invoked from
-//! `execute_reserved_economy`.
+//! The heavy execution functions (`collect_resources`, `run_production`)
+//! remain in `processor.rs`; trade resolution now lives in `trade_phase.rs`.
 
 use crate::economy::buildings::BuildingType;
 use crate::events::{Headline, HeadlineCategory};
@@ -98,7 +97,7 @@ pub(super) fn execute_reserved_economy(
             }
             EconomicOrderKind::ExecuteTrade => {
                 let blockade_capacity = compute_blockade_capacity(game);
-                super::processor::resolve_trade_session(game, report, &blockade_capacity);
+                super::trade_phase::resolve_trade_session(game, report, &blockade_capacity);
             }
         }
     }
