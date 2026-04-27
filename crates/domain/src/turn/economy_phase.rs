@@ -12,12 +12,18 @@
 //! remain in `processor.rs`; trade resolution now lives in `trade_phase.rs`.
 
 use crate::economy::buildings::BuildingType;
+use crate::economy::labor::WorkerType;
+use crate::economy::observability::{PendingEconomyOrder, PendingOrderPhase};
+use crate::economy::production::{
+    ProductionChain, calculate_factory_production, calculate_mill_production,
+};
+use crate::economy::trade::{self, Commodity};
 use crate::events::{Headline, HeadlineCategory};
 use crate::game_state::GameState;
 use crate::military::naval::calculate_blockade_effect;
 use crate::turn::processor::TurnReport;
 use crate::types::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 // ── Plan / Reserve / Execute types (#161) ────────────────────────────────────
 
@@ -39,13 +45,40 @@ pub enum EconomicOrderKind {
     ExecuteTrade,
 }
 
+#[derive(Debug, Clone)]
+pub struct NationReservation {
+    pub nation_id: NationId,
+    pub inventory_reservations: Vec<ReservationId>,
+    pub inventory_summary: BTreeMap<Commodity, u32>,
+    pub treasury_reserved: Money,
+    pub labor_reserved: HashMap<WorkerType, u32>,
+}
+
+impl NationReservation {
+    fn commitment_count(&self) -> usize {
+        let _ = self.nation_id;
+        self.inventory_reservations.len()
+            + self.inventory_summary.len()
+            + self.labor_reserved.len()
+            + usize::from(self.treasury_reserved > Money::ZERO)
+    }
+}
+
 /// An economic order that has been validated and whose resource requirements
-/// have been pre-committed. In Phase 3 this is a structural placeholder —
-/// the `ReservationId` API is implemented (#162) but full per-commodity wiring
-/// into the execution pipeline is deferred to Trello #169 and #174.
+/// have been pre-committed.
 #[derive(Debug, Clone)]
 pub struct ReservedAction {
     pub order: EconomicOrder,
+    pub reservations: Vec<NationReservation>,
+}
+
+impl ReservedAction {
+    fn commitment_count(&self) -> usize {
+        self.reservations
+            .iter()
+            .map(NationReservation::commitment_count)
+            .sum()
+    }
 }
 
 /// Gather the standard economy orders for this turn.
@@ -60,20 +93,407 @@ pub(super) fn collect_economic_orders(_game: &GameState) -> Vec<EconomicOrder> {
     ]
 }
 
-/// Validate orders and mark resource reservations.
+/// Validate orders and register the reservations needed to execute them.
 ///
-/// Returns the subset of orders that are feasible and ready to execute.
-/// In Phase 3 this is a thin pass-through — the structural seam exists so
-/// Phase 4 can add real per-commodity reservation logic without a refactor
-/// (tracked under Trello #169: pre-execution observability).
+/// Returns reserved actions ready for execution in the current economy batch.
+/// Reservations and pending-order summaries are batch-local and must be
+/// cleared after the matching batch executes so later batches observe fresh
+/// `available()` state.
 pub(super) fn validate_and_reserve(
-    _game: &mut GameState,
+    game: &mut GameState,
     orders: Vec<EconomicOrder>,
 ) -> Vec<ReservedAction> {
-    // DEFERRED (#169/#174): no reservation guarantees are active. Phase 4 replaces
-    // this with per-nation NationEconomy::reserve calls; callers must not assume
-    // executing a ReservedAction has committed any inventory.
-    orders.into_iter().map(|order| ReservedAction { order }).collect()
+    orders
+        .into_iter()
+        .map(|order| {
+            let reservations = match order.kind {
+                EconomicOrderKind::CollectTileResources => Vec::new(),
+                EconomicOrderKind::RunProduction => reserve_production_phase(game),
+                EconomicOrderKind::ExecuteTrade => reserve_trade_phase(game),
+            };
+            ReservedAction { order, reservations }
+        })
+        .collect()
+}
+
+fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
+    let untrained_mult = game.game_data.game_config.untrained_labor;
+    let trained_mult = game.game_data.game_config.trained_labor;
+    let expert_mult = game.game_data.game_config.expert_labor;
+    let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
+    let mut out = Vec::new();
+
+    for nation_id in nation_ids {
+        let Some(nation) = game.get_nation(nation_id) else {
+            continue;
+        };
+        if nation.diplomacy.is_in_anarchy {
+            continue;
+        }
+
+        let resources: Vec<(ResourceType, u32)> =
+            nation.economy.warehouse.iter().map(|(r, q)| (*r, *q)).collect();
+        let starting_materials: HashMap<MaterialType, u32> =
+            nation.economy.materials.iter().map(|(m, q)| (*m, *q)).collect();
+
+        let mut remaining_labor = nation.economy.labor.total_labor_units_with(
+            untrained_mult,
+            trained_mult,
+            expert_mult,
+        );
+        let mut resource_needs: BTreeMap<ResourceType, u32> = BTreeMap::new();
+
+        let timber_cap = building_capacity(nation, BuildingType::LumberMill);
+        let timber_result = if timber_cap > 0 {
+            let result = calculate_mill_production(
+                ProductionChain::Timber,
+                &resources,
+                timber_cap,
+                remaining_labor,
+            );
+            remaining_labor -= result.labor_used;
+            for (resource, qty) in &result.resources_consumed {
+                *resource_needs.entry(*resource).or_insert(0) += *qty;
+            }
+            Some(result)
+        } else {
+            None
+        };
+
+        let steel_cap = building_capacity(nation, BuildingType::SteelMill);
+        let metal_result = if steel_cap > 0 {
+            let result = calculate_mill_production(
+                ProductionChain::Metal,
+                &resources,
+                steel_cap,
+                remaining_labor,
+            );
+            remaining_labor -= result.labor_used;
+            for (resource, qty) in &result.resources_consumed {
+                *resource_needs.entry(*resource).or_insert(0) += *qty;
+            }
+            Some(result)
+        } else {
+            None
+        };
+
+        let textile_cap = building_capacity(nation, BuildingType::TextileMill);
+        let textile_result = if textile_cap > 0 {
+            let result = calculate_mill_production(
+                ProductionChain::Textile,
+                &resources,
+                textile_cap,
+                remaining_labor,
+            );
+            remaining_labor -= result.labor_used;
+            for (resource, qty) in &result.resources_consumed {
+                *resource_needs.entry(*resource).or_insert(0) += *qty;
+            }
+            Some(result)
+        } else {
+            None
+        };
+
+        let mut materials_inventory = starting_materials.clone();
+        for result in [&timber_result, &metal_result, &textile_result]
+            .into_iter()
+            .flatten()
+        {
+            for (material, qty) in &result.materials_produced {
+                *materials_inventory.entry(*material).or_insert(0) += *qty;
+            }
+        }
+        let materials_inventory: Vec<(MaterialType, u32)> = materials_inventory.into_iter().collect();
+
+        let furniture_cap = building_capacity(nation, BuildingType::FurnitureFactory);
+        let furniture_result = if furniture_cap > 0 {
+            let result = calculate_factory_production(
+                ProductionChain::Timber,
+                &materials_inventory,
+                furniture_cap,
+                remaining_labor,
+            );
+            remaining_labor -= result.labor_used;
+            Some(result)
+        } else {
+            None
+        };
+        let hardware_cap = building_capacity(nation, BuildingType::HardwareFactory);
+        let hardware_result = if hardware_cap > 0 {
+            let result = calculate_factory_production(
+                ProductionChain::Metal,
+                &materials_inventory,
+                hardware_cap,
+                remaining_labor,
+            );
+            remaining_labor -= result.labor_used;
+            Some(result)
+        } else {
+            None
+        };
+        let clothing_cap = building_capacity(nation, BuildingType::ClothingFactory);
+        let clothing_result = if clothing_cap > 0 {
+            let result = calculate_factory_production(
+                ProductionChain::Textile,
+                &materials_inventory,
+                clothing_cap,
+                remaining_labor,
+            );
+            remaining_labor -= result.labor_used;
+            Some(result)
+        } else {
+            None
+        };
+
+        let mut material_needs: BTreeMap<MaterialType, u32> = BTreeMap::new();
+        for result in [&furniture_result, &hardware_result, &clothing_result]
+            .into_iter()
+            .flatten()
+        {
+            for (material, qty) in &result.materials_consumed {
+                let starting_stock = starting_materials.get(material).copied().unwrap_or(0);
+                let already_reserved = material_needs.get(material).copied().unwrap_or(0);
+                let reservable = starting_stock.saturating_sub(already_reserved).min(*qty);
+                if reservable > 0 {
+                    *material_needs.entry(*material).or_insert(0) += reservable;
+                }
+            }
+        }
+
+        let labor_used: u32 = [&timber_result, &metal_result, &textile_result]
+            .into_iter()
+            .flatten()
+            .map(|r| r.labor_used)
+            .sum::<u32>()
+            + [&furniture_result, &hardware_result, &clothing_result]
+                .into_iter()
+                .flatten()
+                .map(|r| r.labor_used)
+                .sum::<u32>();
+
+        let Some(nation) = game.get_nation_mut(nation_id) else {
+            continue;
+        };
+        let mut inventory_reservations = Vec::new();
+        let mut inventory_summary = BTreeMap::new();
+        for (resource, qty) in resource_needs {
+            if qty == 0 {
+                continue;
+            }
+            if let Ok(id) = nation.economy.reserve(Commodity::Resource(resource), qty) {
+                inventory_reservations.push(id);
+                inventory_summary.insert(Commodity::Resource(resource), qty);
+            }
+        }
+        for (material, qty) in material_needs {
+            if qty == 0 {
+                continue;
+            }
+            if let Ok(id) = nation.economy.reserve(Commodity::Material(material), qty) {
+                inventory_reservations.push(id);
+                inventory_summary.insert(Commodity::Material(material), qty);
+            }
+        }
+        let labor_reserved = nation
+            .economy
+            .reserve_labor_units_with(
+                labor_used,
+                untrained_mult,
+                trained_mult,
+                expert_mult,
+            )
+            .unwrap_or_default();
+        if !inventory_summary.is_empty() || !labor_reserved.is_empty() {
+            register_pending_order(
+                game,
+                nation_id,
+                PendingEconomyOrder {
+                    phase: PendingOrderPhase::Produce,
+                    inventory: inventory_summary.clone(),
+                    treasury: Money::ZERO,
+                    labor: labor_reserved.clone(),
+                },
+            );
+        }
+        out.push(NationReservation {
+            nation_id,
+            inventory_reservations,
+            inventory_summary,
+            treasury_reserved: Money::ZERO,
+            labor_reserved,
+        });
+    }
+
+    out
+}
+
+fn reserve_trade_phase(game: &mut GameState) -> Vec<NationReservation> {
+    let human_id = game.human_player_nation;
+    let blockade_capacity = compute_blockade_capacity(game);
+    let gp_ids: Vec<NationId> = game
+        .world.nations
+        .iter()
+        .filter(|n| n.is_great_power() && !n.diplomacy.is_in_anarchy)
+        .map(|n| n.id)
+        .collect();
+
+    let offers =
+        trade::generate_minor_nation_offers(&game.world.nations, &game.world.provinces, &game.world.hex_map);
+    let mut all_bids = Vec::new();
+    for gp_id in &gp_ids {
+        if *gp_id == human_id {
+            if let Some(human) = game.get_nation(*gp_id) {
+                for order in &human.diplomacy.player_buy_orders {
+                    if order.quantity > 0 {
+                        all_bids.push(trade::TradeBid {
+                            buyer: *gp_id,
+                            resource: order.resource,
+                            quantity: order.quantity,
+                            max_price_per_unit: order.max_price_per_unit,
+                        });
+                    }
+                }
+            }
+            continue;
+        }
+        if let Some(nation) = game.get_nation(*gp_id) {
+            let cargo_capacity = blockade_capacity
+                .get(gp_id)
+                .copied()
+                .unwrap_or_else(|| nation.total_cargo_capacity());
+            all_bids.extend(trade::generate_smart_bids(
+                nation,
+                &offers,
+                &game.world.diplomacy,
+                cargo_capacity,
+            ));
+        }
+    }
+
+    let mut bid_spend: HashMap<NationId, Money> = HashMap::new();
+    for bid in &all_bids {
+        let cost = Money::dollars(
+            bid.max_price_per_unit.as_dollars() * i64::from(bid.quantity),
+        );
+        *bid_spend.entry(bid.buyer).or_insert(Money::ZERO) += cost;
+    }
+
+    let mut out = Vec::new();
+    for nation_id in gp_ids {
+        let Some(nation_ro) = game.get_nation(nation_id) else {
+            continue;
+        };
+        let subsidy_total: Money = nation_ro
+            .diplomacy
+            .trade_subsidies
+            .values()
+            .copied()
+            .fold(Money::ZERO, |acc, cost| acc + cost);
+        let sell_orders = if nation_id == human_id {
+            nation_ro.diplomacy.player_sell_orders.clone()
+        } else {
+            Vec::new()
+        };
+        let reserve_requests: Vec<(Commodity, u32)> = sell_orders
+            .iter()
+            .filter_map(|order| match order.commodity {
+                Commodity::Resource(resource) => {
+                    if order.quantity > 0 && nation_ro.resource_amount(resource) >= order.quantity {
+                        Some((Commodity::Resource(resource), order.quantity))
+                    } else {
+                        None
+                    }
+                }
+                Commodity::Material(material) => {
+                    let stock = nation_ro.economy.materials.get(&material).copied().unwrap_or(0);
+                    let qty = stock.min(order.quantity);
+                    (qty > 0).then_some((Commodity::Material(material), qty))
+                }
+                Commodity::Goods(goods) => {
+                    let stock = nation_ro.economy.goods.get(&goods).copied().unwrap_or(0);
+                    let qty = stock.min(order.quantity);
+                    (qty > 0).then_some((Commodity::Goods(goods), qty))
+                }
+            })
+            .collect();
+
+        let mut inventory_summary = BTreeMap::new();
+        let mut inventory_reservations = Vec::new();
+        for (commodity, qty) in reserve_requests {
+            if let Ok(id) = reserve_inventory(game, nation_id, commodity, qty) {
+                inventory_reservations.push(id);
+                inventory_summary.insert(commodity, qty);
+            }
+        }
+
+        let target_bid_spend = bid_spend.get(&nation_id).copied().unwrap_or(Money::ZERO);
+        let Some(nation) = game.get_nation_mut(nation_id) else {
+            continue;
+        };
+        let mut treasury_reserved = Money::ZERO;
+        if subsidy_total > Money::ZERO && nation.economy.reserve_treasury(subsidy_total).is_ok() {
+            treasury_reserved += subsidy_total;
+        }
+        let bid_reserve = if target_bid_spend <= nation.economy.available_treasury() {
+            target_bid_spend
+        } else {
+            nation.economy.available_treasury()
+        };
+        if bid_reserve > Money::ZERO && nation.economy.reserve_treasury(bid_reserve).is_ok() {
+            treasury_reserved += bid_reserve;
+        }
+
+        if !inventory_summary.is_empty() || treasury_reserved > Money::ZERO {
+            register_pending_order(
+                game,
+                nation_id,
+                PendingEconomyOrder {
+                    phase: PendingOrderPhase::Trade,
+                    inventory: inventory_summary.clone(),
+                    treasury: treasury_reserved,
+                    labor: HashMap::new(),
+                },
+            );
+        }
+        out.push(NationReservation {
+            nation_id,
+            inventory_reservations,
+            inventory_summary,
+            treasury_reserved,
+            labor_reserved: HashMap::new(),
+        });
+    }
+    out
+}
+
+fn building_capacity(nation: &crate::nation::Nation, building_type: BuildingType) -> u32 {
+    nation
+        .economy
+        .buildings
+        .iter()
+        .find(|b| b.building_type == building_type)
+        .map(|b| b.effective_capacity())
+        .unwrap_or(0)
+}
+
+fn reserve_inventory(
+    game: &mut GameState,
+    nation_id: NationId,
+    commodity: Commodity,
+    qty: u32,
+) -> Result<ReservationId, crate::DomainError> {
+    let nation = game
+        .get_nation_mut(nation_id)
+        .ok_or(crate::DomainError::NationNotFound(nation_id))?;
+    nation.economy.reserve(commodity, qty)
+}
+
+fn register_pending_order(game: &mut GameState, nation_id: NationId, order: PendingEconomyOrder) {
+    game.transient
+        .pending_economy_orders
+        .entry(nation_id)
+        .or_default()
+        .push(order);
 }
 
 /// Execute a set of reserved economy actions.
@@ -88,6 +508,7 @@ pub(super) fn execute_reserved_economy(
     reserved: Vec<ReservedAction>,
 ) {
     for action in reserved {
+        let _ = action.commitment_count();
         match action.order.kind {
             EconomicOrderKind::CollectTileResources => {
                 super::processor::collect_resources(game, report);

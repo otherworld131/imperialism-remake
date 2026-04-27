@@ -9,6 +9,7 @@
 use crate::economy::trade::Commodity;
 use crate::economy::labor::WorkerType;
 use crate::types::*;
+use std::collections::{BTreeMap, HashMap};
 
 /// Why an economy action cannot be executed right now.
 ///
@@ -35,6 +36,33 @@ pub enum BlockReason {
     InsufficientTreasury { needed: Money, available: Money },
     /// A named prerequisite (e.g. a building or tech) is missing.
     MissingPrerequisite(String),
+}
+
+/// Which economy-phase batch a pending order belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingOrderPhase {
+    Collect,
+    Produce,
+    Trade,
+}
+
+impl std::fmt::Display for PendingOrderPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Collect => write!(f, "collect"),
+            Self::Produce => write!(f, "production"),
+            Self::Trade => write!(f, "trade"),
+        }
+    }
+}
+
+/// Debug/UI-facing summary of an economy action that has been reserved but not yet cleared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingEconomyOrder {
+    pub phase: PendingOrderPhase,
+    pub inventory: BTreeMap<Commodity, u32>,
+    pub treasury: Money,
+    pub labor: HashMap<WorkerType, u32>,
 }
 
 impl std::fmt::Display for BlockReason {

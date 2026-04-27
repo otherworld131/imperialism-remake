@@ -12,6 +12,37 @@ use crate::scripting::LuaEngine;
 use crate::tech::TechTree;
 use std::collections::HashMap;
 
+#[cfg(test)]
+#[derive(Debug, serde::Deserialize)]
+struct TestTechDefsFile {
+    technologies: Vec<TestTechDef>,
+}
+
+#[cfg(test)]
+#[derive(Debug, serde::Deserialize)]
+struct TestTechDef {
+    id: u32,
+    name: String,
+    cost: i64,
+    earliest_year: u32,
+    latest_year: u32,
+    prerequisites: Vec<u32>,
+    effects: Vec<TestTechEffectDef>,
+}
+
+#[cfg(test)]
+#[derive(Debug, serde::Deserialize)]
+enum TestTechEffectDef {
+    UnlockUnit(String),
+    UnlockBuilding(String),
+    EnableTerrainImprovement { terrain: String, max_level: u8 },
+    EnableInfrastructure(String),
+    UnlockShip(String),
+    UpgradeUnit { from: String, to: String },
+    EnableCivilian(String),
+    LuaScript(String),
+}
+
 /// Global game-rule constants. Loaded from `scripts/config/game.lua` when the
 /// Lua feature is enabled; otherwise uses hardcoded defaults.
 /// These define fundamental mechanics, NOT personality preferences.
@@ -508,6 +539,63 @@ pub fn default_ship_stats() -> HashMap<ShipType, ShipStats> {
         Battlecruiser,
     ];
     all_types.into_iter().map(|t| (t, t.stats())).collect()
+}
+
+#[cfg(test)]
+fn convert_test_tech_effect(def: TestTechEffectDef) -> crate::tech::tree::TechEffect {
+    use crate::economy::buildings::BuildingType;
+    use crate::economy::civilians::CivilianType;
+    use crate::tech::tree::TechEffect;
+
+    match def {
+        TestTechEffectDef::UnlockUnit(name) => {
+            TechEffect::UnlockUnit(name.parse().expect("valid army unit in test data"))
+        }
+        TestTechEffectDef::UnlockBuilding(name) => TechEffect::UnlockBuilding(
+            name.parse::<BuildingType>().expect("valid building type in test data"),
+        ),
+        TestTechEffectDef::EnableTerrainImprovement { terrain, max_level } => {
+            TechEffect::EnableTerrainImprovement { terrain, max_level }
+        }
+        TestTechEffectDef::EnableInfrastructure(name) => TechEffect::EnableInfrastructure(name),
+        TestTechEffectDef::UnlockShip(name) => TechEffect::UnlockShip(name),
+        TestTechEffectDef::UpgradeUnit { from, to } => TechEffect::UpgradeUnit {
+            from: from.parse().expect("valid army unit in test data"),
+            to: to.parse().expect("valid army unit in test data"),
+        },
+        TestTechEffectDef::EnableCivilian(name) => TechEffect::EnableCivilian(
+            name.parse::<CivilianType>().expect("valid civilian type in test data"),
+        ),
+        TestTechEffectDef::LuaScript(script) => TechEffect::LuaScript(script),
+    }
+}
+
+#[cfg(test)]
+pub fn test_game_data() -> GameData {
+    use crate::events::TechId;
+    use crate::tech::tree::Technology;
+    use crate::types::Money;
+
+    let defs: TestTechDefsFile = ron::from_str(include_str!("../../../../data/definitions/technologies.ron"))
+        .expect("technologies.ron must be valid");
+    let tech_tree = TechTree::from_technologies(
+        defs.technologies
+            .into_iter()
+            .map(|def| Technology {
+                id: TechId(def.id),
+                name: def.name,
+                cost: Money::dollars(def.cost),
+                earliest_year: def.earliest_year,
+                latest_year: def.latest_year,
+                prerequisites: def.prerequisites.into_iter().map(TechId).collect(),
+                effects: def.effects.into_iter().map(convert_test_tech_effect).collect(),
+            })
+            .collect(),
+    );
+    tech_tree
+        .validate()
+        .expect("embedded tech tree test data should validate");
+    GameData::from_parts(tech_tree, default_unit_stats(), default_ship_stats())
 }
 
 #[cfg(test)]

@@ -9,9 +9,9 @@ mod saves;
 
 use clap::Parser;
 
-use domain::game_state::new_game;
 use domain::turn::{calculate_score, process_turn};
 use domain::types::*;
+use infrastructure::data_loader::load_embedded_game_data;
 
 use crate::flavor_bridge::apply_flavor;
 
@@ -37,7 +37,12 @@ fn main() {
 
     let mut game = if let Some(scenario_id) = &args.scenario {
         let nation_index = args.nation_index.unwrap_or(0);
-        match domain::scenarios::new_scenario_game(scenario_id, Difficulty::Normal, nation_index) {
+        match domain::scenarios::new_scenario_game_with_data(
+            scenario_id,
+            Difficulty::Normal,
+            nation_index,
+            load_embedded_game_data(),
+        ) {
             Ok(g) => {
                 println!(
                     "  Starting scenario: {} ({})",
@@ -63,7 +68,12 @@ fn main() {
     } else {
         let map_key = args.map_key.as_deref().unwrap_or("imperialism");
         let nation_index = args.nation_index.unwrap_or(0);
-        new_game(map_key, Difficulty::Normal, nation_index)
+        domain::game_state::new_game_with_data(
+            map_key,
+            Difficulty::Normal,
+            nation_index,
+            load_embedded_game_data(),
+        )
     };
 
     apply_flavor(&mut game, "");

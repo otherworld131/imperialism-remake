@@ -459,12 +459,13 @@ mod tests {
         let available = vec![(ResourceType::Timber, 3), (ResourceType::Coal, 20)];
         let deliveries = ts.calculate_deliveries(&available);
 
-        // Timber gets min(5, 3) = 3, Coal gets min(5, 20) = 5
+        // Timber gets min(5, 3) = 3 and the unused 2-capacity remainder is
+        // redistributed to Coal instead of being dropped.
         let timber = deliveries.iter().find(|(r, _)| *r == ResourceType::Timber);
         let coal = deliveries.iter().find(|(r, _)| *r == ResourceType::Coal);
 
         assert_eq!(timber, Some(&(ResourceType::Timber, 3)));
-        assert_eq!(coal, Some(&(ResourceType::Coal, 5)));
+        assert_eq!(coal, Some(&(ResourceType::Coal, 7)));
     }
 
     #[test]
@@ -521,8 +522,10 @@ mod tests {
         let timber = deliveries.iter().find(|(r, _)| *r == ResourceType::Timber);
         let coal = deliveries.iter().find(|(r, _)| *r == ResourceType::Coal);
 
+        // Timber is capped at 3; the unused 5 capacity from its 80% share is
+        // redistributed, so Coal receives 2 + 5 = 7.
         assert_eq!(timber, Some(&(ResourceType::Timber, 3)));
-        assert_eq!(coal, Some(&(ResourceType::Coal, 2)));
+        assert_eq!(coal, Some(&(ResourceType::Coal, 7)));
     }
 
     #[test]

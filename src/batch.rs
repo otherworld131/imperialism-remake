@@ -1,11 +1,13 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use domain::economy::buildings::{Building, BuildingType};
-use domain::game_state::{GameState, new_game_with_seed};
+use domain::game_state::{GameState, new_game_with_seed_and_data};
 use domain::hex::HexCoord;
 use domain::map::infrastructure;
+use domain::nation::Nation;
 use domain::turn::{calculate_score, process_turn};
 use domain::types::*;
+use ::infrastructure::data_loader::load_embedded_game_data;
 
 // ── Batch mode data structures ───────────────────────────────────
 
@@ -103,6 +105,16 @@ pub(crate) struct PersonalityStats {
 }
 
 // ── Snapshot & helpers ───────────────────────────────────────────
+
+fn human_player(game: &GameState) -> Option<&Nation> {
+    match game.get_nation(game.human_player_nation) {
+        Some(player) => Some(player),
+        None => {
+            eprintln!("Internal error: human player nation is missing from game state.");
+            None
+        }
+    }
+}
 
 fn take_snapshot(
     game: &GameState,
@@ -324,7 +336,13 @@ pub(crate) fn run_batch(n: u32, verbose_cashflow: bool) {
     for game_idx in 0..n {
         let map_key = format!("batch_{}", game_idx);
         let personality_seed = game_idx as u64 * 6_364_136_223_846_793_005 + 1;
-        let mut game = new_game_with_seed(&map_key, Difficulty::Normal, 0, personality_seed);
+        let mut game = new_game_with_seed_and_data(
+            &map_key,
+            Difficulty::Normal,
+            0,
+            personality_seed,
+            load_embedded_game_data(),
+        );
         crate::flavor_bridge::apply_flavor(&mut game, "");
         // Batch mode: promote the human slot to fully AI-managed so every GP
         // develops. Without this the slot-0 nation has no personality and is
@@ -562,10 +580,9 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
 
     // Auto-build depot on capital and railroads (same as AI)
     {
-        let capital_pid = game
-            .get_nation(player_id)
-            .map(|n| n.capital_province_id)
-            .unwrap();
+        let Some(capital_pid) = game.get_nation(player_id).map(|n| n.capital_province_id) else {
+            return;
+        };
         let capital_tiles: Vec<HexCoord> = game
             .get_province(capital_pid)
             .map(|p| p.tiles.clone())
@@ -638,10 +655,9 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
             .get_nation(player_id)
             .map(|n| n.province_ids.clone())
             .unwrap_or_default();
-        let capital_pid = game
-            .get_nation(player_id)
-            .map(|n| n.capital_province_id)
-            .unwrap();
+        let Some(capital_pid) = game.get_nation(player_id).map(|n| n.capital_province_id) else {
+            return;
+        };
 
         for &pid in &province_ids {
             if pid == capital_pid {
@@ -731,18 +747,12 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
     }
 
     // Auto-build first mills (free bootstrap, same as AI)
-    let needs_lumber_mill = !game
-        .get_nation(player_id)
-        .unwrap()
-        .has_building(BuildingType::LumberMill);
-    let needs_steel_mill = !game
-        .get_nation(player_id)
-        .unwrap()
-        .has_building(BuildingType::SteelMill);
-    let needs_textile_mill = !game
-        .get_nation(player_id)
-        .unwrap()
-        .has_building(BuildingType::TextileMill);
+    let Some(player) = game.get_nation(player_id) else {
+        return;
+    };
+    let needs_lumber_mill = !player.has_building(BuildingType::LumberMill);
+    let needs_steel_mill = !player.has_building(BuildingType::SteelMill);
+    let needs_textile_mill = !player.has_building(BuildingType::TextileMill);
 
     if let Some(nation) = game.get_nation_mut(player_id) {
         if needs_lumber_mill {
@@ -764,7 +774,9 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
 
     // Auto-build factories: first one of each type is free (same bootstrap as mills)
     {
-        let nation_ref = game.get_nation(player_id).unwrap();
+        let Some(nation_ref) = game.get_nation(player_id) else {
+            return;
+        };
         let has_lumber_mill = nation_ref.has_building(BuildingType::LumberMill);
         let has_steel_mill = nation_ref.has_building(BuildingType::SteelMill);
         let has_textile_mill = nation_ref.has_building(BuildingType::TextileMill);
@@ -868,7 +880,9 @@ pub(crate) fn cmd_auto(game: &mut GameState, turns: u32) {
         return;
     }
 
-    let player = game.get_nation(game.human_player_nation).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
     let score = calculate_score(player);
     let mut all_scores: Vec<_> = game
         .great_powers()

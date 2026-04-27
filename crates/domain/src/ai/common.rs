@@ -257,16 +257,16 @@ pub(crate) mod test_helpers {
             ));
         }
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province1, province2],
             nations: vec![human_nation, ai_nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            game_data: GameData::default(),
+            game_data: crate::data::test_game_data(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -362,11 +362,11 @@ pub(crate) mod test_helpers {
             ProvinceId(3),
         );
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province1, province2, province3],
             nations: vec![human_nation, ai_nation, minor_nation],
             human_player_nation: NationId(1),
@@ -486,17 +486,17 @@ pub(crate) mod test_helpers {
         // Declare war between AI and enemy
         diplomacy.declare_war(NationId(2), NationId(3));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province1, province2, province3],
             nations: vec![human_nation, ai_nation, enemy_nation],
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: GameData::default(),
-            diplomacy,
+            diplomacy: diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             pending_landings: Vec::new(),

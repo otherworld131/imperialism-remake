@@ -491,7 +491,7 @@ mod tests {
         test_build_railroad(&mut map, coord, NationId(1), &provinces).unwrap();
         let result = test_build_railroad(&mut map, coord, NationId(1), &provinces);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Railroad already exists");
+        assert_eq!(result.unwrap_err().to_string(), "illegal move: Railroad already exists");
     }
 
     #[test]
@@ -501,7 +501,7 @@ mod tests {
         let provinces = owned_land(&mut map, coord, TerrainType::Sea);
         let result = test_build_railroad(&mut map, coord, NationId(1), &provinces);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Cannot build railroad on sea");
+        assert_eq!(result.unwrap_err().to_string(), "illegal move: Cannot build railroad on sea");
     }
 
     #[test]
@@ -568,7 +568,7 @@ mod tests {
         build_depot(&mut map, coord, NationId(1), &provinces, &cfg()).unwrap();
         let result = build_depot(&mut map, coord, NationId(1), &provinces, &cfg());
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Depot already exists");
+        assert_eq!(result.unwrap_err().to_string(), "illegal move: Depot already exists");
     }
 
     #[test]
@@ -613,7 +613,10 @@ mod tests {
         let provinces = owned_land(&mut map, coord, TerrainType::Grassland);
         let result = build_port(&mut map, coord, NationId(1), &provinces, &cfg());
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Port must be on a coastal tile");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "illegal move: Port must be on a coastal tile"
+        );
     }
 
     #[test]
@@ -646,7 +649,7 @@ mod tests {
         build_port(&mut map, land, NationId(1), &provinces, &cfg()).unwrap();
         let result = build_port(&mut map, land, NationId(1), &provinces, &cfg());
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Port already exists");
+        assert_eq!(result.unwrap_err().to_string(), "illegal move: Port already exists");
     }
 
     // ── is_province_connected ─────────────────────────────────
@@ -898,7 +901,10 @@ mod tests {
         build_fort(&mut map, coord, &cfg()).unwrap(); // L3
         let result = build_fort(&mut map, coord, &cfg());
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Fort already at maximum level (3)");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "illegal move: Fort already at maximum level (3)"
+        );
     }
 
     #[test]
@@ -1269,7 +1275,7 @@ mod tests {
 
     #[test]
     fn rail_terrain_enabled_no_tech_required() {
-        let data = GameData::default();
+        let data = crate::data::test_game_data();
         let c = cfg();
         let no_techs: &[crate::events::TechId] = &[];
         for terrain in [
@@ -1289,13 +1295,13 @@ mod tests {
 
     #[test]
     fn rail_terrain_enabled_sea_always_false() {
-        let data = GameData::default();
+        let data = crate::data::test_game_data();
         assert!(!rail_terrain_enabled(TerrainType::Sea, &[], &data, &cfg()));
     }
 
     #[test]
     fn rail_terrain_enabled_swamp_requires_tech() {
-        let data = GameData::default();
+        let data = crate::data::test_game_data();
         let c = cfg();
         // Without the tech, swamp is not enabled.
         assert!(!rail_terrain_enabled(TerrainType::Swamp, &[], &data, &c));
@@ -1315,7 +1321,7 @@ mod tests {
 
     #[test]
     fn rail_terrain_enabled_mountain_requires_tech() {
-        let data = GameData::default();
+        let data = crate::data::test_game_data();
         let c = cfg();
         assert!(!rail_terrain_enabled(TerrainType::Mountain, &[], &data, &c));
         let mountain_tech = data
@@ -1336,14 +1342,14 @@ mod tests {
         let mut map = HexMap::new(10, 10);
         let coord = HexCoord::new(0, 0);
         let provinces = owned_land(&mut map, coord, TerrainType::Swamp);
-        let data = GameData::default();
+        let data = crate::data::test_game_data();
         let result = build_railroad(&mut map, coord, NationId(1), &[], &provinces, &data, &cfg());
         assert!(
             result.is_err(),
             "swamp railroad without tech must fail, got {:?}",
             result
         );
-        assert!(result.unwrap_err().contains("Iron Railroad Bridge"));
+        assert!(result.unwrap_err().to_string().contains("Iron Railroad Bridge"));
     }
 
     // ── connectivity edge cases ─────────────────────────────

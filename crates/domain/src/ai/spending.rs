@@ -17,7 +17,9 @@ use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::turn::connected_provinces;
 use crate::types::*;
 
-use super::common::{AiPersonality, PersonalityConfig, get_personality, lua_or};
+use super::common::{AiPersonality, PersonalityConfig, get_personality};
+#[cfg(feature = "lua")]
+use super::common::lua_or;
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -44,6 +46,17 @@ struct SpendingWeights {
     min_threshold: f64,
 }
 
+impl SpendingWeights {
+    fn from_config(cfg: &PersonalityConfig) -> Self {
+        Self {
+            military_weight: cfg.spending_military_weight,
+            economy_weight: cfg.spending_economy_weight,
+            diplomacy_weight: cfg.spending_diplomacy_weight,
+            reserve: cfg.spending_reserve,
+            min_threshold: cfg.spending_min_threshold,
+        }
+    }
+}
 struct ScoredAction {
     category: SpendingCategory,
     score: f64,
@@ -1673,23 +1686,18 @@ pub fn pick_priority_minor_targets(
 #[allow(unused_mut, unused_variables)] // mut + game used only with cfg(feature = "lua")
 fn load_weights(game: &GameState, personality: AiPersonality) -> SpendingWeights {
     let defaults = PersonalityConfig::for_personality(personality);
-    let mut w = SpendingWeights {
-        military_weight: defaults.spending_military_weight,
-        economy_weight: defaults.spending_economy_weight,
-        diplomacy_weight: defaults.spending_diplomacy_weight,
-        reserve: defaults.spending_reserve,
-        min_threshold: defaults.spending_min_threshold,
-    };
+    let mut w = SpendingWeights::from_config(&defaults);
 
     #[cfg(feature = "lua")]
     if let Some(engine) = &game.game_data.lua_engine
         && let Some(cfg) = super::lua_bridge::lua_get_config(engine, personality)
     {
-        w.military_weight = lua_or(cfg.spending_military_weight, w.military_weight);
-        w.economy_weight = lua_or(cfg.spending_economy_weight, w.economy_weight);
-        w.diplomacy_weight = lua_or(cfg.spending_diplomacy_weight, w.diplomacy_weight);
-        w.reserve = lua_or(cfg.treasury_reserve.map(Money::dollars), w.reserve);
-        w.min_threshold = lua_or(cfg.min_score_threshold, w.min_threshold);
+        w.military_weight = lua_or(cfg.spending_military_weight, defaults.spending_military_weight);
+        w.economy_weight = lua_or(cfg.spending_economy_weight, defaults.spending_economy_weight);
+        w.diplomacy_weight =
+            lua_or(cfg.spending_diplomacy_weight, defaults.spending_diplomacy_weight);
+        w.reserve = lua_or(cfg.treasury_reserve.map(Money::dollars), defaults.spending_reserve);
+        w.min_threshold = lua_or(cfg.min_score_threshold, defaults.spending_min_threshold);
     }
 
     // Suppress unused variable warning when lua feature is off

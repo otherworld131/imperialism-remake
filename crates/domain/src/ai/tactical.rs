@@ -1182,17 +1182,17 @@ mod tests {
         let mut diplomacy = crate::diplomacy::DiplomacyState::new();
         diplomacy.declare_war(NationId(2), NationId(3));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
-            provinces,
+            hex_map: hex_map,
+            provinces: provinces,
             nations: vec![human, ai, enemy],
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: crate::data::GameData::default(),
-            diplomacy,
+            diplomacy: diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             pending_landings: Vec::new(),
@@ -1371,17 +1371,17 @@ mod tests {
         let mut diplomacy = crate::diplomacy::DiplomacyState::new();
         diplomacy.declare_war(NationId(2), NationId(3));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
-            provinces,
+            hex_map: hex_map,
+            provinces: provinces,
             nations: vec![human, ai, enemy],
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: crate::data::GameData::default(),
-            diplomacy,
+            diplomacy: diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             pending_landings: Vec::new(),
@@ -1494,17 +1494,17 @@ mod tests {
         let mut diplomacy = crate::diplomacy::DiplomacyState::new();
         diplomacy.declare_war(NationId(2), NationId(3));
 
-        let game = GameState {
+        let game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".into(),
-            hex_map,
-            provinces,
+            hex_map: hex_map,
+            provinces: provinces,
             nations: vec![human, ai, enemy],
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: crate::data::GameData::default(),
-            diplomacy,
+            diplomacy: diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             pending_landings: Vec::new(),
@@ -1589,17 +1589,17 @@ mod tests {
         let mut diplomacy = crate::diplomacy::DiplomacyState::new();
         diplomacy.declare_war(NationId(2), NationId(3));
 
-        let game = GameState {
+        let game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".into(),
-            hex_map,
-            provinces,
+            hex_map: hex_map,
+            provinces: provinces,
             nations: vec![human, ai, enemy],
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: crate::data::GameData::default(),
-            diplomacy,
+            diplomacy: diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             pending_landings: vec![(NationId(3), ProvinceId(1), TurnNumber::new(2))],

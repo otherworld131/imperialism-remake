@@ -5,6 +5,7 @@ use crate::ApplicationError;
 use domain::diplomacy::DiplomaticRelation;
 use domain::economy::trade::base_price;
 use domain::game_state::GameState;
+use domain::nation::Nation;
 
 /// Data for the Map Screen (Screen 1).
 pub struct MapScreenData {
@@ -71,12 +72,18 @@ pub enum FrontendQuery {
 
 // ── Query functions ──────────────────────────────────────────────
 
+fn human_nation(game: &GameState) -> Result<&Nation, ApplicationError> {
+    game.get_nation(game.human_player_nation).ok_or_else(|| {
+        ApplicationError::not_found(format!(
+            "human player nation {} is missing from game state",
+            game.human_player_nation.0
+        ))
+    })
+}
+
 /// Extract data for the Map Screen from the current game state.
 pub fn get_map_screen(game: &GameState) -> Result<MapScreenData, ApplicationError> {
-    let nation = game.get_nation(game.human_player_nation).ok_or_else(|| {
-        ApplicationError::not_found(format!("human nation {:?} not found", game.human_player_nation))
-    })?;
-
+    let nation = human_nation(game)?;
     Ok(MapScreenData {
         turn: format!("{}", game.turn),
         nation_name: nation.name.clone(),
@@ -89,9 +96,7 @@ pub fn get_map_screen(game: &GameState) -> Result<MapScreenData, ApplicationErro
 
 /// Extract data for the Transport Screen from the current game state.
 pub fn get_transport_screen(game: &GameState) -> Result<TransportScreenData, ApplicationError> {
-    let nation = game.get_nation(game.human_player_nation).ok_or_else(|| {
-        ApplicationError::not_found(format!("human nation {:?} not found", game.human_player_nation))
-    })?;
+    let nation = human_nation(game)?;
 
     let freight_cars = nation.military.transport.freight_cars;
     let total_capacity = nation.military.transport.total_capacity();
@@ -116,9 +121,7 @@ pub fn get_transport_screen(game: &GameState) -> Result<TransportScreenData, App
 
 /// Extract data for the Industry Screen from the current game state.
 pub fn get_industry_screen(game: &GameState) -> Result<IndustryScreenData, ApplicationError> {
-    let nation = game.get_nation(game.human_player_nation).ok_or_else(|| {
-        ApplicationError::not_found(format!("human nation {:?} not found", game.human_player_nation))
-    })?;
+    let nation = human_nation(game)?;
 
     let buildings: Vec<(String, u32, bool)> = nation
         .economy.buildings
@@ -172,9 +175,7 @@ pub fn get_industry_screen(game: &GameState) -> Result<IndustryScreenData, Appli
 /// Only shows minor nations with which the human player has a consulate.
 pub fn get_trade_screen(game: &GameState) -> Result<TradeScreenData, ApplicationError> {
     let human_id = game.human_player_nation;
-    let nation = game
-        .get_nation(human_id)
-        .ok_or_else(|| ApplicationError::not_found(format!("human nation {:?} not found", human_id)))?;
+    let nation = human_nation(game)?;
 
     let cargo_capacity = nation.total_cargo_capacity();
     let cargo_used: u32 = nation
@@ -325,10 +326,9 @@ mod tests {
         assert!(!data.nation_name.is_empty());
         assert!(data.treasury.starts_with('$'));
         assert!(data.province_count > 0);
-        // Normal difficulty starts with 2 civilians (Farmer + Forester)
-        assert_eq!(data.civilian_count, 2);
-        // Each Great Power starts with 5 army units
-        assert_eq!(data.army_count, 5);
+        let human = game.get_nation(game.human_player_nation).unwrap();
+        assert_eq!(data.civilian_count, human.military.civilians.len());
+        assert_eq!(data.army_count, human.military.army.len());
     }
 
     // ── Transport Screen ────────────────────────────────────────────
@@ -338,9 +338,9 @@ mod tests {
         let game = new_game("test", Difficulty::Normal, 0);
         let data = get_transport_screen(&game).unwrap();
 
-        // Each Great Power starts with 5 freight cars (from game.lua config)
-        assert_eq!(data.freight_cars, 5);
-        assert_eq!(data.total_capacity, 5);
+        let human = game.get_nation(game.human_player_nation).unwrap();
+        assert_eq!(data.freight_cars, human.military.transport.freight_cars);
+        assert_eq!(data.total_capacity, human.military.transport.total_capacity());
     }
 
     #[test]

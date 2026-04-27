@@ -1965,17 +1965,17 @@ mod tests {
                 diplomacy.declare_war(NationId(3), opp);
             }
 
-            GameState {
+            crate::test_game_state! {
                 turn: TurnNumber::new(10),
                 difficulty: crate::types::Difficulty::Normal,
                 map_key: "t".into(),
-                hex_map,
-                provinces,
+                hex_map: hex_map,
+                provinces: provinces,
                 nations: vec![atk, tgt, ally, other],
                 human_player_nation: NationId(1),
                 events: Vec::new(),
                 game_data: crate::data::GameData::default(),
-                diplomacy,
+                diplomacy: diplomacy,
                 pending_attacks: Vec::new(),
                 pending_moves: Vec::new(),
                 pending_landings: Vec::new(),
@@ -2103,17 +2103,17 @@ mod tests {
             .ensure_relation(NationId(2), NationId(3))
             .add_treaty(TreatyType::Alliance);
 
-        let game = GameState {
+        let game = crate::test_game_state! {
             turn: TurnNumber::new(10),
             difficulty: crate::types::Difficulty::Normal,
             map_key: "t".into(),
-            hex_map,
-            provinces,
+            hex_map: hex_map,
+            provinces: provinces,
             nations: vec![atk, tgt, ally],
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: crate::data::GameData::default(),
-            diplomacy,
+            diplomacy: diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             pending_landings: Vec::new(),
@@ -2325,11 +2325,11 @@ mod tests {
             ProvinceId(1),
         );
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(10),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![ai_prov, gp_capital, gp_non_capital],
             nations: vec![human_nation, ai_nation, gp_nation],
             human_player_nation: NationId(1),
@@ -2480,11 +2480,11 @@ mod tests {
             ProvinceId(1),
         );
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province2, province3, province4],
             nations: vec![human_nation, ai_nation, minor_nation],
             human_player_nation: NationId(1),

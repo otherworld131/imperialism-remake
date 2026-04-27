@@ -2072,11 +2072,11 @@ mod tests {
             .push(Building::new(BuildingType::LumberMill, 2));
         nation.economy.treasury = Money::dollars(20_000);
 
-        GameState {
+        crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "t".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province],
             nations: vec![nation],
             human_player_nation: NationId(99), // unused in planner tests
@@ -2265,11 +2265,11 @@ mod tests {
             .push(Building::new(BuildingType::LumberMill, 2));
         nation.economy.treasury = Money::dollars(20_000);
 
-        let game = GameState {
+        let game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "t".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province],
             nations: vec![nation],
             human_player_nation: NationId(99),

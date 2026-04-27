@@ -149,15 +149,31 @@ pub fn new_scenario_game(
     difficulty: Difficulty,
     human_nation_index: usize,
 ) -> Result<GameState, String> {
+    new_scenario_game_with_data(
+        scenario_id,
+        difficulty,
+        human_nation_index,
+        crate::data::GameData::default(),
+    )
+}
+
+/// Create a game from a historical scenario using caller-supplied `GameData`.
+pub fn new_scenario_game_with_data(
+    scenario_id: &str,
+    difficulty: Difficulty,
+    human_nation_index: usize,
+    game_data: crate::data::GameData,
+) -> Result<GameState, String> {
     let scenario = list_scenarios()
         .into_iter()
         .find(|s| s.id == scenario_id)
         .ok_or_else(|| format!("Unknown scenario: {}", scenario_id))?;
 
-    let mut game = crate::game_state::new_game(
+    let mut game = crate::game_state::new_game_with_data(
         &format!("scenario_{}", scenario_id),
         difficulty,
         human_nation_index,
+        game_data,
     );
 
     // Verify great power count matches scenario expectations
@@ -244,6 +260,19 @@ pub fn new_scenario_game(
 mod tests {
     use super::*;
 
+    fn test_scenario_game(
+        scenario_id: &str,
+        difficulty: Difficulty,
+        human_nation_index: usize,
+    ) -> Result<GameState, String> {
+        new_scenario_game_with_data(
+            scenario_id,
+            difficulty,
+            human_nation_index,
+            crate::data::test_game_data(),
+        )
+    }
+
     #[test]
     fn scenario_list_returns_4_scenarios() {
         let scenarios = list_scenarios();
@@ -259,28 +288,28 @@ mod tests {
 
     #[test]
     fn scenario_game_starts_at_correct_year_1815() {
-        let game = new_scenario_game("1815", Difficulty::Normal, 0).unwrap();
+        let game = test_scenario_game("1815", Difficulty::Normal, 0).unwrap();
         assert_eq!(game.turn.year(), 1815);
         assert_eq!(game.turn.quarter(), 1);
     }
 
     #[test]
     fn scenario_game_starts_at_correct_year_1848() {
-        let game = new_scenario_game("1848", Difficulty::Normal, 0).unwrap();
+        let game = test_scenario_game("1848", Difficulty::Normal, 0).unwrap();
         assert_eq!(game.turn.year(), 1848);
         assert_eq!(game.turn.quarter(), 1);
     }
 
     #[test]
     fn scenario_game_starts_at_correct_year_1882() {
-        let game = new_scenario_game("1882", Difficulty::Normal, 0).unwrap();
+        let game = test_scenario_game("1882", Difficulty::Normal, 0).unwrap();
         assert_eq!(game.turn.year(), 1882);
         assert_eq!(game.turn.quarter(), 1);
     }
 
     #[test]
     fn scenario_game_has_correct_nation_names_1815() {
-        let game = new_scenario_game("1815", Difficulty::Normal, 0).unwrap();
+        let game = test_scenario_game("1815", Difficulty::Normal, 0).unwrap();
         let gp_names: Vec<String> = game.great_powers().iter().map(|n| n.name.clone()).collect();
         assert_eq!(
             gp_names,
@@ -298,7 +327,7 @@ mod tests {
 
     #[test]
     fn scenario_game_has_correct_nation_names_1848() {
-        let game = new_scenario_game("1848", Difficulty::Normal, 0).unwrap();
+        let game = test_scenario_game("1848", Difficulty::Normal, 0).unwrap();
         let gp_names: Vec<String> = game.great_powers().iter().map(|n| n.name.clone()).collect();
         assert_eq!(
             gp_names,
@@ -316,7 +345,7 @@ mod tests {
 
     #[test]
     fn scenario_game_has_correct_nation_names_1882() {
-        let game = new_scenario_game("1882", Difficulty::Normal, 0).unwrap();
+        let game = test_scenario_game("1882", Difficulty::Normal, 0).unwrap();
         let gp_names: Vec<String> = game.great_powers().iter().map(|n| n.name.clone()).collect();
         assert_eq!(
             gp_names,
@@ -334,7 +363,7 @@ mod tests {
 
     #[test]
     fn scenario_1848_pre_researches_early_techs() {
-        let game = new_scenario_game("1848", Difficulty::Normal, 0).unwrap();
+        let game = test_scenario_game("1848", Difficulty::Normal, 0).unwrap();
         // Techs with earliest_year <= 1840 should be pre-researched for Great Powers
         // TechId(1) = "High Pressure Steam Engine" (1815)
         // TechId(2) = "Seed Drill" (1815)
@@ -369,14 +398,14 @@ mod tests {
 
     #[test]
     fn scenario_game_starts_at_correct_year_1820() {
-        let game = new_scenario_game("1820", Difficulty::Normal, 0).unwrap();
+        let game = test_scenario_game("1820", Difficulty::Normal, 0).unwrap();
         assert_eq!(game.turn.year(), 1820);
         assert_eq!(game.turn.quarter(), 1);
     }
 
     #[test]
     fn scenario_game_has_correct_nation_names_1820() {
-        let game = new_scenario_game("1820", Difficulty::Normal, 0).unwrap();
+        let game = test_scenario_game("1820", Difficulty::Normal, 0).unwrap();
         let gp_names: Vec<String> = game.great_powers().iter().map(|n| n.name.clone()).collect();
         assert_eq!(
             gp_names,
@@ -394,7 +423,7 @@ mod tests {
 
     #[test]
     fn scenario_1820_pre_researches_first_two_free_techs() {
-        let game = new_scenario_game("1820", Difficulty::Normal, 0).unwrap();
+        let game = test_scenario_game("1820", Difficulty::Normal, 0).unwrap();
         for nation in game.great_powers() {
             assert!(
                 nation.has_researched(crate::events::TechId(1)),
@@ -418,7 +447,7 @@ mod tests {
 
     #[test]
     fn scenario_1815_does_not_pre_research_techs() {
-        let game = new_scenario_game("1815", Difficulty::Normal, 0).unwrap();
+        let game = test_scenario_game("1815", Difficulty::Normal, 0).unwrap();
         // 1815 is before 1848, so no pre-research should happen
         for nation in game.great_powers() {
             assert!(
@@ -441,19 +470,19 @@ mod tests {
 
     #[test]
     fn scenario_game_has_7_great_powers() {
-        let game = new_scenario_game("1815", Difficulty::Normal, 0).unwrap();
+        let game = test_scenario_game("1815", Difficulty::Normal, 0).unwrap();
         assert_eq!(game.great_powers().len(), 7);
     }
 
     #[test]
     fn scenario_game_has_16_minor_nations() {
-        let game = new_scenario_game("1815", Difficulty::Normal, 0).unwrap();
+        let game = test_scenario_game("1815", Difficulty::Normal, 0).unwrap();
         assert_eq!(game.minor_nations().len(), 16);
     }
 
     #[test]
     fn scenario_human_nation_index_is_respected() {
-        let game = new_scenario_game("1815", Difficulty::Normal, 2).unwrap();
+        let game = test_scenario_game("1815", Difficulty::Normal, 2).unwrap();
         // The third Great Power should be the human player
         let gps = game.great_powers();
         assert_eq!(game.human_player_nation, gps[2].id);

@@ -9,3 +9,7 @@ mlua = { version = "0.10", features = ["lua54", "send", "vendored"], optional = 
 [features]
 default = ["lua"]
 lua = ["mlua"]
+
+[dev-dependencies]
+ron = "0.8"
+serde = { version = "1", features = ["derive"] }

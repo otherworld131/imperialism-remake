@@ -15,10 +15,11 @@ use application::queries::{
     FrontendQuery, get_diplomacy_screen, get_industry_screen, get_map_screen,
     get_trade_screen, get_transport_screen,
 };
-use domain::game_state::{GameState, new_game_with_config};
+use domain::game_state::{GameState, new_game_with_data_and_config};
 use domain::map::MapGenConfig;
 use domain::turn::process_turn;
 use domain::types::*;
+use infrastructure::data_loader::load_embedded_game_data;
 use wasm_bindgen::prelude::*;
 
 use crate::flavor_bridge;
@@ -84,7 +85,13 @@ pub fn wasm_session_new_game(
         num_great_powers: (num_great_powers as usize).clamp(1, 20),
         num_minor_nations: (num_minor_nations as usize).min(32),
     };
-    let mut game = new_game_with_config(map_key, diff, nation_index, cfg);
+    let mut game = new_game_with_data_and_config(
+        map_key,
+        diff,
+        nation_index,
+        load_embedded_game_data(),
+        cfg,
+    );
     flavor_bridge::apply_flavor(&mut game, flavor_key);
 
     SESSION.with(|s| *s.borrow_mut() = Some(game));

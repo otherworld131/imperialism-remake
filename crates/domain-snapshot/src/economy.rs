@@ -1047,6 +1047,8 @@ pub struct NationEconomy {
     pub reservation_ledger: BTreeMap<ReservationId, (Commodity, u32)>,
     #[serde(default)]
     pub next_reservation_id: u64,
+    #[serde(default)]
+    pub reserved_labor: HashMap<WorkerType, u32>,
 }
 
 impl From<&domain::nation::NationEconomy> for NationEconomy {
@@ -1066,6 +1068,11 @@ impl From<&domain::nation::NationEconomy> for NationEconomy {
             reservation_ledger: v.snapshot_reservation_ledger().iter()
                 .map(|(k, (c, n))| ((*k).into(), ((*c).into(), *n))).collect(),
             next_reservation_id: v.snapshot_next_reservation_id(),
+            reserved_labor: v
+                .snapshot_reserved_labor()
+                .iter()
+                .map(|(k, n)| ((*k).into(), *n))
+                .collect(),
         }
     }
 }
@@ -1079,14 +1086,15 @@ impl From<NationEconomy> for domain::nation::NationEconomy {
         ne.buildings = v.buildings.into_iter().map(Into::into).collect();
         ne.labor = v.labor.into();
         ne.logistics = v.logistics.into();
-        ne.restore_reservation_state(
-            v.reserved_treasury.into(),
-            v.reserved_warehouse.into_iter().map(|(k, n)| (k.into(), n)).collect(),
-            v.reserved_materials.into_iter().map(|(k, n)| (k.into(), n)).collect(),
-            v.reserved_goods.into_iter().map(|(k, n)| (k.into(), n)).collect(),
-            v.reservation_ledger.into_iter().map(|(k, (c, n))| (k.into(), (c.into(), n))).collect(),
-            v.next_reservation_id,
-        );
+        ne.restore_reservation_state(domain::nation::ReservationStateSnapshot {
+            reserved_treasury: v.reserved_treasury.into(),
+            reserved_warehouse: v.reserved_warehouse.into_iter().map(|(k, n)| (k.into(), n)).collect(),
+            reserved_materials: v.reserved_materials.into_iter().map(|(k, n)| (k.into(), n)).collect(),
+            reserved_goods: v.reserved_goods.into_iter().map(|(k, n)| (k.into(), n)).collect(),
+            reservation_ledger: v.reservation_ledger.into_iter().map(|(k, (c, n))| (k.into(), (c.into(), n))).collect(),
+            next_reservation_id: v.next_reservation_id,
+            reserved_labor: v.reserved_labor.into_iter().map(|(k, n)| (k.into(), n)).collect(),
+        });
         ne
     }
 }
