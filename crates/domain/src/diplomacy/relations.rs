@@ -823,7 +823,7 @@ mod tests {
         state.build_consulate(NationId(1), NationId(10)).unwrap();
         let result = state.build_consulate(NationId(1), NationId(10));
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Consulate already established");
+        assert_eq!(result.unwrap_err().to_string(), "illegal move: Consulate already established");
     }
 
     #[test]
@@ -831,7 +831,10 @@ mod tests {
         let mut state = DiplomacyState::new();
         let result = state.build_embassy(NationId(1), NationId(10));
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Must build consulate before embassy");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "illegal move: Must build consulate before embassy"
+        );
     }
 
     #[test]
@@ -852,7 +855,7 @@ mod tests {
         state.build_embassy(NationId(1), NationId(10)).unwrap();
         let result = state.build_embassy(NationId(1), NationId(10));
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Embassy already established");
+        assert_eq!(result.unwrap_err().to_string(), "illegal move: Embassy already established");
     }
 
     #[test]
@@ -1019,8 +1022,8 @@ mod tests {
         let result = state.propose_pact(NationId(1), NationId(10));
         assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err(),
-            "Embassy required before proposing a non-aggression pact"
+            result.unwrap_err().to_string(),
+            "illegal move: Embassy required before proposing a non-aggression pact"
         );
     }
 
@@ -1042,8 +1045,8 @@ mod tests {
         let result = state.propose_alliance(NationId(1), NationId(2));
         assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err(),
-            "Embassy required before proposing an alliance"
+            result.unwrap_err().to_string(),
+            "illegal move: Embassy required before proposing an alliance"
         );
     }
 
@@ -1067,7 +1070,10 @@ mod tests {
 
         let result = state.propose_pact(NationId(1), NationId(10));
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Non-aggression pact already active");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "illegal move: Non-aggression pact already active"
+        );
     }
 
     #[test]
@@ -1079,7 +1085,7 @@ mod tests {
 
         let result = state.propose_alliance(NationId(1), NationId(2));
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Alliance already active");
+        assert_eq!(result.unwrap_err().to_string(), "illegal move: Alliance already active");
     }
 
     // ── War breaks all treaties ──────────────────────────────────
@@ -1282,7 +1288,7 @@ mod tests {
 
         let result = state.propose_pact(NationId(1), NationId(2));
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Alliance already active"));
+        assert!(result.unwrap_err().to_string().contains("Alliance already active"));
     }
 
     // ── propose_treaty validation ─────────────────────────────────
@@ -1302,7 +1308,7 @@ mod tests {
             TurnNumber::new(1),
         );
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Embassy required"));
+        assert!(result.unwrap_err().to_string().contains("Embassy required"));
     }
 
     #[test]
@@ -1326,7 +1332,7 @@ mod tests {
             TurnNumber::new(1),
         );
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("already pending"));
+        assert!(result.unwrap_err().to_string().contains("already pending"));
     }
 
     #[test]

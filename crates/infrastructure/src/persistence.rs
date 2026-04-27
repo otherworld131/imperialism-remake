@@ -123,6 +123,14 @@ pub fn save_game(game: &GameState, path: &Path) -> Result<(), PersistenceError> 
 /// (minimal placeholder). Callers that need the full tech tree should replace
 /// `game_data` with the result of `load_game_data()`.
 pub fn load_game(path: &Path) -> Result<GameState, PersistenceError> {
+    load_game_with_data(path, GameData::default())
+}
+
+/// Load a game state and hydrate it with caller-supplied runtime `GameData`.
+pub fn load_game_with_data(
+    path: &Path,
+    game_data: GameData,
+) -> Result<GameState, PersistenceError> {
     let json = std::fs::read_to_string(path)?;
 
     if let Ok(save) = serde_json::from_str::<SaveFile>(&json) {
@@ -133,7 +141,7 @@ pub fn load_game(path: &Path) -> Result<GameState, PersistenceError> {
             });
         }
         let mut game: GameState = save.game.into();
-        game.game_data = GameData::default();
+        game.game_data = game_data;
         return Ok(game);
     }
 

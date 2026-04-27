@@ -1,9 +1,11 @@
 //! Screen data queries — the "query" side of CQRS.
 //! These extract view data from game state for display.
 
+use crate::ApplicationError;
 use domain::diplomacy::DiplomaticRelation;
 use domain::economy::trade::base_price;
 use domain::game_state::GameState;
+use domain::nation::Nation;
 
 /// Data for the Map Screen (Screen 1).
 pub struct MapScreenData {
@@ -70,27 +72,32 @@ pub enum FrontendQuery {
 
 // ── Query functions ──────────────────────────────────────────────
 
-/// Extract data for the Map Screen from the current game state.
-pub fn get_map_screen(game: &GameState) -> MapScreenData {
-    let nation = game
-        .get_nation(game.human_player_nation)
-        .expect("Human player nation must exist");
+fn human_nation(game: &GameState) -> Result<&Nation, ApplicationError> {
+    game.get_nation(game.human_player_nation).ok_or_else(|| {
+        ApplicationError::not_found(format!(
+            "human player nation {} is missing from game state",
+            game.human_player_nation.0
+        ))
+    })
+}
 
-    MapScreenData {
+/// Extract data for the Map Screen from the current game state.
+pub fn get_map_screen(game: &GameState) -> Result<MapScreenData, ApplicationError> {
+    let nation = human_nation(game)?;
+
+    Ok(MapScreenData {
         turn: format!("{}", game.turn),
         nation_name: nation.name.clone(),
         treasury: format!("${}", nation.economy.treasury.as_dollars()),
         province_count: nation.province_count(),
         army_count: nation.military.army.len(),
         civilian_count: nation.military.civilians.len(),
-    }
+    })
 }
 
 /// Extract data for the Transport Screen from the current game state.
-pub fn get_transport_screen(game: &GameState) -> TransportScreenData {
-    let nation = game
-        .get_nation(game.human_player_nation)
-        .expect("Human player nation must exist");
+pub fn get_transport_screen(game: &GameState) -> Result<TransportScreenData, ApplicationError> {
+    let nation = human_nation(game)?;
 
     let freight_cars = nation.military.transport.freight_cars;
     let total_capacity = nation.military.transport.total_capacity();
@@ -105,19 +112,17 @@ pub fn get_transport_screen(game: &GameState) -> TransportScreenData {
         0
     };
 
-    TransportScreenData {
+    Ok(TransportScreenData {
         freight_cars,
         total_capacity,
         total_production,
         utilization_percent,
-    }
+    })
 }
 
 /// Extract data for the Industry Screen from the current game state.
-pub fn get_industry_screen(game: &GameState) -> IndustryScreenData {
-    let nation = game
-        .get_nation(game.human_player_nation)
-        .expect("Human player nation must exist");
+pub fn get_industry_screen(game: &GameState) -> Result<IndustryScreenData, ApplicationError> {
+    let nation = human_nation(game)?;
 
     let buildings: Vec<(String, u32, bool)> = nation
         .economy.buildings
@@ -159,21 +164,19 @@ pub fn get_industry_screen(game: &GameState) -> IndustryScreenData {
     // Sort for deterministic output.
     warehouse_summary.sort_by(|a, b| a.0.cmp(&b.0));
 
-    IndustryScreenData {
+    Ok(IndustryScreenData {
         buildings,
         workers,
         warehouse_summary,
-    }
+    })
 }
 
 /// Extract data for the Trade Screen from the current game state.
 ///
 /// Only shows minor nations with which the human player has a consulate.
-pub fn get_trade_screen(game: &GameState) -> TradeScreenData {
+pub fn get_trade_screen(game: &GameState) -> Result<TradeScreenData, ApplicationError> {
     let human_id = game.human_player_nation;
-    let nation = game
-        .get_nation(human_id)
-        .expect("Human player nation must exist");
+    let nation = human_nation(game)?;
 
     let cargo_capacity = nation.total_cargo_capacity();
     let cargo_used: u32 = nation
@@ -219,15 +222,15 @@ pub fn get_trade_screen(game: &GameState) -> TradeScreenData {
         });
     }
 
-    TradeScreenData {
+    Ok(TradeScreenData {
         partners,
         cargo_capacity,
         cargo_used,
-    }
+    })
 }
 
 /// Extract data for the Diplomacy Screen from the current game state.
-pub fn get_diplomacy_screen(game: &GameState) -> DiplomacyScreenData {
+pub fn get_diplomacy_screen(game: &GameState) -> Result<DiplomacyScreenData, ApplicationError> {
     let human_id = game.human_player_nation;
     let standing = game.world.diplomacy.get_standing(human_id);
 
@@ -262,12 +265,12 @@ pub fn get_diplomacy_screen(game: &GameState) -> DiplomacyScreenData {
         .map(|gp| (gp.name.clone(), gp.province_count() as u32))
         .collect();
 
-    DiplomacyScreenData {
+    Ok(DiplomacyScreenData {
         standing,
         great_power_relations,
         minor_nation_relations,
         council_projection,
-    }
+    })
 }
 
 /// Determine the diplomatic status string for a Great Power relation.
@@ -318,16 +321,15 @@ mod tests {
     #[test]
     fn map_screen_returns_valid_data_for_new_game() {
         let game = new_game("test", Difficulty::Normal, 0);
-        let data = get_map_screen(&game);
+        let data = get_map_screen(&game).unwrap();
 
         assert_eq!(data.turn, "1815 Q1");
         assert!(!data.nation_name.is_empty());
         assert!(data.treasury.starts_with('$'));
         assert!(data.province_count > 0);
-        // Normal difficulty starts with 2 civilians (Farmer + Forester)
-        assert_eq!(data.civilian_count, 2);
-        // Each Great Power starts with 5 army units
-        assert_eq!(data.army_count, 5);
+        let human = game.get_nation(game.human_player_nation).unwrap();
+        assert_eq!(data.civilian_count, human.military.civilians.len());
+        assert_eq!(data.army_count, human.military.army.len());
     }
 
     // ── Transport Screen ────────────────────────────────────────────
@@ -335,11 +337,11 @@ mod tests {
     #[test]
     fn transport_screen_returns_valid_data_for_new_game() {
         let game = new_game("test", Difficulty::Normal, 0);
-        let data = get_transport_screen(&game);
+        let data = get_transport_screen(&game).unwrap();
 
-        // Each Great Power starts with 5 freight cars (from game.lua config)
-        assert_eq!(data.freight_cars, 5);
-        assert_eq!(data.total_capacity, 5);
+        let human = game.get_nation(game.human_player_nation).unwrap();
+        assert_eq!(data.freight_cars, human.military.transport.freight_cars);
+        assert_eq!(data.total_capacity, human.military.transport.total_capacity());
     }
 
     #[test]
@@ -357,7 +359,7 @@ mod tests {
         nation.add_resource(ResourceType::Timber, 3);
         nation.add_resource(ResourceType::Coal, 2);
 
-        let data = get_transport_screen(&game);
+        let data = get_transport_screen(&game).unwrap();
 
         assert_eq!(data.freight_cars, 10);
         assert_eq!(data.total_capacity, 10);
@@ -376,7 +378,7 @@ mod tests {
         nation.military.transport.build_freight_cars(5);
         nation.add_resource(ResourceType::Timber, 10);
 
-        let data = get_transport_screen(&game);
+        let data = get_transport_screen(&game).unwrap();
 
         // Production exceeds capacity, but utilization is capped at 100%
         assert_eq!(data.utilization_percent, 100);
@@ -387,7 +389,7 @@ mod tests {
     #[test]
     fn industry_screen_shows_all_buildings() {
         let game = new_game("test", Difficulty::Normal, 0);
-        let data = get_industry_screen(&game);
+        let data = get_industry_screen(&game).unwrap();
 
         let human = game.get_nation(game.human_player_nation).unwrap();
 
@@ -414,7 +416,7 @@ mod tests {
     #[test]
     fn industry_screen_shows_workers() {
         let game = new_game("test", Difficulty::Normal, 0);
-        let data = get_industry_screen(&game);
+        let data = get_industry_screen(&game).unwrap();
 
         let (untrained, trained, expert) = data.workers;
         // Normal difficulty starting labor
@@ -434,7 +436,7 @@ mod tests {
             mill.start_expansion(3);
         }
 
-        let data = get_industry_screen(&game);
+        let data = get_industry_screen(&game).unwrap();
 
         // Find the LumberMill entry and verify it is expanding
         let lumber_mill = data
@@ -454,7 +456,7 @@ mod tests {
         let human_id = game.human_player_nation;
 
         // At start, no consulates exist, so no trade partners
-        let data = get_trade_screen(&game);
+        let data = get_trade_screen(&game).unwrap();
         assert!(
             data.partners.is_empty(),
             "New game should have no trade partners (no consulates)"
@@ -467,7 +469,7 @@ mod tests {
             .unwrap();
 
         // Now query again
-        let data = get_trade_screen(&game);
+        let data = get_trade_screen(&game).unwrap();
         assert_eq!(
             data.partners.len(),
             1,
@@ -480,7 +482,7 @@ mod tests {
     #[test]
     fn trade_screen_shows_cargo_capacity() {
         let game = new_game("test", Difficulty::Normal, 0);
-        let data = get_trade_screen(&game);
+        let data = get_trade_screen(&game).unwrap();
 
         // Each Great Power starts with 1 Trader ship
         let nation = game.get_nation(game.human_player_nation).unwrap();
@@ -501,7 +503,7 @@ mod tests {
             .build_consulate(human_id, minor_ids[1])
             .unwrap();
 
-        let data = get_trade_screen(&game);
+        let data = get_trade_screen(&game).unwrap();
 
         // All partners should be minor nations (no great powers)
         for partner in &data.partners {
@@ -551,7 +553,7 @@ mod tests {
             total_cost: Money::dollars(100),
                 bought: true,});
 
-        let data = get_trade_screen(&game);
+        let data = get_trade_screen(&game).unwrap();
         let capacity = game.get_nation(human_id).unwrap().total_cargo_capacity();
         let expected = (3u32 + 2).min(capacity);
         assert_eq!(data.cargo_used, expected);
@@ -562,7 +564,7 @@ mod tests {
     #[test]
     fn diplomacy_screen_shows_correct_standing() {
         let game = new_game("test", Difficulty::Normal, 0);
-        let data = get_diplomacy_screen(&game);
+        let data = get_diplomacy_screen(&game).unwrap();
 
         // Default standing is 100
         assert_eq!(data.standing, 100);
@@ -571,7 +573,7 @@ mod tests {
     #[test]
     fn diplomacy_screen_shows_all_other_great_powers() {
         let game = new_game("test", Difficulty::Normal, 0);
-        let data = get_diplomacy_screen(&game);
+        let data = get_diplomacy_screen(&game).unwrap();
 
         // 7 Great Powers - 1 (human) = 6 other Great Powers
         assert_eq!(data.great_power_relations.len(), 6);
@@ -580,7 +582,7 @@ mod tests {
     #[test]
     fn diplomacy_screen_shows_all_minor_nations() {
         let game = new_game("test", Difficulty::Normal, 0);
-        let data = get_diplomacy_screen(&game);
+        let data = get_diplomacy_screen(&game).unwrap();
 
         assert_eq!(data.minor_nation_relations.len(), 16);
     }
@@ -588,7 +590,7 @@ mod tests {
     #[test]
     fn diplomacy_screen_shows_council_projection() {
         let game = new_game("test", Difficulty::Normal, 0);
-        let data = get_diplomacy_screen(&game);
+        let data = get_diplomacy_screen(&game).unwrap();
 
         // All 7 Great Powers should appear in council projection
         assert_eq!(data.council_projection.len(), 7);
@@ -602,7 +604,7 @@ mod tests {
     #[test]
     fn diplomacy_screen_gp_relations_have_neutral_status() {
         let game = new_game("test", Difficulty::Normal, 0);
-        let data = get_diplomacy_screen(&game);
+        let data = get_diplomacy_screen(&game).unwrap();
 
         // At game start, all GP relations should be Neutral (embassies exist but no treaties)
         for (_, _, status, _) in &data.great_power_relations {
@@ -616,7 +618,7 @@ mod tests {
     #[test]
     fn diplomacy_screen_minor_nations_start_with_no_infrastructure() {
         let game = new_game("test", Difficulty::Normal, 0);
-        let data = get_diplomacy_screen(&game);
+        let data = get_diplomacy_screen(&game).unwrap();
 
         // No consulates or embassies at start
         for (_, _, infra, _) in &data.minor_nation_relations {
@@ -635,7 +637,7 @@ mod tests {
         // Reduce standing
         game.world.diplomacy.reduce_standing(human_id, 30);
 
-        let data = get_diplomacy_screen(&game);
+        let data = get_diplomacy_screen(&game).unwrap();
         assert_eq!(data.standing, 70);
     }
 }

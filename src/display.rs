@@ -123,10 +123,22 @@ pub(crate) fn max_recruitment_capacity(player: &Nation) -> u32 {
     province_count / per_province
 }
 
+fn human_player<'a>(game: &'a GameState) -> Option<&'a Nation> {
+    match game.get_nation(game.human_player_nation) {
+        Some(player) => Some(player),
+        None => {
+            println!("  Internal error: human player nation is missing from game state.");
+            None
+        }
+    }
+}
+
 // ── Print functions ───────────────────────────────────────────────
 
 pub(crate) fn print_prompt(game: &GameState) {
-    let nation = game.get_nation(game.human_player_nation).unwrap();
+    let Some(nation) = human_player(game) else {
+        return;
+    };
     print!(
         "  [{} | {} | {}] > ",
         nation.name, game.turn, nation.economy.treasury
@@ -134,7 +146,9 @@ pub(crate) fn print_prompt(game: &GameState) {
 }
 
 pub(crate) fn print_status(game: &GameState) {
-    let player = game.get_nation(game.human_player_nation).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
     println!("  Playing as: {} (Great Power)", player.name);
     println!("  Turn: {} (Year {})", game.turn, game.turn.year());
     println!("  Treasury: {}", player.economy.treasury);
@@ -143,7 +157,9 @@ pub(crate) fn print_status(game: &GameState) {
 }
 
 pub(crate) fn print_warehouse(game: &GameState) {
-    let player = game.get_nation(game.human_player_nation).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
     println!("  WAREHOUSE:");
 
     let mut has_any = false;
@@ -275,7 +291,9 @@ pub(crate) fn print_nations(game: &GameState) {
 }
 
 pub(crate) fn print_buildings(game: &GameState) {
-    let player = game.get_nation(game.human_player_nation).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
     println!("  BUILDINGS:");
     if player.economy.buildings.is_empty() {
         println!("    (none)");
@@ -305,7 +323,9 @@ pub(crate) fn print_buildings(game: &GameState) {
 }
 
 pub(crate) fn print_population(game: &GameState) {
-    let player = game.get_nation(game.human_player_nation).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     let untrained = player.economy.labor.untrained;
     let trained = player.economy.labor.trained;
@@ -363,7 +383,9 @@ pub(crate) fn print_population(game: &GameState) {
 }
 
 pub(crate) fn print_tech(game: &GameState) {
-    let player = game.get_nation(game.human_player_nation).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
     let year = game.turn.year();
 
     // Show already researched technologies
@@ -399,7 +421,9 @@ pub(crate) fn print_tech(game: &GameState) {
 pub(crate) fn print_trade(game: &GameState) {
     use domain::economy::trade;
 
-    let player = game.get_nation(game.human_player_nation).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
     let cargo_capacity = player.total_cargo_capacity();
 
     println!("  TRADE STATUS:");
@@ -516,7 +540,9 @@ pub(crate) fn print_trade(game: &GameState) {
 }
 
 pub(crate) fn print_civilians(game: &GameState) {
-    let player = game.get_nation(game.human_player_nation).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
     if player.military.civilians.is_empty() {
         println!("  No civilian units. Use 'hire <type>' to hire one.");
         println!("  Types: prospector, miner, engineer, farmer, rancher, forester, driller");
@@ -579,6 +605,9 @@ pub(crate) fn print_scores(game: &GameState) {
 pub(crate) fn print_diplomacy(game: &GameState) {
     let player_id = game.human_player_nation;
     let standing = game.world.diplomacy.get_standing(player_id);
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     println!("  DIPLOMATIC STATUS (Standing: {})", standing);
     println!();
@@ -606,7 +635,6 @@ pub(crate) fn print_diplomacy(game: &GameState) {
     println!();
 
     // Show Minor Nation relations
-    let player = game.get_nation(player_id).unwrap();
     println!("  MINOR NATIONS:");
     for mn in game.minor_nations() {
         let status = match game.world.diplomacy.get_relation(player_id, mn.id) {
@@ -948,6 +976,35 @@ pub(crate) fn print_pending_orders(game: &GameState) {
 
     // Working civilians
     if let Some(player) = game.get_nation(player_id) {
+        if let Some(pending) = game.transient.pending_economy_orders.get(&player_id)
+            && !pending.is_empty()
+        {
+            println!("  RESERVED ECONOMY ORDERS:");
+            for order in pending {
+                println!("    -> {} phase", order.phase);
+                if order.treasury > Money::ZERO {
+                    println!("       treasury reserved: ${}", order.treasury.as_dollars());
+                }
+                if !order.inventory.is_empty() {
+                    let items: Vec<String> = order
+                        .inventory
+                        .iter()
+                        .map(|(commodity, qty)| format!("{qty} {commodity}"))
+                        .collect();
+                    println!("       inventory reserved: {}", items.join(", "));
+                }
+                if !order.labor.is_empty() {
+                    let labor: Vec<String> = order
+                        .labor
+                        .iter()
+                        .map(|(tier, qty)| format!("{qty} {tier:?}"))
+                        .collect();
+                    println!("       labor reserved: {}", labor.join(", "));
+                }
+            }
+            has_orders = true;
+        }
+
         let working: Vec<_> = player.military.civilians.iter().filter(|c| c.working).collect();
         if !working.is_empty() {
             println!("  WORKING CIVILIANS:");
@@ -1762,7 +1819,9 @@ pub(crate) fn print_game_end_summary(game: &GameState, report: Option<&TurnRepor
 // ── Military display ─────────────────────────────────────────────
 
 pub(crate) fn print_military(game: &GameState) {
-    let player = game.get_nation(game.human_player_nation).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     println!("  ARMY ({} units):", player.military.army.len());
     if player.military.army.is_empty() {
@@ -1808,7 +1867,9 @@ pub(crate) fn print_military(game: &GameState) {
 // ── Transport display ────────────────────────────────────────────
 
 pub(crate) fn print_transport(game: &GameState) {
-    let player = game.get_nation(game.human_player_nation).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
     let ts = &player.military.transport;
     println!("  TRANSPORT SYSTEM:");
     println!("    Freight cars: {}", ts.freight_cars);
@@ -1889,8 +1950,14 @@ pub(crate) fn print_transport(game: &GameState) {
 // ── Infrastructure display ───────────────────────────────────────
 
 pub(crate) fn print_infrastructure(game: &GameState) {
-    let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
+    let Some(capital_province) = game.get_province(player.capital_province_id) else {
+        println!("  Internal error: capital province is missing from game state.");
+        return;
+    };
+    let capital_tile = capital_province.capital_tile;
 
     println!("  INFRASTRUCTURE STATUS:");
     println!();
@@ -1925,9 +1992,7 @@ pub(crate) fn print_infrastructure(game: &GameState) {
 
         let connected = infrastructure::is_province_connected(
             &game.world.hex_map,
-            game.get_province(player.capital_province_id)
-                .unwrap()
-                .capital_tile,
+            capital_tile,
             *province_id,
             &game.world.provinces,
         );
@@ -1950,7 +2015,9 @@ pub(crate) fn print_infrastructure(game: &GameState) {
 
 /// Print the merchant fleet.
 pub(crate) fn print_fleet(game: &GameState) {
-    let player = game.get_nation(game.human_player_nation).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     if player.military.merchant_fleet.is_empty() {
         println!(
@@ -1982,7 +2049,9 @@ pub(crate) fn print_fleet(game: &GameState) {
 
 /// Print the warship fleet.
 pub(crate) fn print_navy(game: &GameState) {
-    let player = game.get_nation(game.human_player_nation).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     if player.military.warships.is_empty() {
         println!(

@@ -7,13 +7,37 @@ use domain::hex::HexCoord;
 use domain::map::infrastructure;
 use domain::military::ships::{Ship, ShipType};
 use domain::military::units::{ArmyUnit, ArmyUnitType};
+use domain::nation::Nation;
 use domain::types::*;
 
 // ── Helper functions ─────────────────────────────────────────────
 
+fn human_player(game: &GameState) -> Option<&Nation> {
+    match game.get_nation(game.human_player_nation) {
+        Some(player) => Some(player),
+        None => {
+            println!("  Internal error: human player nation is missing from game state.");
+            None
+        }
+    }
+}
+
+fn human_player_mut(game: &mut GameState) -> Option<&mut Nation> {
+    let player_id = game.human_player_nation;
+    match game.get_nation_mut(player_id) {
+        Some(player) => Some(player),
+        None => {
+            println!("  Internal error: human player nation is missing from game state.");
+            None
+        }
+    }
+}
+
 /// Check if the human player's nation is bankrupt. If so, print a message and return true.
 pub(crate) fn check_bankrupt(game: &GameState) -> bool {
-    let player = game.get_nation(game.human_player_nation).unwrap();
+    let Some(player) = human_player(game) else {
+        return true;
+    };
     if player.is_bankrupt() {
         println!(
             "  FINANCIAL CRISIS: Your nation is bankrupt (treasury: {}). No spending allowed until treasury recovers.",
@@ -117,8 +141,9 @@ pub(crate) fn build_building(game: &mut GameState, query: &str) {
         }
     };
 
-    let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     // Check if the player already has this building
     if player.has_building(bt) {
@@ -144,7 +169,9 @@ pub(crate) fn build_building(game: &mut GameState, query: &str) {
         return;
     }
 
-    let player = game.get_nation_mut(player_id).unwrap();
+    let Some(player) = human_player_mut(game) else {
+        return;
+    };
     player.consume_material(MaterialType::Lumber, lumber_needed);
     player.consume_material(MaterialType::Steel, steel_needed);
     player.economy.buildings.push(Building::new(bt, initial_capacity));
@@ -171,8 +198,9 @@ pub(crate) fn expand_building(game: &mut GameState, query: &str) {
         }
     };
 
-    let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     if !player.has_building(bt) {
         println!(
@@ -214,11 +242,16 @@ pub(crate) fn expand_building(game: &mut GameState, query: &str) {
         return;
     }
 
-    let player = game.get_nation_mut(player_id).unwrap();
+    let Some(player) = human_player_mut(game) else {
+        return;
+    };
     player.consume_material(MaterialType::Lumber, lumber_needed);
     player.consume_material(MaterialType::Steel, steel_needed);
 
-    let building = player.get_building_mut(bt).unwrap();
+    let Some(building) = player.get_building_mut(bt) else {
+        println!("  Internal error: {:?} vanished before expansion could start.", bt);
+        return;
+    };
     building.start_expansion(expand_amount);
 
     println!(
@@ -232,8 +265,9 @@ pub(crate) fn recruit_worker(game: &mut GameState) {
         return;
     }
 
-    let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     // Check province-based recruitment limit
     let max_recruits = crate::display::max_recruitment_capacity(player);
@@ -269,7 +303,9 @@ pub(crate) fn recruit_worker(game: &mut GameState) {
         return;
     }
 
-    let player = game.get_nation_mut(player_id).unwrap();
+    let Some(player) = human_player_mut(game) else {
+        return;
+    };
     player.consume_material(MaterialType::CannedFood, 1);
     player.consume_goods(GoodsType::Clothing, 1);
     player.consume_goods(GoodsType::Furniture, 1);
@@ -287,8 +323,9 @@ pub(crate) fn train_worker(game: &mut GameState) {
         return;
     }
 
-    let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     if player.economy.labor.untrained == 0 {
         println!("  No untrained workers available to train.");
@@ -298,7 +335,9 @@ pub(crate) fn train_worker(game: &mut GameState) {
     // Simplified: consume 1 paper if available, but allow training regardless
     let has_paper = player.material_amount(MaterialType::Paper) >= 1;
 
-    let player = game.get_nation_mut(player_id).unwrap();
+    let Some(player) = human_player_mut(game) else {
+        return;
+    };
     if has_paper {
         player.consume_material(MaterialType::Paper, 1);
     }
@@ -333,7 +372,9 @@ pub(crate) fn build_unit(game: &mut GameState, query: &str) {
 
     let cost = unit_build_cost(unit_type);
     let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     if player.economy.treasury.checked_sub(cost).is_none() {
         println!(
@@ -347,7 +388,9 @@ pub(crate) fn build_unit(game: &mut GameState, query: &str) {
     let uid = game.alloc_unit_id();
     let unit = ArmyUnit::new(uid, unit_type, player_id, capital_province);
 
-    let player = game.get_nation_mut(player_id).unwrap();
+    let Some(player) = human_player_mut(game) else {
+        return;
+    };
     player.economy.treasury -= cost;
     player.military.army.push(unit);
 
@@ -375,8 +418,9 @@ pub(crate) fn cmd_upgrade_unit(game: &mut GameState, index_str: &str) {
         }
     };
 
-    let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     if idx >= player.military.army.len() {
         println!(
@@ -426,7 +470,9 @@ pub(crate) fn cmd_upgrade_unit(game: &mut GameState, index_str: &str) {
     }
 
     // Apply upgrade
-    let player = game.get_nation_mut(player_id).unwrap();
+    let Some(player) = human_player_mut(game) else {
+        return;
+    };
     player.economy.treasury -= cost;
     let old_medals = player.military.army[idx].medals;
     let old_health = player.military.army[idx].health;
@@ -464,8 +510,9 @@ pub(crate) fn cmd_build_ship(game: &mut GameState, query: &str) {
     let fabric_needed = stats.fabric_cost;
     let lumber_needed = stats.lumber_cost;
 
-    let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     let fabric_have = player.material_amount(MaterialType::Fabric);
     let lumber_have = player.material_amount(MaterialType::Lumber);
@@ -478,10 +525,13 @@ pub(crate) fn cmd_build_ship(game: &mut GameState, query: &str) {
         return;
     }
 
+    let player_id = game.human_player_nation;
     let uid = game.alloc_unit_id();
     let ship = Ship::new(uid, ship_type, player_id);
 
-    let player = game.get_nation_mut(player_id).unwrap();
+    let Some(player) = human_player_mut(game) else {
+        return;
+    };
     player.consume_material(MaterialType::Fabric, fabric_needed);
     player.consume_material(MaterialType::Lumber, lumber_needed);
     player.military.merchant_fleet.push(ship);
@@ -518,8 +568,9 @@ pub(crate) fn cmd_build_warship(game: &mut GameState, query: &str) {
     let lumber_needed = stats.lumber_cost;
     let arms_needed = stats.arms_cost;
 
-    let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     let fabric_have = player.material_amount(MaterialType::Fabric);
     let lumber_have = player.material_amount(MaterialType::Lumber);
@@ -539,10 +590,13 @@ pub(crate) fn cmd_build_warship(game: &mut GameState, query: &str) {
         return;
     }
 
+    let player_id = game.human_player_nation;
     let uid = game.alloc_unit_id();
     let ship = Ship::new(uid, ship_type, player_id);
 
-    let player = game.get_nation_mut(player_id).unwrap();
+    let Some(player) = human_player_mut(game) else {
+        return;
+    };
     player.consume_material(MaterialType::Fabric, fabric_needed);
     player.consume_material(MaterialType::Lumber, lumber_needed);
     player.consume_material(MaterialType::Arms, arms_needed);
@@ -565,8 +619,9 @@ pub(crate) fn cmd_produce_arms(game: &mut GameState) {
         return;
     }
 
-    let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     let steel_have = player.material_amount(MaterialType::Steel);
     if steel_have < 1 {
@@ -574,7 +629,9 @@ pub(crate) fn cmd_produce_arms(game: &mut GameState) {
         return;
     }
 
-    let player = game.get_nation_mut(player_id).unwrap();
+    let Some(player) = human_player_mut(game) else {
+        return;
+    };
     player.consume_material(MaterialType::Steel, 1);
     player.add_material(MaterialType::Arms, 1);
 
@@ -693,8 +750,9 @@ pub(crate) fn cmd_sell(game: &mut GameState, args: &str) {
         return;
     }
 
-    let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     if player.resource_amount(resource) < quantity {
         println!(
@@ -708,7 +766,9 @@ pub(crate) fn cmd_sell(game: &mut GameState, args: &str) {
 
     let revenue = price * quantity as i64;
 
-    let player = game.get_nation_mut(player_id).unwrap();
+    let Some(player) = human_player_mut(game) else {
+        return;
+    };
     player.remove_resource(resource, quantity);
     player.economy.treasury += revenue;
 
@@ -719,13 +779,14 @@ pub(crate) fn cmd_sell(game: &mut GameState, args: &str) {
 }
 
 pub(crate) fn research_tech(game: &mut GameState, query: &str) {
-    let player_id = game.human_player_nation;
     let year = game.turn.year();
 
     let query_lower = query.to_lowercase();
 
     // Get available techs and find a case-insensitive partial match
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
     let available = game
         .game_data
         .tech_tree
@@ -743,7 +804,9 @@ pub(crate) fn research_tech(game: &mut GameState, query: &str) {
         }
         1 => {
             let tech = matched[0];
-            let player = game.get_nation(player_id).unwrap();
+            let Some(player) = human_player(game) else {
+                return;
+            };
 
             // Check if player can afford it
             if player.economy.treasury.checked_sub(tech.cost).is_none() {
@@ -759,7 +822,9 @@ pub(crate) fn research_tech(game: &mut GameState, query: &str) {
             let tech_cost = tech.cost;
 
             // Deduct cost and add tech
-            let player = game.get_nation_mut(player_id).unwrap();
+            let Some(player) = human_player_mut(game) else {
+                return;
+            };
             player.economy.treasury -= tech_cost;
             player.research_tech(tech_id);
 
@@ -815,7 +880,9 @@ pub(crate) fn cmd_hire_civilian(game: &mut GameState, type_name: &str) {
     let cost = civ_type.creation_cost(&game.game_data.game_config);
     let player_id = game.human_player_nation;
     let civilian_costs_expert = game.game_data.game_config.civilian_costs_expert;
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     if civilian_costs_expert && player.economy.labor.expert == 0 {
         println!("  Cannot hire civilian: requires an expert worker (you have none).");
@@ -834,7 +901,9 @@ pub(crate) fn cmd_hire_civilian(game: &mut GameState, type_name: &str) {
     let id = game.alloc_unit_id();
     let civilian = domain::economy::civilians::Civilian::new(id, civ_type, player_id);
 
-    let player = game.get_nation_mut(player_id).unwrap();
+    let Some(player) = human_player_mut(game) else {
+        return;
+    };
     player.economy.treasury -= cost;
     if civilian_costs_expert {
         player.economy.labor.expert -= 1;
@@ -877,7 +946,9 @@ pub(crate) fn cmd_deploy_civilian(game: &mut GameState, args: &str) {
 
     // Phase 1: gather info with immutable borrows, extract owned data
     let (civ_type, coord, prov_name) = {
-        let player = game.get_nation(player_id).unwrap();
+        let Some(player) = human_player(game) else {
+            return;
+        };
 
         if index >= player.military.civilians.len() {
             println!(
@@ -957,7 +1028,9 @@ pub(crate) fn cmd_deploy_civilian(game: &mut GameState, args: &str) {
     };
 
     // Phase 2: apply mutations
-    let player = game.get_nation_mut(player_id).unwrap();
+    let Some(player) = human_player_mut(game) else {
+        return;
+    };
     let civilian = &mut player.military.civilians[index];
     civilian.deploy(coord);
     civilian.start_work(1); // 1 turn for improvements
@@ -1000,7 +1073,9 @@ pub(crate) fn cmd_consulate(game: &mut GameState, query: &str) {
     let target_id = target.id;
     let target_name = target.name.clone();
 
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
     let cost = Money::dollars(500);
     if player.economy.treasury.checked_sub(cost).is_none() {
         println!(
@@ -1012,7 +1087,9 @@ pub(crate) fn cmd_consulate(game: &mut GameState, query: &str) {
 
     match game.world.diplomacy.build_consulate(player_id, target_id) {
         Ok(_) => {
-            let player = game.get_nation_mut(player_id).unwrap();
+            let Some(player) = human_player_mut(game) else {
+                return;
+            };
             player.economy.treasury -= cost;
             println!(
                 "  {}",
@@ -1064,7 +1141,9 @@ pub(crate) fn cmd_embassy(game: &mut GameState, query: &str) {
     let target_id = target.id;
     let target_name = target.name.clone();
 
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
     let cost = Money::dollars(5000);
     if player.economy.treasury.checked_sub(cost).is_none() {
         println!(
@@ -1076,7 +1155,9 @@ pub(crate) fn cmd_embassy(game: &mut GameState, query: &str) {
 
     match game.world.diplomacy.build_embassy(player_id, target_id) {
         Ok(_) => {
-            let player = game.get_nation_mut(player_id).unwrap();
+            let Some(player) = human_player_mut(game) else {
+                return;
+            };
             player.economy.treasury -= cost;
             println!(
                 "  {}",
@@ -1355,7 +1436,9 @@ pub(crate) fn cmd_grant(game: &mut GameState, args: &str) {
     }
 
     let grant = Money::dollars(amount);
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
     if player.economy.treasury.checked_sub(grant).is_none() {
         println!(
             "  Cannot afford grant of {} (treasury: {}).",
@@ -1365,7 +1448,9 @@ pub(crate) fn cmd_grant(game: &mut GameState, args: &str) {
     }
 
     game.world.diplomacy.send_grant(player_id, target_id, grant);
-    let player = game.get_nation_mut(player_id).unwrap();
+    let Some(player) = human_player_mut(game) else {
+        return;
+    };
     player.economy.treasury -= grant;
     let new_treasury = player.economy.treasury;
     let score = game
@@ -1387,8 +1472,6 @@ pub(crate) fn cmd_subsidy(game: &mut GameState, args: &str) {
     if check_bankrupt(game) {
         return;
     }
-
-    let player_id = game.human_player_nation;
 
     // Parse: subsidy <nation> <amount>
     let parts: Vec<&str> = args.rsplitn(2, ' ').collect();
@@ -1437,7 +1520,9 @@ pub(crate) fn cmd_subsidy(game: &mut GameState, args: &str) {
 
     if amount == 0 {
         // Remove subsidy
-        let player = game.get_nation_mut(player_id).unwrap();
+        let Some(player) = human_player_mut(game) else {
+            return;
+        };
         player.diplomacy.trade_subsidies.remove(&target_id);
         println!(
             "  {}",
@@ -1445,7 +1530,9 @@ pub(crate) fn cmd_subsidy(game: &mut GameState, args: &str) {
         );
     } else {
         let subsidy = Money::dollars(amount);
-        let player = game.get_nation_mut(player_id).unwrap();
+        let Some(player) = human_player_mut(game) else {
+            return;
+        };
         player.diplomacy.trade_subsidies.insert(target_id, subsidy);
         println!(
             "  {}",
@@ -1490,7 +1577,9 @@ pub(crate) fn cmd_attack(game: &mut GameState, query: &str) {
     }
 
     // Check player has army units
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
     if player.military.army.is_empty() {
         println!("  You have no army units! Build units first with 'build unit <type>'.");
         return;
@@ -1572,7 +1661,9 @@ pub(crate) fn cmd_beachhead(game: &mut GameState, query: &str) {
     }
 
     // Must have warships
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
     if player.military.warships.is_empty() {
         println!("  You have no warships! Build warships first.");
         return;
@@ -1628,8 +1719,9 @@ pub(crate) fn build_freight_car(game: &mut GameState) {
         return;
     }
 
-    let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     let (labor_needed, lumber_needed, steel_needed) =
         domain::economy::transport::TransportSystem::build_freight_car_cost();
@@ -1660,7 +1752,9 @@ pub(crate) fn build_freight_car(game: &mut GameState) {
         return;
     }
 
-    let player = game.get_nation_mut(player_id).unwrap();
+    let Some(player) = human_player_mut(game) else {
+        return;
+    };
     player.consume_material(MaterialType::Lumber, lumber_needed);
     player.consume_material(MaterialType::Steel, steel_needed);
     // Labor is consumed as a workforce requirement, not permanently removed.
@@ -1741,7 +1835,10 @@ fn assign_engineer_task(
                 }
             };
             // Tech pre-flight: some terrains require a researched tech.
-            let researched = &game.get_nation(player_id).unwrap().researched_techs;
+            let Some(researched) = game.get_nation(player_id).map(|n| &n.researched_techs) else {
+                println!("  Internal error: player nation is missing from game state.");
+                return;
+            };
             if !infrastructure::rail_terrain_enabled(terrain, researched, &game.game_data, &cfg) {
                 let tech = infrastructure::railroad_required_tech(terrain, &cfg).unwrap_or("?");
                 println!(
@@ -1761,7 +1858,10 @@ fn assign_engineer_task(
         BuildTask::Depot => Money::dollars(cfg.depot_cost),
         BuildTask::Port => Money::dollars(cfg.port_cost),
     };
-    let treasury = game.get_nation(player_id).unwrap().economy.treasury;
+    let Some(treasury) = game.get_nation(player_id).map(|n| n.economy.treasury) else {
+        println!("  Internal error: player nation is missing from game state.");
+        return;
+    };
     if treasury.checked_sub(cost).is_none() {
         println!(
             "  Cannot afford {} (cost: {}, treasury: {}).",
@@ -1814,7 +1914,11 @@ pub(crate) fn cmd_build_railroad(game: &mut GameState) {
         return;
     }
     let player_id = game.human_player_nation;
-    let capital_province_id = game.get_nation(player_id).unwrap().capital_province_id;
+    let Some(capital_province_id) = game.get_nation(player_id).map(|n| n.capital_province_id)
+    else {
+        println!("  Internal error: human player nation is missing from game state.");
+        return;
+    };
     let tiles: Vec<HexCoord> = game
         .get_province(capital_province_id)
         .map(|p| p.tiles.clone())
@@ -1844,8 +1948,16 @@ pub(crate) fn cmd_build_depot(game: &mut GameState) {
         return;
     }
     let player_id = game.human_player_nation;
-    let capital_province_id = game.get_nation(player_id).unwrap().capital_province_id;
-    let capital_tile_coord = game.get_province(capital_province_id).unwrap().capital_tile;
+    let Some(capital_province_id) = game.get_nation(player_id).map(|n| n.capital_province_id)
+    else {
+        println!("  Internal error: human player nation is missing from game state.");
+        return;
+    };
+    let Some(capital_tile_coord) = game.get_province(capital_province_id).map(|p| p.capital_tile)
+    else {
+        println!("  Internal error: capital province is missing from game state.");
+        return;
+    };
 
     assign_engineer_task(
         game,
@@ -1863,7 +1975,11 @@ pub(crate) fn cmd_build_port(game: &mut GameState) {
         return;
     }
     let player_id = game.human_player_nation;
-    let capital_province_id = game.get_nation(player_id).unwrap().capital_province_id;
+    let Some(capital_province_id) = game.get_nation(player_id).map(|n| n.capital_province_id)
+    else {
+        println!("  Internal error: human player nation is missing from game state.");
+        return;
+    };
     let tiles: Vec<HexCoord> = game
         .get_province(capital_province_id)
         .map(|p| p.tiles.clone())
@@ -1900,7 +2016,9 @@ pub(crate) fn cmd_build_fort(game: &mut GameState, province_query: Option<&str>)
     }
 
     let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     // Find the target province: use specified province or fall back to capital
     let target_province_id = if let Some(query) = province_query {
@@ -1925,7 +2043,10 @@ pub(crate) fn cmd_build_fort(game: &mut GameState, province_query: Option<&str>)
         player.capital_province_id
     };
 
-    let province = game.get_province(target_province_id).unwrap();
+    let Some(province) = game.get_province(target_province_id) else {
+        println!("  Internal error: target province is missing from game state.");
+        return;
+    };
     let capital_tile_coord = province.capital_tile;
     let province_name = province.name.clone();
 
@@ -1942,8 +2063,17 @@ pub(crate) fn cmd_build_fort(game: &mut GameState, province_query: Option<&str>)
         return;
     }
 
-    let cost = domain::map::fort_cost(next_level, &game.game_data.game_config).unwrap();
-    let treasury = game.get_nation(player_id).unwrap().economy.treasury;
+    let cost = match domain::map::fort_cost(next_level, &game.game_data.game_config) {
+        Ok(cost) => cost,
+        Err(err) => {
+            println!("  Cannot determine fort cost for level {}: {}.", next_level, err);
+            return;
+        }
+    };
+    let Some(treasury) = game.get_nation(player_id).map(|n| n.economy.treasury) else {
+        println!("  Internal error: human player nation is missing from game state.");
+        return;
+    };
     if treasury.checked_sub(cost).is_none() {
         println!(
             "  Cannot afford fort level {} in {} (cost: {}, treasury: {}).",
@@ -1955,7 +2085,9 @@ pub(crate) fn cmd_build_fort(game: &mut GameState, province_query: Option<&str>)
     let cfg_snapshot = game.game_data.game_config.clone();
     match domain::map::build_fort(&mut game.world.hex_map, capital_tile_coord, &cfg_snapshot) {
         Ok((level, cost)) => {
-            let player = game.get_nation_mut(player_id).unwrap();
+            let Some(player) = human_player_mut(game) else {
+                return;
+            };
             player.economy.treasury -= cost;
             println!(
                 "  {}",
@@ -1999,7 +2131,9 @@ pub(crate) fn cmd_move_unit(game: &mut GameState, args: &str) {
     let province_name = parts[1].trim();
 
     let player_id = game.human_player_nation;
-    let player = game.get_nation(player_id).unwrap();
+    let Some(player) = human_player(game) else {
+        return;
+    };
 
     if index >= player.military.army.len() {
         println!(
@@ -2054,7 +2188,9 @@ pub(crate) fn cmd_move_unit(game: &mut GameState, args: &str) {
 
     if target_owner == player_id {
         // Friendly province: move immediately
-        let player = game.get_nation_mut(player_id).unwrap();
+        let Some(player) = human_player_mut(game) else {
+            return;
+        };
         player.military.army[index].position = target_province_id;
         println!("  Moved {:?} to {}.", unit_type, target_name);
     } else {

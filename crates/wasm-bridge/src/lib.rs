@@ -12,7 +12,9 @@ use domain::economy::production::{
 use domain::economy::trade::{Commodity, base_price, commodity_price};
 use domain::economy::transport::TransportSystem;
 use domain::events::TreatyType;
-use domain::game_state::{GameState, new_game_with_config, new_observer_game_with_config};
+use domain::game_state::{
+    GameState, new_game_with_data_and_config, new_observer_game_with_data_and_config,
+};
 #[cfg(test)]
 use domain::game_state::{new_game, new_observer_game};
 use domain::hex::HexCoord;
@@ -21,10 +23,11 @@ use domain::military::combat::BattleResult;
 use domain::military::naval::NavalBattleResult;
 use domain::military::ships::{Ship, ShipCategory, ShipType};
 use domain::military::units::{ArmyUnit, ArmyUnitType};
-use domain::scenarios::{list_scenarios, new_scenario_game};
+use domain::scenarios::{list_scenarios, new_scenario_game_with_data};
 use domain::turn::process_turn;
 use domain::types::*;
 use domain_snapshot::game_state::GameState as SnapshotGameState;
+use infrastructure::data_loader::load_embedded_game_data;
 
 // ── Snapshot helpers ─────────────────────────────────────────────────────
 
@@ -42,7 +45,7 @@ fn game_from_json(json: &str) -> Result<GameState, String> {
     let snap: SnapshotGameState = serde_json::from_str(json)
         .map_err(|e| format!("deserialize: {e}"))?;
     let mut game: GameState = snap.into();
-    game.game_data = domain::data::GameData::default();
+    game.game_data = load_embedded_game_data();
     Ok(game)
 }
 
@@ -76,7 +79,13 @@ pub fn wasm_new_game(
 ) -> String {
     let diff = difficulty_from_u8(difficulty);
     let cfg = build_map_config(map_width, map_height, num_great_powers, num_minor_nations);
-    let mut game = new_game_with_config(map_key, diff, nation_index, cfg);
+    let mut game = new_game_with_data_and_config(
+        map_key,
+        diff,
+        nation_index,
+        load_embedded_game_data(),
+        cfg,
+    );
     flavor_bridge::apply_flavor(&mut game, flavor_key);
     game_to_json(&game)
 }
@@ -97,7 +106,12 @@ pub fn wasm_new_scenario_game(
         3 => Difficulty::Hard,
         _ => Difficulty::Normal,
     };
-    match new_scenario_game(scenario_id, diff, nation_index) {
+    match new_scenario_game_with_data(
+        scenario_id,
+        diff,
+        nation_index,
+        load_embedded_game_data(),
+    ) {
         Ok(mut game) => {
             flavor_bridge::apply_flavor(&mut game, flavor_key);
             game_to_json(&game)
@@ -131,7 +145,12 @@ pub fn wasm_new_observer_game(
     flavor_key: &str,
 ) -> String {
     let cfg = build_map_config(map_width, map_height, num_great_powers, num_minor_nations);
-    let mut game = new_observer_game_with_config(map_key, difficulty_from_u8(difficulty), cfg);
+    let mut game = new_observer_game_with_data_and_config(
+        map_key,
+        difficulty_from_u8(difficulty),
+        load_embedded_game_data(),
+        cfg,
+    );
     flavor_bridge::apply_flavor(&mut game, flavor_key);
     game_to_json(&game)
 }
@@ -145,7 +164,7 @@ pub fn wasm_new_observer_scenario_game(
     flavor_key: &str,
 ) -> String {
     let diff = difficulty_from_u8(difficulty);
-    match new_scenario_game(scenario_id, diff, 0) {
+    match new_scenario_game_with_data(scenario_id, diff, 0, load_embedded_game_data()) {
         Ok(mut game) => {
             // Promote to observer mode: give seat 0 an AI personality + bonus.
             let human_id = game.human_player_nation;

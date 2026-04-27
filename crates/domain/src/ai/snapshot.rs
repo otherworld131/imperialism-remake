@@ -7,11 +7,46 @@
 //! mid-tick state drift.
 
 use crate::economy::buildings::BuildingType;
+use crate::economy::labor::WorkerType;
 use crate::economy::market::Trend;
+use crate::economy::observability::PendingEconomyOrder;
 use crate::economy::trade::Commodity;
+use crate::economy::transport::LogisticsState;
 use crate::game_state::GameState;
 use crate::types::*;
 use std::collections::HashMap;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InventoryView {
+    pub total: u32,
+    pub reserved: u32,
+    pub available: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreasuryView {
+    pub total: Money,
+    pub reserved: Money,
+    pub available: Money,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaborTierView {
+    pub total: u32,
+    pub reserved: u32,
+    pub available: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaborView {
+    pub by_tier: HashMap<WorkerType, LaborTierView>,
+    pub total_workers: u32,
+    pub reserved_workers: u32,
+    pub available_workers: u32,
+    pub total_units: u32,
+    pub reserved_units: u32,
+    pub available_units: u32,
+}
 
 /// A lightweight snapshot of a nation's production-relevant economy state.
 ///
@@ -23,9 +58,11 @@ pub struct NationEconomySnapshot {
 
     // ── Treasury ─────────────────────────────────────────────────────────────
     pub treasury: Money,
+    pub treasury_view: TreasuryView,
 
     // ── Inventory (total stored quantities) ─────────────────────────────────
     pub inventory: HashMap<Commodity, u32>,
+    pub inventory_view: HashMap<Commodity, InventoryView>,
 
     // ── Buildings (type → effective capacity, 0 = not present) ──────────────
     pub buildings: HashMap<BuildingType, u32>,
@@ -34,10 +71,15 @@ pub struct NationEconomySnapshot {
 
     // ── Labor ────────────────────────────────────────────────────────────────
     pub total_workers: u32,
+    pub labor: LaborView,
 
     // ── Logistics ───────────────────────────────────────────────────────────
     /// Total freight-car transport capacity for this nation.
     pub freight_capacity: u32,
+    pub logistics: LogisticsState,
+
+    // ── Pending pre-execution state ─────────────────────────────────────────
+    pub pending_orders: Vec<PendingEconomyOrder>,
 
     // ── Market view (#164) ───────────────────────────────────────────────────
     /// Current market price per commodity (empty until the first trade turn).
@@ -58,6 +100,18 @@ impl NationEconomySnapshot {
             .iter_all()
             .filter(|(_, qty)| *qty > 0)
             .collect();
+        let mut inventory_view = HashMap::new();
+        for commodity in inventory
+            .keys()
+            .chain(nation.economy.reserved_inventory().keys())
+            .copied()
+        {
+            inventory_view.entry(commodity).or_insert_with(|| InventoryView {
+                total: nation.economy.amount(commodity),
+                reserved: nation.economy.reserved(commodity),
+                available: nation.economy.available(commodity),
+            });
+        }
 
         let buildings: HashMap<BuildingType, u32> = nation
             .economy
@@ -81,15 +135,70 @@ impl NationEconomySnapshot {
             .commodities_with_history()
             .map(|c| (c, state.world.market_state.trend(c, 4)))
             .collect();
+        let treasury_view = TreasuryView {
+            total: nation.economy.treasury,
+            reserved: nation.economy.reserved_treasury_amount(),
+            available: nation.economy.available_treasury(),
+        };
+        let available_labor = nation.economy.available_labor();
+        let reserved_labor = nation.economy.reserved_labor();
+        let mut labor_by_tier = HashMap::new();
+        for (tier, total) in [
+            (WorkerType::Untrained, nation.economy.labor.untrained),
+            (WorkerType::Trained, nation.economy.labor.trained),
+            (WorkerType::Expert, nation.economy.labor.expert),
+        ] {
+            labor_by_tier.insert(
+                tier,
+                LaborTierView {
+                    total,
+                    reserved: reserved_labor.get(&tier).copied().unwrap_or(0),
+                    available: available_labor.get(&tier).copied().unwrap_or(0),
+                },
+            );
+        }
+        let labor = LaborView {
+            by_tier: labor_by_tier,
+            total_workers: nation.economy.labor.total_workers(),
+            reserved_workers: reserved_labor.values().sum(),
+            available_workers: available_labor.values().sum(),
+            total_units: nation.economy.labor.total_labor_units_with(
+                state.game_data.game_config.untrained_labor,
+                state.game_data.game_config.trained_labor,
+                state.game_data.game_config.expert_labor,
+            ),
+            reserved_units: reserved_labor.get(&WorkerType::Untrained).copied().unwrap_or(0)
+                * state.game_data.game_config.untrained_labor
+                + reserved_labor.get(&WorkerType::Trained).copied().unwrap_or(0)
+                    * state.game_data.game_config.trained_labor
+                + reserved_labor.get(&WorkerType::Expert).copied().unwrap_or(0)
+                    * state.game_data.game_config.expert_labor,
+            available_units: nation.economy.available_labor_units_with(
+                state.game_data.game_config.untrained_labor,
+                state.game_data.game_config.trained_labor,
+                state.game_data.game_config.expert_labor,
+            ),
+        };
+        let pending_orders = state
+            .transient
+            .pending_economy_orders
+            .get(&nation_id)
+            .cloned()
+            .unwrap_or_default();
 
         Self {
             nation_id,
             treasury: nation.economy.treasury,
+            treasury_view,
             inventory,
+            inventory_view,
             buildings,
             pending_capacities,
             total_workers: nation.economy.labor.total_workers(),
+            labor,
             freight_capacity: nation.military.transport.total_capacity(),
+            logistics: nation.economy.logistics.clone(),
+            pending_orders,
             market_prices,
             market_trends,
         }
@@ -100,11 +209,28 @@ impl NationEconomySnapshot {
         Self {
             nation_id,
             treasury: Money::ZERO,
+            treasury_view: TreasuryView {
+                total: Money::ZERO,
+                reserved: Money::ZERO,
+                available: Money::ZERO,
+            },
             inventory: HashMap::new(),
+            inventory_view: HashMap::new(),
             buildings: HashMap::new(),
             pending_capacities: HashMap::new(),
             total_workers: 0,
+            labor: LaborView {
+                by_tier: HashMap::new(),
+                total_workers: 0,
+                reserved_workers: 0,
+                available_workers: 0,
+                total_units: 0,
+                reserved_units: 0,
+                available_units: 0,
+            },
             freight_capacity: 0,
+            logistics: LogisticsState::new(),
+            pending_orders: Vec::new(),
             market_prices: HashMap::new(),
             market_trends: HashMap::new(),
         }
@@ -178,6 +304,8 @@ impl NationEconomySnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::GameData;
+    use crate::diplomacy::DiplomacyState;
     use crate::economy::buildings::Building;
     use crate::game_state::GameState;
     use crate::hex::HexCoord;
@@ -186,12 +314,10 @@ mod tests {
     use crate::types::NationType;
 
     fn minimal_game() -> GameState {
-        use crate::data::GameData;
-        use crate::diplomacy::DiplomacyState;
         let coord = HexCoord::new(0, 0);
         let province = Province::new(ProvinceId(1), "Test".to_string(), NationId(1), coord, vec![coord], 4);
         let nation = Nation::new(NationId(1), "Test".to_string(), NationColor::Blue, NationType::GreatPower, ProvinceId(1));
-        GameState {
+        crate::test_game_state! {
             turn: crate::types::TurnNumber::new(1),
             difficulty: crate::types::Difficulty::Normal,
             map_key: "test".to_string(),

@@ -15,10 +15,11 @@ use application::queries::{
     FrontendQuery, get_diplomacy_screen, get_industry_screen, get_map_screen,
     get_trade_screen, get_transport_screen,
 };
-use domain::game_state::{GameState, new_game_with_config};
+use domain::game_state::{GameState, new_game_with_data_and_config};
 use domain::map::MapGenConfig;
 use domain::turn::process_turn;
 use domain::types::*;
+use infrastructure::data_loader::load_embedded_game_data;
 use wasm_bindgen::prelude::*;
 
 use crate::flavor_bridge;
@@ -84,7 +85,13 @@ pub fn wasm_session_new_game(
         num_great_powers: (num_great_powers as usize).clamp(1, 20),
         num_minor_nations: (num_minor_nations as usize).min(32),
     };
-    let mut game = new_game_with_config(map_key, diff, nation_index, cfg);
+    let mut game = new_game_with_data_and_config(
+        map_key,
+        diff,
+        nation_index,
+        load_embedded_game_data(),
+        cfg,
+    );
     flavor_bridge::apply_flavor(&mut game, flavor_key);
 
     SESSION.with(|s| *s.borrow_mut() = Some(game));
@@ -689,7 +696,10 @@ fn respond_to_query(game: &GameState, query: FrontendQuery) -> String {
     use FrontendQuery::*;
     match query {
         MapScreen => {
-            let data = get_map_screen(game);
+            let data = match get_map_screen(game) {
+                Ok(data) => data,
+                Err(e) => return err_json(&e.to_string()),
+            };
             serde_json::to_string(&serde_json::json!({
                 "ok": true,
                 "turn": data.turn,
@@ -702,7 +712,10 @@ fn respond_to_query(game: &GameState, query: FrontendQuery) -> String {
             .unwrap_or_else(|_| ok_json())
         }
         TransportScreen => {
-            let data = get_transport_screen(game);
+            let data = match get_transport_screen(game) {
+                Ok(data) => data,
+                Err(e) => return err_json(&e.to_string()),
+            };
             serde_json::to_string(&serde_json::json!({
                 "ok": true,
                 "freight_cars": data.freight_cars,
@@ -713,7 +726,10 @@ fn respond_to_query(game: &GameState, query: FrontendQuery) -> String {
             .unwrap_or_else(|_| ok_json())
         }
         IndustryScreen => {
-            let data = get_industry_screen(game);
+            let data = match get_industry_screen(game) {
+                Ok(data) => data,
+                Err(e) => return err_json(&e.to_string()),
+            };
             serde_json::to_string(&serde_json::json!({
                 "ok": true,
                 "buildings": data.buildings,
@@ -723,7 +739,10 @@ fn respond_to_query(game: &GameState, query: FrontendQuery) -> String {
             .unwrap_or_else(|_| ok_json())
         }
         TradeScreen => {
-            let data = get_trade_screen(game);
+            let data = match get_trade_screen(game) {
+                Ok(data) => data,
+                Err(e) => return err_json(&e.to_string()),
+            };
             serde_json::to_string(&serde_json::json!({
                 "ok": true,
                 "cargo_capacity": data.cargo_capacity,
@@ -739,7 +758,10 @@ fn respond_to_query(game: &GameState, query: FrontendQuery) -> String {
             .unwrap_or_else(|_| ok_json())
         }
         DiplomacyScreen => {
-            let data = get_diplomacy_screen(game);
+            let data = match get_diplomacy_screen(game) {
+                Ok(data) => data,
+                Err(e) => return err_json(&e.to_string()),
+            };
             serde_json::to_string(&serde_json::json!({
                 "ok": true,
                 "standing": data.standing,

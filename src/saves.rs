@@ -1,64 +1,105 @@
 use std::path::PathBuf;
 
 use ::infrastructure::persistence;
+use ::infrastructure::data_loader::load_embedded_game_data;
+use ::infrastructure::PersistenceError;
 use domain::game_state::GameState;
+
+#[derive(Debug)]
+pub(crate) enum SaveError {
+    InvalidFilename { reason: String },
+    Io { context: &'static str, source: std::io::Error },
+    Persistence(PersistenceError),
+}
+
+impl SaveError {
+    fn invalid(reason: impl Into<String>) -> Self {
+        Self::InvalidFilename { reason: reason.into() }
+    }
+
+    fn io(context: &'static str, source: std::io::Error) -> Self {
+        Self::Io { context, source }
+    }
+}
+
+impl std::fmt::Display for SaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidFilename { reason } => write!(f, "{reason}"),
+            Self::Io { context, source } => write!(f, "{context}: {source}"),
+            Self::Persistence(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl From<PersistenceError> for SaveError {
+    fn from(value: PersistenceError) -> Self {
+        Self::Persistence(value)
+    }
+}
 
 pub(crate) fn saves_dir() -> PathBuf {
     PathBuf::from("saves")
 }
 
-pub(crate) fn sanitize_save_filename(filename: &str) -> Result<PathBuf, String> {
+pub(crate) fn sanitize_save_filename(filename: &str) -> Result<PathBuf, SaveError> {
     if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
-        return Err("Invalid filename: path separators and '..' are not allowed.".to_string());
+        return Err(SaveError::invalid(
+            "Invalid filename: path separators and '..' are not allowed.",
+        ));
     }
     let dir = saves_dir();
     let path = dir.join(filename);
     if let Ok(meta) = std::fs::symlink_metadata(&path)
         && meta.file_type().is_symlink()
     {
-        return Err("Invalid filename: symlinks are not allowed.".to_string());
+        return Err(SaveError::invalid("Invalid filename: symlinks are not allowed."));
     }
     let canonical_dir = dir
         .canonicalize()
-        .map_err(|e| format!("Saves directory error: {}", e))?;
+        .map_err(|e| SaveError::io("Saves directory error", e))?;
     let canonical_path = path
         .canonicalize()
-        .map_err(|e| format!("File not found: {}", e))?;
+        .map_err(|e| SaveError::io("File not found", e))?;
     if !canonical_path.starts_with(&canonical_dir) {
-        return Err("Invalid filename: path escapes saves directory.".to_string());
+        return Err(SaveError::invalid(
+            "Invalid filename: path escapes saves directory.",
+        ));
     }
     Ok(canonical_path)
 }
 
-pub(crate) fn safe_save_path(filename: &str) -> Result<PathBuf, String> {
+pub(crate) fn safe_save_path(filename: &str) -> Result<PathBuf, SaveError> {
     if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
-        return Err("Invalid filename".to_string());
+        return Err(SaveError::invalid("Invalid filename"));
     }
     let dir = saves_dir();
     let path = dir.join(filename);
     if let Ok(meta) = std::fs::symlink_metadata(&path)
         && meta.file_type().is_symlink()
     {
-        return Err("Invalid filename: symlinks are not allowed.".to_string());
+        return Err(SaveError::invalid("Invalid filename: symlinks are not allowed."));
     }
     let canonical_dir = dir
         .canonicalize()
-        .map_err(|e| format!("Saves directory error: {}", e))?;
+        .map_err(|e| SaveError::io("Saves directory error", e))?;
     if path.exists() {
         let canonical_path = path
             .canonicalize()
-            .map_err(|e| format!("Path error: {}", e))?;
+            .map_err(|e| SaveError::io("Path error", e))?;
         if !canonical_path.starts_with(&canonical_dir) {
-            return Err("Invalid filename: path escapes saves directory.".to_string());
+            return Err(SaveError::invalid(
+                "Invalid filename: path escapes saves directory.",
+            ));
         }
     }
     Ok(path)
 }
 
-pub(crate) fn atomic_save_game(game: &GameState, filename: &str) -> Result<(), String> {
+pub(crate) fn atomic_save_game(game: &GameState, filename: &str) -> Result<(), SaveError> {
     let dir = saves_dir();
     std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Failed to create saves directory: {}", e))?;
+        .map_err(|e| SaveError::io("Failed to create saves directory", e))?;
     let target = safe_save_path(filename)?;
     let tmp_path = dir.join(format!(".{}.tmp", filename));
     if let Ok(meta) = std::fs::symlink_metadata(&tmp_path)
@@ -66,8 +107,9 @@ pub(crate) fn atomic_save_game(game: &GameState, filename: &str) -> Result<(), S
     {
         std::fs::remove_file(&tmp_path).ok();
     }
-    persistence::save_game(game, &tmp_path).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp_path, &target).map_err(|e| format!("Failed to finalize save: {}", e))?;
+    persistence::save_game(game, &tmp_path)?;
+    std::fs::rename(&tmp_path, &target)
+        .map_err(|e| SaveError::io("Failed to finalize save", e))?;
     Ok(())
 }
 
@@ -190,9 +232,9 @@ pub(crate) fn print_save_list(dir: &std::path::Path) {
     }
 }
 
-pub(crate) fn load_saved_game(filename: &str) -> Result<GameState, String> {
+pub(crate) fn load_saved_game(filename: &str) -> Result<GameState, SaveError> {
     let path = sanitize_save_filename(filename)?;
-    persistence::load_game(&path).map_err(|e| e.to_string())
+    persistence::load_game_with_data(&path, load_embedded_game_data()).map_err(Into::into)
 }
 
 pub(crate) fn delete_saved_game(filename: &str) {
@@ -248,21 +290,21 @@ mod tests {
     fn rejects_path_traversal_with_dotdot() {
         let result = sanitize_save_filename("../etc/passwd");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("path separators"));
+        assert!(result.unwrap_err().to_string().contains("path separators"));
     }
 
     #[test]
     fn rejects_forward_slash() {
         let result = sanitize_save_filename("subdir/save.json");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("path separators"));
+        assert!(result.unwrap_err().to_string().contains("path separators"));
     }
 
     #[test]
     fn rejects_backslash() {
         let result = sanitize_save_filename("subdir\\save.json");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("path separators"));
+        assert!(result.unwrap_err().to_string().contains("path separators"));
     }
 
     #[test]

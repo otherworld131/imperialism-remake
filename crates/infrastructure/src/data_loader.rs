@@ -261,24 +261,47 @@ fn convert_tech_effect(def: TechEffectDef) -> TechEffect {
 
 // ── Public API ───────────────────────────────────────────────────────────
 
+fn parse_game_data_sources(
+    tech_str: &str,
+    unit_str: Option<&str>,
+    ship_str: Option<&str>,
+) -> GameData {
+    let tech_tree = load_tech_tree(tech_str)
+        .unwrap_or_else(|e| panic!("Failed to load tech tree: {}", e));
+
+    let unit_stats = match unit_str {
+        Some(s) => load_unit_stats(s)
+            .unwrap_or_else(|e| panic!("Failed to load unit stats: {}", e)),
+        None => domain::data::default_unit_stats(),
+    };
+
+    let ship_stats = match ship_str {
+        Some(s) => load_ship_stats(s)
+            .unwrap_or_else(|e| panic!("Failed to load ship stats: {}", e)),
+        None => domain::data::default_ship_stats(),
+    };
+
+    GameData::from_parts(tech_tree, unit_stats, ship_stats)
+}
+
 /// Load game data from RON files in the given data directory.
 ///
 /// `technologies.ron` is required: panics if the file is missing or unreadable.
 /// `units.ron` and `ships.ron` fall back to hardcoded defaults if absent.
 pub fn load_game_data(data_dir: &Path) -> GameData {
     let tech_str = read_required(data_dir, "definitions/technologies.ron");
-    let tech_tree = load_tech_tree(&tech_str)
-        .unwrap_or_else(|e| panic!("Failed to load tech tree: {}", e));
+    let unit_str = try_read(data_dir, "definitions/units.ron");
+    let ship_str = try_read(data_dir, "definitions/ships.ron");
+    parse_game_data_sources(&tech_str, unit_str.as_deref(), ship_str.as_deref())
+}
 
-    let unit_stats = try_read(data_dir, "definitions/units.ron")
-        .and_then(|s| load_unit_stats(&s).ok())
-        .unwrap_or_else(domain::data::default_unit_stats);
-
-    let ship_stats = try_read(data_dir, "definitions/ships.ron")
-        .and_then(|s| load_ship_stats(&s).ok())
-        .unwrap_or_else(domain::data::default_ship_stats);
-
-    GameData::from_parts(tech_tree, unit_stats, ship_stats)
+/// Load game data from the repo's checked-in RON definitions embedded at compile time.
+pub fn load_embedded_game_data() -> GameData {
+    parse_game_data_sources(
+        include_str!("../../../data/definitions/technologies.ron"),
+        Some(include_str!("../../../data/definitions/units.ron")),
+        Some(include_str!("../../../data/definitions/ships.ron")),
+    )
 }
 
 fn read_required(base: &Path, relative: &str) -> String {

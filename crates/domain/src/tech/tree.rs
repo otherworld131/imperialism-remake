@@ -264,11 +264,79 @@ impl Default for TechTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize)]
+    struct TechDefsFile {
+        technologies: Vec<TechDef>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct TechDef {
+        id: u32,
+        name: String,
+        cost: i64,
+        earliest_year: u32,
+        latest_year: u32,
+        prerequisites: Vec<u32>,
+        effects: Vec<TechEffectDef>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    enum TechEffectDef {
+        UnlockUnit(String),
+        UnlockBuilding(String),
+        EnableTerrainImprovement { terrain: String, max_level: u8 },
+        EnableInfrastructure(String),
+        UnlockShip(String),
+        UpgradeUnit { from: String, to: String },
+        EnableCivilian(String),
+        LuaScript(String),
+    }
+
+    fn convert_tech_effect(def: TechEffectDef) -> TechEffect {
+        match def {
+            TechEffectDef::UnlockUnit(name) => {
+                TechEffect::UnlockUnit(name.parse().expect("valid army unit in test data"))
+            }
+            TechEffectDef::UnlockBuilding(name) => {
+                TechEffect::UnlockBuilding(name.parse().expect("valid building type in test data"))
+            }
+            TechEffectDef::EnableTerrainImprovement { terrain, max_level } => {
+                TechEffect::EnableTerrainImprovement { terrain, max_level }
+            }
+            TechEffectDef::EnableInfrastructure(name) => TechEffect::EnableInfrastructure(name),
+            TechEffectDef::UnlockShip(name) => TechEffect::UnlockShip(name),
+            TechEffectDef::UpgradeUnit { from, to } => TechEffect::UpgradeUnit {
+                from: from.parse().expect("valid from-unit in test data"),
+                to: to.parse().expect("valid to-unit in test data"),
+            },
+            TechEffectDef::EnableCivilian(name) => {
+                TechEffect::EnableCivilian(name.parse().expect("valid civilian type in test data"))
+            }
+            TechEffectDef::LuaScript(script) => TechEffect::LuaScript(script),
+        }
+    }
 
     fn load_ron_tree() -> TechTree {
         let ron_content = include_str!("../../../../data/definitions/technologies.ron");
-        crate::data::loader::load_tech_tree(ron_content)
-            .expect("technologies.ron must be valid")
+        let defs: TechDefsFile = ron::from_str(ron_content).expect("technologies.ron must be valid");
+        let tree = TechTree::from_technologies(
+            defs.technologies
+                .into_iter()
+                .map(|def| Technology {
+                    id: TechId(def.id),
+                    name: def.name,
+                    cost: Money::dollars(def.cost),
+                    earliest_year: def.earliest_year,
+                    latest_year: def.latest_year,
+                    prerequisites: def.prerequisites.into_iter().map(TechId).collect(),
+                    effects: def.effects.into_iter().map(convert_tech_effect).collect(),
+                })
+                .collect(),
+        );
+        tree.validate().expect("embedded tech tree test data should validate");
+        tree
     }
 
     #[test]
@@ -446,7 +514,12 @@ mod tests {
     fn simulate_30_turns_all_techs_researchable() {
         // Start a game, research cheapest tech each turn for 30 turns
         // Verify that techs become available and can be researched
-        let mut game = crate::game_state::new_game("tech_sim", crate::types::Difficulty::Normal, 0);
+        let mut game = crate::game_state::new_game_with_data(
+            "tech_sim",
+            crate::types::Difficulty::Normal,
+            0,
+            crate::data::test_game_data(),
+        );
         let mut researched_count = 0;
         for _ in 0..30 {
             let available = game.game_data.tech_tree.available_techs(
@@ -473,15 +546,33 @@ mod tests {
 
     #[test]
     fn scenario_start_dates_provide_correct_starting_techs() {
-        use crate::scenarios::new_scenario_game;
+        use crate::scenarios::new_scenario_game_with_data;
         use crate::types::Difficulty;
 
         // 1815: no pre-researched techs
         // 1848: early techs pre-researched
         // 1882: more techs pre-researched
-        let game_1815 = new_scenario_game("1815", Difficulty::Normal, 0).unwrap();
-        let game_1848 = new_scenario_game("1848", Difficulty::Normal, 0).unwrap();
-        let game_1882 = new_scenario_game("1882", Difficulty::Normal, 0).unwrap();
+        let game_1815 = new_scenario_game_with_data(
+            "1815",
+            Difficulty::Normal,
+            0,
+            crate::data::test_game_data(),
+        )
+        .unwrap();
+        let game_1848 = new_scenario_game_with_data(
+            "1848",
+            Difficulty::Normal,
+            0,
+            crate::data::test_game_data(),
+        )
+        .unwrap();
+        let game_1882 = new_scenario_game_with_data(
+            "1882",
+            Difficulty::Normal,
+            0,
+            crate::data::test_game_data(),
+        )
+        .unwrap();
 
         let techs_1815 = game_1815
             .get_nation(game_1815.human_player_nation)

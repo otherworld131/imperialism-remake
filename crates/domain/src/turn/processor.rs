@@ -246,6 +246,13 @@ fn award_first_colony_clippers(game: &mut GameState, nation_id: NationId, report
     ).for_nation(nation_id));
 }
 
+fn clear_economy_batch_reservations(game: &mut GameState) {
+    for nation in &mut game.world.nations {
+        nation.economy.release_all_reservations();
+    }
+    game.transient.pending_economy_orders.clear();
+}
+
 /// Process one turn of the game.
 pub fn process_turn(game: &mut GameState) -> TurnReport {
     let turn = game.turn;
@@ -302,6 +309,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // turn's ledger — clear them before we open the new accounting window.
     game.transient.pending_ai_cash_spending.clear();
     game.transient.pending_ai_cash_income.clear();
+    game.transient.pending_economy_orders.clear();
     for nation in &game.world.nations {
         report.opening_treasury.insert(nation.id, nation.economy.treasury);
     }
@@ -341,6 +349,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         .collect();
     let reserved_collect = validate_and_reserve(game, collect_orders);
     execute_reserved_economy(game, &mut report, reserved_collect);
+    clear_economy_batch_reservations(game);
 
     // 1b. Transport resolution: cap resources delivered by freight car capacity
     resolve_transport(game, &mut report);
@@ -355,6 +364,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         .collect();
     let reserved_produce = validate_and_reserve(game, produce_orders);
     execute_reserved_economy(game, &mut report, reserved_produce);
+    clear_economy_batch_reservations(game);
 
     // 3a. Town production: Villages and Towns produce materials and goods autonomously
     resolve_town_production(game, &mut report);
@@ -366,13 +376,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         .collect();
     let reserved_trade = validate_and_reserve(game, trade_orders);
     execute_reserved_economy(game, &mut report, reserved_trade);
-
-    // End-of-economy safety net: release any uncommitted reservations from all
-    // three batches. Reservations intentionally survive across collect → production
-    // → trade; this single call is the documented end-of-phase boundary (#162).
-    for nation in &mut game.world.nations {
-        nation.economy.release_all_reservations();
-    }
+    clear_economy_batch_reservations(game);
 
     // 3c. Warehouse capacity caps: prevent infinite resource accumulation
     apply_warehouse_caps(game);
@@ -979,8 +983,9 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
         // Remote resources are capped by freight car capacity
         let overflow = if remote_delivery > freight_capacity {
             let ov = remote_delivery - freight_capacity;
-            let nation = game.world.nations.iter_mut().find(|n| n.id == nation_id)
-                .expect("nation must exist: was iterated over a few lines above");
+            let Some(nation) = game.world.nations.iter_mut().find(|n| n.id == nation_id) else {
+                continue;
+            };
             let mut remaining_to_remove = ov;
 
             // Remove overflow from remote resources (approximation: remove proportionally)
@@ -1010,8 +1015,9 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
         // Use Bresenham-style proportional split so sum(requested)=remote_delivery
         // and sum(delivered)=delivered_remote exactly, preserving freight invariants.
         {
-            let nation = game.world.nations.iter_mut().find(|n| n.id == nation_id)
-                .expect("nation must exist: was iterated over a few lines above");
+            let Some(nation) = game.world.nations.iter_mut().find(|n| n.id == nation_id) else {
+                continue;
+            };
             if remote_delivery > 0 && total_produced > 0 {
                 let delivered_remote = remote_delivery.saturating_sub(overflow);
                 let requested_items = proportional_split(&produced_this_turn, remote_delivery);
@@ -1124,8 +1130,9 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
 
         // Recruit immigrants (up to max_immigrants, consuming 1 set of materials per immigrant)
         let mut recruited = 0;
-        let nation = game.world.nations.iter_mut().find(|n| n.id == nation_id)
-            .expect("nation must exist: was iterated from the same collection");
+        let Some(nation) = game.world.nations.iter_mut().find(|n| n.id == nation_id) else {
+            continue;
+        };
 
         for _ in 0..max_immigrants {
             // Check materials for each immigrant
@@ -1524,8 +1531,9 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
         };
 
         // Apply mill results: consume resources, produce materials
-        let nation = game.world.nations.iter_mut().find(|n| n.id == nation_id)
-            .expect("nation must exist: was iterated from the same collection");
+        let Some(nation) = game.world.nations.iter_mut().find(|n| n.id == nation_id) else {
+            continue;
+        };
 
         // Collect newly produced materials to feed into factories
         let mut new_materials: Vec<(MaterialType, u32)> = Vec::new();
@@ -1858,8 +1866,9 @@ fn process_food(game: &mut GameState, report: &mut TurnReport) {
         let livestock_used = livestock.min(remaining_to_consume);
         // remaining_to_consume should be 0 now
 
-        let nation = game.world.nations.iter_mut().find(|n| n.id == nation_id)
-            .expect("nation must exist: was iterated from the same collection");
+        let Some(nation) = game.world.nations.iter_mut().find(|n| n.id == nation_id) else {
+            continue;
+        };
         if grain_used > 0 {
             nation.remove_resource(ResourceType::Grain, grain_used);
         }
@@ -5894,16 +5903,16 @@ mod tests {
         );
         nation1.economy.treasury = Money::dollars(1000);
 
-        GameState {
+        crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province1],
             nations: vec![nation1],
             human_player_nation: NationId(1),
             events: Vec::new(),
-            game_data: GameData::default(),
+            game_data: crate::data::test_game_data(),
             diplomacy: DiplomacyState::new(),
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
@@ -5955,11 +5964,11 @@ mod tests {
         );
         nation1.economy.treasury = Money::dollars(2000);
 
-        GameState {
+        crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province1],
             nations: vec![nation1],
             human_player_nation: NationId(1),
@@ -6325,11 +6334,11 @@ mod tests {
         );
         nation.economy.treasury = Money::dollars(500);
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province],
             nations: vec![nation],
             human_player_nation: NationId(1),
@@ -6430,11 +6439,11 @@ mod tests {
             .economy.buildings
             .push(Building::new(BuildingType::ClothingFactory, 1));
 
-        GameState {
+        crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province],
             nations: vec![nation],
             human_player_nation: NationId(1),
@@ -7068,11 +7077,11 @@ mod tests {
         // Zero freight cars — capital province resources should still arrive
         nation.economy.labor = LaborPool::new();
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province],
             nations: vec![nation],
             human_player_nation: NationId(1),
@@ -7338,11 +7347,11 @@ mod tests {
         nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province_capital, province_remote],
             nations: vec![nation],
             human_player_nation: NationId(1),
@@ -7413,11 +7422,11 @@ mod tests {
         nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province_capital, province_disconnected],
             nations: vec![nation],
             human_player_nation: NationId(1),
@@ -7557,11 +7566,11 @@ mod tests {
         nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
 
-        GameState {
+        crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province_capital, province_village],
             nations: vec![nation],
             human_player_nation: NationId(1),
@@ -7667,11 +7676,11 @@ mod tests {
         nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province_capital, province_village],
             nations: vec![nation],
             human_player_nation: NationId(1),
@@ -7849,11 +7858,11 @@ mod tests {
         nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province_capital, province_village],
             nations: vec![nation],
             human_player_nation: NationId(1),
@@ -7927,11 +7936,11 @@ mod tests {
         nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province_capital, province_village],
             nations: vec![nation],
             human_player_nation: NationId(1),
@@ -8006,11 +8015,11 @@ mod tests {
         nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province_capital, province_remote],
             nations: vec![nation],
             human_player_nation: NationId(1),
@@ -8333,17 +8342,17 @@ mod tests {
         let mut diplomacy = DiplomacyState::new();
         diplomacy.initialize_great_powers(&[NationId(1)]);
 
-        GameState {
+        crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province1, province2],
             nations: vec![nation1, nation2],
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: GameData::default(),
-            diplomacy,
+            diplomacy: diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             pending_landings: Vec::new(),
@@ -8939,17 +8948,17 @@ mod tests {
         }
         diplomacy.propose_pact(NationId(4), NationId(3)).unwrap();
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province1, province2, province3],
             nations: vec![human, attacker, minor, pact_holder],
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: GameData::default(),
-            diplomacy,
+            diplomacy: diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             pending_landings: Vec::new(),
@@ -9081,11 +9090,11 @@ mod tests {
         nation2.diplomacy.ai_personality = Some(crate::ai::AiPersonality::Balanced);
         nation2.economy.treasury = Money::dollars(10000);
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province1],
             nations: vec![nation1, nation2],
             human_player_nation: NationId(1),
@@ -9261,17 +9270,17 @@ mod tests {
             .map(|r| r.score)
             .unwrap_or(0);
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![gp_province, mn_province],
             nations: vec![gp, mn],
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: GameData::default(),
-            diplomacy,
+            diplomacy: diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             pending_landings: Vec::new(),
@@ -9375,17 +9384,17 @@ mod tests {
             .build_consulate(NationId(1), NationId(10))
             .unwrap();
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![gp_province, mn_province],
             nations: vec![gp, mn],
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: GameData::default(),
-            diplomacy,
+            diplomacy: diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             pending_landings: Vec::new(),
@@ -9626,11 +9635,11 @@ mod tests {
         );
         nation2.add_province(ProvinceId(3));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province1, province2, province3],
             nations: vec![nation1, nation2],
             human_player_nation: NationId(1),
@@ -9900,11 +9909,11 @@ mod tests {
         nation1.add_province(ProvinceId(2));
         nation1.economy.treasury = Money::dollars(1000);
 
-        let game_state = GameState {
+        let game_state = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province1, province2],
             nations: vec![nation1],
             human_player_nation: NationId(1),
@@ -10049,11 +10058,11 @@ mod tests {
         );
         nation1.add_province(ProvinceId(2));
 
-        let game = GameState {
+        let game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province1, province2],
             nations: vec![nation1],
             human_player_nation: NationId(1),
@@ -10267,11 +10276,11 @@ mod tests {
             ProvinceId(2),
         );
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province_gp, province_mn],
             nations: vec![nation_gp, nation_mn],
             human_player_nation: NationId(1),
@@ -10369,17 +10378,17 @@ mod tests {
         diplomacy.initialize_great_powers(&[NationId(1), NationId(2)]);
         diplomacy.declare_war(NationId(1), NationId(2));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province_atk, province_def],
             nations: vec![nation_atk, nation_def],
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: GameData::default(),
-            diplomacy,
+            diplomacy: diplomacy,
             pending_attacks: vec![(NationId(1), ProvinceId(2))],
             pending_moves: Vec::new(),
             pending_landings: Vec::new(),
@@ -10490,17 +10499,17 @@ mod tests {
         diplomacy.initialize_great_powers(&[NationId(1)]);
         diplomacy.declare_war(NationId(1), NationId(2));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province_atk, province_def],
             nations: vec![nation_atk, nation_def],
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: GameData::default(),
-            diplomacy,
+            diplomacy: diplomacy,
             pending_attacks: vec![(NationId(1), ProvinceId(2))],
             pending_moves: Vec::new(),
             pending_landings: Vec::new(),
@@ -10666,17 +10675,17 @@ mod tests {
         let mut diplomacy = DiplomacyState::new();
         diplomacy.declare_war(NationId(1), NationId(2));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![province1, province2, province3],
             nations: vec![nation1, nation2],
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: GameData::default(),
-            diplomacy,
+            diplomacy: diplomacy,
             pending_attacks: vec![(NationId(1), ProvinceId(2))],
             pending_moves: Vec::new(),
             pending_landings: Vec::new(),
@@ -11017,17 +11026,17 @@ mod tests {
         let mut diplomacy = DiplomacyState::new();
         diplomacy.declare_war(NationId(1), NationId(2));
 
-        let game = GameState {
+        let game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".into(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![prov1, prov2],
             nations: vec![n1, n2],
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: GameData::default(),
-            diplomacy,
+            diplomacy: diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             pending_landings: Vec::new(),
@@ -11095,11 +11104,11 @@ mod tests {
             ProvinceId(2),
         );
 
-        let game = GameState {
+        let game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".into(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![prov1, prov2],
             nations: vec![n1, n2],
             human_player_nation: NationId(1),
@@ -11165,11 +11174,11 @@ mod tests {
             ProvinceId(2),
         );
 
-        let game = GameState {
+        let game = crate::test_game_state! {
             turn: TurnNumber::new(2),
             difficulty: Difficulty::Normal,
             map_key: "test".into(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![prov1, prov2],
             nations: vec![n1, n2],
             human_player_nation: NationId(1),
@@ -11236,11 +11245,11 @@ mod tests {
             ProvinceId(2),
         );
 
-        let game = GameState {
+        let game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".into(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![prov1, prov2],
             nations: vec![n1, n2],
             human_player_nation: NationId(1),
@@ -11374,17 +11383,17 @@ mod tests {
         let rel = diplomacy.ensure_relation(NationId(1), NationId(2));
         rel.improve_score(60);
 
-        GameState {
+        crate::test_game_state! {
             turn: TurnNumber::new(5),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![p1, p2],
             nations: vec![n1, n2],
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: GameData::default(),
-            diplomacy,
+            diplomacy: diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             pending_landings: Vec::new(),
@@ -12563,11 +12572,11 @@ mod tests {
         );
         nation2.add_province(ProvinceId(2));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![p1, p2, p10],
             nations: vec![nation1, nation2],
             human_player_nation: NationId(1),
@@ -12753,11 +12762,11 @@ mod tests {
             ProvinceId(99), // not a capital for P2 — so no auto-garrison militia
         );
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(5),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![p1, p2],
             nations: vec![nation1, nation2],
             human_player_nation: NationId(1),
@@ -13026,11 +13035,11 @@ mod tests {
             ProvinceId(2),
         ));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(5),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![p1, p2, p3, p4],
             nations: vec![nation1, nation2],
             human_player_nation: NationId(1),
@@ -13172,17 +13181,17 @@ mod tests {
         // A(1) declares war on B(2)
         diplomacy.declare_war(NationId(1), NationId(2));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(5),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
-            provinces,
-            nations,
+            hex_map: hex_map,
+            provinces: provinces,
+            nations: nations,
             human_player_nation: NationId(1),
             events: Vec::new(),
             game_data: GameData::default(),
-            diplomacy,
+            diplomacy: diplomacy,
             pending_attacks: Vec::new(),
             pending_moves: Vec::new(),
             pending_landings: Vec::new(),
@@ -13438,11 +13447,11 @@ mod tests {
         minor.province_ids.clear(); // absorbed: no provinces
         minor.diplomacy.integrated_by = Some(NationId(1));
 
-        let game = GameState {
+        let game = crate::test_game_state! {
             turn: TurnNumber::new(1),
             difficulty: Difficulty::Normal,
             map_key: "test".into(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![gp_prov, minor_prov],
             nations: vec![gp, minor],
             human_player_nation: NationId(1),
@@ -13706,11 +13715,11 @@ mod tests {
         );
         conqueror.province_ids = vec![province_id];
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(5),
             difficulty: Difficulty::Normal,
             map_key: "test".into(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![captured],
             nations: vec![conqueror, minor],
             human_player_nation: NationId(99),
@@ -14232,11 +14241,11 @@ mod tests {
             ProvinceId(3),
         ));
 
-        let mut game = GameState {
+        let mut game = crate::test_game_state! {
             turn: TurnNumber::new(5),
             difficulty: Difficulty::Normal,
             map_key: "test".to_string(),
-            hex_map,
+            hex_map: hex_map,
             provinces: vec![p1, p2, p3],
             nations: vec![attacker, defender],
             human_player_nation: NationId(1),

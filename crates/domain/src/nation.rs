@@ -46,6 +46,16 @@ pub enum NationColor {
 /// Extracted from `Nation` (KEYSTONE refactor). Future economy work
 /// (reservations, snapshots, plan/reserve/execute) adds fields here, not
 /// to `Nation`.
+pub struct ReservationStateSnapshot {
+    pub reserved_treasury: Money,
+    pub reserved_warehouse: BTreeMap<ResourceType, u32>,
+    pub reserved_materials: BTreeMap<MaterialType, u32>,
+    pub reserved_goods: BTreeMap<GoodsType, u32>,
+    pub reservation_ledger: BTreeMap<ReservationId, (Commodity, u32)>,
+    pub next_reservation_id: u64,
+    pub reserved_labor: HashMap<WorkerType, u32>,
+}
+
 #[derive(Debug, Clone)]
 pub struct NationEconomy {
     pub treasury: Money,
@@ -78,6 +88,8 @@ pub struct NationEconomy {
     pub(crate) reservation_ledger: BTreeMap<ReservationId, (Commodity, u32)>,
     /// Monotonically increasing counter for generating unique ReservationIds.
     pub(crate) next_reservation_id: u64,
+    /// Labor reserved for in-flight economy actions (per worker tier).
+    pub(crate) reserved_labor: HashMap<WorkerType, u32>,
 }
 
 impl NationEconomy {
@@ -96,6 +108,7 @@ impl NationEconomy {
             reserved_goods: BTreeMap::new(),
             reservation_ledger: BTreeMap::new(),
             next_reservation_id: 0,
+            reserved_labor: HashMap::new(),
         }
     }
 
@@ -194,10 +207,9 @@ impl NationEconomy {
         qty: u32,
     ) -> Result<ReservationId, crate::DomainError> {
         if qty == 0 {
-            return Err(crate::DomainError::InsufficientInventory {
-                requested: 0,
-                available: self.available(key),
-            });
+            return Err(crate::DomainError::InvalidOperation(
+                "reserve quantity must be positive".into(),
+            ));
         }
         let avail = self.available(key);
         if avail < qty {
@@ -295,22 +307,16 @@ impl NationEconomy {
     pub fn snapshot_reserved_goods(&self) -> &BTreeMap<GoodsType, u32> { &self.reserved_goods }
     pub fn snapshot_reservation_ledger(&self) -> &BTreeMap<ReservationId, (Commodity, u32)> { &self.reservation_ledger }
     pub fn snapshot_next_reservation_id(&self) -> u64 { self.next_reservation_id }
+    pub fn snapshot_reserved_labor(&self) -> &HashMap<WorkerType, u32> { &self.reserved_labor }
 
-    pub fn restore_reservation_state(
-        &mut self,
-        reserved_treasury: Money,
-        reserved_warehouse: BTreeMap<ResourceType, u32>,
-        reserved_materials: BTreeMap<MaterialType, u32>,
-        reserved_goods: BTreeMap<GoodsType, u32>,
-        reservation_ledger: BTreeMap<ReservationId, (Commodity, u32)>,
-        next_reservation_id: u64,
-    ) {
-        self.reserved_treasury = reserved_treasury;
-        self.reserved_warehouse = reserved_warehouse;
-        self.reserved_materials = reserved_materials;
-        self.reserved_goods = reserved_goods;
-        self.reservation_ledger = reservation_ledger;
-        self.next_reservation_id = next_reservation_id;
+    pub fn restore_reservation_state(&mut self, state: ReservationStateSnapshot) {
+        self.reserved_treasury = state.reserved_treasury;
+        self.reserved_warehouse = state.reserved_warehouse;
+        self.reserved_materials = state.reserved_materials;
+        self.reserved_goods = state.reserved_goods;
+        self.reservation_ledger = state.reservation_ledger;
+        self.next_reservation_id = state.next_reservation_id;
+        self.reserved_labor = state.reserved_labor;
     }
 
     /// Release all active reservations for this nation (end-of-turn safety net).
@@ -320,6 +326,7 @@ impl NationEconomy {
         self.reserved_materials.clear();
         self.reserved_goods.clear();
         self.reserved_treasury = Money::ZERO;
+        self.reserved_labor.clear();
     }
 
     // ── Treasury reservation API (#169) ──────────────────────────────
@@ -423,16 +430,133 @@ impl NationEconomy {
         out
     }
 
+    /// Snapshot of all currently reserved labor counts by tier.
+    pub fn reserved_labor(&self) -> &HashMap<WorkerType, u32> {
+        &self.reserved_labor
+    }
+
     /// How much labor (by tier) is currently available for production.
-    ///
-    /// Returns counts by `WorkerType`. Labor reservation is not yet wired into
-    /// the execution pipeline, so this reflects total (unreserved) labor pool.
     pub fn available_labor(&self) -> std::collections::HashMap<WorkerType, u32> {
         let mut out = std::collections::HashMap::new();
-        out.insert(WorkerType::Untrained, self.labor.untrained);
-        out.insert(WorkerType::Trained, self.labor.trained);
-        out.insert(WorkerType::Expert, self.labor.expert);
+        out.insert(
+            WorkerType::Untrained,
+            self.labor
+                .untrained
+                .saturating_sub(self.reserved_labor.get(&WorkerType::Untrained).copied().unwrap_or(0)),
+        );
+        out.insert(
+            WorkerType::Trained,
+            self.labor
+                .trained
+                .saturating_sub(self.reserved_labor.get(&WorkerType::Trained).copied().unwrap_or(0)),
+        );
+        out.insert(
+            WorkerType::Expert,
+            self.labor
+                .expert
+                .saturating_sub(self.reserved_labor.get(&WorkerType::Expert).copied().unwrap_or(0)),
+        );
         out
+    }
+
+    /// Available labor units after reservations are applied.
+    pub fn available_labor_units_with(
+        &self,
+        untrained_mult: u32,
+        trained_mult: u32,
+        expert_mult: u32,
+    ) -> u32 {
+        let avail = self.available_labor();
+        avail.get(&WorkerType::Untrained).copied().unwrap_or(0) * untrained_mult
+            + avail.get(&WorkerType::Trained).copied().unwrap_or(0) * trained_mult
+            + avail.get(&WorkerType::Expert).copied().unwrap_or(0) * expert_mult
+    }
+
+    /// Reserve an exact number of workers of a single tier.
+    pub fn reserve_labor(
+        &mut self,
+        tier: WorkerType,
+        qty: u32,
+    ) -> Result<(), crate::DomainError> {
+        if qty == 0 {
+            return Ok(());
+        }
+        if let Some(reason) = self.block_reason_for_labor(tier, qty) {
+            return Err(crate::DomainError::illegal(reason));
+        }
+        *self.reserved_labor.entry(tier).or_insert(0) += qty;
+        Ok(())
+    }
+
+    /// Release a labor reservation for a single tier.
+    pub fn release_labor(
+        &mut self,
+        tier: WorkerType,
+        qty: u32,
+    ) -> Result<(), crate::DomainError> {
+        if qty == 0 {
+            return Ok(());
+        }
+        let reserved = self.reserved_labor.entry(tier).or_insert(0);
+        if *reserved < qty {
+            return Err(crate::DomainError::InvalidOperation(
+                "release_labor over-release: amount exceeds reserved labor".into(),
+            ));
+        }
+        *reserved -= qty;
+        if *reserved == 0 {
+            self.reserved_labor.remove(&tier);
+        }
+        Ok(())
+    }
+
+    /// Reserve enough workers to cover `required_units` under the provided labor multipliers.
+    ///
+    /// Workers are reserved from the highest-output tier first so the hold uses the
+    /// fewest heads for a given amount of labor.
+    pub fn reserve_labor_units_with(
+        &mut self,
+        required_units: u32,
+        untrained_mult: u32,
+        trained_mult: u32,
+        expert_mult: u32,
+    ) -> Result<HashMap<WorkerType, u32>, crate::DomainError> {
+        if required_units == 0 {
+            return Ok(HashMap::new());
+        }
+        let available_units = self.available_labor_units_with(untrained_mult, trained_mult, expert_mult);
+        if available_units < required_units {
+            return Err(crate::DomainError::illegal(format!(
+                "Need {required_units} labor units but only {available_units} available"
+            )));
+        }
+
+        let available = self.available_labor();
+        let mut plan = HashMap::new();
+        let mut remaining_units = required_units;
+        for (tier, mult) in [
+            (WorkerType::Expert, expert_mult),
+            (WorkerType::Trained, trained_mult),
+            (WorkerType::Untrained, untrained_mult),
+        ] {
+            if remaining_units == 0 || mult == 0 {
+                continue;
+            }
+            let have = available.get(&tier).copied().unwrap_or(0);
+            if have == 0 {
+                continue;
+            }
+            let needed_workers = remaining_units.div_ceil(mult);
+            let reserve = have.min(needed_workers);
+            if reserve > 0 {
+                self.reserve_labor(tier, reserve)?;
+                plan.insert(tier, reserve);
+                remaining_units = remaining_units.saturating_sub(reserve * mult);
+            }
+        }
+
+        debug_assert_eq!(remaining_units, 0, "labor reservation should fully cover required units");
+        Ok(plan)
     }
 
     /// Why a commodity reservation of `qty` would fail, or `None` if it would succeed.
@@ -458,9 +582,18 @@ impl NationEconomy {
     /// Why a labor request of `qty` workers of `tier` would fail, or `None` if feasible.
     pub fn block_reason_for_labor(&self, tier: WorkerType, qty: u32) -> Option<BlockReason> {
         let available = match tier {
-            WorkerType::Untrained => self.labor.untrained,
-            WorkerType::Trained => self.labor.trained,
-            WorkerType::Expert => self.labor.expert,
+            WorkerType::Untrained => self
+                .labor
+                .untrained
+                .saturating_sub(self.reserved_labor.get(&WorkerType::Untrained).copied().unwrap_or(0)),
+            WorkerType::Trained => self
+                .labor
+                .trained
+                .saturating_sub(self.reserved_labor.get(&WorkerType::Trained).copied().unwrap_or(0)),
+            WorkerType::Expert => self
+                .labor
+                .expert
+                .saturating_sub(self.reserved_labor.get(&WorkerType::Expert).copied().unwrap_or(0)),
         };
         if available < qty {
             Some(BlockReason::InsufficientLabor { tier, needed: qty, available })
@@ -1223,12 +1356,12 @@ mod tests {
         unit1.award_medal();
         unit1.award_medal();
         // Regulars base fp = 2, 2 medals = 1.5x => 3.0
-        n.army.push(unit1);
+        n.military.army.push(unit1);
 
         // Add a Guards unit with 0 medals
         let unit2 = ArmyUnit::new(UnitId(2), ArmyUnitType::Guards, NationId(1), ProvinceId(10));
         // Guards base fp = 5, 0 medals = 1.0x => 5.0
-        n.army.push(unit2);
+        n.military.army.push(unit2);
 
         // Total: 3.0 + 5.0 = 8.0
         assert!((n.total_military_firepower() - 8.0).abs() < f64::EPSILON);
@@ -1267,7 +1400,7 @@ mod tests {
     #[test]
     fn new_nation_has_empty_trade_history() {
         let n = sample_great_power();
-        assert!(n.trade_history.is_empty());
+        assert!(n.archives.trade_history.is_empty());
     }
 
     #[test]
@@ -1275,7 +1408,7 @@ mod tests {
         use crate::economy::trade::TradeHistoryEntry;
 
         let mut n = sample_great_power();
-        n.trade_history.push(TradeHistoryEntry {
+        n.archives.trade_history.push(TradeHistoryEntry {
             turn: TurnNumber::new(3),
             partner: NationId(10),
             resource: ResourceType::Timber,
@@ -1283,9 +1416,9 @@ mod tests {
             total_cost: Money::dollars(250),
             bought: true,
         });
-        assert_eq!(n.trade_history.len(), 1);
-        assert_eq!(n.trade_history[0].partner, NationId(10));
-        assert_eq!(n.trade_history[0].quantity, 5);
+        assert_eq!(n.archives.trade_history.len(), 1);
+        assert_eq!(n.archives.trade_history[0].partner, NationId(10));
+        assert_eq!(n.archives.trade_history[0].quantity, 5);
     }
 
     #[test]
@@ -1293,7 +1426,7 @@ mod tests {
         use crate::economy::trade::TradeHistoryEntry;
 
         let mut n = sample_great_power();
-        n.trade_history.push(TradeHistoryEntry {
+        n.archives.trade_history.push(TradeHistoryEntry {
             turn: TurnNumber::new(7),
             partner: NationId(5),
             resource: ResourceType::Iron,
@@ -1303,9 +1436,9 @@ mod tests {
         });
 
         let cloned = n.clone();
-        assert_eq!(cloned.trade_history.len(), 1);
-        assert_eq!(cloned.trade_history[0].turn, TurnNumber::new(7));
-        assert_eq!(cloned.trade_history[0].partner, NationId(5));
+        assert_eq!(cloned.archives.trade_history.len(), 1);
+        assert_eq!(cloned.archives.trade_history[0].turn, TurnNumber::new(7));
+        assert_eq!(cloned.archives.trade_history[0].partner, NationId(5));
     }
 
     // ── Bankruptcy ──────────────────────────────────────────────

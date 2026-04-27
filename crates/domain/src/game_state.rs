@@ -5,6 +5,7 @@ use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::civilians::{Civilian, CivilianType};
 use crate::economy::ledger::{CashFlow, CashSink, ResourceFlow};
 use crate::economy::market::MarketState;
+use crate::economy::observability::PendingEconomyOrder;
 use crate::events::{DomainEvent, Headline, HistoryEvent};
 use crate::map::{HexMap, Province, UnitId};
 use crate::military::combat::BattleResult;
@@ -86,6 +87,8 @@ pub struct TransientState {
     pub pending_ai_cash_spending: Vec<(NationId, CashSink, Money, Option<NationId>)>,
     /// Transient collector for AI-side cash income entries. Drained at end of turn (not saved).
     pub pending_ai_cash_income: Vec<(NationId, Money)>,
+    /// Reserved-but-not-yet-cleared economy actions for UI/debug/snapshot consumers.
+    pub pending_economy_orders: HashMap<NationId, Vec<PendingEconomyOrder>>,
     /// Per-nation cash flow breakdown from the most recently processed turn.
     /// Populated at the end of `process_turn`; read by the WASM bridge.
     pub last_cash_flow: HashMap<NationId, CashFlow>,
@@ -413,6 +416,43 @@ pub fn new_game_with_data_and_config(
         }
         h ^ 0xA1CA_FE42
     };
+    new_game_with_seed_and_data_and_config(
+        map_key,
+        difficulty,
+        human_nation_index,
+        personality_seed,
+        game_data,
+        cfg,
+    )
+}
+
+/// Create a new game with explicit game data and personality seed.
+pub fn new_game_with_seed_and_data(
+    map_key: &str,
+    difficulty: Difficulty,
+    human_nation_index: usize,
+    personality_seed: u64,
+    game_data: crate::data::GameData,
+) -> GameState {
+    new_game_with_seed_and_data_and_config(
+        map_key,
+        difficulty,
+        human_nation_index,
+        personality_seed,
+        game_data,
+        crate::map::MapGenConfig::default(),
+    )
+}
+
+/// Create a new game with explicit game data, personality seed, and map config.
+pub fn new_game_with_seed_and_data_and_config(
+    map_key: &str,
+    difficulty: Difficulty,
+    human_nation_index: usize,
+    personality_seed: u64,
+    game_data: crate::data::GameData,
+    cfg: crate::map::MapGenConfig,
+) -> GameState {
     new_game_inner(map_key, difficulty, human_nation_index, personality_seed, cfg, game_data)
 }
 
@@ -465,7 +505,14 @@ pub fn new_game_with_seed_and_config(
     personality_seed: u64,
     cfg: crate::map::MapGenConfig,
 ) -> GameState {
-    new_game_inner(map_key, difficulty, human_nation_index, personality_seed, cfg, GameData::default())
+    new_game_with_seed_and_data_and_config(
+        map_key,
+        difficulty,
+        human_nation_index,
+        personality_seed,
+        GameData::default(),
+        cfg,
+    )
 }
 
 fn new_game_inner(
@@ -947,10 +994,34 @@ pub fn new_observer_game(map_key: &str, difficulty: Difficulty) -> GameState {
     new_observer_game_with_config(map_key, difficulty, crate::map::MapGenConfig::default())
 }
 
+/// Create a new observer game with caller-supplied `GameData`.
+pub fn new_observer_game_with_data(
+    map_key: &str,
+    difficulty: Difficulty,
+    game_data: crate::data::GameData,
+) -> GameState {
+    new_observer_game_with_data_and_config(
+        map_key,
+        difficulty,
+        game_data,
+        crate::map::MapGenConfig::default(),
+    )
+}
+
 /// Like [`new_observer_game`] but accepts a custom map-generation config.
 pub fn new_observer_game_with_config(
     map_key: &str,
     difficulty: Difficulty,
+    cfg: crate::map::MapGenConfig,
+) -> GameState {
+    new_observer_game_with_data_and_config(map_key, difficulty, GameData::default(), cfg)
+}
+
+/// Like [`new_observer_game_with_data`] but accepts a custom map-generation config.
+pub fn new_observer_game_with_data_and_config(
+    map_key: &str,
+    difficulty: Difficulty,
+    game_data: crate::data::GameData,
     cfg: crate::map::MapGenConfig,
 ) -> GameState {
     let personality_seed = {
@@ -961,7 +1032,14 @@ pub fn new_observer_game_with_config(
         h ^ 0xA1CA_FE42
     };
     // Build base game with nation 0 as the placeholder "human" seat.
-    let mut game = new_game_with_seed_and_config(map_key, difficulty, 0, personality_seed, cfg);
+    let mut game = new_game_with_seed_and_data_and_config(
+        map_key,
+        difficulty,
+        0,
+        personality_seed,
+        game_data,
+        cfg,
+    );
 
     // Assign an AI personality + difficulty bonus to the placeholder seat so
     // all 7 GPs are on equal footing.

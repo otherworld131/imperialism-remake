@@ -226,6 +226,7 @@ impl From<TransientState> for dgs::TransientState {
                 .collect(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
+            pending_economy_orders: HashMap::new(),
             last_cash_flow: v.last_cash_flow.into_iter()
                 .map(|(n, cf)| (DN::from(n), cf.into()))
                 .collect::<HashMap<_, _>>(),

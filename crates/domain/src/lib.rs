@@ -52,6 +52,77 @@ impl std::fmt::Display for DomainError {
     }
 }
 
+#[cfg(test)]
+#[macro_export]
+macro_rules! test_game_state {
+    (
+        turn: $turn:expr,
+        difficulty: $difficulty:expr,
+        map_key: $map_key:expr,
+        hex_map: $hex_map:expr,
+        provinces: $provinces:expr,
+        nations: $nations:expr,
+        human_player_nation: $human_player_nation:expr,
+        events: $events:expr,
+        game_data: $game_data:expr,
+        diplomacy: $diplomacy:expr,
+        pending_attacks: $pending_attacks:expr,
+        pending_moves: $pending_moves:expr,
+        pending_landings: $pending_landings:expr,
+        history: $history:expr,
+        high_scores: $high_scores:expr,
+        newspaper_archive: $newspaper_archive:expr,
+        battle_archive: $battle_archive:expr,
+        political_archive: $political_archive:expr,
+        ai_debug: $ai_debug:expr,
+        observer_mode: $observer_mode:expr,
+        last_cash_flow: $last_cash_flow:expr,
+        last_resource_flow: $last_resource_flow:expr,
+        pending_ai_cash_spending: $pending_ai_cash_spending:expr,
+        pending_ai_cash_income: $pending_ai_cash_income:expr,
+        next_unit_id: $next_unit_id:expr
+        $(, market_state: $market_state:expr )? $(,)?
+    ) => {
+        $crate::game_state::GameState {
+            turn: $turn,
+            difficulty: $difficulty,
+            human_player_nation: $human_player_nation,
+            ai_debug: $ai_debug,
+            observer_mode: $observer_mode,
+            next_unit_id: $next_unit_id,
+            game_data: $game_data,
+            world: $crate::game_state::WorldState {
+                map_key: $map_key,
+                hex_map: $hex_map,
+                provinces: $provinces,
+                nations: $nations,
+                diplomacy: $diplomacy,
+                market_state: $crate::test_game_state!(@market_state $( $market_state )?),
+            },
+            archive: $crate::game_state::GameArchive {
+                history: $history,
+                high_scores: $high_scores,
+                newspaper_archive: $newspaper_archive,
+                battle_archive: $battle_archive,
+                political_archive: $political_archive,
+            },
+            transient: $crate::game_state::TransientState {
+                events: $events,
+                pending_attacks: $pending_attacks,
+                pending_moves: $pending_moves,
+                pending_landings: $pending_landings,
+                pending_ai_cash_spending: $pending_ai_cash_spending,
+                pending_ai_cash_income: $pending_ai_cash_income,
+                pending_economy_orders: std::collections::HashMap::new(),
+                last_cash_flow: $last_cash_flow,
+                last_resource_flow: $last_resource_flow,
+            },
+        }
+    };
+    (@market_state $market_state:expr) => { $market_state };
+    (@market_state) => { $crate::economy::market::MarketState::new() };
+}
+
 pub mod ai;
 pub mod data;
 pub mod diplomacy;
