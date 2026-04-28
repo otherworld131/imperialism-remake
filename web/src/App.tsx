@@ -1369,6 +1369,7 @@ function App() {
         {activeScreen === 'trade' && (
           <TradeScreen
             trade={tradeData}
+            nations={gameState?.nations || []}
             onSetSubsidy={handleSetSubsidy}
             onSetSellOrder={handleSetSellOrder}
             onSetBuyOrder={handleSetBuyOrder}

@@ -1,16 +1,28 @@
 import React, { useState } from 'react';
 import type { TradeData } from '../wasm';
 import { resourceLabel } from '../resourceEmoji';
+import Flag from './Flag';
+
+interface NationLite {
+  id: number;
+  flag_svg?: string;
+  name?: string;
+}
 
 interface Props {
   trade: TradeData | null;
+  nations?: NationLite[];
   onSetSubsidy: (nationId: number, amount: number) => void;
   onSetSellOrder: (commodity: string, commodityType: string, quantity: number) => void;
   onSetBuyOrder: (resource: string, quantity: number, maxPrice: number) => void;
   onClose: () => void;
 }
 
-export default function TradeScreen({ trade, onSetSubsidy, onSetSellOrder, onSetBuyOrder, onClose }: Props) {
+export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSellOrder, onSetBuyOrder, onClose }: Props) {
+  const flagBySellerId: Record<number, string> = {};
+  for (const n of nations) {
+    if (n.flag_svg) flagBySellerId[n.id] = n.flag_svg;
+  }
   const [buyModalResource, setBuyModalResource] = useState<string | null>(null);
   const [buyQuantity, setBuyQuantity] = useState(1);
 
@@ -96,7 +108,12 @@ export default function TradeScreen({ trade, onSetSubsidy, onSetSellOrder, onSet
                   <tr key={i} style={{ opacity: offer.is_great_power ? 0.9 : 1 }}>
                     <td style={styles.td}>{resourceLabel(offer.resource)}</td>
                     <td style={{ ...styles.td, color: offer.is_great_power ? '#daa520' : '#999', fontSize: 11 }}>
-                      {offer.seller_name}{offer.is_great_power ? ' (GP)' : ''}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        {flagBySellerId[offer.seller_id] && (
+                          <Flag svg={flagBySellerId[offer.seller_id]} width={18} height={12} title={offer.seller_name} />
+                        )}
+                        {offer.seller_name}{offer.is_great_power ? ' (GP)' : ''}
+                      </span>
                     </td>
                     <td style={styles.td}>{offer.quantity}</td>
                     <td style={styles.td}>${offer.price}</td>
