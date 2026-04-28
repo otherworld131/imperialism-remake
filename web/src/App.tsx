@@ -156,6 +156,7 @@ function App() {
   const [showAiCivilians, setShowAiCivilians] = useState(false);
   const [showAiReasoning, setShowAiReasoning] = useState(false);
   const [showAiNonActions, setShowAiNonActions] = useState(false);
+  const [showPersonalities, setShowPersonalities] = useState(false);
   const [disableFogOfWar, setDisableFogOfWar] = useState(false);
   const [organicBorders, setOrganicBorders] = useState(true);
   const [hideHexGrid, setHideHexGrid] = useState(false);
@@ -243,6 +244,7 @@ function App() {
       setShowAiCivilians(true);
       setShowAiReasoning(true);
       setShowAiNonActions(true);
+      setShowPersonalities(true);
       setDisableFogOfWar(true);
     }
   }, [isObserver]);
@@ -1660,6 +1662,10 @@ function App() {
                   {' '}Show AI non-actions
                 </label>
                 <label>
+                  <input type="checkbox" checked={showPersonalities} onChange={e => setShowPersonalities(e.target.checked)} />
+                  {' '}Show AI personalities
+                </label>
+                <label>
                   <input type="checkbox" checked={disableFogOfWar} onChange={e => setDisableFogOfWar(e.target.checked)} />
                   {' '}Disable fog of war
                 </label>
@@ -1671,7 +1677,7 @@ function App() {
                   <div key={n.id} style={styles.nationItem}>
                     <span>{n.name}</span>
                     <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                      {n.diplomacy?.ai_personality && (
+                      {showPersonalities && n.diplomacy?.ai_personality && (
                         <span style={{ fontSize: 10, color: '#888', fontStyle: 'italic' }}>{n.diplomacy.ai_personality}</span>
                       )}
                       <span>{n.province_ids?.length || 0} prov</span>
