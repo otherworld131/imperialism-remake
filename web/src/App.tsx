@@ -105,6 +105,7 @@ import LegendScreen from './components/LegendScreen';
 import ProposalModal from './components/ProposalModal';
 import BusyOverlay from './components/BusyOverlay';
 import Flag from './components/Flag';
+import { resourceLabel } from './resourceEmoji';
 
 function turnToYearQ(turn: number): string {
   const year = 1815 + Math.floor((turn - 1) / 4);
@@ -118,6 +119,8 @@ function App() {
   // settings) acquires this ref to serialize itself against others, preventing overlapping RPCs
   // that would read the same `gameJson` and then race their `applyGameJson` updates.
   const mutationLockRef = useRef(false);
+  const skipCancelRef = useRef(false);
+  const [skipCancellable, setSkipCancellable] = useState(false);
   const [gameJson, setGameJson] = useState<string>('');
   const [tiles, setTiles] = useState<TileData[]>([]);
   const [navyMarkers, setNavyMarkers] = useState<NavyMarker[]>([]);
@@ -466,9 +469,12 @@ function App() {
       const allHeadlines: typeof headlines = [];
       const allBattles: typeof currentBattles = [];
       const allNavalBattles: typeof currentNavalBattles = [];
+      skipCancelRef.current = false;
+      setSkipCancellable(true);
       try {
         for (let i = 0; i < n; i++) {
-          setBusyMessage(`Processing ${turnToYearQ(currentTurn)}…`);
+          if (skipCancelRef.current) break;
+          setBusyMessage(`Processing ${turnToYearQ(currentTurn)}… (click to stop)`);
           const result = await processTurns(currentJson, 1);
           if ((result as any).error) { alert((result as any).error); return; }
           currentJson = JSON.stringify(result.game);
@@ -486,6 +492,8 @@ function App() {
         setIsDeployMode(false);
         setDeployingCivilian(null);
       } finally {
+        skipCancelRef.current = false;
+        setSkipCancellable(false);
         setBusyMessage(null);
       }
     });
@@ -495,8 +503,10 @@ function App() {
     if (skipUntilRunning || mutationLockRef.current) return;
     mutationLockRef.current = true;
     setSkipUntilRunning(true);
+    skipCancelRef.current = false;
+    setSkipCancellable(true);
     const startTurn: number = gameState?.turn?.[0] ?? gameState?.turn ?? 1;
-    setBusyMessage(`Processing ${turnToYearQ(startTurn)}…`);
+    setBusyMessage(`Processing ${turnToYearQ(startTurn)}… (click to stop)`);
     try {
       const needle = skipUntilText.trim().toLowerCase();
       // When looking for a text match, process one turn at a time so we can
@@ -514,12 +524,13 @@ function App() {
       let processed = 0;
 
       while (processed < MAX_TURNS) {
+        if (skipCancelRef.current) { stoppedEarly = true; break; }
         const result = await processTurns(currentJson, batchSize);
         if ((result as any).error) { alert((result as any).error); return; }
         currentJson = JSON.stringify(result.game);
         processed += result.reports.length;
         const currentTurn: number = result.game?.turn?.[0] ?? result.game?.turn ?? (startTurn + processed);
-        setBusyMessage(`Processing ${turnToYearQ(currentTurn)}…`);
+        setBusyMessage(`Processing ${turnToYearQ(currentTurn)}… (click to stop)`);
 
         for (const r of result.reports) {
           allHeadlines.push(...r.headlines);
@@ -558,6 +569,8 @@ function App() {
           : `Skip Until: cap of ${MAX_TURNS} turns reached before game ended`);
       }
     } finally {
+      skipCancelRef.current = false;
+      setSkipCancellable(false);
       setSkipUntilRunning(false);
       setBusyMessage(null);
       mutationLockRef.current = false;
@@ -1403,7 +1416,7 @@ function App() {
                         {ownerTitle && <span style={styles.tileOwnerName}>{ownerTitle}</span>}
                       </div>
                     )}
-                    <p><b>{selectedTile.terrain}{showResource ? ` — ${selectedTile.resource}` : ''}</b></p>
+                    <p><b>{selectedTile.terrain}{showResource ? ` — ${resourceLabel(selectedTile.resource!)}` : ''}</b></p>
                     {selectedTile.province && <p>Province: {selectedTile.province}</p>}
                   </div>
                 );
@@ -1655,7 +1668,12 @@ function App() {
                 {gameState?.nations?.filter((n: any) => n.nation_type === 'GreatPower').map((n: any) => (
                   <div key={n.id} style={styles.nationItem}>
                     <span>{n.name}</span>
-                    <span>{n.province_ids?.length || 0} prov</span>
+                    <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      {n.diplomacy?.ai_personality && (
+                        <span style={{ fontSize: 10, color: '#888', fontStyle: 'italic' }}>{n.diplomacy.ai_personality}</span>
+                      )}
+                      <span>{n.province_ids?.length || 0} prov</span>
+                    </span>
                   </div>
                 ))}
               </div>
@@ -1744,7 +1762,12 @@ function App() {
         />
       )}
 
-      <BusyOverlay busy={busyMessage !== null} message={busyMessage ?? undefined} />
+      <BusyOverlay
+        busy={busyMessage !== null}
+        message={busyMessage ?? undefined}
+        cancellable={skipCancellable}
+        onCancel={() => { skipCancelRef.current = true; }}
+      />
     </main>
   );
 }

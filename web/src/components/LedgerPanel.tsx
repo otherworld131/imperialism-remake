@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import type { GPLedgerEntry } from '../wasm';
+import { resourceEmoji, resourceLabel } from '../resourceEmoji';
 
 type Tab = 'economy' | 'cashflow' | 'production' | 'resources' | 'materials' | 'military' | 'diplomacy' | 'technology';
 
@@ -193,7 +194,7 @@ function ResourcesTable({ entries, prevMap, expanded, onExpand }: { entries: GPL
       <thead>
         <tr>
           <Th text="Nation" align="left" />
-          {RESOURCE_ORDER.map(r => <Th key={r} text={r} />)}
+          {RESOURCE_ORDER.map(r => <Th key={r} text={`${resourceEmoji(r)} ${r}`} />)}
           <Th text="Total" />
         </tr>
       </thead>
@@ -582,7 +583,7 @@ function StockpileCategoryBreakdown({ entry, stockpiles }: { entry: GPLedgerEntr
         <tbody>
           {rows.map(r => (
             <tr key={r.stock}>
-              <td style={{ ...styles.tdName, color: '#daa520' }}>{r.stock}</td>
+              <td style={{ ...styles.tdName, color: '#daa520' }}>{resourceLabel(r.stock)}</td>
               <td style={styles.td}>{fmtCatAmount(r.inCat.Production)}</td>
               <td style={styles.td}>{fmtCatAmount(r.inCat.Trade)}</td>
               <td style={styles.td}>{fmtCatAmount(r.outCat.Consumption)}</td>

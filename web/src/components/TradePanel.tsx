@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import type { TradeData, AvailableOffer } from '../wasm';
+import { resourceLabel } from '../resourceEmoji';
 
 interface Props {
   trade: TradeData;
@@ -105,7 +106,7 @@ export default function TradePanel({ trade, onSetSubsidy, onSetSellOrder, onSetB
               const currentQty = buyQtyMap[resource] ?? 0;
               return (
                 <React.Fragment key={resource}>
-                  <span>{resource}</span>
+                  <span>{resourceLabel(resource)}</span>
                   <span style={{ color: '#aaa' }}>{totalAvail}</span>
                   <span style={{ color: '#daa520' }}>${avgPrice}</span>
                   <button
@@ -150,7 +151,7 @@ export default function TradePanel({ trade, onSetSubsidy, onSetSellOrder, onSetB
                   {mn.has_consulate && <span style={{ fontSize: 9, color: '#2a6', marginLeft: 4 }} title="Consulate: trade improves relations">&#9733;</span>}
                 </span>
                 <span style={{ fontSize: 10, color: '#999' }}>
-                  {mn.resources.join(', ')}
+                  {mn.resources.map(resourceLabel).join(', ')}
                 </span>
               </div>
               {isExpanded && (
@@ -195,7 +196,7 @@ export default function TradePanel({ trade, onSetSubsidy, onSetSellOrder, onSetB
           <div style={{ maxHeight: 100, overflowY: 'auto' }}>
             {trade_history.map((h, i) => (
               <div key={i} style={{ fontSize: 10, color: '#aaa', marginBottom: 2 }}>
-                T{h.turn}: {h.bought ? 'bought' : 'sold'} {h.quantity} {h.resource} {h.bought ? 'from' : 'to'} {h.partner_name} (${h.total_cost})
+                T{h.turn}: {h.bought ? 'bought' : 'sold'} {h.quantity} {resourceLabel(h.resource)} {h.bought ? 'from' : 'to'} {h.partner_name} (${h.total_cost})
               </div>
             ))}
           </div>
@@ -239,7 +240,7 @@ function SellSection({ label, items, commodityType, sellQtyMap, remainingCargo, 
           const currentQty = sellQtyMap[key] ?? 0;
           return (
             <React.Fragment key={item.name}>
-              <span>{item.name}</span>
+              <span>{resourceLabel(item.name)}</span>
               <span style={{ color: '#aaa' }}>{item.stock}</span>
               <span style={{ color: '#daa520' }}>${item.price}</span>
               <span style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
@@ -288,7 +289,7 @@ function BuyModal({ resource, offers, currentQty, remainingCargo, onConfirm, onC
     <div style={backdropStyle} onClick={onCancel}>
       <div style={modalStyle} onClick={e => e.stopPropagation()}>
         <div style={modalHeaderStyle}>
-          <h3 style={{ margin: 0, color: '#daa520', fontSize: 16 }}>Buy {resource}</h3>
+          <h3 style={{ margin: 0, color: '#daa520', fontSize: 16 }}>Buy {resourceLabel(resource)}</h3>
         </div>
         <div style={{ padding: '12px 16px' }}>
           {/* Source nations */}

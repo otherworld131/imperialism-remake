@@ -1,4 +1,5 @@
 import type { CiviliansData, CivilianDetail, BuildableUnit, EngineerBuildKind } from '../wasm';
+import { resourceLabel } from '../resourceEmoji';
 
 const CIVILIAN_EMOJI: Record<string, string> = {
   Farmer: '\u{1F33E}',
@@ -89,7 +90,7 @@ export default function CivilianPanel({
                   </div>
                   {civ.tile_resource && (
                     <div style={{ fontSize: 10, color: '#999' }}>
-                      Improving {civ.tile_resource}
+                      Improving {resourceLabel(civ.tile_resource)}
                     </div>
                   )}
                 </div>

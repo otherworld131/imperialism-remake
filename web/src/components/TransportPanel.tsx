@@ -1,4 +1,5 @@
 import type { TransportData } from '../wasm';
+import { resourceLabel } from '../resourceEmoji';
 
 interface Props {
   transport: TransportData;
@@ -51,7 +52,7 @@ export default function TransportPanel({ transport, onBuildCar, onSetAllocation 
               display: 'flex', alignItems: 'center', gap: 4, marginBottom: 3,
               background: 'rgba(255,255,255,0.03)', borderRadius: 3, padding: '3px 4px',
             }}>
-              <span style={{ flex: 1, fontSize: 12 }}>{d.resource}</span>
+              <span style={{ flex: 1, fontSize: 12 }}>{resourceLabel(d.resource)}</span>
               <button
                 onClick={() => onSetAllocation(d.resource, Math.max(0, pct - 10))}
                 style={smallBtn}

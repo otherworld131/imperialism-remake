@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { TileData, NavyMarker } from '../wasm';
+import { resourceLabel } from '../resourceEmoji';
 
 interface Props {
   /** Tile under the cursor (mutually exclusive with `marker`). */
@@ -58,7 +59,7 @@ export default function HexTooltip({
             <b>
               {tile.terrain}
               {tile.resource && (!tile.resource_hidden || showHiddenResources)
-                ? ` \u2014 ${tile.resource}`
+                ? ` \u2014 ${resourceLabel(tile.resource)}`
                 : ''}
             </b>
           </div>

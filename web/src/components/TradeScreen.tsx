@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import type { TradeData } from '../wasm';
+import { resourceLabel } from '../resourceEmoji';
 
 interface Props {
   trade: TradeData | null;
@@ -58,7 +59,7 @@ export default function TradeScreen({ trade, onSetSubsidy, onSetSellOrder, onSet
                 <div style={styles.subLabel}>{section.label}</div>
                 {section.items.map((item: any) => (
                   <div key={item.name} style={styles.tradeRow}>
-                    <span style={styles.itemName}>{item.name}</span>
+                    <span style={styles.itemName}>{resourceLabel(item.name)}</span>
                     <span style={styles.stock}>x{item.stock}</span>
                     <span style={styles.price}>${item.price}</span>
                     <input
@@ -93,7 +94,7 @@ export default function TradeScreen({ trade, onSetSubsidy, onSetSellOrder, onSet
               <tbody>
                 {available_offers.map((offer: any, i: number) => (
                   <tr key={i} style={{ opacity: offer.is_great_power ? 0.9 : 1 }}>
-                    <td style={styles.td}>{offer.resource}</td>
+                    <td style={styles.td}>{resourceLabel(offer.resource)}</td>
                     <td style={{ ...styles.td, color: offer.is_great_power ? '#daa520' : '#999', fontSize: 11 }}>
                       {offer.seller_name}{offer.is_great_power ? ' (GP)' : ''}
                     </td>
@@ -152,7 +153,7 @@ export default function TradeScreen({ trade, onSetSubsidy, onSetSellOrder, onSet
             {trade_history.map((h: any, i: number) => (
               <div key={i} style={styles.historyRow}>
                 <span>T{h.turn}</span>
-                <span>{h.quantity}x {h.resource}</span>
+                <span>{h.quantity}x {resourceLabel(h.resource)}</span>
                 <span>{h.partner_name}</span>
                 <span style={{ color: h.bought ? '#e63946' : '#2a9d8f' }}>
                   {h.bought ? '-' : '+'}${h.total_cost}
@@ -166,7 +167,7 @@ export default function TradeScreen({ trade, onSetSubsidy, onSetSellOrder, onSet
         {buyModalResource && (
           <div style={styles.modal} onClick={() => setBuyModalResource(null)}>
             <div style={styles.modalContent} onClick={e => e.stopPropagation()}>
-              <h3>Buy {buyModalResource}</h3>
+              <h3>Buy {resourceLabel(buyModalResource)}</h3>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '16px 0' }}>
                 <span>Quantity:</span>
                 {(() => {

@@ -1,12 +1,18 @@
 interface Props {
   busy: boolean;
   message?: string;
+  cancellable?: boolean;
+  onCancel?: () => void;
 }
 
-export default function BusyOverlay({ busy, message }: Props) {
+export default function BusyOverlay({ busy, message, cancellable, onCancel }: Props) {
   if (!busy) return null;
+  const overlayStyle: React.CSSProperties = {
+    ...styles.overlay,
+    cursor: cancellable ? 'pointer' : undefined,
+  };
   return (
-    <div style={styles.overlay}>
+    <div style={overlayStyle} onClick={cancellable ? onCancel : undefined}>
       <div style={styles.spinner} />
       {message && <div style={styles.message}>{message}</div>}
       <style>{keyframes}</style>

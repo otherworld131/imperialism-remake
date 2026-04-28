@@ -1,5 +1,6 @@
 import React from 'react';
 import Flag from './Flag';
+import { RESOURCE_EMOJI_MAP } from '../resourceEmoji';
 
 interface NationLite {
   id: number;
@@ -38,18 +39,18 @@ const TERRAIN_LEGEND = [
 ];
 
 const RESOURCE_LEGEND = [
-  { name: 'Grain', emoji: '\u{1F33E}', desc: 'Food staple, farmed on grassland' },
-  { name: 'Fruit', emoji: '\u{1F34E}', desc: 'Food resource, farmed on grassland' },
-  { name: 'Cotton', emoji: '\u{1F331}', desc: 'Textile raw material' },
-  { name: 'Wool', emoji: '\u{1F411}', desc: 'Textile raw material from ranching' },
-  { name: 'Timber', emoji: '\u{1FAB5}', desc: 'Wood from forests, makes lumber' },
-  { name: 'Livestock', emoji: '\u{1F404}', desc: 'Food resource from ranching' },
-  { name: 'Horses', emoji: '\u{1F434}', desc: 'Required for cavalry units' },
-  { name: 'Coal', emoji: '\u26AB', desc: 'Industrial fuel, mined in mountains/hills' },
-  { name: 'Iron', emoji: '\u{1F518}', desc: 'Makes steel, mined in mountains/hills' },
-  { name: 'Gold', emoji: '\u{1F4B0}', desc: 'Monetary resource, high value' },
-  { name: 'Gems', emoji: '\u{1F48E}', desc: 'Precious stones, very high value' },
-  { name: 'Oil', emoji: '\u{1F6E2}\uFE0F', desc: 'Late-game industrial resource' },
+  { name: 'Grain',     emoji: RESOURCE_EMOJI_MAP['Grain'],     desc: 'Food staple, farmed on grassland' },
+  { name: 'Fruit',     emoji: RESOURCE_EMOJI_MAP['Fruit'],     desc: 'Food resource, farmed on grassland' },
+  { name: 'Cotton',    emoji: RESOURCE_EMOJI_MAP['Cotton'],    desc: 'Textile raw material' },
+  { name: 'Wool',      emoji: RESOURCE_EMOJI_MAP['Wool'],      desc: 'Textile raw material from ranching' },
+  { name: 'Timber',    emoji: RESOURCE_EMOJI_MAP['Timber'],    desc: 'Wood from forests, makes lumber' },
+  { name: 'Livestock', emoji: RESOURCE_EMOJI_MAP['Livestock'], desc: 'Food resource from ranching' },
+  { name: 'Horses',    emoji: RESOURCE_EMOJI_MAP['Horses'],    desc: 'Required for cavalry units' },
+  { name: 'Coal',      emoji: RESOURCE_EMOJI_MAP['Coal'],      desc: 'Industrial fuel, mined in mountains/hills' },
+  { name: 'Iron',      emoji: RESOURCE_EMOJI_MAP['Iron'],      desc: 'Makes steel, mined in mountains/hills' },
+  { name: 'Gold',      emoji: RESOURCE_EMOJI_MAP['Gold'],      desc: 'Monetary resource, high value' },
+  { name: 'Gems',      emoji: RESOURCE_EMOJI_MAP['Gems'],      desc: 'Precious stones, very high value' },
+  { name: 'Oil',       emoji: RESOURCE_EMOJI_MAP['Oil'],       desc: 'Late-game industrial resource' },
 ];
 
 const CIVILIAN_LEGEND = [
