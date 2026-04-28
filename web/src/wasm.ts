@@ -440,6 +440,19 @@ export function parseGameJson(json: string): any {
       if (s.market_state === undefined) s.market_state = s.world.market_state;
       if (s.map_key === undefined) s.map_key = s.world.map_key;
     }
+    // Hoist nation.archives display fields to the top level of each nation so
+    // frontend code can access n.flag_svg, n.government_title etc. directly.
+    if (Array.isArray(s.nations)) {
+      for (const n of s.nations) {
+        if (n.archives && typeof n.archives === 'object') {
+          if (n.flag_svg === undefined) n.flag_svg = n.archives.flag_svg || '';
+          if (n.government_title === undefined) n.government_title = n.archives.government_title || '';
+          if (n.adjective === undefined) n.adjective = n.archives.adjective || '';
+          if (n.demonym_singular === undefined) n.demonym_singular = n.archives.demonym_singular || '';
+          if (n.demonym_plural === undefined) n.demonym_plural = n.archives.demonym_plural || '';
+        }
+      }
+    }
     if (s.transient) {
       if (s.pending_moves === undefined) s.pending_moves = s.transient.pending_moves;
       if (s.pending_attacks === undefined) s.pending_attacks = s.transient.pending_attacks;
