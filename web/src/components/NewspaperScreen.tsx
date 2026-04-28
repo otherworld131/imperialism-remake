@@ -59,6 +59,7 @@ interface Props {
   playerNews: Headline[];
   worldNews: Headline[];
   archiveData: ArchivedNewspaper[];
+  archiveLoadState: 'idle' | 'loading' | 'loaded' | 'error';
   nations: any[];
   countryOptions: { id: number; name: string }[];
   newsFilterCategory: string;
@@ -67,6 +68,7 @@ interface Props {
   showAiNonActions: boolean;
   onCategoryChange: (cat: string) => void;
   onCountryChange: (country: string) => void;
+  onRequestArchive: () => Promise<void>;
   onDismiss: () => void;
   onClose: () => void;
   onShowMap?: (turn: number) => void;
@@ -74,10 +76,11 @@ interface Props {
 
 export default function NewspaperScreen({
   playerName, year, quarter, turnNumber,
-  headlines, archiveData, nations, countryOptions,
+  headlines, archiveData, archiveLoadState, nations, countryOptions,
   newsFilterCategory, newsFilterCountry,
   showAiReasoning, showAiNonActions,
   onCategoryChange, onCountryChange,
+  onRequestArchive,
   onDismiss, onClose, onShowMap,
 }: Props) {
   const [mode, setMode] = useState<'current' | 'archive'>('current');
@@ -139,7 +142,12 @@ export default function NewspaperScreen({
             </button>
             <button
               style={mode === 'archive' ? { ...styles.modeTab, ...styles.modeTabActive } : styles.modeTab}
-              onClick={() => { setMode('archive'); setArchiveData(); }}
+              onClick={() => {
+                setMode('archive');
+                if (archiveLoadState === 'idle' || archiveLoadState === 'error') {
+                  void onRequestArchive();
+                }
+              }}
             >
               Archive ({archiveData.length})
             </button>
@@ -176,7 +184,10 @@ export default function NewspaperScreen({
           {/* Archive sidebar */}
           {mode === 'archive' && (
             <div style={styles.archiveSidebar}>
-              {sortedArchive.length === 0 && <div style={{ padding: 12, color: '#666' }}>No reports yet</div>}
+              {archiveLoadState === 'idle' && <div style={{ padding: 12, color: '#666' }}>Open archive to load reports.</div>}
+              {archiveLoadState === 'loading' && <div style={{ padding: 12, color: '#666' }}>Loading reports…</div>}
+              {archiveLoadState === 'error' && <div style={{ padding: 12, color: '#a33' }}>Failed to load archive for this turn.</div>}
+              {archiveLoadState === 'loaded' && sortedArchive.length === 0 && <div style={{ padding: 12, color: '#666' }}>No reports yet</div>}
               {sortedArchive.map(entry => (
                 <div
                   key={entry.turn}
@@ -253,9 +264,6 @@ export default function NewspaperScreen({
     </div>
   );
 
-  function setArchiveData() {
-    // Archive data is passed in as props; no action needed
-  }
 }
 
 const styles: Record<string, React.CSSProperties> = {

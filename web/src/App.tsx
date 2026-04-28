@@ -120,8 +120,15 @@ function App() {
   // that would read the same `gameJson` and then race their `applyGameJson` updates.
   const mutationLockRef = useRef(false);
   const skipCancelRef = useRef(false);
+  const newsArchiveCacheRef = useRef(new Map<string, ArchivedNewspaper[]>());
+  const archiveRequestSeqRef = useRef(0);
+  const currentGameJsonRef = useRef('');
+  const deferredDerivedRefreshRef = useRef(false);
   const [skipCancellable, setSkipCancellable] = useState(false);
   const [gameJson, setGameJson] = useState<string>('');
+  useEffect(() => {
+    currentGameJsonRef.current = gameJson;
+  }, [gameJson]);
   const [tiles, setTiles] = useState<TileData[]>([]);
   const [navyMarkers, setNavyMarkers] = useState<NavyMarker[]>([]);
   // Selection/hover are stored as *keys*, not snapshots, so a stale object
@@ -170,6 +177,7 @@ function App() {
 
   // Newspaper archive state
   const [archiveData, setArchiveData] = useState<ArchivedNewspaper[]>([]);
+  const [archiveLoadState, setArchiveLoadState] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
   const [politicalSnapshot, setPoliticalSnapshot] = useState<PoliticalSnapshot | null>(null);
 
   // Battle state
@@ -186,17 +194,33 @@ function App() {
     })();
   }, [activeScreen, gameJson]);
 
-  // Refresh newspaper archive whenever the screen is active and the game advances —
-  // the old length-gated version cached the first load forever, so new turns never showed up.
-  useEffect(() => {
-    if (activeScreen !== 'newspaper' || !gameJson) return;
-    let cancelled = false;
-    (async () => {
+  const loadNewspaperArchive = useCallback(async () => {
+    if (!gameJson) {
+      setArchiveData([]);
+      setArchiveLoadState('idle');
+      return;
+    }
+    const requestedJson = gameJson;
+    const requestSeq = ++archiveRequestSeqRef.current;
+    const cached = newsArchiveCacheRef.current.get(gameJson);
+    if (cached) {
+      setArchiveData(cached);
+      setArchiveLoadState('loaded');
+      return;
+    }
+    setArchiveLoadState('loading');
+    try {
       const archive = await getNewspaperArchive(gameJson);
-      if (!cancelled) setArchiveData(archive);
-    })();
-    return () => { cancelled = true; };
-  }, [activeScreen, gameJson]);
+      if (archiveRequestSeqRef.current !== requestSeq || requestedJson !== currentGameJsonRef.current) return;
+      newsArchiveCacheRef.current.set(gameJson, archive);
+      setArchiveData(archive);
+      setArchiveLoadState('loaded');
+    } catch {
+      if (archiveRequestSeqRef.current !== requestSeq || requestedJson !== currentGameJsonRef.current) return;
+      setArchiveData([]);
+      setArchiveLoadState('error');
+    }
+  }, [gameJson]);
 
   // Unit interaction state
   const [provinceUnits, setProvinceUnits] = useState<ProvinceUnits | null>(null);
@@ -353,8 +377,33 @@ function App() {
     }
     prevLedgerTurnRef.current = newTurn;
     setGpLedgerData(gpLedgerRes);
+    deferredDerivedRefreshRef.current = false;
     return true;
   }, [showError, disableFogOfWar, gpLedgerData]);
+
+  const applyGameJsonLightweight = useCallback((json: string): boolean => {
+    let state;
+    try {
+      state = parseGameJson(json);
+    } catch (err) {
+      console.error('Failed to parse game state JSON:', err);
+      showError('Failed to parse game state');
+      return false;
+    }
+    if (state.error) {
+      showError(state.error);
+      return false;
+    }
+    deferredDerivedRefreshRef.current = true;
+    setGameJson(json);
+    setGameState(state);
+    return true;
+  }, [showError]);
+
+  useEffect(() => {
+    if (!deferredDerivedRefreshRef.current || !gameJson || activeScreen === 'newspaper') return;
+    void applyGameJson(gameJson);
+  }, [activeScreen, gameJson, applyGameJson]);
 
   // Re-fetch tiles when fog of war toggle changes
   useEffect(() => {
@@ -421,6 +470,8 @@ function App() {
       setProposalData(null);
       setShowProposals(false);
       setArchiveData([]);
+      setArchiveLoadState('idle');
+      newsArchiveCacheRef.current.clear();
       setSelectedTile(null);
       setSelectedNavyKey(null);
       setHoveredNavyKey(null);
@@ -435,11 +486,13 @@ function App() {
         const result = await processTurn(gameJson);
         if (result.error) { alert(result.error); return; }
         const newJson = JSON.stringify(result.game);
-        if (!(await applyGameJson(newJson))) return;
+        setActiveScreen('newspaper');
+        if (!applyGameJsonLightweight(newJson)) return;
         setHeadlines(result.report?.headlines || []);
         setCurrentBattles(result.report?.battles || []);
         setCurrentNavalBattles(result.report?.naval_battles || []);
-        setActiveScreen('newspaper');
+        setArchiveData([]);
+        setArchiveLoadState('idle');
         // Check for pending proposals
         const newState = parseGameJson(newJson);
         const nid = newState.human_player_nation;
@@ -454,7 +507,7 @@ function App() {
         setBusyMessage(null);
       }
     });
-  }, [gameJson, applyGameJson, runMutation]);
+  }, [gameJson, applyGameJsonLightweight, runMutation]);
 
   const dismissNewspaper = useCallback(() => {
     setActiveScreen('map');
@@ -485,10 +538,12 @@ function App() {
           allBattles.push(...result.reports.flatMap((r: any) => r.battles));
           allNavalBattles.push(...result.reports.flatMap((r: any) => r.naval_battles));
         }
-        if (!(await applyGameJson(currentJson))) return;
+        if (!applyGameJsonLightweight(currentJson)) return;
         setHeadlines(allHeadlines);
         setCurrentBattles(allBattles);
         setCurrentNavalBattles(allNavalBattles);
+        setArchiveData([]);
+        setArchiveLoadState('idle');
         setProvinceUnits(null);
         setSelectedUnitIds([]);
         setIsDeployMode(false);
@@ -499,7 +554,7 @@ function App() {
         setBusyMessage(null);
       }
     });
-  }, [gameJson, gameState, applyGameJson, skipN, runMutation]);
+  }, [gameJson, gameState, applyGameJsonLightweight, skipN, runMutation]);
 
   const handleSkipUntil = useCallback(async () => {
     if (skipUntilRunning || mutationLockRef.current) return;
@@ -556,11 +611,13 @@ function App() {
         }
       }
 
-      if (!(await applyGameJson(currentJson))) return;
+      if (!applyGameJsonLightweight(currentJson)) return;
       setHeadlines(allHeadlines);
       setCurrentBattles(allBattles);
       setCurrentNavalBattles(allNavalBattles);
       setActiveScreen('newspaper');
+      setArchiveData([]);
+      setArchiveLoadState('idle');
       setProvinceUnits(null);
       setSelectedUnitIds([]);
       setIsDeployMode(false);
@@ -577,7 +634,7 @@ function App() {
       setBusyMessage(null);
       mutationLockRef.current = false;
     }
-  }, [gameJson, gameState, applyGameJson, skipUntilText, skipUntilRunning, showError]);
+  }, [gameJson, gameState, applyGameJsonLightweight, skipUntilText, skipUntilRunning, showError]);
 
   const handleChangeViewpoint = useCallback(async (nationId: number) => {
     await runMutation(async () => {
@@ -1230,7 +1287,7 @@ function App() {
           </select>
         )}
         {!isObserver && <button onClick={() => setShowTech(!showTech)} style={styles.btn}>Tech</button>}
-        <button onClick={async () => { setArchiveData(await getNewspaperArchive(gameJson)); setActiveScreen('newspaper'); }} style={styles.btn}>History</button>
+        <button onClick={() => setActiveScreen('newspaper')} style={styles.btn}>History</button>
         {isObserver && (
           <>
             <input
@@ -1344,6 +1401,7 @@ function App() {
               playerNews={playerNews}
               worldNews={worldNews}
               archiveData={archive}
+              archiveLoadState={archiveLoadState}
               nations={gameState?.nations || []}
               countryOptions={countryOptions}
               newsFilterCategory={newsFilterCategory}
@@ -1352,6 +1410,7 @@ function App() {
               showAiNonActions={showAiNonActions}
               onCategoryChange={setNewsFilterCategory}
               onCountryChange={setNewsFilterCountry}
+              onRequestArchive={loadNewspaperArchive}
               onDismiss={dismissNewspaper}
               onClose={() => setActiveScreen('map')}
               onShowMap={async (turn) => {
