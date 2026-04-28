@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import type { GPLedgerEntry } from '../wasm';
 import { resourceEmoji, resourceLabel } from '../resourceEmoji';
+import Flag from './Flag';
+
+interface NationLite { id: number; flag_svg?: string; }
 
 type Tab = 'economy' | 'cashflow' | 'production' | 'resources' | 'materials' | 'military' | 'diplomacy' | 'technology';
 
@@ -15,6 +18,7 @@ interface Props {
   // numeric cell. `null` when no prior turn has been recorded yet (first
   // turn of a game).
   previousEntries: GPLedgerEntry[] | null;
+  nations?: NationLite[];
   onClose: () => void;
 }
 
@@ -27,10 +31,12 @@ function buildPrevMap(prev: GPLedgerEntry[] | null): Map<number, GPLedgerEntry> 
   return m;
 }
 
-export default function LedgerPanel({ entries, previousEntries, onClose }: Props) {
+export default function LedgerPanel({ entries, previousEntries, nations = [], onClose }: Props) {
   const [tab, setTab] = useState<Tab>('economy');
   const [expanded, setExpanded] = useState<number | null>(null);
   const prevMap = buildPrevMap(previousEntries);
+  const flagById: Record<number, string> = {};
+  for (const n of nations) { if (n.flag_svg) flagById[n.id] = n.flag_svg; }
 
   const tabs: { key: Tab; label: string }[] = [
     { key: 'economy', label: 'Economy' },
@@ -69,25 +75,27 @@ export default function LedgerPanel({ entries, previousEntries, onClose }: Props
         </div>
 
         <div style={styles.tableWrap}>
-          {tab === 'economy' && <EconomyTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} />}
-          {tab === 'cashflow' && <CashFlowTable entries={sorted} expanded={expanded} onExpand={setExpanded} />}
-          {tab === 'production' && <ProductionTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} />}
-          {tab === 'resources' && <ResourcesTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} />}
-          {tab === 'materials' && <MaterialsTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} />}
-          {tab === 'military' && <MilitaryTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} />}
-          {tab === 'diplomacy' && <DiplomacyTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} />}
-          {tab === 'technology' && <TechnologyTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} />}
+          {tab === 'economy' && <EconomyTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} flagById={flagById} />}
+          {tab === 'cashflow' && <CashFlowTable entries={sorted} expanded={expanded} onExpand={setExpanded} flagById={flagById} />}
+          {tab === 'production' && <ProductionTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} flagById={flagById} />}
+          {tab === 'resources' && <ResourcesTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} flagById={flagById} />}
+          {tab === 'materials' && <MaterialsTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} flagById={flagById} />}
+          {tab === 'military' && <MilitaryTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} flagById={flagById} />}
+          {tab === 'diplomacy' && <DiplomacyTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} flagById={flagById} />}
+          {tab === 'technology' && <TechnologyTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} flagById={flagById} />}
         </div>
       </div>
     </div>
   );
 }
 
-function NationCell({ entry }: { entry: GPLedgerEntry }) {
+function NationCell({ entry, flag }: { entry: GPLedgerEntry; flag?: string }) {
   const color = NATION_COLORS[entry.nation_color] || '#aaa';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <span style={{ width: 10, height: 10, borderRadius: '50%', background: color, display: 'inline-block', flexShrink: 0 }} />
+      {flag
+        ? <Flag svg={flag} width={18} height={12} />
+        : <span style={{ width: 10, height: 10, borderRadius: '50%', background: color, display: 'inline-block', flexShrink: 0 }} />}
       <span style={{ color: entry.is_human ? '#daa520' : '#ccc', fontWeight: entry.is_human ? 'bold' : 'normal' }}>
         {entry.nation_name}
       </span>
@@ -95,7 +103,7 @@ function NationCell({ entry }: { entry: GPLedgerEntry }) {
   );
 }
 
-function EconomyTable({ entries, prevMap, expanded, onExpand }: { entries: GPLedgerEntry[]; prevMap: Map<number, GPLedgerEntry> | null; expanded: number | null; onExpand: (id: number | null) => void }) {
+function EconomyTable({ entries, prevMap, expanded, onExpand, flagById }: { entries: GPLedgerEntry[]; prevMap: Map<number, GPLedgerEntry> | null; expanded: number | null; onExpand: (id: number | null) => void; flagById: Record<number, string> }) {
   return (
     <table style={styles.table}>
       <thead>
@@ -119,7 +127,7 @@ function EconomyTable({ entries, prevMap, expanded, onExpand }: { entries: GPLed
                 style={e.is_human ? styles.rowHuman : styles.row}
                 onClick={() => onExpand(expanded === e.nation_id ? null : e.nation_id)}
               >
-                <td style={styles.tdName}><NationCell entry={e} /></td>
+                <td style={styles.tdName}><NationCell entry={e} flag={flagById[e.nation_id]} /></td>
                 <DeltaTd value={e.economy.treasury} prev={p?.economy.treasury} format={fmtMoneyCell} />
                 <DeltaTd value={e.economy.provinces} prev={p?.economy.provinces} />
                 <DeltaTd value={e.economy.goods_revenue} prev={p?.economy.goods_revenue} format={fmtMoneyCell} />
@@ -148,7 +156,7 @@ function EconomyTable({ entries, prevMap, expanded, onExpand }: { entries: GPLed
   );
 }
 
-function ProductionTable({ entries, prevMap, expanded, onExpand }: { entries: GPLedgerEntry[]; prevMap: Map<number, GPLedgerEntry> | null; expanded: number | null; onExpand: (id: number | null) => void }) {
+function ProductionTable({ entries, prevMap, expanded, onExpand, flagById }: { entries: GPLedgerEntry[]; prevMap: Map<number, GPLedgerEntry> | null; expanded: number | null; onExpand: (id: number | null) => void; flagById: Record<number, string> }) {
   return (
     <table style={styles.table}>
       <thead>
@@ -171,7 +179,7 @@ function ProductionTable({ entries, prevMap, expanded, onExpand }: { entries: GP
               style={e.is_human ? styles.rowHuman : styles.row}
               onClick={() => onExpand(expanded === e.nation_id ? null : e.nation_id)}
             >
-              <td style={styles.tdName}><NationCell entry={e} /></td>
+              <td style={styles.tdName}><NationCell entry={e} flag={flagById[e.nation_id]} /></td>
               <DeltaTd value={e.economy.buildings} prev={p?.economy.buildings} />
               <DeltaTd value={e.labor.total} prev={p?.labor.total} />
               <DeltaTd value={e.labor.untrained} prev={p?.labor.untrained} />
@@ -188,7 +196,7 @@ function ProductionTable({ entries, prevMap, expanded, onExpand }: { entries: GP
 
 const RESOURCE_ORDER = ['Timber', 'Coal', 'Iron', 'Cotton', 'Wool', 'Grain', 'Fruit', 'Livestock', 'Horses', 'Oil', 'Gold', 'Gems'];
 
-function ResourcesTable({ entries, prevMap, expanded, onExpand }: { entries: GPLedgerEntry[]; prevMap: Map<number, GPLedgerEntry> | null; expanded: number | null; onExpand: (id: number | null) => void }) {
+function ResourcesTable({ entries, prevMap, expanded, onExpand, flagById }: { entries: GPLedgerEntry[]; prevMap: Map<number, GPLedgerEntry> | null; expanded: number | null; onExpand: (id: number | null) => void; flagById: Record<number, string> }) {
   return (
     <table style={styles.table}>
       <thead>
@@ -207,7 +215,7 @@ function ResourcesTable({ entries, prevMap, expanded, onExpand }: { entries: GPL
                 style={e.is_human ? styles.rowHuman : styles.row}
                 onClick={() => onExpand(expanded === e.nation_id ? null : e.nation_id)}
               >
-                <td style={styles.tdName}><NationCell entry={e} /></td>
+                <td style={styles.tdName}><NationCell entry={e} flag={flagById[e.nation_id]} /></td>
                 {RESOURCE_ORDER.map(r => {
                   const cur = e.resources_detail?.[r] || 0;
                   const prv = p ? (p.resources_detail?.[r] || 0) : undefined;
@@ -234,7 +242,7 @@ const MATERIAL_ORDER = ['Lumber', 'Steel', 'Fabric', 'Paper', 'Arms', 'CannedFoo
 const MATERIAL_LABELS: Record<string, string> = { CannedFood: 'Canned Food' };
 const GOODS_ORDER = ['Furniture', 'Clothing', 'Hardware'];
 
-function MaterialsTable({ entries, prevMap, expanded, onExpand }: { entries: GPLedgerEntry[]; prevMap: Map<number, GPLedgerEntry> | null; expanded: number | null; onExpand: (id: number | null) => void }) {
+function MaterialsTable({ entries, prevMap, expanded, onExpand, flagById }: { entries: GPLedgerEntry[]; prevMap: Map<number, GPLedgerEntry> | null; expanded: number | null; onExpand: (id: number | null) => void; flagById: Record<number, string> }) {
   return (
     <table style={styles.table}>
       <thead>
@@ -256,7 +264,7 @@ function MaterialsTable({ entries, prevMap, expanded, onExpand }: { entries: GPL
                 style={e.is_human ? styles.rowHuman : styles.row}
                 onClick={() => onExpand(expanded === e.nation_id ? null : e.nation_id)}
               >
-                <td style={styles.tdName}><NationCell entry={e} /></td>
+                <td style={styles.tdName}><NationCell entry={e} flag={flagById[e.nation_id]} /></td>
                 {MATERIAL_ORDER.map(m => {
                   const cur = e.materials_detail?.[m] || 0;
                   const prv = p ? (p.materials_detail?.[m] || 0) : undefined;
@@ -285,7 +293,7 @@ function MaterialsTable({ entries, prevMap, expanded, onExpand }: { entries: GPL
   );
 }
 
-function MilitaryTable({ entries, prevMap, expanded, onExpand }: { entries: GPLedgerEntry[]; prevMap: Map<number, GPLedgerEntry> | null; expanded: number | null; onExpand: (id: number | null) => void }) {
+function MilitaryTable({ entries, prevMap, expanded, onExpand, flagById }: { entries: GPLedgerEntry[]; prevMap: Map<number, GPLedgerEntry> | null; expanded: number | null; onExpand: (id: number | null) => void; flagById: Record<number, string> }) {
   const maxFp = Math.max(...entries.map(x => x.military.total_army_fp));
   return (
     <table style={styles.table}>
@@ -310,7 +318,7 @@ function MilitaryTable({ entries, prevMap, expanded, onExpand }: { entries: GPLe
               style={e.is_human ? styles.rowHuman : styles.row}
               onClick={() => onExpand(expanded === e.nation_id ? null : e.nation_id)}
             >
-              <td style={styles.tdName}><NationCell entry={e} /></td>
+              <td style={styles.tdName}><NationCell entry={e} flag={flagById[e.nation_id]} /></td>
               <DeltaTd value={e.military.field_army_count} prev={p?.military.field_army_count} />
               <DeltaTd value={e.military.militia_count} prev={p?.military.militia_count} />
               <DeltaTd value={e.military.total_army_fp} prev={p?.military.total_army_fp} highlight={e.military.total_army_fp === maxFp} />
@@ -326,7 +334,7 @@ function MilitaryTable({ entries, prevMap, expanded, onExpand }: { entries: GPLe
   );
 }
 
-function DiplomacyTable({ entries, prevMap, expanded, onExpand }: { entries: GPLedgerEntry[]; prevMap: Map<number, GPLedgerEntry> | null; expanded: number | null; onExpand: (id: number | null) => void }) {
+function DiplomacyTable({ entries, prevMap, expanded, onExpand, flagById }: { entries: GPLedgerEntry[]; prevMap: Map<number, GPLedgerEntry> | null; expanded: number | null; onExpand: (id: number | null) => void; flagById: Record<number, string> }) {
   return (
     <table style={styles.table}>
       <thead>
@@ -348,7 +356,7 @@ function DiplomacyTable({ entries, prevMap, expanded, onExpand }: { entries: GPL
               style={e.is_human ? styles.rowHuman : styles.row}
               onClick={() => onExpand(expanded === e.nation_id ? null : e.nation_id)}
             >
-              <td style={styles.tdName}><NationCell entry={e} /></td>
+              <td style={styles.tdName}><NationCell entry={e} flag={flagById[e.nation_id]} /></td>
               <DeltaTd value={e.diplomacy.standing} prev={p?.diplomacy.standing} />
               <DeltaTd value={e.diplomacy.consulates} prev={p?.diplomacy.consulates} />
               <DeltaTd value={e.diplomacy.embassies} prev={p?.diplomacy.embassies} />
@@ -377,7 +385,7 @@ function DiplomacyTable({ entries, prevMap, expanded, onExpand }: { entries: GPL
   );
 }
 
-function TechnologyTable({ entries, prevMap, expanded, onExpand }: { entries: GPLedgerEntry[]; prevMap: Map<number, GPLedgerEntry> | null; expanded: number | null; onExpand: (id: number | null) => void }) {
+function TechnologyTable({ entries, prevMap, expanded, onExpand, flagById }: { entries: GPLedgerEntry[]; prevMap: Map<number, GPLedgerEntry> | null; expanded: number | null; onExpand: (id: number | null) => void; flagById: Record<number, string> }) {
   return (
     <table style={styles.table}>
       <thead>
@@ -399,7 +407,7 @@ function TechnologyTable({ entries, prevMap, expanded, onExpand }: { entries: GP
                 style={e.is_human ? styles.rowHuman : styles.row}
                 onClick={() => onExpand(expanded === e.nation_id ? null : e.nation_id)}
               >
-                <td style={styles.tdName}><NationCell entry={e} /></td>
+                <td style={styles.tdName}><NationCell entry={e} flag={flagById[e.nation_id]} /></td>
                 <DeltaTd value={e.technology?.researched_count || 0} prev={p?.technology?.researched_count} />
                 <td style={{ ...styles.td, textAlign: 'left', color: '#999', fontSize: 12 }}>
                   {curList.length === 0 ? 'None' : curList.map((t, i) => (
@@ -615,7 +623,7 @@ function fmtMoney(n: number): string {
   return `${sign}$${Math.abs(n).toLocaleString()}`;
 }
 
-function CashFlowTable({ entries, expanded, onExpand }: { entries: GPLedgerEntry[]; expanded: number | null; onExpand: (id: number | null) => void }) {
+function CashFlowTable({ entries, expanded, onExpand, flagById }: { entries: GPLedgerEntry[]; expanded: number | null; onExpand: (id: number | null) => void; flagById: Record<number, string> }) {
   return (
     <table style={styles.table}>
       <thead>
@@ -639,7 +647,7 @@ function CashFlowTable({ entries, expanded, onExpand }: { entries: GPLedgerEntry
                 style={e.is_human ? styles.rowHuman : styles.row}
                 onClick={() => onExpand(isOpen ? null : e.nation_id)}
               >
-                <td style={styles.tdName}><NationCell entry={e} /></td>
+                <td style={styles.tdName}><NationCell entry={e} flag={flagById[e.nation_id]} /></td>
                 <td style={styles.td}>{cf ? fmtMoney(cf.opening_treasury) : '—'}</td>
                 <td style={styles.td}>{cf ? fmtMoney(cf.closing_treasury) : '—'}</td>
                 <td style={{

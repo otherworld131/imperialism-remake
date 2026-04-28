@@ -1317,7 +1317,7 @@ function App() {
 
         {/* Full-screen views */}
         {activeScreen === 'ledger' && (
-          <LedgerPanel entries={gpLedgerData} previousEntries={prevGpLedgerData} onClose={() => setActiveScreen('map')} />
+          <LedgerPanel entries={gpLedgerData} previousEntries={prevGpLedgerData} nations={gameState?.nations || []} onClose={() => setActiveScreen('map')} />
         )}
         {activeScreen === 'newspaper' && (() => {
           const countryOptions: { id: number; name: string }[] = (gameState?.nations || [])
@@ -1384,6 +1384,7 @@ function App() {
             tiles={tiles}
             year={year}
             quarter={quarter}
+            nations={gameState?.nations || []}
             onClose={() => setActiveScreen('map')}
           />
         )}

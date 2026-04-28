@@ -2,6 +2,9 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import type { TileData, LandBattleData, NavalBattleData, BattleData, ArchivedBattleTurn, BattleTile, BattleUnit } from '../wasm';
 import { UnitRow } from './UnitRow';
 import { computeNationLabels } from '../lib/nationLabels';
+import Flag from './Flag';
+
+interface NationLite { id: number; flag_svg?: string; }
 
 // ── Hex rendering constants (mirror HexMap.tsx) ─────────────────
 const HEX_SIZE = 18;
@@ -59,14 +62,17 @@ interface Props {
   tiles: TileData[];
   year: number;
   quarter: number;
+  nations?: NationLite[];
   onClose: () => void;
 }
 
 // ── Component ───────────────────────────────────────────────────
 export default function BattleScreen({
   currentBattles, currentNavalBattles, archiveData, tiles,
-  year, quarter, onClose,
+  year, quarter, nations = [], onClose,
 }: Props) {
+  const flagById: Record<number, string> = {};
+  for (const n of nations) { if (n.flag_svg) flagById[n.id] = n.flag_svg; }
   const [mode, setMode] = useState<'current' | 'archive'>('current');
   const [selectedArchiveTurn, setSelectedArchiveTurn] = useState<number | null>(null);
   const [selectedBattleIdx, setSelectedBattleIdx] = useState(0);
@@ -370,21 +376,28 @@ export default function BattleScreen({
                   {/* Battle list */}
                   <div style={styles.battleList}>
                     <div style={styles.battleListTitle}>Engagements</div>
-                    {activeBattles.map((b, i) => (
-                      <button
-                        key={`land-${i}`}
-                        style={clampedIdx === i ? styles.battleItemActive : styles.battleItem}
-                        onClick={() => handleSelectBattle(i)}
-                      >
-                        <span style={styles.battleIcon}>{'\u2694'}</span>
-                        <span>Battle of {b.province}</span>
-                        <span style={{ color: b.attacker_won ? '#2ecc40' : '#e63946', marginLeft: 'auto', fontSize: 11 }}>
-                          {b.attacker_won ? b.attacker : b.defender} won
-                        </span>
-                      </button>
-                    ))}
+                    {activeBattles.map((b, i) => {
+                      const winnerId = b.attacker_won ? b.attacker_id : b.defender_id;
+                      const winnerFlag = flagById[winnerId];
+                      return (
+                        <button
+                          key={`land-${i}`}
+                          style={clampedIdx === i ? styles.battleItemActive : styles.battleItem}
+                          onClick={() => handleSelectBattle(i)}
+                        >
+                          <span style={styles.battleIcon}>{'\u2694'}</span>
+                          <span>Battle of {b.province}</span>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: b.attacker_won ? '#2ecc40' : '#e63946', marginLeft: 'auto', fontSize: 11 }}>
+                            {winnerFlag && <Flag svg={winnerFlag} width={16} height={11} />}
+                            {b.attacker_won ? b.attacker : b.defender} won
+                          </span>
+                        </button>
+                      );
+                    })}
                     {activeNavalBattles.map((nb, i) => {
                       const globalIdx = activeBattles.length + i;
+                      const winnerId = nb.attacker_won ? nb.attacker_id : nb.defender_id;
+                      const winnerFlag = flagById[winnerId];
                       return (
                         <button
                           key={`naval-${i}`}
@@ -393,7 +406,8 @@ export default function BattleScreen({
                         >
                           <span style={styles.battleIcon}>{'\u2693'}</span>
                           <span>{nb.attacker} vs {nb.defender}</span>
-                          <span style={{ color: nb.attacker_won ? '#2ecc40' : '#e63946', marginLeft: 'auto', fontSize: 11 }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: nb.attacker_won ? '#2ecc40' : '#e63946', marginLeft: 'auto', fontSize: 11 }}>
+                            {winnerFlag && <Flag svg={winnerFlag} width={16} height={11} />}
                             {nb.attacker_won ? nb.attacker : nb.defender} won
                           </span>
                         </button>
@@ -405,10 +419,10 @@ export default function BattleScreen({
                 {/* Right column: battle details */}
                 <div style={styles.rightCol}>
                   {selectedBattle && selectedBattle.type === 'land' && (
-                    <LandBattleDetails battle={selectedBattle} />
+                    <LandBattleDetails battle={selectedBattle} flagById={flagById} />
                   )}
                   {selectedBattle && selectedBattle.type === 'naval' && (
-                    <NavalBattleDetails battle={selectedBattle} />
+                    <NavalBattleDetails battle={selectedBattle} flagById={flagById} />
                   )}
                 </div>
               </div>
@@ -421,8 +435,10 @@ export default function BattleScreen({
 }
 
 // ── Land battle details sub-component ───────────────────────────
-function LandBattleDetails({ battle }: { battle: LandBattleData }) {
+function LandBattleDetails({ battle, flagById }: { battle: LandBattleData; flagById: Record<number, string> }) {
   const winnerName = battle.attacker_won ? battle.attacker : battle.defender;
+  const winnerId = battle.attacker_won ? battle.attacker_id : battle.defender_id;
+  const winnerFlag = flagById[winnerId];
   return (
     <div style={styles.detailsPanel}>
       {/* Outcome banner */}
@@ -430,7 +446,8 @@ function LandBattleDetails({ battle }: { battle: LandBattleData }) {
         ...styles.outcomeBanner,
         borderLeftColor: battle.attacker_won ? '#2ecc40' : '#e63946',
       }}>
-        <div style={styles.outcomeTitle}>
+        <div style={{ ...styles.outcomeTitle, display: 'flex', alignItems: 'center', gap: 8 }}>
+          {winnerFlag && <Flag svg={winnerFlag} width={24} height={16} />}
           {winnerName} Victory
         </div>
         <div style={styles.outcomeSub}>
@@ -481,6 +498,7 @@ function LandBattleDetails({ battle }: { battle: LandBattleData }) {
           <ForceColumn
             side={battle.attacker}
             role="Attacker"
+            flag={flagById[battle.attacker_id]}
             initial={battle.attacker_initial_count}
             survivedCount={battle.attacker_survivors_count}
             survivors={battle.attacker_survivors}
@@ -489,6 +507,7 @@ function LandBattleDetails({ battle }: { battle: LandBattleData }) {
           <ForceColumn
             side={battle.defender}
             role="Defender"
+            flag={flagById[battle.defender_id]}
             initial={battle.defender_initial_count}
             survivedCount={battle.defender_survivors_count}
             survivors={battle.defender_survivors}
@@ -514,10 +533,11 @@ function LandBattleDetails({ battle }: { battle: LandBattleData }) {
 
 // ── Per-side force column for LandBattleDetails ─────────────────
 function ForceColumn({
-  side, role, initial, survivedCount, survivors, casualties,
+  side, role, flag, initial, survivedCount, survivors, casualties,
 }: {
   side: string;
   role: 'Attacker' | 'Defender';
+  flag?: string;
   initial: number;
   survivedCount: number;
   survivors: BattleUnit[];
@@ -525,7 +545,8 @@ function ForceColumn({
 }) {
   return (
     <div style={styles.forceCol}>
-      <div style={styles.forceHeader}>
+      <div style={{ ...styles.forceHeader, display: 'flex', alignItems: 'center', gap: 6 }}>
+        {flag && <Flag svg={flag} width={20} height={13} />}
         {side}
         <span style={styles.roleTag}> ({role})</span>
       </div>
@@ -561,8 +582,10 @@ function ForceColumn({
 }
 
 // ── Naval battle details sub-component ──────────────────────────
-function NavalBattleDetails({ battle }: { battle: NavalBattleData }) {
+function NavalBattleDetails({ battle, flagById }: { battle: NavalBattleData; flagById: Record<number, string> }) {
   const winnerName = battle.attacker_won ? battle.attacker : battle.defender;
+  const winnerId = battle.attacker_won ? battle.attacker_id : battle.defender_id;
+  const winnerFlag = flagById[winnerId];
 
   return (
     <div style={styles.detailsPanel}>
@@ -570,7 +593,8 @@ function NavalBattleDetails({ battle }: { battle: NavalBattleData }) {
         ...styles.outcomeBanner,
         borderLeftColor: battle.attacker_won ? '#2ecc40' : '#e63946',
       }}>
-        <div style={styles.outcomeTitle}>
+        <div style={{ ...styles.outcomeTitle, display: 'flex', alignItems: 'center', gap: 8 }}>
+          {winnerFlag && <Flag svg={winnerFlag} width={24} height={16} />}
           {winnerName} Naval Victory
         </div>
         <div style={styles.outcomeSub}>
@@ -582,7 +606,10 @@ function NavalBattleDetails({ battle }: { battle: NavalBattleData }) {
         <div style={styles.sectionTitle}>Fleets</div>
         <div style={styles.forcesGrid}>
           <div style={styles.forceCol}>
-            <div style={styles.forceHeader}>{battle.attacker}</div>
+            <div style={{ ...styles.forceHeader, display: 'flex', alignItems: 'center', gap: 6 }}>
+              {flagById[battle.attacker_id] && <Flag svg={flagById[battle.attacker_id]} width={20} height={13} />}
+              {battle.attacker}
+            </div>
             <div style={styles.forceStats}>{battle.attacker_survivors_count} ships survived</div>
             {battle.attacker_ships_lost.length > 0 && (
               <div style={styles.casualties}>
@@ -592,7 +619,10 @@ function NavalBattleDetails({ battle }: { battle: NavalBattleData }) {
             )}
           </div>
           <div style={styles.forceCol}>
-            <div style={styles.forceHeader}>{battle.defender}</div>
+            <div style={{ ...styles.forceHeader, display: 'flex', alignItems: 'center', gap: 6 }}>
+              {flagById[battle.defender_id] && <Flag svg={flagById[battle.defender_id]} width={20} height={13} />}
+              {battle.defender}
+            </div>
             <div style={styles.forceStats}>{battle.defender_survivors_count} ships survived</div>
             {battle.defender_ships_lost.length > 0 && (
               <div style={styles.casualties}>
