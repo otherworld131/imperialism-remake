@@ -3,17 +3,13 @@
 pub mod commands;
 pub mod queries;
 
-// Re-export domain for convenient access to types and primary entry points.
-// Architecture tests enforce that this is the primary interface path.
-pub use domain;
-
-// Selective re-exports for commonly-used types (optional, for convenience)
-pub use domain::game_state::{GameState, new_game};
+pub use domain::game_state::{GameState, new_game, new_game_with_data};
 pub use domain::hex::HexCoord;
 pub use domain::nation::NationColor;
-pub use domain::scenarios::{list_scenarios, new_scenario_game};
+pub use domain::scenarios;
 pub use domain::turn::{TurnReport, calculate_score, process_turn};
 pub use domain::types;
+pub use domain::types::*;
 
 /// Application-layer errors covering command/query validation failures and
 /// wrapped domain errors.

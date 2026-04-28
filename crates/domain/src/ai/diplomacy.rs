@@ -3,8 +3,8 @@ use crate::game_state::GameState;
 use crate::types::*;
 
 #[cfg(test)]
-use super::common::{PersonalityConfig, lua_or};
-use super::common::{AiPersonality, get_personality};
+use super::common::lua_or;
+use super::common::{AiPersonality, PersonalityConfig, get_personality};
 
 /// AI builds trade consulates with Minor Nations, prioritizing those with
 /// the most tradeable resources (since trade increases relation scores).
@@ -210,29 +210,20 @@ pub fn ai_manage_diplomacy(
             AiPersonality::Diplomatic | AiPersonality::Balanced | AiPersonality::Economic
         )
     };
+    let pc = PersonalityConfig::for_personality(personality);
     let grant_amount: i64 = 'val: {
         #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.grant_amount) {
             break 'val v;
         }
-        match personality {
-            AiPersonality::Diplomatic => 500,
-            AiPersonality::Economic => 500,
-            AiPersonality::Aggressive => 0,
-            AiPersonality::Balanced => 500,
-        }
+        pc.grant_amount_dollars as i64
     };
     let grant_every_n_turns: u32 = 'val: {
         #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.grant_interval) {
             break 'val v;
         }
-        match personality {
-            AiPersonality::Diplomatic => 4,
-            AiPersonality::Economic => 6,
-            AiPersonality::Aggressive => 0,
-            AiPersonality::Balanced => 8,
-        }
+        pc.grant_interval_turns
     };
 
     // Phase 1: Propose non-aggression pacts with Minor Nations that have embassies
@@ -634,15 +625,13 @@ pub fn ai_pre_election_strategy(
     #[cfg(not(feature = "lua"))]
     let _lua_cfg: Option<()> = None;
 
+    let pc = PersonalityConfig::for_personality(personality);
     let grant_amount: Money = 'val: {
         #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.grant_amount) {
             break 'val Money::dollars(v);
         }
-        match personality {
-            AiPersonality::Diplomatic => Money::dollars(1000),
-            _ => Money::dollars(500),
-        }
+        Money::dollars(pc.election_grant_dollars as i64)
     };
 
     // Send grants to all MNs with embassies to boost relationship before the vote
@@ -688,11 +677,7 @@ pub fn ai_pre_election_strategy(
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.embassy_treasury_threshold) {
             break 'val Money::dollars(v);
         }
-        match personality {
-            AiPersonality::Diplomatic => Money::dollars(5000),
-            AiPersonality::Balanced | AiPersonality::Economic => Money::dollars(10_000),
-            AiPersonality::Aggressive => Money::dollars(15_000),
-        }
+        Money::dollars(pc.embassy_treasury_threshold_dollars as i64)
     };
     let embassy_cost = Money::dollars(5000);
     let treasury_ok = game

@@ -9,8 +9,8 @@ mod saves;
 
 use clap::Parser;
 
-use domain::turn::{calculate_score, process_turn};
-use domain::types::*;
+use application::{calculate_score, process_turn, Difficulty};
+use application::scenarios as app_scenarios;
 use infrastructure::data_loader::load_embedded_game_data;
 
 use crate::flavor_bridge::apply_flavor;
@@ -37,7 +37,7 @@ fn main() {
 
     let mut game = if let Some(scenario_id) = &args.scenario {
         let nation_index = args.nation_index.unwrap_or(0);
-        match domain::scenarios::new_scenario_game_with_data(
+        match app_scenarios::new_scenario_game_with_data(
             scenario_id,
             Difficulty::Normal,
             nation_index,
@@ -47,7 +47,7 @@ fn main() {
                 println!(
                     "  Starting scenario: {} ({})",
                     g.turn.year(),
-                    domain::scenarios::list_scenarios()
+                    app_scenarios::list_scenarios()
                         .iter()
                         .find(|s| s.id == scenario_id.as_str())
                         .map(|s| s.name)
@@ -59,7 +59,7 @@ fn main() {
                 eprintln!("  Error: {}", e);
                 eprintln!();
                 eprintln!("  Available scenarios:");
-                for s in domain::scenarios::list_scenarios() {
+                for s in app_scenarios::list_scenarios() {
                     eprintln!("    {} — {} ({})", s.id, s.name, s.year);
                 }
                 std::process::exit(1);
@@ -68,7 +68,7 @@ fn main() {
     } else {
         let map_key = args.map_key.as_deref().unwrap_or("imperialism");
         let nation_index = args.nation_index.unwrap_or(0);
-        domain::game_state::new_game_with_data(
+        application::new_game_with_data(
             map_key,
             Difficulty::Normal,
             nation_index,
@@ -172,7 +172,7 @@ fn main() {
             "scenarios" => {
                 println!();
                 println!("  Available scenarios (use --scenario flag at startup):");
-                for s in domain::scenarios::list_scenarios() {
+                for s in app_scenarios::list_scenarios() {
                     println!("    {} — {} ({})", s.id, s.name, s.year);
                     println!("      {}", s.description);
                     println!("      Powers: {}", s.great_powers.join(", "));

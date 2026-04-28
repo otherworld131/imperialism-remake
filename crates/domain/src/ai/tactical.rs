@@ -2,7 +2,7 @@
 use crate::game_state::GameState;
 use crate::types::*;
 
-use super::common::{AiPersonality, get_personality};
+use super::common::{AiPersonality, PersonalityConfig, get_personality};
 
 /// AI tactical combat decisions: build forts, move units to threatened provinces,
 /// and propose peace after prolonged losing wars.
@@ -529,20 +529,17 @@ fn ai_build_forts(
     #[cfg(not(feature = "lua"))]
     let _lua_cfg: Option<()> = None;
 
+    let pc = PersonalityConfig::for_personality(personality);
     // Choose which province to fort based on personality / Lua fort_strategy
-    let fort_strategy: String = 'val: {
+    let fort_capital: bool = 'val: {
         #[cfg(feature = "lua")]
-        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.fort_strategy.clone()) {
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.fort_strategy.as_deref().map(|s| s == "capital")) {
             break 'val v;
         }
-        match personality {
-            AiPersonality::Diplomatic => "capital".to_string(),
-            AiPersonality::Aggressive => "border".to_string(),
-            _ => "border".to_string(),
-        }
+        pc.fort_capital
     };
 
-    let target_province = if fort_strategy == "capital" {
+    let target_province = if fort_capital {
         // Fort the capital for defense
         if owned_provinces.contains(&capital_province_id) {
             capital_province_id
@@ -664,16 +661,13 @@ fn ai_propose_peace(
     #[cfg(not(feature = "lua"))]
     let _lua_cfg: Option<()> = None;
 
+    let pc_peace = PersonalityConfig::for_personality(personality);
     let stalemate_duration: u32 = 'val: {
         #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.peace_stalemate_duration) {
             break 'val v;
         }
-        match personality {
-            AiPersonality::Diplomatic => 12,
-            AiPersonality::Aggressive => 25,
-            _ => 15,
-        }
+        pc_peace.peace_stalemate_duration
     };
 
     // Find enemies we are at war with.

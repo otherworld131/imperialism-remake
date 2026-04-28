@@ -1,6 +1,4 @@
-use application::domain::game_state::GameState;
-use application::domain::hex::HexCoord;
-use application::domain::types::*;
+use application::{GameState, HexCoord, TerrainType, ProvinceId};
 use bevy::prelude::*;
 
 use crate::colors;

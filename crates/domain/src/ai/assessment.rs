@@ -5,7 +5,7 @@
 //! proposals (peace, NAP, alliance).
 #![allow(unused_labels)] // labeled blocks used only with cfg(feature = "lua")
 
-use crate::ai::common::AiPersonality;
+use crate::ai::common::{AiPersonality, PersonalityConfig};
 use crate::game_state::GameState;
 use crate::types::*;
 
@@ -520,17 +520,14 @@ pub fn evaluate_war_worthiness(
         .unwrap_or(0);
     let enemy_at_war_start = enemy_current_provinces + provinces_captured;
 
-    // Read thresholds from Lua or use personality defaults
+    let pc = PersonalityConfig::for_personality(personality);
+
     let won_enough_captures: usize = 'val: {
         #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.won_enough_captures) {
             break 'val v;
         }
-        match personality {
-            AiPersonality::Diplomatic => 1,
-            AiPersonality::Aggressive => 4,
-            _ => 2,
-        }
+        pc.won_enough_captures
     };
 
     let lost_enough_losses: usize = 'val: {
@@ -538,11 +535,7 @@ pub fn evaluate_war_worthiness(
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.lost_enough_losses) {
             break 'val v;
         }
-        match personality {
-            AiPersonality::Diplomatic => 1,
-            AiPersonality::Aggressive => 3,
-            _ => 2,
-        }
+        pc.lost_enough_losses
     };
 
     let lost_enough_likelihood: f64 = 'val: {
@@ -550,12 +543,7 @@ pub fn evaluate_war_worthiness(
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.lost_enough_likelihood) {
             break 'val v;
         }
-        match personality {
-            AiPersonality::Diplomatic => 0.40,
-            AiPersonality::Aggressive => 0.20,
-            AiPersonality::Economic => 0.35,
-            _ => 0.30,
-        }
+        pc.lost_enough_likelihood
     };
 
     let won_enough_marginal: f64 = 'val: {
@@ -563,12 +551,7 @@ pub fn evaluate_war_worthiness(
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.won_enough_marginal) {
             break 'val v;
         }
-        match personality {
-            AiPersonality::Diplomatic => 0.40,
-            AiPersonality::Aggressive => 0.20,
-            AiPersonality::Economic => 0.35,
-            _ => 0.30,
-        }
+        pc.won_enough_marginal
     };
 
     let marginal_value = if enemy_at_war_start > 0 {
@@ -654,17 +637,14 @@ pub fn evaluate_peace_proposal(
         lua_cfg,
     );
 
+    let pc = PersonalityConfig::for_personality(personality);
+
     let accept_threshold: f64 = 'val: {
         #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.peace_accept_threshold) {
             break 'val v;
         }
-        match personality {
-            AiPersonality::Diplomatic => 0.50,
-            AiPersonality::Aggressive => 0.35,
-            AiPersonality::Economic => 0.45,
-            _ => 0.45,
-        }
+        pc.peace_accept_threshold
     };
 
     let reject_threshold: f64 = 'val: {
@@ -672,12 +652,7 @@ pub fn evaluate_peace_proposal(
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.peace_reject_threshold) {
             break 'val v;
         }
-        match personality {
-            AiPersonality::Diplomatic => 0.65,
-            AiPersonality::Aggressive => 0.80,
-            AiPersonality::Economic => 0.70,
-            _ => 0.70,
-        }
+        pc.peace_reject_threshold
     };
 
     let stalemate_duration: u32 = 'val: {
@@ -685,12 +660,7 @@ pub fn evaluate_peace_proposal(
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.peace_stalemate_duration) {
             break 'val v;
         }
-        match personality {
-            AiPersonality::Diplomatic => 12,
-            AiPersonality::Aggressive => 25,
-            AiPersonality::Economic => 15,
-            _ => 15,
-        }
+        pc.peace_stalemate_duration
     };
 
     // Reject if clearly winning and want to press advantage
@@ -801,17 +771,13 @@ pub fn evaluate_nap_proposal(
         score -= 0.3;
     }
 
-    // Personality bias
+    let pc = PersonalityConfig::for_personality(personality);
     let bias: f64 = 'val: {
         #[cfg(feature = "lua")]
         if let Some(v) = _lua_cfg.as_ref().and_then(|c| c.treaty_personality_bias) {
             break 'val v;
         }
-        match personality {
-            AiPersonality::Diplomatic => 0.3,
-            AiPersonality::Aggressive => -0.2,
-            _ => 0.1,
-        }
+        pc.nap_accept_bias
     };
     score += bias;
 
@@ -946,18 +912,13 @@ pub fn evaluate_alliance_proposal(
         score -= overcommit_penalty * (existing_alliances - 1) as f64;
     }
 
-    // Personality bias
+    let pc = PersonalityConfig::for_personality(personality);
     let bias: f64 = 'val: {
         #[cfg(feature = "lua")]
         if let Some(v) = _lua_cfg.as_ref().and_then(|c| c.treaty_personality_bias) {
             break 'val v;
         }
-        match personality {
-            AiPersonality::Diplomatic => 0.4,
-            AiPersonality::Aggressive => -0.15,
-            AiPersonality::Economic => 0.0,
-            _ => 0.1,
-        }
+        pc.alliance_accept_bias
     };
     score += bias;
 

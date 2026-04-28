@@ -3,7 +3,7 @@ use crate::game_state::GameState;
 use crate::military::ships::{Ship, ShipType};
 use crate::types::*;
 
-use super::common::{AiPersonality, get_personality};
+use super::common::{AiPersonality, PersonalityConfig, get_personality};
 
 /// Try to build one Frigate for `nation_id`. Returns `true` if a ship was
 /// added to the nation's warships. No cap check — the caller decides when
@@ -108,6 +108,7 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
     #[cfg(not(feature = "lua"))]
     let _lua_cfg: Option<()> = None;
 
+    let pc = PersonalityConfig::for_personality(personality);
     // Ship cap depends on personality; wealthy nations always aim for 5
     let max_ships: usize = if treasury > Money::dollars(5_000) {
         5
@@ -117,10 +118,7 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
             if let Some(v) = lua_cfg.as_ref().and_then(|c| c.max_merchant_ships) {
                 break 'val v;
             }
-            match personality {
-                AiPersonality::Economic => 3,
-                _ => 1,
-            }
+            pc.max_merchant_ships
         }
     };
 

@@ -299,16 +299,9 @@ fn collect_domain_references(dir: &std::path::Path, results: &mut Vec<(String, S
                     if trimmed.starts_with("//") {
                         continue;
                     }
-                    // Flag any `domain::` reference that is NOT preceded by `application::`
-                    // (i.e., not `application::domain::`)
-                    let mut search = trimmed;
-                    while let Some(pos) = search.find("domain::") {
-                        let prefix = &search[..pos];
-                        if !prefix.ends_with("application::") {
-                            results.push((path.display().to_string(), trimmed.to_string()));
-                            break;
-                        }
-                        search = &search[pos + 8..];
+                    // Flag any `domain::` reference — presentation must use application:: re-exports
+                    if trimmed.contains("domain::") {
+                        results.push((path.display().to_string(), trimmed.to_string()));
                     }
                 }
             }
@@ -323,7 +316,52 @@ fn presentation_does_not_import_domain_directly() {
     for (file, line) in &refs {
         panic!(
             "Presentation crate must not reference domain directly. \
-             Route through application::domain:: instead. \
+             Use application:: re-exports instead. \
+             Found '{}' in {}",
+            line,
+            file
+        );
+    }
+}
+
+// ── Test: Presentation has no production unwrap() calls ───────────
+
+fn find_unwrap_calls(dir: &str) -> Vec<(String, String)> {
+    let mut results = Vec::new();
+    let dir_path = std::path::Path::new(dir);
+    if !dir_path.exists() {
+        return results;
+    }
+    if let Ok(entries) = fs::read_dir(dir_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "rs")
+                && let Ok(content) = fs::read_to_string(&path)
+            {
+                let mut in_test_block = false;
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("#[test]") {
+                        in_test_block = true;
+                    }
+                    if !in_test_block && trimmed.contains(".unwrap()") && !trimmed.starts_with("//") {
+                        results.push((path.display().to_string(), trimmed.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    results
+}
+
+#[test]
+fn presentation_has_no_production_unwraps() {
+    let hits = find_unwrap_calls("crates/presentation/src");
+
+    for (file, line) in &hits {
+        panic!(
+            "Presentation crate must not use .unwrap() in production code. \
+             Use typed errors or let-else instead. \
              Found '{}' in {}",
             line,
             file

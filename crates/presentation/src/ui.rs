@@ -1,5 +1,4 @@
-use application::domain::hex::HexCoord;
-use application::domain::turn::process_turn;
+use application::{HexCoord, process_turn};
 use bevy::prelude::*;
 
 use crate::hex_renderer::GameStateResource;
@@ -27,9 +26,10 @@ pub struct InfoPanel;
 /// Set up the HUD overlay.
 pub fn setup_hud(mut commands: Commands, game: Res<GameStateResource>) {
     let game_state = &game.0;
-    let player = game_state
-        .get_nation(game_state.human_player_nation)
-        .unwrap();
+    let Some(player) = game_state.get_nation(game_state.human_player_nation) else {
+        error!("Human player nation not found during HUD setup");
+        return;
+    };
 
     // Root UI node
     commands
