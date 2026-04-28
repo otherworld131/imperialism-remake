@@ -123,7 +123,7 @@ pub(crate) fn max_recruitment_capacity(player: &Nation) -> u32 {
     province_count / per_province
 }
 
-fn human_player<'a>(game: &'a GameState) -> Option<&'a Nation> {
+fn human_player(game: &GameState) -> Option<&Nation> {
     match game.get_nation(game.human_player_nation) {
         Some(player) => Some(player),
         None => {

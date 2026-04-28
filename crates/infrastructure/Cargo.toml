@@ -5,7 +5,7 @@ edition.workspace = true
 
 [dependencies]
 application = { path = "../application" }
-domain = { path = "../domain" }
+domain = { path = "../domain", default-features = false }
 domain-snapshot = { path = "../domain-snapshot" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
