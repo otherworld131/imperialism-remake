@@ -412,6 +412,10 @@ pub enum ResourceOut {
     AutoSoldToMarket,
     /// Consumed by immigration (canned food + clothing + furniture).
     ImmigrationConsumed,
+    /// Consumed by AI construction/build paths (mill expansion, freight cars,
+    /// ships, training paper). Materials used to build a unit/building/asset
+    /// rather than feed a production chain.
+    ConstructionConsumed,
 }
 
 impl ResourceOut {
@@ -426,6 +430,7 @@ impl ResourceOut {
             Self::TradeExport => "Trade export",
             Self::AutoSoldToMarket => "Sold to market",
             Self::ImmigrationConsumed => "Immigration consumed",
+            Self::ConstructionConsumed => "Construction consumed",
         }
     }
 
@@ -440,7 +445,8 @@ impl ResourceOut {
             | Self::MillConsumed
             | Self::FactoryConsumed
             | Self::FoodProcessedInput
-            | Self::ImmigrationConsumed => FlowCategory::Consumption,
+            | Self::ImmigrationConsumed
+            | Self::ConstructionConsumed => FlowCategory::Consumption,
         }
     }
 }
@@ -572,4 +578,41 @@ impl ResourceFlow {
         }
         out
     }
+}
+
+/// Structured per-turn tracking of material- and goods-stockpile movements.
+///
+/// `finalize_resource_flow` reads these vectors and folds them into the
+/// per-nation `ResourceFlow` so the Materials ledger can show the same
+/// production / trade / consumption breakdown the Resources ledger has.
+#[derive(Debug, Default)]
+pub struct StockpileFlowTracking {
+    /// Resources consumed by mills as input (e.g. Timber → Lumber).
+    pub mill_consumed_resources: Vec<(NationId, ResourceType, u32)>,
+    /// Materials produced by mills.
+    pub mill_produced_materials: Vec<(NationId, MaterialType, u32)>,
+    /// Materials consumed by factories (e.g. Lumber → Furniture).
+    pub factory_consumed_materials: Vec<(NationId, MaterialType, u32)>,
+    /// Goods produced by factories.
+    pub factory_produced_goods: Vec<(NationId, GoodsType, u32)>,
+    /// Materials produced via village/town auto-production.
+    pub town_produced_materials: Vec<(NationId, MaterialType, u32)>,
+    /// Goods produced via village/town auto-production.
+    pub town_produced_goods: Vec<(NationId, GoodsType, u32)>,
+    /// Raw food (grain/fruit/livestock) consumed by `process_food` to make canned food.
+    pub food_processed_inputs: Vec<(NationId, ResourceType, u32)>,
+    /// Canned food produced by `process_food`.
+    pub canned_food_produced: Vec<(NationId, u32)>,
+    /// Raw food consumed by workers eating.
+    pub worker_food_consumed: Vec<(NationId, ResourceType, u32)>,
+    /// Canned food consumed by workers eating (fallback).
+    pub worker_canned_food_consumed: Vec<(NationId, u32)>,
+    /// Materials auto-sold to the world market via player sell orders.
+    pub auto_sold_materials: Vec<(NationId, MaterialType, u32)>,
+    /// Goods auto-sold to the world market via player sell orders.
+    pub auto_sold_goods: Vec<(NationId, GoodsType, u32)>,
+    /// Materials consumed by immigration recruitment (CannedFood per immigrant).
+    pub immigration_consumed_materials: Vec<(NationId, MaterialType, u32)>,
+    /// Goods consumed by immigration recruitment (Clothing + Furniture per immigrant).
+    pub immigration_consumed_goods: Vec<(NationId, GoodsType, u32)>,
 }

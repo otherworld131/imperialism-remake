@@ -193,6 +193,7 @@ pub enum ResourceOut {
     TradeExport,
     AutoSoldToMarket,
     ImmigrationConsumed,
+    ConstructionConsumed,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -784,6 +785,7 @@ impl From<d::ledger::ResourceOut> for ResourceOut {
             D::TradeExport => Self::TradeExport,
             D::AutoSoldToMarket => Self::AutoSoldToMarket,
             D::ImmigrationConsumed => Self::ImmigrationConsumed,
+            D::ConstructionConsumed => Self::ConstructionConsumed,
         }
     }
 }
@@ -800,6 +802,7 @@ impl From<ResourceOut> for d::ledger::ResourceOut {
             ResourceOut::TradeExport => D::TradeExport,
             ResourceOut::AutoSoldToMarket => D::AutoSoldToMarket,
             ResourceOut::ImmigrationConsumed => D::ImmigrationConsumed,
+            ResourceOut::ConstructionConsumed => D::ConstructionConsumed,
         }
     }
 }

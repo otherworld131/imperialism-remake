@@ -97,6 +97,15 @@ pub struct TransientState {
     pub last_cash_flow: HashMap<NationId, CashFlow>,
     /// Per-nation resource flow from the most recently processed turn.
     pub last_resource_flow: HashMap<NationId, ResourceFlow>,
+    /// Transient collector for AI-side material consumption events that happen
+    /// inside `run_ai_turns` and don't have access to the `TurnReport`. Drained
+    /// into `report.stockpile_flows` at end of turn (not saved).
+    pub pending_ai_material_outflows: Vec<(NationId, crate::types::MaterialType, crate::economy::ledger::ResourceOut, u32)>,
+    /// Same as above for goods stockpiles.
+    pub pending_ai_goods_outflows: Vec<(NationId, crate::types::GoodsType, crate::economy::ledger::ResourceOut, u32)>,
+    /// Transient collector for AI-side material *inflows* (e.g. AI Steel→Arms
+    /// conversion in `ai/naval.rs`). Drained at end of turn (not saved).
+    pub pending_ai_material_inflows: Vec<(NationId, crate::types::MaterialType, crate::economy::ledger::ResourceIn, u32)>,
 }
 
 /// Top-level aggregate root representing the complete state of a game.

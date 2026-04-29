@@ -1098,6 +1098,12 @@ pub fn ai_manage_resources(
         nation.consume_goods(*goods_type, excess);
         nation.economy.treasury += revenue;
         total_revenue += revenue;
+        game.transient.pending_ai_goods_outflows.push((
+            nation_id,
+            *goods_type,
+            crate::economy::ledger::ResourceOut::AutoSoldToMarket,
+            excess,
+        ));
     }
 
     if total_revenue > Money::ZERO {
@@ -1374,6 +1380,21 @@ fn expand_building(game: &mut GameState, nation_id: NationId, bt: BuildingType, 
         };
         nation.consume_material(MaterialType::Lumber, lumber_cost);
         nation.consume_material(MaterialType::Steel, steel_cost);
+        game.transient.pending_ai_material_outflows.push((
+            nation_id,
+            MaterialType::Lumber,
+            crate::economy::ledger::ResourceOut::ConstructionConsumed,
+            lumber_cost,
+        ));
+        game.transient.pending_ai_material_outflows.push((
+            nation_id,
+            MaterialType::Steel,
+            crate::economy::ledger::ResourceOut::ConstructionConsumed,
+            steel_cost,
+        ));
+        let Some(nation) = game.get_nation_mut(nation_id) else {
+            return;
+        };
         if let Some(building) = nation.get_building_mut(bt) {
             if use_tier {
                 building.start_expansion_to_next_tier();
@@ -1493,6 +1514,18 @@ fn ai_build_transport(game: &mut GameState, nation_id: NationId) {
         nation.consume_material(MaterialType::Lumber, affordable);
         nation.consume_material(MaterialType::Steel, affordable);
         nation.military.transport.build_freight_cars(affordable);
+        game.transient.pending_ai_material_outflows.push((
+            nation_id,
+            MaterialType::Lumber,
+            crate::economy::ledger::ResourceOut::ConstructionConsumed,
+            affordable,
+        ));
+        game.transient.pending_ai_material_outflows.push((
+            nation_id,
+            MaterialType::Steel,
+            crate::economy::ledger::ResourceOut::ConstructionConsumed,
+            affordable,
+        ));
     }
 }
 
@@ -1533,6 +1566,18 @@ pub(crate) fn ai_build_transport_proactive(game: &mut GameState, nation_id: Nati
         nation.consume_material(MaterialType::Lumber, affordable);
         nation.consume_material(MaterialType::Steel, affordable);
         nation.military.transport.build_freight_cars(affordable);
+        game.transient.pending_ai_material_outflows.push((
+            nation_id,
+            MaterialType::Lumber,
+            crate::economy::ledger::ResourceOut::ConstructionConsumed,
+            affordable,
+        ));
+        game.transient.pending_ai_material_outflows.push((
+            nation_id,
+            MaterialType::Steel,
+            crate::economy::ledger::ResourceOut::ConstructionConsumed,
+            affordable,
+        ));
     }
 }
 

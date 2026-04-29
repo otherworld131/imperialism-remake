@@ -245,6 +245,9 @@ impl From<TransientState> for dgs::TransientState {
             last_resource_flow: v.last_resource_flow.into_iter()
                 .map(|(n, rf)| (DN::from(n), rf.into()))
                 .collect::<HashMap<_, _>>(),
+            pending_ai_material_outflows: Vec::new(),
+            pending_ai_goods_outflows: Vec::new(),
+            pending_ai_material_inflows: Vec::new(),
         }
     }
 }

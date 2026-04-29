@@ -50,6 +50,18 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
         };
         nation.consume_material(MaterialType::Steel, arms_to_produce);
         nation.add_material(MaterialType::Arms, arms_to_produce);
+        game.transient.pending_ai_material_outflows.push((
+            nation_id,
+            MaterialType::Steel,
+            crate::economy::ledger::ResourceOut::FactoryConsumed,
+            arms_to_produce,
+        ));
+        game.transient.pending_ai_material_inflows.push((
+            nation_id,
+            MaterialType::Arms,
+            crate::economy::ledger::ResourceIn::FactoryOutput,
+            arms_to_produce,
+        ));
     }
 
     // Re-check after possible arms production.
@@ -72,6 +84,10 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
         nation.consume_material(MaterialType::Arms, arms_need);
         nation.military.warships.push(ship);
         nation.military.warships_built += 1;
+        let out = crate::economy::ledger::ResourceOut::ConstructionConsumed;
+        game.transient.pending_ai_material_outflows.push((nation_id, MaterialType::Fabric, out, fabric_need));
+        game.transient.pending_ai_material_outflows.push((nation_id, MaterialType::Lumber, out, lumber_need));
+        game.transient.pending_ai_material_outflows.push((nation_id, MaterialType::Arms, out, arms_need));
         return true;
     }
     false
@@ -153,6 +169,9 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
         nation.consume_material(MaterialType::Fabric, 2);
         nation.consume_material(MaterialType::Lumber, 4);
         nation.military.merchant_fleet.push(ship);
+        let out = crate::economy::ledger::ResourceOut::ConstructionConsumed;
+        game.transient.pending_ai_material_outflows.push((nation_id, MaterialType::Fabric, out, 2));
+        game.transient.pending_ai_material_outflows.push((nation_id, MaterialType::Lumber, out, 4));
     }
 }
 

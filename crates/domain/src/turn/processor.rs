@@ -3,6 +3,7 @@ use crate::economy::buildings::BuildingType;
 use crate::economy::civilians::CivilianType;
 use crate::economy::ledger::{
     CashFlow, CashSink, CashSource, ResourceFlow, ResourceIn, ResourceOut, Stockpile,
+    StockpileFlowTracking,
 };
 use crate::economy::production::{
     ProductionChain, calculate_factory_production, calculate_mill_production,
@@ -108,6 +109,11 @@ pub struct TurnReport {
     /// Per-nation derived resource flow (populated by `finalize_resource_flow`
     /// at end of `process_turn`). Best-effort visibility, NOT reconciled.
     pub resource_flow: HashMap<NationId, ResourceFlow>,
+    /// Structured tracking of material- and goods-stockpile movements during
+    /// production/consumption phases. Folded into `resource_flow` by
+    /// `finalize_resource_flow` so the Materials ledger sees per-stockpile
+    /// production / trade / consumption breakdowns.
+    pub stockpile_flows: StockpileFlowTracking,
 }
 
 impl TurnReport {
@@ -154,6 +160,7 @@ impl TurnReport {
             bankruptcy_writeoff: Vec::new(),
             cash_flow: HashMap::new(),
             resource_flow: HashMap::new(),
+            stockpile_flows: StockpileFlowTracking::default(),
         }
     }
 
@@ -301,6 +308,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         bankruptcy_writeoff: Vec::new(),
         cash_flow: HashMap::new(),
         resource_flow: HashMap::new(),
+        stockpile_flows: StockpileFlowTracking::default(),
     };
 
     // Cash-flow ledger: snapshot every nation's treasury BEFORE any turn work.
@@ -630,8 +638,15 @@ fn finalize_cash_flow(game: &mut GameState, report: &mut TurnReport) {
 /// - `transport_overflow` → TransportOverflow (resources lost)
 /// - `disconnected_resources` → DisconnectedLoss (resources lost)
 /// - `trade_transactions` → TradeImport / TradeExport per resource
-/// - `food_consumed` is aggregated, no type split — not populated here
-/// - Mill/factory I/O is not instrumented — not populated here
+/// - `stockpile_flows` → mill/factory/town/food/immigration/auto-sale movements
+///   for resources, materials, and goods stockpiles
+///
+/// AI-side material/goods movements that happen inside `run_ai_turns`
+/// (ship/transport building in `ai/naval.rs`, mill expansion + freight cars in
+/// `ai/economy.rs`, paper-for-training in `ai/labor.rs`, Steel→Arms conversion)
+/// are routed through `game.transient.pending_ai_material_outflows` /
+/// `pending_ai_material_inflows` / `pending_ai_goods_outflows`, drained at the
+/// top of this function.
 ///
 /// Writes to `report.resource_flow` and `game.transient.last_resource_flow`.
 fn finalize_resource_flow(game: &mut GameState, report: &mut TurnReport) {
@@ -685,6 +700,155 @@ fn finalize_resource_flow(game: &mut GameState, report: &mut TurnReport) {
                 Stockpile::Resource(txn.resource),
                 ResourceOut::TradeExport,
                 txn.quantity,
+            );
+        }
+    }
+
+    // Drain AI-side stockpile collectors before reading stockpile_flows.
+    let ai_mat = std::mem::take(&mut game.transient.pending_ai_material_outflows);
+    for (nid, material, sink, amount) in ai_mat {
+        if let Some(flow) = flows.get_mut(&nid) {
+            flow.add_outflow(Stockpile::Material(material), sink, amount);
+        }
+    }
+    let ai_goods = std::mem::take(&mut game.transient.pending_ai_goods_outflows);
+    for (nid, good, sink, amount) in ai_goods {
+        if let Some(flow) = flows.get_mut(&nid) {
+            flow.add_outflow(Stockpile::Goods(good), sink, amount);
+        }
+    }
+    let ai_mat_in = std::mem::take(&mut game.transient.pending_ai_material_inflows);
+    for (nid, material, source, amount) in ai_mat_in {
+        if let Some(flow) = flows.get_mut(&nid) {
+            flow.add_inflow(Stockpile::Material(material), source, amount);
+        }
+    }
+
+    // ── Material/Goods stockpile flows from structured tracking ──
+    let sf = &report.stockpile_flows;
+    for (nid, resource, amount) in &sf.mill_consumed_resources {
+        if let Some(flow) = flows.get_mut(nid) {
+            flow.add_outflow(
+                Stockpile::Resource(*resource),
+                ResourceOut::MillConsumed,
+                *amount,
+            );
+        }
+    }
+    for (nid, material, amount) in &sf.mill_produced_materials {
+        if let Some(flow) = flows.get_mut(nid) {
+            flow.add_inflow(
+                Stockpile::Material(*material),
+                ResourceIn::MillOutput,
+                *amount,
+            );
+        }
+    }
+    for (nid, material, amount) in &sf.factory_consumed_materials {
+        if let Some(flow) = flows.get_mut(nid) {
+            flow.add_outflow(
+                Stockpile::Material(*material),
+                ResourceOut::FactoryConsumed,
+                *amount,
+            );
+        }
+    }
+    for (nid, good, amount) in &sf.factory_produced_goods {
+        if let Some(flow) = flows.get_mut(nid) {
+            flow.add_inflow(
+                Stockpile::Goods(*good),
+                ResourceIn::FactoryOutput,
+                *amount,
+            );
+        }
+    }
+    for (nid, material, amount) in &sf.town_produced_materials {
+        if let Some(flow) = flows.get_mut(nid) {
+            flow.add_inflow(
+                Stockpile::Material(*material),
+                ResourceIn::TownProduced,
+                *amount,
+            );
+        }
+    }
+    for (nid, good, amount) in &sf.town_produced_goods {
+        if let Some(flow) = flows.get_mut(nid) {
+            flow.add_inflow(
+                Stockpile::Goods(*good),
+                ResourceIn::TownProduced,
+                *amount,
+            );
+        }
+    }
+    for (nid, resource, amount) in &sf.food_processed_inputs {
+        if let Some(flow) = flows.get_mut(nid) {
+            flow.add_outflow(
+                Stockpile::Resource(*resource),
+                ResourceOut::FoodProcessedInput,
+                *amount,
+            );
+        }
+    }
+    for (nid, amount) in &sf.canned_food_produced {
+        if let Some(flow) = flows.get_mut(nid) {
+            flow.add_inflow(
+                Stockpile::Material(MaterialType::CannedFood),
+                ResourceIn::FoodProcessed,
+                *amount,
+            );
+        }
+    }
+    for (nid, resource, amount) in &sf.worker_food_consumed {
+        if let Some(flow) = flows.get_mut(nid) {
+            flow.add_outflow(
+                Stockpile::Resource(*resource),
+                ResourceOut::WorkerFood,
+                *amount,
+            );
+        }
+    }
+    for (nid, amount) in &sf.worker_canned_food_consumed {
+        if let Some(flow) = flows.get_mut(nid) {
+            flow.add_outflow(
+                Stockpile::Material(MaterialType::CannedFood),
+                ResourceOut::WorkerFood,
+                *amount,
+            );
+        }
+    }
+    for (nid, material, amount) in &sf.auto_sold_materials {
+        if let Some(flow) = flows.get_mut(nid) {
+            flow.add_outflow(
+                Stockpile::Material(*material),
+                ResourceOut::AutoSoldToMarket,
+                *amount,
+            );
+        }
+    }
+    for (nid, good, amount) in &sf.auto_sold_goods {
+        if let Some(flow) = flows.get_mut(nid) {
+            flow.add_outflow(
+                Stockpile::Goods(*good),
+                ResourceOut::AutoSoldToMarket,
+                *amount,
+            );
+        }
+    }
+    for (nid, material, amount) in &sf.immigration_consumed_materials {
+        if let Some(flow) = flows.get_mut(nid) {
+            flow.add_outflow(
+                Stockpile::Material(*material),
+                ResourceOut::ImmigrationConsumed,
+                *amount,
+            );
+        }
+    }
+    for (nid, good, amount) in &sf.immigration_consumed_goods {
+        if let Some(flow) = flows.get_mut(nid) {
+            flow.add_outflow(
+                Stockpile::Goods(*good),
+                ResourceOut::ImmigrationConsumed,
+                *amount,
             );
         }
     }
@@ -1157,6 +1321,21 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
             nation.consume_goods(GoodsType::Furniture, req_furniture);
             nation.economy.labor.recruit_immigrant();
             recruited += 1;
+            report.stockpile_flows.immigration_consumed_materials.push((
+                nation_id,
+                MaterialType::CannedFood,
+                req_canned,
+            ));
+            report.stockpile_flows.immigration_consumed_goods.push((
+                nation_id,
+                GoodsType::Clothing,
+                req_clothing,
+            ));
+            report.stockpile_flows.immigration_consumed_goods.push((
+                nation_id,
+                GoodsType::Furniture,
+                req_furniture,
+            ));
         }
 
         if recruited > 0 {
@@ -1554,6 +1733,10 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
             for (resource, amount) in &result.resources_consumed {
                 if *amount > 0 {
                     nation.remove_resource(*resource, *amount);
+                    report
+                        .stockpile_flows
+                        .mill_consumed_resources
+                        .push((nation_id, *resource, *amount));
                 }
             }
             // Produce materials
@@ -1564,6 +1747,10 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
                     report
                         .production_output
                         .push((nation_id, format!("{:?}", material), *amount));
+                    report
+                        .stockpile_flows
+                        .mill_produced_materials
+                        .push((nation_id, *material, *amount));
                 }
             }
         }
@@ -1647,6 +1834,10 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
                 if *amount > 0 {
                     let entry = nation.economy.materials.entry(*material).or_insert(0);
                     *entry = entry.saturating_sub(*amount);
+                    report
+                        .stockpile_flows
+                        .factory_consumed_materials
+                        .push((nation_id, *material, *amount));
                 }
             }
             // Produce goods
@@ -1656,6 +1847,10 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
                     report
                         .production_output
                         .push((nation_id, format!("{:?}", good), *amount));
+                    report
+                        .stockpile_flows
+                        .factory_produced_goods
+                        .push((nation_id, *good, *amount));
                 }
             }
         }
@@ -1769,24 +1964,44 @@ fn resolve_town_production(game: &mut GameState, report: &mut TurnReport) {
                 report
                     .town_production
                     .push((output.owner, "Lumber".to_string(), output.lumber));
+                report.stockpile_flows.town_produced_materials.push((
+                    output.owner,
+                    MaterialType::Lumber,
+                    output.lumber,
+                ));
             }
             if output.steel > 0 {
                 nation.add_material(MaterialType::Steel, output.steel);
                 report
                     .town_production
                     .push((output.owner, "Steel".to_string(), output.steel));
+                report.stockpile_flows.town_produced_materials.push((
+                    output.owner,
+                    MaterialType::Steel,
+                    output.steel,
+                ));
             }
             if output.fabric > 0 {
                 nation.add_material(MaterialType::Fabric, output.fabric);
                 report
                     .town_production
                     .push((output.owner, "Fabric".to_string(), output.fabric));
+                report.stockpile_flows.town_produced_materials.push((
+                    output.owner,
+                    MaterialType::Fabric,
+                    output.fabric,
+                ));
             }
             if output.furniture > 0 {
                 nation.add_goods(GoodsType::Furniture, output.furniture);
                 report.town_production.push((
                     output.owner,
                     "Furniture".to_string(),
+                    output.furniture,
+                ));
+                report.stockpile_flows.town_produced_goods.push((
+                    output.owner,
+                    GoodsType::Furniture,
                     output.furniture,
                 ));
             }
@@ -1797,12 +2012,22 @@ fn resolve_town_production(game: &mut GameState, report: &mut TurnReport) {
                     "Hardware".to_string(),
                     output.hardware,
                 ));
+                report.stockpile_flows.town_produced_goods.push((
+                    output.owner,
+                    GoodsType::Hardware,
+                    output.hardware,
+                ));
             }
             if output.clothing > 0 {
                 nation.add_goods(GoodsType::Clothing, output.clothing);
                 report.town_production.push((
                     output.owner,
                     "Clothing".to_string(),
+                    output.clothing,
+                ));
+                report.stockpile_flows.town_produced_goods.push((
+                    output.owner,
+                    GoodsType::Clothing,
                     output.clothing,
                 ));
             }
@@ -1879,12 +2104,27 @@ fn process_food(game: &mut GameState, report: &mut TurnReport) {
         };
         if grain_used > 0 {
             nation.remove_resource(ResourceType::Grain, grain_used);
+            report.stockpile_flows.food_processed_inputs.push((
+                nation_id,
+                ResourceType::Grain,
+                grain_used,
+            ));
         }
         if fruit_used > 0 {
             nation.remove_resource(ResourceType::Fruit, fruit_used);
+            report.stockpile_flows.food_processed_inputs.push((
+                nation_id,
+                ResourceType::Fruit,
+                fruit_used,
+            ));
         }
         if livestock_used > 0 {
             nation.remove_resource(ResourceType::Livestock, livestock_used);
+            report.stockpile_flows.food_processed_inputs.push((
+                nation_id,
+                ResourceType::Livestock,
+                livestock_used,
+            ));
         }
 
         nation.add_material(MaterialType::CannedFood, units_to_produce);
@@ -1892,6 +2132,10 @@ fn process_food(game: &mut GameState, report: &mut TurnReport) {
         report
             .production_output
             .push((nation_id, "CannedFood".to_string(), units_to_produce));
+        report
+            .stockpile_flows
+            .canned_food_produced
+            .push((nation_id, units_to_produce));
     }
 }
 
@@ -1910,6 +2154,7 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
         if population == 0 {
             continue;
         }
+        let nation_id = nation.id;
 
         let grain = nation.resource_amount(ResourceType::Grain);
         let fruit = nation.resource_amount(ResourceType::Fruit);
@@ -1940,18 +2185,33 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
         let grain_consumed = grain.min(remaining);
         if grain_consumed > 0 {
             nation.remove_resource(ResourceType::Grain, grain_consumed);
+            report.stockpile_flows.worker_food_consumed.push((
+                nation_id,
+                ResourceType::Grain,
+                grain_consumed,
+            ));
         }
         remaining -= grain_consumed;
 
         let fruit_consumed = fruit.min(remaining);
         if fruit_consumed > 0 {
             nation.remove_resource(ResourceType::Fruit, fruit_consumed);
+            report.stockpile_flows.worker_food_consumed.push((
+                nation_id,
+                ResourceType::Fruit,
+                fruit_consumed,
+            ));
         }
         remaining -= fruit_consumed;
 
         let livestock_consumed = livestock.min(remaining);
         if livestock_consumed > 0 {
             nation.remove_resource(ResourceType::Livestock, livestock_consumed);
+            report.stockpile_flows.worker_food_consumed.push((
+                nation_id,
+                ResourceType::Livestock,
+                livestock_consumed,
+            ));
         }
         remaining -= livestock_consumed;
 
@@ -1959,6 +2219,10 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
         let canned_consumed = canned.min(remaining);
         if canned_consumed > 0 {
             nation.consume_material(MaterialType::CannedFood, canned_consumed);
+            report
+                .stockpile_flows
+                .worker_canned_food_consumed
+                .push((nation_id, canned_consumed));
         }
 
         if food_to_consume > 0 {
@@ -7512,6 +7776,7 @@ mod tests {
             bankruptcy_writeoff: Vec::new(),
             cash_flow: HashMap::new(),
             resource_flow: HashMap::new(),
+            stockpile_flows: StockpileFlowTracking::default(),
         };
 
         resolve_voluntary_incorporations(&mut game, &mut report);
@@ -7588,6 +7853,7 @@ mod tests {
             bankruptcy_writeoff: Vec::new(),
             cash_flow: HashMap::new(),
             resource_flow: HashMap::new(),
+            stockpile_flows: StockpileFlowTracking::default(),
         };
 
         resolve_voluntary_incorporations(&mut game, &mut report);
@@ -7864,6 +8130,7 @@ mod tests {
             bankruptcy_writeoff: Vec::new(),
             cash_flow: HashMap::new(),
             resource_flow: HashMap::new(),
+            stockpile_flows: StockpileFlowTracking::default(),
         };
 
         resolve_unit_upgrades(&mut game, &mut report);
@@ -7942,6 +8209,7 @@ mod tests {
             bankruptcy_writeoff: Vec::new(),
             cash_flow: HashMap::new(),
             resource_flow: HashMap::new(),
+            stockpile_flows: StockpileFlowTracking::default(),
         };
 
         resolve_unit_upgrades(&mut game, &mut report);
@@ -8117,6 +8385,7 @@ mod tests {
             bankruptcy_writeoff: Vec::new(),
             cash_flow: HashMap::new(),
             resource_flow: HashMap::new(),
+            stockpile_flows: StockpileFlowTracking::default(),
         };
 
         trigger_pact_defense(&mut game, NationId(3), NationId(2), &mut report);
@@ -8251,6 +8520,7 @@ mod tests {
             bankruptcy_writeoff: Vec::new(),
             cash_flow: HashMap::new(),
             resource_flow: HashMap::new(),
+            stockpile_flows: StockpileFlowTracking::default(),
         };
 
         // GP defender - should not trigger pact defense
@@ -8938,6 +9208,7 @@ mod tests {
             bankruptcy_writeoff: Vec::new(),
             cash_flow: HashMap::new(),
             resource_flow: HashMap::new(),
+            stockpile_flows: StockpileFlowTracking::default(),
         };
 
         collect_resources(&mut game, &mut report);
@@ -9072,6 +9343,7 @@ mod tests {
             bankruptcy_writeoff: Vec::new(),
             cash_flow: HashMap::new(),
             resource_flow: HashMap::new(),
+            stockpile_flows: StockpileFlowTracking::default(),
         };
 
         collect_resources(&mut game, &mut report);
@@ -10484,6 +10756,7 @@ mod tests {
             bankruptcy_writeoff: Vec::new(),
             cash_flow: HashMap::new(),
             resource_flow: HashMap::new(),
+            stockpile_flows: StockpileFlowTracking::default(),
         }
     }
 

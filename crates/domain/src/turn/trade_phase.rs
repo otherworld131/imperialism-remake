@@ -105,11 +105,19 @@ pub(super) fn resolve_trade_session(
                         if let Some(stock) = human.economy.materials.get_mut(m) {
                             *stock = stock.saturating_sub(*qty);
                         }
+                        report
+                            .stockpile_flows
+                            .auto_sold_materials
+                            .push((human_id, *m, *qty));
                     }
                     trade::Commodity::Goods(g) => {
                         if let Some(stock) = human.economy.goods.get_mut(g) {
                             *stock = stock.saturating_sub(*qty);
                         }
+                        report
+                            .stockpile_flows
+                            .auto_sold_goods
+                            .push((human_id, *g, *qty));
                     }
                     trade::Commodity::Resource(_) => {}
                 }

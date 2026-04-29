@@ -257,15 +257,13 @@ function MaterialsTable({ entries, prevMap, expanded, onExpand, flagById }: { en
         <tr>
           <Th text="Nation" align="left" />
           {MATERIAL_ORDER.map(m => <Th key={m} text={matLabel(m)} />)}
-          <Th text="Mat. Total" />
           {GOODS_ORDER.map(g => <Th key={g} text={matLabel(g)} />)}
-          <Th text="Goods Total" />
         </tr>
       </thead>
       <tbody>
         {entries.map(e => {
           const p = prevMap?.get(e.nation_id);
-          const colCount = MATERIAL_ORDER.length + GOODS_ORDER.length + 3;
+          const colCount = MATERIAL_ORDER.length + GOODS_ORDER.length + 1;
           return (
             <React.Fragment key={e.nation_id}>
               <tr
@@ -278,13 +276,11 @@ function MaterialsTable({ entries, prevMap, expanded, onExpand, flagById }: { en
                   const prv = p ? (p.materials_detail?.[m] || 0) : undefined;
                   return <DeltaTd key={m} value={cur} prev={prv} highlight={cur > 0} />;
                 })}
-                <DeltaTd value={e.economy.total_materials} prev={p?.economy.total_materials} highlight />
                 {GOODS_ORDER.map(g => {
                   const cur = e.goods_detail?.[g] || 0;
                   const prv = p ? (p.goods_detail?.[g] || 0) : undefined;
                   return <DeltaTd key={g} value={cur} prev={prv} highlight={cur > 0} highlightColor="#2a9d8f" />;
                 })}
-                <DeltaTd value={e.economy.total_goods} prev={p?.economy.total_goods} highlight highlightColor="#2a9d8f" />
               </tr>
               {expanded === e.nation_id && (
                 <tr style={styles.expandedRow}>
@@ -560,20 +556,51 @@ function CashCategoryBreakdown({ entry }: { entry: GPLedgerEntry }) {
 
 /// Per-stockpile breakdown of this turn's resource / material / goods
 /// inflow and outflow, grouped into Production / Trade / Consumption.
-/// Hidden when the nation had no movement for any of the given stockpiles
-/// (e.g. fresh game on turn 1).
+/// Each cell carries a hover tooltip listing per-source/sink amounts so
+/// the player can see *why* a stockpile rose or fell (e.g. "Worker food: 30,
+/// Factory consumed: 5").
 function StockpileCategoryBreakdown({ entry, stockpiles }: { entry: GPLedgerEntry; stockpiles: string[] }) {
   const rf = entry.resource_flow;
   if (!rf) return null;
   const inMap = rf.inflow_by_stockpile_category || {};
   const outMap = rf.outflow_by_stockpile_category || {};
+
+  // Group flat inflow/outflow entries by stockpile so we can render
+  // per-source (Mill output, Trade import, …) tooltips for each cell.
+  // The detail map is also the fallback for the row-visibility filter when
+  // the bridge omits the category aggregation maps.
+  type FlowsByStockpile = Record<string, Record<string, Record<string, number>>>;
+  const inflowDetail: FlowsByStockpile = {};
+  for (const e of rf.inflow || []) {
+    const cat = e.category;
+    const src = e.source || '?';
+    const byCat = (inflowDetail[e.stockpile] ||= {});
+    const bySrc = (byCat[cat] ||= {});
+    bySrc[src] = (bySrc[src] || 0) + e.amount;
+  }
+  const outflowDetail: FlowsByStockpile = {};
+  for (const e of rf.outflow || []) {
+    const cat = e.category;
+    const sink = e.sink || '?';
+    const byCat = (outflowDetail[e.stockpile] ||= {});
+    const bySink = (byCat[cat] ||= {});
+    bySink[sink] = (bySink[sink] || 0) + e.amount;
+  }
+
   const rows = stockpiles
     .map(stock => ({
       stock,
       inCat: inMap[stock] || {},
       outCat: outMap[stock] || {},
+      inDetail: inflowDetail[stock] || {},
+      outDetail: outflowDetail[stock] || {},
     }))
-    .filter(r => Object.keys(r.inCat).length > 0 || Object.keys(r.outCat).length > 0);
+    .filter(r =>
+      Object.keys(r.inCat).length > 0
+      || Object.keys(r.outCat).length > 0
+      || Object.keys(r.inDetail).length > 0
+      || Object.keys(r.outDetail).length > 0
+    );
   if (rows.length === 0) {
     return (
       <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#666', padding: 4 }}>
@@ -584,7 +611,7 @@ function StockpileCategoryBreakdown({ entry, stockpiles }: { entry: GPLedgerEntr
   return (
     <div>
       <div style={{ fontSize: 11, color: '#888', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-        This turn's flow by category (production / trade / consumption)
+        This turn's flow by category — hover a value to see the breakdown
       </div>
       <table style={styles.table}>
         <thead>
@@ -600,10 +627,10 @@ function StockpileCategoryBreakdown({ entry, stockpiles }: { entry: GPLedgerEntr
           {rows.map(r => (
             <tr key={r.stock}>
               <td style={{ ...styles.tdName, color: '#daa520' }}>{resourceLabel(r.stock)}</td>
-              <td style={styles.td}>{fmtCatAmount(r.inCat.Production)}</td>
-              <td style={styles.td}>{fmtCatAmount(r.inCat.Trade)}</td>
-              <td style={styles.td}>{fmtCatAmount(r.outCat.Consumption)}</td>
-              <td style={styles.td}>{fmtCatAmount(r.outCat.Trade)}</td>
+              <FlowCell amount={r.inCat.Production ?? sumValues(r.inDetail.Production)} sources={r.inDetail.Production} />
+              <FlowCell amount={r.inCat.Trade ?? sumValues(r.inDetail.Trade)} sources={r.inDetail.Trade} />
+              <FlowCell amount={r.outCat.Consumption ?? sumValues(r.outDetail.Consumption)} sources={r.outDetail.Consumption} />
+              <FlowCell amount={r.outCat.Trade ?? sumValues(r.outDetail.Trade)} sources={r.outDetail.Trade} />
             </tr>
           ))}
         </tbody>
@@ -612,9 +639,38 @@ function StockpileCategoryBreakdown({ entry, stockpiles }: { entry: GPLedgerEntr
   );
 }
 
+// One cell of the per-stockpile flow table. When a per-source breakdown is
+// available the cell becomes hoverable and its tooltip lists the contributing
+// sources/sinks, e.g. "Worker food: 30\nFactory consumed: 5".
+function FlowCell({ amount, sources }: { amount: number | undefined; sources: Record<string, number> | undefined }) {
+  const display = fmtCatAmount(amount);
+  const entries = sources ? Object.entries(sources).filter(([, v]) => v > 0) : [];
+  if (entries.length === 0) {
+    return <td style={styles.td}>{display}</td>;
+  }
+  entries.sort((a, b) => b[1] - a[1]);
+  const tooltip = entries.map(([k, v]) => `${k}: ${v.toLocaleString()}`).join('\n');
+  return (
+    <td
+      style={{ ...styles.td, cursor: 'help', textDecoration: 'underline dotted #555', textUnderlineOffset: 3 }}
+      title={tooltip}
+    >
+      {display}
+    </td>
+  );
+}
+
 function fmtCatAmount(n: number | undefined): string {
-  if (!n) return '·';
+  if (n === undefined) return '·';
+  if (n === 0) return '0';
   return n.toLocaleString();
+}
+
+function sumValues(m: Record<string, number> | undefined): number | undefined {
+  if (!m) return undefined;
+  let total = 0;
+  for (const v of Object.values(m)) total += v;
+  return total;
 }
 
 function DetailItem({ label, value, color }: { label: string; value: string; color?: string }) {

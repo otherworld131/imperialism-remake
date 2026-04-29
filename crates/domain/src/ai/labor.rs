@@ -350,6 +350,14 @@ pub(crate) fn ai_train_and_promote_workers(game: &mut GameState, nation_id: Nati
             nation.consume_material(MaterialType::Paper, 1);
         }
         nation.economy.labor.train_worker();
+        if has_paper {
+            game.transient.pending_ai_material_outflows.push((
+                nation_id,
+                MaterialType::Paper,
+                crate::economy::ledger::ResourceOut::ConstructionConsumed,
+                1,
+            ));
+        }
     }
 
     // Re-read state after potential training
