@@ -1261,7 +1261,7 @@ pub fn wasm_get_ships(game_json: &str, nation_id: u32) -> String {
                 "hull": s.hull_remaining,
                 "hull_max": stats.hull,
                 "cargo": stats.cargo,
-                "sea_zone": s.sea_zone,
+                "sea_zone": s.sea_zone.map(|z| z.0),
             })
         })
         .collect();
@@ -1277,7 +1277,7 @@ pub fn wasm_get_ships(game_json: &str, nation_id: u32) -> String {
                 "hull": s.hull_remaining,
                 "hull_max": stats.hull,
                 "firepower": stats.firepower,
-                "sea_zone": s.sea_zone,
+                "sea_zone": s.sea_zone.map(|z| z.0),
             })
         })
         .collect();
@@ -1579,10 +1579,6 @@ pub fn wasm_queue_unit_move(
         Err(e) => return e,
     };
 
-    if game.observer_mode {
-        return "{\"error\":\"moves not allowed in observer mode\"}".to_string();
-    }
-
     let nid = NationId(nation_id);
     if nid != game.human_player_nation {
         return "{\"error\":\"cannot queue moves for another nation\"}".to_string();
@@ -1635,9 +1631,6 @@ pub fn wasm_cancel_unit_move(game_json: &str, unit_id: u32) -> String {
         Err(e) => return e,
     };
 
-    if game.observer_mode {
-        return "{\"error\":\"moves not allowed in observer mode\"}".to_string();
-    }
     let uid = domain::map::UnitId(unit_id);
     let player = game.human_player_nation;
     game.transient.pending_moves

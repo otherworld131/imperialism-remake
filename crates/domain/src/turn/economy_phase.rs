@@ -585,6 +585,8 @@ pub(super) fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
 /// cargo capacity using `calculate_blockade_effect`. This map is passed to the
 /// trade session so blockades actually reduce trade volume.
 pub(super) fn compute_blockade_capacity(game: &GameState) -> HashMap<NationId, u32> {
+    use crate::map::sea_zones::SeaZoneId;
+
     // Only consider active Great Powers (not anarchic, not eliminated)
     let active_gp_ids: Vec<NationId> = game
         .world.nations
@@ -602,6 +604,27 @@ pub(super) fn compute_blockade_capacity(game: &GameState) -> HashMap<NationId, u
         };
         let raw_cargo = nation.total_cargo_capacity();
 
+        // Find all ocean sea zones adjacent to this nation's coastal provinces.
+        // Zone-local blockade: enemy warships only threaten ports they can reach.
+        // Warships with no zone assigned (sea_zone == None) count globally as a
+        // fallback (preserves behaviour when zones haven't been computed yet).
+        let adjacent_zones: std::collections::HashSet<SeaZoneId> = if game.world.sea_zones.is_empty() {
+            std::collections::HashSet::new()
+        } else {
+            nation.province_ids.iter()
+                .filter_map(|&pid| game.get_province(pid))
+                .filter(|p| p.coastal)
+                .flat_map(|prov| {
+                    crate::map::sea_zones::ocean_zones_adjacent_to_province(
+                        &game.world.sea_zones,
+                        prov,
+                        &game.world.hex_map,
+                    )
+                })
+                .collect()
+        };
+        let zones_computed = !game.world.sea_zones.is_empty();
+
         // Only count warships from active enemy nations, and only if the war
         // is past its one-turn grace period (card #104: blockade, like every
         // other hostile action, doesn't fire on the declaration turn).
@@ -614,8 +637,25 @@ pub(super) fn compute_blockade_capacity(game: &GameState) -> HashMap<NationId, u
                 .world.diplomacy
                 .get_relation(nation_id, other_id)
                 .is_some_and(|r| r.hostilities_active_on(game.turn));
-            if hostile && let Some(other) = game.get_nation(other_id) {
-                enemy_warship_count += other.warship_count() as u32;
+            if !hostile {
+                continue;
+            }
+            if let Some(other) = game.get_nation(other_id) {
+                for ship in &other.military.warships {
+                    let counts = match ship.sea_zone {
+                        // Zones not computed: count all ships globally (legacy / test mode)
+                        None if !zones_computed => true,
+                        // Zones computed but ship undeployed: no blockade effect
+                        None => false,
+                        // Ship in an adjacent ocean zone: blockades this nation
+                        Some(zone_id) if adjacent_zones.contains(&zone_id) => true,
+                        // Ship in a non-adjacent zone: no effect
+                        _ => false,
+                    };
+                    if counts {
+                        enemy_warship_count += 1;
+                    }
+                }
             }
         }
 

@@ -642,6 +642,10 @@ pub struct NationMilitary {
     pub has_colony: bool,
     /// Expert worker rewards already earned (thresholds at 10 and 30 experts).
     pub expert_rewards_earned: u8,
+    /// Remaining fleet movement budget per sea zone for the current turn.
+    /// Key = zone where fleet currently is; value = moves remaining this turn.
+    /// Reset at the start of each turn's resolution phase.
+    pub fleet_moves_remaining: std::collections::HashMap<crate::map::sea_zones::SeaZoneId, u32>,
 }
 
 

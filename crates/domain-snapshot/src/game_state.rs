@@ -129,13 +129,25 @@ impl From<&dgs::WorldState> for WorldState {
 }
 impl From<WorldState> for dgs::WorldState {
     fn from(v: WorldState) -> Self {
+        let hex_map: domain::map::HexMap = v.hex_map.into();
+        let mut provinces: Vec<domain::map::Province> =
+            v.provinces.into_iter().map(Into::into).collect();
+        // Recompute sea zones from the hex map (not serialized — derived from hex_map).
+        let mut sea_zones = domain::map::compute_sea_zones(&hex_map);
+        domain::map::assign_coastal_provinces(&mut sea_zones, &provinces, &hex_map);
+        for province in &mut provinces {
+            province.ocean_coastal = sea_zones
+                .iter()
+                .any(|z| !z.is_lake && z.coastal_provinces.contains(&province.id));
+        }
         Self {
             map_key: v.map_key,
-            hex_map: v.hex_map.into(),
-            provinces: v.provinces.into_iter().map(Into::into).collect(),
+            hex_map,
+            provinces,
             nations: v.nations.into_iter().map(Into::into).collect(),
             diplomacy: v.diplomacy.into(),
             market_state: v.market_state.into(),
+            sea_zones,
         }
     }
 }

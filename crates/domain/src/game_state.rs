@@ -7,7 +7,7 @@ use crate::economy::ledger::{CashFlow, CashSink, ResourceFlow};
 use crate::economy::market::MarketState;
 use crate::economy::observability::PendingEconomyOrder;
 use crate::events::{DomainEvent, Headline, HistoryEvent};
-use crate::map::{HexMap, Province, UnitId};
+use crate::map::{HexMap, Province, SeaZone, UnitId};
 use crate::military::combat::BattleResult;
 use crate::military::naval::NavalBattleResult;
 use crate::military::ships::{Ship, ShipType};
@@ -49,6 +49,9 @@ pub struct WorldState {
     /// Persistent market state: per-commodity price history and trend data
     /// updated at the end of each turn's trade phase.
     pub market_state: MarketState,
+    /// Sea zones computed from the hex map at game start.
+    /// Each zone is a region of connected sea hexes; lakes are marked `is_lake: true`.
+    pub sea_zones: Vec<SeaZone>,
 }
 
 /// Historical records accumulated over the course of the game.
@@ -848,6 +851,7 @@ fn new_game_inner(
             nations,
             diplomacy,
             market_state: MarketState::new(),
+            sea_zones: generated.sea_zones,
         },
         archive: GameArchive::default(),
         transient: TransientState::default(),
@@ -1123,6 +1127,7 @@ mod tests {
                 nations: vec![nation1, nation2],
                 diplomacy: DiplomacyState::new(),
                 market_state: MarketState::new(),
+                sea_zones: Vec::new(),
             },
             archive: GameArchive::default(),
             transient: TransientState::default(),

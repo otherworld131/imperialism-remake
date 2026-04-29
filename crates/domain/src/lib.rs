@@ -98,6 +98,7 @@ macro_rules! test_game_state {
                 nations: $nations,
                 diplomacy: $diplomacy,
                 market_state: $crate::test_game_state!(@market_state $( $market_state )?),
+                sea_zones: Vec::new(),
             },
             archive: $crate::game_state::GameArchive {
                 history: $history,

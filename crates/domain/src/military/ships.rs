@@ -1,4 +1,4 @@
-use crate::map::UnitId;
+use crate::map::{sea_zones::SeaZoneId, UnitId};
 use crate::types::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -50,7 +50,8 @@ pub struct Ship {
     pub ship_type: ShipType,
     pub owner: NationId,
     pub hull_remaining: u32,
-    pub sea_zone: Option<u32>,
+    /// Sea zone this ship currently occupies. `None` for ships not yet positioned.
+    pub sea_zone: Option<SeaZoneId>,
     /// Current naval operation assignment (Patrol, Blockade, Beachhead, etc.).
     pub operation: Option<crate::military::naval::NavalOperation>,
 }

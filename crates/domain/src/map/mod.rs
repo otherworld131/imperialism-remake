@@ -2,6 +2,7 @@ pub mod generator;
 pub mod hex_map;
 pub mod infrastructure;
 mod province;
+pub mod sea_zones;
 pub mod tile;
 
 pub use generator::{
@@ -13,4 +14,5 @@ pub use infrastructure::{
     railroad_cost,
 };
 pub use province::{Province, SettlementLevel, compute_coastal, provinces_are_adjacent};
+pub use sea_zones::{SeaZone, SeaZoneId, assign_coastal_provinces, compute_sea_zones};
 pub use tile::{Infrastructure, Tile, UnitId};

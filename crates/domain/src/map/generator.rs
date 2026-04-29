@@ -127,6 +127,7 @@ pub struct GeneratedMap {
     pub provinces: Vec<Province>,
     pub great_power_nations: Vec<NationSetup>,
     pub minor_nations: Vec<NationSetup>,
+    pub sea_zones: Vec<super::sea_zones::SeaZone>,
 }
 
 // ── Hash utility ───────────────────────────────────────────────
@@ -385,11 +386,22 @@ pub fn generate_map_with_config(map_key: &str, cfg: &MapGenConfig) -> GeneratedM
         }
     }
 
+    // Compute sea zones from the finished hex map
+    let mut sea_zones = super::sea_zones::compute_sea_zones(&hex_map);
+    // Assign coastal provinces to each sea zone and compute ocean_coastal per province
+    super::sea_zones::assign_coastal_provinces(&mut sea_zones, &provinces, &hex_map);
+    for province in &mut provinces {
+        province.ocean_coastal = sea_zones
+            .iter()
+            .any(|z| !z.is_lake && z.coastal_provinces.contains(&province.id));
+    }
+
     GeneratedMap {
         hex_map,
         provinces,
         great_power_nations,
         minor_nations: minor_nations_out,
+        sea_zones,
     }
 }
 

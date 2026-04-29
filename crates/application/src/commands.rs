@@ -40,6 +40,13 @@ pub enum FrontendCommand {
         nation_id: u32,
         ship_type: String,
     },
+    /// Move all warships in `from_zone_id` to the adjacent `to_zone_id`.
+    /// Consumes fleet movement budget (min ship speed / turn).
+    MoveFleet {
+        nation_id: u32,
+        from_zone_id: u32,
+        to_zone_id: u32,
+    },
 
     // ── Civilians ─────────────────────────────────────────────────────────
     HireCivilian {

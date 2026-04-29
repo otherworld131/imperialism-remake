@@ -410,11 +410,11 @@ pub fn ai_naval_strategy(
                 continue;
             }
 
-            // Find coastal enemy province to target
+            // Find ocean-coastal enemy province to target (lake shores are excluded)
             let coastal_target = game
                 .world.provinces
                 .iter()
-                .find(|p| p.owner == enemy_id && p.coastal);
+                .find(|p| p.owner == enemy_id && p.ocean_coastal);
 
             if let Some(target_prov) = coastal_target {
                 // Assign warships to beachhead operation targeting the specific province
@@ -693,12 +693,14 @@ mod tests {
         game.world.provinces.iter_mut().for_each(|p| {
             if p.id == ProvinceId(2) {
                 p.coastal = true;
+                p.ocean_coastal = true;
             }
         });
-        // Make the enemy province coastal too, so it would be a viable beachhead.
+        // Make the enemy province ocean-coastal too, so it would be a viable beachhead.
         game.world.provinces.iter_mut().for_each(|p| {
             if p.id == ProvinceId(3) {
                 p.coastal = true;
+                p.ocean_coastal = true;
             }
         });
 
@@ -752,12 +754,14 @@ mod tests {
         game.world.provinces.iter_mut().for_each(|p| {
             if p.id == ProvinceId(2) {
                 p.coastal = true;
+                p.ocean_coastal = true;
             }
             if p.id == ProvinceId(3) {
-                // The land-adjacent enemy province is ALSO coastal — that
+                // The land-adjacent enemy province is ALSO ocean-coastal — that
                 // keeps it as the beachhead candidate, and we over-garrison
                 // it so it fails the strength check.
                 p.coastal = true;
+                p.ocean_coastal = true;
                 p.garrison_count = 20;
             }
         });
@@ -838,6 +842,7 @@ mod tests {
         game.world.provinces.iter_mut().for_each(|p| {
             if p.id == ProvinceId(2) {
                 p.coastal = true;
+                p.ocean_coastal = true;
             }
         });
 
@@ -882,6 +887,7 @@ mod tests {
         game.world.provinces.iter_mut().for_each(|p| {
             if p.id == ProvinceId(2) {
                 p.coastal = true;
+                p.ocean_coastal = true;
             }
         });
 

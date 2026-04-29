@@ -58,6 +58,8 @@ pub struct Province {
     #[serde(default)]
     pub coastal: bool,
     #[serde(default)]
+    pub ocean_coastal: bool,
+    #[serde(default)]
     pub incorporated_from: Option<NationId>,
     #[serde(default)]
     pub conquest_origin: Option<NationId>,
@@ -184,6 +186,7 @@ impl From<&dm::Province> for Province {
             industrialization_turns_remaining: v.industrialization_turns_remaining,
             town_countdown: v.town_countdown,
             coastal: v.coastal,
+            ocean_coastal: v.ocean_coastal,
             incorporated_from: v.incorporated_from.map(Into::into),
             conquest_origin: v.conquest_origin.map(Into::into),
         }
@@ -205,6 +208,7 @@ impl From<Province> for dm::Province {
         p.industrialization_turns_remaining = v.industrialization_turns_remaining;
         p.town_countdown = v.town_countdown;
         p.coastal = v.coastal;
+        p.ocean_coastal = v.ocean_coastal;
         p.incorporated_from = v.incorporated_from.map(Into::into);
         p.conquest_origin = v.conquest_origin.map(Into::into);
         p

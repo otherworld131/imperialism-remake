@@ -314,6 +314,10 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     game.transient.pending_ai_cash_spending.clear();
     game.transient.pending_ai_cash_income.clear();
     game.transient.pending_economy_orders.clear();
+    // Reset per-zone fleet movement budgets; lazily reinitialised by MoveFleet commands.
+    for nation in &mut game.world.nations {
+        nation.military.fleet_moves_remaining.clear();
+    }
     for nation in &game.world.nations {
         report.opening_treasury.insert(nation.id, nation.economy.treasury);
     }
@@ -2022,9 +2026,9 @@ fn resolve_beachheads(game: &mut GameState, report: &mut TurnReport) {
             if !has_ships {
                 return false;
             }
-            // Revalidate: target must still be coastal, owned by enemy, and at war
+            // Revalidate: target must still be ocean-coastal, owned by enemy, and at war
             let target_valid = game.get_province(*pid).is_some_and(|p| {
-                p.coastal && {
+                p.ocean_coastal && {
                     let at_war = game
                         .world.diplomacy
                         .get_relation(*nid, p.owner)
@@ -2033,11 +2037,11 @@ fn resolve_beachheads(game: &mut GameState, report: &mut TurnReport) {
                     at_war || target_anarchic
                 }
             });
-            // Revalidate embarkation: attacker must still own a coastal province
+            // Revalidate embarkation: attacker must still own an ocean-coastal province
             let attacker_has_coast = game.get_nation(*nid).is_some_and(|n| {
                 n.province_ids
                     .iter()
-                    .any(|&pid| game.get_province(pid).is_some_and(|p| p.coastal))
+                    .any(|&pid| game.get_province(pid).is_some_and(|p| p.ocean_coastal || p.coastal))
             });
             target_valid && attacker_has_coast
         })
@@ -2066,23 +2070,50 @@ fn resolve_beachheads(game: &mut GameState, report: &mut TurnReport) {
     }
 
     for (attacker_id, target_pid) in new_requests {
-        // Sea-zone adjacency: attacker must own at least one coastal province
-        // (embarkation point). Without a port, ships cannot depart.
+        // Embarkation: attacker must own at least one ocean-coastal province (port).
         let attacker_has_coast = game
             .get_nation(attacker_id)
             .map(|n| {
                 n.province_ids
                     .iter()
-                    .any(|&pid| game.get_province(pid).is_some_and(|p| p.coastal))
+                    .any(|&pid| game.get_province(pid).is_some_and(|p| p.ocean_coastal || p.coastal))
             })
             .unwrap_or(false);
         if !attacker_has_coast {
             continue;
         }
 
-        // Validate the target province is coastal and owned by an enemy
-        let valid = game.get_province(target_pid).is_some_and(|p| {
-            p.coastal && {
+        // Zone adjacency: when zones are computed, at least one assigned ship must be in a
+        // non-lake zone that borders the target province. When zones have not been computed
+        // (test/legacy mode), skip the zone check.
+        let fleet_zone_ok = {
+            let zones_computed = !game.world.sea_zones.is_empty();
+            let attacker_ship_zones: Vec<_> = game
+                .get_nation(attacker_id)
+                .map(|n| {
+                    n.military.warships.iter()
+                        .filter(|s| matches!(s.operation, Some(crate::military::naval::NavalOperation::Beachhead(pid)) if pid == target_pid))
+                        .filter_map(|s| s.sea_zone)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if !zones_computed {
+                // Legacy / test mode: no zone check
+                true
+            } else if attacker_ship_zones.is_empty() {
+                // Zones exist but ships have no zone → not deployed, cannot establish beachhead
+                false
+            } else {
+                // At least one assigned ship must be in an ocean zone bordering the target
+                attacker_ship_zones.iter().any(|&zone_id| {
+                    game.world.sea_zones.iter()
+                        .find(|z| z.id == zone_id)
+                        .is_some_and(|z| !z.is_lake && z.coastal_provinces.contains(&target_pid))
+                })
+            }
+        };
+        let valid = fleet_zone_ok && game.get_province(target_pid).is_some_and(|p| {
+            p.ocean_coastal && {
                 let at_war = game
                     .world.diplomacy
                     .get_relation(attacker_id, p.owner)
@@ -4244,12 +4275,13 @@ pub fn continue_pact_defense_cascade(
     );
 }
 
-/// Resolve naval combat between nations at war that both have warships.
+/// Resolve naval combat between nations at war that share a sea zone.
 ///
-/// For each pair of nations at war where both sides have warships, resolve
-/// a naval battle. The winner keeps surviving ships, the loser loses destroyed ships.
+/// Zone-local: only ships in the same sea zone fight each other. Ships with no
+/// zone assigned (`sea_zone == None`) are considered not deployed and skip combat.
 fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
-    // Collect all pairs of nations at war where both have warships
+    use crate::map::sea_zones::SeaZoneId;
+
     let gp_ids: Vec<NationId> = game
         .world.nations
         .iter()
@@ -4257,7 +4289,8 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
         .map(|n| n.id)
         .collect();
 
-    let mut battles_to_resolve: Vec<(NationId, NationId)> = Vec::new();
+    // Collect zone-local battles: (attacker, defender, zone)
+    let mut battles_to_resolve: Vec<(NationId, NationId, SeaZoneId)> = Vec::new();
 
     for i in 0..gp_ids.len() {
         for j in (i + 1)..gp_ids.len() {
@@ -4276,25 +4309,52 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
                 continue;
             }
 
-            // Check if both have warships
-            let a_has_warships = game.get_nation(a).is_some_and(|n| !n.military.warships.is_empty());
-            let b_has_warships = game.get_nation(b).is_some_and(|n| !n.military.warships.is_empty());
+            // Find all sea zones where nation A has warships
+            let a_zones: Vec<SeaZoneId> = {
+                let mut zones: Vec<SeaZoneId> = game
+                    .get_nation(a)
+                    .map(|n| {
+                        n.military.warships.iter()
+                            .filter_map(|s| s.sea_zone)
+                            .collect::<HashSet<_>>()
+                            .into_iter()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                zones.sort();
+                zones
+            };
 
-            if a_has_warships && b_has_warships {
-                battles_to_resolve.push((a, b));
+            // Schedule a battle for each zone where B also has warships
+            for zone_id in a_zones {
+                let b_has_in_zone = game
+                    .get_nation(b)
+                    .is_some_and(|n| n.military.warships.iter().any(|s| s.sea_zone == Some(zone_id)));
+                if b_has_in_zone {
+                    battles_to_resolve.push((a, b, zone_id));
+                }
             }
         }
     }
 
-    for (attacker_id, defender_id) in battles_to_resolve {
-        let atk_ships = match game.get_nation(attacker_id) {
-            Some(n) => n.military.warships.clone(),
+    for (attacker_id, defender_id, zone_id) in battles_to_resolve {
+        let atk_ships: Vec<_> = match game.get_nation(attacker_id) {
+            Some(n) => n.military.warships.iter()
+                .filter(|s| s.sea_zone == Some(zone_id))
+                .cloned()
+                .collect(),
             None => continue,
         };
-        let def_ships = match game.get_nation(defender_id) {
-            Some(n) => n.military.warships.clone(),
+        let def_ships: Vec<_> = match game.get_nation(defender_id) {
+            Some(n) => n.military.warships.iter()
+                .filter(|s| s.sea_zone == Some(zone_id))
+                .cloned()
+                .collect(),
             None => continue,
         };
+        if atk_ships.is_empty() || def_ships.is_empty() {
+            continue;
+        }
 
         let result = resolve_naval_battle(&atk_ships, &def_ships, attacker_id, defender_id);
 
@@ -4307,14 +4367,18 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
             .map(|n| n.name.clone())
             .unwrap_or_else(|| "Unknown".to_string());
 
-        // Update surviving fleets and record losses
-        if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
-            attacker_nation.military.warships = result.attacker_survivors.clone();
-            attacker_nation.military.warships_lost += result.attacker_ships_lost.len() as u32;
+        // Keep ships outside this zone; replace zone participants with survivors.
+        // attacker_ships_lost is Vec<ShipType> (type info only); use survivor IDs
+        // to determine which ships in the zone lived.
+        let atk_survivor_ids: HashSet<_> = result.attacker_survivors.iter().map(|s| s.id).collect();
+        let def_survivor_ids: HashSet<_> = result.defender_survivors.iter().map(|s| s.id).collect();
+        if let Some(nation) = game.get_nation_mut(attacker_id) {
+            nation.military.warships.retain(|s| s.sea_zone != Some(zone_id) || atk_survivor_ids.contains(&s.id));
+            nation.military.warships_lost += result.attacker_ships_lost.len() as u32;
         }
-        if let Some(defender_nation) = game.get_nation_mut(defender_id) {
-            defender_nation.military.warships = result.defender_survivors.clone();
-            defender_nation.military.warships_lost += result.defender_ships_lost.len() as u32;
+        if let Some(nation) = game.get_nation_mut(defender_id) {
+            nation.military.warships.retain(|s| s.sea_zone != Some(zone_id) || def_survivor_ids.contains(&s.id));
+            nation.military.warships_lost += result.defender_ships_lost.len() as u32;
         }
 
         // Add headline
@@ -9936,6 +10000,71 @@ mod tests {
         );
     }
 
+    #[test]
+    fn blockade_ignores_unzoned_ships_when_zones_computed() {
+        // When sea_zones is non-empty (zones computed), enemy warships with
+        // sea_zone==None must NOT reduce trade cargo capacity.
+        use crate::map::UnitId;
+        use crate::map::sea_zones::{SeaZone, SeaZoneId};
+        use crate::military::ships::{Ship, ShipType};
+        use std::collections::BTreeSet;
+
+        let mut game = test_game_state();
+
+        // Add a second Great Power
+        let mut nation2 = Nation::new(
+            NationId(2),
+            "EnemyNation".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(200),
+        );
+        nation2.economy.treasury = Money::dollars(5000);
+
+        // Unzoned enemy warships (sea_zone = None)
+        for i in 0..3 {
+            nation2.military.warships.push(Ship::new(
+                UnitId(9000 + i),
+                ShipType::ShipOfTheLine,
+                NationId(2),
+            ));
+            // sea_zone stays None by default
+        }
+
+        let nation1 = game.get_nation_mut(NationId(1)).unwrap();
+        for i in 0..4 {
+            nation1.military.merchant_fleet.push(Ship::new(
+                UnitId(8000 + i),
+                ShipType::Clipper,
+                NationId(1),
+            ));
+        }
+
+        let coord2 = HexCoord::new(5, 5);
+        let province2 = Province::new(ProvinceId(200), "EnemyLand".to_string(), NationId(2), coord2, vec![coord2], 4);
+        game.world.provinces.push(province2);
+        game.world.nations.push(nation2);
+        game.world.diplomacy.declare_war(NationId(1), NationId(2));
+
+        // Install one dummy sea zone so zones_computed = true
+        game.world.sea_zones = vec![SeaZone {
+            id: SeaZoneId(0),
+            hexes: BTreeSet::new(),
+            is_lake: false,
+            adjacent_zone_ids: Vec::new(),
+            coastal_provinces: Vec::new(),
+        }];
+
+        let capacity = compute_blockade_capacity(&game);
+        let raw_cargo = game.get_nation(NationId(1)).unwrap().total_cargo_capacity();
+        let effective = capacity.get(&NationId(1)).copied().unwrap_or(raw_cargo);
+
+        assert_eq!(
+            effective, raw_cargo,
+            "Unzoned enemy warships must not blockade when zones are computed"
+        );
+    }
+
     // ── Immigration zero-config guard ───────────────────────────
 
     #[test]
@@ -11752,6 +11881,7 @@ mod tests {
             4,
         );
         p1.coastal = true;
+        p1.ocean_coastal = true;
         let mut p2 = Province::new(
             ProvinceId(2),
             "Target".into(),
@@ -11761,6 +11891,7 @@ mod tests {
             3,
         );
         p2.coastal = true;
+        p2.ocean_coastal = true;
 
         let mut nation1 = Nation::new(
             NationId(1),
@@ -11981,6 +12112,7 @@ mod tests {
             4,
         );
         p1.coastal = true;
+        p1.ocean_coastal = true;
         let mut p2 = Province::new(
             ProvinceId(2),
             "Target".into(),
@@ -11990,6 +12122,7 @@ mod tests {
             3,
         );
         p2.coastal = true;
+        p2.ocean_coastal = true;
         let p3 = Province::new(
             ProvinceId(3),
             "Border".into(),
@@ -13204,6 +13337,7 @@ mod tests {
             4,
         );
         p1.coastal = true;
+        p1.ocean_coastal = true;
         let mut p2 = Province::new(
             ProvinceId(2),
             "FormerEnemyCapital".into(),
@@ -13213,6 +13347,7 @@ mod tests {
             4,
         );
         p2.coastal = true;
+        p2.ocean_coastal = true;
         let mut p3 = Province::new(
             ProvinceId(3),
             "Target".into(),
@@ -13222,6 +13357,7 @@ mod tests {
             3,
         );
         p3.coastal = true;
+        p3.ocean_coastal = true;
 
         let mut attacker = Nation::new(
             NationId(1),

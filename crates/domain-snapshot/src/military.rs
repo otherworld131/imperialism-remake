@@ -289,17 +289,17 @@ impl From<&d::ships::Ship> for Ship {
             ship_type: v.ship_type.into(),
             owner: v.owner.into(),
             hull_remaining: v.hull_remaining,
-            sea_zone: v.sea_zone,
+            sea_zone: v.sea_zone.map(|z| z.0),
             operation: v.operation.map(Into::into),
         }
     }
 }
 impl From<Ship> for d::ships::Ship {
     fn from(v: Ship) -> Self {
-        use domain::map::UnitId;
+        use domain::map::{sea_zones::SeaZoneId, UnitId};
         let mut s = d::ships::Ship::new(UnitId(v.id), v.ship_type.into(), v.owner.into());
         s.hull_remaining = v.hull_remaining;
-        s.sea_zone = v.sea_zone;
+        s.sea_zone = v.sea_zone.map(SeaZoneId);
         s.operation = v.operation.map(Into::into);
         s
     }
@@ -427,6 +427,8 @@ impl From<NationMilitary> for domain::nation::NationMilitary {
             capitol_bonus_capacity: v.capitol_bonus_capacity,
             has_colony: v.has_colony,
             expert_rewards_earned: v.expert_rewards_earned,
+            // Transient per-turn state: reset on load (budgets recompute each turn).
+            fleet_moves_remaining: std::collections::HashMap::new(),
         }
     }
 }

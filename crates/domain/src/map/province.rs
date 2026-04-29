@@ -48,6 +48,9 @@ pub struct Province {
     /// Computed at map generation time. Coastal provinces can be targeted
     /// by naval landings (beachhead operations).
     pub coastal: bool,
+    /// Whether this province borders an ocean sea zone (not a lake).
+    /// Provinces adjacent only to inland lakes cannot embark troops for beachhead operations.
+    pub ocean_coastal: bool,
     /// If this province was diplomatically incorporated from a minor nation,
     /// tracks the original minor nation's ID. Used for map rendering only:
     /// incorporated provinces keep separate borders and show a lighter shade
@@ -92,6 +95,7 @@ impl Province {
             industrialization_turns_remaining: None,
             town_countdown: None,
             coastal: false,
+            ocean_coastal: false,
             incorporated_from: None,
             conquest_origin: None,
         }

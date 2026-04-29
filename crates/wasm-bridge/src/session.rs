@@ -233,6 +233,34 @@ fn parse_commodity(name: &str) -> Option<domain::economy::trade::Commodity> {
     None
 }
 
+// ── Naval helpers ────────────────────────────────────────────────────────────
+
+/// Find the sea zone adjacent to the given nation's capital province.
+/// Returns the first non-lake zone that borders any of the nation's coastal provinces.
+fn find_nation_home_sea_zone(
+    game: &GameState,
+    nation_id: NationId,
+) -> Option<domain::map::sea_zones::SeaZoneId> {
+    let nation = game.get_nation(nation_id)?;
+    // Prefer the zone adjacent to the capital province
+    let capital_pid = nation.capital_province_id;
+    let pids: Vec<_> = std::iter::once(capital_pid)
+        .chain(nation.province_ids.iter().copied())
+        .collect();
+    for pid in pids {
+        let province = game.get_province(pid)?;
+        if !province.ocean_coastal {
+            continue;
+        }
+        for zone in &game.world.sea_zones {
+            if !zone.is_lake && zone.coastal_provinces.contains(&pid) {
+                return Some(zone.id);
+            }
+        }
+    }
+    None
+}
+
 // ── Command application ──────────────────────────────────────────────────────
 
 fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
@@ -250,7 +278,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
             | DiplomacyDeclareWar { .. } | DiplomacySendGrant { .. }
             | DiplomacyBreakTreaty { .. } | DiplomacyProposePeace { .. }
             | AcceptProposal { .. } | RejectProposal { .. } | BuildShip { .. }
-            | SetShipOperation { .. } => {
+            | SetShipOperation { .. } | MoveFleet { .. } => {
                 return CommandResult::error("mutations not allowed in observer mode")
             }
         }
@@ -467,12 +495,49 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
                 Ok(s) => s,
                 Err(_) => return CommandResult::error("unknown ship type"),
             };
+            let stats = st.stats();
+            // Check material costs before building
+            {
+                use domain::types::{MaterialType, ResourceType};
+                let nation = match game.get_nation(nation_id) {
+                    Some(n) => n,
+                    None => return CommandResult::error("nation not found"),
+                };
+                let ok = nation.material_amount(MaterialType::Fabric) >= stats.fabric_cost
+                    && nation.material_amount(MaterialType::Lumber) >= stats.lumber_cost
+                    && nation.material_amount(MaterialType::Arms) >= stats.arms_cost
+                    && nation.material_amount(MaterialType::Steel) >= stats.steel_cost
+                    && nation.resource_amount(ResourceType::Coal) >= stats.coal_cost;
+                if !ok {
+                    return CommandResult::error("insufficient materials to build ship");
+                }
+            }
+            // Deduct costs
+            {
+                use domain::types::{MaterialType, ResourceType};
+                let nation = game.get_nation_mut(nation_id).unwrap();
+                if stats.fabric_cost > 0 {
+                    nation.consume_material(MaterialType::Fabric, stats.fabric_cost);
+                }
+                if stats.lumber_cost > 0 {
+                    nation.consume_material(MaterialType::Lumber, stats.lumber_cost);
+                }
+                if stats.arms_cost > 0 {
+                    nation.consume_material(MaterialType::Arms, stats.arms_cost);
+                }
+                if stats.steel_cost > 0 {
+                    nation.consume_material(MaterialType::Steel, stats.steel_cost);
+                }
+                if stats.coal_cost > 0 {
+                    nation.remove_resource(ResourceType::Coal, stats.coal_cost);
+                }
+            }
+            // Determine home sea zone for the new ship
+            let home_zone = find_nation_home_sea_zone(game, nation_id);
             let id = game.alloc_unit_id();
-            let nation = match game.get_nation_mut(nation_id) {
-                Some(n) => n,
-                None => return CommandResult::error("nation not found"),
-            };
-            let ship = domain::military::ships::Ship::new(id, st, nation_id);
+            let nation = game.get_nation_mut(nation_id).unwrap();
+            let mut ship = domain::military::ships::Ship::new(id, st, nation_id);
+            ship.sea_zone = home_zone;
             match st.category() {
                 ShipCategory::Merchant => nation.military.merchant_fleet.push(ship),
                 ShipCategory::Warship => {
@@ -480,6 +545,85 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
                     nation.military.warships_built += 1;
                 }
             }
+            CommandResult::success()
+        }
+
+        MoveFleet { nation_id, from_zone_id, to_zone_id } => {
+            let nid = NationId(nation_id);
+            use domain::map::sea_zones::SeaZoneId;
+            let from_z = SeaZoneId(from_zone_id);
+            let to_z = SeaZoneId(to_zone_id);
+
+            // Validate both zones exist and are non-lake
+            let from_zone_ok = game.world.sea_zones.iter().any(|z| z.id == from_z && !z.is_lake);
+            let to_zone_ok = game.world.sea_zones.iter().any(|z| z.id == to_z && !z.is_lake);
+            if !from_zone_ok || !to_zone_ok {
+                return CommandResult::error("invalid sea zone");
+            }
+            let adjacent = game.world.sea_zones.iter()
+                .find(|z| z.id == from_z)
+                .map(|z| z.is_adjacent_to(to_z))
+                .unwrap_or(false);
+            if !adjacent {
+                return CommandResult::error("sea zones are not adjacent");
+            }
+
+            // Check the nation has warships in from_zone
+            let has_ships = game.get_nation(nid)
+                .map(|n| n.military.warships.iter().any(|s| s.sea_zone == Some(from_z)))
+                .unwrap_or(false);
+            if !has_ships {
+                return CommandResult::error("no warships in that sea zone");
+            }
+
+            // Compute or look up movement budget
+            let budget = {
+                let nation = match game.get_nation(nid) {
+                    Some(n) => n,
+                    None => return CommandResult::error("nation not found"),
+                };
+                if let Some(&rem) = nation.military.fleet_moves_remaining.get(&from_z) {
+                    rem
+                } else {
+                    // First move from this zone: budget = min speed of ships in zone
+                    nation.military.warships.iter()
+                        .filter(|s| s.sea_zone == Some(from_z))
+                        .map(|s| s.ship_type.stats().speed)
+                        .filter(|&sp| sp > 0)
+                        .min()
+                        .unwrap_or(0)
+                }
+            };
+            if budget == 0 {
+                return CommandResult::error("fleet has no movement points remaining this turn");
+            }
+
+            // Snapshot destination baseline BEFORE moving ships so we measure
+            // only the pre-existing fleet in to_z (not the incoming ships).
+            let remaining = budget - 1;
+            let nation = game.get_nation_mut(nid).unwrap();
+            let dest_budget = nation.military.fleet_moves_remaining.get(&to_z).copied()
+                .unwrap_or_else(|| {
+                    nation.military.warships.iter()
+                        .filter(|s| s.sea_zone == Some(to_z))
+                        .map(|s| s.ship_type.stats().speed)
+                        .filter(|&sp| sp > 0)
+                        .min()
+                        .unwrap_or(u32::MAX)
+                });
+
+            // Move all warships from from_zone to to_zone
+            for ship in &mut nation.military.warships {
+                if ship.sea_zone == Some(from_z) {
+                    ship.sea_zone = Some(to_z);
+                }
+            }
+
+            // Always write the destination budget (even zero) so exhausted fleets cannot
+            // get a fresh budget on the next MoveFleet command. Take min so the combined
+            // fleet is constrained by the slowest group.
+            nation.military.fleet_moves_remaining.remove(&from_z);
+            nation.military.fleet_moves_remaining.insert(to_z, remaining.min(dest_budget));
             CommandResult::success()
         }
 
@@ -844,12 +988,28 @@ mod tests {
         assert!(!result.ok, "should fail with no funds");
     }
 
-    // ── BuildShip — category routing ─────────────────────────────
+    // ── BuildShip — category routing + material costs ─────────────
+
+    fn give_frigate_materials(game: &mut domain::game_state::GameState, nid: domain::types::NationId) {
+        use domain::types::MaterialType;
+        let n = game.get_nation_mut(nid).unwrap();
+        n.add_material(MaterialType::Fabric, 2);
+        n.add_material(MaterialType::Lumber, 5);
+        n.add_material(MaterialType::Arms, 2);
+    }
+
+    fn give_trader_materials(game: &mut domain::game_state::GameState, nid: domain::types::NationId) {
+        use domain::types::MaterialType;
+        let n = game.get_nation_mut(nid).unwrap();
+        n.add_material(MaterialType::Fabric, 2);
+        n.add_material(MaterialType::Lumber, 4);
+    }
 
     #[test]
     fn build_warship_goes_to_warships() {
         let mut game = setup();
         let nid = game.human_player_nation;
+        give_frigate_materials(&mut game, nid);
         let before = game.get_nation(nid).unwrap().military.warships.len();
 
         let result = apply_command(&mut game, FrontendCommand::BuildShip {
@@ -864,6 +1024,7 @@ mod tests {
     fn build_merchant_ship_goes_to_merchant_fleet() {
         let mut game = setup();
         let nid = game.human_player_nation;
+        give_trader_materials(&mut game, nid);
         let before = game.get_nation(nid).unwrap().military.merchant_fleet.len();
 
         let result = apply_command(&mut game, FrontendCommand::BuildShip {
@@ -872,6 +1033,173 @@ mod tests {
         });
         assert!(result.ok, "{:?}", result.message);
         assert_eq!(game.get_nation(nid).unwrap().military.merchant_fleet.len(), before + 1);
+    }
+
+    #[test]
+    fn build_ship_deducts_materials() {
+        let mut game = setup();
+        let nid = game.human_player_nation;
+        give_frigate_materials(&mut game, nid);
+        use domain::types::MaterialType;
+        let before_lumber = game.get_nation(nid).unwrap().material_amount(MaterialType::Lumber);
+
+        let result = apply_command(&mut game, FrontendCommand::BuildShip {
+            nation_id: nid.0,
+            ship_type: "Frigate".to_string(),
+        });
+        assert!(result.ok, "{:?}", result.message);
+        let after_lumber = game.get_nation(nid).unwrap().material_amount(MaterialType::Lumber);
+        assert_eq!(after_lumber, before_lumber - 5, "lumber should be deducted");
+    }
+
+    #[test]
+    fn build_ship_fails_without_materials() {
+        let mut game = setup();
+        let nid = game.human_player_nation;
+        // Don't give any materials
+        let result = apply_command(&mut game, FrontendCommand::BuildShip {
+            nation_id: nid.0,
+            ship_type: "Frigate".to_string(),
+        });
+        assert!(!result.ok, "should fail with no materials");
+    }
+
+    // ── MoveFleet ────────────────────────────────────────────────
+
+    fn setup_two_zone_game() -> (GameState, domain::map::sea_zones::SeaZoneId, domain::map::sea_zones::SeaZoneId) {
+        use domain::map::sea_zones::{SeaZone, SeaZoneId};
+        use std::collections::BTreeSet;
+        use domain::hex::HexCoord;
+
+        let mut game = setup();
+        let zone_a = SeaZoneId(10);
+        let zone_b = SeaZoneId(11);
+        game.world.sea_zones = vec![
+            SeaZone {
+                id: zone_a,
+                hexes: BTreeSet::new(),
+                is_lake: false,
+                adjacent_zone_ids: vec![zone_b],
+                coastal_provinces: Vec::new(),
+            },
+            SeaZone {
+                id: zone_b,
+                hexes: BTreeSet::new(),
+                is_lake: false,
+                adjacent_zone_ids: vec![zone_a],
+                coastal_provinces: Vec::new(),
+            },
+        ];
+        (game, zone_a, zone_b)
+    }
+
+    #[test]
+    fn move_fleet_exhausted_fleet_cannot_move_again() {
+        // A Clipper has speed 3. After 3 moves the budget is zero; the fleet
+        // must not get a fresh budget from the lazy-init path.
+        use domain::military::ships::{Ship, ShipType};
+        use domain::map::UnitId;
+        use domain::map::sea_zones::SeaZoneId;
+
+        let (mut game, zone_a, zone_b) = setup_two_zone_game();
+        let nid = game.human_player_nation;
+
+        // Add a Clipper (speed 3) in zone_a
+        let mut ship = Ship::new(UnitId(9990), ShipType::Clipper, nid);
+        ship.sea_zone = Some(zone_a);
+        game.get_nation_mut(nid).unwrap().military.warships.push(ship);
+
+        // Pre-set budget to 1 (simulating 2 moves already made)
+        game.get_nation_mut(nid).unwrap().military.fleet_moves_remaining.insert(zone_a, 1);
+
+        // Move 1: succeeds, budget drops to 0
+        let r1 = apply_command(&mut game, FrontendCommand::MoveFleet {
+            nation_id: nid.0,
+            from_zone_id: zone_a.0,
+            to_zone_id: zone_b.0,
+        });
+        assert!(r1.ok, "first move should succeed");
+
+        // Verify budget is 0 in zone_b (not absent)
+        let budget_after = game.get_nation(nid).unwrap().military.fleet_moves_remaining.get(&zone_b).copied();
+        assert_eq!(budget_after, Some(0), "exhausted fleet budget must be stored as 0, not absent");
+
+        // Move 2: must fail — zero budget
+        let r2 = apply_command(&mut game, FrontendCommand::MoveFleet {
+            nation_id: nid.0,
+            from_zone_id: zone_b.0,
+            to_zone_id: zone_a.0,
+        });
+        assert!(!r2.ok, "exhausted fleet must not move again this turn");
+    }
+
+    #[test]
+    fn move_fleet_merge_takes_min_budget() {
+        // Two groups in zone_a; one moves to zone_b which already has ships
+        // with a lower budget. Result must be the min.
+        use domain::military::ships::{Ship, ShipType};
+        use domain::map::UnitId;
+
+        let (mut game, zone_a, zone_b) = setup_two_zone_game();
+        let nid = game.human_player_nation;
+
+        let mut s1 = Ship::new(UnitId(9991), ShipType::Clipper, nid); // speed 3
+        s1.sea_zone = Some(zone_a);
+        let mut s2 = Ship::new(UnitId(9992), ShipType::Clipper, nid);
+        s2.sea_zone = Some(zone_b);
+        game.get_nation_mut(nid).unwrap().military.warships.extend([s1, s2]);
+
+        // zone_a fleet has 3 remaining; zone_b already has budget 1
+        let n = game.get_nation_mut(nid).unwrap();
+        n.military.fleet_moves_remaining.insert(zone_a, 3);
+        n.military.fleet_moves_remaining.insert(zone_b, 1);
+
+        let r = apply_command(&mut game, FrontendCommand::MoveFleet {
+            nation_id: nid.0,
+            from_zone_id: zone_a.0,
+            to_zone_id: zone_b.0,
+        });
+        assert!(r.ok, "move should succeed");
+        let budget = game.get_nation(nid).unwrap().military.fleet_moves_remaining.get(&zone_b).copied();
+        // incoming remaining = 3-1 = 2; destination existing = 1 → min = 1
+        assert_eq!(budget, Some(1), "merged budget must be min(2, 1) = 1");
+    }
+
+    #[test]
+    fn move_fleet_merge_with_unmoved_destination_fleet() {
+        // Destination zone has a slow Clipper (speed 3) that has not moved yet
+        // (no budget entry). Moving a faster group into it must cap at the
+        // destination baseline (speed 3 → budget 3), not at u32::MAX.
+        use domain::military::ships::{Ship, ShipType};
+        use domain::map::UnitId;
+
+        let (mut game, zone_a, zone_b) = setup_two_zone_game();
+        let nid = game.human_player_nation;
+
+        // zone_a: Clipper with speed 3, full budget (hasn't moved)
+        let mut s_a = Ship::new(UnitId(9993), ShipType::Clipper, nid); // speed 3
+        s_a.sea_zone = Some(zone_a);
+        // zone_b: a slow ship (Trader speed=0 → use Frigate speed=4; pick Clipper again for simplicity)
+        // Actually we want a slower destination; let's use Frigate speed=4 in zone_b and faster in zone_a
+        // Use ShipOfTheLine (speed=6) in zone_a, Clipper (speed=3) in zone_b
+        let mut s_b = Ship::new(UnitId(9994), ShipType::Clipper, nid); // speed 3 (destination)
+        s_b.sea_zone = Some(zone_b);
+        game.get_nation_mut(nid).unwrap().military.warships.extend([s_a, s_b]);
+
+        // zone_a has budget 6 (simulating a ShipOfTheLine-paced fleet); zone_b has NO entry
+        game.get_nation_mut(nid).unwrap().military.fleet_moves_remaining.insert(zone_a, 6);
+        // zone_b: intentionally no entry (ships are unmoved)
+
+        let r = apply_command(&mut game, FrontendCommand::MoveFleet {
+            nation_id: nid.0,
+            from_zone_id: zone_a.0,
+            to_zone_id: zone_b.0,
+        });
+        assert!(r.ok, "move should succeed");
+        let budget = game.get_nation(nid).unwrap().military.fleet_moves_remaining.get(&zone_b).copied();
+        // incoming remaining = 6-1 = 5; dest baseline = min speed of zone_b ships = 3
+        // merged = min(5, 3) = 3
+        assert_eq!(budget, Some(3), "merged budget must be capped by slower destination fleet baseline (3)");
     }
 
     // ── SetPlayerSellOrder ────────────────────────────────────────
