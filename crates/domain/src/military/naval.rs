@@ -1,3 +1,5 @@
+use crate::game_state::GameState;
+use crate::map::sea_zones::SeaZoneId;
 use crate::military::ships::{Ship, ShipCategory, ShipType};
 use crate::types::*;
 
@@ -16,8 +18,8 @@ pub struct NavalBattleResult {
 
 /// The type of naval operation a warship can be ordered to perform.
 ///
-/// Ships operate globally (simplified: no per-zone movement). Operations
-/// are resolved automatically at the end of each turn.
+/// Ships occupy sea zones and may be moved through the sea-zone graph during
+/// the turn. Operations are resolved automatically at the end of each turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NavalOperation {
     /// Warship patrols — attacks enemies encountered.
@@ -79,6 +81,141 @@ pub fn blockade_with_escorts(
 ) -> u32 {
     let effective_enemy = enemy_warship_count.saturating_sub(escort_count);
     calculate_blockade_effect(merchant_cargo, effective_enemy)
+}
+
+/// Find a nation's default ocean sea zone for newly-deployed ships.
+///
+/// Prefers the capital's adjacent ocean zone, then falls back to any owned
+/// ocean-coastal province. Returns `None` for landlocked nations.
+pub(crate) fn find_nation_home_sea_zone(
+    game: &GameState,
+    nation_id: NationId,
+) -> Option<SeaZoneId> {
+    let nation = game.get_nation(nation_id)?;
+    let capital_pid = nation.capital_province_id;
+    let pids: Vec<_> = std::iter::once(capital_pid)
+        .chain(nation.province_ids.iter().copied())
+        .collect();
+    for pid in pids {
+        let province = game.get_province(pid)?;
+        if !province.ocean_coastal {
+            continue;
+        }
+        for zone in &game.world.sea_zones {
+            if !zone.is_lake && zone.coastal_provinces.contains(&pid) {
+                return Some(zone.id);
+            }
+        }
+    }
+    None
+}
+
+/// Move all warships in a sea zone one adjacent sea zone while preserving the
+/// per-zone fleet movement budget semantics used by the frontend.
+///
+/// Returns `true` if at least one ship moved.
+pub(crate) fn move_warship_group_one_zone(
+    game: &mut GameState,
+    nation_id: NationId,
+    from_z: SeaZoneId,
+    to_z: SeaZoneId,
+) -> bool {
+    let from_zone_ok = game
+        .world
+        .sea_zones
+        .iter()
+        .any(|z| z.id == from_z && !z.is_lake);
+    let to_zone_ok = game
+        .world
+        .sea_zones
+        .iter()
+        .any(|z| z.id == to_z && !z.is_lake);
+    if !from_zone_ok || !to_zone_ok {
+        return false;
+    }
+    let adjacent = game
+        .world
+        .sea_zones
+        .iter()
+        .find(|z| z.id == from_z)
+        .map(|z| z.is_adjacent_to(to_z))
+        .unwrap_or(false);
+    if !adjacent {
+        return false;
+    }
+
+    let Some(nation) = game.get_nation(nation_id) else {
+        return false;
+    };
+    let moving_ship_count = nation
+        .military
+        .warships
+        .iter()
+        .filter(|ship| ship.sea_zone == Some(from_z))
+        .count();
+    if moving_ship_count == 0 {
+        return false;
+    }
+
+    let budget = if let Some(&rem) = nation.military.fleet_moves_remaining.get(&from_z) {
+        rem
+    } else {
+        nation
+            .military
+            .warships
+            .iter()
+            .filter(|ship| ship.sea_zone == Some(from_z))
+            .map(|ship| ship.ship_type.stats().speed)
+            .filter(|&speed| speed > 0)
+            .min()
+            .unwrap_or(0)
+    };
+    if budget == 0 {
+        return false;
+    }
+
+    let remaining = budget - 1;
+    let dest_budget = nation
+        .military
+        .fleet_moves_remaining
+        .get(&to_z)
+        .copied()
+        .unwrap_or_else(|| {
+            nation
+                .military
+                .warships
+                .iter()
+                .filter(|ship| ship.sea_zone == Some(to_z))
+                .map(|ship| ship.ship_type.stats().speed)
+                .filter(|&speed| speed > 0)
+                .min()
+                .unwrap_or(u32::MAX)
+        });
+
+    let Some(nation) = game.get_nation_mut(nation_id) else {
+        return false;
+    };
+    for ship in &mut nation.military.warships {
+        if ship.sea_zone == Some(from_z) {
+            ship.sea_zone = Some(to_z);
+        }
+    }
+
+    let source_has_leftovers = nation
+        .military
+        .warships
+        .iter()
+        .any(|ship| ship.sea_zone == Some(from_z));
+    if source_has_leftovers {
+        nation.military.fleet_moves_remaining.insert(from_z, remaining);
+    } else {
+        nation.military.fleet_moves_remaining.remove(&from_z);
+    }
+    nation
+        .military
+        .fleet_moves_remaining
+        .insert(to_z, remaining.min(dest_budget));
+    true
 }
 
 /// Perform naval reconnaissance: estimate enemy ground forces.

@@ -699,30 +699,86 @@ pub fn wasm_get_navy_markers(game_json: &str, disable_fog: bool) -> String {
         let owner_name = nation.name.as_str();
         let owner_color = format!("{:?}", nation.color);
 
-        // Group warships into (a) non-beachhead fleet, (b) per-target beachhead groups.
-        let mut fleet_group: Vec<&Ship> = Vec::new();
-        let mut beachhead_groups: std::collections::BTreeMap<u32, Vec<&Ship>> =
-            std::collections::BTreeMap::new();
-        for ship in &nation.military.warships {
-            if ship.ship_type.category() != ShipCategory::Warship {
-                continue;
-            }
-            match ship.operation {
+        // Fleet markers always represent ships at their actual location. A
+        // Beachhead assignment is just intent until `pending_landings`
+        // confirms a real landing site, so keep those ships with the fleet
+        // marker and emit a separate beachhead marker only after establishment.
+        let established_beachhead_targets: std::collections::BTreeSet<ProvinceId> = game
+            .transient
+            .pending_landings
+            .iter()
+            .filter(|(nid, _, _)| *nid == nation.id)
+            .map(|(_, pid, _)| *pid)
+            .collect();
+        let fleet_group: Vec<&Ship> = nation
+            .military
+            .warships
+            .iter()
+            .filter(|ship| ship.ship_type.category() == ShipCategory::Warship)
+            .filter(|ship| match ship.operation {
                 Some(domain::military::naval::NavalOperation::Beachhead(pid)) => {
-                    beachhead_groups.entry(pid.0).or_default().push(ship);
+                    !established_beachhead_targets.contains(&pid)
                 }
-                _ => fleet_group.push(ship),
-            }
-        }
+                _ => true,
+            })
+            .collect();
 
-        // ── Fleet marker ─────────────────────────────────────────
-        if !fleet_group.is_empty()
-            && let Some(anchor) = fleet_anchor(nation, &game.world.hex_map, &game.world.provinces)
-        {
-            let is_human = nation.id == human_nation_id;
-            let is_visible = disable_fog || is_human || visible_hexes.contains(&anchor);
-            if is_visible
-                && let Some(marker) = build_marker(
+        // ── Fleet markers (grouped by sea zone) ──────────────────
+        if !fleet_group.is_empty() {
+            // Group ships by their sea_zone field.
+            let mut by_zone: std::collections::BTreeMap<Option<u32>, Vec<&Ship>> =
+                std::collections::BTreeMap::new();
+            for ship in &fleet_group {
+                by_zone.entry(ship.sea_zone.map(|sz| sz.0)).or_default().push(ship);
+            }
+
+            for (zone_id_opt, zone_ships) in by_zone {
+                // Resolve anchor: use zone centroid when zone is known, else fall
+                // back to fleet_anchor (home-port proximity rule).
+                let (anchor, sz_id, sz_name) = if let Some(zone_id) = zone_id_opt {
+                    let zone = game.world.sea_zones.iter().find(|z| z.id.0 == zone_id);
+                    if let Some(z) = zone {
+                        if z.hexes.is_empty() {
+                            // Empty zone — fall back to fleet_anchor
+                            let Some(a) = fleet_anchor(nation, &game.world.hex_map, &game.world.provinces) else { continue };
+                            (a, Some(zone_id), Some(z.name.clone()))
+                        } else {
+                            // Median centroid of zone hexes
+                            let mut qs: Vec<i32> = z.hexes.iter().map(|h| h.q).collect();
+                            let mut rs: Vec<i32> = z.hexes.iter().map(|h| h.r).collect();
+                            qs.sort_unstable();
+                            rs.sort_unstable();
+                            let cq = qs[qs.len() / 2];
+                            let cr = rs[rs.len() / 2];
+                            (HexCoord::new(cq, cr), Some(zone_id), Some(z.name.clone()))
+                        }
+                    } else {
+                        // Zone id not found — fall back
+                        let Some(a) = fleet_anchor(nation, &game.world.hex_map, &game.world.provinces) else { continue };
+                        (a, None, None)
+                    }
+                } else {
+                    // No zone assigned — use legacy fleet_anchor
+                    let Some(a) = fleet_anchor(nation, &game.world.hex_map, &game.world.provinces) else { continue };
+                    (a, None, None)
+                };
+
+                let is_human = nation.id == human_nation_id;
+                let is_visible = if disable_fog || is_human {
+                    true
+                } else if let Some(zone_id) = zone_id_opt {
+                    game.world
+                        .sea_zones
+                        .iter()
+                        .find(|z| z.id.0 == zone_id)
+                        .is_some_and(|z| z.hexes.iter().any(|hex| visible_hexes.contains(hex)))
+                } else {
+                    visible_hexes.contains(&anchor)
+                };
+                if !is_visible {
+                    continue;
+                }
+                if let Some(mut marker) = build_marker(
                     anchor,
                     nation.id,
                     owner_name,
@@ -730,16 +786,34 @@ pub fn wasm_get_navy_markers(game_json: &str, disable_fog: bool) -> String {
                     "fleet",
                     None,
                     None,
-                    &fleet_group,
-                )
-            {
-                markers.push(marker);
+                    &zone_ships,
+                ) {
+                    if let Some(id) = sz_id {
+                        marker["sea_zone_id"] = serde_json::Value::Number(id.into());
+                    }
+                    if let Some(name) = sz_name {
+                        marker["sea_zone_name"] = serde_json::Value::String(name);
+                    }
+                    markers.push(marker);
+                }
             }
         }
 
         // ── Beachhead markers ────────────────────────────────────
-        for (pid_raw, ships) in beachhead_groups {
-            let pid = ProvinceId(pid_raw);
+        for pid in established_beachhead_targets {
+            let ships: Vec<&Ship> = nation
+                .military
+                .warships
+                .iter()
+                .filter(|ship| ship.ship_type.category() == ShipCategory::Warship)
+                .filter(|ship| {
+                    ship.operation
+                        == Some(domain::military::naval::NavalOperation::Beachhead(pid))
+                })
+                .collect();
+            if ships.is_empty() {
+                continue;
+            }
             let target = match game.get_province(pid) {
                 Some(p) => p,
                 None => continue,
@@ -842,6 +916,54 @@ fn format_operation(op: Option<domain::military::naval::NavalOperation>) -> Stri
         Some(NavalOperation::Beachhead(p)) => format!("Beachhead(p{})", p.0),
         Some(NavalOperation::Reconnaissance(n)) => format!("Recon(n{})", n.0),
     }
+}
+
+/// Get sea zone data for map rendering.
+///
+/// Returns a JSON array of zones:
+/// `[{id, name, is_lake, center_q, center_r, hexes: [{q, r}]}]`
+///
+/// `center_q` / `center_r` are the median q and r of the zone's hexes
+/// (deterministic centroid). Zones with no hexes are omitted.
+#[wasm_bindgen]
+pub fn wasm_get_sea_zones(game_json: &str) -> String {
+    let game = match game_from_json(game_json) {
+        Ok(g) => g,
+        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    };
+
+    let zones: Vec<serde_json::Value> = game
+        .world
+        .sea_zones
+        .iter()
+        .filter(|z| !z.hexes.is_empty())
+        .map(|z| {
+            // Median q and r as a deterministic center estimate.
+            let mut qs: Vec<i32> = z.hexes.iter().map(|h| h.q).collect();
+            let mut rs: Vec<i32> = z.hexes.iter().map(|h| h.r).collect();
+            qs.sort_unstable();
+            rs.sort_unstable();
+            let center_q = qs[qs.len() / 2];
+            let center_r = rs[rs.len() / 2];
+
+            let hexes: Vec<serde_json::Value> = z
+                .hexes
+                .iter()
+                .map(|h| serde_json::json!({ "q": h.q, "r": h.r }))
+                .collect();
+
+            serde_json::json!({
+                "id": z.id.0,
+                "name": z.name,
+                "is_lake": z.is_lake,
+                "center_q": center_q,
+                "center_r": center_r,
+                "hexes": hexes,
+            })
+        })
+        .collect();
+
+    serde_json::to_string(&zones).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
 }
 
 /// Get available technologies for the human player.
@@ -4701,9 +4823,10 @@ mod tests {
     }
 
     #[test]
-    fn navy_markers_splits_beachhead_into_its_own_marker() {
+    fn navy_markers_keeps_unestablished_beachhead_with_fleet_marker() {
         let (mut game, _) = setup_navy_markers_game();
-        // Re-assign the Ironclad to Beachhead a hostile coastal province.
+        // Re-assign the Ironclad to Beachhead a hostile coastal province, but
+        // do not establish an actual landing yet.
         let human = game.human_player_nation;
         let beachhead_pid: ProvinceId = game
             .world.provinces
@@ -4724,9 +4847,51 @@ mod tests {
             .filter(|m| m.get("nation_id").and_then(|v| v.as_u64()) == Some(0))
             .collect();
         assert_eq!(
+            human_markers.len(), 1,
+            "ships assigned to a future beachhead should still render at the fleet location"
+        );
+        let fleet = human_markers
+            .iter()
+            .find(|m| m["kind"] == "fleet")
+            .expect("fleet marker present");
+        assert_eq!(fleet["ship_count"], 3);
+        let by_op = fleet["by_operation"].as_object().unwrap();
+        assert_eq!(
+            by_op.get(&format!("Beachhead(p{})", beachhead_pid.0))
+                .and_then(|v| v.as_u64()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn navy_markers_emits_beachhead_marker_for_established_landing() {
+        let (mut game, _) = setup_navy_markers_game();
+        let human = game.human_player_nation;
+        let beachhead_pid: ProvinceId = game
+            .world.provinces
+            .iter()
+            .find(|p| p.owner != human && p.is_coastal())
+            .map(|p| p.id)
+            .expect("need a hostile coastal province for beachhead");
+        let nation = game.get_nation_mut(human).unwrap();
+        nation.military.warships[2].operation = Some(domain::military::naval::NavalOperation::Beachhead(
+            beachhead_pid,
+        ));
+        game.transient
+            .pending_landings
+            .push((human, beachhead_pid, game.turn));
+        let json = serde_json::to_string(&game).unwrap();
+
+        let result = wasm_get_navy_markers(&json, false);
+        let markers: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        let human_markers: Vec<_> = markers
+            .iter()
+            .filter(|m| m.get("nation_id").and_then(|v| v.as_u64()) == Some(0))
+            .collect();
+        assert_eq!(
             human_markers.len(),
             2,
-            "one fleet marker + one beachhead marker"
+            "established beachheads should render both a fleet marker and a landing marker"
         );
         assert!(human_markers.iter().any(|m| m["kind"] == "fleet"));
         let beachhead = human_markers

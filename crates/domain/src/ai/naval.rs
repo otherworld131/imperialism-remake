@@ -1,5 +1,11 @@
 #![allow(unused_labels)]
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+
 use crate::game_state::GameState;
+use crate::map::sea_zones::SeaZoneId;
+use crate::military::naval::{
+    NavalOperation, find_nation_home_sea_zone, move_warship_group_one_zone,
+};
 use crate::military::ships::{Ship, ShipType};
 use crate::types::*;
 
@@ -201,6 +207,146 @@ fn clear_stale_beachheads(game: &mut GameState, nation_id: NationId, enemies: &[
                 && stale_targets.contains(&pid)
             {
                 ship.operation = None;
+            }
+        }
+    }
+}
+
+fn shortest_zone_path_to_any(
+    game: &GameState,
+    start: SeaZoneId,
+    goals: &HashSet<SeaZoneId>,
+) -> Option<Vec<SeaZoneId>> {
+    if goals.contains(&start) {
+        return Some(vec![start]);
+    }
+
+    let mut queue = VecDeque::from([start]);
+    let mut previous: HashMap<SeaZoneId, Option<SeaZoneId>> = HashMap::from([(start, None)]);
+
+    while let Some(current) = queue.pop_front() {
+        let Some(zone) = game.world.sea_zones.iter().find(|z| z.id == current) else {
+            continue;
+        };
+        for &next in &zone.adjacent_zone_ids {
+            if previous.contains_key(&next) {
+                continue;
+            }
+            previous.insert(next, Some(current));
+            if goals.contains(&next) {
+                let mut path = vec![next];
+                let mut cursor = next;
+                while let Some(Some(prev)) = previous.get(&cursor) {
+                    path.push(*prev);
+                    cursor = *prev;
+                }
+                path.reverse();
+                return Some(path);
+            }
+            queue.push_back(next);
+        }
+    }
+
+    None
+}
+
+fn advance_beachhead_fleets(game: &mut GameState, nation_id: NationId) {
+    let target_pids: BTreeSet<ProvinceId> = game
+        .get_nation(nation_id)
+        .map(|nation| {
+            nation
+                .military
+                .warships
+                .iter()
+                .filter_map(|ship| match ship.operation {
+                    Some(NavalOperation::Beachhead(pid)) => Some(pid),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if target_pids.is_empty() {
+        return;
+    }
+
+    let home_zone = find_nation_home_sea_zone(game, nation_id);
+
+    for target_pid in target_pids {
+        if let Some(home_zone) = home_zone
+            && let Some(nation) = game.get_nation_mut(nation_id)
+        {
+            for ship in &mut nation.military.warships {
+                if ship.operation == Some(NavalOperation::Beachhead(target_pid))
+                    && ship.sea_zone.is_none()
+                {
+                    ship.sea_zone = Some(home_zone);
+                }
+            }
+        }
+
+        let Some(target_province) = game.get_province(target_pid) else {
+            continue;
+        };
+        let target_zones: HashSet<SeaZoneId> =
+            crate::map::sea_zones::ocean_zones_adjacent_to_province(
+                &game.world.sea_zones,
+                target_province,
+                &game.world.hex_map,
+            )
+            .into_iter()
+            .collect();
+        if target_zones.is_empty() {
+            continue;
+        }
+
+        loop {
+            let source_zones: BTreeSet<SeaZoneId> = game
+                .get_nation(nation_id)
+                .map(|nation| {
+                    nation
+                        .military
+                        .warships
+                        .iter()
+                        .filter(|ship| ship.operation == Some(NavalOperation::Beachhead(target_pid)))
+                        .filter_map(|ship| ship.sea_zone)
+                        .filter(|zone| !target_zones.contains(zone))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if source_zones.is_empty() {
+                break;
+            }
+
+            let mut moved_any = false;
+            for from_z in source_zones {
+                let Some(path) = shortest_zone_path_to_any(game, from_z, &target_zones) else {
+                    continue;
+                };
+                if path.len() < 2 {
+                    continue;
+                }
+                let zone_is_dedicated_to_target = game
+                    .get_nation(nation_id)
+                    .map(|nation| {
+                        nation
+                            .military
+                            .warships
+                            .iter()
+                            .filter(|ship| ship.sea_zone == Some(from_z))
+                            .all(|ship| ship.operation == Some(NavalOperation::Beachhead(target_pid)))
+                    })
+                    .unwrap_or(false);
+                if !zone_is_dedicated_to_target {
+                    continue;
+                }
+                let to_z = path[1];
+                if move_warship_group_one_zone(game, nation_id, from_z, to_z) {
+                    moved_any = true;
+                }
+            }
+
+            if !moved_any {
+                break;
             }
         }
     }
@@ -457,13 +603,183 @@ pub fn ai_naval_strategy(
             }
         }
     }
+
+    advance_beachhead_fleets(game, nation_id);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ai::common::test_helpers::{test_game_with_ai, test_game_with_ai_and_minor};
+    use crate::data::GameData;
+    use crate::diplomacy::DiplomacyState;
+    use crate::hex::HexCoord;
+    use crate::map::{HexMap, Province, SeaZone, Tile};
     use crate::map::UnitId;
+    use crate::nation::{Nation, NationColor};
+    use std::collections::BTreeSet;
+
+    fn setup_linear_beachhead_path_game() -> (GameState, SeaZoneId, SeaZoneId, SeaZoneId, SeaZoneId) {
+        let human_tile = HexCoord::new(10, 10);
+        let ai_tile = HexCoord::new(0, 0);
+        let enemy_tile = HexCoord::new(8, 0);
+        let zone_a_hex = HexCoord::new(1, 0);
+        let zone_b_hex = HexCoord::new(3, 0);
+        let zone_c_hex = HexCoord::new(5, 0);
+        let zone_d_hex = HexCoord::new(7, 0);
+
+        let mut hex_map = HexMap::new(20, 20);
+        hex_map.set_tile(
+            human_tile,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        hex_map.set_tile(
+            ai_tile,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+        hex_map.set_tile(
+            enemy_tile,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(3)),
+        );
+        for sea_hex in [zone_a_hex, zone_b_hex, zone_c_hex, zone_d_hex] {
+            hex_map.set_tile(sea_hex, Tile::new(TerrainType::Sea));
+        }
+
+        let human_province = Province::new(
+            ProvinceId(1),
+            "Human Land".to_string(),
+            NationId(1),
+            human_tile,
+            vec![human_tile],
+            4,
+        );
+        let mut ai_province = Province::new(
+            ProvinceId(2),
+            "AI Port".to_string(),
+            NationId(2),
+            ai_tile,
+            vec![ai_tile],
+            4,
+        );
+        ai_province.coastal = true;
+        ai_province.ocean_coastal = true;
+        let mut enemy_province = Province::new(
+            ProvinceId(3),
+            "Enemy Coast".to_string(),
+            NationId(3),
+            enemy_tile,
+            vec![enemy_tile],
+            20,
+        );
+        enemy_province.coastal = true;
+        enemy_province.ocean_coastal = true;
+
+        let human_nation = Nation::new(
+            NationId(1),
+            "HumanNation".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        let mut ai_nation = Nation::new(
+            NationId(2),
+            "AINation".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(2),
+        );
+        ai_nation.economy.treasury = Money::dollars(20_000);
+        ai_nation.diplomacy.ai_personality = Some(AiPersonality::Balanced);
+        for i in 0..4 {
+            ai_nation.military.army.push(crate::military::units::ArmyUnit::new(
+                UnitId(40_000 + i),
+                crate::military::units::ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        ai_nation
+            .military
+            .warships
+            .push(Ship::new(UnitId(50_000), ShipType::Frigate, NationId(2)));
+
+        let enemy_nation = Nation::new(
+            NationId(3),
+            "EnemyLand".to_string(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(3),
+        );
+
+        let mut diplomacy = DiplomacyState::new();
+        diplomacy.declare_war(NationId(2), NationId(3));
+
+        let mut game = crate::test_game_state! {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map: hex_map,
+            provinces: vec![human_province, ai_province, enemy_province],
+            nations: vec![human_nation, ai_nation, enemy_nation],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: GameData::default(),
+            diplomacy: diplomacy,
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
+            political_archive: Vec::new(),
+            ai_debug: false,
+            observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
+            next_unit_id: 6_000_000,};
+        let zone_a = SeaZoneId(10);
+        let zone_b = SeaZoneId(11);
+        let zone_c = SeaZoneId(12);
+        let zone_d = SeaZoneId(13);
+        game.world.sea_zones = vec![
+            SeaZone {
+                id: zone_a,
+                name: "Zone A".to_string(),
+                hexes: BTreeSet::from([zone_a_hex]),
+                is_lake: false,
+                adjacent_zone_ids: vec![zone_b],
+                coastal_provinces: vec![ProvinceId(2)],
+            },
+            SeaZone {
+                id: zone_b,
+                name: "Zone B".to_string(),
+                hexes: BTreeSet::from([zone_b_hex]),
+                is_lake: false,
+                adjacent_zone_ids: vec![zone_a, zone_c],
+                coastal_provinces: vec![],
+            },
+            SeaZone {
+                id: zone_c,
+                name: "Zone C".to_string(),
+                hexes: BTreeSet::from([zone_c_hex]),
+                is_lake: false,
+                adjacent_zone_ids: vec![zone_b, zone_d],
+                coastal_provinces: vec![],
+            },
+            SeaZone {
+                id: zone_d,
+                name: "Zone D".to_string(),
+                hexes: BTreeSet::from([zone_d_hex]),
+                is_lake: false,
+                adjacent_zone_ids: vec![zone_c],
+                coastal_provinces: vec![ProvinceId(3)],
+            },
+        ];
+        (game, zone_a, zone_b, zone_c, zone_d)
+    }
 
     #[test]
     fn ai_builds_warship_with_arms() {
@@ -800,6 +1116,54 @@ mod tests {
                 .iter()
                 .any(|a| a.text.contains("amphibious invasion")),
             "AI should announce amphibious invasion"
+        );
+    }
+
+    #[test]
+    fn ai_beachhead_fleet_stages_through_intermediate_zones() {
+        let (mut game, _zone_a, _zone_b, zone_c, zone_d) = setup_linear_beachhead_path_game();
+
+        let mut actions = Vec::new();
+        ai_naval_strategy(&mut game, NationId(2), &mut actions);
+
+        let ship = &game.get_nation(NationId(2)).unwrap().military.warships[0];
+        assert_eq!(
+            ship.operation,
+            Some(NavalOperation::Beachhead(ProvinceId(3))),
+            "AI should choose the hostile coastal province as the beachhead target"
+        );
+        assert_eq!(
+            ship.sea_zone,
+            Some(zone_c),
+            "Frigate should advance two zone hops on turn one, not teleport to the target coast"
+        );
+        assert_ne!(
+            ship.sea_zone,
+            Some(zone_d),
+            "Fleet must stage through the sea-lane graph before reaching the target zone"
+        );
+    }
+
+    #[test]
+    fn ai_beachhead_fleet_reaches_target_zone_on_later_turn() {
+        let (mut game, _zone_a, _zone_b, _zone_c, zone_d) = setup_linear_beachhead_path_game();
+
+        let mut actions = Vec::new();
+        ai_naval_strategy(&mut game, NationId(2), &mut actions);
+        actions.clear();
+        game.get_nation_mut(NationId(2))
+            .unwrap()
+            .military
+            .fleet_moves_remaining
+            .clear();
+
+        ai_naval_strategy(&mut game, NationId(2), &mut actions);
+
+        let ship = &game.get_nation(NationId(2)).unwrap().military.warships[0];
+        assert_eq!(
+            ship.sea_zone,
+            Some(zone_d),
+            "Fleet should continue along the path on a later turn and reach the target-adjacent zone"
         );
     }
 
