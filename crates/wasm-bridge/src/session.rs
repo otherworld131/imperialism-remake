@@ -1077,6 +1077,7 @@ mod tests {
         game.world.sea_zones = vec![
             SeaZone {
                 id: zone_a,
+                name: "Zone A".to_string(),
                 hexes: BTreeSet::new(),
                 is_lake: false,
                 adjacent_zone_ids: vec![zone_b],
@@ -1084,6 +1085,7 @@ mod tests {
             },
             SeaZone {
                 id: zone_b,
+                name: "Zone B".to_string(),
                 hexes: BTreeSet::new(),
                 is_lake: false,
                 adjacent_zone_ids: vec![zone_a],

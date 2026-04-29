@@ -21,6 +21,7 @@ impl std::fmt::Display for SeaZoneId {
 #[derive(Debug, Clone)]
 pub struct SeaZone {
     pub id: SeaZoneId,
+    pub name: String,
     pub hexes: BTreeSet<HexCoord>,
     /// True if this zone is an enclosed inland body of water (not connected to the ocean).
     pub is_lake: bool,
@@ -83,52 +84,89 @@ pub fn compute_sea_zones(hex_map: &HexMap) -> Vec<SeaZone> {
     }
 
     // Lakes: each isolated enclosed sea body is one lake zone
+    let mut lake_number = 1u32;
     for lake in lake_components {
         zones.push(SeaZone {
             id: SeaZoneId(next_id),
+            name: format!("Lake {lake_number}"),
             hexes: lake,
             is_lake: true,
             adjacent_zone_ids: Vec::new(),
             coastal_provinces: Vec::new(),
         });
         next_id += 1;
+        lake_number += 1;
     }
 
-    // Ocean: merge all ocean components (usually one), then subdivide into quadrants
-    // Compute bounding box of all ocean hexes for quadrant division
+    // Ocean: merge all ocean components, then subdivide into a 4-column × 3-row Voronoi grid.
+    // Seeds are placed at the median hex of each grid cell; all ocean hexes are assigned to
+    // their nearest seed, producing organic (non-rectangular) zone boundaries.
     if !ocean_hexes.is_empty() {
-        let all_ocean_vec: Vec<HexCoord> = ocean_hexes.iter().copied().collect();
+        const GRID_COLS: usize = 4;
+        const GRID_ROWS: usize = 3;
+        const COL_NAMES: [&str; GRID_COLS] = ["Western", "West-Central", "East-Central", "Eastern"];
+        const ROW_NAMES: [&str; GRID_ROWS] = ["Northern", "Central", "Southern"];
+
+        let mut all_ocean_vec: Vec<HexCoord> = ocean_hexes.iter().copied().collect();
         let mut qs: Vec<i32> = all_ocean_vec.iter().map(|h| h.q).collect();
         let mut rs: Vec<i32> = all_ocean_vec.iter().map(|h| h.r).collect();
         qs.sort_unstable();
         rs.sort_unstable();
 
-        // Use medians for the split so each quadrant has roughly equal area
-        let mid_q = qs[qs.len() / 2];
-        let mid_r = rs[rs.len() / 2];
+        // Percentile split points so each band has roughly equal hex count.
+        let q_splits: Vec<i32> = (1..GRID_COLS)
+            .map(|i| qs[qs.len() * i / GRID_COLS])
+            .collect();
+        let r_splits: Vec<i32> = (1..GRID_ROWS)
+            .map(|i| rs[rs.len() * i / GRID_ROWS])
+            .collect();
 
-        // Assign each ocean hex to one of 4 quadrant zones: NW, NE, SW, SE
-        let quadrant_id_base = next_id;
-        // 0=NW, 1=NE, 2=SW, 3=SE
-        let mut quadrants: [BTreeSet<HexCoord>; 4] = Default::default();
-
-        for &hex in &all_ocean_vec {
-            let qi = if hex.q < mid_q { 0 } else { 1 };
-            let ri = if hex.r < mid_r { 0 } else { 2 };
-            quadrants[qi + ri].insert(hex);
+        // Pick one seed hex per grid cell (median element, sorted by (q,r)).
+        let mut seeds: Vec<(usize, HexCoord)> = Vec::new();
+        for row in 0..GRID_ROWS {
+            for col in 0..GRID_COLS {
+                let mut cell: Vec<HexCoord> = all_ocean_vec.iter().copied()
+                    .filter(|h| {
+                        q_splits.partition_point(|&s| s <= h.q) == col
+                            && r_splits.partition_point(|&s| s <= h.r) == row
+                    })
+                    .collect();
+                if cell.is_empty() {
+                    continue;
+                }
+                cell.sort_unstable_by_key(|h| (h.q, h.r));
+                seeds.push((row * GRID_COLS + col, cell[cell.len() / 2]));
+            }
         }
 
-        for (i, quad) in quadrants.iter().enumerate() {
-            if quad.is_empty() {
-                continue;
+        // Voronoi assignment: each hex goes to the zone whose seed is closest.
+        all_ocean_vec.sort_unstable_by_key(|h| (h.q, h.r));
+        let mut zone_hexes: HashMap<usize, BTreeSet<HexCoord>> = HashMap::new();
+        for &hex in &all_ocean_vec {
+            let nearest = seeds.iter()
+                .min_by_key(|&&(_, seed)| hex_distance(hex, seed))
+                .map(|&(zone_idx, _)| zone_idx)
+                .unwrap_or(0);
+            zone_hexes.entry(nearest).or_default().insert(hex);
+        }
+
+        // Emit zones in deterministic order (by zone_idx = row*GRID_COLS+col).
+        let grid_id_base = next_id;
+        let mut zone_indices: Vec<usize> = zone_hexes.keys().copied().collect();
+        zone_indices.sort_unstable();
+        for zone_idx in zone_indices {
+            if let Some(hexes) = zone_hexes.remove(&zone_idx) {
+                let row = zone_idx / GRID_COLS;
+                let col = zone_idx % GRID_COLS;
+                zones.push(SeaZone {
+                    id: SeaZoneId(grid_id_base + zone_idx as u32),
+                    name: format!("{} {} Ocean", ROW_NAMES[row], COL_NAMES[col]),
+                    hexes,
+                    is_lake: false,
+                    adjacent_zone_ids: Vec::new(),
+                    coastal_provinces: Vec::new(),
+                });
             }
-            zones.push(SeaZone {
-                id: SeaZoneId(quadrant_id_base + i as u32),
-                hexes: quad.clone(),
-                is_lake: false,
-                adjacent_zone_ids: Vec::new(),
-                coastal_provinces: Vec::new(),
-            });
         }
         let _ = next_id;
     }
@@ -245,6 +283,13 @@ fn flood_fill_components(
     components
 }
 
+fn hex_distance(a: HexCoord, b: HexCoord) -> i32 {
+    let dq = (a.q - b.q).abs();
+    let dr = (a.r - b.r).abs();
+    let ds = ((a.q + a.r) - (b.q + b.r)).abs();
+    (dq + dr + ds) / 2
+}
+
 fn compute_zone_adjacency(zones: &mut Vec<SeaZone>) {
     // Build hex → zone_id lookup
     let mut hex_to_zone: HashMap<HexCoord, usize> = HashMap::new();
@@ -333,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn ocean_component_split_into_quadrants() {
+    fn ocean_component_split_into_grid() {
         // Create a 6x6 grid of sea hexes all touching the border → all ocean
         let mut map = HexMap::new(6, 6);
         for q in 0..6i32 {
@@ -342,9 +387,10 @@ mod tests {
             }
         }
         let zones = compute_sea_zones(&map);
-        // Expect 4 quadrant zones, no lakes
+        // Expect up to 4×3=12 ocean grid zones, no lakes
         let ocean_zones: Vec<_> = zones.iter().filter(|z| !z.is_lake).collect();
-        assert_eq!(ocean_zones.len(), 4, "should produce 4 ocean quadrant zones");
+        assert!(ocean_zones.len() >= 4, "should produce multiple ocean grid zones, got {}", ocean_zones.len());
+        assert!(ocean_zones.len() <= 12, "should produce at most 12 ocean grid zones");
         assert!(zones.iter().all(|z| !z.is_lake));
     }
 
@@ -357,7 +403,7 @@ mod tests {
             }
         }
         let zones = compute_sea_zones(&map);
-        // All 4 quadrant zones should be adjacent to at least 1 other zone
+        // All grid zones should be adjacent to at least 1 other zone
         for zone in &zones {
             assert!(!zone.adjacent_zone_ids.is_empty(), "zone {} should have adjacent zones", zone.id);
         }

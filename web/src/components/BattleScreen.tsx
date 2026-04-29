@@ -387,7 +387,7 @@ export default function BattleScreen({
                         >
                           <span style={styles.battleIcon}>{'\u2694'}</span>
                           <span>Battle of {b.province}</span>
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: b.attacker_won ? '#2ecc40' : '#e63946', marginLeft: 'auto', fontSize: 11 }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: b.attacker_won ? '#2ecc40' : '#e63946', marginLeft: 'auto', fontSize: 'var(--ui-font-size, 14px)' }}>
                             {winnerFlag && <Flag svg={winnerFlag} width={16} height={11} />}
                             {b.attacker_won ? b.attacker : b.defender} won
                           </span>
@@ -406,7 +406,7 @@ export default function BattleScreen({
                         >
                           <span style={styles.battleIcon}>{'\u2693'}</span>
                           <span>{nb.attacker} vs {nb.defender}</span>
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: nb.attacker_won ? '#2ecc40' : '#e63946', marginLeft: 'auto', fontSize: 11 }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: nb.attacker_won ? '#2ecc40' : '#e63946', marginLeft: 'auto', fontSize: 'var(--ui-font-size, 14px)' }}>
                             {winnerFlag && <Flag svg={winnerFlag} width={16} height={11} />}
                             {nb.attacker_won ? nb.attacker : nb.defender} won
                           </span>
@@ -455,7 +455,7 @@ function LandBattleDetails({ battle, flagById }: { battle: LandBattleData; flagB
           {battle.retreated && ' (attacker retreated)'}
         </div>
         {(battle.is_naval_landing || battle.origin_province_names.length > 0) && (
-          <div style={{ marginTop: 6, fontSize: 12, color: '#d8d0b8' }}>
+          <div style={{ marginTop: 6, fontSize: 'var(--ui-font-size, 14px)', color: '#d8d0b8' }}>
             {battle.is_naval_landing && (
               <span style={{
                 display: 'inline-block', marginRight: 6, padding: '1px 6px',
@@ -574,7 +574,7 @@ function ForceColumn({
           />
         ))}
         {survivors.length === 0 && casualties.length === 0 && (
-          <div style={{ color: '#888', fontStyle: 'italic', fontSize: 11 }}>No units recorded</div>
+          <div style={{ color: '#888', fontStyle: 'italic', fontSize: 'var(--ui-font-size, 14px)' }}>No units recorded</div>
         )}
       </div>
     </div>
@@ -665,15 +665,15 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#0f0f23',
   },
   title: { color: '#daa520', margin: 0, fontSize: 22 },
-  turnLabel: { color: '#aaa', fontSize: 14 },
+  turnLabel: { color: '#aaa', fontSize: 'var(--ui-font-size, 14px)' },
   modeTabs: { display: 'flex', gap: 4, marginLeft: 'auto' },
   modeTab: {
     padding: '4px 12px', background: '#1a1a2e', color: '#888',
-    border: '1px solid #3a3520', cursor: 'pointer', fontFamily: "'Georgia', serif", fontSize: 12,
+    border: '1px solid #3a3520', cursor: 'pointer', fontFamily: "'Georgia', serif", fontSize: 'var(--ui-font-size, 14px)',
   },
   modeTabActive: {
     padding: '4px 12px', background: '#3a3520', color: '#daa520',
-    border: '1px solid #5a5030', cursor: 'pointer', fontFamily: "'Georgia', serif", fontSize: 12,
+    border: '1px solid #5a5030', cursor: 'pointer', fontFamily: "'Georgia', serif", fontSize: 'var(--ui-font-size, 14px)',
   },
   closeBtn: {
     padding: '4px 12px', background: '#3a3520', color: '#e0d8c0',
@@ -693,13 +693,13 @@ const styles: Record<string, React.CSSProperties> = {
   archiveItem: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     width: '100%', padding: '6px 12px', background: 'none', color: '#e0d8c0',
-    border: 'none', cursor: 'pointer', fontFamily: "'Georgia', serif", fontSize: 13,
+    border: 'none', cursor: 'pointer', fontFamily: "'Georgia', serif", fontSize: 'var(--ui-font-size, 14px)',
     textAlign: 'left' as const,
   },
   archiveItemActive: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     width: '100%', padding: '6px 12px', background: '#2a2a4e', color: '#daa520',
-    border: 'none', cursor: 'pointer', fontFamily: "'Georgia', serif", fontSize: 13,
+    border: 'none', cursor: 'pointer', fontFamily: "'Georgia', serif", fontSize: 'var(--ui-font-size, 14px)',
     textAlign: 'left' as const, borderLeft: '3px solid #daa520',
   },
   archiveBadge: {
@@ -740,13 +740,13 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex', alignItems: 'center', gap: 8,
     width: '100%', padding: '8px 12px', background: 'none', color: '#e0d8c0',
     border: 'none', borderBottom: '1px solid #2a2a3e', cursor: 'pointer',
-    fontFamily: "'Georgia', serif", fontSize: 13, textAlign: 'left' as const,
+    fontFamily: "'Georgia', serif", fontSize: 'var(--ui-font-size, 14px)', textAlign: 'left' as const,
   },
   battleItemActive: {
     display: 'flex', alignItems: 'center', gap: 8,
     width: '100%', padding: '8px 12px', background: '#2a2a4e', color: '#daa520',
     border: 'none', borderBottom: '1px solid #2a2a3e', cursor: 'pointer',
-    fontFamily: "'Georgia', serif", fontSize: 13, textAlign: 'left' as const,
+    fontFamily: "'Georgia', serif", fontSize: 'var(--ui-font-size, 14px)', textAlign: 'left' as const,
     borderLeft: '3px solid #daa520',
   },
   battleIcon: { fontSize: 16 },
@@ -764,7 +764,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 20, fontWeight: 'bold', color: '#daa520',
   },
   outcomeSub: {
-    fontSize: 13, color: '#aaa', marginTop: 4,
+    fontSize: 'var(--ui-font-size, 14px)', color: '#aaa', marginTop: 4,
   },
   detailSection: {
     background: '#12122a', padding: '12px 16px', borderRadius: 4,
@@ -780,13 +780,13 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
   },
   forceHeader: {
-    fontSize: 14, fontWeight: 'bold', color: '#e0d8c0', marginBottom: 4,
+    fontSize: 'var(--ui-font-size, 14px)', fontWeight: 'bold', color: '#e0d8c0', marginBottom: 4,
   },
   roleTag: {
     fontSize: 11, color: '#888', fontWeight: 'normal',
   },
   forceStats: {
-    fontSize: 13, color: '#bbb', marginBottom: 2,
+    fontSize: 'var(--ui-font-size, 14px)', color: '#bbb', marginBottom: 2,
   },
   casualties: {
     fontSize: 12, color: '#e63946', marginTop: 4,
@@ -798,7 +798,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex', gap: 24, flexWrap: 'wrap' as const,
   },
   fieldItem: {
-    fontSize: 13, color: '#bbb',
+    fontSize: 'var(--ui-font-size, 14px)', color: '#bbb',
   },
   fieldLabel: {
     color: '#aaa',
@@ -807,6 +807,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#daa520', fontSize: 11,
   },
   medalItem: {
-    fontSize: 13, color: '#daa520', marginBottom: 2,
+    fontSize: 'var(--ui-font-size, 14px)', color: '#daa520', marginBottom: 2,
   },
 };

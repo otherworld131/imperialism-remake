@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   initWasm, processTurn, processTurns, setHumanPlayer,
   newGame, newScenarioGame, newObserverGame, newObserverScenarioGame,
-  getMapData, getNavyMarkers, getAvailableTechs, researchTech,
+  getMapData, getNavyMarkers, getSeaZones, getAvailableTechs, researchTech,
   getDiplomacyOverlay, getMilitaryOverlay,
   getUnitsInProvince, getCivilians, getShips, getValidMoveTargets, getBuildableUnits,
   queueUnitMove, cancelUnitMove, disbandUnit, deployCivilian, recallCivilian, engineerBuild,
@@ -25,7 +25,7 @@ import {
   parseGameJson,
 } from './wasm';
 import type {
-  TileData, NavyMarker, Headline, MapMode, DiplomacyOverlay, DiplomacyOverlayRelation, MilitaryOverlayEntry,
+  TileData, NavyMarker, SeaZone, Headline, MapMode, DiplomacyOverlay, DiplomacyOverlayRelation, MilitaryOverlayEntry,
   ArmyUnitDetail, ProvinceUnits, CiviliansData, CivilianDetail, ShipsData,
   ValidMoveTargets, BuildableUnits, PendingMove,
   TransportData, IndustryData, TradeData, DiplomacyScreenData, ProposalData,
@@ -60,31 +60,6 @@ const SCREEN_TABS: { key: ScreenTab; label: string; hotkey: string }[] = [
 
 function isFullScreen(screen: ScreenTab): boolean {
   return ['ledger', 'trade', 'newspaper', 'battle', 'legend'].includes(screen);
-}
-
-function extractNationTag(text: string, nations?: any[]): string | null {
-  if (!nations) return null;
-  for (const n of nations) {
-    if (n.nation_type === 'GreatPower' && text.includes(n.name)) return n.name;
-  }
-  return null;
-}
-
-
-function applyNewsFilters(
-  headlines: Headline[],
-  opts: { showNonActions: boolean; category: string; country: string },
-): Headline[] {
-  return headlines.filter(h => {
-    if (h.is_non_action && !opts.showNonActions) return false;
-    if (opts.category !== 'all' && h.category !== opts.category) return false;
-    if (opts.country !== 'all') {
-      const nid = parseInt(opts.country, 10);
-      if (Number.isNaN(nid)) return true;
-      if (!h.nation_ids?.includes(nid)) return false;
-    }
-    return true;
-  });
 }
 
 
@@ -131,6 +106,7 @@ function App() {
   }, [gameJson]);
   const [tiles, setTiles] = useState<TileData[]>([]);
   const [navyMarkers, setNavyMarkers] = useState<NavyMarker[]>([]);
+  const [seaZones, setSeaZones] = useState<SeaZone[]>([]);
   // Selection/hover are stored as *keys*, not snapshots, so a stale object
   // cannot linger after the marker list is refreshed at end-of-turn or on a
   // fog/viewpoint change. Derived live markers below (`selectedNavyMarker`,
@@ -167,6 +143,7 @@ function App() {
   const [disableFogOfWar, setDisableFogOfWar] = useState(false);
   const [organicBorders, setOrganicBorders] = useState(true);
   const [hideHexGrid, setHideHexGrid] = useState(false);
+  const [uiFontSize, setUiFontSize] = useState(14);
   const [newsFilterCategory, setNewsFilterCategory] = useState<string>('all');
   const [newsFilterCountry, setNewsFilterCountry] = useState<string>('all');
   const [mapMode, setMapMode] = useState<MapMode>('political');
@@ -336,13 +313,14 @@ function App() {
     // Fetch everything in parallel, then commit atomically if we're still the latest call.
     const nid = state.human_player_nation;
     const [
-      mapData, navyData, techsData,
+      mapData, navyData, seaZonesData, techsData,
       civiliansData, shipsRes, buildableData,
       transportRes, industryRes, tradeRes,
       diploRes, ledgerRes, gpLedgerRes,
     ] = await Promise.all([
       getMapData(json, disableFogOfWar),
       getNavyMarkers(json, disableFogOfWar),
+      getSeaZones(json),
       getAvailableTechs(json),
       getCivilians(json, nid),
       getShips(json, nid),
@@ -359,6 +337,7 @@ function App() {
     setGameState(state);
     setTiles(mapData);
     setNavyMarkers(navyData);
+    setSeaZones(seaZonesData);
     setTechs(techsData);
     setCivilians(civiliansData);
     setShipsData(shipsRes);
@@ -522,8 +501,8 @@ function App() {
       let currentJson = gameJson;
       let currentTurn: number = gameState?.turn?.[0] ?? gameState?.turn ?? 1;
       const allHeadlines: typeof headlines = [];
-      const allBattles: typeof currentBattles = [];
-      const allNavalBattles: typeof currentNavalBattles = [];
+      let lastBattles: typeof currentBattles = [];
+      let lastNavalBattles: typeof currentNavalBattles = [];
       skipCancelRef.current = false;
       setSkipCancellable(true);
       try {
@@ -535,13 +514,13 @@ function App() {
           currentJson = JSON.stringify(result.game);
           currentTurn = result.game?.turn?.[0] ?? result.game?.turn ?? (currentTurn + 1);
           allHeadlines.push(...result.reports.flatMap((r: any) => r.headlines));
-          allBattles.push(...result.reports.flatMap((r: any) => r.battles));
-          allNavalBattles.push(...result.reports.flatMap((r: any) => r.naval_battles));
+          lastBattles = result.reports.flatMap((r: any) => r.battles);
+          lastNavalBattles = result.reports.flatMap((r: any) => r.naval_battles);
         }
         if (!applyGameJsonLightweight(currentJson)) return;
         setHeadlines(allHeadlines);
-        setCurrentBattles(allBattles);
-        setCurrentNavalBattles(allNavalBattles);
+        setCurrentBattles(lastBattles);
+        setCurrentNavalBattles(lastNavalBattles);
         setArchiveData([]);
         setArchiveLoadState('idle');
         setProvinceUnits(null);
@@ -574,8 +553,8 @@ function App() {
       const batchSize = needle ? 1 : 50;
       let currentJson = gameJson;
       const allHeadlines: typeof headlines = [];
-      const allBattles: typeof currentBattles = [];
-      const allNavalBattles: typeof currentNavalBattles = [];
+      let lastBattlesSkip: typeof currentBattles = [];
+      let lastNavalBattlesSkip: typeof currentNavalBattles = [];
       let matched = false;
       let stoppedEarly = false;
       let processed = 0;
@@ -591,8 +570,8 @@ function App() {
 
         for (const r of result.reports) {
           allHeadlines.push(...r.headlines);
-          allBattles.push(...r.battles);
-          allNavalBattles.push(...r.naval_battles);
+          lastBattlesSkip = r.battles;
+          lastNavalBattlesSkip = r.naval_battles;
           if (needle) {
             for (const h of r.headlines) {
               if (h.text.toLowerCase().includes(needle) ||
@@ -613,8 +592,8 @@ function App() {
 
       if (!applyGameJsonLightweight(currentJson)) return;
       setHeadlines(allHeadlines);
-      setCurrentBattles(allBattles);
-      setCurrentNavalBattles(allNavalBattles);
+      setCurrentBattles(lastBattlesSkip);
+      setCurrentNavalBattles(lastNavalBattlesSkip);
       setActiveScreen('newspaper');
       setArchiveData([]);
       setArchiveLoadState('idle');
@@ -790,14 +769,23 @@ function App() {
 
     setSelectedTile(tile);
     setSelectedNavyKey(null);
+    setSelectedUnitIds([]);
     if (tile.owner && tile.terrain !== 'Sea' && (mapMode === 'diplomatic' || mapMode === 'relationship')) {
       setSelectedNation(tile.owner);
     }
 
-    // Load province units when clicking a capital tile; clear multi-selection on context switch
+    // Load province units when clicking a capital tile; auto-select all movable units for player capitals
     if (tile.is_capital && tile.province_id != null) {
-      setProvinceUnits(await getUnitsInProvince(gameJson, tile.province_id));
-      setSelectedUnitIds([]);
+      const units = await getUnitsInProvince(gameJson, tile.province_id);
+      setProvinceUnits(units);
+      if (tile.nation_id === playerNationId && units && units.army_units.length > 0) {
+        const selectableIds = units.army_units
+          .filter(u => u.category !== 'Garrison')
+          .map(u => u.id);
+        setSelectedUnitIds(selectableIds);
+      } else {
+        setSelectedUnitIds([]);
+      }
     } else {
       setProvinceUnits(null);
       setSelectedUnitIds([]);
@@ -1156,7 +1144,7 @@ function App() {
       // is just the one being observed, so suppress the "Your nation" label.
       const isSelf = !isObserver && tile.owner === selectedNation;
       return (
-        <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid #3a3520', fontSize: 11 }}>
+        <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid #3a3520', fontSize: 'var(--ui-font-size, 14px)' }}>
           <div style={{ color: '#888', marginBottom: 2 }}>
             {mapMode === 'diplomatic' ? 'Diplomatic' : 'Relationship'} view {'\u2014'} {selectedNation}
           </div>
@@ -1176,7 +1164,7 @@ function App() {
       const milInfo = getMilitaryInfoForTile(tile);
       const isMilitary = mapMode === 'military';
       return (
-        <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid #3a3520', fontSize: 11 }}>
+        <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid #3a3520', fontSize: 'var(--ui-font-size, 14px)' }}>
           <div style={{ color: '#888', marginBottom: 2 }}>
             {isMilitary ? 'Military' : 'Naval'} strength
           </div>
@@ -1238,7 +1226,7 @@ function App() {
   }
 
   return (
-    <main style={styles.container}>
+    <main style={{ ...styles.container, '--ui-font-size': `${uiFontSize}px`, fontSize: `var(--ui-font-size, 14px)` } as React.CSSProperties}>
       {/* Top bar */}
       <div style={styles.topBar} className="top-bar-responsive">
         <span style={styles.titleGroup} className="title-text">
@@ -1366,11 +1354,13 @@ function App() {
             onScaleChange={setMapScale}
             onOffsetChange={setMapOffset}
             navyMarkers={navyMarkers}
+            seaZones={seaZones}
             selectedNavyKey={selectedNavyKey}
             onNavyMarkerClick={handleNavyMarkerClick}
             onNavyMarkerHover={handleNavyMarkerHover}
             renderTooltipModeExtras={renderTooltipModeExtras}
             governmentTitleByNationId={governmentTitleByNationId}
+            selectedTileKey={selectedTile ? `${selectedTile.q},${selectedTile.r}` : null}
           />
         </div>
 
@@ -1382,14 +1372,6 @@ function App() {
           const countryOptions: { id: number; name: string }[] = (gameState?.nations || [])
             .filter((n: any) => !!n.name)
             .map((n: any) => ({ id: n.id as number, name: n.name as string }));
-          const visible = applyNewsFilters(headlines, {
-            showNonActions: showAiNonActions,
-            category: newsFilterCategory,
-            country: newsFilterCountry,
-          });
-          const playerNews = visible.filter(h => h.text.includes(playerName));
-          const worldNews = visible.filter(h => !h.text.includes(playerName));
-          // Ensure archive data is available (populated by effect when entering newspaper screen)
           const archive = archiveData;
           return (
             <NewspaperScreen
@@ -1398,8 +1380,6 @@ function App() {
               quarter={quarter}
               turnNumber={turnNumber}
               headlines={headlines}
-              playerNews={playerNews}
-              worldNews={worldNews}
               archiveData={archive}
               archiveLoadState={archiveLoadState}
               nations={gameState?.nations || []}
@@ -1500,25 +1480,25 @@ function App() {
                 const byOp = Object.entries(marker.by_operation);
                 return (
                   <div style={{
-                    fontSize: 13, padding: '8px 0', borderTop: '1px solid #3a3520',
+                    fontSize: 'var(--ui-font-size, 14px)', padding: '8px 0', borderTop: '1px solid #3a3520',
                     marginTop: 6, opacity: isSelected ? 1 : 0.85,
                   }}>
-                    <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
+                    <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#888', marginBottom: 4 }}>
                       {isSelected ? 'Selected navy' : 'Hovering navy'}
                     </div>
                     <div style={{ color: marker.kind === 'beachhead' ? '#ff8059' : '#e0d8c0' }}>
                       <b>{title}</b>
                     </div>
-                    <div style={{ fontSize: 12, color: '#bbb', marginTop: 4 }}>
+                    <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#bbb', marginTop: 4 }}>
                       {marker.ship_count} ships &middot; {marker.total_fp} FP &middot; {marker.total_hull} hull
                     </div>
                     {byType.length > 0 && (
-                      <div style={{ fontSize: 12, color: '#bbb', marginTop: 4 }}>
+                      <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#bbb', marginTop: 4 }}>
                         {byType.map(([t, n]) => `${n} ${t}`).join(', ')}
                       </div>
                     )}
                     {byOp.length > 0 && (
-                      <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
+                      <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#888', marginTop: 2 }}>
                         {byOp.map(([op, n]) => `${n} ${op}`).join(' \u00b7 ')}
                       </div>
                     )}
@@ -1532,7 +1512,7 @@ function App() {
                 const diploInfo = getDiploInfoForTile(activeTile);
                 const isSelf = activeTile?.owner === selectedNation;
                 return (
-                  <div style={{ fontSize: 13, padding: '6px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
+                  <div style={{ fontSize: 'var(--ui-font-size, 14px)', padding: '6px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
                     <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
                       {mapMode === 'diplomatic' ? 'Diplomatic' : 'Relationship'} view — {selectedNation}
                     </div>
@@ -1552,7 +1532,7 @@ function App() {
                 const activeTile = selectedTile;
                 const milInfo = getMilitaryInfoForTile(activeTile);
                 return (
-                  <div style={{ fontSize: 13, padding: '6px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
+                  <div style={{ fontSize: 'var(--ui-font-size, 14px)', padding: '6px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
                     <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
                       {mapMode === 'military' ? 'Military' : 'Naval'} strength
                     </div>
@@ -1563,7 +1543,7 @@ function App() {
                       <div>Navy: {activeTile.naval_ship_count} warships, {activeTile.naval_firepower} FP</div>
                     )}
                     {milInfo && (
-                      <div style={{ marginTop: 4, fontSize: 12, color: '#bbb' }}>
+                      <div style={{ marginTop: 4, fontSize: 'var(--ui-font-size, 14px)', color: '#bbb' }}>
                         {mapMode === 'military'
                           ? <span>{milInfo.nation_name}: {milInfo.army_unit_count} total units, {milInfo.total_army_fp.toFixed(1)} total FP</span>
                           : <span>{milInfo.nation_name}: {milInfo.warship_count} warships, {milInfo.total_naval_fp} total FP</span>
@@ -1576,7 +1556,7 @@ function App() {
 
               {/* Map mode legend */}
               {mapMode === 'diplomatic' && (
-                <div style={{ fontSize: 11, padding: '8px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
+                <div style={{ fontSize: 'var(--ui-font-size, 14px)', padding: '8px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
                   <div style={{ color: '#888', marginBottom: 4 }}>Legend</div>
                   {[
                     { color: '#ffd900', label: 'Self' },
@@ -1593,7 +1573,7 @@ function App() {
                 </div>
               )}
               {mapMode === 'relationship' && (
-                <div style={{ fontSize: 11, padding: '8px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
+                <div style={{ fontSize: 'var(--ui-font-size, 14px)', padding: '8px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
                   <div style={{ color: '#888', marginBottom: 4 }}>Relationship Score</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span>-100</span>
@@ -1603,7 +1583,7 @@ function App() {
                 </div>
               )}
               {mapMode === 'military' && (
-                <div style={{ fontSize: 11, padding: '8px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
+                <div style={{ fontSize: 'var(--ui-font-size, 14px)', padding: '8px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
                   <div style={{ color: '#888', marginBottom: 4 }}>Army Strength (vs average)</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span>Weak</span>
@@ -1613,7 +1593,7 @@ function App() {
                 </div>
               )}
               {mapMode === 'naval' && (
-                <div style={{ fontSize: 11, padding: '8px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
+                <div style={{ fontSize: 'var(--ui-font-size, 14px)', padding: '8px 0', borderTop: '1px solid #3a3520', marginTop: 6 }}>
                   <div style={{ color: '#888', marginBottom: 4 }}>Naval Strength (vs average)</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span>Weak</span>
@@ -1625,19 +1605,19 @@ function App() {
 
               {/* Status message (errors, confirmations) */}
               {statusMessage && (
-                <div style={{ background: 'rgba(200,50,50,0.2)', border: '1px solid rgba(200,50,50,0.5)', borderRadius: 4, padding: 8, marginBottom: 8, fontSize: 12, color: '#f88' }}>
+                <div style={{ background: 'rgba(200,50,50,0.2)', border: '1px solid rgba(200,50,50,0.5)', borderRadius: 4, padding: 8, marginBottom: 8, fontSize: 'var(--ui-font-size, 14px)', color: '#f88' }}>
                   {statusMessage}
                 </div>
               )}
 
               {/* Movement/Deploy mode indicator */}
               {isMovementMode && (
-                <div style={{ background: 'rgba(255,200,0,0.15)', border: '1px solid rgba(255,200,0,0.4)', borderRadius: 4, padding: 8, marginBottom: 8, fontSize: 12 }}>
+                <div style={{ background: 'rgba(255,200,0,0.15)', border: '1px solid rgba(255,200,0,0.4)', borderRadius: 4, padding: 8, marginBottom: 8, fontSize: 'var(--ui-font-size, 14px)' }}>
                   <b>Movement Mode</b> — {selectedUnitIds.length > 1 ? `moving ${selectedUnitIds.length} units` : 'moving 1 unit'} — click a highlighted province, or press Escape to cancel.
                 </div>
               )}
               {isDeployMode && deployingCivilian && (
-                <div style={{ background: 'rgba(46,204,64,0.15)', border: '1px solid rgba(46,204,64,0.4)', borderRadius: 4, padding: 8, marginBottom: 8, fontSize: 12 }}>
+                <div style={{ background: 'rgba(46,204,64,0.15)', border: '1px solid rgba(46,204,64,0.4)', borderRadius: 4, padding: 8, marginBottom: 8, fontSize: 'var(--ui-font-size, 14px)' }}>
                   <b>Deploy {deployingCivilian.type}</b> — click a highlighted tile, or press Escape to cancel.
                 </div>
               )}
@@ -1691,7 +1671,7 @@ function App() {
               )}
 
               <h3 style={styles.panelTitle}>UI</h3>
-              <div style={{ padding: '4px 0', fontSize: '12px', display: 'flex', flexDirection: 'column' as const, gap: 4 }}>
+              <div style={{ padding: '4px 0', fontSize: 'var(--ui-font-size, 14px)', display: 'flex', flexDirection: 'column' as const, gap: 4 }}>
                 <label>
                   <input type="checkbox" checked={organicBorders} onChange={e => setOrganicBorders(e.target.checked)} />
                   {' '}Organic borders
@@ -1700,10 +1680,22 @@ function App() {
                   <input type="checkbox" checked={hideHexGrid} onChange={e => setHideHexGrid(e.target.checked)} />
                   {' '}Hide hex grid
                 </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span>Font:</span>
+                  <input
+                    type="range"
+                    min={10}
+                    max={20}
+                    value={uiFontSize}
+                    onChange={e => setUiFontSize(parseInt(e.target.value))}
+                    style={{ flex: 1, cursor: 'pointer' }}
+                  />
+                  <span style={{ minWidth: 28, textAlign: 'right' }}>{uiFontSize}px</span>
+                </div>
               </div>
 
               <h3 style={styles.panelTitle}>Debug</h3>
-              <div style={{ padding: '4px 0', fontSize: '12px', display: 'flex', flexDirection: 'column' as const, gap: 4 }}>
+              <div style={{ padding: '4px 0', fontSize: 'var(--ui-font-size, 14px)', display: 'flex', flexDirection: 'column' as const, gap: 4 }}>
                 <label>
                   <input type="checkbox" checked={showHiddenResources} onChange={e => setShowHiddenResources(e.target.checked)} />
                   {' '}Show hidden resources
@@ -1793,7 +1785,7 @@ function App() {
         <div style={{
           position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)',
           background: 'rgba(200,50,50,0.95)', border: '1px solid rgba(255,80,80,0.8)',
-          borderRadius: 6, padding: '10px 20px', fontSize: 13, color: '#fff',
+          borderRadius: 6, padding: '10px 20px', fontSize: 'var(--ui-font-size, 14px)', color: '#fff',
           zIndex: 200, maxWidth: 500, textAlign: 'center',
           boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
         }}>
@@ -1846,7 +1838,7 @@ const styles: Record<string, React.CSSProperties> = {
   titleGroup: { display: 'inline-flex', alignItems: 'center', gap: 10 },
   title: { fontWeight: 'bold', fontSize: 18, color: '#daa520' },
   screenTabs: { display: 'flex', background: '#0f0f23', borderBottom: '2px solid #3a3520', flexShrink: 0 },
-  screenTab: { flex: 1, padding: '10px 8px', textAlign: 'center' as const, fontSize: 13, color: '#9a9a9a', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'Georgia, serif', borderBottom: '3px solid transparent', display: 'flex', flexDirection: 'column' as const, alignItems: 'center' as const },
+  screenTab: { flex: 1, padding: '10px 8px', textAlign: 'center' as const, fontSize: 'var(--ui-font-size, 14px)', color: '#9a9a9a', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'Georgia, serif', borderBottom: '3px solid transparent', display: 'flex', flexDirection: 'column' as const, alignItems: 'center' as const },
   screenTabActive: { color: '#daa520', borderBottomColor: '#daa520', background: 'rgba(218,165,32,0.05)' },
   hotkey: { fontSize: 10, color: '#555', display: 'block', marginTop: 2 },
   hotkeyActive: { fontSize: 10, color: '#8a7530', display: 'block', marginTop: 2 },
@@ -1854,7 +1846,7 @@ const styles: Record<string, React.CSSProperties> = {
   mapContainer: { flex: 1, background: '#0a0a1a', minHeight: 0, position: 'relative' as const },
   sidePanel: { width: 260, padding: 12, background: '#161625', borderLeft: '2px solid #3a3520', overflowY: 'auto' as const, flexShrink: 0 },
   panelTitle: { margin: '12px 0 6px', color: '#daa520', borderBottom: '1px solid #3a3520', paddingBottom: 4 },
-  tileInfo: { fontSize: 13 },
+  tileInfo: { fontSize: 'var(--ui-font-size, 14px)' },
   tileOwnerRow: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 },
   tileOwnerName: { fontWeight: 'bold', color: '#daa520' },
   tileSelected: { background: 'rgba(218,165,32,0.1)', border: '1px solid rgba(218,165,32,0.3)', borderRadius: 4, padding: 8, marginBottom: 8 },
@@ -1862,17 +1854,17 @@ const styles: Record<string, React.CSSProperties> = {
   tileLabel: { fontSize: 11, color: '#daa520', textTransform: 'uppercase' as const, letterSpacing: 0.5, marginBottom: 4 },
   tileLabelDim: { fontSize: 11, color: '#888', textTransform: 'uppercase' as const, letterSpacing: 0.5, marginBottom: 4 },
   hint: { color: '#9a9a9a', fontStyle: 'italic' },
-  nationList: { fontSize: 13 },
+  nationList: { fontSize: 'var(--ui-font-size, 14px)' },
   nationItem: { display: 'flex', justifyContent: 'space-between', padding: '2px 0' },
   btn: { padding: '4px 12px', background: '#3a3520', color: '#e0d8c0', border: '1px solid #5a5030', cursor: 'pointer', fontFamily: 'Georgia, serif' },
   endTurnBtn: { padding: '6px 20px', background: '#8b4513', color: '#fff', border: '1px solid #a0522d', cursor: 'pointer', fontWeight: 'bold', fontFamily: 'Georgia, serif' },
   skipInput: { width: 48, padding: '4px 6px', background: '#1a1a2e', color: '#e0d8c0', border: '1px solid #5a5030', fontFamily: 'Georgia, serif' },
   skipUntilInput: { width: 110, padding: '4px 6px', background: '#1a1a2e', color: '#e0d8c0', border: '1px solid #5a5030', fontFamily: 'Georgia, serif' },
   viewpointSelect: { padding: '4px 8px', background: '#3a3520', color: '#e0d8c0', border: '1px solid #5a5030', fontFamily: 'Georgia, serif', cursor: 'pointer' },
-  mapKeyChip: { padding: '2px 8px', background: '#1a1a2e', color: '#9a9a9a', border: '1px solid #3a3520', fontFamily: 'monospace', fontSize: 12, cursor: 'pointer', userSelect: 'none' as const },
+  mapKeyChip: { padding: '2px 8px', background: '#1a1a2e', color: '#9a9a9a', border: '1px solid #3a3520', fontFamily: 'monospace', fontSize: 'var(--ui-font-size, 14px)', cursor: 'pointer', userSelect: 'none' as const },
   modal: { position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 100 },
   modalContent: { background: '#1a1a2e', border: '2px solid #daa520', padding: 24, maxWidth: 500, maxHeight: '80vh', overflowY: 'auto' as const },
-  headline: { margin: '6px 0', fontSize: 14 },
+  headline: { margin: '6px 0', fontSize: 'var(--ui-font-size, 14px)' },
   techItem: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' },
 };
 

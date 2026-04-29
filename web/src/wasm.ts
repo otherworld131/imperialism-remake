@@ -54,6 +54,17 @@ export interface NavyMarker {
   by_type: Record<string, number>;
   by_operation: Record<string, number>;
   visible: boolean;
+  sea_zone_id?: number;
+  sea_zone_name?: string;
+}
+
+export interface SeaZone {
+  id: number;
+  name: string;
+  is_lake: boolean;
+  center_q: number;
+  center_r: number;
+  hexes: { q: number; r: number }[];
 }
 
 export interface Headline {
@@ -509,6 +520,10 @@ export async function getMapData(gameJson: string, disableFog: boolean = false):
 
 export async function getNavyMarkers(gameJson: string, disableFog: boolean = false): Promise<NavyMarker[]> {
   return JSON.parse(await call<string>('wasm_get_navy_markers', gameJson, disableFog));
+}
+
+export async function getSeaZones(gameJson: string): Promise<SeaZone[]> {
+  return JSON.parse(await call<string>('wasm_get_sea_zones', gameJson));
 }
 
 export async function getAvailableTechs(gameJson: string): Promise<any[]> {

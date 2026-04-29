@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import type { Headline, ArchivedNewspaper } from '../wasm';
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -56,8 +56,6 @@ interface Props {
   quarter: number;
   turnNumber: number;
   headlines: Headline[];
-  playerNews: Headline[];
-  worldNews: Headline[];
   archiveData: ArchivedNewspaper[];
   archiveLoadState: 'idle' | 'loading' | 'loaded' | 'error';
   nations: any[];
@@ -92,14 +90,21 @@ export default function NewspaperScreen({
   const handleCategoryChange = (cat: string) => { setLocalCategory(cat); onCategoryChange(cat); };
   const handleCountryChange = (country: string) => { setLocalCountry(country); onCountryChange(country); };
 
-  // Get current headlines to display
-  const currentHeadlines = mode === 'current' ? headlines : (() => {
-    const entry = archiveData.find(a => a.turn === selectedArchiveTurn);
-    return entry?.headlines || [];
-  })();
+  const archiveByTurn = useMemo(
+    () => new Map(archiveData.map(entry => [entry.turn, entry])),
+    [archiveData],
+  );
+
+  const sortedArchive = useMemo(
+    () => [...archiveData].sort((a, b) => b.turn - a.turn),
+    [archiveData],
+  );
+
+  const selectedArchive = selectedArchiveTurn === null ? null : archiveByTurn.get(selectedArchiveTurn) ?? null;
+  const currentHeadlines = mode === 'current' ? headlines : selectedArchive?.headlines || [];
 
   const q = localText.trim().toLowerCase();
-  const visible = applyNewsFilters(currentHeadlines, {
+  const visible = useMemo(() => applyNewsFilters(currentHeadlines, {
     showNonActions: showAiNonActions,
     category: localCategory,
     country: localCountry,
@@ -107,19 +112,18 @@ export default function NewspaperScreen({
     !q ||
     h.text.toLowerCase().includes(q) ||
     (h.reason || '').toLowerCase().includes(q)
+  ), [currentHeadlines, showAiNonActions, localCategory, localCountry, q]);
+  const playerNews = useMemo(
+    () => visible.filter(h => h.text.includes(playerName)),
+    [visible, playerName],
   );
-  const playerNews = visible.filter(h => h.text.includes(playerName));
-  const worldNews = visible.filter(h => !h.text.includes(playerName));
+  const worldNews = useMemo(
+    () => visible.filter(h => !h.text.includes(playerName)),
+    [visible, playerName],
+  );
 
-  // Sort archive most recent first
-  const sortedArchive = [...archiveData].sort((a, b) => b.turn - a.turn);
-
-  const displayYear = mode === 'archive' && selectedArchiveTurn !== null
-    ? (() => { const e = archiveData.find(a => a.turn === selectedArchiveTurn); return e ? e.year : year; })()
-    : year;
-  const displayQuarter = mode === 'archive' && selectedArchiveTurn !== null
-    ? (() => { const e = archiveData.find(a => a.turn === selectedArchiveTurn); return e ? e.quarter : quarter; })()
-    : quarter;
+  const displayYear = mode === 'archive' && selectedArchive !== null ? selectedArchive.year : year;
+  const displayQuarter = mode === 'archive' && selectedArchive !== null ? selectedArchive.quarter : quarter;
   const displayTurn = mode === 'archive' && selectedArchiveTurn !== null ? selectedArchiveTurn : turnNumber;
 
   return (
@@ -193,7 +197,7 @@ export default function NewspaperScreen({
                   key={entry.turn}
                   onClick={() => setSelectedArchiveTurn(entry.turn)}
                   style={{
-                    padding: '8px 12px', cursor: 'pointer', fontSize: 13,
+                    padding: '8px 12px', cursor: 'pointer', fontSize: 'var(--ui-font-size, 14px)',
                     background: selectedArchiveTurn === entry.turn ? 'rgba(0,0,0,0.1)' : 'transparent',
                     borderLeft: selectedArchiveTurn === entry.turn ? '3px solid #8b4513' : '3px solid transparent',
                     color: selectedArchiveTurn === entry.turn ? '#333' : '#666',
@@ -224,7 +228,7 @@ export default function NewspaperScreen({
                   }}>
                     {h.text}
                     {showAiReasoning && h.reason && (
-                      <div style={{ fontSize: 12, color: '#888', marginTop: 2, fontStyle: 'italic', whiteSpace: 'pre-wrap' }}>{h.reason}</div>
+                      <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#888', marginTop: 2, fontStyle: 'italic', whiteSpace: 'pre-wrap' }}>{h.reason}</div>
                     )}
                   </div>
                 ))}
@@ -243,7 +247,7 @@ export default function NewspaperScreen({
                       {tag && <span style={styles.nationTag}>{tag}</span>}
                       {h.text}
                       {showAiReasoning && h.reason && (
-                        <div style={{ fontSize: 12, color: '#888', marginTop: 2, fontStyle: 'italic', whiteSpace: 'pre-wrap' }}>{h.reason}</div>
+                        <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#888', marginTop: 2, fontStyle: 'italic', whiteSpace: 'pre-wrap' }}>{h.reason}</div>
                       )}
                     </div>
                   );
@@ -288,7 +292,7 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: 2,
   },
   date: {
-    fontSize: 14, color: '#666', marginTop: 4,
+    fontSize: 'var(--ui-font-size, 14px)', color: '#666', marginTop: 4,
   },
   toolbar: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -300,7 +304,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   modeTab: {
     padding: '6px 16px', background: 'transparent', border: '1px solid #999',
-    cursor: 'pointer', fontFamily: "'Georgia', serif", fontSize: 13, color: '#666',
+    cursor: 'pointer', fontFamily: "'Georgia', serif", fontSize: 'var(--ui-font-size, 14px)', color: '#666',
     borderRadius: 3,
   },
   modeTabActive: {
@@ -310,18 +314,18 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex', gap: 8,
   },
   select: {
-    padding: '4px 8px', fontFamily: "'Georgia', serif", fontSize: 12,
+    padding: '4px 8px', fontFamily: "'Georgia', serif", fontSize: 'var(--ui-font-size, 14px)',
     border: '1px solid #999', background: '#fff', color: '#333',
   },
   searchInput: {
-    padding: '4px 8px', fontFamily: "'Georgia', serif", fontSize: 12,
+    padding: '4px 8px', fontFamily: "'Georgia', serif", fontSize: 'var(--ui-font-size, 14px)',
     border: '1px solid #999', background: '#fff', color: '#333',
     minWidth: 160,
   },
   showMapBtn: {
     padding: '4px 10px', background: '#8b4513', color: '#fff',
     border: '1px solid #6b3410', cursor: 'pointer',
-    fontFamily: "'Georgia', serif", fontSize: 12, borderRadius: 3,
+    fontFamily: "'Georgia', serif", fontSize: 'var(--ui-font-size, 14px)', borderRadius: 3,
   },
   contentArea: {
     display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden',
@@ -341,7 +345,7 @@ const styles: Record<string, React.CSSProperties> = {
     columnSpan: 'all' as any,
   },
   headline: {
-    padding: '6px 0 6px 12px', margin: '4px 0', fontSize: 14,
+    padding: '6px 0 6px 12px', margin: '4px 0', fontSize: 'var(--ui-font-size, 14px)',
     borderLeft: '3px solid transparent', lineHeight: 1.5,
     breakInside: 'avoid' as any,
   },
@@ -361,6 +365,6 @@ const styles: Record<string, React.CSSProperties> = {
   continueBtn: {
     padding: '8px 24px', background: '#8b4513', color: '#fff',
     border: 'none', cursor: 'pointer', fontWeight: 'bold',
-    fontFamily: "'Georgia', serif", fontSize: 14, borderRadius: 3,
+    fontFamily: "'Georgia', serif", fontSize: 'var(--ui-font-size, 14px)', borderRadius: 3,
   },
 };

@@ -153,12 +153,14 @@ cargo run --release --bin imperialism -- [map_key] [nation_index]
 
 # Web frontend — rebuild WASM and (re)start the dev server
 ./web/restart-web-server.sh
+# Use optimized WASM when testing gameplay/runtime performance
+./web/restart-web-server.sh --opt
 # Then open http://localhost:5173
 ```
 
 After implementing any plan that touches game logic, **always run a few batch games** (e.g. `--batch 3`) to verify the full game loop works end-to-end, not just unit tests.
 
-After any changes to Rust code that affect the web frontend, use `./web/restart-web-server.sh` to rebuild the WASM bridge and restart the dev server.
+After any changes to Rust code that affect the web frontend, use `./web/restart-web-server.sh` to rebuild the WASM bridge and restart the dev server. Use `./web/restart-web-server.sh --opt` when you need an optimized WASM build for performance testing.
 
 ## Reference: Original Game Manual
 

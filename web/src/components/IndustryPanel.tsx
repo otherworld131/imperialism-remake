@@ -15,7 +15,7 @@ export default function IndustryPanel({ industry, onExpand }: Props) {
   const { buildings, warehouse, labor, production_forecast, can_expand } = industry;
 
   return (
-    <div style={{ fontSize: 13 }}>
+    <div style={{ fontSize: 'var(--ui-font-size, 14px)' }}>
       {/* Production Chains */}
       <div style={{ fontWeight: 'bold', marginBottom: 4 }}>Production Chains</div>
       {Object.entries(CHAIN_LABELS).map(([key, label]) => {
@@ -25,11 +25,11 @@ export default function IndustryPanel({ industry, onExpand }: Props) {
             background: 'rgba(255,255,255,0.03)', borderRadius: 3,
             padding: '3px 5px', marginBottom: 3,
           }}>
-            <div style={{ fontWeight: 'bold', fontSize: 11, color: '#daa520' }}>{label.name}</div>
-            <div style={{ fontSize: 11, color: '#bbb' }}>
+            <div style={{ fontWeight: 'bold', fontSize: 'var(--ui-font-size, 14px)', color: '#daa520' }}>{label.name}</div>
+            <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#bbb' }}>
               {label.mill}: <span style={{ color: '#e0d8c0' }}>{forecast.mill_output}</span>
             </div>
-            <div style={{ fontSize: 11, color: '#bbb' }}>
+            <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#bbb' }}>
               {label.factory}: <span style={{ color: '#e0d8c0' }}>{forecast.factory_output}</span>
             </div>
           </div>
@@ -47,7 +47,7 @@ export default function IndustryPanel({ industry, onExpand }: Props) {
               padding: '2px 0', marginBottom: 2,
             }}>
               <div>
-                <span style={{ fontSize: 12 }}>{b.display_name}</span>
+                <span style={{ fontSize: 'var(--ui-font-size, 14px)' }}>{b.display_name}</span>
                 <span style={{ fontSize: 10, color: '#888', marginLeft: 4 }}>
                   {b.capacity}{b.is_expanding ? `\u2192${b.capacity + b.pending_capacity}` : `/${b.next_capacity}`}
                 </span>
@@ -82,7 +82,7 @@ export default function IndustryPanel({ industry, onExpand }: Props) {
       {/* Labor */}
       <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 8 }}>
         <div style={{ fontWeight: 'bold', marginBottom: 4 }}>Labor</div>
-        <div style={{ fontSize: 11, color: '#aaa' }}>
+        <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#aaa' }}>
           {labor.untrained} untrained, {labor.trained} trained, {labor.expert} expert
           <span style={{ color: '#daa520', marginLeft: 4 }}>= {labor.total_labor_units} units</span>
         </div>
@@ -99,7 +99,7 @@ function WarehouseSection({ label, items }: { label: string; items: Record<strin
       <div style={{ fontSize: 10, color: '#888', textTransform: 'uppercase', marginBottom: 2 }}>{label}</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
         {entries.map(([k, v]) => (
-          <span key={k} style={{ fontSize: 11 }}>
+          <span key={k} style={{ fontSize: 'var(--ui-font-size, 14px)' }}>
             {k.replace(/([A-Z])/g, ' $1').trim()}: <span style={{ color: '#daa520' }}>{v}</span>
           </span>
         ))}

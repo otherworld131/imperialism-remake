@@ -169,10 +169,10 @@ export default function LegendScreen({ nations = [], onClose }: Props) {
             <h3 style={styles.sectionTitle}>Military Units</h3>
             {UNIT_LEGEND.map(cat => (
               <div key={cat.category} style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 12, color: '#daa520', textTransform: 'uppercase' as const, letterSpacing: 1, marginBottom: 4 }}>
+                <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#daa520', textTransform: 'uppercase' as const, letterSpacing: 1, marginBottom: 4 }}>
                   {cat.category}
                 </div>
-                <div style={{ fontSize: 13, color: '#ccc', lineHeight: 1.6 }}>
+                <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#ccc', lineHeight: 1.6 }}>
                   {cat.units.join(' \u2022 ')}
                 </div>
               </div>
@@ -196,19 +196,19 @@ export default function LegendScreen({ nations = [], onClose }: Props) {
           <div style={styles.section}>
             <h3 style={styles.sectionTitle}>Strength Map Modes</h3>
             <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>Military / Naval Strength (relative to average)</div>
+              <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#999', marginBottom: 4 }}>Military / Naval Strength (relative to average)</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 12 }}>Weak</span>
+                <span style={{ fontSize: 'var(--ui-font-size, 14px)' }}>Weak</span>
                 <div style={{ flex: 1, height: 16, background: 'linear-gradient(to right, rgb(220,40,40), rgb(200,200,40) 50%, rgb(40,200,40))', borderRadius: 3 }} />
-                <span style={{ fontSize: 12 }}>Strong</span>
+                <span style={{ fontSize: 'var(--ui-font-size, 14px)' }}>Strong</span>
               </div>
             </div>
             <div>
-              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>Relationship Score</div>
+              <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#999', marginBottom: 4 }}>Relationship Score</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 12 }}>-100</span>
+                <span style={{ fontSize: 'var(--ui-font-size, 14px)' }}>-100</span>
                 <div style={{ flex: 1, height: 16, background: 'linear-gradient(to right, rgb(220,40,40), rgb(160,160,160) 50%, rgb(40,200,40))', borderRadius: 3 }} />
-                <span style={{ fontSize: 12 }}>+100</span>
+                <span style={{ fontSize: 'var(--ui-font-size, 14px)' }}>+100</span>
               </div>
             </div>
           </div>
@@ -321,10 +321,10 @@ const styles: Record<string, React.CSSProperties> = {
   emoji: {
     fontSize: 20, width: 28, textAlign: 'center' as const, flexShrink: 0,
   },
-  itemName: { fontSize: 14, fontWeight: 'bold' as const },
-  itemDesc: { fontSize: 12, color: '#999' },
+  itemName: { fontSize: 'var(--ui-font-size, 14px)', fontWeight: 'bold' as const },
+  itemDesc: { fontSize: 'var(--ui-font-size, 14px)', color: '#999' },
   flagGroupTitle: {
-    fontSize: 12, color: '#daa520', textTransform: 'uppercase' as const,
+    fontSize: 'var(--ui-font-size, 14px)', color: '#daa520', textTransform: 'uppercase' as const,
     letterSpacing: 1, marginBottom: 10,
   },
   flagGrid: {
@@ -344,7 +344,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid rgba(255,255,255,0.2)', flexShrink: 0,
   },
   flagName: {
-    fontSize: 14, fontWeight: 'bold' as const, color: '#e0d8c0',
+    fontSize: 'var(--ui-font-size, 14px)', fontWeight: 'bold' as const, color: '#e0d8c0',
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
   },
   flagTitle: {

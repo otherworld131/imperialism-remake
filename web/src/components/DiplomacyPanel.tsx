@@ -35,7 +35,7 @@ export default function DiplomacyPanel({
   });
 
   return (
-    <div style={{ fontSize: 13 }}>
+    <div style={{ fontSize: 'var(--ui-font-size, 14px)' }}>
       {/* Standing */}
       <div style={{ fontWeight: 'bold', marginBottom: 4 }}>Standing</div>
       <div style={{ marginBottom: 8 }}>
@@ -122,12 +122,12 @@ function NationRow({
         onClick={rel.is_in_anarchy ? undefined : onToggle}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <span style={{ fontSize: 12, fontWeight: 'bold' }}>{rel.nation_name}</span>
+          <span style={{ fontSize: 'var(--ui-font-size, 14px)', fontWeight: 'bold' }}>{rel.nation_name}</span>
           <span style={{ fontSize: 9, color: '#888', background: 'rgba(255,255,255,0.06)', borderRadius: 2, padding: '0 3px' }}>
             {rel.nation_type === 'GreatPower' ? 'GP' : 'MN'}
           </span>
         </div>
-        <span style={{ fontSize: 11, color: STATUS_COLORS[rel.status] || '#888' }}>{rel.status}</span>
+        <span style={{ fontSize: 'var(--ui-font-size, 14px)', color: STATUS_COLORS[rel.status] || '#888' }}>{rel.status}</span>
       </div>
 
       {/* Score bar */}

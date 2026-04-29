@@ -28,13 +28,13 @@ export default function CivilianPanel({
   const { deployed, undeployed } = civilians;
 
   return (
-    <div style={{ fontSize: 13 }}>
+    <div style={{ fontSize: 'var(--ui-font-size, 14px)' }}>
       <div style={{ fontWeight: 'bold', marginBottom: 6, color: '#ccc' }}>Civilian Workforce</div>
 
       {/* Undeployed */}
       {undeployed.length > 0 && (
         <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 11, color: '#888', marginBottom: 3 }}>
+          <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#888', marginBottom: 3 }}>
             Undeployed ({undeployed.length})
           </div>
           {undeployed.map(civ => (
@@ -57,7 +57,7 @@ export default function CivilianPanel({
       {/* Deployed */}
       {deployed.length > 0 && (
         <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 11, color: '#888', marginBottom: 3 }}>
+          <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#888', marginBottom: 3 }}>
             Deployed ({deployed.length})
           </div>
           {deployed.map(civ => (
@@ -124,7 +124,7 @@ export default function CivilianPanel({
       {/* Hire section */}
       <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8 }}>
         <div style={{ fontWeight: 'bold', marginBottom: 4, color: '#ccc' }}>Hire Civilian</div>
-        <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
+        <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#888', marginBottom: 4 }}>
           Treasury: ${treasury.toLocaleString()}
         </div>
         {buildableCivilians.map(b => {
@@ -134,7 +134,7 @@ export default function CivilianPanel({
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
               padding: '2px 0', opacity: canBuild ? 1 : 0.45,
             }}>
-              <span style={{ fontSize: 12 }}>
+              <span style={{ fontSize: 'var(--ui-font-size, 14px)' }}>
                 {CIVILIAN_EMOJI[b.type] || ''} {b.type}
                 <span style={{ color: '#888', fontSize: 10, marginLeft: 4 }}>${b.cost}</span>
               </span>

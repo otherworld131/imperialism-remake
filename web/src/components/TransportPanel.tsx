@@ -16,7 +16,7 @@ export default function TransportPanel({ transport, onBuildCar, onSetAllocation 
   const totalPct = Object.values(allocationMap).reduce((s, v) => s + v, 0);
 
   return (
-    <div style={{ fontSize: 13 }}>
+    <div style={{ fontSize: 'var(--ui-font-size, 14px)' }}>
       <div style={{ fontWeight: 'bold', marginBottom: 6 }}>Freight Cars</div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
         <span>Cars: {freight_cars}</span>
@@ -43,7 +43,7 @@ export default function TransportPanel({ transport, onBuildCar, onSetAllocation 
           </div>
         )}
         {deliveries.length === 0 && (
-          <div style={{ color: '#888', fontStyle: 'italic', fontSize: 12 }}>No resources available</div>
+          <div style={{ color: '#888', fontStyle: 'italic', fontSize: 'var(--ui-font-size, 14px)' }}>No resources available</div>
         )}
         {deliveries.map(d => {
           const pct = allocationMap[d.resource] ?? 0;
@@ -52,7 +52,7 @@ export default function TransportPanel({ transport, onBuildCar, onSetAllocation 
               display: 'flex', alignItems: 'center', gap: 4, marginBottom: 3,
               background: 'rgba(255,255,255,0.03)', borderRadius: 3, padding: '3px 4px',
             }}>
-              <span style={{ flex: 1, fontSize: 12 }}>{resourceLabel(d.resource)}</span>
+              <span style={{ flex: 1, fontSize: 'var(--ui-font-size, 14px)' }}>{resourceLabel(d.resource)}</span>
               <button
                 onClick={() => onSetAllocation(d.resource, Math.max(0, pct - 10))}
                 style={smallBtn}
@@ -72,7 +72,7 @@ export default function TransportPanel({ transport, onBuildCar, onSetAllocation 
 
       <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 8 }}>
         <div style={{ fontWeight: 'bold', marginBottom: 4 }}>Military Transport</div>
-        <div style={{ fontSize: 12, color: '#aaa' }}>
+        <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#aaa' }}>
           Rail capacity: {military_transport_capacity} unit{military_transport_capacity !== 1 ? 's' : ''}
         </div>
       </div>

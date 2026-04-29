@@ -1,6 +1,6 @@
 import { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
 import type { ReactNode } from 'react';
-import type { TileData, MapMode, DiplomacyOverlay, MilitaryOverlayEntry, ArmyUnitDetail, ValidMoveTargets, NavyMarker } from '../wasm';
+import type { TileData, MapMode, DiplomacyOverlay, MilitaryOverlayEntry, ArmyUnitDetail, ValidMoveTargets, NavyMarker, SeaZone } from '../wasm';
 import { computeNationLabels } from '../lib/nationLabels';
 import { stitchPolylines, vKey, smoothPolylineAnchored, fbm, type Vec2 } from '../lib/mapGeometry';
 import HexTooltip from './HexTooltip';
@@ -263,6 +263,7 @@ interface Props {
   onTileClick?: (tile: TileData) => void;
   onTileHover?: (tile: TileData | null) => void;
   navyMarkers?: NavyMarker[];
+  seaZones?: SeaZone[];
   selectedNavyKey?: string | null;
   onNavyMarkerClick?: (marker: NavyMarker | null) => void;
   onNavyMarkerHover?: (marker: NavyMarker | null) => void;
@@ -287,6 +288,8 @@ interface Props {
   highlightedNationId?: number | null;
   /** nation_id → full government title (e.g., "Kingdom of Pram"). Used by tooltip. */
   governmentTitleByNationId?: Record<number, string>;
+  /** Key of the currently selected tile ("q,r") — used to blink its troop indicator. */
+  selectedTileKey?: string | null;
 }
 
 const CIVILIAN_EMOJI: Record<string, string> = {
@@ -328,9 +331,10 @@ export default function HexMap({
   hideHexGrid = false,
   scale: scaleProp, offset: offsetProp, onScaleChange, onOffsetChange,
   highlightedNationId = null,
-  navyMarkers = [], selectedNavyKey = null, onNavyMarkerClick, onNavyMarkerHover,
+  navyMarkers = [], seaZones = [], selectedNavyKey = null, onNavyMarkerClick, onNavyMarkerHover,
   renderTooltipModeExtras,
   governmentTitleByNationId,
+  selectedTileKey = null,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Use props if provided (controlled mode), otherwise use local state (uncontrolled)
@@ -342,6 +346,8 @@ export default function HexMap({
   const dragStartRef = useRef({ x: 0, y: 0 });
   const [localScale, setLocalScale] = useState(0.7);
   const [dropupOpen, setDropupOpen] = useState(false);
+  const [blinkOn, setBlinkOn] = useState(true);
+  const blinkIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastTouchRef = useRef<{ x: number; y: number } | null>(null);
   const lastPinchDistRef = useRef<number | null>(null);
   const scaleRef = useRef(scaleProp ?? 0.7);
@@ -640,6 +646,9 @@ export default function HexMap({
     }
     return m;
   }, [tiles]);
+
+  const SEA_ZONE_FILL_COLOR = 'rgba(20, 70, 130, 0.12)';
+  const SEA_ZONE_BORDER_COLOR = 'rgba(0, 40, 100, 0.45)';
 
   // Build nation → overlay fill color map for diplomatic/relationship/military/naval modes
   const nationFillMap = useMemo(() => {
@@ -1268,6 +1277,69 @@ export default function HexMap({
       }
     }
 
+    // ── Pass 1.5: Sea zone shading ────────────────────────────────
+    if (seaZones.length > 0) {
+      // Build hex-key → zone id lookup for border detection.
+      const hexZoneMap = new Map<string, number>();
+      for (const zone of seaZones) {
+        for (const hex of zone.hexes) {
+          hexZoneMap.set(`${hex.q},${hex.r}`, zone.id);
+        }
+      }
+
+      // Uniform fill for all zone hexes.
+      ctx.fillStyle = SEA_ZONE_FILL_COLOR;
+      for (const zone of seaZones) {
+        for (const hex of zone.hexes) {
+          const [px, py] = hexToPixel(hex.q, hex.r);
+          drawHexagon(ctx, px, py, HEX_SIZE);
+          ctx.fill();
+        }
+      }
+
+      // Darker border on every edge where two different zones meet.
+      const verts = hexVertices(HEX_SIZE);
+      ctx.strokeStyle = SEA_ZONE_BORDER_COLOR;
+      ctx.lineWidth = 1.5 / scale;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (const zone of seaZones) {
+        for (const hex of zone.hexes) {
+          const [px, py] = hexToPixel(hex.q, hex.r);
+          const neighbors = hexNeighbors(hex.q, hex.r);
+          for (let d = 0; d < 6; d++) {
+            const [nq, nr] = neighbors[d];
+            const nzId = hexZoneMap.get(`${nq},${nr}`);
+            if (nzId !== undefined && nzId !== zone.id) {
+              ctx.moveTo(px + verts[d][0], py + verts[d][1]);
+              ctx.lineTo(px + verts[(d + 1) % 6][0], py + verts[(d + 1) % 6][1]);
+            }
+          }
+        }
+      }
+      ctx.stroke();
+
+      // Zone name labels (only when zoomed in enough).
+      if (scale > 0.4) {
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const labelFontSize = Math.max(9, Math.min(16, HEX_SIZE * scale * 0.9));
+        ctx.font = `italic ${labelFontSize / scale}px Georgia, serif`;
+        ctx.globalAlpha = 0.6;
+        for (const zone of seaZones) {
+          if (zone.hexes.length === 0) continue;
+          const [cx, cy] = hexToPixel(zone.center_q, zone.center_r);
+          const label = zone.name.toUpperCase();
+          ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+          ctx.lineWidth = 2 / scale;
+          ctx.strokeText(label, cx, cy);
+          ctx.fillStyle = 'rgba(200,230,255,0.95)';
+          ctx.fillText(label, cx, cy);
+        }
+        ctx.globalAlpha = 1.0;
+      }
+    }
+
     // ── Pass 2: Edge strokes ──
     // When organicBorders is on, interior same-province edges are drawn as a
     // subtle hex grid (gameplay aid), and the three political/coast classes
@@ -1561,15 +1633,11 @@ export default function HexMap({
       }
     }
 
-    // ── Pass 7: Army strength bar at capitals (navy is surfaced via the
-    //             navy markers on the adjacent sea hex, so no naval bar here).
-    if (scale > 0.8) {
-      const maxBarWidth = HEX_SIZE * 0.8;
-
-      // Font + text alignment are uniform across every capital badge — set
-      // once outside the loop instead of per tile.
-      ctx.font = '7px sans-serif';
-      ctx.textAlign = 'left';
+    // ── Pass 7: Troop emoji indicators at capitals ──────────────
+    // Single ⚔️ emoji for all nation types; font size scales with unit count.
+    // Selected tile's indicator blinks.
+    if (scale > 0.6) {
+      ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
       for (const tile of tiles) {
@@ -1577,20 +1645,51 @@ export default function HexMap({
         if (!tile.is_capital) continue;
         if (tile.army_unit_count === 0) continue;
 
+        const tKey = `${tile.q},${tile.r}`;
+        const isSelected = tKey === selectedTileKey;
+
+        // Skip on odd blink frames for selected tile
+        if (isSelected && !blinkOn) continue;
+
+        const n = tile.army_unit_count;
+        // Scale emoji size with unit count: 1 unit → 55%, 7+ units → 110% of HEX_SIZE
+        const sizeScale = Math.min(1.1, 0.55 + n * 0.08);
+        const emojiSize = Math.max(7, HEX_SIZE * sizeScale);
+
         const [px, py] = hexToPixel(tile.q, tile.r);
-        const barWidth = Math.max(3, (tile.army_firepower / maxArmyFP) * maxBarWidth);
-        const barX = px - barWidth / 2;
-        const barY = py + HEX_SIZE * 0.45;
+        // Position to the upper-right of the capital icon
+        const ex = px + HEX_SIZE * 0.6;
+        const ey = py - HEX_SIZE * 0.55;
 
-        ctx.fillStyle = '#8b0000';
-        ctx.fillRect(barX, barY, barWidth, 2.5);
-        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-        ctx.lineWidth = 0.5;
-        ctx.strokeRect(barX, barY, barWidth, 2.5);
+        if (isSelected) {
+          ctx.beginPath();
+          ctx.arc(ex, ey, emojiSize * 0.65, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255,220,0,0.35)';
+          ctx.fill();
+        }
 
-        ctx.fillStyle = 'rgba(255,255,255,0.9)';
-        ctx.fillText(`x${tile.army_unit_count}`, barX + barWidth + 2, barY + 1.5);
+        ctx.globalAlpha = isSelected ? 1.0 : 0.85;
+
+        // Draw sword emoji
+        ctx.font = `${emojiSize}px sans-serif`;
+        ctx.fillText('⚔️', ex, ey);
+
+        // Draw unit count below emoji
+        const countSize = Math.max(6, emojiSize * 0.65);
+        ctx.font = `bold ${countSize}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+        ctx.strokeText(String(n), ex, ey + emojiSize * 0.4);
+        ctx.fillText(String(n), ex, ey + emojiSize * 0.4);
+        ctx.textBaseline = 'middle';
+        ctx.lineWidth = 1;
+
+        ctx.globalAlpha = 1.0;
       }
+      ctx.globalAlpha = 1.0;
     }
 
     // ── Pass 8: Civilian emoji icons on hex tiles ──────────────
@@ -1787,8 +1886,9 @@ export default function HexMap({
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   }, [tiles, showPoliticalColors, showHiddenResources, showAiCivilians, mapMode, nationFillMap,
       isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves, nationLabels, disableFogOfWar,
-      navyMarkers, selectedNavyKey, mapGeometry, tileMap, diplomacyOverlay,
-      hideHexGrid, highlightedNationId, classifiedEdges, maxArmyFP, mapDims]);
+      navyMarkers, seaZones, selectedNavyKey, mapGeometry, tileMap, diplomacyOverlay,
+      hideHexGrid, highlightedNationId, classifiedEdges, maxArmyFP, mapDims,
+      selectedTileKey, blinkOn]);
 
   const scheduleFrame = useCallback(() => {
     if (rafIdRef.current != null) return;
@@ -1803,8 +1903,32 @@ export default function HexMap({
 
   // Schedule a repaint whenever any render-relevant value changes. Includes
   // scale/offset so external state updates (zoom buttons, keyboard, parent-
-  // driven pan) still trigger a frame.
-  useEffect(() => { scheduleFrame(); }, [scheduleFrame, scale, offset]);
+  // driven pan) still trigger a frame. Also blinkOn for the troop-tier animation.
+  useEffect(() => { scheduleFrame(); }, [scheduleFrame, scale, offset, blinkOn]);
+
+  // Blink interval: only runs when the selected tile is a capital with troops.
+  useEffect(() => {
+    if (blinkIntervalRef.current) {
+      clearInterval(blinkIntervalRef.current);
+      blinkIntervalRef.current = null;
+    }
+    const selectedCapitalWithTroops = selectedTileKey
+      ? tiles.find(t => `${t.q},${t.r}` === selectedTileKey && t.is_capital && t.army_unit_count > 0)
+      : null;
+    if (selectedCapitalWithTroops) {
+      blinkIntervalRef.current = setInterval(() => {
+        setBlinkOn(b => !b);
+      }, 500);
+    } else {
+      setBlinkOn(true);
+    }
+    return () => {
+      if (blinkIntervalRef.current) {
+        clearInterval(blinkIntervalRef.current);
+        blinkIntervalRef.current = null;
+      }
+    };
+  }, [selectedTileKey, tiles]);
 
   // Cancel any pending RAF and commit timer on unmount.
   useEffect(() => () => {
@@ -1815,6 +1939,10 @@ export default function HexMap({
     if (gestureCommitTimerRef.current != null) {
       window.clearTimeout(gestureCommitTimerRef.current);
       gestureCommitTimerRef.current = null;
+    }
+    if (blinkIntervalRef.current) {
+      clearInterval(blinkIntervalRef.current);
+      blinkIntervalRef.current = null;
     }
   }, []);
 
@@ -2103,6 +2231,24 @@ export default function HexMap({
     }
     if (onNavyMarkerClick) onNavyMarkerClick(null);
     if (onTileClick) {
+      // Explicit hit-test for troop-indicator icons before generic hex resolution.
+      // Indicators are drawn at (px + HEX_SIZE*0.6, py - HEX_SIZE*0.55) for capital tiles
+      // with troops. Clicking within HEX_SIZE*0.7 of an indicator resolves to that capital.
+      if (scaleRef.current > 0.6) {
+        const hitRadius = HEX_SIZE * 0.7;
+        for (const tile of tiles) {
+          if (!tile.is_capital || tile.army_unit_count === 0) continue;
+          const [px, py] = hexToPixel(tile.q, tile.r);
+          const ex = px + HEX_SIZE * 0.6;
+          const ey = py - HEX_SIZE * 0.55;
+          const dx = mx - ex;
+          const dy = my - ey;
+          if (dx * dx + dy * dy <= hitRadius * hitRadius) {
+            onTileClick(tile);
+            return;
+          }
+        }
+      }
       const [hq, hr] = wrapHex(...pixelToHex(mx, my));
       const tile = tileMap.get(`${hq},${hr}`);
       if (tile) onTileClick(tile);

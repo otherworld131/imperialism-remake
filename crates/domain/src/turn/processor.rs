@@ -10049,6 +10049,7 @@ mod tests {
         // Install one dummy sea zone so zones_computed = true
         game.world.sea_zones = vec![SeaZone {
             id: SeaZoneId(0),
+            name: "Dummy Zone".to_string(),
             hexes: BTreeSet::new(),
             is_lake: false,
             adjacent_zone_ids: Vec::new(),

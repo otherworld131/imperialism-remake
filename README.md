@@ -36,6 +36,9 @@ cd web && npm install && cd ..
 # Build WASM and start dev server
 ./web/restart-web-server.sh
 
+# Build optimized WASM when testing runtime performance
+./web/restart-web-server.sh --opt
+
 # Open http://localhost:5173
 ```
 

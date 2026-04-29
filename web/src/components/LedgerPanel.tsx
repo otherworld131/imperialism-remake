@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import type { GPLedgerEntry } from '../wasm';
-import { resourceEmoji, resourceLabel } from '../resourceEmoji';
+import { resourceEmoji, resourceLabel, RESOURCE_EMOJI_MAP } from '../resourceEmoji';
 import Flag from './Flag';
 
 interface NationLite { id: number; flag_svg?: string; }
 
-type Tab = 'economy' | 'cashflow' | 'production' | 'resources' | 'materials' | 'military' | 'diplomacy' | 'technology';
+type Tab = 'economy' | 'cashflow' | 'expenses' | 'production' | 'resources' | 'materials' | 'military' | 'diplomacy' | 'technology';
 
 const NATION_COLORS: Record<string, string> = {
   Yellow: '#e6c619', Orange: '#e68a19', LightBlue: '#66b3ff', Red: '#e63946',
@@ -41,6 +41,7 @@ export default function LedgerPanel({ entries, previousEntries, nations = [], on
   const tabs: { key: Tab; label: string }[] = [
     { key: 'economy', label: 'Economy' },
     { key: 'cashflow', label: 'Cash flow' },
+    { key: 'expenses', label: 'Expenses' },
     { key: 'production', label: 'Production' },
     { key: 'resources', label: 'Resources' },
     { key: 'materials', label: 'Materials' },
@@ -77,6 +78,7 @@ export default function LedgerPanel({ entries, previousEntries, nations = [], on
         <div style={styles.tableWrap}>
           {tab === 'economy' && <EconomyTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} flagById={flagById} />}
           {tab === 'cashflow' && <CashFlowTable entries={sorted} expanded={expanded} onExpand={setExpanded} flagById={flagById} />}
+          {tab === 'expenses' && <ExpensesTab entries={sorted} />}
           {tab === 'production' && <ProductionTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} flagById={flagById} />}
           {tab === 'resources' && <ResourcesTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} flagById={flagById} />}
           {tab === 'materials' && <MaterialsTable entries={sorted} prevMap={prevMap} expanded={expanded} onExpand={setExpanded} flagById={flagById} />}
@@ -242,15 +244,21 @@ const MATERIAL_ORDER = ['Lumber', 'Steel', 'Fabric', 'Paper', 'Arms', 'CannedFoo
 const MATERIAL_LABELS: Record<string, string> = { CannedFood: 'Canned Food' };
 const GOODS_ORDER = ['Furniture', 'Clothing', 'Hardware'];
 
+function matLabel(name: string): string {
+  const emoji = RESOURCE_EMOJI_MAP[name];
+  const display = MATERIAL_LABELS[name] || name;
+  return emoji ? `${emoji} ${display}` : display;
+}
+
 function MaterialsTable({ entries, prevMap, expanded, onExpand, flagById }: { entries: GPLedgerEntry[]; prevMap: Map<number, GPLedgerEntry> | null; expanded: number | null; onExpand: (id: number | null) => void; flagById: Record<number, string> }) {
   return (
     <table style={styles.table}>
       <thead>
         <tr>
           <Th text="Nation" align="left" />
-          {MATERIAL_ORDER.map(m => <Th key={m} text={MATERIAL_LABELS[m] || m} />)}
+          {MATERIAL_ORDER.map(m => <Th key={m} text={matLabel(m)} />)}
           <Th text="Mat. Total" />
-          {GOODS_ORDER.map(g => <Th key={g} text={g} />)}
+          {GOODS_ORDER.map(g => <Th key={g} text={matLabel(g)} />)}
           <Th text="Goods Total" />
         </tr>
       </thead>
@@ -300,13 +308,13 @@ function MilitaryTable({ entries, prevMap, expanded, onExpand, flagById }: { ent
       <thead>
         <tr>
           <Th text="Nation" align="left" />
-          <Th text="Field Army" />
-          <Th text="Militia" />
-          <Th text="Firepower" />
-          <Th text="Warships" />
-          <Th text="Merchants" />
-          <Th text="Arms Built" />
-          <Th text="Generals" />
+          <Th text="⚔️ Field Army" />
+          <Th text="🏠 Militia" />
+          <Th text="💥 Firepower" />
+          <Th text="⚓ Warships" />
+          <Th text="🚢 Merchants" />
+          <Th text="🔫 Arms Built" />
+          <Th text="🎖️ Generals" />
         </tr>
       </thead>
       <tbody>
@@ -518,7 +526,7 @@ function CashCategoryBreakdown({ entry }: { entry: GPLedgerEntry }) {
       <div style={{ fontSize: 11, color: '#888', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>
         This turn's cash flow by category
       </div>
-      <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 12, fontFamily: 'monospace' }}>
+      <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 'var(--ui-font-size, 14px)', fontFamily: 'monospace' }}>
         <div>
           <span style={{ color: '#2ecc40', fontWeight: 'bold', marginRight: 6 }}>Income:</span>
           {CATEGORY_ORDER.map(c => {
@@ -568,7 +576,7 @@ function StockpileCategoryBreakdown({ entry, stockpiles }: { entry: GPLedgerEntr
     .filter(r => Object.keys(r.inCat).length > 0 || Object.keys(r.outCat).length > 0);
   if (rows.length === 0) {
     return (
-      <div style={{ fontSize: 12, color: '#666', padding: 4 }}>
+      <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#666', padding: 4 }}>
         No in/out movement this turn for these stockpiles.
       </div>
     );
@@ -578,7 +586,7 @@ function StockpileCategoryBreakdown({ entry, stockpiles }: { entry: GPLedgerEntr
       <div style={{ fontSize: 11, color: '#888', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>
         This turn's flow by category (production / trade / consumption)
       </div>
-      <table style={{ ...styles.table, fontSize: 12 }}>
+      <table style={styles.table}>
         <thead>
           <tr>
             <th style={{ ...styles.th, textAlign: 'left' }}>Stockpile</th>
@@ -611,7 +619,7 @@ function fmtCatAmount(n: number | undefined): string {
 
 function DetailItem({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <div style={{ fontSize: 12 }}>
+    <div style={{ fontSize: 'var(--ui-font-size, 14px)' }}>
       <span style={{ color: '#777' }}>{label}: </span>
       <span style={{ color: color || '#ccc' }}>{value}</span>
     </div>
@@ -621,6 +629,86 @@ function DetailItem({ label, value, color }: { label: string; value: string; col
 function fmtMoney(n: number): string {
   const sign = n < 0 ? '-' : '';
   return `${sign}$${Math.abs(n).toLocaleString()}`;
+}
+
+function ExpensesTab({ entries }: { entries: GPLedgerEntry[] }) {
+  const human = entries.find(e => e.is_human) || entries[0];
+  if (!human) return <div style={{ padding: 24, color: '#666' }}>No data available.</div>;
+
+  const cf = human.cash_flow;
+  const cumulative = human.cumulative;
+
+  return (
+    <div style={{ padding: '16px 24px', maxWidth: 900 }}>
+      <div style={{ display: 'flex', gap: 40, flexWrap: 'wrap' as const, alignItems: 'flex-start' }}>
+        {/* This-turn income */}
+        <div style={{ minWidth: 260 }}>
+          <div style={{ color: '#2ecc40', fontWeight: 'bold', fontSize: 15, marginBottom: 10, borderBottom: '1px solid #2ecc4040', paddingBottom: 6 }}>
+            Income this turn{cf ? `: ${fmtMoney(cf.total_income)}` : ''}
+          </div>
+          {cf && Object.entries(cf.income_totals).length > 0
+            ? Object.entries(cf.income_totals)
+                .sort((a, b) => b[1] - a[1])
+                .map(([label, amount]) => (
+                  <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 'var(--ui-font-size, 14px)' }}>
+                    <span style={{ color: '#bbb' }}>{label}</span>
+                    <span style={{ color: '#2ecc40', fontFamily: 'monospace' }}>{fmtMoney(amount)}</span>
+                  </div>
+                ))
+            : <div style={{ color: '#555', fontSize: 'var(--ui-font-size, 14px)' }}>(no income this turn)</div>}
+        </div>
+
+        {/* This-turn expenses */}
+        <div style={{ minWidth: 260 }}>
+          <div style={{ color: '#e63946', fontWeight: 'bold', fontSize: 15, marginBottom: 10, borderBottom: '1px solid #e6394640', paddingBottom: 6 }}>
+            Expenses this turn{cf ? `: ${fmtMoney(cf.total_expense)}` : ''}
+          </div>
+          {cf && Object.entries(cf.expense_totals).length > 0
+            ? Object.entries(cf.expense_totals)
+                .sort((a, b) => b[1] - a[1])
+                .map(([label, amount]) => (
+                  <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 'var(--ui-font-size, 14px)' }}>
+                    <span style={{ color: '#bbb' }}>{label}</span>
+                    <span style={{ color: '#e63946', fontFamily: 'monospace' }}>{fmtMoney(amount)}</span>
+                  </div>
+                ))
+            : <div style={{ color: '#555', fontSize: 'var(--ui-font-size, 14px)' }}>(no expenses this turn)</div>}
+        </div>
+
+        {/* Cumulative totals */}
+        <div style={{ minWidth: 260 }}>
+          <div style={{ color: '#daa520', fontWeight: 'bold', fontSize: 15, marginBottom: 10, borderBottom: '1px solid #daa52040', paddingBottom: 6 }}>
+            Cumulative (all turns)
+          </div>
+          {Object.entries(cumulative.income_totals).sort((a, b) => b[1] - a[1]).map(([k, v]) => (
+            <div key={`c-in-${k}`} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 'var(--ui-font-size, 14px)' }}>
+              <span style={{ color: '#bbb' }}>+ {k}</span>
+              <span style={{ color: '#2ecc40', fontFamily: 'monospace' }}>{fmtMoney(v)}</span>
+            </div>
+          ))}
+          {Object.entries(cumulative.expense_totals).sort((a, b) => b[1] - a[1]).map(([k, v]) => (
+            <div key={`c-out-${k}`} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 'var(--ui-font-size, 14px)' }}>
+              <span style={{ color: '#bbb' }}>− {k}</span>
+              <span style={{ color: '#e63946', fontFamily: 'monospace' }}>{fmtMoney(v)}</span>
+            </div>
+          ))}
+          {Object.keys(cumulative.income_totals).length === 0 && Object.keys(cumulative.expense_totals).length === 0 && (
+            <div style={{ color: '#555', fontSize: 'var(--ui-font-size, 14px)' }}>(no history yet)</div>
+          )}
+        </div>
+      </div>
+
+      {cf && (
+        <div style={{ marginTop: 20, fontSize: 'var(--ui-font-size, 14px)', color: '#777', borderTop: '1px solid #222', paddingTop: 10 }}>
+          Treasury: {fmtMoney(cf.opening_treasury)} → {fmtMoney(cf.closing_treasury)}
+          {' '}({cf.observed_delta >= 0 ? '+' : ''}{fmtMoney(cf.observed_delta)})
+          {!cf.reconciles && (
+            <span style={{ color: '#e63946', marginLeft: 12 }}>⚠ reconciliation mismatch: {fmtMoney(cf.reconciliation_mismatch)}</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function CashFlowTable({ entries, expanded, onExpand, flagById }: { entries: GPLedgerEntry[]; expanded: number | null; onExpand: (id: number | null) => void; flagById: Record<number, string> }) {
@@ -669,11 +757,11 @@ function CashFlowTable({ entries, expanded, onExpand, flagById }: { entries: GPL
                   <td colSpan={7} style={styles.expandedCell}>
                     <div style={styles.detailGrid}>
                       <div style={{ minWidth: 220 }}>
-                        <div style={{ color: '#2ecc40', fontSize: 12, marginBottom: 4, fontWeight: 'bold' }}>
+                        <div style={{ color: '#2ecc40', fontSize: 'var(--ui-font-size, 14px)', marginBottom: 4, fontWeight: 'bold' }}>
                           Income (${cf.total_income.toLocaleString()})
                         </div>
                         {Object.entries(cf.income_totals).length === 0
-                          ? <div style={{ color: '#666', fontSize: 11 }}>(no income this turn)</div>
+                          ? <div style={{ color: '#666', fontSize: 'var(--ui-font-size, 14px)' }}>(no income this turn)</div>
                           : Object.entries(cf.income_totals)
                               .sort((a, b) => b[1] - a[1])
                               .map(([label, amount]) => (
@@ -681,11 +769,11 @@ function CashFlowTable({ entries, expanded, onExpand, flagById }: { entries: GPL
                               ))}
                       </div>
                       <div style={{ minWidth: 220 }}>
-                        <div style={{ color: '#e63946', fontSize: 12, marginBottom: 4, fontWeight: 'bold' }}>
+                        <div style={{ color: '#e63946', fontSize: 'var(--ui-font-size, 14px)', marginBottom: 4, fontWeight: 'bold' }}>
                           Expense (${cf.total_expense.toLocaleString()})
                         </div>
                         {Object.entries(cf.expense_totals).length === 0
-                          ? <div style={{ color: '#666', fontSize: 11 }}>(no expense this turn)</div>
+                          ? <div style={{ color: '#666', fontSize: 'var(--ui-font-size, 14px)' }}>(no expense this turn)</div>
                           : Object.entries(cf.expense_totals)
                               .sort((a, b) => b[1] - a[1])
                               .map(([label, amount]) => (
@@ -693,7 +781,7 @@ function CashFlowTable({ entries, expanded, onExpand, flagById }: { entries: GPL
                               ))}
                       </div>
                       <div style={{ minWidth: 220 }}>
-                        <div style={{ color: '#daa520', fontSize: 12, marginBottom: 4, fontWeight: 'bold' }}>
+                        <div style={{ color: '#daa520', fontSize: 'var(--ui-font-size, 14px)', marginBottom: 4, fontWeight: 'bold' }}>
                           Cumulative (all turns)
                         </div>
                         {Object.entries(e.cumulative.income_totals).map(([k, v]) => (
@@ -736,18 +824,18 @@ const styles: Record<string, React.CSSProperties> = {
   tab: {
     background: 'transparent', border: '1px solid #333', color: '#888',
     padding: '6px 12px', cursor: 'pointer', fontFamily: 'Georgia, serif',
-    fontSize: 12, borderRadius: 4,
+    fontSize: 'var(--ui-font-size, 14px)', borderRadius: 4,
   },
   tabActive: {
     color: '#daa520', borderColor: '#daa520', background: 'rgba(218,165,32,0.08)',
   },
   closeBtn: {
     background: 'transparent', border: '1px solid #555', color: '#888',
-    padding: '4px 12px', cursor: 'pointer', fontSize: 12, borderRadius: 4,
+    padding: '4px 12px', cursor: 'pointer', fontSize: 'var(--ui-font-size, 14px)', borderRadius: 4,
   },
   tableWrap: { flex: 1, overflowY: 'auto', overflowX: 'auto' },
   table: {
-    width: '100%', borderCollapse: 'collapse' as const, fontSize: 14,
+    width: '100%', borderCollapse: 'collapse' as const, fontSize: 'var(--ui-font-size, 14px)',
     fontFamily: "'Segoe UI', sans-serif",
   },
   th: {
@@ -765,7 +853,7 @@ const styles: Record<string, React.CSSProperties> = {
   tdName: { padding: '8px 12px', whiteSpace: 'nowrap' as const },
   td: {
     padding: '8px 12px', textAlign: 'right' as const,
-    fontFamily: 'monospace', fontSize: 13,
+    fontFamily: 'monospace', fontSize: 'var(--ui-font-size, 14px)',
   },
   expandedRow: { background: 'rgba(218,165,32,0.03)' },
   expandedCell: { padding: '6px 12px 10px 32px' },
