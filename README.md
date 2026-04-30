@@ -39,7 +39,7 @@ cd web && npm install && cd ..
 # Build optimized WASM when testing runtime performance
 ./web/restart-web-server.sh --opt
 
-# Open http://localhost:5173
+# Open http://localhost:43173
 ```
 
 ## Historical Scenarios

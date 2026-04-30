@@ -155,7 +155,7 @@ cargo run --release --bin imperialism -- [map_key] [nation_index]
 ./web/restart-web-server.sh
 # Use optimized WASM when testing gameplay/runtime performance
 ./web/restart-web-server.sh --opt
-# Then open http://localhost:5173
+# Then open http://localhost:43173
 ```
 
 After implementing any plan that touches game logic, **always run a few batch games** (e.g. `--batch 3`) to verify the full game loop works end-to-end, not just unit tests.

@@ -11,6 +11,7 @@ WASM_MODE_STAMP="$WASM_DIR/pkg/.restart-web-server-build-mode"
 NPM_INSTALL_STAMP="$WEB_DIR/node_modules/.install-stamp"
 FORCE_REBUILD=0
 WASM_BUILD_MODE="dev-no-opt"
+DEV_SERVER_PORT=43173
 
 usage() {
   cat <<EOF
@@ -76,7 +77,7 @@ needs_npm_install() {
 }
 
 echo ">> Killing dev server..."
-lsof -ti :5173 | xargs kill 2>/dev/null || true
+lsof -ti :"$DEV_SERVER_PORT" | xargs kill 2>/dev/null || true
 
 if needs_npm_install; then
   echo ">> Installing web dependencies..."
@@ -100,6 +101,6 @@ else
 fi
 
 echo ">> Starting dev server..."
-(cd "$WEB_DIR" && npm run dev &)
+(cd "$WEB_DIR" && npm run dev -- --port "$DEV_SERVER_PORT" &)
 
-echo ">> Done. Dev server starting on http://localhost:5173"
+echo ">> Done. Dev server starting on http://localhost:$DEV_SERVER_PORT"
