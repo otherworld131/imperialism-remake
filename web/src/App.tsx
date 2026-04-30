@@ -658,11 +658,11 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeScreen, showTech, showProposals, handleEndTurn, dismissNewspaper, selectedUnitIds, isDeployMode]);
 
-  // Fetch overlay data when map mode or selected nation changes
+  // Fetch overlay data when map mode, active screen, or selected nation changes
   useEffect(() => {
     (async () => {
       if (!gameJson || !gameState) return;
-      if (mapMode === 'diplomatic' || mapMode === 'relationship') {
+      if (mapMode === 'diplomatic' || mapMode === 'relationship' || activeScreen === 'diplomacy') {
         const nation = gameState.nations?.find((n: any) => n.name === selectedNation);
         if (nation) {
           setDiplomacyOverlay(await getDiplomacyOverlay(gameJson, nation.id));
@@ -678,7 +678,7 @@ function App() {
         setMilitaryOverlay(null);
       }
     })();
-  }, [mapMode, selectedNation, gameJson, gameState]);
+  }, [mapMode, activeScreen, selectedNation, gameJson, gameState]);
 
   const playerNationId = gameState?.human_player_nation ?? 0;
 
@@ -1361,7 +1361,8 @@ function App() {
             renderTooltipModeExtras={renderTooltipModeExtras}
             governmentTitleByNationId={governmentTitleByNationId}
             selectedTileKey={selectedTile ? `${selectedTile.q},${selectedTile.r}` : null}
-            lockZoom={mapMode === 'diplomatic'}
+            lockZoom={activeScreen === 'diplomacy'}
+            showDiplomacyMarkers={activeScreen === 'diplomacy'}
           />
         </div>
 

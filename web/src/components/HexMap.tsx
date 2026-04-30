@@ -292,6 +292,8 @@ interface Props {
   selectedTileKey?: string | null;
   /** When true, zoom is locked to the minimum fit-scale (map fills canvas, no zoom in/out). */
   lockZoom?: boolean;
+  /** When true, render consulate/embassy emoji markers on nation label centroids. */
+  showDiplomacyMarkers?: boolean;
 }
 
 const CIVILIAN_EMOJI: Record<string, string> = {
@@ -338,6 +340,7 @@ export default function HexMap({
   governmentTitleByNationId,
   selectedTileKey = null,
   lockZoom = false,
+  showDiplomacyMarkers = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Use props if provided (controlled mode), otherwise use local state (uncontrolled)
@@ -561,7 +564,8 @@ export default function HexMap({
     const fitScale = canvasH / mapPixelHeight;
     let nextScale = scaleRef.current;
     if (nextScale < fitScale) nextScale = fitScale;
-    if (nextScale > 4) nextScale = 4;
+    const maxScale = lockZoom ? fitScale : 4;
+    if (nextScale > maxScale) nextScale = maxScale;
     const nextOffset = applyPanConstraints(offsetRef.current, nextScale);
     const changedScale = nextScale !== scaleRef.current;
     const changedOffset = nextOffset.x !== offsetRef.current.x || nextOffset.y !== offsetRef.current.y;
@@ -571,7 +575,7 @@ export default function HexMap({
     if (changedScale) setScale(nextScale);
     if (changedOffset) setOffset(nextOffset);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapDims, canvasSize, applyPanConstraints]);
+  }, [mapDims, canvasSize, applyPanConstraints, lockZoom]);
 
   // If a pinned tooltip's hex has been panned/zoomed (or the canvas resized)
   // off-screen, dismiss it. With globe-style wrap, the hex may also be
@@ -1594,36 +1598,42 @@ export default function HexMap({
     }
 
     // ── Pass 5b: Diplomatic presence icons (consulate/embassy) ──
-    if (mapMode === 'diplomatic' && diplomacyOverlay) {
+    // Anchored below the nation label centroid (not the capital tile) so the
+    // emoji appears directly under the country name as the card requires.
+    if (showDiplomacyMarkers && diplomacyOverlay) {
       const diploByNation = new Map<string, typeof diplomacyOverlay.relations[0]>();
       for (const rel of diplomacyOverlay.relations) {
         diploByNation.set(rel.nation_name, rel);
       }
 
-      const emojiSize = Math.max(10, HEX_SIZE * 0.55);
+      // Use a large emoji size so the icon is clearly prominent on the map.
+      const emojiSize = Math.max(18, HEX_SIZE * 1.2);
       ctx.font = `${emojiSize}px sans-serif`;
       ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
+      ctx.textBaseline = 'top';
 
-      for (const tile of tiles) {
-        if (!tile.is_country_capital || tile.terrain === 'Sea') continue;
-        if (!tile.owner) continue;
-        const rel = diploByNation.get(tile.owner);
+      for (const label of nationLabels) {
+        const rel = diploByNation.get(label.name);
         if (!rel) continue;
-
         if (!rel.has_consulate && !rel.has_embassy) continue;
 
-        const [px, py] = hexToPixel(tile.q, tile.r);
-        // Position below the capital icon and below the nation name label
-        const iy = py + HEX_SIZE * 0.7;
+        // Place emoji just below the nation name label centroid.
+        const fontSize = Math.max(12, Math.min(28, Math.sqrt(label.size) * 3));
+        const iy = label.cy + fontSize * 0.6;
 
         const emoji = rel.has_embassy ? '\u{1F3DB}️' : '\u{1F4DC}'; // 🏛️ embassy, 📜 consulate
-        ctx.fillText(emoji, px, iy);
+        ctx.fillText(emoji, label.cx, iy);
       }
+      ctx.textBaseline = 'middle';
     }
 
     // ── Pass 6: Nation name labels (all non-terrain modes, hidden when zoomed in) ──
-    if (showPoliticalColors && scale <= 1.2) {
+    // Threshold is relative to fit-scale so labels are always visible at baseline
+    // zoom and disappear only after actual zoom-in.
+    const fitScaleForLabels = mapDims.mapPixelHeight > 0 && canvas.height > 0
+      ? canvas.height / mapDims.mapPixelHeight
+      : 0;
+    if (showPoliticalColors && (fitScaleForLabels === 0 || scale <= fitScaleForLabels * 1.5)) {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       for (const label of nationLabels) {
@@ -1898,7 +1908,7 @@ export default function HexMap({
       isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves, nationLabels, disableFogOfWar,
       navyMarkers, seaZones, selectedNavyKey, mapGeometry, tileMap, diplomacyOverlay,
       hideHexGrid, highlightedNationId, classifiedEdges, maxArmyFP, mapDims,
-      selectedTileKey, blinkOn]);
+      selectedTileKey, blinkOn, showDiplomacyMarkers]);
 
   const scheduleFrame = useCallback(() => {
     if (rafIdRef.current != null) return;
