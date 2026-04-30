@@ -681,35 +681,19 @@ pub fn ai_pre_election_strategy(
     };
     let embassy_cost = Money::dollars(game.game_data.game_config.embassy_cost);
     let min_relation = game.game_data.game_config.ai_embassy_min_relation;
-    // Priority-minor targets bypass the relation gate (card #210) — they
-    // also bypass it in `score_embassy` / `execute_embassy`, and the
-    // pre-election path must stay consistent.
-    let priority_targets: std::collections::HashSet<NationId> = game
-        .get_nation(nation_id)
-        .map(|n| {
-            n.diplomacy
-                .ai_priority_state
-                .priority_minor_targets
-                .iter()
-                .copied()
-                .collect()
-        })
-        .unwrap_or_default();
     let treasury_ok = game
         .get_nation(nation_id)
         .is_some_and(|n| n.economy.treasury >= embassy_treasury_threshold);
     if treasury_ok {
         for mn_id in &minor_ids {
-            // Card #210: require relationship warm enough OR priority target;
-            // consulate alone gives a bonus, so the costly embassy waits.
-            let is_priority = priority_targets.contains(mn_id);
+            // Card #210: relation gate applies uniformly — priority-minor
+            // targets do NOT bypass it. Consulate alone gives a relationship
+            // bonus, so the costly embassy waits until rapport has warmed.
             let warm_enough = game
                 .world.diplomacy
                 .get_relation(nation_id, *mn_id)
                 .is_some_and(|r| {
-                    r.has_consulate
-                        && !r.has_embassy
-                        && (is_priority || r.score >= min_relation)
+                    r.has_consulate && !r.has_embassy && r.score >= min_relation
                 });
             if !warm_enough {
                 continue;
@@ -1450,18 +1434,17 @@ mod tests {
         );
     }
 
-    /// Card #210 + F-001 fix: pre-election embassy build path must still
-    /// build an embassy with a priority-minor target even if the
-    /// relationship is below the gate.
+    /// Card #210 follow-up: pre-election embassy spending must NOT bypass
+    /// the relation gate for priority-minor targets — earlier code did,
+    /// which caused on-turn-1 embassy spam once a consulate had been built.
     #[test]
-    fn ai_pre_election_builds_embassy_for_cold_priority_target() {
+    fn ai_pre_election_priority_target_still_blocked_when_cold() {
         let mut game = test_game_with_ai_and_minor();
         game.turn = TurnNumber::from_year_quarter(1824, 2);
 
         let ai_id = NationId(2);
         let mn_id = NationId(3);
 
-        // Consulate exists, but relationship is below threshold.
         game.world.diplomacy.build_consulate(ai_id, mn_id).unwrap();
         let rel = game.world.diplomacy.get_relation_mut(ai_id, mn_id).unwrap();
         rel.score = 0;
@@ -1469,7 +1452,6 @@ mod tests {
         let ai = game.get_nation_mut(ai_id).unwrap();
         ai.diplomacy.ai_personality = Some(AiPersonality::Diplomatic);
         ai.economy.treasury = Money::dollars(50_000);
-        // Mark the MN as a priority target for the AI.
         ai.diplomacy
             .ai_priority_state
             .priority_minor_targets
@@ -1479,12 +1461,13 @@ mod tests {
         ai_pre_election_strategy(&mut game, ai_id, &mut actions);
 
         let has_embassy = game
-            .world.diplomacy
+            .world
+            .diplomacy
             .get_relation(ai_id, mn_id)
             .is_some_and(|r| r.has_embassy);
         assert!(
-            has_embassy,
-            "Pre-election should build embassy with a priority-minor target regardless of relation gate",
+            !has_embassy,
+            "pre-election must respect the relation gate even for priority targets",
         );
     }
 

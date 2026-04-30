@@ -1368,6 +1368,17 @@ mod tests {
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.treasury = Money::dollars(3000);
         // AI starts with 0 FIELD army units (only starting garrison militia).
+        // Give the human one rival field unit so the threat-gated military
+        // scoring (added with the turn-1 spending fix) has a real rival to
+        // match. With one rival, after the AI builds its first Regular the
+        // deficit closes and the AI stops — keeping this test single-build.
+        let human = game.get_nation_mut(NationId(1)).unwrap();
+        human.military.army.push(crate::military::units::ArmyUnit::new(
+            UnitId(2_000_000),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(1),
+        ));
 
         run_ai_turns(&mut game);
 
@@ -1388,6 +1399,26 @@ mod tests {
             ai.economy.treasury,
             Money::dollars(2500),
             "Treasury should be reduced by $500"
+        );
+    }
+
+    /// Card #210 follow-up: with no rival fielding any army, the AI must
+    /// not build a field unit on turn 1 even when it can afford to. The
+    /// territorial-floor `provinces * 1.5` used to fire here; the threat
+    /// gate disables it when `strongest_rival_army == 0`.
+    #[test]
+    fn ai_does_not_build_field_army_on_turn_1_absent_rivals() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.economy.treasury = Money::dollars(10_000);
+        // No rival armies anywhere; no consulates / embassies; turn 1.
+        run_ai_turns(&mut game);
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            ai.field_army_count(),
+            0,
+            "AI must not raise a field army on turn 1 when no rival is projecting power",
         );
     }
 

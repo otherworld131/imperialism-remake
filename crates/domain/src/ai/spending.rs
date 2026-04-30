@@ -395,9 +395,15 @@ fn backlog_bonus(
         None => return 0.0,
     };
     let cfg = &game.game_data.game_config;
+    // A category that has never been invested in starts with backlog 0 on
+    // the very first scoring pass — otherwise on turn 1 every category
+    // gets a free `current_turn` bonus, which on a fresh game biases the AI
+    // hard toward Military (high weight × small province count = army spam
+    // before any threat exists). The cap still applies for genuinely
+    // long-neglected categories deeper in the game.
     let backlog_turns = match nation.diplomacy.ai_priority_state.last_invest_turn.get(&category) {
         Some(&last) => current_turn.saturating_sub(last),
-        None => current_turn.min(cfg.backlog_initial_cap),
+        None => current_turn.saturating_sub(1).min(cfg.backlog_initial_cap),
     };
 
     let personality = nation.diplomacy.ai_personality.unwrap_or(AiPersonality::Balanced);
@@ -558,8 +564,18 @@ fn score_military(
         }
     }
 
-    // Desired army scales with territory and relative power
-    let desired = (province_count * 1.5).max(strongest_rival_army as f64 * 0.6);
+    // Threat-gated desired field army. The territorial floor only kicks in
+    // when *some rival is actually projecting power that exceeds our own*
+    // — provinces are already garrisoned by militia, so the field army is
+    // for matching/exceeding rival projection, not for static defense.
+    // Without this gate the original formula produced a turn-1 deficit
+    // that pushed every AI to spend on armies before any threat existed.
+    let rival_pressure = strongest_rival_army as f64 * 0.6;
+    let desired = if rival_pressure > army_count {
+        (province_count * 1.5).max(rival_pressure)
+    } else {
+        0.0
+    };
     let deficit = (desired - army_count).max(0.0) * 8.0;
     let territory = province_count * 2.0;
     let saturation = army_count * 3.0;
@@ -754,39 +770,22 @@ fn score_embassy(
     nation_id: NationId,
     weights: &SpendingWeights,
 ) -> Option<ScoredAction> {
-    let nation = game.get_nation(nation_id)?;
     let cfg = &game.game_data.game_config;
 
-    // Priority-minor short-circuit: any priority target with consulate but
-    // no embassy yet scores at 1000. Embassy is the full-trust upgrade that
-    // secures the target; wanted fast for all personalities.
-    let priority_needs_embassy = nation
-        .diplomacy.ai_priority_state
-        .priority_minor_targets
-        .iter()
-        .filter(|mn_id| {
-            game.get_nation(**mn_id)
-                .is_some_and(|n| !n.province_ids.is_empty())
-        })
-        .any(|mn_id| {
-            game.world.diplomacy
-                .get_relation(nation_id, *mn_id)
-                .is_some_and(|r| r.has_consulate && !r.has_embassy)
-        });
-    if priority_needs_embassy {
-        return Some(ScoredAction {
-            category: SpendingCategory::Embassy,
-            score: cfg.priority_minor_target_score * weights.diplomacy_weight,
-            cost: Money::dollars(cfg.embassy_cost),
-        });
-    }
-
-    // Count minor nations with consulate but no embassy AND relationship
-    // already warm enough to justify the upgrade. Consulates are cheap and
-    // grant a relationship bonus on their own, so AI shouldn't burn $5k on
-    // an embassy when the relationship is still cold (card #210).
+    // Card #210: an embassy is only justified once the relationship has
+    // warmed up to `ai_embassy_min_relation`. Consulates are cheap and
+    // already grant a relationship bonus, so the AI should *let consulates
+    // do their job* before spending on the costly upgrade. This rule
+    // applies uniformly — priority-minor targets do NOT bypass it. They
+    // simply build a consulate first and wait for the score to climb.
     let min_relation = cfg.ai_embassy_min_relation;
     let mut upgradeable = 0u32;
+    let mut priority_upgradeable = 0u32;
+    let priority_targets = &game
+        .get_nation(nation_id)?
+        .diplomacy
+        .ai_priority_state
+        .priority_minor_targets;
     for n in &game.world.nations {
         if n.is_great_power() || n.province_ids.is_empty() {
             continue;
@@ -797,11 +796,24 @@ fn score_embassy(
             && rel.score >= min_relation
         {
             upgradeable += 1;
+            if priority_targets.contains(&n.id) {
+                priority_upgradeable += 1;
+            }
         }
     }
 
     if upgradeable == 0 {
         return None;
+    }
+
+    // Priority targets that have warmed up still get the headline score —
+    // the gate is on warmth, not on prioritisation.
+    if priority_upgradeable > 0 {
+        return Some(ScoredAction {
+            category: SpendingCategory::Embassy,
+            score: cfg.priority_minor_target_score * weights.diplomacy_weight,
+            cost: Money::dollars(cfg.embassy_cost),
+        });
     }
 
     // Election proximity bonus
@@ -1602,45 +1614,51 @@ fn execute_embassy(game: &mut GameState, nation_id: NationId) {
     let cost = Money::dollars(game.game_data.game_config.embassy_cost);
     let min_relation = game.game_data.game_config.ai_embassy_min_relation;
 
-    // Prefer priority targets with consulate-but-no-embassy (these bypass the
-    // relation gate); fall back to best-relation non-priority match that has
-    // already warmed up to `ai_embassy_min_relation`.
-    let priority_pick: Option<NationId> = game.get_nation(nation_id).and_then(|n| {
-        n.diplomacy.ai_priority_state
-            .priority_minor_targets
-            .iter()
-            .find(|mn_id| {
-                game.get_nation(**mn_id)
-                    .is_some_and(|m| !m.province_ids.is_empty() && !m.diplomacy.is_in_anarchy)
-                    && game
-                        .world.diplomacy
-                        .get_relation(nation_id, **mn_id)
-                        .is_some_and(|r| r.has_consulate && !r.has_embassy)
-            })
-            .copied()
-    });
+    // Card #210: relation gate applies uniformly. Priority targets are
+    // preferred among warmed-up candidates, but they do NOT bypass the
+    // gate — a priority MN with a cold relation should keep building rapport
+    // through the consulate before the AI burns money on the upgrade.
+    let priority_targets: std::collections::HashSet<NationId> = game
+        .get_nation(nation_id)
+        .map(|n| {
+            n.diplomacy
+                .ai_priority_state
+                .priority_minor_targets
+                .iter()
+                .copied()
+                .collect()
+        })
+        .unwrap_or_default();
 
-    let best_mn = priority_pick.or_else(|| {
-        let mut best: Option<NationId> = None;
-        let mut best_relation = i32::MIN;
-        for n in &game.world.nations {
-            if n.is_great_power() || n.province_ids.is_empty() || n.diplomacy.is_in_anarchy {
-                continue;
-            }
-            if let Some(rel) = game.world.diplomacy.get_relation(nation_id, n.id)
-                && rel.has_consulate
-                && !rel.has_embassy
-                && rel.score >= min_relation
-                && rel.score > best_relation
-            {
-                best_relation = rel.score;
-                best = Some(n.id);
-            }
+    let mut best: Option<NationId> = None;
+    let mut best_priority = false;
+    let mut best_relation = i32::MIN;
+    for n in &game.world.nations {
+        if n.is_great_power() || n.province_ids.is_empty() || n.diplomacy.is_in_anarchy {
+            continue;
         }
-        best
-    });
+        let Some(rel) = game.world.diplomacy.get_relation(nation_id, n.id) else {
+            continue;
+        };
+        if !rel.has_consulate || rel.has_embassy || rel.score < min_relation {
+            continue;
+        }
+        let is_priority = priority_targets.contains(&n.id);
+        // Priority status takes precedence; among same-priority entries,
+        // pick the warmest relation.
+        let better = match (is_priority, best_priority) {
+            (true, false) => true,
+            (false, true) => false,
+            _ => rel.score > best_relation,
+        };
+        if better {
+            best = Some(n.id);
+            best_priority = is_priority;
+            best_relation = rel.score;
+        }
+    }
 
-    if let Some(mn_id) = best_mn
+    if let Some(mn_id) = best
         && game.world.diplomacy.build_embassy(nation_id, mn_id).is_ok()
     {
         if let Some(nation) = game.get_nation_mut(nation_id) {
@@ -2276,27 +2294,95 @@ mod tests {
         );
     }
 
-    /// The relation gate must not block priority-minor targets — those keep
-    /// their priority short-circuit so the AI can still secure them quickly.
+    /// Card #210 follow-up: a priority-minor target with a cold relation
+    /// must NOT score an embassy. The gate applies uniformly — priority
+    /// status only changes which warmed-up MN is preferred, never whether
+    /// the upgrade is permitted at all. (Without this, on turn 1 the AI
+    /// would build a consulate and immediately upgrade it to an embassy
+    /// with rel.score still at 0.)
     #[test]
-    fn score_embassy_priority_target_bypasses_relation_gate() {
+    fn score_embassy_priority_target_still_blocked_when_cold() {
         let mut game = test_game_with_ai_and_minor();
         let ai = NationId(2);
         let mn = NationId(3);
 
         game.world.diplomacy.build_consulate(ai, mn).unwrap();
         let rel = game.world.diplomacy.get_relation_mut(ai, mn).unwrap();
-        rel.score = -50; // very cold
+        rel.score = 0; // cold despite priority status
 
-        // Mark the MN as a priority target.
         let nation = game.get_nation_mut(ai).unwrap();
         nation.diplomacy.ai_priority_state.priority_minor_targets.push(mn);
 
         let weights = load_weights(&game, super::super::common::AiPersonality::Balanced);
         let scored = score_embassy(&game, ai, &weights);
         assert!(
-            scored.is_some_and(|a| a.score > 0.0),
-            "priority-minor targets should still score for embassy regardless of relationship",
+            scored.is_none(),
+            "priority-minor targets must still respect the relation gate; turn-1 embassy spam is the bug we're killing",
         );
+    }
+
+    /// Once a priority-minor target's relationship clears the gate, it
+    /// gets the headline `priority_minor_target_score` rather than the
+    /// regular per-MN score — priority still matters when warm.
+    #[test]
+    fn score_embassy_priority_target_gets_headline_score_when_warm() {
+        let mut game = test_game_with_ai_and_minor();
+        let ai = NationId(2);
+        let mn = NationId(3);
+
+        game.world.diplomacy.build_consulate(ai, mn).unwrap();
+        let threshold = game.game_data.game_config.ai_embassy_min_relation;
+        let rel = game.world.diplomacy.get_relation_mut(ai, mn).unwrap();
+        rel.score = threshold;
+
+        let nation = game.get_nation_mut(ai).unwrap();
+        nation.diplomacy.ai_priority_state.priority_minor_targets.push(mn);
+
+        let weights = load_weights(&game, super::super::common::AiPersonality::Balanced);
+        let scored = score_embassy(&game, ai, &weights).expect("embassy should score");
+
+        let expected = game.game_data.game_config.priority_minor_target_score
+            * weights.diplomacy_weight;
+        assert!(
+            (scored.score - expected).abs() < 1e-6,
+            "warm priority target should get headline score {expected}, got {}",
+            scored.score,
+        );
+    }
+
+    /// Card #210 follow-up: a category never yet invested in must score
+    /// zero backlog on turn 1, not `current_turn.min(cap)`. The earlier
+    /// behaviour gave Military a free 30-point bonus on turn 1 (Balanced
+    /// weight 30 × 1 turn) which biased every fresh AI toward army spam.
+    #[test]
+    fn backlog_bonus_zero_on_turn_1_for_uninvested_category() {
+        let game = test_game_with_ai();
+        let bonus = backlog_bonus(
+            &game,
+            NationId(2),
+            SpendingCategory::Military,
+            1,
+            false,
+        );
+        assert_eq!(
+            bonus, 0.0,
+            "fresh AI must not get backlog credit on turn 1 for never-invested category",
+        );
+    }
+
+    /// And the backlog still accrues normally once a few turns have passed
+    /// without investment — the cap takes over only at long horizons.
+    #[test]
+    fn backlog_bonus_accrues_after_turn_1() {
+        let game = test_game_with_ai();
+        let bonus = backlog_bonus(
+            &game,
+            NationId(2),
+            SpendingCategory::Military,
+            5,
+            false,
+        );
+        // 4 turns of accrual × Balanced military weight (30) = 120
+        assert_eq!(bonus, 120.0);
     }
 }

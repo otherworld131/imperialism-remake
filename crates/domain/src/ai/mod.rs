@@ -158,12 +158,11 @@ mod tests {
             ai.has_researched(TechId(1)) || ai.has_researched(TechId(2)),
             "AI should research a free tech"
         );
-        // Treasury reduced by spending (research is free, scoring system may spend on other things)
-        assert!(
-            ai.economy.treasury < Money::dollars(10000),
-            "AI should spend some treasury, has ${}",
-            ai.economy.treasury.as_dollars()
-        );
+        // Note: this test no longer checks treasury delta. After the
+        // turn-1-spending fix, an AI on a fresh game with no rival armies
+        // and no warm embassy candidates may legitimately spend nothing
+        // on turn 1 — research is free, and that's what this test cares
+        // about.
     }
 
     #[test]
