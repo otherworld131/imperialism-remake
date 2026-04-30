@@ -193,7 +193,37 @@ pub(crate) fn ai_scored_spending(
                 options.push(opt);
             }
         }
-        if let Some(mut opt) = score_civilian(game, nation_id, &weights) {
+        // Card #217 follow-up: when the engineer has finished a rail run and
+        // the only remaining infra step is the depot ($2000), bleeding $100
+        // into civilian hires keeps treasury permanently below the depot
+        // threshold. Suppress HireImprover while we're saving up so cash
+        // accumulates instead of leaking to improvers that can't yet harvest
+        // anything (the depot being unbuilt is exactly why their tiles aren't
+        // collectable). Only kicks in when an idle engineer is on hand —
+        // otherwise the depot can't be built anyway and we shouldn't starve
+        // other categories.
+        let saving_for_depot = depot_plan
+            .as_ref()
+            .is_some_and(|p| p.path.is_empty())
+            && {
+                let nation = game.get_nation(nation_id);
+                let any_idle_engineer = nation.is_some_and(|n| {
+                    n.military.civilians.iter().any(|c| {
+                        c.civilian_type == CivilianType::Engineer
+                            && !c.working
+                            && c.turns_remaining == 0
+                    })
+                });
+                let depot_total =
+                    weights.reserve + Money::dollars(game.game_data.game_config.depot_cost);
+                let cant_afford_yet = nation
+                    .map(|n| n.economy.treasury < depot_total)
+                    .unwrap_or(false);
+                any_idle_engineer && cant_afford_yet
+            };
+        if !saving_for_depot
+            && let Some(mut opt) = score_civilian(game, nation_id, &weights)
+        {
             opt.score += backlog_bonus(
                 game,
                 nation_id,
@@ -242,12 +272,16 @@ pub(crate) fn ai_scored_spending(
                     );
                 }
                 // Snapshot engineer state before executing Infrastructure to
-                // detect whether the execute actually started a build.
-                let engineer_was_working = if cat == SpendingCategory::Infrastructure {
+                // detect whether the execute actually started a *new* build.
+                // Count working engineers (not just any-working) so multi-
+                // engineer parallelism is detected correctly: a second
+                // engineer transitioning to working still grows the count.
+                let engineer_working_count_before = if cat == SpendingCategory::Infrastructure {
                     game.get_nation(nation_id).map(|n| {
                         n.military.civilians
                             .iter()
-                            .any(|c| c.civilian_type == CivilianType::Engineer && c.working)
+                            .filter(|c| c.civilian_type == CivilianType::Engineer && c.working)
+                            .count()
                     })
                 } else {
                     None
@@ -280,18 +314,19 @@ pub(crate) fn ai_scored_spending(
                     // execute was a silent no-op: the next hex is blocked,
                     // unowned, or unaffordable. Skip infra for the rest of
                     // this turn to prevent the loop from spinning on it.
-                    let engineer_now_working = game
+                    let engineer_working_count_after = game
                         .get_nation(nation_id)
                         .map(|n| {
                             n.military.civilians
                                 .iter()
-                                .any(|c| c.civilian_type == CivilianType::Engineer && c.working)
+                                .filter(|c| c.civilian_type == CivilianType::Engineer && c.working)
+                                .count()
                         })
-                        .unwrap_or(false);
+                        .unwrap_or(0);
                     let treasury_after = game.get_nation(nation_id).map(|n| n.economy.treasury);
                     let treasury_changed = treasury_before != treasury_after;
-                    let engineer_transitioned =
-                        engineer_was_working == Some(false) && engineer_now_working;
+                    let engineer_transitioned = engineer_working_count_before
+                        .is_some_and(|before| engineer_working_count_after > before);
                     if !engineer_transitioned && !treasury_changed {
                         infra_blocked_this_turn = true;
                     }
@@ -572,14 +607,18 @@ fn score_infrastructure(
         return None;
     }
     let nation = game.get_nation(nation_id)?;
-    // If the nation's engineer is already working, `execute_infrastructure`
-    // will no-op — don't keep selecting this category and starve other
-    // spending actions.
-    let engineer_busy = nation
+    // We can only progress infrastructure if there's at least one idle
+    // engineer. With multiple engineers, the others may be busy mid-build
+    // — that's fine, the executor will pick an idle one. Returning None
+    // only when *no* engineer is idle prevents infinite infra picks while
+    // still letting parallelism work when the AI has staff to spare.
+    let any_idle_engineer = nation
         .military.civilians
         .iter()
-        .any(|c| c.civilian_type == CivilianType::Engineer && c.working);
-    if engineer_busy {
+        .any(|c| {
+            c.civilian_type == CivilianType::Engineer && !c.working && c.turns_remaining == 0
+        });
+    if !any_idle_engineer {
         return None;
     }
 
@@ -1243,14 +1282,30 @@ fn execute_infrastructure(
         None => return,
     };
 
-    // Find (or hire) an Engineer.
+    // Pick an *idle* engineer so multiple engineers can build in parallel
+    // (one rail/depot per engineer per turn). Falls back to the hire path
+    // only when the nation has zero engineers; if the nation has engineers
+    // but all are busy, score_infrastructure already returned None and we
+    // wouldn't be here.
     let engineer_idx = nation
         .military.civilians
         .iter()
-        .position(|c| c.civilian_type == CivilianType::Engineer);
+        .position(|c| {
+            c.civilian_type == CivilianType::Engineer && !c.working && c.turns_remaining == 0
+        });
+
+    let any_engineer_present = nation
+        .military.civilians
+        .iter()
+        .any(|c| c.civilian_type == CivilianType::Engineer);
 
     let engineer_idx = match engineer_idx {
         Some(idx) => idx,
+        None if any_engineer_present => {
+            // Have engineer(s) but none idle — nothing for us to start now.
+            // (score_infrastructure should have prevented this; defensive.)
+            return;
+        }
         None => {
             let civilian_costs_expert = cfg.civilian_costs_expert;
             let cost = CivilianType::Engineer.creation_cost(&cfg);
@@ -1356,60 +1411,47 @@ fn execute_infrastructure(
         .and_then(|n| n.military.civilians[engineer_idx].position)
         .unwrap_or(capital_tile);
 
-    // Pick the next unbuilt hex, preferring one adjacent to the engineer.
-    let next_hex = plan
+    // Pick the next unbuilt, unassigned hex, preferring one adjacent to
+    // the engineer. Skipping assigned hexes lets a second engineer pick a
+    // different path tile when the first engineer is already mid-build on
+    // the closest one.
+    let unbuilt_unassigned = |c: HexCoord| -> bool {
+        game.world
+            .hex_map
+            .get_tile(c)
+            .is_some_and(|t| {
+                !t.infrastructure.has_railroad
+                    && !t.infrastructure.has_depot
+                    && t.assigned_civilian.is_none()
+            })
+    };
+    let build_coord = plan
         .path
         .iter()
-        .find(|c| engineer_pos.neighbors().contains(c))
         .copied()
-        .or_else(|| plan.path.first().copied());
-    let next_hex = match next_hex {
-        Some(c) => c,
-        None => return,
-    };
+        .find(|c| engineer_pos.neighbors().contains(c) && unbuilt_unassigned(*c))
+        .or_else(|| plan.path.iter().copied().find(|c| unbuilt_unassigned(*c)));
 
-    // If the next-hex choice already has a rail, advance one further along path.
-    let already_has_rail = game
-        .world.hex_map
-        .get_tile(next_hex)
-        .is_some_and(|t| t.infrastructure.has_railroad);
-    let build_coord = if already_has_rail {
-        plan.path
-            .iter()
-            .skip_while(|c| **c != next_hex)
-            .nth(1)
-            .copied()
-            .unwrap_or(next_hex)
-    } else {
-        next_hex
-    };
-
-    // Safety guard: if build_coord already has rail/depot (e.g. built by a
-    // second engineer this same turn), the path is effectively exhausted —
-    // place the depot rather than spinning on already-built tiles.
-    let build_coord_already_built = game
-        .world.hex_map
-        .get_tile(build_coord)
-        .is_some_and(|t| t.infrastructure.has_railroad || t.infrastructure.has_depot);
-
-    if build_coord_already_built {
-        start_engineer_task(
+    // No unbuilt-unassigned rail hex left → the path is effectively done
+    // for this turn; jump to the depot. This also covers the multi-engineer
+    // case where another engineer has already claimed the only remaining hex.
+    match build_coord {
+        Some(coord) => start_engineer_task(
+            game,
+            nation_id,
+            engineer_idx,
+            coord,
+            BuildTask::Railroad,
+            &cfg,
+        ),
+        None => start_engineer_task(
             game,
             nation_id,
             engineer_idx,
             plan.candidate,
             BuildTask::Depot,
             &cfg,
-        );
-    } else {
-        start_engineer_task(
-            game,
-            nation_id,
-            engineer_idx,
-            build_coord,
-            BuildTask::Railroad,
-            &cfg,
-        );
+        ),
     }
 }
 
@@ -2047,6 +2089,190 @@ mod tests {
         assert!(
             scored.is_some(),
             "embassy should be scored when relationship >= ai_embassy_min_relation",
+        );
+    }
+
+    // ── Card #217 follow-up: multi-engineer + depot saving ──
+
+    /// Build a minimal game state with an AI nation, a country-capital tile,
+    /// a committed depot target, and N engineers (some idle, some busy).
+    /// Returns (game, ai_id, candidate_coord).
+    fn game_with_engineers(idle_count: usize, busy_count: usize) -> (GameState, NationId) {
+        let mut game = test_game_with_ai();
+        let cap = crate::hex::HexCoord::new(3, 3);
+        let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        cap_tile.set_resource(ResourceType::Grain);
+        cap_tile.is_country_capital = true;
+        cap_tile.infrastructure.has_depot = true;
+        game.world.hex_map.set_tile(cap, cap_tile);
+
+        // A path of owned grassland tiles ending at a candidate 3 hexes
+        // away from the capital so plan_next_depot returns a real plan
+        // (the capital's 1-hex radius is already covered, so the candidate
+        // must be outside it).
+        let path_coords: Vec<crate::hex::HexCoord> = vec![
+            crate::hex::HexCoord::new(4, 3),
+            crate::hex::HexCoord::new(5, 3),
+            crate::hex::HexCoord::new(6, 3),
+        ];
+        let candidate = *path_coords.last().unwrap();
+        for &c in &path_coords {
+            let mut t = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+            t.set_resource(ResourceType::Grain);
+            game.world.hex_map.set_tile(c, t);
+        }
+        let prov = game
+            .world
+            .provinces
+            .iter_mut()
+            .find(|p| p.id == ProvinceId(2))
+            .expect("AI province");
+        for &c in &path_coords {
+            if !prov.tiles.contains(&c) {
+                prov.tiles.push(c);
+            }
+        }
+        let _ = candidate;
+
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.economy.treasury = Money::dollars(10_000);
+        ai.economy.labor.expert = 4;
+        ai.military.civilians.clear();
+        for _ in 0..busy_count {
+            let mut e = Civilian::new(next_civilian_id(), CivilianType::Engineer, NationId(2));
+            e.working = true;
+            e.turns_remaining = 2;
+            ai.military.civilians.push(e);
+        }
+        for _ in 0..idle_count {
+            let e = Civilian::new(next_civilian_id(), CivilianType::Engineer, NationId(2));
+            ai.military.civilians.push(e);
+        }
+        (game, NationId(2))
+    }
+
+    /// Card #217 follow-up: with two engineers, one mid-build and one idle,
+    /// score_infrastructure must still fire — the idle engineer is
+    /// available to start a parallel build.
+    #[test]
+    fn score_infrastructure_fires_when_at_least_one_engineer_idle() {
+        let (game, ai_id) = game_with_engineers(1, 1);
+        let weights = load_weights(&game, super::super::common::AiPersonality::Balanced);
+        let plan_outcome = super::super::economy::plan_next_depot(&game, ai_id);
+        let plan = plan_outcome.as_plan();
+
+        let scored = score_infrastructure(&game, ai_id, &weights, plan, false);
+        assert!(
+            scored.is_some(),
+            "score_infrastructure should fire while at least one engineer is idle, got None",
+        );
+    }
+
+    /// Conversely, when every engineer is busy, score_infrastructure must
+    /// return None — there's nobody to assign to a new task.
+    #[test]
+    fn score_infrastructure_none_when_no_engineer_idle() {
+        let (game, ai_id) = game_with_engineers(0, 2);
+        let weights = load_weights(&game, super::super::common::AiPersonality::Balanced);
+        let plan_outcome = super::super::economy::plan_next_depot(&game, ai_id);
+        let plan = plan_outcome.as_plan();
+
+        let scored = score_infrastructure(&game, ai_id, &weights, plan, false);
+        assert!(
+            scored.is_none(),
+            "score_infrastructure must return None when no engineer is idle, got Some",
+        );
+    }
+
+    /// Card #217 follow-up: when the engineer is parked at a built rail line
+    /// and the only remaining infra step is the depot, but the AI can't yet
+    /// afford the depot+reserve, the spending loop must NOT bleed cash into
+    /// civilian hires — it must save up.
+    #[test]
+    fn ai_scored_spending_skips_improver_while_saving_for_depot() {
+        // Build a state with: a country-capital + connected rail leading to a
+        // candidate (so plan.path is empty), an idle engineer, an improvable
+        // tile that would otherwise pull HireImprover, and a treasury just
+        // above the reserve but below `reserve + depot_cost`.
+        let mut game = test_game_with_ai();
+        let cap = crate::hex::HexCoord::new(3, 3);
+        let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        cap_tile.set_resource(ResourceType::Grain);
+        cap_tile.is_country_capital = true;
+        cap_tile.infrastructure.has_depot = true;
+        game.world.hex_map.set_tile(cap, cap_tile);
+
+        // Rail-connected candidate at (4,3): the path is empty (rail already
+        // there), so the next infra step is to plant the depot at (4,3).
+        let candidate = crate::hex::HexCoord::new(4, 3);
+        let mut cand_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        cand_tile.set_resource(ResourceType::Grain);
+        cand_tile.infrastructure.has_railroad = true;
+        game.world.hex_map.set_tile(candidate, cand_tile);
+
+        // Improvable visible tile far from rail to drive HireImprover demand
+        // (uses the unconnected weight, so contribution is small but present).
+        let far = crate::hex::HexCoord::new(8, 8);
+        let mut far_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        far_tile.set_resource(ResourceType::Grain);
+        game.world.hex_map.set_tile(far, far_tile);
+
+        let prov = game
+            .world
+            .provinces
+            .iter_mut()
+            .find(|p| p.id == ProvinceId(2))
+            .expect("AI province");
+        for &c in &[candidate, far] {
+            if !prov.tiles.contains(&c) {
+                prov.tiles.push(c);
+            }
+        }
+
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.economy.labor.expert = 4;
+        ai.military.civilians.clear();
+        // Idle engineer so the depot CAN be built — and should be.
+        ai.military.civilians.push(Civilian::new(
+            next_civilian_id(),
+            CivilianType::Engineer,
+            NationId(2),
+        ));
+        // Existing improver so HireImprover scoring path runs cleanly.
+        ai.military.civilians.push(Civilian::new(
+            next_civilian_id(),
+            CivilianType::Farmer,
+            NationId(2),
+        ));
+        ai.researched_techs.push(crate::events::TechId(2));
+        // Diplomatic reserve = $1000; depot_cost = $2000. Treasury at $1500
+        // is above reserve (loop fires) but below reserve + depot_cost
+        // ($3000) → saving_for_depot kicks in.
+        ai.economy.treasury = Money::dollars(1500);
+        ai.diplomacy.ai_personality = Some(super::super::common::AiPersonality::Diplomatic);
+
+        let civs_before = game
+            .get_nation(NationId(2))
+            .unwrap()
+            .military
+            .civilians
+            .iter()
+            .filter(|c| c.civilian_type != CivilianType::Engineer)
+            .count();
+        let mut actions = Vec::new();
+        ai_scored_spending(&mut game, NationId(2), &mut actions);
+        let civs_after = game
+            .get_nation(NationId(2))
+            .unwrap()
+            .military
+            .civilians
+            .iter()
+            .filter(|c| c.civilian_type != CivilianType::Engineer)
+            .count();
+        assert_eq!(
+            civs_after, civs_before,
+            "AI must not hire improvers while saving for the depot (civs_before={}, civs_after={})",
+            civs_before, civs_after,
         );
     }
 
