@@ -6,7 +6,7 @@ import {
   DEFAULT_MAP_GEN_CONFIG,
   parseGameJson,
 } from '../wasm';
-import type { TileData, MapGenConfig } from '../wasm';
+import type { TileData, MapMode, MapGenConfig } from '../wasm';
 import HexMap from './HexMap';
 import Flag from './Flag';
 
@@ -89,6 +89,7 @@ export default function GameSetup({ onStartGame }: Props) {
   const [previewGps, setPreviewGps] = useState<GpInfo[]>([]);
   const [pickedNationIdx, setPickedNationIdx] = useState<number | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewMapMode, setPreviewMapMode] = useState<'terrain' | 'political'>('political');
 
   useEffect(() => {
     getScenarios().then(setScenarios).catch(() => { /* no scenarios available */ });
@@ -428,15 +429,18 @@ export default function GameSetup({ onStartGame }: Props) {
         <div style={s.mapWrap}>
           <HexMap
             tiles={previewTiles}
-            mapMode="political"
+            mapMode={previewMapMode}
             diplomacyOverlay={null}
             militaryOverlay={null}
-            onMapModeChange={() => {}}
+            onMapModeChange={(mode: MapMode) => {
+              if (mode === 'terrain' || mode === 'political') setPreviewMapMode(mode);
+            }}
             onTileClick={handleTileClick}
             disableFogOfWar={true}
             highlightedNationId={pickedGp?.id ?? null}
             organicBorders={organicBorders}
             hideHexGrid={hideHexGrid}
+            limitedMapModes={true}
           />
         </div>
         <div style={s.sidebar}>

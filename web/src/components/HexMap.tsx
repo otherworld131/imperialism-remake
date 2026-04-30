@@ -294,6 +294,8 @@ interface Props {
   lockZoom?: boolean;
   /** When true, render consulate/embassy emoji markers on nation label centroids. */
   showDiplomacyMarkers?: boolean;
+  /** When true, the map-mode dropup only offers Terrain and Political. */
+  limitedMapModes?: boolean;
 }
 
 const CIVILIAN_EMOJI: Record<string, string> = {
@@ -341,6 +343,7 @@ export default function HexMap({
   selectedTileKey = null,
   lockZoom = false,
   showDiplomacyMarkers = false,
+  limitedMapModes = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Use props if provided (controlled mode), otherwise use local state (uncontrolled)
@@ -2398,22 +2401,26 @@ export default function HexMap({
                   {MAP_MODE_LABELS[mode]}
                 </button>
               ))}
-              <div style={{ height: 1, background: '#5a5030', margin: '2px 0' }} />
-              {(['diplomatic', 'relationship', 'military', 'naval'] as MapMode[]).map(mode => (
-                <button
-                  key={mode}
-                  onClick={() => { onMapModeChange(mode); setDropupOpen(false); }}
-                  style={{
-                    display: 'block', width: '100%', textAlign: 'left',
-                    padding: '7px 12px', border: 'none', cursor: 'pointer',
-                    fontFamily: 'Georgia, serif', fontSize: 13,
-                    background: mapMode === mode ? 'rgba(218,165,32,0.15)' : 'transparent',
-                    color: mapMode === mode ? '#daa520' : '#e0d8c0',
-                  }}
-                >
-                  {MAP_MODE_LABELS[mode]}
-                </button>
-              ))}
+              {!limitedMapModes && (
+                <>
+                  <div style={{ height: 1, background: '#5a5030', margin: '2px 0' }} />
+                  {(['diplomatic', 'relationship', 'military', 'naval'] as MapMode[]).map(mode => (
+                    <button
+                      key={mode}
+                      onClick={() => { onMapModeChange(mode); setDropupOpen(false); }}
+                      style={{
+                        display: 'block', width: '100%', textAlign: 'left',
+                        padding: '7px 12px', border: 'none', cursor: 'pointer',
+                        fontFamily: 'Georgia, serif', fontSize: 13,
+                        background: mapMode === mode ? 'rgba(218,165,32,0.15)' : 'transparent',
+                        color: mapMode === mode ? '#daa520' : '#e0d8c0',
+                      }}
+                    >
+                      {MAP_MODE_LABELS[mode]}
+                    </button>
+                  ))}
+                </>
+              )}
             </div>
           )}
           <button
