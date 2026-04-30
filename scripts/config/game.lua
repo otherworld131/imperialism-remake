@@ -110,6 +110,18 @@ game_config = {
     -- high-coverage remote candidates.
     infra_coverage_weight = 1.0,
     infra_path_cost_weight = 1.0,
+    -- Card #217: weight on a tile's "eventual" yield (improvable tiers above
+    -- current improvement_level, capped by tech) when scoring depot coverage.
+    -- 0 = current yield only (legacy). 1.0 = 1 demand-weighted point per
+    -- unimproved tier. Lets the depot planner prefer tiles that *will* produce
+    -- a lot once worked, not just tiles that produce a lot today.
+    infra_improvability_weight = 0.5,
+    -- Card #217: early-game bias toward laying rail before hiring more
+    -- improvers. For the first N turns, multiply score_infrastructure by
+    -- early_game_bias. Connecting an L0 tile produces yield immediately;
+    -- improving a disconnected tile produces nothing until rail catches up.
+    infra_early_game_bias_turns = 5,
+    infra_early_game_bias = 1.5,
 
     -- Trade-aware demand (cards #131 / #132).
     --   trade_lookback_turns             — window for "recently imported"
@@ -149,9 +161,45 @@ game_config = {
     -- 1-tile-each Farmers); higher = fewer, harder-working civilians. The
     -- original game has ~1–3 of each type per nation, so 8 is a closer match.
     civilian_target_tiles_per_worker = 8,
-    civilian_coverage_per_unmet = 3.0,
+    -- Card #217 follow-up: replaces the single `civilian_coverage_per_unmet`
+    -- with per-tile weights that depend on the tile's connectivity. An
+    -- improvable tile only produces yield once collected, so a depot-
+    -- connected tile pulls a stronger "we should hire someone for this"
+    -- signal than an isolated tile that won't yield until rail catches up.
+    --   collectable      visible-improvable tile inside a connected depot's
+    --                    1-hex collection radius (or in the capital province).
+    --   rail_adjacent    visible-improvable tile next to existing owned
+    --                    rail/depot — easy to extend to it next.
+    --   unconnected      visible-improvable tile not in either set; speculative.
+    --   undiscovered     un-prospected deposit-eligible hex (Prospector pull).
+    -- Saturation cap stays the same: each existing improver "covers"
+    -- target_tiles_per_worker tiles' worth of weighted demand.
+    civilian_coverage_collectable = 3.0,
+    civilian_coverage_rail_adjacent = 1.5,
+    civilian_coverage_unconnected = 0.5,
+    civilian_coverage_undiscovered = 1.5,
     civilian_hire_bootstrap = 15.0,
     civilian_idle_penalty = 8.0,
+
+    -- Card #217: improver-deployment connectivity buckets. When picking which
+    -- tile an idle improver should work next, the AI prefers (lower score
+    -- wins, ties broken by lowest current improvement_level):
+    --   0  collectable now (already in the rail/depot harvest set)
+    --   planned_weight  on the AI's current depot plan (path or 1-hex radius
+    --                   around the planned candidate) — will be collectable
+    --                   within a few turns
+    --   adjacent_weight adjacent to existing rail/depot — easily reached by
+    --                   a small rail extension later
+    --   unconnected_weight not in any plan and far from rail — speculative
+    --
+    -- Cash-rich softening: when the AI's treasury surplus over its spending
+    -- reserve exceeds `softening_treasury_threshold` dollars, the unconnected
+    -- bucket weights are scaled by `1 / (1 + surplus / threshold)`, so a rich
+    -- AI doesn't sit on idle improvers when only disconnected tiles remain.
+    civilian_connectivity_planned_weight = 30.0,
+    civilian_connectivity_adjacent_weight = 60.0,
+    civilian_connectivity_unconnected_weight = 100.0,
+    civilian_connectivity_softening_threshold = 20000,
 
     -- Backlog scoring weights — points added per turn the spending category
     -- has been neglected. Each personality has a different sensitivity per

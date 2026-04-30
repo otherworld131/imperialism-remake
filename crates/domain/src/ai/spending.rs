@@ -604,7 +604,15 @@ fn score_infrastructure(
     // the cost/benefit doesn't "pay back" strictly within the horizon.
     // (Depots last the whole game; any coverage is a durable asset.)
     let normalised = (plan.net_score / 10.0).max(10.0);
-    let score = normalised * weights.economy_weight;
+    // Card #217: early-game bias — connecting an L0 tile produces yield
+    // immediately, while improving a disconnected tile produces nothing
+    // until rail catches up. For the first N turns, lean toward rail.
+    let early_bias = if game.turn.0 < cfg.infra_early_game_bias_turns {
+        cfg.infra_early_game_bias
+    } else {
+        1.0
+    };
+    let score = normalised * weights.economy_weight * early_bias;
 
     Some(ScoredAction {
         category: SpendingCategory::Infrastructure,
@@ -779,51 +787,90 @@ fn score_civilian(
         return None;
     }
 
-    // Count improvable tiles across owned provinces. Only visible deposits
-    // are counted: per the manual, hidden minerals (coal/iron/gold/gems/oil)
-    // must be revealed by a Prospector before the nation knows they are there.
-    // Un-prospected deposit-eligible hexes contribute too, so the AI still
-    // wants a civilian (a Prospector) when its territory is unexplored.
-    let mut improvable_tiles = 0u32;
-    let mut undiscovered_hexes = 0u32;
-    for &pid in &nation.province_ids {
-        if let Some(province) = game.get_province(pid) {
-            for &coord in &province.tiles {
-                if let Some(tile) = game.world.hex_map.get_tile(coord) {
-                    // A tile is "undiscovered" only when it could plausibly hide
-                    // a deposit AND nothing is visible on it. Hills with visible
-                    // Wool, for example, are deposit-capable terrain but already
-                    // bear a known resource — the Prospector has nothing to do
-                    // there.
-                    if tile.terrain().can_have_deposits()
-                        && !tile.is_prospected()
-                        && !tile.has_visible_resource()
-                    {
-                        undiscovered_hexes += 1;
-                        continue;
-                    }
-                    if !tile.has_visible_resource() {
-                        continue;
-                    }
-                    // Use the tech-gated cap, not the resource's intrinsic
-                    // max — a tile already at the nation's current tech
-                    // ceiling shouldn't pull more civilians.
-                    let max_level = game
-                        .game_data
-                        .tech_tree
-                        .effective_max_improvement_level(
-                            tile.terrain(),
-                            tile.resource_deposit(),
-                            &nation.researched_techs,
-                        );
-                    if max_level > 0 && tile.improvement_level() < max_level {
-                        improvable_tiles += 1;
-                    }
+    // Card #217 follow-up: per-tile weighted demand. An improvable tile only
+    // produces yield once the nation can collect from it, so a tile in a
+    // connected depot's collection radius pulls a stronger "we need a worker"
+    // signal than a tile that's still disconnected. The buckets mirror the
+    // ones the improver-deployment uses (`ai_deploy_civilians`):
+    //   - collectable        in the connected harvest set today
+    //   - rail_adjacent      adjacent to *our* existing rail/depot — easy
+    //                        to extend a depot to within a few turns
+    //   - unconnected        far from rail; speculative
+    //   - undiscovered hex   un-prospected deposit-eligible hex (Prospector pull)
+    let cfg = &game.game_data.game_config;
+
+    // Precompute the connectivity sets for this nation.
+    let owned_provinces: Vec<&crate::map::Province> = game
+        .world
+        .provinces
+        .iter()
+        .filter(|p| p.owner == nation_id)
+        .collect();
+    let connected = connected_provinces(game, nation_id);
+    let collectable: HashSet<HexCoord> =
+        crate::map::infrastructure::collectable_hexes(&game.world.hex_map, &owned_provinces, &connected);
+    let owned_hexes: HashSet<HexCoord> = owned_provinces
+        .iter()
+        .flat_map(|p| p.tiles.iter().copied())
+        .collect();
+    let rail_adjacent: HashSet<HexCoord> = {
+        let mut s = HashSet::new();
+        for &coord in &owned_hexes {
+            let Some(tile) = game.world.hex_map.get_tile(coord) else {
+                continue;
+            };
+            if tile.infrastructure.has_railroad || tile.infrastructure.has_depot {
+                for n in coord.neighbors().iter().copied() {
+                    s.insert(n);
                 }
             }
         }
+        s
+    };
+
+    let mut weighted_demand: f64 = 0.0;
+    let mut visible_improvable_count: u32 = 0;
+    let mut undiscovered_count: u32 = 0;
+    for &pid in &nation.province_ids {
+        if let Some(province) = game.get_province(pid) {
+            for &coord in &province.tiles {
+                let Some(tile) = game.world.hex_map.get_tile(coord) else {
+                    continue;
+                };
+                // A tile is "undiscovered" only when it could plausibly hide
+                // a deposit AND nothing is visible on it.
+                if tile.terrain().can_have_deposits()
+                    && !tile.is_prospected()
+                    && !tile.has_visible_resource()
+                {
+                    undiscovered_count += 1;
+                    weighted_demand += cfg.civilian_coverage_undiscovered;
+                    continue;
+                }
+                if !tile.has_visible_resource() {
+                    continue;
+                }
+                let max_level = game.game_data.tech_tree.effective_max_improvement_level(
+                    tile.terrain(),
+                    tile.resource_deposit(),
+                    &nation.researched_techs,
+                );
+                if max_level == 0 || tile.improvement_level() >= max_level {
+                    continue;
+                }
+                visible_improvable_count += 1;
+                let mult = if collectable.contains(&coord) {
+                    cfg.civilian_coverage_collectable
+                } else if rail_adjacent.contains(&coord) {
+                    cfg.civilian_coverage_rail_adjacent
+                } else {
+                    cfg.civilian_coverage_unconnected
+                };
+                weighted_demand += mult;
+            }
+        }
     }
-    let total_demand = improvable_tiles + undiscovered_hexes;
+    let any_demand = visible_improvable_count + undiscovered_count > 0;
 
     let civilian_count = nation
         .military.civilians
@@ -838,18 +885,18 @@ fn score_civilian(
         })
         .count();
 
-    // Continuous saturation formula (scales with empire size). Each existing
-    // improver "covers" target_tiles_per_worker improvable tiles; each unmet
-    // tile beyond that capacity adds coverage_per_unmet to the score.
-    let cfg = &game.game_data.game_config;
+    // Saturation: each existing improver "covers" target_tiles_per_worker
+    // weighted demand units. The unmet weighted demand is the score's
+    // "we need more workers" signal.
     let target_ratio = cfg.civilian_target_tiles_per_worker as f64;
-    let unmet = (total_demand as f64 - civilian_count as f64 * target_ratio).max(0.0);
-    let bootstrap = if civilian_count == 0 && total_demand > 0 {
+    let capacity = civilian_count as f64 * target_ratio;
+    let unmet = (weighted_demand - capacity).max(0.0);
+    let bootstrap = if civilian_count == 0 && any_demand {
         cfg.civilian_hire_bootstrap
     } else {
         0.0
     };
-    let coverage = unmet * cfg.civilian_coverage_per_unmet + bootstrap;
+    let coverage = unmet + bootstrap;
     let idle_penalty = idle_civilians as f64 * cfg.civilian_idle_penalty;
 
     let raw = (coverage - idle_penalty).max(0.0);
@@ -1864,4 +1911,91 @@ fn load_weights(game: &GameState, personality: AiPersonality) -> SpendingWeights
     // Suppress unused variable warning when lua feature is off
     let _ = game;
     w
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::common::test_helpers::test_game_with_ai;
+    use crate::economy::civilians::{Civilian, CivilianType, next_civilian_id};
+    use crate::map::tile::Tile;
+    use crate::types::{NationId, ProvinceId, ResourceType, TerrainType};
+
+    /// Card #217 follow-up: when many improvable tiles sit inside a
+    /// connected depot's collection radius, HireImprover should score higher
+    /// than when the same tile count is disconnected — improving a
+    /// disconnected tile produces no yield until rail catches up.
+    #[test]
+    fn hire_improver_score_lower_for_disconnected_tiles_than_collectable_ones() {
+        fn run_with_tiles_in_collectable(in_collectable: bool) -> f64 {
+            let mut game = test_game_with_ai();
+            // To get 6 collectable test tiles, mark the AI capital at (3,3)
+            // as country_capital and use its 6 neighbours as test tiles.
+            // For the disconnected branch, place 6 tiles far from any
+            // collector. We use 6 tiles in both branches to keep counts
+            // identical so the only differentiator is the connectivity bucket.
+            // Ensure the AI capital tile exists in hex_map (the helper
+            // doesn't populate it) and mark it as country_capital so it acts
+            // as a collector.
+            let cap = crate::hex::HexCoord::new(3, 3);
+            let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+            cap_tile.is_country_capital = true;
+            game.world.hex_map.set_tile(cap, cap_tile);
+            let coords: Vec<crate::hex::HexCoord> = if in_collectable {
+                crate::hex::HexCoord::new(3, 3).neighbors().to_vec()
+            } else {
+                (0..6)
+                    .map(|i| crate::hex::HexCoord::new(20 + i, 20 + i))
+                    .collect()
+            };
+            let prov = game
+                .world
+                .provinces
+                .iter_mut()
+                .find(|p| p.id == ProvinceId(2))
+                .expect("AI province");
+            for &c in &coords {
+                if !prov.tiles.contains(&c) {
+                    prov.tiles.push(c);
+                }
+            }
+            for &c in &coords {
+                let mut tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+                tile.set_resource(ResourceType::Grain);
+                game.world.hex_map.set_tile(c, tile);
+            }
+
+            let ai = game.get_nation_mut(NationId(2)).unwrap();
+            ai.economy.treasury = Money::dollars(10_000);
+            ai.economy.labor.expert = 1;
+            ai.military.civilians.clear();
+            // One *non-idle* civilian so idle_penalty stays at 0 and the
+            // bucket weight differences come through cleanly.
+            let mut working_civ = Civilian::new(
+                next_civilian_id(),
+                CivilianType::Farmer,
+                NationId(2),
+            );
+            working_civ.working = true;
+            working_civ.turns_remaining = 2;
+            ai.military.civilians.push(working_civ);
+            // Seed Drill so Grain tiles are improvable.
+            ai.researched_techs.push(crate::events::TechId(2));
+
+            let weights = load_weights(&game, super::super::common::AiPersonality::Diplomatic);
+            score_civilian(&game, NationId(2), &weights)
+                .map(|a| a.score)
+                .unwrap_or(0.0)
+        }
+
+        let score_collectable = run_with_tiles_in_collectable(true);
+        let score_disconnected = run_with_tiles_in_collectable(false);
+
+        assert!(
+            score_collectable > score_disconnected,
+            "score for collectable improvable tiles must exceed the score for the same tiles disconnected (collectable={}, disconnected={})",
+            score_collectable,
+            score_disconnected,
+        );
+    }
 }

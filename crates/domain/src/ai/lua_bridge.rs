@@ -105,6 +105,9 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         infrastructure_horizon_turns: table.get("infrastructure_horizon_turns").unwrap_or(50),
         infra_coverage_weight: table.get("infra_coverage_weight").unwrap_or(1.0),
         infra_path_cost_weight: table.get("infra_path_cost_weight").unwrap_or(1.0),
+        infra_improvability_weight: table.get("infra_improvability_weight").unwrap_or(0.5),
+        infra_early_game_bias_turns: table.get("infra_early_game_bias_turns").unwrap_or(5),
+        infra_early_game_bias: table.get("infra_early_game_bias").unwrap_or(1.5),
         trade_lookback_turns: table.get("trade_lookback_turns").unwrap_or(8),
         trade_discount_weight: table.get("trade_discount_weight").unwrap_or(0.5),
         trade_history_weight: table.get("trade_history_weight").unwrap_or(1.0),
@@ -118,9 +121,32 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         civilian_target_tiles_per_worker: table
             .get("civilian_target_tiles_per_worker")
             .unwrap_or(3),
-        civilian_coverage_per_unmet: table.get("civilian_coverage_per_unmet").unwrap_or(3.0),
+        civilian_coverage_collectable: table
+            .get("civilian_coverage_collectable")
+            .unwrap_or(3.0),
+        civilian_coverage_rail_adjacent: table
+            .get("civilian_coverage_rail_adjacent")
+            .unwrap_or(1.5),
+        civilian_coverage_unconnected: table
+            .get("civilian_coverage_unconnected")
+            .unwrap_or(0.5),
+        civilian_coverage_undiscovered: table
+            .get("civilian_coverage_undiscovered")
+            .unwrap_or(1.5),
         civilian_hire_bootstrap: table.get("civilian_hire_bootstrap").unwrap_or(15.0),
         civilian_idle_penalty: table.get("civilian_idle_penalty").unwrap_or(8.0),
+        civilian_connectivity_planned_weight: table
+            .get("civilian_connectivity_planned_weight")
+            .unwrap_or(30.0),
+        civilian_connectivity_adjacent_weight: table
+            .get("civilian_connectivity_adjacent_weight")
+            .unwrap_or(60.0),
+        civilian_connectivity_unconnected_weight: table
+            .get("civilian_connectivity_unconnected_weight")
+            .unwrap_or(100.0),
+        civilian_connectivity_softening_threshold: table
+            .get("civilian_connectivity_softening_threshold")
+            .unwrap_or(20_000),
         // `nil` in Lua propagates to `None` (ungated). Vanilla game.lua sets
         // these explicitly per the manual; modders can ungate by setting to nil.
         civilian_rancher_tech: table.get("civilian_rancher_tech").ok(),

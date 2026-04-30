@@ -188,15 +188,30 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
         None => return,
     };
 
+    // Early-out if no idle non-engineer civilians exist — avoids the
+    // depot-plan / rail-adjacency precomputation when nothing will deploy.
+    let has_idle = match game.get_nation(nation_id) {
+        Some(n) => n.military.civilians.iter().any(|c| {
+            !c.working && c.turns_remaining == 0 && c.civilian_type != CivilianType::Engineer
+        }),
+        None => return,
+    };
+    if !has_idle {
+        return;
+    }
+
     // Precompute the set of tiles currently harvesting to the capital. We
     // prefer deploying civilians onto these (their improvements turn into
-    // real yield), but we still allow speculative improvement of other tiles
-    // if nothing in `collectable` is available — the AI's rail planner is
-    // expected to catch up and connect them within a few turns.
+    // real yield).
+    //
+    // Card #217: extend the preference into ordered buckets so improvements
+    // queue up where rail will arrive next, not on arbitrary disconnected
+    // tiles:
+    //   collectable        already harvestable
+    //   planned            on the depot planner's current path / radius
+    //   rail_adjacent      adjacent to existing rail or depot
+    //   (everything else is unconnected and least preferred)
     let collectable: std::collections::HashSet<crate::hex::HexCoord> = {
-        if game.get_nation(nation_id).is_none() {
-            return;
-        }
         let connected = super::super::turn::connected_provinces(game, nation_id);
         let owned_provinces: Vec<&crate::map::Province> = game
             .world.provinces
@@ -204,6 +219,90 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
             .filter(|p| p.owner == nation_id)
             .collect();
         crate::map::infrastructure::collectable_hexes(&game.world.hex_map, &owned_provinces, &connected)
+    };
+    // Tiles the depot planner intends to connect soon: every hex on the
+    // current plan's path, plus the 1-hex radius around the planned
+    // candidate (the area that becomes collectable once the depot is
+    // built). Empty when the AI has no active plan.
+    let planned: std::collections::HashSet<crate::hex::HexCoord> = {
+        match super::economy::plan_next_depot(game, nation_id).as_plan() {
+            Some(plan) => {
+                let mut s: std::collections::HashSet<crate::hex::HexCoord> =
+                    plan.path.iter().copied().collect();
+                s.insert(plan.candidate);
+                for n in plan.candidate.neighbors().iter().copied() {
+                    s.insert(n);
+                }
+                s
+            }
+            None => std::collections::HashSet::new(),
+        }
+    };
+    // Tiles adjacent to *our* existing rail or depot — easy targets for a
+    // future minor rail extension. Foreign rail networks are excluded
+    // because the nation can't piggyback off another power's infrastructure.
+    let rail_adjacent: std::collections::HashSet<crate::hex::HexCoord> = {
+        let owned_set: std::collections::HashSet<crate::hex::HexCoord> = game
+            .world
+            .provinces
+            .iter()
+            .filter(|p| p.owner == nation_id)
+            .flat_map(|p| p.tiles.iter().copied())
+            .collect();
+        let mut s = std::collections::HashSet::new();
+        for &coord in &owned_set {
+            let Some(tile) = game.world.hex_map.get_tile(coord) else {
+                continue;
+            };
+            if tile.infrastructure.has_railroad || tile.infrastructure.has_depot {
+                for n in coord.neighbors().iter().copied() {
+                    s.insert(n);
+                }
+            }
+        }
+        s
+    };
+    // Cash-rich softening: when treasury surplus over the personality's
+    // spending reserve is large, compress the unconnected-bucket weights
+    // toward zero so a rich AI doesn't sit idle waiting for rail.
+    let softening: f64 = {
+        let cfg = &game.game_data.game_config;
+        let personality = super::common::get_personality(game, nation_id);
+        let reserve = super::common::PersonalityConfig::for_personality(personality).spending_reserve;
+        let treasury = game
+            .get_nation(nation_id)
+            .map(|n| n.economy.treasury)
+            .unwrap_or(Money::ZERO);
+        let surplus = (treasury - reserve).as_dollars().max(0) as f64;
+        let threshold = cfg.civilian_connectivity_softening_threshold.max(1) as f64;
+        1.0 / (1.0 + surplus / threshold)
+    };
+    let cfg = &game.game_data.game_config;
+    let bucket_collectable: u32 = 0;
+    // Weights are integer-truncated so heavy softening can collapse them
+    // toward zero, at which point the improvement-level tiebreaker decides.
+    let bucket_planned: u32 = (cfg.civilian_connectivity_planned_weight * softening) as u32;
+    let bucket_adjacent: u32 =
+        (cfg.civilian_connectivity_adjacent_weight * softening) as u32;
+    let bucket_unconnected: u32 =
+        (cfg.civilian_connectivity_unconnected_weight * softening) as u32;
+    // Combined sort key: `bucket << 8 | improvement_level`. Connectivity
+    // dominates while the bucket gap is wide; once softening has collapsed
+    // the gap toward zero (cash-rich case) the improvement-level term takes
+    // over and tiebreaks to the lower-level tile.
+    let sort_key_for = |coord: crate::hex::HexCoord, improvement: u8| -> u32 {
+        let bucket = if collectable.contains(&coord) {
+            bucket_collectable
+        } else if planned.contains(&coord) {
+            bucket_planned
+        } else if rail_adjacent.contains(&coord) {
+            bucket_adjacent
+        } else {
+            bucket_unconnected
+        };
+        bucket
+            .saturating_mul(256)
+            .saturating_add(improvement as u32)
     };
 
     // Snapshot the nation's researched techs so we can consult the tech-gated
@@ -296,7 +395,7 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
                 .iter()
                 .enumerate()
                 .filter(|(_, (_, _, has_assigned))| !has_assigned)
-                .min_by_key(|(_, (coord, _, _))| !collectable.contains(coord));
+                .min_by_key(|(_, (coord, _, _))| sort_key_for(*coord, 0));
             if let Some((tile_idx, &(coord, _, _))) = best {
                 unprospected_tiles[tile_idx].2 = true;
                 let Some(nation) = game.get_nation_mut(nation_id) else {
@@ -328,9 +427,10 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
                 !has_assigned && civ_type.can_improve(*terrain, *resource)
             })
             .min_by_key(|(_, (coord, _, _, improvement, _, _))| {
-                // `false` (0) sorts before `true` (1), so collectable tiles
-                // come first; within each bucket, lowest improvement_level wins.
-                (!collectable.contains(coord), *improvement)
+                // Card #217: combined connectivity + improvement-level key
+                // so heavy softening can collapse the bucket gap and let
+                // the lowest-level tile win across buckets.
+                sort_key_for(*coord, *improvement)
             });
 
         if let Some((tile_idx, &(coord, _, _, _, _, _))) = best_tile {
@@ -653,6 +753,214 @@ mod tests {
             tile.assigned_civilian,
             Some(UnitId(950)),
             "Tile should have the civilian assigned"
+        );
+    }
+
+    // ── Card #217: connectivity-aware deployment ──────────────
+
+    /// Helper: extend the AI's province (id 2) with extra owned tiles.
+    fn add_owned_tiles(game: &mut GameState, coords: &[HexCoord]) {
+        // Update the province's tile list.
+        let prov = game
+            .world
+            .provinces
+            .iter_mut()
+            .find(|p| p.id == ProvinceId(2))
+            .expect("AI province");
+        for &c in coords {
+            if !prov.tiles.contains(&c) {
+                prov.tiles.push(c);
+            }
+        }
+        // Add the AI nation as owner of the province (already so, but keep it
+        // simple) and ensure each tile carries the province id.
+        for &c in coords {
+            // If the hex_map doesn't have a tile at c yet, set one.
+            if game.world.hex_map.get_tile(c).is_none() {
+                let t = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+                game.world.hex_map.set_tile(c, t);
+            } else if let Some(tile) = game.world.hex_map.get_tile_mut(c) {
+                tile.province_id = Some(ProvinceId(2));
+            }
+        }
+    }
+
+    #[test]
+    fn ai_deploy_prefers_rail_adjacent_over_unconnected() {
+        let mut game = test_game_with_ai();
+
+        // Two improvable Grain tiles: one adjacent to rail, one isolated.
+        let near_rail = HexCoord::new(5, 5);
+        let isolated = HexCoord::new(8, 8);
+        let rail_hex = HexCoord::new(6, 5); // neighbor of near_rail; not owned
+
+        add_owned_tiles(&mut game, &[near_rail, isolated]);
+
+        let mut t1 = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        t1.set_resource(ResourceType::Grain);
+        game.world.hex_map.set_tile(near_rail, t1);
+
+        let mut t2 = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        t2.set_resource(ResourceType::Grain);
+        game.world.hex_map.set_tile(isolated, t2);
+
+        // Lay a railroad somewhere unowned but adjacent to `near_rail`. The
+        // sort key looks at *any* rail tile in the map, not just owned ones.
+        let mut rt = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(99));
+        rt.infrastructure.has_railroad = true;
+        game.world.hex_map.set_tile(rail_hex, rt);
+
+        // Single idle Farmer; need Seed Drill so Farm tiles are improvable.
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.economy.treasury = Money::dollars(0); // no hiring
+        ai.military.civilians.clear();
+        ai.military.civilians.push(Civilian::new(
+            UnitId(700),
+            CivilianType::Farmer,
+            NationId(2),
+        ));
+        ai.researched_techs.push(crate::events::TechId(2)); // Seed Drill
+
+        ai_deploy_civilians(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            ai.military.civilians[0].position,
+            Some(near_rail),
+            "Farmer must prefer rail-adjacent tile over isolated tile"
+        );
+    }
+
+    #[test]
+    fn ai_deploy_cash_rich_softening_flips_choice_between_buckets() {
+        // Card #217: when treasury surplus is small the connectivity bucket
+        // dominates and the AI picks the rail-adjacent tile; when the
+        // surplus dwarfs `civilian_connectivity_softening_threshold` the
+        // bucket gap collapses and the (improvement_level) tiebreaker takes
+        // over, flipping the choice to the unconnected (but lower-level,
+        // higher-headroom) tile.
+        //
+        // Layout (both improvable to L2 with Seed Drill + Steel/Iron Plows):
+        //   - owned_rail (6,5): owned, has railroad (no resource).
+        //   - near_rail  (5,5): rail-adjacent (neighbor of owned_rail),
+        //                       Grain at improvement_level 1.
+        //   - isolated   (8,8): unconnected, Grain at improvement_level 0.
+
+        fn run_with_treasury(treasury_dollars: i64) -> Option<HexCoord> {
+            let mut game = test_game_with_ai();
+
+            let owned_rail = HexCoord::new(6, 5);
+            let near_rail = HexCoord::new(5, 5);
+            let isolated = HexCoord::new(8, 8);
+
+            add_owned_tiles(&mut game, &[owned_rail, near_rail, isolated]);
+
+            let mut rt =
+                crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+            rt.infrastructure.has_railroad = true;
+            game.world.hex_map.set_tile(owned_rail, rt);
+
+            let mut t1 =
+                crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+            t1.set_resource(ResourceType::Grain);
+            t1.set_improvement_level(1);
+            game.world.hex_map.set_tile(near_rail, t1);
+
+            let mut t2 =
+                crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+            t2.set_resource(ResourceType::Grain);
+            t2.set_improvement_level(0);
+            game.world.hex_map.set_tile(isolated, t2);
+
+            let ai = game.get_nation_mut(NationId(2)).unwrap();
+            ai.economy.treasury = Money::dollars(treasury_dollars);
+            ai.military.civilians.clear();
+            ai.military.civilians.push(Civilian::new(
+                UnitId(710),
+                CivilianType::Farmer,
+                NationId(2),
+            ));
+            // Seed Drill (Farm L1) + Steel and Iron Plows (Farm L2) so both
+            // tiles remain improvable: near_rail (1 → 2) and isolated (0 → 2).
+            ai.researched_techs.push(crate::events::TechId(2));
+            ai.researched_techs.push(crate::events::TechId(10));
+
+            ai_deploy_civilians(&mut game, NationId(2));
+            game.get_nation(NationId(2))
+                .and_then(|n| n.military.civilians.first().and_then(|c| c.position))
+        }
+
+        let near_rail = HexCoord::new(5, 5);
+        let isolated = HexCoord::new(8, 8);
+
+        // Cash-tight (treasury == reserve, no surplus): bucket dominates.
+        // PersonalityConfig::Aggressive uses spending_reserve = $500.
+        let cash_tight =
+            run_with_treasury(500).expect("cash-tight AI must deploy a civilian");
+        assert_eq!(
+            cash_tight, near_rail,
+            "cash-tight: bucket preference must beat the improvement-level tiebreaker"
+        );
+
+        // Cash-rich (treasury vastly above the $20k softening threshold):
+        // bucket gap collapses → tiebreaker on improvement_level wins, and
+        // isolated (level 0) beats near_rail (level 1).
+        let cash_rich =
+            run_with_treasury(50_000_000).expect("cash-rich AI must deploy a civilian");
+        assert_eq!(
+            cash_rich, isolated,
+            "cash-rich softening must let the lower-improvement unconnected tile win"
+        );
+    }
+
+    #[test]
+    fn ai_deploy_softening_lets_isolated_tile_win_when_only_unconnected_improvable() {
+        // Direct test of softening: with treasury well above reserve and
+        // the rail-adjacent tile already maxed, the AI must happily deploy
+        // on the disconnected tile (the only improvable one). This case
+        // also passes without softening (the legacy fall-through), but
+        // makes the regression detectable if the unconnected bucket is
+        // ever made truly prohibitive.
+        let mut game = test_game_with_ai();
+
+        let near_rail = HexCoord::new(5, 5);
+        let isolated = HexCoord::new(8, 8);
+        let owned_rail = HexCoord::new(6, 5);
+
+        add_owned_tiles(&mut game, &[owned_rail, near_rail, isolated]);
+
+        let mut rt = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        rt.infrastructure.has_railroad = true;
+        game.world.hex_map.set_tile(owned_rail, rt);
+
+        // near_rail: maxed → not improvable.
+        let mut t1 = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        t1.set_resource(ResourceType::Grain);
+        t1.set_improvement_level(1);
+        game.world.hex_map.set_tile(near_rail, t1);
+
+        // isolated: L0 → improvable.
+        let mut t2 = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        t2.set_resource(ResourceType::Grain);
+        game.world.hex_map.set_tile(isolated, t2);
+
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.economy.treasury = Money::dollars(10_000_000);
+        ai.military.civilians.clear();
+        ai.military.civilians.push(Civilian::new(
+            UnitId(720),
+            CivilianType::Farmer,
+            NationId(2),
+        ));
+        ai.researched_techs.push(crate::events::TechId(2));
+
+        ai_deploy_civilians(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            ai.military.civilians[0].position,
+            Some(isolated),
+            "Cash-rich AI must deploy to the only improvable tile, even disconnected"
         );
     }
 

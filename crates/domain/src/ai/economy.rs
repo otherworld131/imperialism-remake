@@ -440,6 +440,9 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
                     &owned_hexes,
                     &already_covered,
                     &compute_resource_demand(nation, game, cfg),
+                    &game.game_data.tech_tree,
+                    &nation.researched_techs,
+                    cfg.infra_improvability_weight,
                 );
                 let net_score = net_score(coverage_value, path_cost, cfg);
                 return PlanOutcome::KeepCommitment(DepotPlan {
@@ -490,6 +493,9 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
             &owned_hexes,
             &already_covered,
             &demand,
+            &game.game_data.tech_tree,
+            &nation.researched_techs,
+            cfg.infra_improvability_weight,
         );
         if coverage_value == 0 {
             continue;
@@ -546,14 +552,24 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
 
 /// Demand-weighted coverage of the 1-hex radius around `center`, excluding
 /// tiles already covered by another connected collector.
+///
+/// Card #217: in addition to a tile's *current* demand-weighted yield, each
+/// tile also contributes a smaller "improvability" term, equal to
+/// `(tech_capped_max - current_improvement) * demand_weight *
+/// cfg.infra_improvability_weight`. This makes the planner prefer candidates
+/// covering tiles that will yield once worked, not just tiles yielding today.
+#[allow(clippy::too_many_arguments)]
 fn coverage_around(
     hex_map: &HexMap,
     center: HexCoord,
     owned_hexes: &HashSet<HexCoord>,
     already_covered: &HashSet<HexCoord>,
     demand: &HashMap<ResourceType, f64>,
+    tech_tree: &crate::tech::TechTree,
+    researched_techs: &[crate::events::TechId],
+    improvability_weight: f64,
 ) -> u32 {
-    let mut v: u32 = 0;
+    let mut v: f64 = 0.0;
     let radius: Vec<HexCoord> = std::iter::once(center)
         .chain(center.neighbors().iter().copied())
         .collect();
@@ -564,9 +580,30 @@ fn coverage_around(
         if already_covered.contains(r_hex) {
             continue;
         }
-        v += score_tile_for_demand(hex_map, *r_hex, demand);
+        v += score_tile_for_demand(hex_map, *r_hex, demand) as f64;
+        if improvability_weight > 0.0
+            && let Some(tile) = hex_map.get_tile(*r_hex)
+            // Per the manual, hidden minerals are unknown until prospected.
+            // Mirror the visibility check `score_civilian` already applies
+            // so the depot planner doesn't bias toward secret deposits.
+            && tile.has_visible_resource()
+        {
+            let resource = tile.resource_deposit();
+            let max = tech_tree.effective_max_improvement_level(
+                tile.terrain(),
+                resource,
+                researched_techs,
+            );
+            let current = tile.improvement_level();
+            if max > current {
+                let demand_w = resource
+                    .and_then(|r| demand.get(&r).copied())
+                    .unwrap_or(1.0);
+                v += (max - current) as f64 * demand_w * improvability_weight;
+            }
+        }
     }
-    v
+    v as u32
 }
 
 /// Reconstruct the build-order path to `candidate`, dropping any tiles that
@@ -2482,6 +2519,136 @@ mod tests {
             }
             other => panic!("expected KeepCommitment on turn 2, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn plan_improvability_weight_increases_coverage() {
+        // Card #217: depot planner must factor in tech-capped improvability,
+        // not just current yield. With Seed Drill researched, a Grain L0 tile
+        // has +1 max-level headroom → coverage_value rises with the
+        // `infra_improvability_weight` knob.
+        let capital = HexCoord::new(0, 0);
+        let candidate = HexCoord::new(2, 0);
+        let intermediate = HexCoord::new(1, 0);
+        // Place an extra Grain L0 tile inside the candidate's 1-hex radius
+        // (3,0) so the tile contributes to coverage_around.
+        let extra = HexCoord::new(3, 0);
+
+        let mut game = planner_game(
+            capital,
+            &[
+                (intermediate, ResourceType::Grain),
+                (candidate, ResourceType::Grain),
+                (extra, ResourceType::Grain),
+            ],
+        );
+        // Seed Drill so Farm is improvable to L1.
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .researched_techs
+            .push(crate::events::TechId(2));
+
+        // Snapshot coverage with weight = 0 (legacy behavior).
+        game.game_data.game_config.infra_improvability_weight = 0.0;
+        let cov_off = plan_next_depot(&game, NationId(1))
+            .as_plan()
+            .expect("plan should exist")
+            .coverage_value;
+
+        // Same scenario with improvability weight > 0 must yield strictly more.
+        game.game_data.game_config.infra_improvability_weight = 1.0;
+        let cov_on = plan_next_depot(&game, NationId(1))
+            .as_plan()
+            .expect("plan should exist")
+            .coverage_value;
+
+        assert!(
+            cov_on > cov_off,
+            "improvability weight must lift coverage_value (off={}, on={})",
+            cov_off,
+            cov_on,
+        );
+    }
+
+    #[test]
+    fn plan_picks_more_improvable_candidate_at_equal_path_cost() {
+        // Card #217: with two candidates equidistant from the capital and
+        // identical path cost, the planner should prefer the one whose
+        // 1-hex radius covers tiles with more improvability headroom once
+        // `infra_improvability_weight` is on. With the weight at 0 (legacy
+        // behavior), the higher *current* yield wins.
+        //
+        // Setup (Grassland everywhere, every tile path-cost == $100):
+        //   - capital at (0,0): country-capital Grain L0 with depot.
+        //   - cand_more_imp at (3,0): empty grassland, neighbour (4,0)
+        //     carries Grain at improvement_level 0  → delta=2 with Farm L2 tech.
+        //   - cand_more_curr at (-3,0): empty grassland, neighbour (-4,0)
+        //     carries Grain at improvement_level 1 → current yield=2, delta=1.
+        //
+        // Yield (surface resource = 1 + level):
+        //   - (4,0) at L0: current yield 1, improvability +2W.
+        //   - (-4,0) at L1: current yield 2, improvability +1W.
+        //
+        // With W=0: more_curr beats more_imp (2 vs 1) → planner picks (-3,0).
+        // With W=2: more_imp 1+4=5 beats more_curr 2+2=4 → planner picks (3,0).
+        let capital = HexCoord::new(0, 0);
+        let cand_more_imp = HexCoord::new(3, 0);
+        let cand_more_curr = HexCoord::new(-3, 0);
+        let imp_neighbour = HexCoord::new(4, 0);
+        let curr_neighbour = HexCoord::new(-4, 0);
+
+        // Path filler so Dijkstra can reach both candidates.
+        let mut game = planner_game(
+            capital,
+            &[
+                (HexCoord::new(1, 0), ResourceType::Grain),
+                (HexCoord::new(2, 0), ResourceType::Grain),
+                (cand_more_imp, ResourceType::Grain),
+                (imp_neighbour, ResourceType::Grain),
+                (HexCoord::new(-1, 0), ResourceType::Grain),
+                (HexCoord::new(-2, 0), ResourceType::Grain),
+                (cand_more_curr, ResourceType::Grain),
+                (curr_neighbour, ResourceType::Grain),
+            ],
+        );
+
+        // Lift `curr_neighbour` to improvement_level 1.
+        if let Some(t) = game.world.hex_map.get_tile_mut(curr_neighbour) {
+            t.set_improvement_level(1);
+        }
+
+        // Research Seed Drill (Farm L1) + Steel and Iron Plows (Farm L2) so
+        // both neighbours are still improvable: imp_neighbour 0→2,
+        // curr_neighbour 1→2.
+        let nat = game.get_nation_mut(NationId(1)).unwrap();
+        nat.researched_techs.push(crate::events::TechId(2));
+        nat.researched_techs.push(crate::events::TechId(10));
+        // Clear the LumberMill that planner_game seeds — we want Grain to
+        // dominate the demand profile so each Grain tile contributes a
+        // demand_weight ~1.0 with no Timber bias.
+        nat.economy.buildings.clear();
+
+        // Legacy behaviour (weight = 0): the higher-yield neighbour side wins.
+        game.game_data.game_config.infra_improvability_weight = 0.0;
+        let chosen_legacy = plan_next_depot(&game, NationId(1))
+            .as_plan()
+            .expect("planner must pick a target")
+            .candidate;
+        assert_eq!(
+            chosen_legacy, cand_more_curr,
+            "with improvability_weight=0, current yield wins → expected cand_more_curr"
+        );
+
+        // Improvability-weighted: improvable side wins despite lower current yield.
+        game.game_data.game_config.infra_improvability_weight = 2.0;
+        let chosen_imp = plan_next_depot(&game, NationId(1))
+            .as_plan()
+            .expect("planner must pick a target")
+            .candidate;
+        assert_eq!(
+            chosen_imp, cand_more_imp,
+            "with improvability_weight=2.0, improvable side must win at equal path cost"
+        );
     }
 
     #[test]

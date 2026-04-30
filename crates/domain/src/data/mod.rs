@@ -126,6 +126,13 @@ pub struct GameConfig {
     //            - path_cost * infra_path_cost_weight - depot_cost`
     pub infra_coverage_weight: f64,
     pub infra_path_cost_weight: f64,
+    // Card #217: depot-planner weight on improvable-but-not-yet-improved tiers
+    // (0 disables, 1.0 = 1 demand-weighted point per unimproved tier).
+    pub infra_improvability_weight: f64,
+    // Card #217: early-game bias multiplier on `score_infrastructure` for the
+    // first `infra_early_game_bias_turns` turns of the game.
+    pub infra_early_game_bias_turns: u32,
+    pub infra_early_game_bias: f64,
     // Trade-aware demand (cards #131 / #132): how far back to look for
     // import history, and how strongly to discount demand for resources
     // already flowing in via trade.
@@ -146,15 +153,27 @@ pub struct GameConfig {
     pub engineer_hire_base: u32,
     pub engineer_hire_path_coeff: u32,
     pub engineer_hire_cap: u32,
-    // Improver civilian-hire scoring (drives `score_civilian`). Replaces the
-    // old fixed 4-step coverage ladder with a continuous saturation formula:
-    // each existing civilian "covers" ~`civilian_target_tiles_per_worker`
-    // improvable tiles; every unmet tile beyond that capacity adds
-    // `civilian_coverage_per_unmet` to the score. Scales with empire size.
+    // Improver civilian-hire scoring (drives `score_civilian`). Continuous
+    // saturation formula: each existing civilian "covers" weighted demand
+    // worth ~`civilian_target_tiles_per_worker` units; unmet weighted
+    // demand drives the score. The per-tile weight depends on the tile's
+    // connectivity (see civilian_coverage_* fields below) so disconnected
+    // tiles don't pull as hard for additional improvers as connected ones.
     pub civilian_target_tiles_per_worker: u32,
-    pub civilian_coverage_per_unmet: f64,
+    // Card #217 follow-up: per-tile coverage weights. See `score_civilian`
+    // and `scripts/config/game.lua` for the bucket definitions.
+    pub civilian_coverage_collectable: f64,
+    pub civilian_coverage_rail_adjacent: f64,
+    pub civilian_coverage_unconnected: f64,
+    pub civilian_coverage_undiscovered: f64,
     pub civilian_hire_bootstrap: f64,
     pub civilian_idle_penalty: f64,
+    // Card #217: improver-deployment connectivity bucket weights. See
+    // `ai_deploy_civilians` and game.lua for semantics.
+    pub civilian_connectivity_planned_weight: f64,
+    pub civilian_connectivity_adjacent_weight: f64,
+    pub civilian_connectivity_unconnected_weight: f64,
+    pub civilian_connectivity_softening_threshold: i64,
     // Tech prerequisites for hiring specific civilian types — must match the
     // tech tree. `None` means the civilian is available from turn 1.
     // Per the original Imperialism manual (p.27–28): Rancher needs Feed Grasses,
@@ -327,6 +346,9 @@ impl Default for GameConfig {
             infrastructure_horizon_turns: 50,
             infra_coverage_weight: 1.0,
             infra_path_cost_weight: 1.0,
+            infra_improvability_weight: 0.5,
+            infra_early_game_bias_turns: 5,
+            infra_early_game_bias: 1.5,
             trade_lookback_turns: 8,
             trade_discount_weight: 0.5,
             trade_history_weight: 1.0,
@@ -336,9 +358,16 @@ impl Default for GameConfig {
             engineer_hire_path_coeff: 30,
             engineer_hire_cap: 250,
             civilian_target_tiles_per_worker: 8,
-            civilian_coverage_per_unmet: 3.0,
+            civilian_coverage_collectable: 3.0,
+            civilian_coverage_rail_adjacent: 1.5,
+            civilian_coverage_unconnected: 0.5,
+            civilian_coverage_undiscovered: 1.5,
             civilian_hire_bootstrap: 15.0,
             civilian_idle_penalty: 8.0,
+            civilian_connectivity_planned_weight: 30.0,
+            civilian_connectivity_adjacent_weight: 60.0,
+            civilian_connectivity_unconnected_weight: 100.0,
+            civilian_connectivity_softening_threshold: 20_000,
             civilian_rancher_tech: Some("Feed Grasses".to_string()),
             civilian_forester_tech: Some("Iron Railroad Bridge".to_string()),
             civilian_driller_tech: Some("Oil Drilling".to_string()),
