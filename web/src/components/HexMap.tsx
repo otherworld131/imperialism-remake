@@ -290,6 +290,8 @@ interface Props {
   governmentTitleByNationId?: Record<number, string>;
   /** Key of the currently selected tile ("q,r") — used to blink its troop indicator. */
   selectedTileKey?: string | null;
+  /** When true, zoom is locked to the minimum fit-scale (map fills canvas, no zoom in/out). */
+  lockZoom?: boolean;
 }
 
 const CIVILIAN_EMOJI: Record<string, string> = {
@@ -335,6 +337,7 @@ export default function HexMap({
   renderTooltipModeExtras,
   governmentTitleByNationId,
   selectedTileKey = null,
+  lockZoom = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Use props if provided (controlled mode), otherwise use local state (uncontrolled)
@@ -612,7 +615,8 @@ export default function HexMap({
     const fitScale = (mapPixelHeight > 0 && canvasH > 0)
       ? (canvasH / mapPixelHeight)
       : 0.1;
-    const clamped = Math.max(fitScale, Math.min(4, newScale));
+    const maxScale = lockZoom ? fitScale : 4;
+    const clamped = Math.max(fitScale, Math.min(maxScale, newScale));
     const ratio = clamped / oldScale;
     const rawOffset = { x: cx - (cx - oldOffset.x) * ratio, y: cy - (cy - oldOffset.y) * ratio };
     return { scale: clamped, offset: applyPanConstraints(rawOffset, clamped) };
@@ -636,6 +640,24 @@ export default function HexMap({
   zoomAtRef.current = zoomAt;
   const computeZoomRef = useRef(computeZoom);
   computeZoomRef.current = computeZoom;
+
+  // When lockZoom becomes true, snap to fitScale immediately so the map fills the canvas.
+  const prevLockZoomRef = useRef(lockZoom);
+  useEffect(() => {
+    if (lockZoom && !prevLockZoomRef.current) {
+      const canvas = canvasRef.current;
+      const cx = canvas ? canvas.clientWidth / 2 : 0;
+      const cy = canvas ? canvas.clientHeight / 2 : 0;
+      const z = computeZoomRef.current(cx, cy, scaleRef.current, offsetRef.current, 0.01);
+      scaleRef.current = z.scale;
+      offsetRef.current = z.offset;
+      setScale(z.scale);
+      setOffset(z.offset);
+      scheduleFrameRef.current();
+    }
+    prevLockZoomRef.current = lockZoom;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lockZoom]);
 
   const showPoliticalColors = mapMode !== 'terrain';
 
@@ -1572,14 +1594,16 @@ export default function HexMap({
     }
 
     // ── Pass 5b: Diplomatic presence icons (consulate/embassy) ──
-    if (mapMode === 'diplomatic' && diplomacyOverlay && scale > 0.6) {
+    if (mapMode === 'diplomatic' && diplomacyOverlay) {
       const diploByNation = new Map<string, typeof diplomacyOverlay.relations[0]>();
       for (const rel of diplomacyOverlay.relations) {
         diploByNation.set(rel.nation_name, rel);
       }
 
-      const badgeSize = Math.max(9, HEX_SIZE * 0.35);
-      const badgeR = badgeSize * 0.65;
+      const emojiSize = Math.max(10, HEX_SIZE * 0.55);
+      ctx.font = `${emojiSize}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
 
       for (const tile of tiles) {
         if (!tile.is_country_capital || tile.terrain === 'Sea') continue;
@@ -1590,30 +1614,16 @@ export default function HexMap({
         if (!rel.has_consulate && !rel.has_embassy) continue;
 
         const [px, py] = hexToPixel(tile.q, tile.r);
-        const iy = py + HEX_SIZE * 0.55;
+        // Position below the capital icon and below the nation name label
+        const iy = py + HEX_SIZE * 0.7;
 
-        // Draw badge circle + letter
-        const letter = rel.has_embassy ? 'E' : 'C';
-        const bgColor = rel.has_embassy ? 'rgba(30,80,160,0.85)' : 'rgba(0,150,136,0.85)';
-
-        ctx.beginPath();
-        ctx.arc(px, iy, badgeR, 0, Math.PI * 2);
-        ctx.fillStyle = bgColor;
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(218,165,32,0.9)';
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
-
-        ctx.font = `bold ${badgeSize * 0.7}px Georgia, serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#fff';
-        ctx.fillText(letter, px, iy);
+        const emoji = rel.has_embassy ? '\u{1F3DB}️' : '\u{1F4DC}'; // 🏛️ embassy, 📜 consulate
+        ctx.fillText(emoji, px, iy);
       }
     }
 
-    // ── Pass 6: Nation name labels (all non-terrain modes) ──
-    if (showPoliticalColors) {
+    // ── Pass 6: Nation name labels (all non-terrain modes, hidden when zoomed in) ──
+    if (showPoliticalColors && scale <= 1.2) {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       for (const label of nationLabels) {
@@ -2291,24 +2301,28 @@ export default function HexMap({
       )}
       {/* Map controls */}
       <div style={{ position: 'absolute', bottom: 12, right: 12, display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-        <button
-          onClick={() => {
-            const canvas = canvasRef.current;
-            if (!canvas) return;
-            zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, scale - 0.2);
-          }}
-          style={controlBtn}
-          aria-label="Zoom out"
-        >{'\u2212'}</button>
-        <button
-          onClick={() => {
-            const canvas = canvasRef.current;
-            if (!canvas) return;
-            zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, scale + 0.2);
-          }}
-          style={controlBtn}
-          aria-label="Zoom in"
-        >+</button>
+        {!lockZoom && (
+          <>
+            <button
+              onClick={() => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, scale - 0.2);
+              }}
+              style={controlBtn}
+              aria-label="Zoom out"
+            >{'\u2212'}</button>
+            <button
+              onClick={() => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, scale + 0.2);
+              }}
+              style={controlBtn}
+              aria-label="Zoom in"
+            >+</button>
+          </>
+        )}
 
         {/* Map mode dropup */}
         <div style={{ position: 'relative' }}>

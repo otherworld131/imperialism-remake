@@ -1361,6 +1361,7 @@ function App() {
             renderTooltipModeExtras={renderTooltipModeExtras}
             governmentTitleByNationId={governmentTitleByNationId}
             selectedTileKey={selectedTile ? `${selectedTile.q},${selectedTile.r}` : null}
+            lockZoom={mapMode === 'diplomatic'}
           />
         </div>
 
