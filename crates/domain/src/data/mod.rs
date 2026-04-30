@@ -247,6 +247,13 @@ pub struct GameConfig {
     pub ai_consulate_priority_score: f64,
     pub ai_consulate_beyond_target_score: f64,
     pub ai_consulate_beyond_target_decay: f64,
+    // Per-personality hard cap on consulates pursued under normal financial
+    // conditions. Reuses `priority_minor_targets_*` (Aggressive 3, Balanced 4,
+    // Economic 4, Diplomatic 5). The cap is lifted when treasury exceeds
+    // `labor_wealthy_treasury_threshold` — at that point the existing soft
+    // decay in `ai_consulate_beyond_target_*` resumes governing growth.
+    // Without the cap the soft-decay formula alone let rich maps push
+    // consulate counts to 8-10+.
     // Map generation
     pub min_food_tile_percent: u32,
     pub food_cluster_chance: u32,

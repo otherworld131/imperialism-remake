@@ -684,6 +684,39 @@ fn score_consulate(
     let nation = game.get_nation(nation_id)?;
     let cfg = &game.game_data.game_config;
 
+    // Per-personality hard cap on consulates pursued under normal financial
+    // conditions. Reuses `priority_minor_targets_*` (Aggressive 3 / Balanced 4
+    // / Economic 4 / Diplomatic 5) so the cap and the early-game priority
+    // pick share one knob. The cap is *lifted* once the AI has accumulated
+    // serious cash (treasury >= `labor_wealthy_treasury_threshold`), at
+    // which point the existing soft-decay branch below resumes governing
+    // growth — wealthy AIs can chase more trade partners.
+    let personality = nation
+        .diplomacy
+        .ai_personality
+        .unwrap_or(AiPersonality::Balanced);
+    let cap = priority_target_count(cfg, personality) as u32;
+    let wealthy = nation.economy.treasury.as_dollars() >= cfg.labor_wealthy_treasury_threshold;
+
+    // Pre-count current consulates so the cap can short-circuit before the
+    // priority-target boost kicks in — otherwise the priority short-circuit
+    // would happily push past the cap chasing late-added priority targets.
+    let existing_consulates_pre: u32 = game
+        .world
+        .nations
+        .iter()
+        .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
+        .filter(|n| {
+            game.world
+                .diplomacy
+                .get_relation(nation_id, n.id)
+                .is_some_and(|r| r.has_consulate)
+        })
+        .count() as u32;
+    if !wealthy && existing_consulates_pre >= cap {
+        return None;
+    }
+
     // Priority-minor short-circuit: if any of our priority targets still lacks
     // a consulate with us, the score is huge — locking in early-game trade
     // partners is the most important diplomacy goal until it's done.
@@ -2384,5 +2417,126 @@ mod tests {
         );
         // 4 turns of accrual × Balanced military weight (30) = 120
         assert_eq!(bonus, 120.0);
+    }
+
+    // ── Consulate cap (per-personality, wealth-overridable) ──
+
+    /// Build on top of `test_game_with_ai_and_minor`: extend the world with
+    /// `extra_minors` additional minor nations, each with a tradeable Grain
+    /// tile so they're visible to `score_consulate`. Returns the IDs of all
+    /// minor nations (the original + the extras).
+    fn game_with_extra_minors(extra_minors: usize) -> (GameState, NationId, Vec<NationId>) {
+        use crate::ai::common::test_helpers::test_game_with_ai_and_minor;
+        use crate::hex::HexCoord;
+        use crate::map::Province;
+        use crate::map::tile::Tile;
+        use crate::nation::{Nation, NationColor};
+        use crate::types::NationType;
+
+        let mut game = test_game_with_ai_and_minor();
+        let ai_id = NationId(2);
+        let mut minor_ids = vec![NationId(3)]; // pre-existing minor
+
+        for i in 0..extra_minors {
+            let mn_id = NationId(100 + i as u32);
+            let prov_id = ProvinceId(100 + i as u32);
+            let coord = HexCoord::new(8 + i as i32 % 5, 8 + i as i32 / 5);
+            let mut tile = Tile::with_province(TerrainType::Grassland, prov_id);
+            tile.set_resource(ResourceType::Grain);
+            game.world.hex_map.set_tile(coord, tile);
+            let mut prov = Province::new(
+                prov_id,
+                format!("Minor {i}"),
+                mn_id,
+                coord,
+                vec![coord],
+                3,
+            );
+            prov.tiles.push(coord);
+            game.world.provinces.push(prov);
+            let mut mn = Nation::new(
+                mn_id,
+                format!("Minor {i}"),
+                NationColor::Gray,
+                NationType::MinorNation,
+                prov_id,
+            );
+            mn.add_province(prov_id);
+            game.world.nations.push(mn);
+            minor_ids.push(mn_id);
+        }
+        (game, ai_id, minor_ids)
+    }
+
+    /// Card follow-up: under normal financial conditions, the AI must not
+    /// score additional consulates once it already holds the
+    /// per-personality cap (Balanced = 4).
+    #[test]
+    fn score_consulate_capped_at_personality_target_when_not_wealthy() {
+        let (mut game, ai_id, minors) = game_with_extra_minors(7);
+        // Treasury well below the wealthy threshold so the cap holds.
+        game.get_nation_mut(ai_id).unwrap().economy.treasury = Money::dollars(5_000);
+        // Pre-build 4 consulates (== Balanced cap). Use minors that are NOT
+        // priority targets so the priority short-circuit can't fire.
+        for &mn in minors.iter().take(4) {
+            game.world.diplomacy.build_consulate(ai_id, mn).unwrap();
+        }
+
+        let weights = load_weights(&game, AiPersonality::Balanced);
+        let scored = score_consulate(&game, ai_id, &weights);
+        assert!(
+            scored.is_none(),
+            "non-wealthy Balanced AI must not score a 5th consulate (cap = 4)",
+        );
+    }
+
+    /// Card follow-up: when the AI is wealthy (treasury >=
+    /// `labor_wealthy_treasury_threshold`), the cap is lifted and the
+    /// soft-decay branch resumes governing growth. The AI may still score
+    /// additional consulates above the personality cap.
+    #[test]
+    fn score_consulate_cap_lifted_when_wealthy() {
+        let (mut game, ai_id, minors) = game_with_extra_minors(7);
+        let threshold = game.game_data.game_config.labor_wealthy_treasury_threshold;
+        game.get_nation_mut(ai_id).unwrap().economy.treasury =
+            Money::dollars(threshold + 1_000);
+        for &mn in minors.iter().take(4) {
+            game.world.diplomacy.build_consulate(ai_id, mn).unwrap();
+        }
+
+        let weights = load_weights(&game, AiPersonality::Balanced);
+        let scored = score_consulate(&game, ai_id, &weights);
+        assert!(
+            scored.is_some(),
+            "wealthy AI must still score additional consulates beyond the personality cap",
+        );
+    }
+
+    /// Card follow-up: the cap applies *before* the priority short-circuit,
+    /// so an AI at the cap will not chase a still-unsecured priority target
+    /// past its limit (under normal financial conditions).
+    #[test]
+    fn score_consulate_cap_blocks_even_priority_short_circuit() {
+        let (mut game, ai_id, minors) = game_with_extra_minors(7);
+        game.get_nation_mut(ai_id).unwrap().economy.treasury = Money::dollars(5_000);
+        // 4 consulates already (cap reached) with non-priority MNs.
+        for &mn in minors.iter().take(4) {
+            game.world.diplomacy.build_consulate(ai_id, mn).unwrap();
+        }
+        // Add a 5th MN as a priority target with no consulate yet.
+        let stretch_target = minors[4];
+        game.get_nation_mut(ai_id)
+            .unwrap()
+            .diplomacy
+            .ai_priority_state
+            .priority_minor_targets
+            .push(stretch_target);
+
+        let weights = load_weights(&game, AiPersonality::Balanced);
+        let scored = score_consulate(&game, ai_id, &weights);
+        assert!(
+            scored.is_none(),
+            "cap must apply ahead of the priority short-circuit so the AI doesn't chase priority targets past the limit when poor",
+        );
     }
 }
