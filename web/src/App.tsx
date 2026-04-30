@@ -1362,7 +1362,7 @@ function App() {
             governmentTitleByNationId={governmentTitleByNationId}
             selectedTileKey={selectedTile ? `${selectedTile.q},${selectedTile.r}` : null}
             lockZoom={activeScreen === 'diplomacy'}
-            showDiplomacyMarkers={activeScreen === 'diplomacy'}
+            showDiplomacyMarkers={mapMode === 'diplomatic'}
           />
         </div>
 

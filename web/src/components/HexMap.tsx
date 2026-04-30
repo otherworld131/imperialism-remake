@@ -714,6 +714,25 @@ export default function HexMap({
   // Uses visual_group so incorporated minor nations get their own label
   const nationLabels = useMemo(() => computeNationLabels(tiles), [tiles]);
 
+  // Province label centroids — used for zoom-in province name rendering
+  const provinceLabels = useMemo(() => {
+    const map = new Map<string, { cx: number; cy: number; size: number }>();
+    for (const tile of tiles) {
+      if (tile.terrain === 'Sea' || !tile.province) continue;
+      const [px, py] = [HEX_SIZE * (Math.sqrt(3) * tile.q + Math.sqrt(3) / 2 * tile.r),
+                        HEX_SIZE * (3 / 2 * tile.r)];
+      const entry = map.get(tile.province);
+      if (entry) {
+        entry.cx = (entry.cx * entry.size + px) / (entry.size + 1);
+        entry.cy = (entry.cy * entry.size + py) / (entry.size + 1);
+        entry.size += 1;
+      } else {
+        map.set(tile.province, { cx: px, cy: py, size: 1 });
+      }
+    }
+    return Array.from(map.entries()).map(([name, v]) => ({ name, ...v }));
+  }, [tiles]);
+
   // ── Organic coastline + border geometry ─────────────────────────────────
   //
   // Builds smoothed polylines for the land/sea boundary and for political
@@ -1249,6 +1268,11 @@ export default function HexMap({
       return pickPoliticalColor(tile);
     };
 
+    const fitScaleForLabels = mapDims.mapPixelHeight > 0 && canvas.height > 0
+      ? canvas.height / mapDims.mapPixelHeight
+      : 0;
+    const zoomedInPastLabels = fitScaleForLabels > 0 && scale > fitScaleForLabels * 1.5;
+
     for (let k = kMin; k <= kMax; k++) {
       ctx.setTransform(scale, 0, 0, scale, offset.x + k * periodScreen, offset.y);
 
@@ -1401,10 +1425,12 @@ export default function HexMap({
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
 
-        ctx.strokeStyle = 'rgba(20,15,10,0.5)';
-        ctx.lineWidth = 1.5;
-        for (const loop of mapGeometry.provincePolylinesClosed) strokePolyline(loop, true);
-        for (const line of mapGeometry.provincePolylinesOpen) strokePolyline(line, false);
+        if (mapMode !== 'diplomatic' && zoomedInPastLabels) {
+          ctx.strokeStyle = 'rgba(20,15,10,0.5)';
+          ctx.lineWidth = 1.5;
+          for (const loop of mapGeometry.provincePolylinesClosed) strokePolyline(loop, true);
+          for (const line of mapGeometry.provincePolylinesOpen) strokePolyline(line, false);
+        }
 
         ctx.strokeStyle = 'rgba(10,5,0,0.9)';
         ctx.lineWidth = 3.5;
@@ -1417,14 +1443,16 @@ export default function HexMap({
         for (const line of mapGeometry.coastPolylinesOpen) strokePolyline(line, false);
       } else {
         // Straight hex-edge strokes — original look.
-        ctx.strokeStyle = 'rgba(20,15,10,0.5)';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        for (let i = 0; i < provinceEdges.length; i += 4) {
-          ctx.moveTo(provinceEdges[i], provinceEdges[i + 1]);
-          ctx.lineTo(provinceEdges[i + 2], provinceEdges[i + 3]);
+        if (mapMode !== 'diplomatic' && zoomedInPastLabels) {
+          ctx.strokeStyle = 'rgba(20,15,10,0.5)';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          for (let i = 0; i < provinceEdges.length; i += 4) {
+            ctx.moveTo(provinceEdges[i], provinceEdges[i + 1]);
+            ctx.lineTo(provinceEdges[i + 2], provinceEdges[i + 3]);
+          }
+          ctx.stroke();
         }
-        ctx.stroke();
 
         ctx.strokeStyle = 'rgba(10,5,0,0.9)';
         ctx.lineWidth = 3.5;
@@ -1552,7 +1580,7 @@ export default function HexMap({
         if (!tile.has_railroad && !tile.has_depot && !tile.has_port && !tile.has_fort) continue;
         const [px, py] = hexToPixel(tile.q, tile.r);
 
-        if (tile.has_railroad) {
+        if (tile.has_railroad && mapMode === 'terrain') {
           // Draw small railroad tracks (two parallel lines)
           const rw = HEX_SIZE * 0.35;
           ctx.strokeStyle = 'rgba(100,60,20,0.8)';
@@ -1566,7 +1594,7 @@ export default function HexMap({
           }
           ctx.stroke();
         }
-        if (tile.has_depot) {
+        if (tile.has_depot && mapMode === 'terrain') {
           ctx.fillStyle = 'rgba(139,90,43,0.9)';
           const ds = HEX_SIZE * 0.2;
           ctx.fillRect(px - ds + HEX_SIZE * 0.3, py - ds, ds * 2, ds * 2);
@@ -1628,12 +1656,7 @@ export default function HexMap({
     }
 
     // ── Pass 6: Nation name labels (all non-terrain modes, hidden when zoomed in) ──
-    // Threshold is relative to fit-scale so labels are always visible at baseline
-    // zoom and disappear only after actual zoom-in.
-    const fitScaleForLabels = mapDims.mapPixelHeight > 0 && canvas.height > 0
-      ? canvas.height / mapDims.mapPixelHeight
-      : 0;
-    if (showPoliticalColors && (fitScaleForLabels === 0 || scale <= fitScaleForLabels * 1.5)) {
+    if (showPoliticalColors && !zoomedInPastLabels) {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       for (const label of nationLabels) {
@@ -1653,10 +1676,25 @@ export default function HexMap({
       }
     }
 
+    // ── Pass 6b: Province names (only when zoomed in past country-name threshold) ──
+    if (showPoliticalColors && zoomedInPastLabels) {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const label of provinceLabels) {
+        const fontSize = Math.max(7, Math.min(14, Math.sqrt(label.size) * 2.5));
+        ctx.font = `${fontSize}px Georgia, serif`;
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+        ctx.strokeText(label.name, label.cx, label.cy);
+        ctx.fillStyle = 'rgba(230,220,190,0.9)';
+        ctx.fillText(label.name, label.cx, label.cy);
+      }
+    }
+
     // ── Pass 7: Troop emoji indicators at capitals ──────────────
     // Single ⚔️ emoji for all nation types; font size scales with unit count.
     // Selected tile's indicator blinks.
-    if (scale > 0.6) {
+    if (scale > 0.6 && mapMode !== 'diplomatic') {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
@@ -1908,7 +1946,7 @@ export default function HexMap({
       isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves, nationLabels, disableFogOfWar,
       navyMarkers, seaZones, selectedNavyKey, mapGeometry, tileMap, diplomacyOverlay,
       hideHexGrid, highlightedNationId, classifiedEdges, maxArmyFP, mapDims,
-      selectedTileKey, blinkOn, showDiplomacyMarkers]);
+      selectedTileKey, blinkOn, showDiplomacyMarkers, provinceLabels]);
 
   const scheduleFrame = useCallback(() => {
     if (rafIdRef.current != null) return;
