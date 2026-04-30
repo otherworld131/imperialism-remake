@@ -386,10 +386,15 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
 
         BuildFreightCar { nation_id } => {
             let nation_id = NationId(nation_id);
+            let cost = Money::dollars(game.game_data.game_config.freight_car_cost);
             let nation = match game.get_nation_mut(nation_id) {
                 Some(n) => n,
                 None => return CommandResult::error("nation not found"),
             };
+            if nation.economy.treasury.checked_sub(cost).is_none() {
+                return CommandResult::error("insufficient funds");
+            }
+            nation.economy.treasury -= cost;
             nation.military.transport.build_freight_cars(1);
             CommandResult::success()
         }
@@ -993,6 +998,45 @@ mod tests {
             civilian_type: "Farmer".to_string(),
         });
         assert!(!result.ok, "should fail with no funds");
+    }
+
+    // ── BuildFreightCar — treasury cost ───────────────────────────
+
+    #[test]
+    fn build_freight_car_deducts_treasury() {
+        let mut game = setup();
+        let nid = game.human_player_nation;
+        let cost = domain::types::Money::dollars(game.game_data.game_config.freight_car_cost);
+        let before_treasury = game.get_nation(nid).unwrap().economy.treasury;
+        let before_cars = game.get_nation(nid).unwrap().military.transport.freight_cars;
+
+        let result = apply_command(&mut game, FrontendCommand::BuildFreightCar { nation_id: nid.0 });
+        assert!(result.ok, "{:?}", result.message);
+
+        let after = game.get_nation(nid).unwrap();
+        assert_eq!(after.economy.treasury, before_treasury - cost);
+        assert_eq!(after.military.transport.freight_cars, before_cars + 1);
+    }
+
+    #[test]
+    fn build_freight_car_fails_if_insufficient_funds() {
+        let mut game = setup();
+        let nid = game.human_player_nation;
+        game.get_nation_mut(nid).unwrap().economy.treasury = domain::types::Money::ZERO;
+        let before_treasury = game.get_nation(nid).unwrap().economy.treasury;
+        let before_cars = game.get_nation(nid).unwrap().military.transport.freight_cars;
+
+        let result = apply_command(&mut game, FrontendCommand::BuildFreightCar { nation_id: nid.0 });
+        assert!(!result.ok, "should fail with no funds");
+        let after = game.get_nation(nid).unwrap();
+        assert_eq!(
+            after.military.transport.freight_cars, before_cars,
+            "no freight car should be built when funds insufficient",
+        );
+        assert_eq!(
+            after.economy.treasury, before_treasury,
+            "treasury must not change on the failure path",
+        );
     }
 
     // ── BuildShip — category routing + material costs ─────────────

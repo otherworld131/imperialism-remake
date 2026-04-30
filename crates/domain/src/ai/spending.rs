@@ -742,7 +742,11 @@ fn score_embassy(
         });
     }
 
-    // Count minor nations with consulate but no embassy
+    // Count minor nations with consulate but no embassy AND relationship
+    // already warm enough to justify the upgrade. Consulates are cheap and
+    // grant a relationship bonus on their own, so AI shouldn't burn $5k on
+    // an embassy when the relationship is still cold (card #210).
+    let min_relation = cfg.ai_embassy_min_relation;
     let mut upgradeable = 0u32;
     for n in &game.world.nations {
         if n.is_great_power() || n.province_ids.is_empty() {
@@ -751,6 +755,7 @@ fn score_embassy(
         if let Some(rel) = game.world.diplomacy.get_relation(nation_id, n.id)
             && rel.has_consulate
             && !rel.has_embassy
+            && rel.score >= min_relation
         {
             upgradeable += 1;
         }
@@ -1553,9 +1558,11 @@ fn execute_consulate(game: &mut GameState, nation_id: NationId) {
 
 fn execute_embassy(game: &mut GameState, nation_id: NationId) {
     let cost = Money::dollars(game.game_data.game_config.embassy_cost);
+    let min_relation = game.game_data.game_config.ai_embassy_min_relation;
 
-    // Prefer priority targets with consulate-but-no-embassy; fall back to
-    // best-relation non-priority match.
+    // Prefer priority targets with consulate-but-no-embassy (these bypass the
+    // relation gate); fall back to best-relation non-priority match that has
+    // already warmed up to `ai_embassy_min_relation`.
     let priority_pick: Option<NationId> = game.get_nation(nation_id).and_then(|n| {
         n.diplomacy.ai_priority_state
             .priority_minor_targets
@@ -1581,6 +1588,7 @@ fn execute_embassy(game: &mut GameState, nation_id: NationId) {
             if let Some(rel) = game.world.diplomacy.get_relation(nation_id, n.id)
                 && rel.has_consulate
                 && !rel.has_embassy
+                && rel.score >= min_relation
                 && rel.score > best_relation
             {
                 best_relation = rel.score;
@@ -1916,7 +1924,7 @@ fn load_weights(game: &GameState, personality: AiPersonality) -> SpendingWeights
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::common::test_helpers::test_game_with_ai;
+    use crate::ai::common::test_helpers::{test_game_with_ai, test_game_with_ai_and_minor};
     use crate::economy::civilians::{Civilian, CivilianType, next_civilian_id};
     use crate::map::tile::Tile;
     use crate::types::{NationId, ProvinceId, ResourceType, TerrainType};
@@ -1996,6 +2004,73 @@ mod tests {
             "score for collectable improvable tiles must exceed the score for the same tiles disconnected (collectable={}, disconnected={})",
             score_collectable,
             score_disconnected,
+        );
+    }
+
+    /// Card #210: AI must not score an embassy when the only candidate MN
+    /// has a consulate but a cold relationship — consulate alone gives a
+    /// relationship bonus, the embassy is the costly upgrade and should wait.
+    #[test]
+    fn score_embassy_skips_cold_consulate_relationship() {
+        let mut game = test_game_with_ai_and_minor();
+        let ai = NationId(2);
+        let mn = NationId(3);
+
+        // Consulate established, but score never warmed up.
+        game.world.diplomacy.build_consulate(ai, mn).unwrap();
+        let rel = game.world.diplomacy.get_relation_mut(ai, mn).unwrap();
+        rel.score = 0; // cold
+
+        let weights = load_weights(&game, super::super::common::AiPersonality::Balanced);
+        let scored = score_embassy(&game, ai, &weights);
+        assert!(
+            scored.is_none(),
+            "embassy should not be considered until relationship reaches ai_embassy_min_relation",
+        );
+    }
+
+    /// Once the relationship clears the threshold, the embassy becomes a
+    /// scored option again — the gate is conditional, not permanent.
+    #[test]
+    fn score_embassy_allowed_when_relationship_warm() {
+        let mut game = test_game_with_ai_and_minor();
+        let ai = NationId(2);
+        let mn = NationId(3);
+
+        game.world.diplomacy.build_consulate(ai, mn).unwrap();
+        let threshold = game.game_data.game_config.ai_embassy_min_relation;
+        let rel = game.world.diplomacy.get_relation_mut(ai, mn).unwrap();
+        rel.score = threshold;
+
+        let weights = load_weights(&game, super::super::common::AiPersonality::Balanced);
+        let scored = score_embassy(&game, ai, &weights);
+        assert!(
+            scored.is_some(),
+            "embassy should be scored when relationship >= ai_embassy_min_relation",
+        );
+    }
+
+    /// The relation gate must not block priority-minor targets — those keep
+    /// their priority short-circuit so the AI can still secure them quickly.
+    #[test]
+    fn score_embassy_priority_target_bypasses_relation_gate() {
+        let mut game = test_game_with_ai_and_minor();
+        let ai = NationId(2);
+        let mn = NationId(3);
+
+        game.world.diplomacy.build_consulate(ai, mn).unwrap();
+        let rel = game.world.diplomacy.get_relation_mut(ai, mn).unwrap();
+        rel.score = -50; // very cold
+
+        // Mark the MN as a priority target.
+        let nation = game.get_nation_mut(ai).unwrap();
+        nation.diplomacy.ai_priority_state.priority_minor_targets.push(mn);
+
+        let weights = load_weights(&game, super::super::common::AiPersonality::Balanced);
+        let scored = score_embassy(&game, ai, &weights);
+        assert!(
+            scored.is_some_and(|a| a.score > 0.0),
+            "priority-minor targets should still score for embassy regardless of relationship",
         );
     }
 }

@@ -538,6 +538,7 @@ pub(super) fn tick_buildings(game: &mut GameState) {
 
 /// Apply army maintenance, bankruptcy clamp, and bankruptcy headline.
 pub(super) fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
+    let cents_per_arm = game.game_data.game_config.army_maintenance_cents_per_arm;
     for nation in &mut game.world.nations {
         if nation.diplomacy.is_in_anarchy {
             continue;
@@ -545,7 +546,7 @@ pub(super) fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
         let total_cost: Money = nation
             .military.army
             .iter()
-            .map(|u| u.maintenance_cost())
+            .map(|u| u.maintenance_cost(cents_per_arm))
             .fold(Money::ZERO, |acc, c| acc + c);
         if total_cost != Money::ZERO {
             nation.economy.treasury -= total_cost;

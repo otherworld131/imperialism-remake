@@ -524,10 +524,18 @@ impl ArmyUnit {
         self.health > 0
     }
 
-    /// Calculate maintenance cost: $25 per arm in the unit.
-    pub fn maintenance_cost(&self) -> Money {
+    /// Calculate the per-turn maintenance cost for this unit.
+    ///
+    /// Garrison units (militia, garrison artillery — tied to provinces, can't
+    /// be disbanded) pay no upkeep per card #216. All other units pay
+    /// `cents_per_arm * arms_required`. The rate lives in `GameConfig` so
+    /// balance can be tuned from Lua.
+    pub fn maintenance_cost(&self, cents_per_arm: i64) -> Money {
+        if self.unit_type.category() == UnitCategory::Garrison {
+            return Money::ZERO;
+        }
         let arms = self.unit_type.stats().arms_required;
-        Money::dollars(25) * arms as i64
+        Money::from_cents(cents_per_arm * arms as i64)
     }
 }
 
@@ -893,6 +901,12 @@ mod tests {
     }
 
     // ── Maintenance cost calculations ───────────────────────────
+    //
+    // Card #216: maintenance is now $2.50/arm (250 ¢) by default and Garrison
+    // units are exempt. Tests pass the rate explicitly so the production rate
+    // can change without breaking the unit-cost arithmetic.
+
+    const TEST_RATE: i64 = 250; // $2.50 per arm
 
     #[test]
     fn regulars_maintenance_1_arm() {
@@ -902,8 +916,7 @@ mod tests {
             NationId(1),
             ProvinceId(1),
         );
-        // 1 arm * $25 = $25
-        assert_eq!(unit.maintenance_cost(), Money::dollars(25));
+        assert_eq!(unit.maintenance_cost(TEST_RATE), Money::from_cents(250));
     }
 
     #[test]
@@ -914,15 +927,13 @@ mod tests {
             NationId(1),
             ProvinceId(1),
         );
-        // 2 arms * $25 = $50
-        assert_eq!(unit.maintenance_cost(), Money::dollars(50));
+        assert_eq!(unit.maintenance_cost(TEST_RATE), Money::from_cents(500));
     }
 
     #[test]
     fn guards_maintenance_3_arms() {
         let unit = ArmyUnit::new(UnitId(3), ArmyUnitType::Guards, NationId(1), ProvinceId(1));
-        // 3 arms * $25 = $75
-        assert_eq!(unit.maintenance_cost(), Money::dollars(75));
+        assert_eq!(unit.maintenance_cost(TEST_RATE), Money::from_cents(750));
     }
 
     #[test]
@@ -933,8 +944,7 @@ mod tests {
             NationId(1),
             ProvinceId(1),
         );
-        // 4 arms * $25 = $100
-        assert_eq!(unit.maintenance_cost(), Money::dollars(100));
+        assert_eq!(unit.maintenance_cost(TEST_RATE), Money::from_cents(1000));
     }
 
     #[test]
@@ -945,15 +955,26 @@ mod tests {
             NationId(1),
             ProvinceId(1),
         );
-        // 5 arms * $25 = $125
-        assert_eq!(unit.maintenance_cost(), Money::dollars(125));
+        assert_eq!(unit.maintenance_cost(TEST_RATE), Money::from_cents(1250));
+    }
+
+    /// Card #216: Garrison units (militia) pay no upkeep regardless of the
+    /// configured rate — they are tied to provinces and can't be disbanded.
+    #[test]
+    fn militia_maintenance_is_zero() {
+        let unit = ArmyUnit::new(UnitId(6), ArmyUnitType::Militia, NationId(1), ProvinceId(1));
+        assert_eq!(unit.maintenance_cost(TEST_RATE), Money::ZERO);
     }
 
     #[test]
-    fn militia_maintenance_1_arm() {
-        let unit = ArmyUnit::new(UnitId(6), ArmyUnitType::Militia, NationId(1), ProvinceId(1));
-        // 1 arm * $25 = $25
-        assert_eq!(unit.maintenance_cost(), Money::dollars(25));
+    fn garrison_artillery_maintenance_is_zero() {
+        let unit = ArmyUnit::new(
+            UnitId(7),
+            ArmyUnitType::GarrisonArtillery,
+            NationId(1),
+            ProvinceId(1),
+        );
+        assert_eq!(unit.maintenance_cost(TEST_RATE), Money::ZERO);
     }
 
     // ── ArmyUnit::new defaults ──────────────────────────────────
@@ -1109,7 +1130,7 @@ mod tests {
             NationId(1),
             ProvinceId(1),
         );
-        assert_eq!(unit.maintenance_cost(), Money::dollars(0));
+        assert_eq!(unit.maintenance_cost(TEST_RATE), Money::ZERO);
     }
 
     #[test]

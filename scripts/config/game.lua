@@ -45,6 +45,11 @@ game_config = {
     -- Starting conditions
     starting_freight_cars = 15,    -- freight cars each Great Power starts with
     starting_engineers = 1,        -- Engineer civilians each Great Power starts with
+    freight_car_cost = 200,        -- $ to build one freight car (BuildFreightCar command)
+    -- Per-turn army maintenance, in cents per arms_required slot. $2.50/arm
+    -- (1/10 of the original $25/arm) per card #216. Garrison units (militia
+    -- and garrison artillery) are exempt regardless of this value.
+    army_maintenance_cents_per_arm = 250,
     starting_prospectors = 1,      -- Prospector civilians each Great Power starts with
     starting_miners = 1,           -- Miner civilians each Great Power starts with
 
@@ -262,6 +267,11 @@ game_config = {
     -- Diplomacy costs
     consulate_cost = 500,
     embassy_cost = 5000,
+    -- Minimum relationship score (-100..=100) before AI upgrades a consulate
+    -- to an embassy. Consulates already give a relationship bonus, so the
+    -- expensive embassy should wait for real warmth. Priority-minor targets
+    -- bypass this gate.
+    ai_embassy_min_relation = 50,
 
     -- Diplomatic relationship tuning
     -- Minor nations voluntarily join a Great Power's empire when their relation

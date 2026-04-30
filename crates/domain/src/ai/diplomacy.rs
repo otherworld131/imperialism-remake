@@ -679,17 +679,39 @@ pub fn ai_pre_election_strategy(
         }
         Money::dollars(pc.embassy_treasury_threshold_dollars as i64)
     };
-    let embassy_cost = Money::dollars(5000);
+    let embassy_cost = Money::dollars(game.game_data.game_config.embassy_cost);
+    let min_relation = game.game_data.game_config.ai_embassy_min_relation;
+    // Priority-minor targets bypass the relation gate (card #210) — they
+    // also bypass it in `score_embassy` / `execute_embassy`, and the
+    // pre-election path must stay consistent.
+    let priority_targets: std::collections::HashSet<NationId> = game
+        .get_nation(nation_id)
+        .map(|n| {
+            n.diplomacy
+                .ai_priority_state
+                .priority_minor_targets
+                .iter()
+                .copied()
+                .collect()
+        })
+        .unwrap_or_default();
     let treasury_ok = game
         .get_nation(nation_id)
         .is_some_and(|n| n.economy.treasury >= embassy_treasury_threshold);
     if treasury_ok {
         for mn_id in &minor_ids {
-            let has_consulate_no_embassy = game
+            // Card #210: require relationship warm enough OR priority target;
+            // consulate alone gives a bonus, so the costly embassy waits.
+            let is_priority = priority_targets.contains(mn_id);
+            let warm_enough = game
                 .world.diplomacy
                 .get_relation(nation_id, *mn_id)
-                .is_some_and(|r| r.has_consulate && !r.has_embassy);
-            if !has_consulate_no_embassy {
+                .is_some_and(|r| {
+                    r.has_consulate
+                        && !r.has_embassy
+                        && (is_priority || r.score >= min_relation)
+                });
+            if !warm_enough {
                 continue;
             }
 
@@ -1393,5 +1415,134 @@ mod tests {
             "Diplomatic AI should have at most 2 alliances; got {}",
             alliance_count
         );
+    }
+
+    /// Card #210 + F-001 fix: pre-election embassy build path must skip a
+    /// minor whose relationship is below `ai_embassy_min_relation` and that
+    /// is NOT a priority target.
+    #[test]
+    fn ai_pre_election_skips_cold_non_priority_minor() {
+        let mut game = test_game_with_ai_and_minor();
+        game.turn = TurnNumber::from_year_quarter(1824, 2);
+
+        let ai_id = NationId(2);
+        let mn_id = NationId(3);
+
+        let ai = game.get_nation_mut(ai_id).unwrap();
+        ai.diplomacy.ai_personality = Some(AiPersonality::Diplomatic);
+        ai.economy.treasury = Money::dollars(50_000);
+
+        // Consulate exists but relationship is still cold; not a priority target.
+        game.world.diplomacy.build_consulate(ai_id, mn_id).unwrap();
+        let rel = game.world.diplomacy.get_relation_mut(ai_id, mn_id).unwrap();
+        rel.score = 0;
+
+        let mut actions = Vec::new();
+        ai_pre_election_strategy(&mut game, ai_id, &mut actions);
+
+        let has_embassy = game
+            .world.diplomacy
+            .get_relation(ai_id, mn_id)
+            .is_some_and(|r| r.has_embassy);
+        assert!(
+            !has_embassy,
+            "Pre-election should not build embassy with a cold non-priority minor",
+        );
+    }
+
+    /// Card #210 + F-001 fix: pre-election embassy build path must still
+    /// build an embassy with a priority-minor target even if the
+    /// relationship is below the gate.
+    #[test]
+    fn ai_pre_election_builds_embassy_for_cold_priority_target() {
+        let mut game = test_game_with_ai_and_minor();
+        game.turn = TurnNumber::from_year_quarter(1824, 2);
+
+        let ai_id = NationId(2);
+        let mn_id = NationId(3);
+
+        // Consulate exists, but relationship is below threshold.
+        game.world.diplomacy.build_consulate(ai_id, mn_id).unwrap();
+        let rel = game.world.diplomacy.get_relation_mut(ai_id, mn_id).unwrap();
+        rel.score = 0;
+
+        let ai = game.get_nation_mut(ai_id).unwrap();
+        ai.diplomacy.ai_personality = Some(AiPersonality::Diplomatic);
+        ai.economy.treasury = Money::dollars(50_000);
+        // Mark the MN as a priority target for the AI.
+        ai.diplomacy
+            .ai_priority_state
+            .priority_minor_targets
+            .push(mn_id);
+
+        let mut actions = Vec::new();
+        ai_pre_election_strategy(&mut game, ai_id, &mut actions);
+
+        let has_embassy = game
+            .world.diplomacy
+            .get_relation(ai_id, mn_id)
+            .is_some_and(|r| r.has_embassy);
+        assert!(
+            has_embassy,
+            "Pre-election should build embassy with a priority-minor target regardless of relation gate",
+        );
+    }
+
+    /// F-002 fix: pre-election embassy spending must use the configured
+    /// `embassy_cost`, not a hardcoded `Money::dollars(5000)`.
+    #[test]
+    fn ai_pre_election_uses_configured_embassy_cost() {
+        let mut game = test_game_with_ai_and_minor();
+        game.turn = TurnNumber::from_year_quarter(1824, 2);
+
+        // Tweak the configured cost away from the default 5000 so we can
+        // observe that the new value is what gets deducted.
+        let custom_cost: i64 = 1234;
+        game.game_data.game_config.embassy_cost = custom_cost;
+
+        let ai_id = NationId(2);
+        let mn_id = NationId(3);
+
+        game.world.diplomacy.build_consulate(ai_id, mn_id).unwrap();
+        let rel = game.world.diplomacy.get_relation_mut(ai_id, mn_id).unwrap();
+        rel.score = 100;
+
+        let ai = game.get_nation_mut(ai_id).unwrap();
+        ai.diplomacy.ai_personality = Some(AiPersonality::Diplomatic);
+        // Plenty of treasury to clear both the personality threshold and
+        // grants AND the custom embassy cost.
+        ai.economy.treasury = Money::dollars(50_000);
+        let before = game.get_nation(ai_id).unwrap().economy.treasury;
+
+        let mut actions = Vec::new();
+        ai_pre_election_strategy(&mut game, ai_id, &mut actions);
+
+        let has_embassy = game
+            .world.diplomacy
+            .get_relation(ai_id, mn_id)
+            .is_some_and(|r| r.has_embassy);
+        assert!(has_embassy, "embassy should have been built");
+
+        // Treasury delta from pre-election strategy includes both the
+        // grant and the embassy cost; check the embassy contribution by
+        // verifying the ledger entry.
+        let embassy_spend: i64 = game
+            .transient
+            .pending_ai_cash_spending
+            .iter()
+            .filter(|(nid, sink, _, _)| {
+                *nid == ai_id
+                    && matches!(sink, crate::economy::ledger::CashSink::AiDiplomacyEmbassy)
+            })
+            .map(|(_, _, amount, _)| amount.as_dollars())
+            .sum();
+        assert_eq!(
+            embassy_spend, custom_cost,
+            "pre-election embassy must charge the configured embassy_cost, not a hardcoded value",
+        );
+
+        // Sanity: treasury should have decreased by at least the custom cost.
+        let after = game.get_nation(ai_id).unwrap().economy.treasury;
+        assert!(after < before);
     }
 }

@@ -77,6 +77,11 @@ pub struct GameConfig {
     // Diplomacy costs
     pub consulate_cost: i64,
     pub embassy_cost: i64,
+    // Minimum relationship score (-100..=100) before AI upgrades a consulate
+    // to an embassy. Consulates are cheap and themselves grant a relationship
+    // bonus, so the AI should defer the (expensive) embassy until the score
+    // already shows real warmth. Priority-minor targets bypass this gate.
+    pub ai_embassy_min_relation: i32,
     // Diplomatic relationship tuning
     pub voluntary_incorporation_threshold: i32,
     pub trade_relation_improvement_cap: i32,
@@ -84,6 +89,12 @@ pub struct GameConfig {
     // Starting conditions
     pub starting_freight_cars: u32,
     pub starting_engineers: u32,
+    // Cost to build a single freight car ($).
+    pub freight_car_cost: i64,
+    // Per-turn army maintenance, in cents per `arms_required` slot. Card #216
+    // dropped this from the original $25/arm (2500 ¢) to $2.50/arm (250 ¢).
+    // Garrison units (militia, garrison artillery) are exempt and always pay 0.
+    pub army_maintenance_cents_per_arm: i64,
     // Infrastructure costs ($)
     pub engineer_cost: i64,
     pub prospector_cost: i64,
@@ -309,11 +320,14 @@ impl Default for GameConfig {
             use_tier_expansion: true,
             consulate_cost: 500,
             embassy_cost: 5000,
+            ai_embassy_min_relation: 50,
             voluntary_incorporation_threshold: 90,
             trade_relation_improvement_cap: 2,
             trade_relation_turn_interval: 3,
             starting_freight_cars: 15,
             starting_engineers: 1,
+            freight_car_cost: 200,
+            army_maintenance_cents_per_arm: 250,
             engineer_cost: 500,
             prospector_cost: 100,
             miner_cost: 1500,
