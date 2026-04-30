@@ -211,44 +211,40 @@ impl Tile {
     ///
     /// ## Yield Rules
     ///
+    /// Matches the original Imperialism (1997) Resource Development Table (manual p.28):
+    ///
     /// - **Surface resources** (Grain, Fruit, Cotton, Wool, Timber, Livestock, Horses):
-    ///   base 1, +1 per improvement level (level 0 = 1, level 3 = 4).
-    /// - **Coal / Iron**: double rate — 1 + 2×level (level 0 = 1, level 3 = 7).
-    /// - **Gold / Gems**: requires level 1+ to produce; yield = level.
-    /// - **Oil**: requires level 1+ to produce; yield = level.
+    ///   1 / 2 / 3 / 4 by level (always visible, baseline at level 0).
+    /// - **Coal / Iron**: 0 / 2 / 4 / 6 by level. Hidden until prospected; a Miner builds
+    ///   the mine to reach level 1.
+    /// - **Gold / Gems**: 0 / 1 / 2 / 3 by level. Hidden until prospected; mined to L1.
+    /// - **Oil**: 0 / 2 / 4 / 6 by level. Hidden until prospected (gated by Oil Drilling
+    ///   tech); a Driller builds the derrick to reach level 1.
     pub fn calculate_yield(&self) -> Option<ResourceAmount> {
         let resource = self.resource_deposit?;
+        let level = self.improvement_level as u32;
 
         match resource {
-            // Coal and Iron: double rate
-            ResourceType::Coal | ResourceType::Iron => {
-                let qty = 1 + 2 * self.improvement_level as u32;
-                Some(ResourceAmount::new(resource, qty))
+            // Coal, Iron, Oil: 0 / 2 / 4 / 6
+            ResourceType::Coal | ResourceType::Iron | ResourceType::Oil => {
+                if level == 0 {
+                    None
+                } else {
+                    Some(ResourceAmount::new(resource, 2 * level))
+                }
             }
 
-            // Gold and Gems: require level 1+
+            // Gold and Gems: 0 / 1 / 2 / 3
             ResourceType::Gold | ResourceType::Gems => {
-                if self.improvement_level == 0 {
+                if level == 0 {
                     None
                 } else {
-                    Some(ResourceAmount::new(resource, self.improvement_level as u32))
+                    Some(ResourceAmount::new(resource, level))
                 }
             }
 
-            // Oil: requires level 1+
-            ResourceType::Oil => {
-                if self.improvement_level == 0 {
-                    None
-                } else {
-                    Some(ResourceAmount::new(resource, self.improvement_level as u32))
-                }
-            }
-
-            // Surface resources: base 1, +1 per improvement level
-            _ => {
-                let qty = 1 + self.improvement_level as u32;
-                Some(ResourceAmount::new(resource, qty))
-            }
+            // Surface resources: 1 / 2 / 3 / 4
+            _ => Some(ResourceAmount::new(resource, 1 + level)),
         }
     }
 }
@@ -465,6 +461,26 @@ mod tests {
         assert!(tile.is_prospected()); // grassland can't have deposits
     }
 
+    #[test]
+    fn hills_with_wool_is_visible_not_undiscovered() {
+        // Regression for adversarial-review F-002: Hills are deposit-capable
+        // terrain (so `is_prospected()` returns the raw `prospected` flag, which
+        // the generator leaves false) but Wool is a surface resource and is
+        // already visible. AI undiscovered-tile logic must not flag this.
+        let tile = Tile::with_resource(TerrainType::Hills, ResourceType::Wool);
+        assert!(tile.terrain().can_have_deposits(), "Hills can have deposits");
+        assert!(!tile.is_prospected(), "fresh Hills tile is not yet prospected");
+        assert!(
+            tile.has_visible_resource(),
+            "Wool is a surface resource and is visible from turn 1"
+        );
+        // The canonical undiscovered predicate must therefore reject this tile.
+        let is_undiscovered = tile.terrain().can_have_deposits()
+            && !tile.is_prospected()
+            && !tile.has_visible_resource();
+        assert!(!is_undiscovered, "Hills + visible Wool must NOT be undiscovered");
+    }
+
     // ── Assigned civilian ──────────────────────────────────────
 
     #[test]
@@ -603,67 +619,61 @@ mod tests {
         );
     }
 
-    // ── Yield: Mining (Coal & Iron — double rate) ──────────────
+    // ── Yield: Mining (Coal & Iron — 0/2/4/6) ──────────────────
 
     #[test]
-    fn mountain_with_coal_double_rate() {
+    fn mountain_with_coal_table() {
         let mut tile = Tile::new(TerrainType::Mountain);
         tile.reveal_deposit(ResourceType::Coal);
 
-        // Level 0: base 1
-        assert_eq!(
-            tile.calculate_yield().unwrap(),
-            ResourceAmount::new(ResourceType::Coal, 1)
-        );
+        // Level 0: hidden mine produces nothing
+        assert_eq!(tile.calculate_yield(), None);
 
-        // Level 1: 1 + 2*1 = 3
+        // Level 1: 2
         tile.improve();
         assert_eq!(
             tile.calculate_yield().unwrap(),
-            ResourceAmount::new(ResourceType::Coal, 3)
+            ResourceAmount::new(ResourceType::Coal, 2)
         );
 
-        // Level 2: 1 + 2*2 = 5
+        // Level 2: 4
         tile.improve();
         assert_eq!(
             tile.calculate_yield().unwrap(),
-            ResourceAmount::new(ResourceType::Coal, 5)
+            ResourceAmount::new(ResourceType::Coal, 4)
         );
 
-        // Level 3: 1 + 2*3 = 7
+        // Level 3: 6
         tile.improve();
         assert_eq!(
             tile.calculate_yield().unwrap(),
-            ResourceAmount::new(ResourceType::Coal, 7)
+            ResourceAmount::new(ResourceType::Coal, 6)
         );
     }
 
     #[test]
-    fn hills_with_iron_double_rate() {
+    fn hills_with_iron_table() {
         let mut tile = Tile::new(TerrainType::Hills);
         tile.reveal_deposit(ResourceType::Iron);
 
-        assert_eq!(
-            tile.calculate_yield().unwrap(),
-            ResourceAmount::new(ResourceType::Iron, 1)
-        );
+        assert_eq!(tile.calculate_yield(), None);
 
         tile.set_improvement_level(1);
         assert_eq!(
             tile.calculate_yield().unwrap(),
-            ResourceAmount::new(ResourceType::Iron, 3)
+            ResourceAmount::new(ResourceType::Iron, 2)
         );
 
         tile.set_improvement_level(2);
         assert_eq!(
             tile.calculate_yield().unwrap(),
-            ResourceAmount::new(ResourceType::Iron, 5)
+            ResourceAmount::new(ResourceType::Iron, 4)
         );
 
         tile.set_improvement_level(3);
         assert_eq!(
             tile.calculate_yield().unwrap(),
-            ResourceAmount::new(ResourceType::Iron, 7)
+            ResourceAmount::new(ResourceType::Iron, 6)
         );
     }
 
@@ -748,25 +758,25 @@ mod tests {
         // Level 0: nothing (needs drilling infrastructure)
         assert_eq!(tile.calculate_yield(), None);
 
-        // Level 1: 1 oil
-        tile.improve();
-        assert_eq!(
-            tile.calculate_yield().unwrap(),
-            ResourceAmount::new(ResourceType::Oil, 1)
-        );
-
-        // Level 2: 2 oil
+        // Level 1: 2
         tile.improve();
         assert_eq!(
             tile.calculate_yield().unwrap(),
             ResourceAmount::new(ResourceType::Oil, 2)
         );
 
-        // Level 3: 3 oil
+        // Level 2: 4
         tile.improve();
         assert_eq!(
             tile.calculate_yield().unwrap(),
-            ResourceAmount::new(ResourceType::Oil, 3)
+            ResourceAmount::new(ResourceType::Oil, 4)
+        );
+
+        // Level 3: 6
+        tile.improve();
+        assert_eq!(
+            tile.calculate_yield().unwrap(),
+            ResourceAmount::new(ResourceType::Oil, 6)
         );
     }
 
@@ -780,7 +790,7 @@ mod tests {
         tile.set_improvement_level(2);
         assert_eq!(
             tile.calculate_yield().unwrap(),
-            ResourceAmount::new(ResourceType::Oil, 2)
+            ResourceAmount::new(ResourceType::Oil, 4)
         );
     }
 
@@ -794,7 +804,7 @@ mod tests {
         tile.set_improvement_level(1);
         assert_eq!(
             tile.calculate_yield().unwrap(),
-            ResourceAmount::new(ResourceType::Oil, 1)
+            ResourceAmount::new(ResourceType::Oil, 2)
         );
     }
 
@@ -858,7 +868,7 @@ mod tests {
     }
 
     #[test]
-    fn coal_and_iron_double_rate_all_levels() {
+    fn coal_and_iron_table_all_levels() {
         let deposits = [ResourceType::Coal, ResourceType::Iron];
         let terrains = [TerrainType::Hills, TerrainType::Mountain];
 
@@ -867,10 +877,17 @@ mod tests {
                 let mut tile = Tile::new(terrain);
                 tile.reveal_deposit(deposit);
 
-                for level in 0..=3u8 {
+                tile.set_improvement_level(0);
+                assert_eq!(
+                    tile.calculate_yield(),
+                    None,
+                    "{terrain:?} with {deposit:?} at level 0 should yield nothing"
+                );
+
+                for level in 1..=3u8 {
                     tile.set_improvement_level(level);
                     let y = tile.calculate_yield().unwrap();
-                    let expected = 1 + 2 * level as u32;
+                    let expected = 2 * level as u32;
                     assert_eq!(
                         y.resource, deposit,
                         "{terrain:?} with {deposit:?} at level {level}"

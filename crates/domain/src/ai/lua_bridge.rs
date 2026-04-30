@@ -14,6 +14,7 @@ use super::common::AiPersonality;
 
 // Embed scripts at compile time for sandboxing safety.
 const GAME_CONFIG_LUA: &str = include_str!("../../../../scripts/config/game.lua");
+const TECH_TREE_LUA: &str = include_str!("../../../../scripts/config/tech_tree.lua");
 const BALANCED_LUA: &str = include_str!("../../../../scripts/ai/balanced.lua");
 const AGGRESSIVE_LUA: &str = include_str!("../../../../scripts/ai/aggressive.lua");
 const DIPLOMATIC_LUA: &str = include_str!("../../../../scripts/ai/diplomatic.lua");
@@ -120,6 +121,14 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         civilian_coverage_per_unmet: table.get("civilian_coverage_per_unmet").unwrap_or(3.0),
         civilian_hire_bootstrap: table.get("civilian_hire_bootstrap").unwrap_or(15.0),
         civilian_idle_penalty: table.get("civilian_idle_penalty").unwrap_or(8.0),
+        // `nil` in Lua propagates to `None` (ungated). Vanilla game.lua sets
+        // these explicitly per the manual; modders can ungate by setting to nil.
+        civilian_rancher_tech: table.get("civilian_rancher_tech").ok(),
+        civilian_forester_tech: table.get("civilian_forester_tech").ok(),
+        civilian_driller_tech: table.get("civilian_driller_tech").ok(),
+        ai_prospector_per_hexes: table.get("ai_prospector_per_hexes").unwrap_or(10),
+        starting_prospectors: table.get("starting_prospectors").unwrap_or(1),
+        starting_miners: table.get("starting_miners").unwrap_or(1),
         backlog_weight_aggressive_military: table
             .get("backlog_weight_aggressive_military")
             .unwrap_or(50),
@@ -491,11 +500,131 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
 /// Load game config and all personality scripts into the Lua VM.
 pub fn load_scripts(engine: &LuaEngine) -> Result<(), String> {
     engine.exec(GAME_CONFIG_LUA)?;
+    engine.exec(TECH_TREE_LUA)?;
     engine.exec(BALANCED_LUA)?;
     engine.exec(AGGRESSIVE_LUA)?;
     engine.exec(DIPLOMATIC_LUA)?;
     engine.exec(ECONOMIC_LUA)?;
     Ok(())
+}
+
+/// Load the tech tree from the Lua `tech_tree` global table.
+///
+/// Returns `None` if the table is missing or malformed; callers fall back
+/// to the hardcoded Rust default. We log per-row parse failures so a typo
+/// in tech_tree.lua doesn't silently disable everything else.
+pub fn load_tech_tree(engine: &LuaEngine) -> Option<crate::tech::tree::TechTree> {
+    use crate::economy::buildings::BuildingType;
+    use crate::economy::civilians::CivilianType;
+    use crate::military::units::ArmyUnitType;
+    use crate::tech::tree::{TechEffect, Technology};
+
+    let lua = engine.lua();
+    let table: mlua::Table = lua.globals().get("tech_tree").ok()?;
+
+    let mut techs: Vec<Technology> = Vec::new();
+    for pair in table.sequence_values::<mlua::Table>() {
+        let row = match pair {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[tech_tree.lua] skipping malformed row: {}", e);
+                continue;
+            }
+        };
+        let id: u32 = match row.get("id") {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let name: String = match row.get("name") {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let cost: i64 = row.get("cost").unwrap_or(0);
+        let earliest_year: u32 = row.get("earliest_year").unwrap_or(1815);
+        let latest_year: u32 = row.get("latest_year").unwrap_or(1900);
+        let prerequisites: Vec<u32> = row
+            .get::<mlua::Table>("prerequisites")
+            .map(|t| t.sequence_values::<u32>().filter_map(|v| v.ok()).collect())
+            .unwrap_or_default();
+
+        let mut effects: Vec<TechEffect> = Vec::new();
+        if let Ok(effects_t) = row.get::<mlua::Table>("effects") {
+            for eff_pair in effects_t.sequence_values::<mlua::Table>() {
+                let eff = match eff_pair {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                let kind: String = match eff.get("kind") {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                let parsed = match kind.as_str() {
+                    "EnableInfrastructure" => eff
+                        .get::<String>("value")
+                        .ok()
+                        .map(TechEffect::EnableInfrastructure),
+                    "EnableTerrainImprovement" => {
+                        let terrain: Option<String> = eff.get("terrain").ok();
+                        let max_level: Option<u8> = eff.get("max_level").ok();
+                        match (terrain, max_level) {
+                            (Some(terrain), Some(max_level)) => Some(TechEffect::EnableTerrainImprovement {
+                                terrain,
+                                max_level,
+                            }),
+                            _ => None,
+                        }
+                    }
+                    "UnlockShip" => eff.get::<String>("value").ok().map(TechEffect::UnlockShip),
+                    "UnlockBuilding" => eff
+                        .get::<String>("value")
+                        .ok()
+                        .and_then(|s| s.parse::<BuildingType>().ok())
+                        .map(TechEffect::UnlockBuilding),
+                    "UnlockUnit" => eff
+                        .get::<String>("value")
+                        .ok()
+                        .and_then(|s| s.parse::<ArmyUnitType>().ok())
+                        .map(TechEffect::UnlockUnit),
+                    "UpgradeUnit" => {
+                        let from: Option<String> = eff.get("from").ok();
+                        let to: Option<String> = eff.get("to").ok();
+                        match (from.and_then(|s| s.parse().ok()), to.and_then(|s| s.parse().ok())) {
+                            (Some(from), Some(to)) => Some(TechEffect::UpgradeUnit { from, to }),
+                            _ => None,
+                        }
+                    }
+                    "EnableCivilian" => eff
+                        .get::<String>("value")
+                        .ok()
+                        .and_then(|s| s.parse::<CivilianType>().ok())
+                        .map(TechEffect::EnableCivilian),
+                    "LuaScript" => eff.get::<String>("value").ok().map(TechEffect::LuaScript),
+                    other => {
+                        eprintln!("[tech_tree.lua] unknown effect kind: {}", other);
+                        None
+                    }
+                };
+                if let Some(p) = parsed {
+                    effects.push(p);
+                }
+            }
+        }
+
+        techs.push(Technology {
+            id: TechId(id),
+            name,
+            cost: Money::dollars(cost),
+            earliest_year,
+            latest_year,
+            prerequisites: prerequisites.into_iter().map(TechId).collect(),
+            effects,
+        });
+    }
+
+    if techs.is_empty() {
+        return None;
+    }
+    Some(crate::tech::tree::TechTree::from_technologies(techs))
 }
 
 /// Load all four personality scripts into the Lua VM (used by tests).

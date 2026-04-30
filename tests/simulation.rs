@@ -367,17 +367,81 @@ fn test_game_with_difficulty_builder() {
 // ── AI verification tests ────────────────────────────────────────
 
 #[test]
+fn ai_does_not_hire_infinite_farmers() {
+    // Regression for user report: "AI now seems to hire infinite farmers when
+    // it has the funds". The saturation picker now caps per-type workers at
+    // ceil(demand / civilian_target_tiles_per_worker), preventing runaway
+    // hiring of any single improver type.
+    let mut game = new_game("farmer_cap", Difficulty::Normal, 0);
+    for _ in 0..40 {
+        process_turn(&mut game);
+    }
+    for n in game
+        .great_powers()
+        .iter()
+        .filter(|n| n.id != game.human_player_nation)
+    {
+        let farmer_count = n
+            .military
+            .civilians
+            .iter()
+            .filter(|c| c.civilian_type == domain::economy::civilians::CivilianType::Farmer)
+            .count();
+        assert!(
+            farmer_count <= 10,
+            "{} hired {} farmers in 40 turns; saturation cap should hold this well below 10",
+            n.name,
+            farmer_count
+        );
+    }
+}
+
+#[test]
+fn ai_does_not_hire_locked_civilians_without_tech() {
+    // Regression for user report: tech-gating not working for
+    // Rancher/Forester/Driller. At turn 1 (year 1815, before any of the
+    // gating techs are available), no AI should have hired any of these.
+    let mut game = new_game("tech_gate", Difficulty::Normal, 0);
+    process_turn(&mut game);
+    use domain::economy::civilians::CivilianType;
+    for n in game.great_powers().iter() {
+        let has_locked = n.military.civilians.iter().any(|c| {
+            matches!(
+                c.civilian_type,
+                CivilianType::Rancher | CivilianType::Forester | CivilianType::Driller
+            )
+        });
+        // Starting kit is Prospector + Miner + Engineer; none of the locked
+        // types should appear after turn 1 either.
+        assert!(
+            !has_locked,
+            "{} has a locked civilian (Rancher/Forester/Driller) before researching its tech",
+            n.name
+        );
+    }
+}
+
+#[test]
 fn ai_achieves_self_sustaining_economy_within_20_turns() {
     let mut game = new_game("econ_test", Difficulty::Normal, 0);
     for _ in 0..20 {
         process_turn(&mut game);
     }
-    // At least one AI GP should have positive treasury or growing warehouse
+    // At least one AI GP should be developing its economy: positive treasury,
+    // growing timber/grain stockpile, or actively producing minerals.
+    // Per the manual's tech-gating, Foresters are not hireable until Iron
+    // Railroad Bridge (1821–1824) so timber ramps later than other resources;
+    // accept a broader "showing signs of economic life" predicate here.
     let ai_viable = game
         .great_powers()
         .iter()
         .filter(|n| n.id != game.human_player_nation)
-        .any(|n| n.economy.treasury > Money::dollars(0) || n.resource_amount(ResourceType::Timber) > 10);
+        .any(|n| {
+            n.economy.treasury > Money::dollars(0)
+                || n.resource_amount(ResourceType::Timber) > 10
+                || n.resource_amount(ResourceType::Grain) > 10
+                || n.resource_amount(ResourceType::Coal) > 10
+        });
     assert!(
         ai_viable,
         "At least one AI should be economically viable after 20 turns"

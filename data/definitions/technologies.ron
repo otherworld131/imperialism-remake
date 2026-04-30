@@ -1,9 +1,22 @@
-// Technology definitions — data-driven, moddable
-// This file defines all technologies in the tech tree and their properties.
+// Technology definitions — test fixture and reference.
 //
-// Format: list of technology definitions with costs, year windows, prerequisites, and effects.
-// Currently hardcoded in domain/src/tech/tree.rs; this file serves as
-// the data-driven reference for future RON-based loading.
+// The production game loads its tech tree from `scripts/config/tech_tree.lua`
+// (see `lua_bridge::load_tech_tree`). This RON file exists as test-data
+// for the domain crate's unit tests and must stay in sync with the Lua file.
+// Keep both in sync until the test path is migrated to use the Lua loader.
+//
+// Reference: original Imperialism manual p.89 (Benefits of Technology Table)
+// and p.27–28 (per-civilian gates).
+//
+// Improvement classes:
+//   "Farm"        — Grain on Grassland
+//   "Orchard"     — Fruit on Grassland
+//   "Plantation"  — Cotton on Grassland
+//   "Wool"        — Wool on Hills
+//   "Livestock"   — Livestock and Horses on Grassland
+//   "Forest"      — Timber in hardwood forest
+//   "Mining"      — Coal/Iron/Gold/Gems on Hills/Mountain
+//   "Oil"         — Oil on Desert/Swamp/Tundra
 
 (
     technologies: [
@@ -23,7 +36,10 @@
             earliest_year: 1815,
             latest_year: 1815,
             prerequisites: [],
-            effects: [EnableTerrainImprovement(terrain: "Farm", max_level: 1)],
+            effects: [
+                EnableTerrainImprovement(terrain: "Farm", max_level: 1),
+                EnableTerrainImprovement(terrain: "Orchard", max_level: 1),
+            ],
         ),
         (
             id: 3,
@@ -39,18 +55,26 @@
             name: "Iron Railroad Bridge",
             cost: 1500,
             earliest_year: 1821,
-            latest_year: 1824,
-            prerequisites: [],
-            effects: [EnableInfrastructure("Railroad Bridge")],
+            latest_year: 1825,
+            prerequisites: [1],
+            effects: [
+                EnableInfrastructure("Railroad Bridge"),
+                EnableCivilian("Forester"),
+                EnableTerrainImprovement(terrain: "Forest", max_level: 1),
+            ],
         ),
         (
             id: 5,
             name: "Feed Grasses",
             cost: 1500,
             earliest_year: 1821,
-            latest_year: 1824,
+            latest_year: 1825,
             prerequisites: [],
-            effects: [EnableTerrainImprovement(terrain: "OpenRange", max_level: 1)],
+            effects: [
+                EnableCivilian("Rancher"),
+                EnableTerrainImprovement(terrain: "Wool", max_level: 1),
+                EnableTerrainImprovement(terrain: "Livestock", max_level: 1),
+            ],
         ),
         (
             id: 6,
@@ -58,8 +82,8 @@
             cost: 1500,
             earliest_year: 1821,
             latest_year: 1825,
-            prerequisites: [],
-            effects: [EnableTerrainImprovement(terrain: "Mountain", max_level: 2)],
+            prerequisites: [1],
+            effects: [EnableTerrainImprovement(terrain: "Mining", max_level: 2)],
         ),
         (
             id: 7,
@@ -75,9 +99,13 @@
             name: "Spinning Jenny",
             cost: 3000,
             earliest_year: 1826,
-            latest_year: 1829,
+            latest_year: 1830,
             prerequisites: [3, 5],
-            effects: [UnlockBuilding("Textile Mill")],
+            effects: [
+                UnlockBuilding("Textile Mill"),
+                EnableTerrainImprovement(terrain: "Plantation", max_level: 2),
+                EnableTerrainImprovement(terrain: "Wool", max_level: 2),
+            ],
         ),
         (
             id: 9,
@@ -90,19 +118,22 @@
         ),
         (
             id: 10,
-            name: "Steel Plows",
+            name: "Steel and Iron Plows",
             cost: 3000,
             earliest_year: 1831,
             latest_year: 1835,
             prerequisites: [2],
-            effects: [EnableTerrainImprovement(terrain: "Farm", max_level: 2)],
+            effects: [
+                EnableTerrainImprovement(terrain: "Farm", max_level: 2),
+                EnableTerrainImprovement(terrain: "Orchard", max_level: 2),
+            ],
         ),
         (
             id: 11,
             name: "Bessemer Converter",
             cost: 6000,
             earliest_year: 1836,
-            latest_year: 1839,
+            latest_year: 1840,
             prerequisites: [],
             effects: [UnlockBuilding("Steel Mill")],
         ),
@@ -111,9 +142,12 @@
             name: "Compound Steam Engine",
             cost: 7000,
             earliest_year: 1836,
-            latest_year: 1838,
+            latest_year: 1840,
             prerequisites: [4],
-            effects: [EnableInfrastructure("Advanced Railroad")],
+            effects: [
+                EnableInfrastructure("Advanced Railroad"),
+                EnableTerrainImprovement(terrain: "Forest", max_level: 2),
+            ],
         ),
         (
             id: 13,
@@ -129,7 +163,7 @@
             name: "Rifled Artillery",
             cost: 10000,
             earliest_year: 1841,
-            latest_year: 1844,
+            latest_year: 1845,
             prerequisites: [],
             effects: [UpgradeUnit(from: "LightArtillery", to: "StandardArtillery")],
         ),
@@ -147,9 +181,13 @@
             name: "Power Loom",
             cost: 12000,
             earliest_year: 1846,
-            latest_year: 1851,
+            latest_year: 1850,
             prerequisites: [8],
-            effects: [UnlockBuilding("Advanced Textile Mill")],
+            effects: [
+                UnlockBuilding("Advanced Textile Mill"),
+                EnableTerrainImprovement(terrain: "Plantation", max_level: 3),
+                EnableTerrainImprovement(terrain: "Wool", max_level: 3),
+            ],
         ),
         (
             id: 17,
@@ -174,25 +212,28 @@
             name: "Oil Drilling",
             cost: 25000,
             earliest_year: 1856,
-            latest_year: 1858,
+            latest_year: 1860,
             prerequisites: [],
-            effects: [EnableTerrainImprovement(terrain: "Desert", max_level: 1)],
+            effects: [
+                EnableCivilian("Driller"),
+                EnableTerrainImprovement(terrain: "Oil", max_level: 1),
+            ],
         ),
         (
             id: 20,
             name: "Barbed Wire",
             cost: 20000,
-            earliest_year: 1862,
-            latest_year: 1862,
+            earliest_year: 1861,
+            latest_year: 1865,
             prerequisites: [5],
-            effects: [EnableTerrainImprovement(terrain: "OpenRange", max_level: 2)],
+            effects: [EnableTerrainImprovement(terrain: "Livestock", max_level: 2)],
         ),
         (
             id: 21,
             name: "Steel Armour Plate",
             cost: 40000,
             earliest_year: 1866,
-            latest_year: 1868,
+            latest_year: 1870,
             prerequisites: [15],
             effects: [UnlockShip("Advanced Ironclad")],
         ),
@@ -200,8 +241,8 @@
             id: 22,
             name: "Large Artillery",
             cost: 40000,
-            earliest_year: 1872,
-            latest_year: 1886,
+            earliest_year: 1871,
+            latest_year: 1875,
             prerequisites: [14],
             effects: [UnlockUnit("SiegeArtillery")],
         ),
@@ -209,17 +250,20 @@
             id: 23,
             name: "Dynamite",
             cost: 40000,
-            earliest_year: 1874,
-            latest_year: 1887,
+            earliest_year: 1871,
+            latest_year: 1875,
             prerequisites: [12, 6],
-            effects: [EnableTerrainImprovement(terrain: "Mountain", max_level: 3)],
+            effects: [
+                EnableTerrainImprovement(terrain: "Mining", max_level: 3),
+                EnableTerrainImprovement(terrain: "Forest", max_level: 3),
+            ],
         ),
         (
             id: 24,
             name: "Marine Engineering",
             cost: 40000,
-            earliest_year: 1873,
-            latest_year: 1889,
+            earliest_year: 1871,
+            latest_year: 1875,
             prerequisites: [21],
             effects: [UnlockShip("Armoured Cruiser")],
         ),
@@ -227,8 +271,8 @@
             id: 25,
             name: "Machine Guns",
             cost: 100000,
-            earliest_year: 1879,
-            latest_year: 1893,
+            earliest_year: 1876,
+            latest_year: 1880,
             prerequisites: [13],
             effects: [UnlockUnit("MachineGunners")],
         ),
@@ -236,17 +280,21 @@
             id: 26,
             name: "Chemistry",
             cost: 120000,
-            earliest_year: 1875,
-            latest_year: 1894,
+            earliest_year: 1876,
+            latest_year: 1880,
             prerequisites: [19, 20],
-            effects: [UnlockBuilding("Chemical Plant")],
+            effects: [
+                UnlockBuilding("Chemical Plant"),
+                EnableTerrainImprovement(terrain: "Oil", max_level: 2),
+                EnableTerrainImprovement(terrain: "Livestock", max_level: 3),
+            ],
         ),
         (
             id: 27,
             name: "Improved Range-Finding",
             cost: 150000,
             earliest_year: 1881,
-            latest_year: 1897,
+            latest_year: 1885,
             prerequisites: [24],
             effects: [UnlockShip("Dreadnought")],
         ),
@@ -254,10 +302,13 @@
             id: 28,
             name: "Internal Combustion",
             cost: 150000,
-            earliest_year: 1884,
-            latest_year: 1898,
+            earliest_year: 1881,
+            latest_year: 1885,
             prerequisites: [26],
-            effects: [UnlockUnit("Mechanised")],
+            effects: [
+                UnlockUnit("Mechanised"),
+                EnableTerrainImprovement(terrain: "Oil", max_level: 3),
+            ],
         ),
     ],
 )

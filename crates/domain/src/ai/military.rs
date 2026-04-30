@@ -9,6 +9,8 @@ use crate::types::*;
 use super::common::next_unit_id;
 #[cfg(test)]
 use super::common::lua_or;
+#[cfg(test)]
+use super::common::AiPersonality;
 use super::common::{PersonalityConfig, get_personality};
 
 /// Build military units when the nation has sufficient treasury.

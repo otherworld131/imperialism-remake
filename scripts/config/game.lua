@@ -45,6 +45,18 @@ game_config = {
     -- Starting conditions
     starting_freight_cars = 15,    -- freight cars each Great Power starts with
     starting_engineers = 1,        -- Engineer civilians each Great Power starts with
+    starting_prospectors = 1,      -- Prospector civilians each Great Power starts with
+    starting_miners = 1,           -- Miner civilians each Great Power starts with
+
+    -- Tech prerequisites for hiring civilians. nil = available from turn 1.
+    -- Per the original Imperialism manual (p.27–28).
+    civilian_rancher_tech = "Feed Grasses",
+    civilian_forester_tech = "Iron Railroad Bridge",
+    civilian_driller_tech = "Oil Drilling",
+
+    -- AI prospector hire pacing: target one Prospector per N undiscovered
+    -- deposit-eligible hexes the nation owns. 0 disables hiring.
+    ai_prospector_per_hexes = 10,
 
     -- Civilian hire costs ($)
     engineer_cost = 500,
@@ -131,7 +143,12 @@ game_config = {
     --   hire_bootstrap is added when civilian_count = 0 and there is at
     --   least one improvable tile (gets the first civilian hired).
     --   idle_penalty is subtracted per idle improver already on the roster.
-    civilian_target_tiles_per_worker = 3,
+    -- Each civilian "covers" this many improvable tiles' worth of work; the
+    -- saturation picker stops adding more of a type once
+    -- `workers >= ceil(demand / coverage)`. Lower = more civilians (lots of
+    -- 1-tile-each Farmers); higher = fewer, harder-working civilians. The
+    -- original game has ~1–3 of each type per nation, so 8 is a closer match.
+    civilian_target_tiles_per_worker = 8,
     civilian_coverage_per_unmet = 3.0,
     civilian_hire_bootstrap = 15.0,
     civilian_idle_penalty = 8.0,

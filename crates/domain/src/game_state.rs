@@ -688,21 +688,25 @@ fn new_game_inner(
         let starting_cars = game_data.game_config.starting_freight_cars;
         nation.military.transport.build_freight_cars(starting_cars);
 
-        // Starting civilians: 1 Farmer + 1 Forester + N Engineers for each Great Power
-        let farmer = Civilian::new(
-            crate::map::UnitId(id_counter),
-            CivilianType::Farmer,
-            setup.nation_id,
-        );
-        id_counter += 1;
-        let forester = Civilian::new(
-            crate::map::UnitId(id_counter),
-            CivilianType::Forester,
-            setup.nation_id,
-        );
-        id_counter += 1;
-        nation.military.civilians.push(farmer);
-        nation.military.civilians.push(forester);
+        // Starting civilians (per manual p.27–28 + card #212): each Great Power
+        // gets N Prospectors + N Miners + N Engineers. Forester/Rancher/Driller
+        // are tech-gated, and Farmer is hired as needed via the Labor screen.
+        for _ in 0..game_data.game_config.starting_prospectors {
+            nation.military.civilians.push(Civilian::new(
+                crate::map::UnitId(id_counter),
+                CivilianType::Prospector,
+                setup.nation_id,
+            ));
+            id_counter += 1;
+        }
+        for _ in 0..game_data.game_config.starting_miners {
+            nation.military.civilians.push(Civilian::new(
+                crate::map::UnitId(id_counter),
+                CivilianType::Miner,
+                setup.nation_id,
+            ));
+            id_counter += 1;
+        }
         for _ in 0..game_data.game_config.starting_engineers {
             nation.military.civilians.push(Civilian::new(
                 crate::map::UnitId(id_counter),
@@ -1813,7 +1817,11 @@ mod tests {
     #[test]
     fn new_game_great_powers_have_starting_civilians() {
         let gs = new_game("test", Difficulty::Normal, 0);
-        let expected = 2 + gs.game_data.game_config.starting_engineers as usize;
+        let cfg = &gs.game_data.game_config;
+        let prospectors = cfg.starting_prospectors as usize;
+        let miners = cfg.starting_miners as usize;
+        let engineers = cfg.starting_engineers as usize;
+        let expected = prospectors + miners + engineers;
         for nation in gs.great_powers() {
             assert_eq!(
                 nation.military.civilians.len(),
@@ -1822,30 +1830,17 @@ mod tests {
                 nation.name,
                 expected
             );
-            // First should be a Farmer
-            assert_eq!(
-                nation.military.civilians[0].civilian_type,
-                CivilianType::Farmer,
-                "{} should have a Farmer as first civilian",
-                nation.name
-            );
-            // Second should be a Forester
-            assert_eq!(
-                nation.military.civilians[1].civilian_type,
-                CivilianType::Forester,
-                "{} should have a Forester as second civilian",
-                nation.name
-            );
-            // Remaining should be Engineers
-            for (i, civ) in nation.military.civilians.iter().enumerate().skip(2) {
-                assert_eq!(
-                    civ.civilian_type,
-                    CivilianType::Engineer,
-                    "{} civilian {} should be an Engineer",
-                    nation.name,
-                    i
-                );
-            }
+            let counts = |t: CivilianType| {
+                nation
+                    .military
+                    .civilians
+                    .iter()
+                    .filter(|c| c.civilian_type == t)
+                    .count()
+            };
+            assert_eq!(counts(CivilianType::Prospector), prospectors);
+            assert_eq!(counts(CivilianType::Miner), miners);
+            assert_eq!(counts(CivilianType::Engineer), engineers);
         }
     }
 

@@ -155,6 +155,19 @@ pub struct GameConfig {
     pub civilian_coverage_per_unmet: f64,
     pub civilian_hire_bootstrap: f64,
     pub civilian_idle_penalty: f64,
+    // Tech prerequisites for hiring specific civilian types — must match the
+    // tech tree. `None` means the civilian is available from turn 1.
+    // Per the original Imperialism manual (p.27–28): Rancher needs Feed Grasses,
+    // Forester needs Iron Railroad Bridge, Driller needs Oil Drilling.
+    pub civilian_rancher_tech: Option<String>,
+    pub civilian_forester_tech: Option<String>,
+    pub civilian_driller_tech: Option<String>,
+    // AI prospector hiring: target one prospector per N undiscovered hexes
+    // owned by the nation. 0 disables prospector hiring entirely.
+    pub ai_prospector_per_hexes: u32,
+    // Starting civilians per Great Power.
+    pub starting_prospectors: u32,
+    pub starting_miners: u32,
     // Backlog scoring weights per personality. `(category, personality)` →
     // points added per turn the category has been neglected.
     // Categories: military, infrastructure, diplomacy, hire_engineer, hire_improver.
@@ -322,10 +335,16 @@ impl Default for GameConfig {
             engineer_hire_base: 100,
             engineer_hire_path_coeff: 30,
             engineer_hire_cap: 250,
-            civilian_target_tiles_per_worker: 3,
+            civilian_target_tiles_per_worker: 8,
             civilian_coverage_per_unmet: 3.0,
             civilian_hire_bootstrap: 15.0,
             civilian_idle_penalty: 8.0,
+            civilian_rancher_tech: Some("Feed Grasses".to_string()),
+            civilian_forester_tech: Some("Iron Railroad Bridge".to_string()),
+            civilian_driller_tech: Some("Oil Drilling".to_string()),
+            ai_prospector_per_hexes: 10,
+            starting_prospectors: 1,
+            starting_miners: 1,
             backlog_weight_aggressive_military: 50,
             backlog_weight_aggressive_infra: 25,
             backlog_weight_aggressive_diplomacy: 5,
@@ -466,6 +485,8 @@ impl Default for GameData {
     fn default() -> Self {
         #[allow(unused_mut)]
         let mut game_config = GameConfig::default();
+        #[allow(unused_mut)]
+        let mut tech_tree = TechTree::default(); // empty until Lua populates
 
         #[cfg(feature = "lua")]
         let lua_engine = {
@@ -475,12 +496,19 @@ impl Default for GameData {
                     eprintln!("[GameData] Warning: Lua script loading failed: {}", err);
                 }
                 game_config = crate::ai::lua_bridge::load_game_config(e);
+                match crate::ai::lua_bridge::load_tech_tree(e) {
+                    Some(loaded) => tech_tree = loaded,
+                    None => eprintln!(
+                        "[GameData] ERROR: scripts/config/tech_tree.lua failed to load. \
+                         Tech tree is empty; tech-gating and research will not function."
+                    ),
+                }
             }
             engine
         };
 
         GameData {
-            tech_tree: TechTree::from_technologies(vec![]),
+            tech_tree,
             unit_stats: default_unit_stats(),
             ship_stats: default_ship_stats(),
             #[cfg(feature = "lua")]

@@ -884,6 +884,21 @@ pub(crate) fn cmd_hire_civilian(game: &mut GameState, type_name: &str) {
         return;
     };
 
+    if !civ_type.is_unlocked(
+        &player.researched_techs,
+        &game.game_data,
+        &game.game_data.game_config,
+    ) {
+        let req = civ_type
+            .required_tech(&game.game_data.game_config)
+            .unwrap_or("required technology");
+        println!(
+            "  Cannot hire {}: requires technology '{}' (not yet researched).",
+            civ_type, req
+        );
+        return;
+    }
+
     if civilian_costs_expert && player.economy.labor.expert == 0 {
         println!("  Cannot hire civilian: requires an expert worker (you have none).");
         println!("  Train workers at the Trade School first.");

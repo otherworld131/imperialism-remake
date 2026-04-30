@@ -117,6 +117,9 @@ macro_rules! test_game_state {
                 pending_economy_orders: std::collections::HashMap::new(),
                 last_cash_flow: $last_cash_flow,
                 last_resource_flow: $last_resource_flow,
+                pending_ai_material_outflows: Vec::new(),
+                pending_ai_goods_outflows: Vec::new(),
+                pending_ai_material_inflows: Vec::new(),
             },
         }
     };

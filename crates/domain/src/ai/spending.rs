@@ -779,16 +779,43 @@ fn score_civilian(
         return None;
     }
 
-    // Count improvable tiles across owned provinces
+    // Count improvable tiles across owned provinces. Only visible deposits
+    // are counted: per the manual, hidden minerals (coal/iron/gold/gems/oil)
+    // must be revealed by a Prospector before the nation knows they are there.
+    // Un-prospected deposit-eligible hexes contribute too, so the AI still
+    // wants a civilian (a Prospector) when its territory is unexplored.
     let mut improvable_tiles = 0u32;
+    let mut undiscovered_hexes = 0u32;
     for &pid in &nation.province_ids {
         if let Some(province) = game.get_province(pid) {
             for &coord in &province.tiles {
                 if let Some(tile) = game.world.hex_map.get_tile(coord) {
-                    let max_level = tile
-                        .resource_deposit()
-                        .map(|r| r.max_improvement_level())
-                        .unwrap_or(0);
+                    // A tile is "undiscovered" only when it could plausibly hide
+                    // a deposit AND nothing is visible on it. Hills with visible
+                    // Wool, for example, are deposit-capable terrain but already
+                    // bear a known resource — the Prospector has nothing to do
+                    // there.
+                    if tile.terrain().can_have_deposits()
+                        && !tile.is_prospected()
+                        && !tile.has_visible_resource()
+                    {
+                        undiscovered_hexes += 1;
+                        continue;
+                    }
+                    if !tile.has_visible_resource() {
+                        continue;
+                    }
+                    // Use the tech-gated cap, not the resource's intrinsic
+                    // max — a tile already at the nation's current tech
+                    // ceiling shouldn't pull more civilians.
+                    let max_level = game
+                        .game_data
+                        .tech_tree
+                        .effective_max_improvement_level(
+                            tile.terrain(),
+                            tile.resource_deposit(),
+                            &nation.researched_techs,
+                        );
                     if max_level > 0 && tile.improvement_level() < max_level {
                         improvable_tiles += 1;
                     }
@@ -796,6 +823,7 @@ fn score_civilian(
             }
         }
     }
+    let total_demand = improvable_tiles + undiscovered_hexes;
 
     let civilian_count = nation
         .military.civilians
@@ -815,8 +843,8 @@ fn score_civilian(
     // tile beyond that capacity adds coverage_per_unmet to the score.
     let cfg = &game.game_data.game_config;
     let target_ratio = cfg.civilian_target_tiles_per_worker as f64;
-    let unmet = (improvable_tiles as f64 - civilian_count as f64 * target_ratio).max(0.0);
-    let bootstrap = if civilian_count == 0 && improvable_tiles > 0 {
+    let unmet = (total_demand as f64 - civilian_count as f64 * target_ratio).max(0.0);
+    let bootstrap = if civilian_count == 0 && total_demand > 0 {
         cfg.civilian_hire_bootstrap
     } else {
         0.0
@@ -1543,24 +1571,12 @@ fn execute_hire_improver(game: &mut GameState, nation_id: NationId) {
         if civilian_costs_expert && nation.economy.labor.expert == 0 {
             return;
         }
-        let improver_count = nation
-            .military.civilians
-            .iter()
-            .filter(|c| c.civilian_type != CivilianType::Engineer)
-            .count();
-        let civ_type = if improver_count < 2 {
-            CivilianType::Farmer
-        } else {
-            let has_forester = nation
-                .military.civilians
-                .iter()
-                .any(|c| c.civilian_type == CivilianType::Forester);
-            if has_forester {
-                CivilianType::Miner
-            } else {
-                CivilianType::Forester
-            }
+
+        let civ_type = match select_civilian_to_hire(game, nation, &cfg) {
+            Some(t) => t,
+            None => return,
         };
+
         let already_idle_unplaced = nation
             .military.civilians
             .iter()
@@ -1589,6 +1605,151 @@ fn execute_hire_improver(game: &mut GameState, nation_id: NationId) {
         cost,
         None,
     ));
+}
+
+/// Pick which civilian type the AI should hire next.
+///
+/// Two-stage decision per the manual + card #86 fix:
+///
+/// 1. **Prospector first**: if the nation has un-prospected deposit-eligible
+///    hexes and not yet enough Prospectors (one per `ai_prospector_per_hexes`
+///    hexes), hire a Prospector — minerals are unknown until revealed.
+/// 2. **Saturation picker for improvers**: among tech-unlocked improver types
+///    (Farmer/Rancher/Forester/Miner/Driller), score each by
+///    `unimproved_tiles[T] / (workers[T] + 1)`. Pick the highest. Tie-break
+///    by raw `unimproved_tiles[T]`.
+///
+/// Skips a type if it has zero improvable tiles, so Rancher/Driller/Forester
+/// don't displace useful hires when there's nothing for them to do.
+fn select_civilian_to_hire(
+    game: &GameState,
+    nation: &crate::nation::Nation,
+    cfg: &crate::data::GameConfig,
+) -> Option<CivilianType> {
+    use std::collections::HashMap;
+
+    // ── Collect per-type counts in one pass ──────────────────────
+    let mut improvable_by_type: HashMap<CivilianType, u32> = HashMap::new();
+    let mut undiscovered_hexes: u32 = 0;
+    for &pid in &nation.province_ids {
+        if let Some(province) = game.get_province(pid) {
+            for &coord in &province.tiles {
+                let Some(tile) = game.world.hex_map.get_tile(coord) else {
+                    continue;
+                };
+                let terrain = tile.terrain();
+
+                // Undiscovered = deposit-capable terrain, not yet prospected,
+                // AND nothing visible on the tile. Hills + visible Wool are
+                // deposit-capable but already useful to a Rancher; treat them
+                // as Rancher demand below, not as Prospector demand.
+                if terrain.can_have_deposits()
+                    && !tile.is_prospected()
+                    && !tile.has_visible_resource()
+                {
+                    undiscovered_hexes += 1;
+                    continue;
+                }
+                if !tile.has_visible_resource() {
+                    continue;
+                }
+                let resource = tile.resource_deposit();
+                let max_level = game.game_data.tech_tree.effective_max_improvement_level(
+                    terrain,
+                    resource,
+                    &nation.researched_techs,
+                );
+                if max_level == 0 || tile.improvement_level() >= max_level {
+                    continue;
+                }
+                for civ in [
+                    CivilianType::Farmer,
+                    CivilianType::Rancher,
+                    CivilianType::Forester,
+                    CivilianType::Miner,
+                    CivilianType::Driller,
+                ] {
+                    if civ.can_improve(terrain, resource) {
+                        *improvable_by_type.entry(civ).or_insert(0) += 1;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut workers_by_type: HashMap<CivilianType, u32> = HashMap::new();
+    for civ in &nation.military.civilians {
+        *workers_by_type.entry(civ.civilian_type).or_insert(0) += 1;
+    }
+
+    // ── Saturation-driven pick across all civilian types ─────────
+    //
+    // For each type T:
+    //   demand[T]     = number of tiles T can usefully be assigned to
+    //   saturation[T] = demand[T] / (workers[T] + 1)
+    //
+    // The improver types (Farmer/Rancher/Forester/Miner/Driller) use raw
+    // unimproved-tile counts. Prospector is normalised by
+    // `ai_prospector_per_hexes` so a vast unexplored map doesn't crowd out
+    // bread-and-butter improvers — one Prospector can cover many hexes over
+    // multiple turns. Tie-break by raw demand so a swing of one tile doesn't
+    // pin the pick.
+    let per_hexes = cfg.ai_prospector_per_hexes.max(1);
+    let prospector_demand = if cfg.ai_prospector_per_hexes == 0 {
+        0
+    } else {
+        undiscovered_hexes / per_hexes
+    };
+
+    // Each existing worker is treated as covering `target_tiles_per_worker`
+    // tiles' worth of work. Once `workers >= ceil(demand / coverage)`, the
+    // type is saturated and we don't hire another. This is what stops the
+    // AI from buying a Farmer for every grain plain on a 50-tile empire.
+    let coverage = cfg.civilian_target_tiles_per_worker.max(1);
+    let mut best: Option<(CivilianType, f64, u32)> = None;
+    let consider = |civ: CivilianType, demand: u32, best: &mut Option<(CivilianType, f64, u32)>| {
+        if demand == 0 {
+            return;
+        }
+        let workers = workers_by_type.get(&civ).copied().unwrap_or(0);
+        let workers_needed = demand.div_ceil(coverage);
+        if workers >= workers_needed {
+            return;
+        }
+        let saturation = demand as f64 / (workers as f64 + 1.0);
+        let beats = match *best {
+            None => true,
+            Some((_, s, t)) => saturation > s || (saturation == s && demand > t),
+        };
+        if beats {
+            *best = Some((civ, saturation, demand));
+        }
+    };
+
+    for civ in [
+        CivilianType::Farmer,
+        CivilianType::Rancher,
+        CivilianType::Forester,
+        CivilianType::Miner,
+        CivilianType::Driller,
+    ] {
+        if !civ.is_unlocked(&nation.researched_techs, &game.game_data, cfg) {
+            continue;
+        }
+        let demand = improvable_by_type.get(&civ).copied().unwrap_or(0);
+        consider(civ, demand, &mut best);
+    }
+    consider(CivilianType::Prospector, prospector_demand, &mut best);
+
+    // Bootstrap: if we matched nothing yet (e.g. no improvable tiles known
+    // but plenty of un-prospected hexes), still hire a Prospector — it's
+    // the only way to surface new mineral demand.
+    if best.is_none() && undiscovered_hexes > 0 && cfg.ai_prospector_per_hexes > 0 {
+        return Some(CivilianType::Prospector);
+    }
+
+    best.map(|(t, _, _)| t)
 }
 
 /// Drop annexed/destroyed priority targets and pick replacements so the

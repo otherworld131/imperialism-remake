@@ -68,6 +68,46 @@ pub enum CivilianType {
 }
 
 impl CivilianType {
+    /// Name of the tech (from Lua `game_config`) that gates hiring this
+    /// civilian type. `None` means available from turn 1.
+    ///
+    /// Per the original Imperialism manual (p.27–28):
+    /// - Rancher requires Feed Grasses
+    /// - Forester requires Iron Railroad Bridge
+    /// - Driller requires Oil Drilling
+    pub fn required_tech(self, cfg: &crate::data::GameConfig) -> Option<&str> {
+        let name: &Option<String> = match self {
+            Self::Rancher => &cfg.civilian_rancher_tech,
+            Self::Forester => &cfg.civilian_forester_tech,
+            Self::Driller => &cfg.civilian_driller_tech,
+            _ => return None,
+        };
+        name.as_deref()
+    }
+
+    /// True if `researched_techs` is sufficient to hire this civilian type.
+    ///
+    /// **Fail-closed**: if the configured tech name does not resolve in the
+    /// tech tree, the civilian is treated as LOCKED. Treating an unknown
+    /// gate as "unlocked" silently disables tech-gating whenever the tech
+    /// tree is empty (the default `GameData` used to look like that), which
+    /// is the wrong default — modders that want to ungate a civilian should
+    /// set the relevant `civilian_*_tech` to `nil` in `game.lua`.
+    pub fn is_unlocked(
+        self,
+        researched_techs: &[crate::events::TechId],
+        game_data: &crate::data::GameData,
+        cfg: &crate::data::GameConfig,
+    ) -> bool {
+        match self.required_tech(cfg) {
+            None => true,
+            Some(tech_name) => match game_data.tech_tree.get_by_name(tech_name) {
+                Some(t) => researched_techs.contains(&t.id),
+                None => false,
+            },
+        }
+    }
+
     /// The cost in money to hire this civilian type. Reads from Lua `game_config`.
     pub fn creation_cost(self, cfg: &crate::data::GameConfig) -> Money {
         let dollars = match self {
@@ -368,6 +408,75 @@ mod tests {
         assert!(CivilianType::Engineer.can_improve(TerrainType::Mountain, None));
         assert!(CivilianType::Engineer.can_improve(TerrainType::Desert, None));
         assert!(!CivilianType::Engineer.can_improve(TerrainType::Sea, None));
+    }
+
+    // ── Tech gating ───────────────────────────────────────────
+
+    #[test]
+    fn required_tech_returns_configured_names() {
+        let cfg = crate::data::GameConfig::default();
+        assert_eq!(CivilianType::Rancher.required_tech(&cfg), Some("Feed Grasses"));
+        assert_eq!(
+            CivilianType::Forester.required_tech(&cfg),
+            Some("Iron Railroad Bridge")
+        );
+        assert_eq!(
+            CivilianType::Driller.required_tech(&cfg),
+            Some("Oil Drilling")
+        );
+        // Ungated civilians return None.
+        assert_eq!(CivilianType::Farmer.required_tech(&cfg), None);
+        assert_eq!(CivilianType::Miner.required_tech(&cfg), None);
+        assert_eq!(CivilianType::Prospector.required_tech(&cfg), None);
+        assert_eq!(CivilianType::Engineer.required_tech(&cfg), None);
+    }
+
+    #[test]
+    fn required_tech_nil_means_ungated() {
+        // Modders can ungate by setting the tech name to None in config.
+        let mut cfg = crate::data::GameConfig::default();
+        cfg.civilian_rancher_tech = None;
+        assert_eq!(CivilianType::Rancher.required_tech(&cfg), None);
+    }
+
+    #[test]
+    fn default_game_data_has_real_tech_tree() {
+        // Regression: production game uses GameData::default() which used to
+        // return an empty TechTree, silently disabling tech-gating. Confirm
+        // both that the tree contains the manual-spec gates AND that an
+        // un-researched nation has the gated civilians locked.
+        let gd = crate::data::GameData::default();
+        let cfg = crate::data::GameConfig::default();
+        assert!(
+            gd.tech_tree.get_by_name("Feed Grasses").is_some(),
+            "default tech tree must contain Feed Grasses"
+        );
+        assert!(
+            gd.tech_tree.get_by_name("Iron Railroad Bridge").is_some(),
+            "default tech tree must contain Iron Railroad Bridge"
+        );
+        assert!(
+            gd.tech_tree.get_by_name("Oil Drilling").is_some(),
+            "default tech tree must contain Oil Drilling"
+        );
+        let no_techs: Vec<crate::events::TechId> = vec![];
+        assert!(
+            !CivilianType::Rancher.is_unlocked(&no_techs, &gd, &cfg),
+            "Rancher must be locked at game start (no Feed Grasses)"
+        );
+        assert!(
+            !CivilianType::Forester.is_unlocked(&no_techs, &gd, &cfg),
+            "Forester must be locked at game start (no Iron Railroad Bridge)"
+        );
+        assert!(
+            !CivilianType::Driller.is_unlocked(&no_techs, &gd, &cfg),
+            "Driller must be locked at game start (no Oil Drilling)"
+        );
+        // Ungated civilians remain available.
+        assert!(CivilianType::Farmer.is_unlocked(&no_techs, &gd, &cfg));
+        assert!(CivilianType::Miner.is_unlocked(&no_techs, &gd, &cfg));
+        assert!(CivilianType::Prospector.is_unlocked(&no_techs, &gd, &cfg));
+        assert!(CivilianType::Engineer.is_unlocked(&no_techs, &gd, &cfg));
     }
 
     // ── Improvement costs ─────────────────────────────────────

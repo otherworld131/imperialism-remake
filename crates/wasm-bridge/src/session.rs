@@ -439,6 +439,13 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
                 Some(n) => n,
                 None => return CommandResult::error("nation not found"),
             };
+            if !ct.is_unlocked(
+                &nation.researched_techs,
+                &game.game_data,
+                &game.game_data.game_config,
+            ) {
+                return CommandResult::error("civilian type locked: required technology not researched");
+            }
             if nation.economy.treasury < cost {
                 return CommandResult::error("insufficient funds");
             }

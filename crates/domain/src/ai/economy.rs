@@ -825,7 +825,7 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
         if let Some(budget) = lua_cfg.as_ref().map(|c| c.infrastructure_budget) {
             break 'val Money::dollars(budget);
         }
-        Money::dollars(pc.infra_base_budget_dollars as u64)
+        Money::dollars(pc.infra_base_budget_dollars as i64)
     };
 
     // Scale budget with treasury: spend more aggressively when cash-rich

@@ -2146,13 +2146,23 @@ pub fn wasm_hire_civilian(game_json: &str, nation_id: u32, civilian_type_str: &s
     let cost = civ_type.creation_cost(&game.game_data.game_config);
 
     {
-        let nation = match game.get_nation_mut(nid) {
+        let nation = match game.get_nation(nid) {
             Some(n) => n,
             None => return "{\"error\":\"nation not found\"}".to_string(),
         };
+        if !civ_type.is_unlocked(
+            &nation.researched_techs,
+            &game.game_data,
+            &game.game_data.game_config,
+        ) {
+            return "{\"error\":\"civilian type locked: required technology not researched\"}"
+                .to_string();
+        }
         if nation.economy.treasury < cost {
             return "{\"error\":\"insufficient funds\"}".to_string();
         }
+    }
+    if let Some(nation) = game.get_nation_mut(nid) {
         nation.economy.treasury -= cost;
     }
     let cid = game.alloc_unit_id();
@@ -5128,6 +5138,27 @@ mod tests {
 
         let result = wasm_hire_civilian(&json, game.human_player_nation.0, "Miner");
         assert!(result.contains("insufficient funds"));
+    }
+
+    #[test]
+    fn hire_civilian_locked_tech_is_rejected() {
+        // Rancher requires "Feed Grasses". Without it, the WASM bridge must
+        // refuse the hire — closing the bypass tagged in the adversarial
+        // review (F-001).
+        let json = make_game_json();
+        let mut game = game_from_json(&json).unwrap();
+        game.game_data = domain::data::GameData::default();
+        let nation = game.get_nation_mut(game.human_player_nation).unwrap();
+        nation.economy.treasury = Money::dollars(100_000);
+        nation.researched_techs.clear();
+        let json = serde_json::to_string(&game).unwrap();
+
+        let result = wasm_hire_civilian(&json, game.human_player_nation.0, "Rancher");
+        assert!(
+            result.contains("locked"),
+            "expected 'locked' error, got: {}",
+            result
+        );
     }
 
     #[test]

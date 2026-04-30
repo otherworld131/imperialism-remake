@@ -56,6 +56,59 @@ impl TechTree {
         self.technologies.iter().find(|t| t.name == name)
     }
 
+    /// Highest improvement level the nation may take a tile to, given the set
+    /// of techs it has researched. Walks `EnableTerrainImprovement` effects
+    /// across all researched techs, taking the maximum `max_level` for the
+    /// (terrain, resource) class.
+    ///
+    /// Returns:
+    /// - The tech-gated cap for tiles in a known class (Farm, Orchard,
+    ///   Plantation, Wool, Livestock, Forest, Mining, Oil).
+    /// - The implicit Mining base of 1 when the nation has no relevant
+    ///   tech yet — a Miner can always open a fresh mine to L1 per
+    ///   manual p.27.
+    /// - 0 if the tile has no resource or the resource has no class.
+    pub fn effective_max_improvement_level(
+        &self,
+        terrain: TerrainType,
+        resource: Option<ResourceType>,
+        researched: &[TechId],
+    ) -> u8 {
+        let resource = match resource {
+            Some(r) => r,
+            None => return 0,
+        };
+        let class = match improvement_class(terrain, resource) {
+            Some(c) => c,
+            None => return 0,
+        };
+        // Manual p.27: "When a Miner finishes opening a new mine it produces
+        // at Level I." Mining can reach L1 with no tech; all other classes
+        // need an explicit `EnableTerrainImprovement` effect at L1+ to be
+        // workable at all.
+        let base = match class {
+            "Mining" => 1,
+            _ => 0,
+        };
+        let mut max = base;
+        for tid in researched {
+            if let Some(tech) = self.get(*tid) {
+                for effect in &tech.effects {
+                    if let TechEffect::EnableTerrainImprovement {
+                        terrain: eff_class,
+                        max_level,
+                    } = effect
+                    {
+                        if eff_class == class && *max_level > max {
+                            max = *max_level;
+                        }
+                    }
+                }
+            }
+        }
+        max.min(resource.max_improvement_level())
+    }
+
     /// Returns technologies available for research given the current set of
     /// researched techs and the current year.
     ///
@@ -256,8 +309,39 @@ impl TechTree {
 }
 
 impl Default for TechTree {
+    /// An empty tree. Production builds populate the tree from
+    /// `scripts/config/tech_tree.lua` via `lua_bridge::load_tech_tree`,
+    /// which is the single source of truth.
     fn default() -> Self {
-        Self::from_technologies(vec![])
+        Self::from_technologies(Vec::new())
+    }
+}
+
+/// Map a (terrain, resource) pair to the tech-tree improvement class string
+/// used by `EnableTerrainImprovement` effects.
+///
+/// Reference: original Imperialism manual p.89 (Benefits of Technology Table)
+/// and p.27–28 (per-civilian sections).
+///
+/// Per the manual the Wool ladder (Feed Grasses → Spinning Jenny → Power
+/// Loom) and the Livestock ladder (Feed Grasses → Barbed Wire → Chemistry)
+/// diverge at L2, so they are separate classes.
+fn improvement_class(terrain: TerrainType, resource: ResourceType) -> Option<&'static str> {
+    use ResourceType::*;
+    use TerrainType::*;
+    match (terrain, resource) {
+        (Grassland, Grain) => Some("Farm"),
+        (Grassland, Fruit) => Some("Orchard"),
+        (Grassland, Cotton) => Some("Plantation"),
+        (Grassland, Livestock | Horses) => Some("Livestock"),
+        (Hills, Wool) => Some("Wool"),
+        // Hills mining and Mountain mining share Square-Set Timbering / Dynamite.
+        (Hills | Mountain, Coal | Iron | Gold | Gems) => Some("Mining"),
+        (Forest, Timber) => Some("Forest"),
+        // All oil terrains share the Oil Drilling / Chemistry / Internal
+        // Combustion ladder.
+        (Desert | Swamp | Tundra, Oil) => Some("Oil"),
+        _ => None,
     }
 }
 
@@ -345,6 +429,321 @@ mod tests {
         assert_eq!(tree.all_techs().len(), 28);
     }
 
+    // ── Tech-gated improvement levels ─────────────────────────────
+
+    #[test]
+    fn farm_max_level_starts_at_zero_then_unlocks_with_techs() {
+        let tree = load_ron_tree();
+        // No tech researched → cannot improve a Farm tile.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Grassland,
+                Some(ResourceType::Grain),
+                &[]
+            ),
+            0
+        );
+        // Seed Drill (id 2) → L1.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Grassland,
+                Some(ResourceType::Grain),
+                &[TechId(2)]
+            ),
+            1
+        );
+        // Steel Plows (id 10) → L2.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Grassland,
+                Some(ResourceType::Grain),
+                &[TechId(2), TechId(10)]
+            ),
+            2
+        );
+        // Mechanical Reaper (id 17) → L3.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Grassland,
+                Some(ResourceType::Grain),
+                &[TechId(2), TechId(10), TechId(17)]
+            ),
+            3
+        );
+    }
+
+    #[test]
+    fn mountain_mining_baseline_is_l1_without_tech() {
+        let tree = load_ron_tree();
+        // Per manual p.27: a Miner can always open a fresh mine to L1.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Mountain,
+                Some(ResourceType::Coal),
+                &[]
+            ),
+            1
+        );
+        // Square-Set Timbering (id 6) → L2.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Mountain,
+                Some(ResourceType::Coal),
+                &[TechId(6)]
+            ),
+            2
+        );
+        // Dynamite (id 23) → L3.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Mountain,
+                Some(ResourceType::Iron),
+                &[TechId(6), TechId(23)]
+            ),
+            3
+        );
+    }
+
+    #[test]
+    fn hills_mining_uses_same_class_as_mountain() {
+        let tree = load_ron_tree();
+        // Coal on Hills should follow the same Mountain ladder.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Hills,
+                Some(ResourceType::Coal),
+                &[TechId(6)]
+            ),
+            2,
+            "Hills mining must share Mountain's tech gates"
+        );
+    }
+
+    #[test]
+    fn livestock_ladder_feed_grasses_barbed_wire_chemistry() {
+        let tree = load_ron_tree();
+        // No tech → 0.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Grassland,
+                Some(ResourceType::Livestock),
+                &[]
+            ),
+            0
+        );
+        // Feed Grasses (id 5) → L1.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Grassland,
+                Some(ResourceType::Livestock),
+                &[TechId(5)]
+            ),
+            1
+        );
+        // Barbed Wire (id 20) → L2.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Grassland,
+                Some(ResourceType::Livestock),
+                &[TechId(5), TechId(20)]
+            ),
+            2
+        );
+        // Chemistry (id 26) → L3.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Grassland,
+                Some(ResourceType::Livestock),
+                &[TechId(5), TechId(20), TechId(26)]
+            ),
+            3
+        );
+    }
+
+    #[test]
+    fn wool_ladder_feed_grasses_spinning_jenny_power_loom() {
+        let tree = load_ron_tree();
+        // Wool diverges from Livestock at L2: Spinning Jenny (id 8) → L2,
+        // Power Loom (id 16) → L3 — completely separate from the Livestock
+        // ladder (Barbed Wire / Chemistry).
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Hills,
+                Some(ResourceType::Wool),
+                &[TechId(5), TechId(8)]
+            ),
+            2
+        );
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Hills,
+                Some(ResourceType::Wool),
+                &[TechId(5), TechId(8), TechId(16)]
+            ),
+            3
+        );
+        // Barbed Wire alone does not raise Wool past L1 (it's a Livestock tech).
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Hills,
+                Some(ResourceType::Wool),
+                &[TechId(5), TechId(20)]
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn cotton_plantation_ladder() {
+        let tree = load_ron_tree();
+        // Cotton Gin (id 3) → L1, Spinning Jenny (id 8) → L2, Power Loom (16) → L3.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Grassland,
+                Some(ResourceType::Cotton),
+                &[TechId(3)]
+            ),
+            1
+        );
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Grassland,
+                Some(ResourceType::Cotton),
+                &[TechId(3), TechId(5), TechId(8)]
+            ),
+            2
+        );
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Grassland,
+                Some(ResourceType::Cotton),
+                &[TechId(3), TechId(5), TechId(8), TechId(16)]
+            ),
+            3
+        );
+    }
+
+    #[test]
+    fn orchard_fruit_ladder() {
+        let tree = load_ron_tree();
+        // Seed Drill (2) → L1, Steel and Iron Plows (10) → L2, Commercial Fertilizer (18) → L3.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Grassland,
+                Some(ResourceType::Fruit),
+                &[TechId(2)]
+            ),
+            1
+        );
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Grassland,
+                Some(ResourceType::Fruit),
+                &[TechId(2), TechId(10)]
+            ),
+            2
+        );
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Grassland,
+                Some(ResourceType::Fruit),
+                &[TechId(2), TechId(10), TechId(18)]
+            ),
+            3
+        );
+        // Mechanical Reaper (Farm L3) does NOT raise Orchard.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Grassland,
+                Some(ResourceType::Fruit),
+                &[TechId(2), TechId(10), TechId(17)]
+            ),
+            2
+        );
+    }
+
+    #[test]
+    fn oil_ladder_drilling_chemistry_internal_combustion() {
+        let tree = load_ron_tree();
+        // No tech → 0 (cannot drill anywhere).
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Desert,
+                Some(ResourceType::Oil),
+                &[]
+            ),
+            0
+        );
+        // Oil Drilling (19) → L1.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Desert,
+                Some(ResourceType::Oil),
+                &[TechId(19)]
+            ),
+            1
+        );
+        // Chemistry (26) → L2 — also covers Swamp/Tundra.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Swamp,
+                Some(ResourceType::Oil),
+                &[TechId(19), TechId(20), TechId(26)]
+            ),
+            2
+        );
+        // Internal Combustion (28) → L3.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Tundra,
+                Some(ResourceType::Oil),
+                &[TechId(19), TechId(20), TechId(26), TechId(28)]
+            ),
+            3
+        );
+    }
+
+    #[test]
+    fn forest_ladder_iron_rr_compound_steam_dynamite() {
+        let tree = load_ron_tree();
+        // Per manual p.27 + p.89: Forester not buildable until Iron Railroad
+        // Bridge; that tech also unlocks Timber L1. Compound Steam Engine →
+        // L2, Dynamite → L3.
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Forest,
+                Some(ResourceType::Timber),
+                &[]
+            ),
+            0,
+            "no tech → no Timber improvement"
+        );
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Forest,
+                Some(ResourceType::Timber),
+                &[TechId(4)]
+            ),
+            1
+        );
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Forest,
+                Some(ResourceType::Timber),
+                &[TechId(1), TechId(4), TechId(12)]
+            ),
+            2
+        );
+        assert_eq!(
+            tree.effective_max_improvement_level(
+                TerrainType::Forest,
+                Some(ResourceType::Timber),
+                &[TechId(1), TechId(4), TechId(6), TechId(12), TechId(23)]
+            ),
+            3
+        );
+    }
+
     #[test]
     fn validation_passes() {
         let tree = load_ron_tree();
@@ -376,20 +775,20 @@ mod tests {
     fn dependent_techs_become_available_after_prereqs() {
         let tree = load_ron_tree();
 
-        // Steel Plows (ID 10) requires Seed Drill (ID 2) and year 1831-1835
+        // Steel and Iron Plows (ID 10) requires Seed Drill (ID 2) and year 1831-1835
         let available_before = tree.available_techs(&[], 1831);
         let names_before: Vec<&str> = available_before.iter().map(|t| t.name.as_str()).collect();
         assert!(
-            !names_before.contains(&"Steel Plows"),
-            "Steel Plows should NOT be available without Seed Drill"
+            !names_before.contains(&"Steel and Iron Plows"),
+            "Steel and Iron Plows should NOT be available without Seed Drill"
         );
 
         // After researching Seed Drill
         let available_after = tree.available_techs(&[TechId(2)], 1831);
         let names_after: Vec<&str> = available_after.iter().map(|t| t.name.as_str()).collect();
         assert!(
-            names_after.contains(&"Steel Plows"),
-            "Steel Plows should be available after researching Seed Drill in 1831"
+            names_after.contains(&"Steel and Iron Plows"),
+            "Steel and Iron Plows should be available after researching Seed Drill in 1831"
         );
     }
 
@@ -433,7 +832,7 @@ mod tests {
         assert_eq!(tech.id, TechId(11));
         assert_eq!(tech.cost, Money::dollars(6_000));
         assert_eq!(tech.earliest_year, 1836);
-        assert_eq!(tech.latest_year, 1839);
+        assert_eq!(tech.latest_year, 1840);
 
         let not_found = tree.get_by_name("Nonexistent Tech");
         assert!(

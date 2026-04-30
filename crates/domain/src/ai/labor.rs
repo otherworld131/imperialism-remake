@@ -206,6 +206,13 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
         crate::map::infrastructure::collectable_hexes(&game.world.hex_map, &owned_provinces, &connected)
     };
 
+    // Snapshot the nation's researched techs so we can consult the tech-gated
+    // improvement cap without re-borrowing `game` each tile.
+    let researched_techs: Vec<crate::events::TechId> = match game.get_nation(nation_id) {
+        Some(n) => n.researched_techs.clone(),
+        None => return,
+    };
+
     // Find all improvable tiles across the nation's provinces.
     // Each entry: (coord, terrain, resource, improvement_level, max_level, has_civilian_assigned)
     let mut improvable_tiles: Vec<(
@@ -216,11 +223,35 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
         u8,
         bool,
     )> = Vec::new();
+    // Un-prospected deposit-eligible tiles — Prospectors target these. Stored
+    // separately because they don't have a `resource_deposit` known to the
+    // nation and the existing improvable_tiles entries assume one is present.
+    let mut unprospected_tiles: Vec<(crate::hex::HexCoord, TerrainType, bool)> = Vec::new();
     for &pid in &province_ids {
         for (coord, tile) in game.world.hex_map.tiles_in_province(pid) {
             let terrain = tile.terrain();
+            // Prospector targets: deposit-capable terrain that hasn't been
+            // searched AND has no visible resource. Hills with visible Wool
+            // are deposit-capable terrain but a Prospector has nothing to do
+            // there — the Wool is already known.
+            if terrain.can_have_deposits()
+                && !tile.is_prospected()
+                && !tile.has_visible_resource()
+            {
+                unprospected_tiles.push((coord, terrain, tile.assigned_civilian.is_some()));
+                continue;
+            }
+            // Per the manual, hidden minerals are unknown until prospected;
+            // the AI must not deploy improvers to un-prospected hidden tiles.
+            if !tile.has_visible_resource() {
+                continue;
+            }
             let resource = tile.resource_deposit();
-            let max_level = resource.map(|r| r.max_improvement_level()).unwrap_or(0);
+            let max_level = game.game_data.tech_tree.effective_max_improvement_level(
+                terrain,
+                resource,
+                &researched_techs,
+            );
             if max_level > 0 && tile.improvement_level() < max_level {
                 let has_assigned = tile.assigned_civilian.is_some();
                 improvable_tiles.push((
@@ -256,7 +287,40 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
     // (a) tiles currently in `collectable` (so the improvement immediately
     //     produces yield), then
     // (b) lowest current improvement level (ramp weakest tiles first).
+    //
+    // Prospectors are routed to the `unprospected_tiles` pool — they don't
+    // improve resources, they reveal hidden deposits.
     for (civ_idx, civ_type) in idle_civilians {
+        if civ_type == CivilianType::Prospector {
+            let best = unprospected_tiles
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, _, has_assigned))| !has_assigned)
+                .min_by_key(|(_, (coord, _, _))| !collectable.contains(coord));
+            if let Some((tile_idx, &(coord, _, _))) = best {
+                unprospected_tiles[tile_idx].2 = true;
+                let Some(nation) = game.get_nation_mut(nation_id) else {
+                    return;
+                };
+                let civilian_id = nation.military.civilians[civ_idx].id;
+                if let Some(old_pos) = nation.military.civilians[civ_idx].position
+                    && let Some(old_tile) = game.world.hex_map.get_tile_mut(old_pos)
+                    && old_tile.assigned_civilian == Some(civilian_id)
+                {
+                    old_tile.assigned_civilian = None;
+                }
+                let Some(nation) = game.get_nation_mut(nation_id) else {
+                    return;
+                };
+                nation.military.civilians[civ_idx].deploy(coord);
+                nation.military.civilians[civ_idx].start_work(2);
+                if let Some(tile) = game.world.hex_map.get_tile_mut(coord) {
+                    tile.assigned_civilian = Some(civilian_id);
+                }
+            }
+            continue;
+        }
+
         let best_tile = improvable_tiles
             .iter()
             .enumerate()
@@ -559,7 +623,9 @@ mod tests {
         tile.set_resource(ResourceType::Grain);
         game.world.hex_map.set_tile(farm_coord, tile);
 
-        // Give AI a Farmer civilian (idle), clear pre-populated ones
+        // Give AI a Farmer civilian (idle), clear pre-populated ones, and
+        // research Seed Drill so the Farm tile is improvable per the tech
+        // tree's `EnableTerrainImprovement Farm L1` gate.
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.treasury = Money::dollars(500); // Not enough for hiring
         ai.military.civilians.clear();
@@ -568,6 +634,7 @@ mod tests {
             CivilianType::Farmer,
             NationId(2),
         ));
+        ai.researched_techs.push(crate::events::TechId(2)); // Seed Drill
 
         ai_manage_civilians(&mut game, NationId(2));
 

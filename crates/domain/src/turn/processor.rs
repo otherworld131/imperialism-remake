@@ -1536,6 +1536,24 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
             continue;
         }
 
+        // Pre-compute the tech-gated improvement cap before mut-borrowing the
+        // tile, so we can cap the improvement at what the nation's researched
+        // techs allow (manual p.27–28: e.g. Mountain mines need Square-Set
+        // Timbering for L2, Dynamite for L3).
+        let tech_capped_max: u8 = {
+            let researched: Vec<crate::events::TechId> = game
+                .get_nation(work.nation_id)
+                .map(|n| n.researched_techs.clone())
+                .unwrap_or_default();
+            let (terrain, resource) = match game.world.hex_map.get_tile(work.position) {
+                Some(t) => (t.terrain(), t.resource_deposit()),
+                None => (crate::types::TerrainType::Sea, None),
+            };
+            game.game_data
+                .tech_tree
+                .effective_max_improvement_level(terrain, resource, &researched)
+        };
+
         if let Some(tile) = game.world.hex_map.get_tile_mut(work.position) {
             // Release the civilian's tile slot so the engineer (or another
             // improver) can use it next turn.
@@ -1546,33 +1564,22 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
                 | CivilianType::Forester
                 | CivilianType::Miner
                 | CivilianType::Driller => {
-                    tile.improve();
+                    if tile.improvement_level() < tech_capped_max {
+                        tile.improve();
+                    }
                 }
                 CivilianType::Prospector => {
-                    // Reveal a resource deposit based on terrain, using coordinate-based
-                    // deterministic distribution matching the map generator's probabilities.
-                    if tile.terrain().can_have_deposits() && tile.resource_deposit().is_none() {
-                        // ~60% chance of finding something (40% find nothing)
-                        let hash = (work.position.q.wrapping_mul(73)
-                            ^ work.position.r.wrapping_mul(179))
-                            as u32;
-                        let roll = hash % 100;
-                        if roll < 40 {
-                            let deposit = match tile.terrain() {
-                                TerrainType::Hills | TerrainType::Mountain => {
-                                    let mineral_roll = (hash / 100) % 100;
-                                    match mineral_roll {
-                                        0..=34 => ResourceType::Coal,
-                                        35..=64 => ResourceType::Iron,
-                                        65..=84 => ResourceType::Gold,
-                                        _ => ResourceType::Gems,
-                                    }
-                                }
-                                _ => ResourceType::Oil,
-                            };
-                            tile.reveal_deposit(deposit);
-                        } else {
-                            tile.reveal_no_deposit();
+                    // The map generator pre-places hidden deposits at world-gen
+                    // time; the Prospector's job is to *reveal* what's there.
+                    // Skip tiles with a visible surface resource (e.g. Hills
+                    // with Wool): nothing hidden to find there.
+                    if tile.terrain().can_have_deposits()
+                        && !tile.is_prospected()
+                        && !tile.has_visible_resource()
+                    {
+                        match tile.resource_deposit() {
+                            Some(r) => tile.reveal_deposit(r),
+                            None => tile.reveal_no_deposit(),
                         }
                     }
                 }
@@ -6991,7 +6998,7 @@ mod tests {
         let cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
         hex_map.set_tile(capital_coord, cap_tile);
 
-        // 2 Coal tiles and 2 Iron tiles (BarrenHills with revealed deposits)
+        // 2 Coal tiles and 2 Iron tiles (Hills with revealed, mined deposits at L1)
         let coords: Vec<HexCoord> = (0..4).map(|i| HexCoord::new(5 + i, 0)).collect();
         for (i, &coord) in coords.iter().enumerate() {
             let mut tile = Tile::with_province(TerrainType::Hills, ProvinceId(2));
@@ -7000,6 +7007,8 @@ mod tests {
             } else {
                 tile.reveal_deposit(ResourceType::Iron);
             }
+            // Coal/Iron need level 1+ to produce (manual: Level 0 = 0).
+            tile.set_improvement_level(1);
             hex_map.set_tile(coord, tile);
         }
 
@@ -7062,19 +7071,19 @@ mod tests {
 
         let report = process_turn(&mut game);
 
-        // Coal: 2 tiles * 1 yield = 2, Iron: 2 tiles * 1 yield = 2
-        // Steel = min(2, 2) = 2
-        // Hardware = 2 / 2 = 1
+        // Coal: 2 tiles * 2 yield (L1) = 4, Iron: 2 tiles * 2 yield (L1) = 4
+        // Steel = min(4, 4) = 4
+        // Hardware = 4 / 2 = 2
         let nation = game.get_nation(NationId(1)).unwrap();
         assert_eq!(
             nation.material_amount(MaterialType::Steel),
-            2,
-            "Village should produce 2 steel from 2 coal + 2 iron"
+            4,
+            "Village should produce 4 steel from 4 coal + 4 iron"
         );
         assert_eq!(
             nation.goods_amount(GoodsType::Hardware),
-            1,
-            "Village should produce 1 hardware from 2 steel"
+            2,
+            "Village should produce 2 hardware from 4 steel"
         );
 
         let steel_output: u32 = report
@@ -7083,7 +7092,7 @@ mod tests {
             .filter(|(_, name, _)| name == "Steel")
             .map(|(_, _, q)| *q)
             .sum();
-        assert_eq!(steel_output, 2);
+        assert_eq!(steel_output, 4);
     }
 
     #[test]
