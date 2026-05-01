@@ -53,11 +53,11 @@ pub struct ReconResult {
 ///
 /// Landing force size = total arms_cost used to build all ships in the fleet.
 /// This matches the design: "Landing force size = total arms used to build all ships."
-pub fn beachhead_force_size(warships: &[Ship]) -> u32 {
+pub fn beachhead_force_size(warships: &[Ship], data: &crate::data::GameData) -> u32 {
     warships
         .iter()
         .filter(|s| s.ship_type.category() == ShipCategory::Warship)
-        .map(|s| s.ship_type.stats().arms_cost)
+        .map(|s| data.ship_stats(s.ship_type).arms_cost)
         .sum()
 }
 
@@ -165,7 +165,7 @@ pub(crate) fn move_warship_group_one_zone(
             .warships
             .iter()
             .filter(|ship| ship.sea_zone == Some(from_z))
-            .map(|ship| ship.ship_type.stats().speed)
+            .map(|ship| game.game_data.ship_stats(ship.ship_type).speed)
             .filter(|&speed| speed > 0)
             .min()
             .unwrap_or(0)
@@ -186,7 +186,7 @@ pub(crate) fn move_warship_group_one_zone(
                 .warships
                 .iter()
                 .filter(|ship| ship.sea_zone == Some(to_z))
-                .map(|ship| ship.ship_type.stats().speed)
+                .map(|ship| game.game_data.ship_stats(ship.ship_type).speed)
                 .filter(|&speed| speed > 0)
                 .min()
                 .unwrap_or(u32::MAX)
@@ -252,6 +252,7 @@ pub fn resolve_naval_battle(
     defender_ships: &[Ship],
     attacker_id: NationId,
     defender_id: NationId,
+    data: &crate::data::GameData,
 ) -> NavalBattleResult {
     let mut atk_ships: Vec<Ship> = attacker_ships.to_vec();
     let mut def_ships: Vec<Ship> = defender_ships.to_vec();
@@ -302,11 +303,11 @@ pub fn resolve_naval_battle(
         // Calculate total firepower for each side
         let atk_fp: u32 = atk_ships
             .iter()
-            .map(|s| s.ship_type.stats().firepower)
+            .map(|s| data.ship_stats(s.ship_type).firepower)
             .sum();
         let def_fp: u32 = def_ships
             .iter()
-            .map(|s| s.ship_type.stats().firepower)
+            .map(|s| data.ship_stats(s.ship_type).firepower)
             .sum();
 
         // Attacker deals damage to defender ships (weakest hull first)
@@ -318,7 +319,7 @@ pub fn resolve_naval_battle(
             let remainder = atk_fp % n;
             for (i, ship) in def_ships.iter_mut().enumerate() {
                 let damage_per_ship = base_damage + if (i as u32) < remainder { 1 } else { 0 };
-                let armor = ship.ship_type.stats().armor;
+                let armor = data.ship_stats(ship.ship_type).armor;
                 let effective_damage = damage_per_ship.saturating_sub(armor / 5);
                 // Always deal at least 1 damage if there is any firepower
                 let actual_damage = if atk_fp > 0 && effective_damage == 0 {
@@ -338,7 +339,7 @@ pub fn resolve_naval_battle(
             let remainder = def_fp % n;
             for (i, ship) in atk_ships.iter_mut().enumerate() {
                 let damage_per_ship = base_damage + if (i as u32) < remainder { 1 } else { 0 };
-                let armor = ship.ship_type.stats().armor;
+                let armor = data.ship_stats(ship.ship_type).armor;
                 let effective_damage = damage_per_ship.saturating_sub(armor / 5);
                 let actual_damage = if def_fp > 0 && effective_damage == 0 {
                     1
@@ -407,69 +408,81 @@ pub fn calculate_blockade_effect(merchant_cargo: u32, enemy_warship_count: u32) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::GameData;
     use crate::map::UnitId;
     use crate::military::ships::Ship;
 
+    fn test_data() -> GameData {
+        GameData::default()
+    }
+
     fn make_ship(id: u32, ship_type: ShipType, owner: NationId) -> Ship {
-        Ship::new(UnitId(id), ship_type, owner)
+        let data = test_data();
+        Ship::with_data(UnitId(id), ship_type, owner, &data)
     }
 
     // ── Naval combat tests ──────────────────────────────────────
 
     #[test]
     fn attacker_with_more_firepower_wins() {
+        let data = test_data();
         let atk = vec![
             make_ship(1, ShipType::ShipOfTheLine, NationId(1)),
             make_ship(2, ShipType::ShipOfTheLine, NationId(1)),
         ];
         let def = vec![make_ship(10, ShipType::Frigate, NationId(2))];
 
-        let result = resolve_naval_battle(&atk, &def, NationId(1), NationId(2));
+        let result = resolve_naval_battle(&atk, &def, NationId(1), NationId(2), &data);
         assert!(result.attacker_won);
         assert!(!result.defender_ships_lost.is_empty());
     }
 
     #[test]
     fn defender_with_more_firepower_wins() {
+        let data = test_data();
         let atk = vec![make_ship(1, ShipType::Frigate, NationId(1))];
         let def = vec![
             make_ship(10, ShipType::ShipOfTheLine, NationId(2)),
             make_ship(11, ShipType::ShipOfTheLine, NationId(2)),
         ];
 
-        let result = resolve_naval_battle(&atk, &def, NationId(1), NationId(2));
+        let result = resolve_naval_battle(&atk, &def, NationId(1), NationId(2), &data);
         assert!(!result.attacker_won);
         assert!(!result.attacker_ships_lost.is_empty());
     }
 
     #[test]
     fn empty_attacker_loses() {
+        let data = test_data();
         let atk: Vec<Ship> = vec![];
         let def = vec![make_ship(10, ShipType::Frigate, NationId(2))];
 
-        let result = resolve_naval_battle(&atk, &def, NationId(1), NationId(2));
+        let result = resolve_naval_battle(&atk, &def, NationId(1), NationId(2), &data);
         assert!(!result.attacker_won);
         assert!(result.attacker_survivors.is_empty());
     }
 
     #[test]
     fn empty_defender_loses() {
+        let data = test_data();
         let atk = vec![make_ship(1, ShipType::Frigate, NationId(1))];
         let def: Vec<Ship> = vec![];
 
-        let result = resolve_naval_battle(&atk, &def, NationId(1), NationId(2));
+        let result = resolve_naval_battle(&atk, &def, NationId(1), NationId(2), &data);
         assert!(result.attacker_won);
         assert!(result.defender_survivors.is_empty());
     }
 
     #[test]
     fn both_empty_defender_wins_by_default() {
-        let result = resolve_naval_battle(&[], &[], NationId(1), NationId(2));
+        let data = test_data();
+        let result = resolve_naval_battle(&[], &[], NationId(1), NationId(2), &data);
         assert!(!result.attacker_won);
     }
 
     #[test]
     fn casualties_tracked() {
+        let data = test_data();
         let atk = vec![
             make_ship(1, ShipType::ShipOfTheLine, NationId(1)),
             make_ship(2, ShipType::ShipOfTheLine, NationId(1)),
@@ -477,7 +490,7 @@ mod tests {
         ];
         let def = vec![make_ship(10, ShipType::Frigate, NationId(2))];
 
-        let result = resolve_naval_battle(&atk, &def, NationId(1), NationId(2));
+        let result = resolve_naval_battle(&atk, &def, NationId(1), NationId(2), &data);
         assert!(result.attacker_won);
         // The single frigate should be destroyed
         assert!(
@@ -496,6 +509,7 @@ mod tests {
 
     #[test]
     fn equal_forces_battle_resolves() {
+        let data = test_data();
         let atk = vec![
             make_ship(1, ShipType::Frigate, NationId(1)),
             make_ship(2, ShipType::Frigate, NationId(1)),
@@ -505,7 +519,7 @@ mod tests {
             make_ship(11, ShipType::Frigate, NationId(2)),
         ];
 
-        let result = resolve_naval_battle(&atk, &def, NationId(1), NationId(2));
+        let result = resolve_naval_battle(&atk, &def, NationId(1), NationId(2), &data);
         // Both sides equally matched - result is deterministic but either side could win
         // Just verify the battle resolved without panic
         let total_atk = result.attacker_ships_lost.len() + result.attacker_survivors.len();
@@ -543,26 +557,29 @@ mod tests {
 
     #[test]
     fn beachhead_force_size_empty() {
-        assert_eq!(beachhead_force_size(&[]), 0);
+        let data = test_data();
+        assert_eq!(beachhead_force_size(&[], &data), 0);
     }
 
     #[test]
     fn beachhead_force_size_warships_only() {
+        let data = test_data();
         let fleet = vec![
             make_ship(1, ShipType::Frigate, NationId(1)), // arms_cost = 2
             make_ship(2, ShipType::Frigate, NationId(1)), // arms_cost = 2
             make_ship(3, ShipType::ShipOfTheLine, NationId(1)), // arms_cost = 5
         ];
-        assert_eq!(beachhead_force_size(&fleet), 2 + 2 + 5);
+        assert_eq!(beachhead_force_size(&fleet, &data), 2 + 2 + 5);
     }
 
     #[test]
     fn beachhead_force_size_ignores_merchants() {
+        let data = test_data();
         let fleet = vec![
             make_ship(1, ShipType::Frigate, NationId(1)), // arms_cost = 2
             make_ship(2, ShipType::Trader, NationId(1)),  // merchant, arms_cost = 0 but filtered
         ];
-        assert_eq!(beachhead_force_size(&fleet), 2);
+        assert_eq!(beachhead_force_size(&fleet, &data), 2);
     }
 
     // ── Escort protection ──────────────────────────────────────

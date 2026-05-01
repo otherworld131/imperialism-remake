@@ -465,7 +465,7 @@ pub(crate) fn run_batch(n: u32, verbose_cashflow: bool) {
         let mut best_name = None;
         let mut best_score = 0u32;
         for nation in game.great_powers() {
-            let score = calculate_score(nation);
+            let score = calculate_score(nation, &game.game_data);
             final_scores.insert(nation.name.clone(), score.total);
             if score.total > best_score {
                 best_score = score.total;
@@ -862,7 +862,7 @@ pub(crate) fn cmd_auto(game: &mut GameState, turns: u32) {
         let gp_scores: Vec<(String, u32)> = game
             .great_powers()
             .iter()
-            .map(|gp| (gp.name.clone(), calculate_score(gp).total))
+            .map(|gp| (gp.name.clone(), calculate_score(gp, &game.game_data).total))
             .collect();
         for (name, total) in gp_scores {
             game.archive.high_scores.push((name, total, date_str.clone()));
@@ -883,11 +883,11 @@ pub(crate) fn cmd_auto(game: &mut GameState, turns: u32) {
     let Some(player) = human_player(game) else {
         return;
     };
-    let score = calculate_score(player);
+    let score = calculate_score(player, &game.game_data);
     let mut all_scores: Vec<_> = game
         .great_powers()
         .iter()
-        .map(|n| (n.id, calculate_score(n).total))
+        .map(|n| (n.id, calculate_score(n, &game.game_data).total))
         .collect();
     all_scores.sort_by(|a, b| b.1.cmp(&a.1));
     let rank = all_scores

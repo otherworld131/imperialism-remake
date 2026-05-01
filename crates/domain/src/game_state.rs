@@ -717,18 +717,20 @@ fn new_game_inner(
         }
 
         // Starting merchant fleet: 1 Trader for each Great Power
-        let trader = Ship::new(
+        let trader = Ship::with_data(
             UnitId(1_500_000 + i as u32),
             ShipType::Trader,
             setup.nation_id,
+            &game_data,
         );
         nation.military.merchant_fleet.push(trader);
 
         // Starting warship: 1 Frigate for each Great Power
-        let frigate = Ship::new(
+        let frigate = Ship::with_data(
             UnitId(2_500_000 + i as u32),
             ShipType::Frigate,
             setup.nation_id,
+            &game_data,
         );
         nation.military.warships.push(frigate);
 
@@ -1933,7 +1935,7 @@ mod tests {
         assert!(gs.is_game_over());
 
         // Record a high score
-        let score = crate::turn::calculate_score(gs.get_nation(NationId(1)).unwrap());
+        let score = crate::turn::calculate_score(gs.get_nation(NationId(1)).unwrap(), &gs.game_data);
         let date_str = format!("{} Q{}", gs.turn.year(), gs.turn.quarter());
         gs.archive.high_scores
             .push(("France".to_string(), score.total, date_str));

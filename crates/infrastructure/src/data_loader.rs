@@ -405,14 +405,29 @@ mod tests {
     }
 
     #[test]
-    fn ron_ship_stats_match_hardcoded() {
+    fn ron_ship_stats_define_all_thirteen_types() {
         let ron_content = std::fs::read_to_string("../../data/definitions/ships.ron").unwrap();
         let from_ron = load_ship_stats(&ron_content).unwrap();
         assert_eq!(from_ron.len(), 13);
-        for (ship_type, ron_stats) in &from_ron {
-            let hardcoded = ship_type.stats();
-            assert_eq!(ron_stats.firepower, hardcoded.firepower, "Firepower mismatch for {:?}", ship_type);
-            assert_eq!(ron_stats.hull, hardcoded.hull, "Hull mismatch for {:?}", ship_type);
+        for ship_type in [
+            ShipType::Trader,
+            ShipType::Indiaman,
+            ShipType::Clipper,
+            ShipType::Paddlewheeler,
+            ShipType::Freighter,
+            ShipType::Frigate,
+            ShipType::ShipOfTheLine,
+            ShipType::Raider,
+            ShipType::Ironclad,
+            ShipType::AdvancedIronclad,
+            ShipType::ArmouredCruiser,
+            ShipType::Dreadnought,
+            ShipType::Battlecruiser,
+        ] {
+            let stats = from_ron.get(&ship_type)
+                .unwrap_or_else(|| panic!("ships.ron must define {:?}", ship_type));
+            assert!(stats.hull > 0, "{:?} must have positive hull", ship_type);
+            assert_eq!(ship_type.category(), stats.category, "category mismatch for {:?}", ship_type);
         }
     }
 

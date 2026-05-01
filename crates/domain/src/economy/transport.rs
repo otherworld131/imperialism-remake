@@ -325,8 +325,8 @@ pub fn rail_transport_capacity(freight_cars: u32) -> u32 {
 
 /// Calculate amphibious landing force size.
 /// Force size = total arms_cost used to build all ships in the fleet.
-pub fn amphibious_force_size(ships: &[Ship]) -> u32 {
-    ships.iter().map(|s| s.ship_type.stats().arms_cost).sum()
+pub fn amphibious_force_size(ships: &[Ship], data: &crate::data::GameData) -> u32 {
+    ships.iter().map(|s| data.ship_stats(s.ship_type).arms_cost).sum()
 }
 
 /// Calculate the transport size of an army unit (= arms required to build it).
@@ -601,8 +601,9 @@ mod tests {
 
     #[test]
     fn amphibious_force_size_empty_fleet() {
+        let data = crate::data::GameData::default();
         let ships: Vec<Ship> = vec![];
-        assert_eq!(amphibious_force_size(&ships), 0);
+        assert_eq!(amphibious_force_size(&ships, &data), 0);
     }
 
     #[test]
@@ -610,11 +611,12 @@ mod tests {
         use crate::map::UnitId;
         use crate::military::ships::ShipType;
 
+        let data = crate::data::GameData::default();
         // 4 frigates, each with arms_cost = 2
         let ships: Vec<Ship> = (0..4)
-            .map(|i| Ship::new(UnitId(i), ShipType::Frigate, NationId(1)))
+            .map(|i| Ship::with_data(UnitId(i), ShipType::Frigate, NationId(1), &data))
             .collect();
-        assert_eq!(amphibious_force_size(&ships), 8);
+        assert_eq!(amphibious_force_size(&ships, &data), 8);
     }
 
     #[test]
@@ -622,13 +624,14 @@ mod tests {
         use crate::map::UnitId;
         use crate::military::ships::ShipType;
 
+        let data = crate::data::GameData::default();
         // Mix of warships with different arms_cost values
         let ships = vec![
-            Ship::new(UnitId(1), ShipType::Frigate, NationId(1)), // arms_cost = 2
-            Ship::new(UnitId(2), ShipType::ShipOfTheLine, NationId(1)), // arms_cost = 5
-            Ship::new(UnitId(3), ShipType::Dreadnought, NationId(1)), // arms_cost = 8
+            Ship::with_data(UnitId(1), ShipType::Frigate, NationId(1), &data), // arms_cost = 2
+            Ship::with_data(UnitId(2), ShipType::ShipOfTheLine, NationId(1), &data), // arms_cost = 5
+            Ship::with_data(UnitId(3), ShipType::Dreadnought, NationId(1), &data), // arms_cost = 8
         ];
-        assert_eq!(amphibious_force_size(&ships), 2 + 5 + 8);
+        assert_eq!(amphibious_force_size(&ships, &data), 2 + 5 + 8);
     }
 
     #[test]
@@ -636,11 +639,12 @@ mod tests {
         use crate::map::UnitId;
         use crate::military::ships::ShipType;
 
+        let data = crate::data::GameData::default();
         let ships = vec![
-            Ship::new(UnitId(1), ShipType::Trader, NationId(1)), // arms_cost = 0
-            Ship::new(UnitId(2), ShipType::Clipper, NationId(1)), // arms_cost = 0
+            Ship::with_data(UnitId(1), ShipType::Trader, NationId(1), &data), // arms_cost = 0
+            Ship::with_data(UnitId(2), ShipType::Clipper, NationId(1), &data), // arms_cost = 0
         ];
-        assert_eq!(amphibious_force_size(&ships), 0);
+        assert_eq!(amphibious_force_size(&ships, &data), 0);
     }
 
     // ── Army transport size ─────────────────────────────────────

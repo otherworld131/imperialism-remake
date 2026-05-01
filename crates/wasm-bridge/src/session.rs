@@ -507,7 +507,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
                 Ok(s) => s,
                 Err(_) => return CommandResult::error("unknown ship type"),
             };
-            let stats = st.stats();
+            let stats = game.game_data.ship_stats(st).clone();
             // Check material costs before building
             {
                 use domain::types::{MaterialType, ResourceType};
@@ -547,8 +547,9 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
             // Determine home sea zone for the new ship
             let home_zone = find_nation_home_sea_zone(game, nation_id);
             let id = game.alloc_unit_id();
+            let initial_hull = game.game_data.ship_stats(st).hull;
             let nation = game.get_nation_mut(nation_id).unwrap();
-            let mut ship = domain::military::ships::Ship::new(id, st, nation_id);
+            let mut ship = domain::military::ships::Ship::new(id, st, nation_id, initial_hull);
             ship.sea_zone = home_zone;
             match st.category() {
                 ShipCategory::Merchant => nation.military.merchant_fleet.push(ship),
@@ -600,7 +601,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
                     // First move from this zone: budget = min speed of ships in zone
                     nation.military.warships.iter()
                         .filter(|s| s.sea_zone == Some(from_z))
-                        .map(|s| s.ship_type.stats().speed)
+                        .map(|s| game.game_data.ship_stats(s.ship_type).speed)
                         .filter(|&sp| sp > 0)
                         .min()
                         .unwrap_or(0)
@@ -613,16 +614,16 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
             // Snapshot destination baseline BEFORE moving ships so we measure
             // only the pre-existing fleet in to_z (not the incoming ships).
             let remaining = budget - 1;
+            let dest_min_speed: Option<u32> = game.get_nation(nid).and_then(|n| {
+                n.military.warships.iter()
+                    .filter(|s| s.sea_zone == Some(to_z))
+                    .map(|s| game.game_data.ship_stats(s.ship_type).speed)
+                    .filter(|&sp| sp > 0)
+                    .min()
+            });
             let nation = game.get_nation_mut(nid).unwrap();
             let dest_budget = nation.military.fleet_moves_remaining.get(&to_z).copied()
-                .unwrap_or_else(|| {
-                    nation.military.warships.iter()
-                        .filter(|s| s.sea_zone == Some(to_z))
-                        .map(|s| s.ship_type.stats().speed)
-                        .filter(|&sp| sp > 0)
-                        .min()
-                        .unwrap_or(u32::MAX)
-                });
+                .unwrap_or_else(|| dest_min_speed.unwrap_or(u32::MAX));
 
             // Move all warships from from_zone to to_zone
             for ship in &mut nation.military.warships {
@@ -1158,7 +1159,7 @@ mod tests {
         let nid = game.human_player_nation;
 
         // Add a Clipper (speed 3) in zone_a
-        let mut ship = Ship::new(UnitId(9990), ShipType::Clipper, nid);
+        let mut ship = Ship::with_data(UnitId(9990), ShipType::Clipper, nid, &game.game_data);
         ship.sea_zone = Some(zone_a);
         game.get_nation_mut(nid).unwrap().military.warships.push(ship);
 
@@ -1196,9 +1197,9 @@ mod tests {
         let (mut game, zone_a, zone_b) = setup_two_zone_game();
         let nid = game.human_player_nation;
 
-        let mut s1 = Ship::new(UnitId(9991), ShipType::Clipper, nid); // speed 3
+        let mut s1 = Ship::with_data(UnitId(9991), ShipType::Clipper, nid, &game.game_data); // speed 3
         s1.sea_zone = Some(zone_a);
-        let mut s2 = Ship::new(UnitId(9992), ShipType::Clipper, nid);
+        let mut s2 = Ship::with_data(UnitId(9992), ShipType::Clipper, nid, &game.game_data);
         s2.sea_zone = Some(zone_b);
         game.get_nation_mut(nid).unwrap().military.warships.extend([s1, s2]);
 

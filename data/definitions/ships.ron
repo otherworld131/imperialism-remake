@@ -1,8 +1,6 @@
-// Ship definitions — data-driven, moddable
-// This file defines all ship types (merchant and warship) and their stats.
-//
-// Currently hardcoded in domain/src/military/ships.rs; this file serves as
-// the data-driven reference for future RON-based loading.
+// Ship definitions — data-driven, moddable.
+// Source of truth for ship stats at runtime; loaded by infrastructure into
+// GameData.ship_stats and looked up via game_data.ship_stats(ship_type).
 
 (
     ships: [
@@ -47,56 +45,56 @@
         (
             name: "Frigate",
             category: "Warship",
-            firepower: 3, range: 5, armor: 10, hull: 35, speed: 4, cargo: 0,
+            firepower: 3, range: 5, armor: 10, hull: 35, speed: 2, cargo: 0,
             fabric_cost: 2, lumber_cost: 5, arms_cost: 2, steel_cost: 0, coal_cost: 0,
             prerequisite_tech: None,
         ),
         (
             name: "Ship-of-the-Line",
             category: "Warship",
-            firepower: 6, range: 6, armor: 20, hull: 65, speed: 3, cargo: 0,
+            firepower: 6, range: 6, armor: 20, hull: 65, speed: 2, cargo: 0,
             fabric_cost: 3, lumber_cost: 8, arms_cost: 5, steel_cost: 0, coal_cost: 0,
             prerequisite_tech: None,
         ),
         (
             name: "Raider",
             category: "Warship",
-            firepower: 3, range: 7, armor: 20, hull: 30, speed: 7, cargo: 0,
+            firepower: 3, range: 7, armor: 20, hull: 30, speed: 3, cargo: 0,
             fabric_cost: 0, lumber_cost: 6, arms_cost: 3, steel_cost: 0, coal_cost: 10,
             prerequisite_tech: Some("Paddlewheels"),
         ),
         (
             name: "Ironclad",
             category: "Warship",
-            firepower: 8, range: 7, armor: 30, hull: 50, speed: 5, cargo: 0,
+            firepower: 8, range: 7, armor: 30, hull: 50, speed: 3, cargo: 0,
             fabric_cost: 0, lumber_cost: 6, arms_cost: 4, steel_cost: 3, coal_cost: 12,
             prerequisite_tech: Some("Advanced Iron Working"),
         ),
         (
             name: "Advanced Ironclad",
             category: "Warship",
-            firepower: 10, range: 8, armor: 40, hull: 60, speed: 5, cargo: 0,
+            firepower: 10, range: 8, armor: 40, hull: 60, speed: 3, cargo: 0,
             fabric_cost: 0, lumber_cost: 6, arms_cost: 5, steel_cost: 4, coal_cost: 15,
             prerequisite_tech: Some("Steel Armour Plate"),
         ),
         (
             name: "Armoured Cruiser",
             category: "Warship",
-            firepower: 8, range: 9, armor: 35, hull: 55, speed: 7, cargo: 0,
+            firepower: 8, range: 9, armor: 35, hull: 55, speed: 3, cargo: 0,
             fabric_cost: 0, lumber_cost: 7, arms_cost: 4, steel_cost: 5, coal_cost: 15,
             prerequisite_tech: Some("Marine Engineering"),
         ),
         (
             name: "Dreadnought",
             category: "Warship",
-            firepower: 15, range: 10, armor: 50, hull: 80, speed: 6, cargo: 0,
+            firepower: 15, range: 10, armor: 50, hull: 80, speed: 3, cargo: 0,
             fabric_cost: 0, lumber_cost: 10, arms_cost: 8, steel_cost: 8, coal_cost: 20,
             prerequisite_tech: Some("Improved Range-Finding"),
         ),
         (
             name: "Battlecruiser",
             category: "Warship",
-            firepower: 12, range: 10, armor: 40, hull: 65, speed: 8, cargo: 0,
+            firepower: 12, range: 10, armor: 40, hull: 65, speed: 4, cargo: 0,
             fabric_cost: 0, lumber_cost: 8, arms_cost: 6, steel_cost: 6, coal_cost: 18,
             prerequisite_tech: Some("Improved Range-Finding"),
         ),

@@ -227,19 +227,20 @@ fn award_first_colony_clippers(game: &mut GameState, nation_id: NationId, report
     if already_has_colony {
         return;
     }
+    use crate::map::UnitId;
+    use crate::military::ships::{Ship, ShipType};
+    let clipper_hull = game.game_data.ship_stats(ShipType::Clipper).hull;
     let Some(nation) = game.get_nation_mut(nation_id) else {
         return;
     };
-    use crate::map::UnitId;
-    use crate::military::ships::{Ship, ShipType};
     nation.military.has_colony = true;
     let base_id = 5_000_000 + nation.id.0 * 100;
     nation
         .military.merchant_fleet
-        .push(Ship::new(UnitId(base_id + 1), ShipType::Clipper, nation_id));
+        .push(Ship::new(UnitId(base_id + 1), ShipType::Clipper, nation_id, clipper_hull));
     nation
         .military.merchant_fleet
-        .push(Ship::new(UnitId(base_id + 2), ShipType::Clipper, nation_id));
+        .push(Ship::new(UnitId(base_id + 2), ShipType::Clipper, nation_id, clipper_hull));
     let name = nation.name.clone();
     report.rewards_earned.push((
         nation_id,
@@ -2680,7 +2681,7 @@ fn resolve_combat(
                     .filter(|s| s.operation == Some(NavalOperation::Beachhead(province_id)))
                     .cloned()
                     .collect();
-                crate::military::naval::beachhead_force_size(&assigned_ships)
+                crate::military::naval::beachhead_force_size(&assigned_ships, &game.game_data)
             })
             .unwrap_or(0) as usize;
 
@@ -4627,7 +4628,7 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
             continue;
         }
 
-        let result = resolve_naval_battle(&atk_ships, &def_ships, attacker_id, defender_id);
+        let result = resolve_naval_battle(&atk_ships, &def_ships, attacker_id, defender_id, &game.game_data);
 
         let atk_name = game
             .get_nation(attacker_id)
@@ -5168,7 +5169,7 @@ fn calculate_scores(game: &GameState, report: &mut TurnReport) {
         .iter()
         .filter(|n| n.is_great_power())
         .map(|n| {
-            let s = calculate_score(n);
+            let s = calculate_score(n, &game.game_data);
             (n.id, n.name.clone(), s.total)
         })
         .collect();
@@ -7901,7 +7902,7 @@ mod tests {
         gp2.economy.treasury = Money::dollars(1000);
         for i in 0..4 {
             gp2.military.warships
-                .push(Ship::new(UnitId(20 + i), ShipType::Frigate, NationId(2)));
+                .push(Ship::with_data(UnitId(20 + i), ShipType::Frigate, NationId(2), &game.game_data));
         }
         // Give gp2 a real province so it's "active" in the blockade sweep.
         let extra_province = Province::new(
@@ -7917,10 +7918,11 @@ mod tests {
         game.world.nations.push(gp2);
 
         // GP1 gets a merchant fleet so there's cargo to blockade.
+        let clipper_hull = game.game_data.ship_stats(ShipType::Clipper).hull;
         let gp1 = game.get_nation_mut(NationId(1)).unwrap();
         for i in 0..3 {
             gp1.military.merchant_fleet
-                .push(Ship::new(UnitId(100 + i), ShipType::Clipper, NationId(1)));
+                .push(Ship::new(UnitId(100 + i), ShipType::Clipper, NationId(1), clipper_hull));
         }
 
         game.world.diplomacy
@@ -7932,7 +7934,7 @@ mod tests {
 
         // Declaration turn: compute_blockade_capacity must return the
         // victim's raw cargo (no reduction).
-        let raw_cargo = game.get_nation(NationId(1)).unwrap().total_cargo_capacity();
+        let raw_cargo = game.get_nation(NationId(1)).unwrap().total_cargo_capacity(&game.game_data);
         assert!(
             raw_cargo > 0,
             "victim must have cargo for this test to be meaningful"
@@ -8563,6 +8565,7 @@ mod tests {
             crate::map::UnitId(999),
             ShipType::Trader,
             NationId(1),
+            25,
         ));
 
         let mn = Nation::new(
@@ -8683,6 +8686,7 @@ mod tests {
             crate::map::UnitId(999),
             ShipType::Trader,
             NationId(1),
+            25,
         ));
 
         let mn = Nation::new(
@@ -10130,6 +10134,7 @@ mod tests {
                 UnitId(9000 + i),
                 ShipType::ShipOfTheLine,
                 NationId(2),
+                65,
             ));
         }
 
@@ -10140,6 +10145,7 @@ mod tests {
                 UnitId(8000 + i),
                 ShipType::Clipper,
                 NationId(1),
+                25,
             ));
         }
 
@@ -10163,7 +10169,7 @@ mod tests {
         let capacity = compute_blockade_capacity(&game);
 
         // Without blockade: raw cargo = 4 * clipper_capacity
-        let raw_cargo = game.get_nation(NationId(1)).unwrap().total_cargo_capacity();
+        let raw_cargo = game.get_nation(NationId(1)).unwrap().total_cargo_capacity(&game.game_data);
         let effective = capacity.get(&NationId(1)).copied().unwrap_or(raw_cargo);
 
         // Blockade should reduce capacity when enemy has warships
@@ -10197,6 +10203,7 @@ mod tests {
                 UnitId(9000 + i),
                 ShipType::ShipOfTheLine,
                 NationId(2),
+                65,
             ));
         }
 
@@ -10206,6 +10213,7 @@ mod tests {
                 UnitId(8000 + i),
                 ShipType::Clipper,
                 NationId(1),
+                25,
             ));
         }
 
@@ -10213,7 +10221,7 @@ mod tests {
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let capacity = compute_blockade_capacity(&game);
-        let raw_cargo = game.get_nation(NationId(1)).unwrap().total_cargo_capacity();
+        let raw_cargo = game.get_nation(NationId(1)).unwrap().total_cargo_capacity(&game.game_data);
         let effective = capacity.get(&NationId(1)).copied().unwrap_or(raw_cargo);
 
         // Anarchic nation's warships should NOT reduce trade
@@ -10250,6 +10258,7 @@ mod tests {
                 UnitId(9000 + i),
                 ShipType::ShipOfTheLine,
                 NationId(2),
+                65,
             ));
             // sea_zone stays None by default
         }
@@ -10260,6 +10269,7 @@ mod tests {
                 UnitId(8000 + i),
                 ShipType::Clipper,
                 NationId(1),
+                25,
             ));
         }
 
@@ -10280,7 +10290,7 @@ mod tests {
         }];
 
         let capacity = compute_blockade_capacity(&game);
-        let raw_cargo = game.get_nation(NationId(1)).unwrap().total_cargo_capacity();
+        let raw_cargo = game.get_nation(NationId(1)).unwrap().total_cargo_capacity(&game.game_data);
         let effective = capacity.get(&NationId(1)).copied().unwrap_or(raw_cargo);
 
         assert_eq!(
@@ -10333,7 +10343,8 @@ mod tests {
             .economy.buildings
             .push(Building::new(BuildingType::SteelMill, 1)); // building_score = 2 * 10 = 20
 
-        let score = calculate_score(&nation);
+        let data = crate::data::GameData::default();
+        let score = calculate_score(&nation, &data);
 
         assert_eq!(score.tech_score, 60, "2 techs * 30 = 60");
         assert_eq!(
@@ -12135,7 +12146,7 @@ mod tests {
             ));
         }
         // ShipOfTheLine has arms_cost = 5, enough beachhead capacity for 4 Guards
-        let mut ship = Ship::new(UnitId(500), ShipType::ShipOfTheLine, NationId(1));
+        let mut ship = Ship::new(UnitId(500), ShipType::ShipOfTheLine, NationId(1), 65);
         ship.operation = Some(NavalOperation::Beachhead(ProvinceId(2)));
         nation1.military.warships.push(ship);
 
@@ -12403,7 +12414,7 @@ mod tests {
 
         // ShipOfTheLine: arms_cost = 5 → beachhead_cap = 5 (room for 3 P1 + 2 P3 = 5 but
         // land cohort doesn't consume beachhead, so naval cap only affects P1 units: 3 <= 5)
-        let mut ship = Ship::new(UnitId(500), ShipType::ShipOfTheLine, NationId(1));
+        let mut ship = Ship::new(UnitId(500), ShipType::ShipOfTheLine, NationId(1), 65);
         ship.operation = Some(NavalOperation::Beachhead(ProvinceId(2)));
         nation1.military.warships.push(ship);
 
@@ -13613,7 +13624,7 @@ mod tests {
             ));
         }
         // Frigate: arms_cost = 2 → beachhead_cap = 2 (forces the cap to bite).
-        let mut ship = Ship::new(UnitId(500), ShipType::Frigate, NationId(1));
+        let mut ship = Ship::new(UnitId(500), ShipType::Frigate, NationId(1), 35);
         ship.operation = Some(NavalOperation::Beachhead(ProvinceId(3)));
         attacker.military.warships.push(ship);
 

@@ -121,7 +121,7 @@ fn weights_from_lua(cfg: Option<&LuaAiConfig>) -> AssessmentWeights {
 /// Compute a nation's military score (land firepower + naval firepower scaled).
 pub fn nation_military_score(game: &GameState, nation_id: NationId, naval_weight: f64) -> f64 {
     game.get_nation(nation_id)
-        .map(|n| n.total_military_firepower() + n.total_naval_firepower() as f64 * naval_weight)
+        .map(|n| n.total_military_firepower() + n.total_naval_firepower(&game.game_data) as f64 * naval_weight)
         .unwrap_or(0.0)
 }
 

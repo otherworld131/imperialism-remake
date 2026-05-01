@@ -22,7 +22,7 @@ use super::common::{AiPersonality, PersonalityConfig, get_personality};
 /// is now driven by the scored-spending alternation (backlog climbs each
 /// turn navy is skipped) and gated by material availability only.
 pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bool {
-    let costs = ShipType::Frigate.stats();
+    let costs = game.game_data.ship_stats(ShipType::Frigate).clone();
     let fabric_need = costs.fabric_cost;
     let lumber_need = costs.lumber_cost;
     let arms_need = costs.arms_cost;
@@ -75,7 +75,7 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
 
     if fabric_have >= fabric_need && lumber_have >= lumber_need && arms_have >= arms_need {
         let uid = game.alloc_unit_id();
-        let ship = Ship::new(uid, ShipType::Frigate, nation_id);
+        let ship = Ship::with_data(uid, ShipType::Frigate, nation_id, &game.game_data);
         let Some(nation) = game.get_nation_mut(nation_id) else {
             return false;
         };
@@ -100,7 +100,7 @@ pub(crate) fn can_build_warship(game: &GameState, nation_id: NationId) -> bool {
     let Some(nation) = game.get_nation(nation_id) else {
         return false;
     };
-    let costs = ShipType::Frigate.stats();
+    let costs = game.game_data.ship_stats(ShipType::Frigate);
     let fabric_have = nation.material_amount(MaterialType::Fabric);
     let lumber_have = nation.material_amount(MaterialType::Lumber);
     let arms_have = nation.material_amount(MaterialType::Arms);
@@ -147,7 +147,7 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
     // For non-Economic with low treasury, only build if cargo capacity is 0
     if personality != AiPersonality::Economic
         && treasury <= Money::dollars(5_000)
-        && nation.total_cargo_capacity() > 0
+        && nation.total_cargo_capacity(&game.game_data) > 0
     {
         return;
     }
@@ -162,7 +162,7 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
     // Try to build Trader (2 fabric + 4 lumber)
     if fabric_have >= 2 && lumber_have >= 4 {
         let uid = game.alloc_unit_id();
-        let ship = Ship::new(uid, ShipType::Trader, nation_id);
+        let ship = Ship::with_data(uid, ShipType::Trader, nation_id, &game.game_data);
         let Some(nation) = game.get_nation_mut(nation_id) else {
             return;
         };
@@ -400,7 +400,7 @@ pub fn ai_naval_strategy(
         None => return,
     };
 
-    let our_naval_fp = nation.total_naval_firepower();
+    let our_naval_fp = nation.total_naval_firepower(&game.game_data);
     let nation_name = nation.name.clone();
 
     if game.ai_debug {
@@ -443,7 +443,7 @@ pub fn ai_naval_strategy(
     let max_enemy_naval_fp: u32 = enemies
         .iter()
         .filter_map(|&eid| game.get_nation(eid))
-        .map(|n| n.total_naval_firepower())
+        .map(|n| n.total_naval_firepower(&game.game_data))
         .max()
         .unwrap_or(0);
 
@@ -818,10 +818,10 @@ mod tests {
         let minor = game.get_nation_mut(NationId(3)).unwrap();
         minor
             .military.warships
-            .push(Ship::new(UnitId(50001), ShipType::Frigate, NationId(3)));
+            .push(Ship::new(UnitId(50001), ShipType::Frigate, NationId(3), 35));
         minor
             .military.warships
-            .push(Ship::new(UnitId(50002), ShipType::Frigate, NationId(3)));
+            .push(Ship::new(UnitId(50002), ShipType::Frigate, NationId(3), 35));
 
         // Give AI materials to build a warship (2 fabric + 5 lumber + 2 arms)
         let ai = game.get_nation_mut(NationId(2)).unwrap();
@@ -885,7 +885,7 @@ mod tests {
         }
         for i in 0..3 {
             ai.military.warships
-                .push(Ship::new(UnitId(9200 + i), ShipType::Frigate, NationId(2)));
+                .push(Ship::new(UnitId(9200 + i), ShipType::Frigate, NationId(2), 35));
         }
         // Enemy has no warships and a small garrison (garrison_count=3 by default).
 
@@ -947,7 +947,7 @@ mod tests {
         }
         for i in 0..3 {
             ai.military.warships
-                .push(Ship::new(UnitId(9600 + i), ShipType::Frigate, NationId(2)));
+                .push(Ship::new(UnitId(9600 + i), ShipType::Frigate, NationId(2), 35));
         }
         // Enemy stacked with a fat garrison already (20). Attacker army=5,
         // ratio 1.5 → cap = 8; defenders (20) > 8 → too hard.
@@ -982,7 +982,7 @@ mod tests {
 
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
-        let mut stale_ship = Ship::new(UnitId(9800), ShipType::Frigate, NationId(2));
+        let mut stale_ship = Ship::new(UnitId(9800), ShipType::Frigate, NationId(2), 35);
         stale_ship.operation = Some(crate::military::naval::NavalOperation::Beachhead(
             ProvinceId(3),
         ));
@@ -1017,7 +1017,7 @@ mod tests {
         // AI has a stale Beachhead op and zero warship firepower.
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
-        let mut stale_ship = Ship::new(UnitId(9700), ShipType::Frigate, NationId(2));
+        let mut stale_ship = Ship::new(UnitId(9700), ShipType::Frigate, NationId(2), 35);
         stale_ship.operation = Some(crate::military::naval::NavalOperation::Beachhead(
             ProvinceId(3),
         ));
@@ -1030,6 +1030,7 @@ mod tests {
                 UnitId(9700 + 100 + i),
                 ShipType::ShipOfTheLine,
                 NationId(3),
+                65,
             ));
         }
 
@@ -1061,7 +1062,7 @@ mod tests {
 
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
-        let mut stale_ship = Ship::new(UnitId(9300), ShipType::Frigate, NationId(2));
+        let mut stale_ship = Ship::new(UnitId(9300), ShipType::Frigate, NationId(2), 35);
         stale_ship.operation = Some(crate::military::naval::NavalOperation::Beachhead(
             ProvinceId(3),
         ));

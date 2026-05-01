@@ -5,7 +5,7 @@
 //! from hardcoded defaults (`GameData::default()`) or from parsed data
 //! supplied by infrastructure (`GameData::from_parts()`).
 
-use crate::military::ships::{ShipStats, ShipType};
+use crate::military::ships::{ShipCategory, ShipStats, ShipType};
 use crate::military::units::{ArmyUnitType, UnitStats};
 #[cfg(feature = "lua")]
 use crate::scripting::LuaEngine;
@@ -499,6 +499,14 @@ pub struct GameData {
 }
 
 impl GameData {
+    /// Look up ship stats by type. Panics if the ship type is missing — this
+    /// indicates a data file that doesn't define all ShipType variants.
+    pub fn ship_stats(&self, ship_type: ShipType) -> &ShipStats {
+        self.ship_stats
+            .get(&ship_type)
+            .unwrap_or_else(|| panic!("missing ship stats for {:?}", ship_type))
+    }
+
     /// Construct GameData from pre-parsed parts supplied by infrastructure.
     ///
     /// Infrastructure parses RON files and calls this constructor so that
@@ -605,25 +613,48 @@ pub fn default_unit_stats() -> HashMap<ArmyUnitType, UnitStats> {
     all_types.into_iter().map(|t| (t, t.stats())).collect()
 }
 
-/// Build default ship stats from the hardcoded `ShipType::stats()` method.
+/// Built-in ship stats baseline — used only by `GameData::default()` as a
+/// snapshot-restore placeholder. Production builds replace this via
+/// `infrastructure::data_loader::load_*` which parses `data/definitions/ships.ron`.
+/// Keep these values aligned with `data/definitions/ships.ron`.
 pub fn default_ship_stats() -> HashMap<ShipType, ShipStats> {
     use ShipType::*;
-    let all_types = [
-        Trader,
-        Indiaman,
-        Clipper,
-        Paddlewheeler,
-        Freighter,
-        Frigate,
-        ShipOfTheLine,
-        Raider,
-        Ironclad,
-        AdvancedIronclad,
-        ArmouredCruiser,
-        Dreadnought,
-        Battlecruiser,
-    ];
-    all_types.into_iter().map(|t| (t, t.stats())).collect()
+    let merchant = ShipCategory::Merchant;
+    let warship = ShipCategory::Warship;
+    let s = |firepower, range, armor, hull, speed, cargo, category,
+             fabric_cost, lumber_cost, arms_cost, steel_cost, coal_cost,
+             prerequisite_tech: Option<&str>| ShipStats {
+        firepower,
+        range,
+        armor,
+        hull,
+        speed,
+        cargo,
+        category,
+        fabric_cost,
+        lumber_cost,
+        arms_cost,
+        steel_cost,
+        coal_cost,
+        prerequisite_tech: prerequisite_tech.map(String::from),
+    };
+    [
+        (Trader,           s(0,  0,  0, 25, 0,  2, merchant, 2, 4, 0, 0,  0, None)),
+        (Indiaman,         s(0,  0,  5, 40, 0,  4, merchant, 3, 7, 0, 0,  0, None)),
+        (Clipper,          s(0,  0,  0, 25, 0,  4, merchant, 2, 6, 0, 0,  0, Some("Streamlined Hulls"))),
+        (Paddlewheeler,    s(0,  0,  5, 35, 0,  8, merchant, 0, 6, 0, 2, 10, Some("Paddlewheels"))),
+        (Freighter,        s(0,  0, 10, 50, 0, 12, merchant, 0, 8, 0, 4, 15, Some("Marine Engineering"))),
+        (Frigate,          s(3,  5, 10, 35, 2,  0, warship,  2, 5, 2, 0,  0, None)),
+        (ShipOfTheLine,    s(6,  6, 20, 65, 2,  0, warship,  3, 8, 5, 0,  0, None)),
+        (Raider,           s(3,  7, 20, 30, 3,  0, warship,  0, 6, 3, 0, 10, Some("Paddlewheels"))),
+        (Ironclad,         s(8,  7, 30, 50, 3,  0, warship,  0, 6, 4, 3, 12, Some("Advanced Iron Working"))),
+        (AdvancedIronclad, s(10, 8, 40, 60, 3,  0, warship,  0, 6, 5, 4, 15, Some("Steel Armour Plate"))),
+        (ArmouredCruiser,  s(8,  9, 35, 55, 3,  0, warship,  0, 7, 4, 5, 15, Some("Marine Engineering"))),
+        (Dreadnought,      s(15, 10, 50, 80, 3, 0, warship,  0, 10, 8, 8, 20, Some("Improved Range-Finding"))),
+        (Battlecruiser,    s(12, 10, 40, 65, 4, 0, warship,  0, 8, 6, 6, 18, Some("Improved Range-Finding"))),
+    ]
+    .into_iter()
+    .collect()
 }
 
 #[cfg(test)]

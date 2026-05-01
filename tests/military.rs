@@ -304,6 +304,8 @@ fn build_frigate_deducts_resources_and_adds_ship() {
     let mut game = new_game("ship_build", Difficulty::Easy, 0); // Easy has starting materials
     let player = game.human_player_nation;
 
+    let frigate_hull = game.game_data.ship_stats(ShipType::Frigate).hull;
+
     // Give player materials for a Frigate: 2 fabric + 5 lumber + 2 arms
     let nation = game.get_nation_mut(player).unwrap();
     nation.add_material(MaterialType::Fabric, 5);
@@ -320,7 +322,7 @@ fn build_frigate_deducts_resources_and_adds_ship() {
     nation.consume_material(MaterialType::Arms, arms_cost);
     nation
         .military.warships
-        .push(Ship::new(UnitId(9999), ShipType::Frigate, player));
+        .push(Ship::new(UnitId(9999), ShipType::Frigate, player, frigate_hull));
 
     assert_eq!(nation.military.warships.len(), initial_warships + 1);
     // Easy difficulty starts with 20 Lumber, 10 Steel, 5 Fabric (bumped
@@ -380,6 +382,7 @@ fn all_unit_types_have_valid_stats() {
 
 #[test]
 fn all_ship_types_have_valid_stats() {
+    let game = new_game("ships", Difficulty::Normal, 0);
     let types = [
         ShipType::Trader,
         ShipType::Indiaman,
@@ -396,7 +399,7 @@ fn all_ship_types_have_valid_stats() {
         ShipType::Battlecruiser,
     ];
     for ship_type in &types {
-        let stats = ship_type.stats();
+        let stats = game.game_data.ship_stats(*ship_type);
         assert!(stats.hull > 0, "{:?} should have positive hull", ship_type);
     }
 }

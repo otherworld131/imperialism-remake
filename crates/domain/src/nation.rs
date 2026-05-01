@@ -934,10 +934,10 @@ impl Nation {
     }
 
     /// Total cargo capacity of all merchant ships in the fleet.
-    pub fn total_cargo_capacity(&self) -> u32 {
+    pub fn total_cargo_capacity(&self, data: &crate::data::GameData) -> u32 {
         self.military.merchant_fleet
             .iter()
-            .map(|s| s.total_cargo_capacity())
+            .map(|s| data.ship_stats(s.ship_type).cargo)
             .sum()
     }
 
@@ -947,10 +947,10 @@ impl Nation {
     }
 
     /// Sum of firepower for all warships in the fleet.
-    pub fn total_naval_firepower(&self) -> u32 {
+    pub fn total_naval_firepower(&self, data: &crate::data::GameData) -> u32 {
         self.military.warships
             .iter()
-            .map(|s| s.ship_type.stats().firepower)
+            .map(|s| data.ship_stats(s.ship_type).firepower)
             .sum()
     }
 

@@ -297,7 +297,8 @@ impl From<&d::ships::Ship> for Ship {
 impl From<Ship> for d::ships::Ship {
     fn from(v: Ship) -> Self {
         use domain::map::{sea_zones::SeaZoneId, UnitId};
-        let mut s = d::ships::Ship::new(UnitId(v.id), v.ship_type.into(), v.owner.into());
+        // Hull is overridden immediately, so the initial value is irrelevant.
+        let mut s = d::ships::Ship::new(UnitId(v.id), v.ship_type.into(), v.owner.into(), 0);
         s.hull_remaining = v.hull_remaining;
         s.sea_zone = v.sea_zone.map(SeaZoneId);
         s.operation = v.operation.map(Into::into);

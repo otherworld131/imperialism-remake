@@ -360,7 +360,7 @@ fn reserve_trade_phase(game: &mut GameState) -> Vec<NationReservation> {
             let cargo_capacity = blockade_capacity
                 .get(gp_id)
                 .copied()
-                .unwrap_or_else(|| nation.total_cargo_capacity());
+                .unwrap_or_else(|| nation.total_cargo_capacity(&game.game_data));
             all_bids.extend(trade::generate_smart_bids(
                 nation,
                 &offers,
@@ -603,7 +603,7 @@ pub(super) fn compute_blockade_capacity(game: &GameState) -> HashMap<NationId, u
             Some(n) => n,
             None => continue,
         };
-        let raw_cargo = nation.total_cargo_capacity();
+        let raw_cargo = nation.total_cargo_capacity(&game.game_data);
 
         // Find all ocean sea zones adjacent to this nation's coastal provinces.
         // Zone-local blockade: enemy warships only threaten ports they can reach.
@@ -691,7 +691,7 @@ pub(super) fn apply_blockade_effects(game: &GameState, report: &mut TurnReport) 
             None => continue,
         };
 
-        let cargo = nation.total_cargo_capacity();
+        let cargo = nation.total_cargo_capacity(&game.game_data);
         if cargo == 0 {
             continue;
         }

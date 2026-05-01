@@ -497,7 +497,7 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
     let nation_naval: std::collections::HashMap<NationId, (u32, usize)> = game
         .world.nations
         .iter()
-        .map(|n| (n.id, (n.total_naval_firepower(), n.warship_count())))
+        .map(|n| (n.id, (n.total_naval_firepower(&game.game_data), n.warship_count())))
         .collect();
 
     // Build hex coord → civilian lookup for ALL nations
@@ -787,6 +787,7 @@ pub fn wasm_get_navy_markers(game_json: &str, disable_fog: bool) -> String {
                     None,
                     None,
                     &zone_ships,
+                    &game.game_data,
                 ) {
                     if let Some(id) = sz_id {
                         marker["sea_zone_id"] = serde_json::Value::Number(id.into());
@@ -842,6 +843,7 @@ pub fn wasm_get_navy_markers(game_json: &str, disable_fog: bool) -> String {
                 Some(target_province_name),
                 coast_tile,
                 &ships,
+                &game.game_data,
             ) {
                 markers.push(marker);
             }
@@ -860,6 +862,7 @@ fn build_marker(
     target_province: Option<String>,
     target_hex: Option<domain::hex::HexCoord>,
     ships: &[&Ship],
+    data: &domain::data::GameData,
 ) -> Option<serde_json::Value> {
     if ships.is_empty() {
         return None;
@@ -876,7 +879,7 @@ fn build_marker(
         *by_type.entry(type_key).or_insert(0) += 1;
         let op_key = format_operation(ship.operation);
         *by_operation.entry(op_key).or_insert(0) += 1;
-        total_fp += ship.ship_type.stats().firepower;
+        total_fp += data.ship_stats(ship.ship_type).firepower;
         total_hull += ship.hull_remaining;
     }
 
@@ -1153,7 +1156,7 @@ pub fn wasm_get_military_overlay(game_json: &str) -> String {
                 "nation_id": n.id.0,
                 "nation_color": format!("{:?}", n.color),
                 "total_army_fp": n.total_military_firepower(),
-                "total_naval_fp": n.total_naval_firepower(),
+                "total_naval_fp": n.total_naval_firepower(&game.game_data),
                 "army_unit_count": n.military.army.len(),
                 "warship_count": n.warship_count(),
             })
@@ -1376,7 +1379,7 @@ pub fn wasm_get_ships(game_json: &str, nation_id: u32) -> String {
         .military.merchant_fleet
         .iter()
         .map(|s| {
-            let stats = s.ship_type.stats();
+            let stats = game.game_data.ship_stats(s.ship_type);
             serde_json::json!({
                 "id": s.id.0,
                 "type": format!("{:?}", s.ship_type),
@@ -1392,7 +1395,7 @@ pub fn wasm_get_ships(game_json: &str, nation_id: u32) -> String {
         .military.warships
         .iter()
         .map(|s| {
-            let stats = s.ship_type.stats();
+            let stats = game.game_data.ship_stats(s.ship_type);
             serde_json::json!({
                 "id": s.id.0,
                 "type": format!("{:?}", s.ship_type),
@@ -1407,8 +1410,8 @@ pub fn wasm_get_ships(game_json: &str, nation_id: u32) -> String {
     serde_json::json!({
         "merchants": merchants,
         "warships": warships,
-        "total_cargo": nation.total_cargo_capacity(),
-        "total_naval_fp": nation.total_naval_firepower(),
+        "total_cargo": nation.total_cargo_capacity(&game.game_data),
+        "total_naval_fp": nation.total_naval_firepower(&game.game_data),
     })
     .to_string()
 }
@@ -1621,7 +1624,7 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
     let ships: Vec<serde_json::Value> = all_ship_types
         .iter()
         .map(|st| {
-            let stats = st.stats();
+            let stats = game.game_data.ship_stats(*st);
             let tech_met = match &stats.prerequisite_tech {
                 Some(tech) => nation_has_tech(nation, tech, &game.game_data),
                 None => true,
@@ -2190,7 +2193,7 @@ pub fn wasm_build_ship(game_json: &str, nation_id: u32, ship_type_str: &str) -> 
         None => return format!("{{\"error\":\"unknown ship type: {}\"}}", ship_type_str),
     };
 
-    let stats = ship_type.stats();
+    let stats = game.game_data.ship_stats(ship_type).clone();
 
     // Check tech prerequisite
     {
@@ -2234,7 +2237,7 @@ pub fn wasm_build_ship(game_json: &str, nation_id: u32, ship_type_str: &str) -> 
         nation.remove_resource(ResourceType::Coal, stats.coal_cost);
     }
     let sid = game.alloc_unit_id();
-    let new_ship = Ship::new(sid, ship_type, nid);
+    let new_ship = Ship::with_data(sid, ship_type, nid, &game.game_data);
     if let Some(nation) = game.get_nation_mut(nid) {
         match ship_type.category() {
             ShipCategory::Merchant => nation.military.merchant_fleet.push(new_ship),
@@ -2928,7 +2931,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
     let total_cargo: u32 = nation
         .military.merchant_fleet
         .iter()
-        .map(|s| s.ship_type.stats().cargo)
+        .map(|s| game.game_data.ship_stats(s.ship_type).cargo)
         .sum();
 
     // Minor nations with consulates
@@ -3210,6 +3213,11 @@ pub fn wasm_set_player_sell_order(
         None => return r#"{"error":"invalid commodity"}"#.to_string(),
     };
 
+    let total_cargo: u32 = match game.get_nation(nid) {
+        Some(n) => n.total_cargo_capacity(&game.game_data),
+        None => return r#"{"error":"nation not found"}"#.to_string(),
+    };
+
     let nation = match game.get_nation_mut(nid) {
         Some(n) => n,
         None => return r#"{"error":"nation not found"}"#.to_string(),
@@ -3225,8 +3233,6 @@ pub fn wasm_set_player_sell_order(
         return r#"{"error":"insufficient stock"}"#.to_string();
     }
 
-    // Validate cargo capacity
-    let total_cargo: u32 = nation.total_cargo_capacity();
     let other_orders: u32 = nation
         .diplomacy.player_sell_orders
         .iter()
@@ -3274,13 +3280,16 @@ pub fn wasm_set_player_buy_order(
         None => return r#"{"error":"invalid resource type"}"#.to_string(),
     };
 
+    let total_cargo: u32 = match game.get_nation(nid) {
+        Some(n) => n.total_cargo_capacity(&game.game_data),
+        None => return r#"{"error":"nation not found"}"#.to_string(),
+    };
+
     let nation = match game.get_nation_mut(nid) {
         Some(n) => n,
         None => return r#"{"error":"nation not found"}"#.to_string(),
     };
 
-    // Validate cargo capacity
-    let total_cargo: u32 = nation.total_cargo_capacity();
     let other_orders: u32 = nation
         .diplomacy.player_sell_orders
         .iter()
@@ -4792,10 +4801,16 @@ mod tests {
 
         // Give the human nation three warships: two Frigates on Patrol and
         // one Ironclad on Escort.
+        let frigate_hull = game.game_data.ship_stats(ShipType::Frigate).hull;
+        let ironclad_hull = game.game_data.ship_stats(ShipType::Ironclad).hull;
         let nation = game.get_nation_mut(human).unwrap();
         let mk_ship =
             |id: u32, ship_type: ShipType, op: Option<domain::military::naval::NavalOperation>| {
-                let mut s = Ship::new(domain::map::UnitId(id), ship_type, human);
+                let hull = match ship_type {
+                    ShipType::Ironclad => ironclad_hull,
+                    _ => frigate_hull,
+                };
+                let mut s = Ship::new(domain::map::UnitId(id), ship_type, human, hull);
                 s.operation = op;
                 s
             };
@@ -4959,7 +4974,7 @@ mod tests {
         };
 
         // Give the enemy one Frigate on Patrol.
-        let mut enemy_ship = Ship::new(domain::map::UnitId(9500), ShipType::Frigate, enemy_id);
+        let mut enemy_ship = Ship::with_data(domain::map::UnitId(9500), ShipType::Frigate, enemy_id, &game.game_data);
         enemy_ship.operation = Some(domain::military::naval::NavalOperation::Patrol);
         let enemy = game.get_nation_mut(enemy_id).unwrap();
         enemy.military.warships.clear();

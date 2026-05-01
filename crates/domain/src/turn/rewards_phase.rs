@@ -111,6 +111,7 @@ pub(super) fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
         }
 
         if new_admirals > 0 || current_sol != nation.military.total_ships_of_the_line_built {
+            let bonus_hull = game.game_data.ship_stats(ShipType::ShipOfTheLine).hull;
             let nation = match game.world.nations.iter_mut().find(|n| n.id == *nation_id) {
                 Some(n) => n,
                 None => continue,
@@ -121,7 +122,7 @@ pub(super) fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                 nation.military.admirals_earned += 1;
                 // Award a free Ship-of-the-Line as the Admiral bonus warship
                 let ship_id = UnitId(4_000_000 + nation.id.0 * 100 + nation.military.admirals_earned);
-                let bonus_ship = Ship::new(ship_id, ShipType::ShipOfTheLine, *nation_id);
+                let bonus_ship = Ship::new(ship_id, ShipType::ShipOfTheLine, *nation_id, bonus_hull);
                 nation.military.warships.push(bonus_ship);
 
                 let nation_name = nation.name.clone();

@@ -610,24 +610,27 @@ fn human_player_gets_no_bonus() {
 
 #[test]
 fn naval_balance_frigates_vs_ship_of_the_line() {
+    use domain::data::GameData;
     use domain::map::UnitId;
     use domain::military::naval::resolve_naval_battle;
     use domain::military::ships::{Ship, ShipType};
 
+    let data = GameData::default();
     let mut frigate_wins = 0;
     let mut sol_wins = 0;
 
     for seed in 0..100u32 {
         let frigates: Vec<Ship> = (0..3)
-            .map(|i| Ship::new(UnitId(seed * 10 + i), ShipType::Frigate, NationId(1)))
+            .map(|i| Ship::with_data(UnitId(seed * 10 + i), ShipType::Frigate, NationId(1), &data))
             .collect();
-        let sol: Vec<Ship> = vec![Ship::new(
+        let sol: Vec<Ship> = vec![Ship::with_data(
             UnitId(seed * 10 + 100),
             ShipType::ShipOfTheLine,
             NationId(2),
+            &data,
         )];
 
-        let result = resolve_naval_battle(&frigates, &sol, NationId(1), NationId(2));
+        let result = resolve_naval_battle(&frigates, &sol, NationId(1), NationId(2), &data);
         if result.attacker_won {
             frigate_wins += 1;
         } else {

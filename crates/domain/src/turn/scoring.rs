@@ -59,7 +59,7 @@ pub struct CouncilVoteResult {
 /// - **Merchant marine**: cargo capacity (placeholder — currently 0)
 /// - **Diplomatic**: placeholder — currently 50
 /// - **Province**: number of provinces * 100
-pub fn calculate_score(nation: &Nation) -> NationScore {
+pub fn calculate_score(nation: &Nation, data: &crate::data::GameData) -> NationScore {
     if nation.diplomacy.is_in_anarchy {
         return NationScore::default();
     }
@@ -70,7 +70,7 @@ pub fn calculate_score(nation: &Nation) -> NationScore {
         .sum::<u32>();
     let labor_score = nation.economy.labor.total_workers() * 10;
     let transport_score = nation.military.transport.freight_cars * 5;
-    let merchant_marine_score = nation.total_cargo_capacity() * 20;
+    let merchant_marine_score = nation.total_cargo_capacity(data) * 20;
     let diplomatic_score = 50; // placeholder
     let province_score = nation.province_count() as u32 * 75;
 
@@ -327,7 +327,8 @@ mod tests {
         nation.economy.labor.untrained = 3;
         nation.economy.labor.trained = 2;
 
-        let score = calculate_score(&nation);
+        let data = crate::data::GameData::default();
+        let score = calculate_score(&nation, &data);
 
         assert_eq!(score.military_score, 0); // placeholder
         assert_eq!(score.labor_score, 50); // 5 workers * 10

@@ -506,7 +506,7 @@ pub(crate) fn cmd_build_ship(game: &mut GameState, query: &str) {
         }
     };
 
-    let stats = ship_type.stats();
+    let stats = game.game_data.ship_stats(ship_type).clone();
     let fabric_needed = stats.fabric_cost;
     let lumber_needed = stats.lumber_cost;
 
@@ -527,21 +527,27 @@ pub(crate) fn cmd_build_ship(game: &mut GameState, query: &str) {
 
     let player_id = game.human_player_nation;
     let uid = game.alloc_unit_id();
-    let ship = Ship::new(uid, ship_type, player_id);
+    let ship = Ship::with_data(uid, ship_type, player_id, &game.game_data);
 
-    let Some(player) = human_player_mut(game) else {
-        return;
+    {
+        let Some(player) = human_player_mut(game) else {
+            return;
+        };
+        player.consume_material(MaterialType::Fabric, fabric_needed);
+        player.consume_material(MaterialType::Lumber, lumber_needed);
+        player.military.merchant_fleet.push(ship);
+    }
+
+    let player = match human_player(game) {
+        Some(p) => p,
+        None => return,
     };
-    player.consume_material(MaterialType::Fabric, fabric_needed);
-    player.consume_material(MaterialType::Lumber, lumber_needed);
-    player.military.merchant_fleet.push(ship);
-
     println!(
         "  Ship built! {:?} added to merchant fleet (cargo: {}). Fleet size: {}, total cargo: {}",
         ship_type,
         stats.cargo,
         player.military.merchant_fleet.len(),
-        player.total_cargo_capacity()
+        player.total_cargo_capacity(&game.game_data),
     );
 }
 
@@ -563,7 +569,7 @@ pub(crate) fn cmd_build_warship(game: &mut GameState, query: &str) {
         }
     };
 
-    let stats = ship_type.stats();
+    let stats = game.game_data.ship_stats(ship_type).clone();
     let fabric_needed = stats.fabric_cost;
     let lumber_needed = stats.lumber_cost;
     let arms_needed = stats.arms_cost;
@@ -592,16 +598,22 @@ pub(crate) fn cmd_build_warship(game: &mut GameState, query: &str) {
 
     let player_id = game.human_player_nation;
     let uid = game.alloc_unit_id();
-    let ship = Ship::new(uid, ship_type, player_id);
+    let ship = Ship::with_data(uid, ship_type, player_id, &game.game_data);
 
-    let Some(player) = human_player_mut(game) else {
-        return;
+    {
+        let Some(player) = human_player_mut(game) else {
+            return;
+        };
+        player.consume_material(MaterialType::Fabric, fabric_needed);
+        player.consume_material(MaterialType::Lumber, lumber_needed);
+        player.consume_material(MaterialType::Arms, arms_needed);
+        player.military.warships.push(ship);
+    }
+
+    let player = match human_player(game) {
+        Some(p) => p,
+        None => return,
     };
-    player.consume_material(MaterialType::Fabric, fabric_needed);
-    player.consume_material(MaterialType::Lumber, lumber_needed);
-    player.consume_material(MaterialType::Arms, arms_needed);
-    player.military.warships.push(ship);
-
     println!(
         "  Warship built! {:?} added to navy (FP: {}, Armor: {}, Hull: {}). Navy size: {}, total naval firepower: {}",
         ship_type,
@@ -609,7 +621,7 @@ pub(crate) fn cmd_build_warship(game: &mut GameState, query: &str) {
         stats.armor,
         stats.hull,
         player.military.warships.len(),
-        player.total_naval_firepower()
+        player.total_naval_firepower(&game.game_data),
     );
 }
 
@@ -687,7 +699,7 @@ pub(crate) fn cmd_blockade(game: &GameState, query: &str) {
         return;
     }
 
-    let enemy_cargo = target.total_cargo_capacity();
+    let enemy_cargo = target.total_cargo_capacity(&game.game_data);
     let blocked = domain::military::calculate_blockade_effect(enemy_cargo, our_warships as u32);
     let cargo_blocked = enemy_cargo.saturating_sub(blocked);
 
@@ -695,7 +707,7 @@ pub(crate) fn cmd_blockade(game: &GameState, query: &str) {
     println!("    Your warships: {}", our_warships);
     println!(
         "    Your naval firepower: {}",
-        player.total_naval_firepower()
+        player.total_naval_firepower(&game.game_data)
     );
     println!("    Enemy merchant cargo: {} holds", enemy_cargo);
     println!(

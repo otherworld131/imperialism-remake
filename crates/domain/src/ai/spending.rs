@@ -1105,7 +1105,7 @@ fn score_warship(
             .is_some_and(|r| r.at_war);
         if at_war {
             any_at_war = true;
-            max_enemy_naval_fp = max_enemy_naval_fp.max(other.total_naval_firepower());
+            max_enemy_naval_fp = max_enemy_naval_fp.max(other.total_naval_firepower(&game.game_data));
         }
     }
     if any_at_war {
@@ -1113,7 +1113,7 @@ fn score_warship(
     }
 
     // Outmatched at sea: strong driver.
-    let our_naval_fp = nation.total_naval_firepower();
+    let our_naval_fp = nation.total_naval_firepower(&game.game_data);
     if max_enemy_naval_fp > our_naval_fp {
         raw += (max_enemy_naval_fp - our_naval_fp) as f64 * naval_gap_coeff;
     }

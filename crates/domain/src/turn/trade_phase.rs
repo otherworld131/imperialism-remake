@@ -176,7 +176,7 @@ pub(super) fn resolve_trade_session(
             let cargo_capacity = blockade_capacity
                 .get(gp_id)
                 .copied()
-                .unwrap_or_else(|| nation.total_cargo_capacity());
+                .unwrap_or_else(|| nation.total_cargo_capacity(&game.game_data));
             let bids = trade::generate_smart_bids(nation, &offers, &game.world.diplomacy, cargo_capacity);
             all_bids.extend(bids);
         }

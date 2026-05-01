@@ -132,7 +132,7 @@ fn main() {
                     let gp_scores: Vec<(String, u32)> = game
                         .great_powers()
                         .iter()
-                        .map(|gp| (gp.name.clone(), calculate_score(gp).total))
+                        .map(|gp| (gp.name.clone(), calculate_score(gp, &game.game_data).total))
                         .collect();
                     for (name, total) in gp_scores {
                         game.archive.high_scores.push((name, total, date_str.clone()));

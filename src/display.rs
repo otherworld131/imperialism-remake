@@ -424,7 +424,7 @@ pub(crate) fn print_trade(game: &GameState) {
     let Some(player) = human_player(game) else {
         return;
     };
-    let cargo_capacity = player.total_cargo_capacity();
+    let cargo_capacity = player.total_cargo_capacity(&game.game_data);
 
     println!("  TRADE STATUS:");
     println!(
@@ -580,7 +580,7 @@ pub(crate) fn print_scores(game: &GameState) {
         .great_powers()
         .iter()
         .map(|n| {
-            let s = calculate_score(n);
+            let s = calculate_score(n, &game.game_data);
             (n.id, n.name.clone(), s)
         })
         .collect();
@@ -835,11 +835,11 @@ pub(crate) fn print_overview(game: &GameState) {
     let total_techs = game.game_data.tech_tree.total_tech_count();
 
     // Score
-    let score = calculate_score(player);
+    let score = calculate_score(player, &game.game_data);
     let mut all_scores: Vec<_> = game
         .great_powers()
         .iter()
-        .map(|n| (n.id, calculate_score(n).total))
+        .map(|n| (n.id, calculate_score(n, &game.game_data).total))
         .collect();
     all_scores.sort_by(|a, b| b.1.cmp(&a.1));
     let rank = all_scores
@@ -1641,7 +1641,7 @@ pub(crate) fn print_game_end_summary(game: &GameState, report: Option<&TurnRepor
         .great_powers()
         .iter()
         .map(|n| {
-            let s = calculate_score(n);
+            let s = calculate_score(n, &game.game_data);
             (n.id, n.name.clone(), s.total, n.province_count())
         })
         .collect();
@@ -2036,7 +2036,7 @@ pub(crate) fn print_fleet(game: &GameState) {
         std::collections::BTreeMap::new();
     for ship in &player.military.merchant_fleet {
         let name = format!("{:?}", ship.ship_type);
-        let cargo = ship.total_cargo_capacity();
+        let cargo = game.game_data.ship_stats(ship.ship_type).cargo;
         let entry = counts.entry(name).or_insert((0, cargo));
         entry.0 += 1;
     }
@@ -2046,7 +2046,7 @@ pub(crate) fn print_fleet(game: &GameState) {
     }
     println!(
         "    Total cargo capacity: {} holds",
-        player.total_cargo_capacity()
+        player.total_cargo_capacity(&game.game_data)
     );
 }
 
@@ -2070,7 +2070,7 @@ pub(crate) fn print_navy(game: &GameState) {
         std::collections::BTreeMap::new();
     for ship in &player.military.warships {
         let name = format!("{:?}", ship.ship_type);
-        let stats = ship.ship_type.stats();
+        let stats = game.game_data.ship_stats(ship.ship_type);
         let entry = counts
             .entry(name)
             .or_insert((0, stats.firepower, stats.armor, stats.hull));
@@ -2085,7 +2085,7 @@ pub(crate) fn print_navy(game: &GameState) {
     }
     println!(
         "    Total naval firepower: {}",
-        player.total_naval_firepower()
+        player.total_naval_firepower(&game.game_data)
     );
 }
 
@@ -2189,7 +2189,7 @@ pub(crate) fn print_nation_info(game: &GameState, query: &str) {
 
     // Score (Great Powers only)
     if target.is_great_power() {
-        let score = calculate_score(target);
+        let score = calculate_score(target, &game.game_data);
         println!(
             "  Score: {} (Mil:{} Lab:{} Trans:{} Dip:{} Prov:{})",
             format_number(score.total),

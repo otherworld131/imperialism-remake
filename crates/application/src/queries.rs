@@ -177,7 +177,7 @@ pub fn get_trade_screen(game: &GameState) -> Result<TradeScreenData, Application
     let human_id = game.human_player_nation;
     let nation = human_nation(game)?;
 
-    let cargo_capacity = nation.total_cargo_capacity();
+    let cargo_capacity = nation.total_cargo_capacity(&game.game_data);
     // Cargo is consumed only by resource trades in the normal trade session.
     // Exclude world-market auto-sells (partner=NationId(0)) and manufactured-goods entries
     // (sentinel entries where commodity_label differs from the resource's Debug name).
@@ -490,7 +490,7 @@ mod tests {
 
         // Each Great Power starts with 1 Trader ship
         let nation = game.get_nation(game.human_player_nation).unwrap();
-        assert_eq!(data.cargo_capacity, nation.total_cargo_capacity());
+        assert_eq!(data.cargo_capacity, nation.total_cargo_capacity(&game.game_data));
     }
 
     #[test]
@@ -564,7 +564,7 @@ mod tests {
         });
 
         let data = get_trade_screen(&game).unwrap();
-        let capacity = game.get_nation(human_id).unwrap().total_cargo_capacity();
+        let capacity = game.get_nation(human_id).unwrap().total_cargo_capacity(&game.game_data);
         let expected = (3u32 + 2).min(capacity);
         assert_eq!(data.cargo_used, expected);
     }

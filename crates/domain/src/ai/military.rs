@@ -1208,7 +1208,7 @@ pub(crate) fn ai_military_strategy(
                                         })
                                         .cloned()
                                         .collect();
-                                    crate::military::naval::beachhead_force_size(&assigned)
+                                    crate::military::naval::beachhead_force_size(&assigned, &game.game_data)
                                 })
                                 .unwrap_or(0) as usize;
                         let mut eligible: Vec<f64> = naval_candidates
