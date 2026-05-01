@@ -2856,22 +2856,32 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         })
         .collect();
 
-    // Trade history (last 20)
+    // Trade history (last 10 turns), newest first
+    let history_min_turn = game.turn.0.saturating_sub(9);
     let history: Vec<serde_json::Value> = nation
         .archives.trade_history
         .iter()
         .rev()
-        .take(20)
+        .filter(|entry| entry.turn.0 >= history_min_turn)
         .map(|entry| {
-            let partner_name = game
-                .get_nation(entry.partner)
-                .map(|n| n.name.as_str())
-                .unwrap_or("Unknown");
+            let partner_name = if entry.partner.0 == 0 {
+                "World Market"
+            } else {
+                game.get_nation(entry.partner)
+                    .map(|n| n.name.as_str())
+                    .unwrap_or("Unknown")
+            };
+            // Use commodity_label when set (manufactured goods), fall back to resource name
+            let commodity = if entry.commodity_label.is_empty() {
+                format!("{:?}", entry.resource)
+            } else {
+                entry.commodity_label.clone()
+            };
             serde_json::json!({
                 "turn": entry.turn.0,
                 "partner_name": partner_name,
                 "partner_id": entry.partner.0,
-                "resource": format!("{:?}", entry.resource),
+                "resource": commodity,
                 "quantity": entry.quantity,
                 "total_cost": entry.total_cost.as_dollars(),
                 "bought": entry.bought,
@@ -2902,7 +2912,8 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         })
         .collect();
 
-    // Trade balance from history + auto-sold goods revenue
+    // Trade balance from history. All sales (resource trades, auto-sell goods,
+    // minor-nation goods bids) are recorded as TradeHistoryEntry with bought=false.
     let mut total_bought: i64 = 0;
     let mut total_sold: i64 = 0;
     for entry in &nation.archives.trade_history {
@@ -2912,7 +2923,6 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
             total_sold += entry.total_cost.as_dollars();
         }
     }
-    total_sold += nation.archives.goods_sales_revenue_dollars;
 
     // Cargo capacity from merchant fleet
     let total_cargo: u32 = nation
@@ -2990,12 +3000,20 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         })
         .collect();
 
-    // Available offers from minor nations
+    // Available offers from minor nations — use the same seeded withholding path as trade resolution
+    let minor_offer_seed = (game.turn.0 as u64).wrapping_mul(0x9e3779b97f4a7c15) ^ 0x6c62272e07bb0142;
+    let withhold_chance = game
+        .game_data
+        .game_config
+        .minor_resource_withhold_chance
+        .min(100);
     let mut available_offers: Vec<serde_json::Value> =
-        domain::economy::trade::generate_minor_nation_offers(
+        domain::economy::trade::generate_minor_nation_offers_with_seed(
             &game.world.nations,
             &game.world.provinces,
             &game.world.hex_map,
+            withhold_chance,
+            minor_offer_seed,
         )
         .iter()
         .map(|o| {
@@ -4711,7 +4729,7 @@ mod tests {
 
     fn make_game_json() -> String {
         let game = new_game("default", Difficulty::Normal, 0);
-        serde_json::to_string(&game).unwrap()
+        serialize_game(&game)
     }
 
     // ── Parser tests ──────────────────────────────────────────
@@ -4798,7 +4816,7 @@ mod tests {
             Some(domain::military::naval::NavalOperation::Escort),
         ));
 
-        let json = serde_json::to_string(&game).unwrap();
+        let json = serialize_game(&game);
         (game, json)
     }
 
@@ -4848,7 +4866,7 @@ mod tests {
         nation.military.warships[2].operation = Some(domain::military::naval::NavalOperation::Beachhead(
             beachhead_pid,
         ));
-        let json = serde_json::to_string(&game).unwrap();
+        let json = serialize_game(&game);
 
         let result = wasm_get_navy_markers(&json, false);
         let markers: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
@@ -4890,7 +4908,7 @@ mod tests {
         game.transient
             .pending_landings
             .push((human, beachhead_pid, game.turn));
-        let json = serde_json::to_string(&game).unwrap();
+        let json = serialize_game(&game);
 
         let result = wasm_get_navy_markers(&json, false);
         let markers: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
@@ -4963,7 +4981,7 @@ mod tests {
             "enemy anchor hex must be outside human visibility for this test to be meaningful",
         );
 
-        let json = serde_json::to_string(&game).unwrap();
+        let json = serialize_game(&game);
 
         // Fogged: enemy marker must be absent.
         let fogged = wasm_get_navy_markers(&json, false);
@@ -5041,7 +5059,7 @@ mod tests {
             return;
         }
 
-        let json = serde_json::to_string(&game).unwrap();
+        let json = serialize_game(&game);
         let result1 = wasm_queue_unit_move(&json, nid.0, uid, own_provs[0]);
         assert!(!result1.contains("error"));
 
@@ -5134,7 +5152,7 @@ mod tests {
         game.game_data = domain::data::GameData::default();
         let nation = game.get_nation_mut(game.human_player_nation).unwrap();
         nation.economy.treasury = Money::ZERO;
-        let json = serde_json::to_string(&game).unwrap();
+        let json = serialize_game(&game);
 
         let result = wasm_hire_civilian(&json, game.human_player_nation.0, "Miner");
         assert!(result.contains("insufficient funds"));
@@ -5151,7 +5169,7 @@ mod tests {
         let nation = game.get_nation_mut(game.human_player_nation).unwrap();
         nation.economy.treasury = Money::dollars(100_000);
         nation.researched_techs.clear();
-        let json = serde_json::to_string(&game).unwrap();
+        let json = serialize_game(&game);
 
         let result = wasm_hire_civilian(&json, game.human_player_nation.0, "Rancher");
         assert!(
@@ -5194,7 +5212,7 @@ mod tests {
         let nid = game.human_player_nation;
         game.transient.pending_moves
             .push((nid, domain::map::UnitId(12345), ProvinceId(1)));
-        let json = serde_json::to_string(&game).unwrap();
+        let json = serialize_game(&game);
 
         let result = wasm_cancel_unit_move(&json, 12345);
         assert!(!result.contains("error"));
@@ -5221,7 +5239,7 @@ mod tests {
             let unit = nation.military.army.iter().find(|u| u.unit_type.can_move());
             if let Some(unit) = unit {
                 let uid = unit.id.0;
-                let json = serde_json::to_string(&game).unwrap();
+                let json = serialize_game(&game);
                 let result = wasm_get_valid_move_targets(&json, nid.0, uid);
                 let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
                 let hostile = parsed["hostile"].as_array().unwrap();
@@ -5259,7 +5277,7 @@ mod tests {
             let nation = game.get_nation(nid).unwrap();
             if let Some(unit) = nation.military.army.iter().find(|u| u.unit_type.can_move()) {
                 let uid = unit.id.0;
-                let json = serde_json::to_string(&game).unwrap();
+                let json = serialize_game(&game);
                 let result = wasm_queue_unit_move(&json, nid.0, uid, pid.0);
                 assert!(
                     !result.contains("error"),
@@ -5291,7 +5309,7 @@ mod tests {
             let nation = game.get_nation(nid).unwrap();
             if let Some(unit) = nation.military.army.iter().find(|u| u.unit_type.can_move()) {
                 let uid = unit.id.0;
-                let json = serde_json::to_string(&game).unwrap();
+                let json = serialize_game(&game);
                 let result = wasm_queue_unit_move(&json, nid.0, uid, pid.0);
                 assert!(
                     result.contains("error"),
@@ -5339,7 +5357,7 @@ mod tests {
             ],
         ));
 
-        let game_json = serde_json::to_string(&game).unwrap();
+        let game_json = serialize_game(&game);
         let archive_json = wasm_get_newspaper_archive(&game_json);
         let parsed: serde_json::Value = serde_json::from_str(&archive_json).unwrap();
         let first_turn = &parsed.as_array().unwrap()[0];
@@ -5390,7 +5408,7 @@ mod tests {
             ],
         ));
 
-        let game_json = serde_json::to_string(&game).unwrap();
+        let game_json = serialize_game(&game);
         let archive_json = wasm_get_newspaper_archive(&game_json);
         let parsed: serde_json::Value = serde_json::from_str(&archive_json).unwrap();
         let headlines = parsed.as_array().unwrap()[0]["headlines"]
@@ -5436,7 +5454,7 @@ mod tests {
             ],
         ));
 
-        let game_json = serde_json::to_string(&game).unwrap();
+        let game_json = serialize_game(&game);
         let archive_json = wasm_get_newspaper_archive(&game_json);
         let parsed: serde_json::Value = serde_json::from_str(&archive_json).unwrap();
         let headlines = parsed.as_array().unwrap()[0]["headlines"].as_array().unwrap();
@@ -5561,7 +5579,7 @@ mod tests {
         game.archive.battle_archive
             .push((TurnNumber::new(1), vec![battle], Vec::new()));
 
-        let game_json = serde_json::to_string(&game).unwrap();
+        let game_json = serialize_game(&game);
         let result_json = wasm_get_battle_data(&game_json);
         let parsed: serde_json::Value = serde_json::from_str(&result_json).unwrap();
 
@@ -5655,7 +5673,7 @@ mod tests {
         game.archive.battle_archive
             .push((TurnNumber::new(2), Vec::new(), vec![naval]));
 
-        let game_json = serde_json::to_string(&game).unwrap();
+        let game_json = serialize_game(&game);
         let result_json = wasm_get_battle_data(&game_json);
         let parsed: serde_json::Value = serde_json::from_str(&result_json).unwrap();
 
@@ -5704,7 +5722,7 @@ mod tests {
         // Ensure raw_at_war is false for the pair.
         assert!(!game.world.diplomacy.is_at_war(player_id, target_id));
 
-        let json = serde_json::to_string(&game).unwrap();
+        let json = serialize_game(&game);
         let out = wasm_get_diplomacy_screen_data(&json, player_id.0);
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         let relations = parsed["relations"].as_array().unwrap();
@@ -5757,7 +5775,7 @@ mod tests {
             },
         ));
 
-        let game_json = serde_json::to_string(&game).unwrap();
+        let game_json = serialize_game(&game);
         let out = wasm_get_political_snapshot(&game_json, 5);
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
 
@@ -5846,7 +5864,7 @@ mod tests {
             p.incorporated_from = Some(NationId(999));
         }
 
-        let game_json = serde_json::to_string(&game).unwrap();
+        let game_json = serialize_game(&game);
         let out = wasm_get_political_snapshot(&game_json, 5);
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         let tiles = parsed["tiles"].as_array().expect("tiles array");

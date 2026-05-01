@@ -178,11 +178,16 @@ pub fn get_trade_screen(game: &GameState) -> Result<TradeScreenData, Application
     let nation = human_nation(game)?;
 
     let cargo_capacity = nation.total_cargo_capacity();
+    // Cargo is consumed only by resource trades in the normal trade session.
+    // Exclude world-market auto-sells (partner=NationId(0)) and manufactured-goods entries
+    // (sentinel entries where commodity_label differs from the resource's Debug name).
     let cargo_used: u32 = nation
         .archives.trade_history
         .iter()
         .filter(|th| th.turn.0 <= game.turn.0 && game.turn.0.saturating_sub(th.turn.0) <= 1)
         .filter(|th| th.partner != nation.id)
+        .filter(|th| th.partner.0 != 0)
+        .filter(|th| th.commodity_label == format!("{:?}", th.resource))
         .map(|th| th.quantity)
         .sum::<u32>()
         .min(cargo_capacity);
@@ -532,25 +537,31 @@ mod tests {
             turn: TurnNumber(5),
             partner,
             resource: ResourceType::Timber,
+            commodity_label: "Timber".to_string(),
             quantity: 3,
             total_cost: Money::dollars(30),
-                bought: true,});
+            bought: true,
+        });
         // Turn 4 (previous) — should count
         nation.archives.trade_history.push(TradeHistoryEntry {
             turn: TurnNumber(4),
             partner,
             resource: ResourceType::Coal,
+            commodity_label: "Coal".to_string(),
             quantity: 2,
             total_cost: Money::dollars(20),
-                bought: true,});
+            bought: true,
+        });
         // Turn 3 (older) — should NOT count
         nation.archives.trade_history.push(TradeHistoryEntry {
             turn: TurnNumber(3),
             partner,
             resource: ResourceType::Iron,
+            commodity_label: "Iron".to_string(),
             quantity: 10,
             total_cost: Money::dollars(100),
-                bought: true,});
+            bought: true,
+        });
 
         let data = get_trade_screen(&game).unwrap();
         let capacity = game.get_nation(human_id).unwrap().total_cargo_capacity();

@@ -300,6 +300,11 @@ pub struct GameConfig {
     pub labor_hire_civilian_tier2_max: u32,
     // D-7: AI consulate treasury threshold
     pub ai_consulate_treasury_threshold: i64,
+    // Minor nation trade behaviour
+    // Chance (0–100) that a minor nation withholds one random resource offer each turn.
+    pub minor_resource_withhold_chance: u32,
+    // Price minor nations pay per unit when buying manufactured goods (materials/finished goods).
+    pub minor_goods_buy_price: i64,
 }
 
 impl Default for GameConfig {
@@ -473,6 +478,8 @@ impl Default for GameConfig {
             labor_hire_civilian_tier2_treasury: 2000,
             labor_hire_civilian_tier2_max: 4,
             ai_consulate_treasury_threshold: 2000,
+            minor_resource_withhold_chance: 20,
+            minor_goods_buy_price: 150,
         }
     }
 }

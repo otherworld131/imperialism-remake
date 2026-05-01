@@ -286,6 +286,13 @@ game_config = {
     -- a minor nation through passive trade alone. Set to 1 for every turn.
     trade_relation_turn_interval = 3,
 
+    -- Minor nation trade behaviour
+    -- Chance (0–100) that a minor nation withholds one random resource offer each turn.
+    -- This adds variety: a minor is not always a perfectly predictable supplier.
+    minor_resource_withhold_chance = 20,
+    -- Price ($/unit) minor nations pay when purchasing manufactured goods each turn.
+    minor_goods_buy_price = 150,
+
     -- AI trade behaviour
     ai_consulate_target = 4,                  -- AI GPs aim for this many consulates in minor nations
     ai_consulate_priority_score = 30.0,        -- scoring weight per missing consulate below target

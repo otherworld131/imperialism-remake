@@ -36,9 +36,19 @@ pub(super) fn resolve_trade_session(
         }
     }
 
-    // 1. Generate offers from Minor Nations
-    let mut offers =
-        trade::generate_minor_nation_offers(&game.world.nations, &game.world.provinces, &game.world.hex_map);
+    let current_turn = game.turn;
+
+    // 1. Generate offers from Minor Nations (with optional random withholding)
+    let minor_offer_seed = (current_turn.0 as u64).wrapping_mul(0x9e3779b97f4a7c15)
+        ^ 0x6c62272e07bb0142;
+    let withhold_chance = game.game_data.game_config.minor_resource_withhold_chance.min(100);
+    let mut offers = trade::generate_minor_nation_offers_with_seed(
+        &game.world.nations,
+        &game.world.provinces,
+        &game.world.hex_map,
+        withhold_chance,
+        minor_offer_seed,
+    );
 
     // 1b. Add human player's resource sell offers to the pool
     if let Some(human) = game.get_nation(human_id) {
@@ -59,7 +69,6 @@ pub(super) fn resolve_trade_session(
     }
 
     // 1c. Auto-sell player's material/goods sell orders (world market demand)
-    let current_turn = game.turn;
     let mut player_goods_revenue = Money::ZERO;
     if let Some(human) = game.get_nation(human_id) {
         let sell_orders: Vec<trade::PlayerSellOrder> = human.diplomacy.player_sell_orders.clone();
@@ -99,7 +108,12 @@ pub(super) fn resolve_trade_session(
                     .goods_auto_sale_revenue
                     .push((human_id, player_goods_revenue));
             }
-            for (commodity, qty, _revenue) in &goods_sold {
+            for (commodity, qty, revenue) in &goods_sold {
+                let commodity_label = match commodity {
+                    trade::Commodity::Material(m) => format!("{m}"),
+                    trade::Commodity::Goods(g) => format!("{g:?}"),
+                    trade::Commodity::Resource(r) => format!("{r:?}"),
+                };
                 match commodity {
                     trade::Commodity::Material(m) => {
                         if let Some(stock) = human.economy.materials.get_mut(m) {
@@ -120,6 +134,18 @@ pub(super) fn resolve_trade_session(
                             .push((human_id, *g, *qty));
                     }
                     trade::Commodity::Resource(_) => {}
+                }
+                // Record auto-sale in trade history with world-market sentinel partner (NationId(0))
+                if *qty > 0 {
+                    human.archives.trade_history.push(trade::TradeHistoryEntry {
+                        turn: current_turn,
+                        partner: NationId(0),
+                        resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
+                        commodity_label,
+                        quantity: *qty,
+                        total_cost: *revenue,
+                        bought: false,
+                    });
                 }
             }
         }
@@ -153,6 +179,164 @@ pub(super) fn resolve_trade_session(
                 .unwrap_or_else(|| nation.total_cargo_capacity());
             let bids = trade::generate_smart_bids(nation, &offers, &game.world.diplomacy, cargo_capacity);
             all_bids.extend(bids);
+        }
+    }
+
+    // 2b. Generate minor nation goods bids and resolve them against GP stockpiles.
+    // Each non-anarchic minor nation always wants to buy 1 unit of one manufactured
+    // commodity (Material or Goods) per turn, chosen randomly but deterministically.
+    {
+        let minor_bid_seed = (current_turn.0 as u64).wrapping_mul(0xbf58476d1ce4e5b9)
+            ^ 0x94d049bb133111eb;
+        let buy_price = Money::dollars(game.game_data.game_config.minor_goods_buy_price);
+        let minor_bids = trade::generate_minor_nation_goods_bids(
+            &game.world.nations,
+            buy_price,
+            minor_bid_seed,
+        );
+
+        for bid in &minor_bids {
+            // Try to fill from human player first, then AI GPs
+            let mut filled = false;
+
+            // Check human player stock
+            let has_stock = match bid.commodity {
+                trade::ManufacturedCommodity::Material(m) => {
+                    game.get_nation(human_id)
+                        .map(|n| n.economy.materials.get(&m).copied().unwrap_or(0) >= bid.quantity)
+                        .unwrap_or(false)
+                }
+                trade::ManufacturedCommodity::Goods(g) => {
+                    game.get_nation(human_id)
+                        .map(|n| n.economy.goods.get(&g).copied().unwrap_or(0) >= bid.quantity)
+                        .unwrap_or(false)
+                }
+            };
+
+            if has_stock {
+                let revenue = Money::dollars(
+                    buy_price.as_dollars() * bid.quantity as i64,
+                );
+                let commodity_label = match bid.commodity {
+                    trade::ManufacturedCommodity::Material(m) => format!("{m}"),
+                    trade::ManufacturedCommodity::Goods(g) => format!("{g:?}"),
+                };
+                if let Some(seller) = game.get_nation_mut(human_id) {
+                    seller.economy.treasury += revenue;
+                    match bid.commodity {
+                        trade::ManufacturedCommodity::Material(m) => {
+                            if let Some(s) = seller.economy.materials.get_mut(&m) {
+                                *s = s.saturating_sub(bid.quantity);
+                            }
+                        }
+                        trade::ManufacturedCommodity::Goods(g) => {
+                            if let Some(s) = seller.economy.goods.get_mut(&g) {
+                                *s = s.saturating_sub(bid.quantity);
+                            }
+                        }
+                    }
+                    seller.archives.goods_sales_revenue_dollars += revenue.as_dollars();
+                    // Record in trade history: player sold manufactured goods to minor nation
+                    seller.archives.trade_history.push(trade::TradeHistoryEntry {
+                        turn: current_turn,
+                        partner: bid.buyer,
+                        resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
+                        commodity_label: commodity_label.clone(),
+                        quantity: bid.quantity,
+                        total_cost: revenue,
+                        bought: false,
+                    });
+                }
+                // Record buyer-side entry for the minor nation (bought=true)
+                if let Some(buyer) = game.get_nation_mut(bid.buyer) {
+                    buyer.archives.trade_history.push(trade::TradeHistoryEntry {
+                        turn: current_turn,
+                        partner: human_id,
+                        resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
+                        commodity_label: commodity_label.clone(),
+                        quantity: bid.quantity,
+                        total_cost: revenue,
+                        bought: true,
+                    });
+                }
+                // Minor nation buyers don't have tracked cash flows — payment
+                // represents abstracted demand, not a real treasury deduction.
+                // Record the revenue so cash-flow reconciliation accounts for it.
+                report.goods_auto_sale_revenue.push((human_id, revenue));
+                filled = true;
+            }
+
+            if !filled {
+                // Try AI GP sellers (skip human, already checked)
+                for gp_id in &gp_ids {
+                    if *gp_id == human_id {
+                        continue;
+                    }
+                    let gp_has_stock = match bid.commodity {
+                        trade::ManufacturedCommodity::Material(m) => {
+                            game.get_nation(*gp_id)
+                                .map(|n| n.economy.materials.get(&m).copied().unwrap_or(0) >= bid.quantity)
+                                .unwrap_or(false)
+                        }
+                        trade::ManufacturedCommodity::Goods(g) => {
+                            game.get_nation(*gp_id)
+                                .map(|n| n.economy.goods.get(&g).copied().unwrap_or(0) >= bid.quantity)
+                                .unwrap_or(false)
+                        }
+                    };
+                    if gp_has_stock {
+                        let revenue = Money::dollars(
+                            buy_price.as_dollars() * bid.quantity as i64,
+                        );
+                        let commodity_label = match bid.commodity {
+                            trade::ManufacturedCommodity::Material(m) => format!("{m}"),
+                            trade::ManufacturedCommodity::Goods(g) => format!("{g:?}"),
+                        };
+                        if let Some(seller) = game.get_nation_mut(*gp_id) {
+                            seller.economy.treasury += revenue;
+                            match bid.commodity {
+                                trade::ManufacturedCommodity::Material(m) => {
+                                    if let Some(s) = seller.economy.materials.get_mut(&m) {
+                                        *s = s.saturating_sub(bid.quantity);
+                                    }
+                                }
+                                trade::ManufacturedCommodity::Goods(g) => {
+                                    if let Some(s) = seller.economy.goods.get_mut(&g) {
+                                        *s = s.saturating_sub(bid.quantity);
+                                    }
+                                }
+                            }
+                            seller.archives.goods_sales_revenue_dollars += revenue.as_dollars();
+                            // Record in trade history: AI GP sold manufactured goods to minor nation
+                            seller.archives.trade_history.push(trade::TradeHistoryEntry {
+                                turn: current_turn,
+                                partner: bid.buyer,
+                                resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
+                                commodity_label: commodity_label.clone(),
+                                quantity: bid.quantity,
+                                total_cost: revenue,
+                                bought: false,
+                            });
+                        }
+                        // Record buyer-side entry for the minor nation (bought=true)
+                        if let Some(buyer) = game.get_nation_mut(bid.buyer) {
+                            buyer.archives.trade_history.push(trade::TradeHistoryEntry {
+                                turn: current_turn,
+                                partner: *gp_id,
+                                resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
+                                commodity_label,
+                                quantity: bid.quantity,
+                                total_cost: revenue,
+                                bought: true,
+                            });
+                        }
+                        // Minor nation buyers don't have tracked cash flows.
+                        // Route through pending_ai_cash_income so finalize_cash_flow picks it up.
+                        game.transient.pending_ai_cash_income.push((*gp_id, revenue));
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -217,12 +401,14 @@ pub(super) fn resolve_trade_session(
 
     // 5c. Record trade history for each nation involved
     for txn in &transactions {
+        let label = format!("{:?}", txn.resource);
         // Record for buyer (partner is seller)
         if let Some(buyer) = game.get_nation_mut(txn.buyer) {
             buyer.archives.trade_history.push(trade::TradeHistoryEntry {
                 turn: current_turn,
                 partner: txn.seller,
                 resource: txn.resource,
+                commodity_label: label.clone(),
                 quantity: txn.quantity,
                 total_cost: txn.total_cost,
                 bought: true,
@@ -234,6 +420,7 @@ pub(super) fn resolve_trade_session(
                 turn: current_turn,
                 partner: txn.buyer,
                 resource: txn.resource,
+                commodity_label: label.clone(),
                 quantity: txn.quantity,
                 total_cost: txn.total_cost,
                 bought: false,

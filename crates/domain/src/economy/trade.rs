@@ -38,6 +38,10 @@ pub struct TradeHistoryEntry {
     pub turn: TurnNumber,
     pub partner: NationId,
     pub resource: ResourceType,
+    /// Human-readable label for the traded commodity. For resource trades this
+    /// matches `resource` printed as a string. For material/goods auto-sales it
+    /// holds the material or goods name (e.g. "Lumber", "Furniture").
+    pub commodity_label: String,
     pub quantity: u32,
     pub total_cost: Money,
     /// Whether this nation was the buyer (true) or seller (false) in this transaction.
@@ -347,6 +351,168 @@ pub fn generate_minor_nation_offers(
     }
 
     offers
+}
+
+/// Auto-generate trade offers from Minor Nations with optional resource withholding.
+///
+/// `withhold_chance` is 0–100: each minor nation has this % chance to withhold
+/// one randomly chosen resource offer for this turn. `seed` drives the PRNG so
+/// results are deterministic for a given turn.
+pub fn generate_minor_nation_offers_with_seed(
+    nations: &[Nation],
+    provinces: &[crate::map::Province],
+    hex_map: &crate::map::HexMap,
+    withhold_chance: u32,
+    seed: u64,
+) -> Vec<TradeOffer> {
+    let mut offers = Vec::new();
+    let mut rng_state = seed.max(1);
+
+    for nation in nations {
+        if nation.is_great_power()
+            || nation.diplomacy.is_in_anarchy
+            || nation.diplomacy.integrated_by.is_some()
+        {
+            continue;
+        }
+
+        let mut production: std::collections::BTreeMap<ResourceType, u32> =
+            std::collections::BTreeMap::new();
+
+        for province in provinces {
+            if province.owner != nation.id {
+                continue;
+            }
+            for tile_coord in &province.tiles {
+                if let Some(tile) = hex_map.get_tile(*tile_coord)
+                    && let Some(yield_amount) = tile.calculate_yield()
+                {
+                    *production.entry(yield_amount.resource).or_insert(0) += yield_amount.quantity;
+                }
+            }
+        }
+
+        // Decide which resource (if any) to withhold this turn
+        let tradeable: Vec<ResourceType> = production
+            .keys()
+            .copied()
+            .filter(|r| r.is_tradeable())
+            .collect();
+
+        let withheld = if !tradeable.is_empty() && withhold_chance > 0 {
+            // xorshift64 step
+            rng_state ^= rng_state << 13;
+            rng_state ^= rng_state >> 7;
+            rng_state ^= rng_state << 17;
+            let roll = (rng_state >> 32) as u32 % 100;
+            if roll < withhold_chance {
+                rng_state ^= rng_state << 13;
+                rng_state ^= rng_state >> 7;
+                rng_state ^= rng_state << 17;
+                let idx = ((rng_state >> 32) as usize) % tradeable.len();
+                Some(tradeable[idx])
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        for (resource, quantity) in &production {
+            if Some(*resource) == withheld {
+                continue;
+            }
+            if resource.is_tradeable() && *quantity > 0 {
+                let price = base_price(*resource);
+                if price != Money::ZERO {
+                    offers.push(TradeOffer {
+                        seller: nation.id,
+                        resource: *resource,
+                        quantity: *quantity,
+                        price_per_unit: price,
+                    });
+                }
+            }
+        }
+    }
+
+    offers
+}
+
+/// The manufactured commodity types that minor nations want to buy each turn.
+/// Covers all Materials and Goods (everything that Great Powers produce in factories).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManufacturedCommodity {
+    Material(crate::types::MaterialType),
+    Goods(crate::types::GoodsType),
+}
+
+/// Generate buy bids from Minor Nations for one manufactured commodity each turn.
+///
+/// Each non-anarchic minor nation always wants to purchase exactly 1 unit of one
+/// randomly chosen manufactured good (Material or GoodsType) per turn.  The
+/// `price_per_unit` they are willing to pay is `buy_price`.  `seed` drives the
+/// PRNG so results are deterministic for a given turn.
+pub fn generate_minor_nation_goods_bids(
+    nations: &[Nation],
+    buy_price: Money,
+    seed: u64,
+) -> Vec<MinorGoodsBid> {
+    use crate::types::{GoodsType, MaterialType};
+    const ALL_MANUFACTURED: &[ManufacturedCommodity] = &[
+        ManufacturedCommodity::Material(MaterialType::Lumber),
+        ManufacturedCommodity::Material(MaterialType::Steel),
+        ManufacturedCommodity::Material(MaterialType::Fabric),
+        ManufacturedCommodity::Material(MaterialType::Paper),
+        ManufacturedCommodity::Material(MaterialType::Arms),
+        ManufacturedCommodity::Material(MaterialType::CannedFood),
+        ManufacturedCommodity::Goods(GoodsType::Furniture),
+        ManufacturedCommodity::Goods(GoodsType::Clothing),
+        ManufacturedCommodity::Goods(GoodsType::Hardware),
+    ];
+
+    let mut bids = Vec::new();
+    let mut rng_state = seed.max(1);
+
+    for nation in nations {
+        if nation.is_great_power()
+            || nation.diplomacy.is_in_anarchy
+            || nation.diplomacy.integrated_by.is_some()
+        {
+            continue;
+        }
+
+        // xorshift64 step — pick one manufactured commodity for this minor
+        rng_state ^= rng_state << 13;
+        rng_state ^= rng_state >> 7;
+        rng_state ^= rng_state << 17;
+        let idx = ((rng_state >> 32) as usize) % ALL_MANUFACTURED.len();
+        let commodity = ALL_MANUFACTURED[idx];
+
+        // Minor nations bid as a resource bid only for Resource-typed goods;
+        // for Material/Goods we record the purchase as a goods-sale-style
+        // event on the seller side.  Since TradeBid is resource-only we model
+        // the manufactured-good purchase as a special one-unit resource phantom.
+        // Instead, we add it to the bids using a dedicated field; for now we
+        // record the desire as a minor-goods-bid separate from the resource pool.
+        bids.push(MinorGoodsBid {
+            buyer: nation.id,
+            commodity,
+            quantity: 1,
+            price_per_unit: buy_price,
+        });
+    }
+
+    bids
+}
+
+/// A bid from a minor nation to purchase one unit of a manufactured commodity.
+#[derive(Debug, Clone)]
+pub struct MinorGoodsBid {
+    pub buyer: NationId,
+    pub commodity: ManufacturedCommodity,
+    pub quantity: u32,
+    pub price_per_unit: Money,
 }
 
 /// Generate trade bids for an AI nation based on available offers and cargo capacity.
@@ -895,6 +1061,176 @@ mod tests {
         assert_eq!(txns[0].buyer, NationId(2));
     }
 
+    // ── generate_minor_nation_offers_with_seed ─────────────────
+
+    /// Build a minor nation with two tiles (Timber + Cotton) in a map/province.
+    fn make_minor_with_resources() -> (Vec<crate::nation::Nation>, Vec<crate::map::Province>, HexMap) {
+        use crate::map::Province;
+        let coord_a = HexCoord::new(0, 0);
+        let coord_b = HexCoord::new(1, 0);
+        let mut hex_map = HexMap::new(10, 10);
+        let mut tile_a = Tile::with_province(TerrainType::Forest, ProvinceId(20));
+        tile_a.set_resource(ResourceType::Timber);
+        hex_map.set_tile(coord_a, tile_a);
+        let mut tile_b = Tile::with_province(TerrainType::Grassland, ProvinceId(20));
+        tile_b.set_resource(ResourceType::Cotton);
+        hex_map.set_tile(coord_b, tile_b);
+        let province = Province::new(
+            ProvinceId(20),
+            "Minor Province".to_string(),
+            NationId(10),
+            coord_a,
+            vec![coord_a, coord_b],
+            3,
+        );
+        let minor = Nation::new(
+            NationId(10),
+            "Bruhr".to_string(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(20),
+        );
+        (vec![minor], vec![province], hex_map)
+    }
+
+    #[test]
+    fn withhold_chance_zero_never_withholds() {
+        let (nations, provinces, hex_map) = make_minor_with_resources();
+        let offers_normal = generate_minor_nation_offers(&nations, &provinces, &hex_map);
+        let offers_seeded = generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 0, 42);
+        // withhold_chance=0 must produce identical count as the unseeded version
+        assert_eq!(offers_seeded.len(), offers_normal.len());
+        assert_eq!(offers_seeded.len(), 2); // Timber + Cotton
+    }
+
+    #[test]
+    fn withhold_chance_100_withholds_exactly_one_resource() {
+        let (nations, provinces, hex_map) = make_minor_with_resources();
+        let offers_full = generate_minor_nation_offers(&nations, &provinces, &hex_map);
+        assert_eq!(offers_full.len(), 2, "setup: minor must have 2 resources");
+        // At 100% chance, exactly one resource should be withheld
+        let offers_withheld = generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 100, 99);
+        assert_eq!(offers_withheld.len(), 1, "100% chance must withhold exactly one of two resources");
+    }
+
+    #[test]
+    fn seeded_offers_are_deterministic() {
+        let (nations, provinces, hex_map) = make_minor_with_resources();
+        let a = generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 50, 12345);
+        let b = generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 50, 12345);
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert_eq!(x.seller, y.seller);
+            assert_eq!(x.resource, y.resource);
+        }
+    }
+
+    #[test]
+    fn different_seeds_can_withhold_different_resources() {
+        let (nations, provinces, hex_map) = make_minor_with_resources();
+        // Try many seeds; with 100% chance, each seed consistently withholds one specific resource.
+        // Collect the withheld resource across seeds and verify they differ (not always same one).
+        let full = generate_minor_nation_offers(&nations, &provinces, &hex_map);
+        assert_eq!(full.len(), 2, "setup: minor must have Timber + Cotton");
+        let withheld: Vec<ResourceType> = (1u64..=200)
+            .filter_map(|seed| {
+                let offers = generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 100, seed);
+                // withheld = resource present in full but absent in offers
+                full.iter().find(|o| !offers.iter().any(|x| x.resource == o.resource)).map(|o| o.resource)
+            })
+            .collect();
+        let has_timber = withheld.iter().any(|r| *r == ResourceType::Timber);
+        let has_cotton = withheld.iter().any(|r| *r == ResourceType::Cotton);
+        // With 200 seeds both resources should appear as withheld at some point
+        assert!(has_timber && has_cotton, "different seeds should withhold different resources across 200 seeds");
+    }
+
+    // ── generate_minor_nation_goods_bids ───────────────────────
+
+    #[test]
+    fn goods_bids_one_per_minor_nation() {
+        let nations = vec![make_minor_nation(1)];
+        let minor_count = nations
+            .iter()
+            .filter(|n| !n.is_great_power() && !n.diplomacy.is_in_anarchy)
+            .count();
+        let bids =
+            generate_minor_nation_goods_bids(&nations, Money::dollars(150), 999);
+        assert_eq!(bids.len(), minor_count);
+    }
+
+    #[test]
+    fn goods_bids_use_specified_price() {
+        let nations = vec![make_minor_nation(1)];
+        let bids =
+            generate_minor_nation_goods_bids(&nations, Money::dollars(200), 1);
+        for bid in &bids {
+            assert_eq!(bid.price_per_unit, Money::dollars(200));
+            assert_eq!(bid.quantity, 1);
+        }
+    }
+
+    #[test]
+    fn goods_bids_are_deterministic() {
+        let nations = vec![make_minor_nation(1)];
+        let a = generate_minor_nation_goods_bids(&nations, Money::dollars(150), 77777);
+        let b = generate_minor_nation_goods_bids(&nations, Money::dollars(150), 77777);
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert_eq!(x.buyer, y.buyer);
+            assert_eq!(x.commodity, y.commodity);
+        }
+    }
+
+    #[test]
+    fn goods_bids_differ_with_different_seeds() {
+        let nations = make_nations_with_many_minors();
+        let a = generate_minor_nation_goods_bids(&nations, Money::dollars(150), 1);
+        let b = generate_minor_nation_goods_bids(&nations, Money::dollars(150), 999999);
+        // With enough minor nations, at least some commodities should differ
+        let same = a.iter().zip(b.iter()).filter(|(x, y)| x.commodity == y.commodity).count();
+        assert!(same < a.len(), "Expected at least some commodities to differ with different seeds");
+    }
+
+    #[test]
+    fn anarchic_minor_nations_excluded_from_bids() {
+        let mut nations = vec![make_minor_nation(1)];
+        for n in &mut nations {
+            if !n.is_great_power() {
+                n.diplomacy.is_in_anarchy = true;
+                break;
+            }
+        }
+        let bids = generate_minor_nation_goods_bids(&nations, Money::dollars(150), 1);
+        assert_eq!(bids.len(), 0);
+    }
+
+    #[test]
+    fn integrated_minor_nations_excluded_from_bids() {
+        let mut nations = vec![make_minor_nation(1), make_minor_nation(2)];
+        // Mark minor 1 as integrated (absorbed by another nation)
+        nations[0].diplomacy.integrated_by = Some(NationId(99));
+        let bids = generate_minor_nation_goods_bids(&nations, Money::dollars(150), 1);
+        // Only minor 2 should bid
+        assert_eq!(bids.len(), 1);
+        assert_eq!(bids[0].buyer, NationId(2));
+    }
+
+    fn make_minor_nation(id: u32) -> crate::nation::Nation {
+        use crate::nation::{Nation, NationColor};
+        Nation::new(
+            NationId(id),
+            format!("Minor{id}"),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(id),
+        )
+    }
+
+    fn make_nations_with_many_minors() -> Vec<crate::nation::Nation> {
+        (1..=15).map(make_minor_nation).collect()
+    }
+
     // ── TradeHistoryEntry ──────────────────────────────────────
 
     #[test]
@@ -903,6 +1239,7 @@ mod tests {
             turn: TurnNumber(5),
             partner: NationId(10),
             resource: ResourceType::Timber,
+            commodity_label: "Timber".to_string(),
             quantity: 3,
             total_cost: Money::dollars(150),
             bought: true,
@@ -920,6 +1257,7 @@ mod tests {
             turn: TurnNumber(12),
             partner: NationId(5),
             resource: ResourceType::Coal,
+            commodity_label: "Coal".to_string(),
             quantity: 7,
             total_cost: Money::dollars(525),
             bought: true,

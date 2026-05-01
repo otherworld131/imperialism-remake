@@ -1129,12 +1129,23 @@ pub fn ai_manage_resources(
         let revenue = Money::dollars(*price_per_unit) * excess as i64;
 
         // Mutations go through game.
+        let current_turn = game.turn;
         let Some(nation) = game.get_nation_mut(nation_id) else {
             return;
         };
         nation.consume_goods(*goods_type, excess);
         nation.economy.treasury += revenue;
         total_revenue += revenue;
+        // Record in trade history: AI GP auto-sold goods to world market (NationId(0) sentinel)
+        nation.archives.trade_history.push(trade::TradeHistoryEntry {
+            turn: current_turn,
+            partner: NationId(0),
+            resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
+            commodity_label: format!("{goods_type:?}"),
+            quantity: excess,
+            total_cost: revenue,
+            bought: false,
+        });
         game.transient.pending_ai_goods_outflows.push((
             nation_id,
             *goods_type,
@@ -1479,6 +1490,7 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
         10
     };
 
+    let current_turn = game.turn;
     let mut total_revenue = Money::ZERO;
     {
         let nation = match game.get_nation_mut(nation_id) {
@@ -1505,7 +1517,6 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
             ResourceType::Horses,
             ResourceType::Oil,
         ];
-
         for resource in tradeable_resources {
             let amount = nation.resource_amount(resource);
             if amount > trade_resource_reserve {
@@ -1516,6 +1527,16 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
                     nation.remove_resource(resource, excess);
                     nation.economy.treasury += revenue;
                     total_revenue += revenue;
+                    // Record in trade history: AI GP sold excess resource to world market
+                    nation.archives.trade_history.push(trade::TradeHistoryEntry {
+                        turn: current_turn,
+                        partner: NationId(0), // world-market sentinel
+                        resource,
+                        commodity_label: format!("{resource:?}"),
+                        quantity: excess,
+                        total_cost: revenue,
+                        bought: false,
+                    });
                 }
             }
         }
@@ -2027,6 +2048,7 @@ mod tests {
                 turn: TurnNumber::new(1),
                 partner: NationId(1),
                 resource: ResourceType::Timber,
+                commodity_label: "Timber".to_string(),
                 quantity: 30,
                 total_cost: Money::dollars(600),
                 bought: true,
@@ -2060,6 +2082,7 @@ mod tests {
                 turn: TurnNumber::new(1),
                 partner: NationId(1),
                 resource: ResourceType::Timber,
+                commodity_label: "Timber".to_string(),
                 quantity: 100,
                 total_cost: Money::dollars(2000),
                 bought: true,
@@ -2089,6 +2112,7 @@ mod tests {
                 turn: TurnNumber::new(1), // 49 turns stale
                 partner: NationId(1),
                 resource: ResourceType::Timber,
+                commodity_label: "Timber".to_string(),
                 quantity: 100,
                 total_cost: Money::dollars(2000),
                 bought: true,

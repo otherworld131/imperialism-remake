@@ -502,12 +502,15 @@ pub(crate) fn print_trade(game: &GameState) {
 
     // Show cargo utilization: estimate how many holds are used by current trade volume
     if cargo_capacity > 0 {
-        // Count total quantity being traded (sum of last turn's transactions for this player)
+        // Count total quantity being traded (sum of last turn's transactions for this player).
+        // Exclude world-market auto-sells (NationId(0)) and manufactured-goods sentinel entries.
         let cargo_used: u32 = player
             .archives.trade_history
             .iter()
             .filter(|th| th.turn == game.turn || th.turn.0 + 1 == game.turn.0)
-            .filter(|th| th.partner != player.id) // buyer entries
+            .filter(|th| th.partner != player.id)
+            .filter(|th| th.partner.0 != 0)
+            .filter(|th| th.commodity_label == format!("{:?}", th.resource))
             .map(|th| th.quantity)
             .sum();
         let cargo_used = cargo_used.min(cargo_capacity);

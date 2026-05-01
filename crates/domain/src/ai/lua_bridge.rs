@@ -306,6 +306,11 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         ai_consulate_treasury_threshold: table
             .get("ai_consulate_treasury_threshold")
             .unwrap_or(2000),
+        // Minor nation trade behaviour
+        minor_resource_withhold_chance: table
+            .get("minor_resource_withhold_chance")
+            .unwrap_or(20),
+        minor_goods_buy_price: table.get("minor_goods_buy_price").unwrap_or(150),
     };
     // Sanitize: ensure no zero-or-negative values for fields used as divisors/multipliers
     let sanitized_default_garrison = cfg.default_garrison_per_province.clamp(0, 20);
@@ -525,6 +530,9 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         labor_hire_civilian_tier2_max: cfg.labor_hire_civilian_tier2_max.clamp(0, 20),
         // D-7: AI consulate treasury threshold
         ai_consulate_treasury_threshold: cfg.ai_consulate_treasury_threshold.clamp(0, 1_000_000),
+        // Minor nation trade tunables
+        minor_resource_withhold_chance: cfg.minor_resource_withhold_chance.min(100),
+        minor_goods_buy_price: cfg.minor_goods_buy_price.clamp(1, 1_000_000),
         ..cfg
     }
 }

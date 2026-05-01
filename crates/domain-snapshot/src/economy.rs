@@ -254,6 +254,10 @@ pub struct TradeHistoryEntry {
     pub turn: TurnNumber,
     pub partner: NationId,
     pub resource: ResourceType,
+    /// Human-readable commodity label. Defaults to the resource name for resource
+    /// trades; overridden to the material/goods name for manufactured-good sales.
+    #[serde(default)]
+    pub commodity_label: String,
     pub quantity: u32,
     pub total_cost: Money,
     #[serde(default)]
@@ -912,6 +916,7 @@ impl From<&d::trade::TradeHistoryEntry> for TradeHistoryEntry {
             turn: v.turn.into(),
             partner: v.partner.into(),
             resource: v.resource.into(),
+            commodity_label: v.commodity_label.clone(),
             quantity: v.quantity,
             total_cost: v.total_cost.into(),
             bought: v.bought,
@@ -924,6 +929,7 @@ impl From<TradeHistoryEntry> for d::trade::TradeHistoryEntry {
             turn: v.turn.into(),
             partner: v.partner.into(),
             resource: v.resource.into(),
+            commodity_label: v.commodity_label,
             quantity: v.quantity,
             total_cost: v.total_cost.into(),
             bought: v.bought,
