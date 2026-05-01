@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, HashMap};
 /// Colors used to distinguish nations on the map and in the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NationColor {
-    // Great Power colors
+    // Great Power colors (first 7 match the original game)
     Yellow,
     Orange,
     LightBlue,
@@ -23,6 +23,21 @@ pub enum NationColor {
     Green,
     Purple,
     Blue,
+    // Additional GP colors — used when num_great_powers > 7 so each GP still
+    // gets a visually distinct hue (every-frame color matters for tile fill).
+    Crimson,
+    Magenta,
+    Forest,
+    Gold,
+    Aqua,
+    Violet,
+    BurntOrange,
+    HotPink,
+    Turquoise,
+    Slate,
+    Mauve,
+    Sage,
+    Mustard,
     // Minor nation colors
     Gray,
     Brown,

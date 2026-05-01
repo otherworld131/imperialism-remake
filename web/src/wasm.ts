@@ -475,11 +475,54 @@ export function parseGameJson(json: string): any {
 
 // ── Existing wrapper functions ───────────────────────────────────────
 
+export interface TerrainMix {
+  grassland: number;
+  forest: number;
+  hills: number;
+  mountain: number;
+  desert: number;
+  swamp: number;
+  tundra: number;
+  forest_cluster: number;
+  hills_cluster: number;
+  mountain_cluster: number;
+  desert_cluster: number;
+  swamp_cluster: number;
+  /** 0 = uniform tundra, 1 = strong concentration at top/bottom rows. */
+  pole_tundra_strength: number;
+  /** Outermost guaranteed-sea ring width (cells). */
+  sea_hard_margin: number;
+  /** Soft-falloff zone width (cells). Must exceed sea_hard_margin. */
+  sea_falloff_radius: number;
+  /** Multiplier on continent target size: 1 = baseline, 0.3 = sparse, 2 = dense. */
+  land_amount: number;
+}
+
+export const DEFAULT_TERRAIN_MIX: TerrainMix = {
+  grassland: 55,
+  forest: 20,
+  hills: 13,
+  mountain: 5,
+  desert: 3,
+  swamp: 3,
+  tundra: 1,
+  forest_cluster: 25,
+  hills_cluster: 20,
+  mountain_cluster: 12,
+  desert_cluster: 15,
+  swamp_cluster: 10,
+  pole_tundra_strength: 0.5,
+  sea_hard_margin: 1,
+  sea_falloff_radius: 5,
+  land_amount: 1.0,
+};
+
 export interface MapGenConfig {
   width: number;
   height: number;
   numGreatPowers: number;
   numMinorNations: number;
+  terrain?: TerrainMix;
 }
 
 export const DEFAULT_MAP_GEN_CONFIG: MapGenConfig = {
@@ -487,7 +530,12 @@ export const DEFAULT_MAP_GEN_CONFIG: MapGenConfig = {
   height: 50,
   numGreatPowers: 7,
   numMinorNations: 16,
+  terrain: DEFAULT_TERRAIN_MIX,
 };
+
+function terrainJson(cfg: MapGenConfig): string {
+  return cfg.terrain ? JSON.stringify(cfg.terrain) : '';
+}
 
 export async function newGame(
   mapKey: string,
@@ -506,6 +554,7 @@ export async function newGame(
     cfg.numGreatPowers,
     cfg.numMinorNations,
     flavorKey,
+    terrainJson(cfg),
   );
 }
 
@@ -562,6 +611,7 @@ export async function newObserverGame(
     cfg.numGreatPowers,
     cfg.numMinorNations,
     flavorKey,
+    terrainJson(cfg),
   );
 }
 

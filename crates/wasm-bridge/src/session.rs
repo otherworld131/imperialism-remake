@@ -77,6 +77,7 @@ pub fn wasm_session_new_game(
     num_great_powers: u32,
     num_minor_nations: u32,
     flavor_key: &str,
+    terrain_json: &str,
 ) -> String {
     let diff = crate::difficulty_from_u8(difficulty);
     let cfg = MapGenConfig {
@@ -84,6 +85,7 @@ pub fn wasm_session_new_game(
         height: map_height.clamp(20, 150),
         num_great_powers: (num_great_powers as usize).clamp(1, 20),
         num_minor_nations: (num_minor_nations as usize).min(32),
+        terrain: crate::parse_terrain_mix(terrain_json),
     };
     let mut game = new_game_with_data_and_config(
         map_key,

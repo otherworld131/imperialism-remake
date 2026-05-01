@@ -3,8 +3,20 @@ use std::collections::{HashMap, HashSet};
 use crate::hex::HexCoord;
 use crate::types::*;
 
+use super::bounds::MapBounds;
 use super::hex_map::HexMap;
 use super::province::Province;
+
+/// Default hard margin: continents are never placed in this many cells of
+/// the map's edge. A small absolute floor only — the natural sea ring comes
+/// from the soft falloff. Tunable via `TerrainMix::sea_hard_margin`.
+pub const DEFAULT_SEA_HARD_MARGIN: i32 = 1;
+
+/// Default cells of soft falloff around the map edge. Continent growth
+/// probability decays linearly from full strength at distance ≥ this many
+/// cells down to 0 at the hard margin. Tunable via
+/// `TerrainMix::sea_falloff_radius`.
+pub const DEFAULT_SEA_FALLOFF_RADIUS: i32 = 5;
 
 // ── Constants ──────────────────────────────────────────────────
 
@@ -25,6 +37,69 @@ const MINOR_NATION_NAME_POOL: [&str; 16] = [
     "Pram", "Sindel", "Twelt", "Wodan", "Zazi", "Zinlu",
 ];
 
+/// Per-terrain weights and clustering parameters for map generation.
+///
+/// Weights are *relative* — the picker normalizes them, so values of
+/// (10, 5, 1, 1, 1, 1) are equivalent to (100, 50, 10, 10, 10, 10).
+/// The defaults reproduce the historical hardcoded distribution.
+#[derive(Debug, Clone, Copy)]
+pub struct TerrainMix {
+    pub grassland: f32,
+    pub forest: f32,
+    pub hills: f32,
+    pub mountain: f32,
+    pub desert: f32,
+    pub swamp: f32,
+    pub tundra: f32,
+    /// Clustering spread chance for each terrain (0–100). Each cluster source
+    /// tile rolls for every neighbor; higher values produce larger contiguous
+    /// patches.
+    pub forest_cluster: i32,
+    pub hills_cluster: i32,
+    pub mountain_cluster: i32,
+    pub desert_cluster: i32,
+    pub swamp_cluster: i32,
+    /// 0 = tundra is distributed uniformly over land. 1 = tundra weight is
+    /// strongly biased toward the top and bottom rows of the map (the poles).
+    pub pole_tundra_strength: f32,
+    /// Outermost guaranteed-sea ring width (cells). Continents never spawn in
+    /// this perimeter so fleets can always circumnavigate.
+    pub sea_hard_margin: i32,
+    /// Soft-falloff zone width (cells). Continent growth probability decays
+    /// linearly from full strength at this distance from the edge to 0 at
+    /// the hard margin, producing organic coastlines along the perimeter
+    /// instead of a rectangular cut. Must be > sea_hard_margin.
+    pub sea_falloff_radius: i32,
+    /// Multiplier on continent target size: 1.0 = baseline (~200-500 tiles
+    /// per continent), 0.3 = sparse archipelagos, 2.0 = dense supercontinents.
+    pub land_amount: f32,
+}
+
+impl Default for TerrainMix {
+    fn default() -> Self {
+        // Historical pre-cluster baseline (per-terrain percent of land tiles
+        // before resources are rolled and before clustering spreads things).
+        Self {
+            grassland: 55.0,
+            forest: 20.0,
+            hills: 13.0,
+            mountain: 5.0,
+            desert: 3.0,
+            swamp: 3.0,
+            tundra: 1.0,
+            forest_cluster: 25,
+            hills_cluster: 20,
+            mountain_cluster: 12,
+            desert_cluster: 15,
+            swamp_cluster: 10,
+            pole_tundra_strength: 0.5,
+            sea_hard_margin: DEFAULT_SEA_HARD_MARGIN,
+            sea_falloff_radius: DEFAULT_SEA_FALLOFF_RADIUS,
+            land_amount: 1.0,
+        }
+    }
+}
+
 /// Configuration for map generation. Use `MapGenConfig::default()` for canonical
 /// 80×50 maps with 7 great powers and 16 minor nations.
 #[derive(Debug, Clone, Copy)]
@@ -33,6 +108,7 @@ pub struct MapGenConfig {
     pub height: i32,
     pub num_great_powers: usize,
     pub num_minor_nations: usize,
+    pub terrain: TerrainMix,
 }
 
 impl Default for MapGenConfig {
@@ -42,6 +118,7 @@ impl Default for MapGenConfig {
             height: DEFAULT_MAP_HEIGHT,
             num_great_powers: DEFAULT_NUM_GREAT_POWERS,
             num_minor_nations: DEFAULT_NUM_MINOR_NATIONS,
+            terrain: TerrainMix::default(),
         }
     }
 }
@@ -161,22 +238,23 @@ pub fn generate_map_with_config(map_key: &str, cfg: &MapGenConfig) -> GeneratedM
     let num_gp = cfg.num_great_powers;
     let num_mn = cfg.num_minor_nations;
 
-    // Step 1: Create land mask via continent generation
-    let land_mask = generate_land_mass(&mut rng, map_width, map_height);
+    // Step 1: Create land mask via continent generation (margin enforced)
+    let bounds = MapBounds::new(map_width, map_height);
+    let land_mask = generate_land_mass(&mut rng, bounds, &cfg.terrain);
 
-    // Step 2: Build hex map and assign terrain to ALL land tiles (no provinces yet)
+    // Step 2: Build hex map and assign terrain to ALL land tiles (no provinces yet).
+    // Only coords inside the offset rectangle exist as tiles; the world's left
+    // and right edges are vertical (within half a hex) instead of diagonal.
     let mut hex_map = HexMap::new(map_width, map_height);
-    for q in 0..map_width {
-        for r in 0..map_height {
-            let coord = HexCoord::new(q, r);
-            hex_map.set_tile(coord, super::tile::Tile::new(TerrainType::Sea));
-        }
+    for coord in bounds.iter_coords() {
+        hex_map.set_tile(coord, super::tile::Tile::new(TerrainType::Sea));
     }
     // Sort land tiles for deterministic RNG consumption (HashSet order is arbitrary)
     let mut land_tiles_sorted: Vec<HexCoord> = land_mask.iter().copied().collect();
     land_tiles_sorted.sort_by_key(|c| (c.q, c.r));
     for &coord in &land_tiles_sorted {
-        let (terrain, resource) = random_land_terrain_with_resource(&mut rng);
+        let (terrain, resource) =
+            random_land_terrain_with_resource(&mut rng, &cfg.terrain, coord, map_height);
         if let Some(res) = resource {
             hex_map.set_tile(coord, super::tile::Tile::with_resource(terrain, res));
         } else {
@@ -185,17 +263,42 @@ pub fn generate_map_with_config(map_key: &str, cfg: &MapGenConfig) -> GeneratedM
     }
 
     // Step 2b: Cluster terrain for spatial coherence (forests→patches, mountains→chains, etc.)
-    cluster_terrain(&mut hex_map, &land_mask, &mut rng, TerrainType::Forest, 25);
-    cluster_terrain(&mut hex_map, &land_mask, &mut rng, TerrainType::Hills, 20);
+    let mix = &cfg.terrain;
+    cluster_terrain(
+        &mut hex_map,
+        &land_mask,
+        &mut rng,
+        TerrainType::Forest,
+        mix.forest_cluster,
+    );
+    cluster_terrain(
+        &mut hex_map,
+        &land_mask,
+        &mut rng,
+        TerrainType::Hills,
+        mix.hills_cluster,
+    );
     cluster_terrain(
         &mut hex_map,
         &land_mask,
         &mut rng,
         TerrainType::Mountain,
-        12,
+        mix.mountain_cluster,
     );
-    cluster_terrain(&mut hex_map, &land_mask, &mut rng, TerrainType::Desert, 15);
-    cluster_terrain(&mut hex_map, &land_mask, &mut rng, TerrainType::Swamp, 10);
+    cluster_terrain(
+        &mut hex_map,
+        &land_mask,
+        &mut rng,
+        TerrainType::Desert,
+        mix.desert_cluster,
+    );
+    cluster_terrain(
+        &mut hex_map,
+        &land_mask,
+        &mut rng,
+        TerrainType::Swamp,
+        mix.swamp_cluster,
+    );
 
     // Step 3: Cluster food terrain and enforce minimum food (before nations/provinces)
     cluster_food_terrain(&mut hex_map, &land_mask, &mut rng, 15);
@@ -289,18 +392,16 @@ pub fn generate_map_with_config(map_key: &str, cfg: &MapGenConfig) -> GeneratedM
     select_province_capitals(&mut hex_map, &all_province_data);
 
     // Step 10: Place hidden mineral deposits on prospectable terrain
-    for q in 0..map_width {
-        for r in 0..map_height {
-            let coord = HexCoord::new(q, r);
-            if let Some(tile) = hex_map.get_tile_mut(coord)
-                && tile.terrain().can_have_deposits()
-                && tile.resource_deposit().is_none()
-            {
-                let roll = rng.range(0, 99);
-                if roll < 40 {
-                    let deposit = random_mineral_deposit(&mut rng, tile.terrain());
-                    tile.set_resource(deposit); // set_resource, NOT reveal — keeps prospected=false
-                }
+    let deposit_coords: Vec<HexCoord> = bounds.iter_coords().collect();
+    for coord in deposit_coords {
+        if let Some(tile) = hex_map.get_tile_mut(coord)
+            && tile.terrain().can_have_deposits()
+            && tile.resource_deposit().is_none()
+        {
+            let roll = rng.range(0, 99);
+            if roll < 40 {
+                let deposit = random_mineral_deposit(&mut rng, tile.terrain());
+                tile.set_resource(deposit); // set_resource, NOT reveal — keeps prospected=false
             }
         }
     }
@@ -481,28 +582,86 @@ struct ProvinceData {
 
 // ── Land generation ────────────────────────────────────────────
 
+/// Linear-falloff multiplier in [0, 100] based on a coord's distance to the
+/// nearest map edge. 100 once we're beyond `falloff_radius` cells, dropping
+/// linearly to 0 at the `hard_margin`. This is the mechanism that produces an
+/// organic, irregular coastline along the world's perimeter instead of a
+/// rectangular sea band: tiles closer to the edge are progressively less
+/// likely to be reached by continent growth.
+fn edge_falloff_factor(
+    coord: HexCoord,
+    bounds: MapBounds,
+    hard_margin: i32,
+    falloff_radius: i32,
+) -> i32 {
+    let qoff = MapBounds::qoff(coord);
+    let dist = qoff
+        .min(bounds.width - 1 - qoff)
+        .min(coord.r)
+        .min(bounds.height - 1 - coord.r);
+    if dist <= hard_margin {
+        0
+    } else if dist >= falloff_radius {
+        100
+    } else {
+        let span = (falloff_radius - hard_margin).max(1);
+        ((dist - hard_margin) * 100) / span
+    }
+}
+
 /// Generate a land mask: a set of hex coordinates that are land.
 /// Uses continent seeds that grow outward to create landmasses.
-fn generate_land_mass(rng: &mut Rng, map_width: i32, map_height: i32) -> HashSet<HexCoord> {
+///
+/// Edge handling: continents grow with a soft probability falloff as they
+/// approach the rectangle's perimeter. Tiles in the outermost
+/// `mix.sea_hard_margin` ring are never land; tiles within
+/// `mix.sea_falloff_radius` have growth chance scaled by a linear factor.
+/// Continents thus taper into ocean naturally, producing organic coastlines
+/// around the world's edge instead of a clean rectangular cut.
+fn generate_land_mass(
+    rng: &mut Rng,
+    bounds: MapBounds,
+    mix: &TerrainMix,
+) -> HashSet<HexCoord> {
+    let hard_margin = mix.sea_hard_margin.max(0);
+    let falloff_radius = mix.sea_falloff_radius.max(hard_margin + 1);
     let mut land = HashSet::new();
 
-    // Place 5-8 continent seeds spread across the map
+    // Place 5-8 continent seeds spread across the map. Seeds work in screen-
+    // column space (qoff) so they're evenly distributed left-to-right
+    // regardless of the diagonal-vs-vertical world shape.
     let num_continents = rng.range(5, 8) as usize;
+    let map_width = bounds.width;
+    let map_height = bounds.height;
     let mut seeds: Vec<HexCoord> = Vec::new();
 
-    // Divide the map into regions to ensure spread
+    // Divide the map into vertical bands (in screen-column space) for spread.
+    // Seeds are placed at least `falloff_radius + 1` cells from any edge so
+    // continents have room to grow before the falloff kicks in.
+    let band_margin = falloff_radius + 1;
     for i in 0..num_continents {
         let region_width = map_width / num_continents as i32;
-        let q = region_width * i as i32 + rng.range(3, region_width.max(4) - 1);
-        let r = rng.range(4, map_height - 5);
-        let seed = HexCoord::new(q.min(map_width - 4), r);
+        let qoff_low = (region_width * i as i32 + band_margin).min(map_width - band_margin - 1);
+        let qoff_high = (qoff_low + region_width.max(4) - 2).min(map_width - band_margin - 1);
+        let qoff = if qoff_high > qoff_low {
+            rng.range(qoff_low, qoff_high)
+        } else {
+            qoff_low
+        };
+        let r_low = band_margin;
+        let r_high = (map_height - band_margin - 1).max(r_low + 1);
+        let r = rng.range(r_low, r_high);
+        let q = qoff - r.div_euclid(2);
+        let seed = HexCoord::new(q, r);
         seeds.push(seed);
     }
 
     // Grow each continent from its seed
+    let land_amount = mix.land_amount.clamp(0.1, 4.0);
     for seed in &seeds {
-        // Target size: 150-350 tiles per continent
-        let target_size = rng.range(200, 500) as usize;
+        // Target size: ~200-500 tiles per continent, scaled by land_amount.
+        let base_target = rng.range(200, 500) as f32;
+        let target_size = (base_target * land_amount).max(20.0) as usize;
         let mut frontier: Vec<HexCoord> = vec![*seed];
         let mut continent: HashSet<HexCoord> = HashSet::new();
         continent.insert(*seed);
@@ -518,17 +677,14 @@ fn generate_land_mass(rng: &mut Rng, map_width: i32, map_height: i32) -> HashSet
                 if continent.contains(neighbor) {
                     continue;
                 }
-                // Stay within map bounds (with margin)
-                if neighbor.q < 1
-                    || neighbor.q >= map_width - 1
-                    || neighbor.r < 1
-                    || neighbor.r >= map_height - 1
-                {
+                // Hard floor: never grow into the outermost ring (guarantees
+                // sea tiles exist on the very edge, so navy can sail past).
+                if !bounds.contains_with_margin(*neighbor, hard_margin) {
                     continue;
                 }
-                // Growth probability — decreases with distance from seed for natural shapes
+                // Distance-from-seed component (existing organic shaping).
                 let dist = seed.distance(*neighbor);
-                let prob = if dist < 5 {
+                let dist_prob = if dist < 5 {
                     85
                 } else if dist < 10 {
                     65
@@ -537,6 +693,10 @@ fn generate_land_mass(rng: &mut Rng, map_width: i32, map_height: i32) -> HashSet
                 } else {
                     25
                 };
+                // Edge-falloff multiplier so continents thin out organically
+                // toward the world's perimeter.
+                let edge_pct = edge_falloff_factor(*neighbor, bounds, hard_margin, falloff_radius);
+                let prob = dist_prob * edge_pct / 100;
 
                 if rng.range(0, 99) < prob {
                     continent.insert(*neighbor);
@@ -944,14 +1104,11 @@ fn cluster_terrain(
 ) {
     // Snapshot all tiles of the target terrain
     let mut source_tiles: Vec<HexCoord> = Vec::new();
-    for q in 0..hex_map.width() {
-        for r in 0..hex_map.height() {
-            let coord = HexCoord::new(q, r);
-            if let Some(tile) = hex_map.get_tile(coord)
-                && tile.terrain() == target_terrain
-            {
-                source_tiles.push(coord);
-            }
+    for coord in hex_map.bounds().iter_coords() {
+        if let Some(tile) = hex_map.get_tile(coord)
+            && tile.terrain() == target_terrain
+        {
+            source_tiles.push(coord);
         }
     }
 
@@ -982,14 +1139,11 @@ fn cluster_food_terrain(
 ) {
     // Collect all current food tiles (snapshot before mutation)
     let mut food_tiles: Vec<(HexCoord, TerrainType, Option<ResourceType>)> = Vec::new();
-    for q in 0..hex_map.width() {
-        for r in 0..hex_map.height() {
-            let coord = HexCoord::new(q, r);
-            if let Some(tile) = hex_map.get_tile(coord)
-                && is_food_terrain(tile)
-            {
-                food_tiles.push((coord, tile.terrain(), tile.resource_deposit()));
-            }
+    for coord in hex_map.bounds().iter_coords() {
+        if let Some(tile) = hex_map.get_tile(coord)
+            && is_food_terrain(tile)
+        {
+            food_tiles.push((coord, tile.terrain(), tile.resource_deposit()));
         }
     }
 
@@ -1187,39 +1341,86 @@ fn select_province_capitals(hex_map: &mut super::hex_map::HexMap, province_data:
 
 // ── Terrain generation ─────────────────────────────────────────
 
-/// Pick a random land terrain type and optional resource with game-appropriate distribution.
-/// Returns (terrain, optional resource).
-/// Pick a random terrain + optional resource. ~60% of tiles have no resource.
-fn random_land_terrain_with_resource(rng: &mut Rng) -> (TerrainType, Option<ResourceType>) {
-    let roll = rng.range(0, 99);
-    match roll {
-        // ── No resource (~60%) ────────────────────────────────
-        // Bare grassland ~30%
-        0..=29 => (TerrainType::Grassland, None),
-        // Bare forest ~10%
-        30..=39 => (TerrainType::Forest, None),
-        // Bare hills ~8%
-        40..=47 => (TerrainType::Hills, None),
-        // Mountains ~5% (deposits placed separately via prospecting)
-        48..=52 => (TerrainType::Mountain, None),
-        // Desert/swamp/tundra ~7% (oil deposits placed separately)
-        53..=55 => (TerrainType::Desert, None),
-        56..=58 => (TerrainType::Swamp, None),
-        59 => (TerrainType::Tundra, None),
+/// Pick a random land terrain type and optional resource using the configured mix.
+///
+/// Tundra weight is biased by latitude — at full `pole_tundra_strength`, tiles
+/// in the top and bottom rows get up to 5× the base tundra weight, while the
+/// equator stays at the base weight. Resource rolls are conditional on the
+/// chosen terrain and follow the historical surface-resource distribution.
+fn random_land_terrain_with_resource(
+    rng: &mut Rng,
+    mix: &TerrainMix,
+    coord: HexCoord,
+    map_height: i32,
+) -> (TerrainType, Option<ResourceType>) {
+    // pole_strength ∈ [0, 1]: 0 at the equator (mid row), 1 at the top/bottom
+    // edge of the world. Squared so the boost concentrates near the very edge
+    // rather than fading linearly into the middle latitudes.
+    let pole_strength = if map_height > 1 {
+        let mid = (map_height as f32 - 1.0) * 0.5;
+        let dist_from_mid = (coord.r as f32 - mid).abs();
+        (dist_from_mid / mid).clamp(0.0, 1.0).powi(2)
+    } else {
+        0.0
+    };
+    let tundra_boost = 1.0 + mix.pole_tundra_strength.max(0.0) * 4.0 * pole_strength;
+    let weights = [
+        (TerrainType::Grassland, mix.grassland.max(0.0)),
+        (TerrainType::Forest, mix.forest.max(0.0)),
+        (TerrainType::Hills, mix.hills.max(0.0)),
+        (TerrainType::Mountain, mix.mountain.max(0.0)),
+        (TerrainType::Desert, mix.desert.max(0.0)),
+        (TerrainType::Swamp, mix.swamp.max(0.0)),
+        (TerrainType::Tundra, mix.tundra.max(0.0) * tundra_boost),
+    ];
+    let total: f32 = weights.iter().map(|(_, w)| *w).sum();
+    let terrain = if total <= 0.0 {
+        TerrainType::Grassland
+    } else {
+        let mut roll = (rng.next_u32() as f32 / u32::MAX as f32) * total;
+        let mut chosen = TerrainType::Grassland;
+        for (terrain, w) in &weights {
+            if roll < *w {
+                chosen = *terrain;
+                break;
+            }
+            roll -= *w;
+        }
+        chosen
+    };
+    let resource = roll_surface_resource(rng, terrain);
+    (terrain, resource)
+}
 
-        // ── With resource (~40%) ──────────────────────────────
-        // Grassland + food/cash crops
-        60..=65 => (TerrainType::Grassland, Some(ResourceType::Grain)),
-        66..=69 => (TerrainType::Grassland, Some(ResourceType::Fruit)),
-        70..=74 => (TerrainType::Grassland, Some(ResourceType::Cotton)),
-        75..=78 => (TerrainType::Grassland, Some(ResourceType::Livestock)),
-        79..=81 => (TerrainType::Grassland, Some(ResourceType::Horses)),
-        // Hills + wool
-        82..=86 => (TerrainType::Hills, Some(ResourceType::Wool)),
-        // Forest + timber
-        87..=96 => (TerrainType::Forest, Some(ResourceType::Timber)),
-        // Remaining: grain
-        _ => (TerrainType::Grassland, Some(ResourceType::Grain)),
+/// Roll for a surface resource conditional on the terrain. Mineral deposits
+/// for Mountain/Hills/Desert/Swamp/Tundra are placed in a separate prospecting
+/// pass and so are not produced here.
+fn roll_surface_resource(rng: &mut Rng, terrain: TerrainType) -> Option<ResourceType> {
+    let roll = rng.range(0, 99);
+    match terrain {
+        TerrainType::Grassland => match roll {
+            0..=54 => None,
+            55..=70 => Some(ResourceType::Grain),
+            71..=77 => Some(ResourceType::Fruit),
+            78..=86 => Some(ResourceType::Cotton),
+            87..=93 => Some(ResourceType::Livestock),
+            _ => Some(ResourceType::Horses),
+        },
+        TerrainType::Forest => {
+            if roll < 50 {
+                Some(ResourceType::Timber)
+            } else {
+                None
+            }
+        }
+        TerrainType::Hills => {
+            if roll < 38 {
+                Some(ResourceType::Wool)
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
 
@@ -1336,6 +1537,135 @@ mod tests {
         let capitals1: Vec<_> = map1.provinces.iter().map(|p| p.capital_tile).collect();
         let capitals2: Vec<_> = map2.provinces.iter().map(|p| p.capital_tile).collect();
         assert_ne!(capitals1, capitals2);
+    }
+
+    #[test]
+    fn outer_sea_ring_is_traversable() {
+        // The outermost SEA_HARD_MARGIN ring of the offset rectangle must always be sea,
+        // guaranteeing fleets can sail around the world's perimeter regardless of
+        // where continents end up. The soft falloff just inside this ring may
+        // contain land, by design — the rectangular look is broken up at the cost
+        // of a shoreline that wiggles in and out of the falloff zone.
+        for key in ["sea_ring_a", "sea_ring_b", "sea_ring_c", "sea_ring_d"] {
+            let result = generate_map(key);
+            let bounds = result.hex_map.bounds();
+            for coord in bounds.iter_coords() {
+                if !bounds.is_edge_ring(coord, DEFAULT_SEA_HARD_MARGIN) {
+                    continue;
+                }
+                let tile = result.hex_map.get_tile(coord).unwrap_or_else(|| {
+                    panic!("missing tile at edge-ring coord {coord} for key {key}")
+                });
+                assert_eq!(
+                    tile.terrain(),
+                    TerrainType::Sea,
+                    "edge-ring coord {coord} (key {key}) is {:?}, expected Sea",
+                    tile.terrain()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pole_tundra_strength_concentrates_tundra_at_edges() {
+        // With strong pole bias, tundra should be much more common in the top/
+        // bottom 20% of rows than in the middle 20%.
+        let mut cfg = MapGenConfig::default();
+        cfg.terrain.pole_tundra_strength = 1.0;
+        cfg.terrain.tundra = 5.0; // high enough that we get a meaningful sample
+        let map = generate_map_with_config("pole_test", &cfg);
+        let h = map.hex_map.height();
+        let pole_threshold = h / 5;
+        let mid_lo = h * 2 / 5;
+        let mid_hi = h * 3 / 5;
+        let mut pole_tundra = 0;
+        let mut pole_total = 0;
+        let mut mid_tundra = 0;
+        let mut mid_total = 0;
+        for (coord, tile) in map.hex_map.all_tiles() {
+            if tile.terrain() == TerrainType::Sea {
+                continue;
+            }
+            if coord.r < pole_threshold || coord.r >= h - pole_threshold {
+                pole_total += 1;
+                if tile.terrain() == TerrainType::Tundra {
+                    pole_tundra += 1;
+                }
+            } else if coord.r >= mid_lo && coord.r < mid_hi {
+                mid_total += 1;
+                if tile.terrain() == TerrainType::Tundra {
+                    mid_tundra += 1;
+                }
+            }
+        }
+        // Need at least some sample to compare meaningfully.
+        assert!(pole_total > 30 && mid_total > 30);
+        let pole_share = pole_tundra as f32 / pole_total as f32;
+        let mid_share = mid_tundra as f32 / mid_total as f32;
+        // Squared pole_strength + 5× max boost should produce a clear gradient.
+        assert!(
+            pole_share > mid_share * 1.5,
+            "pole tundra share {pole_share} should exceed mid share {mid_share} by ≥1.5×"
+        );
+    }
+
+    #[test]
+    fn zero_pole_strength_does_not_concentrate_tundra() {
+        // With strength = 0, tundra should be roughly uniform across rows.
+        let mut cfg = MapGenConfig::default();
+        cfg.terrain.pole_tundra_strength = 0.0;
+        cfg.terrain.tundra = 10.0;
+        let map = generate_map_with_config("uniform_test", &cfg);
+        let h = map.hex_map.height();
+        let pole_threshold = h / 5;
+        let mut pole_tundra = 0;
+        let mut pole_total = 0;
+        let mut mid_tundra = 0;
+        let mut mid_total = 0;
+        for (coord, tile) in map.hex_map.all_tiles() {
+            if tile.terrain() == TerrainType::Sea {
+                continue;
+            }
+            if coord.r < pole_threshold || coord.r >= h - pole_threshold {
+                pole_total += 1;
+                if tile.terrain() == TerrainType::Tundra {
+                    pole_tundra += 1;
+                }
+            } else {
+                mid_total += 1;
+                if tile.terrain() == TerrainType::Tundra {
+                    mid_tundra += 1;
+                }
+            }
+        }
+        let pole_share = pole_tundra as f32 / pole_total.max(1) as f32;
+        let mid_share = mid_tundra as f32 / mid_total.max(1) as f32;
+        // No bias: shares should be within 2× of each other (random sample noise).
+        assert!(
+            pole_share < mid_share * 2.0 + 0.05,
+            "with strength=0, pole {pole_share} and mid {mid_share} should be similar"
+        );
+    }
+
+    #[test]
+    fn map_bounds_form_offset_rectangle() {
+        // Every row of the generated map should contain exactly map_width tiles
+        // (the offset rectangle), not the parallelogram of the old axial layout.
+        let result = generate_map("offset_rect_test");
+        let bounds = result.hex_map.bounds();
+        for r in 0..bounds.height {
+            let count = (0..bounds.width)
+                .filter(|qoff| {
+                    let q = qoff - r.div_euclid(2);
+                    result.hex_map.get_tile(HexCoord::new(q, r)).is_some()
+                })
+                .count();
+            assert_eq!(
+                count as i32, bounds.width,
+                "row r={r} should have {} tiles, has {count}",
+                bounds.width
+            );
+        }
     }
 
     #[test]

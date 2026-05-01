@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use crate::hex::HexCoord;
 use crate::types::*;
 
+use super::bounds::MapBounds;
 use super::tile::Tile;
 
 /// The hex-based game map. Stores all tiles indexed by axial hex coordinates.
@@ -92,6 +93,12 @@ impl HexMap {
     /// The logical height of the map (number of rows).
     pub fn height(&self) -> i32 {
         self.height
+    }
+
+    /// The offset-rectangle bounds for this map. Tiles at coords outside
+    /// these bounds are off-map and never populated by map generation.
+    pub fn bounds(&self) -> MapBounds {
+        MapBounds::new(self.width, self.height)
     }
 }
 

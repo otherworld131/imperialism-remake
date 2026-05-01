@@ -93,6 +93,19 @@ pub(crate) fn nation_color_code(nation: &Nation) -> &str {
         NationColor::Green => "\x1b[92m",
         NationColor::Purple => "\x1b[95m",
         NationColor::Blue => "\x1b[94m",
+        NationColor::Crimson => "\x1b[91m",
+        NationColor::Magenta => "\x1b[95m",
+        NationColor::Forest => "\x1b[32m",
+        NationColor::Gold => "\x1b[33m",
+        NationColor::Aqua => "\x1b[96m",
+        NationColor::Violet => "\x1b[35m",
+        NationColor::BurntOrange => "\x1b[33m",
+        NationColor::HotPink => "\x1b[95m",
+        NationColor::Turquoise => "\x1b[36m",
+        NationColor::Slate => "\x1b[37m",
+        NationColor::Mauve => "\x1b[35m",
+        NationColor::Sage => "\x1b[32m",
+        NationColor::Mustard => "\x1b[33m",
         NationColor::Gray => "\x1b[37m",
         NationColor::Brown => "\x1b[33m",
         NationColor::Pink => "\x1b[95m",
@@ -2223,7 +2236,11 @@ pub(crate) fn render_map(hex_map: &HexMap, nations: &[Nation]) {
             print!("  ");
         }
 
-        for q in 0..hex_map.width() {
+        // Offset-rectangle world: row r spans qoff in [0, width),
+        // mapped to axial q via qoff - r.div_euclid(2).
+        let shift = r.div_euclid(2);
+        for qoff in 0..hex_map.width() {
+            let q = qoff - shift;
             let coord = HexCoord::new(q, r);
             match hex_map.get_tile(coord) {
                 Some(tile) => {

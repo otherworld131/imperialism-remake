@@ -8,6 +8,17 @@ import HexTooltip from './HexTooltip';
 const HEX_SIZE = 18;
 const SQRT3 = Math.sqrt(3);
 
+// Perf instrumentation toggle. Flip in DevTools console with
+//   localStorage.setItem('hexmap.perf', '1'); location.reload();
+// to log mapGeometry / classifiedEdges / render timings. Off by default so
+// production users don't see console noise.
+const PERF_LOG = typeof window !== 'undefined' && window.localStorage?.getItem('hexmap.perf') === '1';
+const perfMark = (label: string): (() => void) => {
+  if (!PERF_LOG) return () => {};
+  const t0 = performance.now();
+  return () => console.log(`[hexmap] ${label}: ${(performance.now() - t0).toFixed(2)}ms`);
+};
+
 // ─── Organic-border tunables ────────────────────────────────────────────
 // All knobs for the "non-hex looking" map rendering live here. Tweak these
 // and the effect appears immediately on next render — no other code needs
@@ -75,7 +86,13 @@ const TERRAIN_COLORS: Record<string, string> = {
 const NATION_COLORS: Record<string, string> = {
   Yellow: '#ffd900', Orange: '#ff8c00', LightBlue: '#66b3ff',
   Red: '#e62626', Green: '#1abf1a', Purple: '#a633d9',
-  Blue: '#3359e6', Gray: '#999', Brown: '#8c5926',
+  Blue: '#3359e6',
+  Crimson: '#b00020', Magenta: '#d913a8', Forest: '#1f5b2c',
+  Gold: '#d4a52a', Aqua: '#00b8c4', Violet: '#8a2be2',
+  BurntOrange: '#cc5500', HotPink: '#ff44a0', Turquoise: '#14b89c',
+  Slate: '#5a6e8c', Mauve: '#b07ab0', Sage: '#7a9b6a',
+  Mustard: '#b88a00',
+  Gray: '#999', Brown: '#8c5926',
   Pink: '#ff80b3', Teal: '#00b3a6', Olive: '#808000',
   Maroon: '#8c001a', Navy: '#00008c', Cyan: '#00cccc',
   Lime: '#73d900', Coral: '#ff8059', Lavender: '#b380e6',
@@ -541,8 +558,13 @@ export default function HexMap({
    *  tile. No-op until map dims are known. */
   const wrapHex = useCallback((q: number, r: number): [number, number] => {
     const w = mapDims.mapWidth;
-    if (w > 0) return [((q % w) + w) % w, r];
-    return [q, r];
+    if (w <= 0) return [q, r];
+    // Wrap in offset-q space — the world is an offset rectangle, not an
+    // axial parallelogram, so naive q-modulo lands outside the row's range.
+    const shift = Math.floor(r / 2);
+    const qoff = q + shift;
+    const wqoff = ((qoff % w) + w) % w;
+    return [wqoff - shift, r];
   }, [mapDims]);
 
   /** Wrap a world-space x coordinate into the primary map copy. Used for
@@ -676,6 +698,40 @@ export default function HexMap({
     return m;
   }, [tiles]);
 
+  // Per-tile world-space center, computed once per tiles change. The render
+  // path uses it for frustum culling instead of paying hexToPixel per tile per
+  // pass.
+  const tilePositions = useMemo(() => {
+    const out = new Array<{ tile: TileData; px: number; py: number }>(tiles.length);
+    for (let i = 0; i < tiles.length; i++) {
+      const t = tiles[i];
+      const [px, py] = hexToPixel(t.q, t.r);
+      out[i] = { tile: t, px, py };
+    }
+    return out;
+  }, [tiles]);
+
+  // Border-relevant fingerprint. mapGeometry / classifiedEdges only need to
+  // recompute when a tile's coastline (terrain Sea?), country (visual_group /
+  // owner) or province assignment changes. Most turn-tick fields (visible,
+  // civilian_on_tile, army_*, etc.) are border-irrelevant. Pinning the heavy
+  // border memos to this fingerprint lets ownership-stable turns reuse the
+  // previous result.
+  const borderSignature = useMemo(() => {
+    const end = perfMark(`borderSignature (${tiles.length} tiles)`);
+    const parts = new Array<string>(tiles.length + 1);
+    parts[0] = String(tiles[0]?.map_width ?? 0);
+    for (let i = 0; i < tiles.length; i++) {
+      const t = tiles[i];
+      parts[i + 1] = `${t.q},${t.r},${t.terrain === 'Sea' ? 1 : 0},${t.visual_group ?? ''},${t.owner ?? ''},${t.province ?? ''}`;
+    }
+    const sig = parts.join('|');
+    end();
+    return sig;
+  }, [tiles]);
+  const tilesRef = useRef(tiles);
+  tilesRef.current = tiles;
+
   const SEA_ZONE_FILL_COLOR = 'rgba(20, 70, 130, 0.12)';
   const SEA_ZONE_BORDER_COLOR = 'rgba(0, 40, 100, 0.45)';
 
@@ -744,6 +800,8 @@ export default function HexMap({
   // web/src/lib/mapGeometry.ts. Computed only when organicBorders is on.
   const mapGeometry = useMemo(() => {
     if (!organicBorders) return null;
+    const tiles = tilesRef.current;
+    const end = perfMark(`mapGeometry (${tiles.length} tiles)`);
     const verts = hexVertices(HEX_SIZE);
     const tileMapLocal = new Map<string, TileData>();
     for (const tile of tiles) tileMapLocal.set(`${tile.q},${tile.r}`, tile);
@@ -756,9 +814,18 @@ export default function HexMap({
     // across the seam are correctly identified as interior neighbours and
     // the border / coast generation skips the seam entirely.
     const mw = tiles[0]?.map_width ?? 0;
+    // Wrap in offset-q space (q + floor(r/2)) rather than raw axial q. The
+    // world is an offset rectangle: each row r holds q in
+    // [-floor(r/2), mw - floor(r/2)), so naive q-modulo would wrap into
+    // coordinates that don't exist for that row. Wrapping in offset-q first,
+    // then converting back, lands on the actual stored neighbor across the
+    // seam.
     const wrapNeighbor = (nq: number, nr: number): TileData | undefined => {
       if (mw <= 0) return tileMapLocal.get(`${nq},${nr}`);
-      const wq = ((nq % mw) + mw) % mw;
+      const shift = Math.floor(nr / 2);
+      const qoff = nq + shift;
+      const wqoff = ((qoff % mw) + mw) % mw;
+      const wq = wqoff - shift;
       return tileMapLocal.get(`${wq},${nr}`);
     };
 
@@ -949,18 +1016,25 @@ export default function HexMap({
     // prevents a nation's color from leaking past the smoothed border.
     const tileComp = new Map<string, number>();
     const compVg: string[] = [];
-    const compTiles: TileData[][] = [];
+    // Components store stable `${q},${r}` keys instead of TileData references
+    // so render can re-resolve to the *current* TileData via tileMap each
+    // frame. The mapGeometry memo is keyed by borderSignature (q/r/Sea?/
+    // visual_group/owner/province) — non-border fields like terrain subtype
+    // (Forest vs Desert), is_incorporated_minor, and nation_id can change
+    // without triggering recompute, so the fill/highlight passes that read
+    // those fields must see the live tile, not a snapshot.
+    const compTileKeys: string[][] = [];
     for (const tile of landHexes) {
       const tk = `${tile.q},${tile.r}`;
       if (tileComp.has(tk)) continue;
       const vg = tile.visual_group || tile.owner || '';
-      const idx = compTiles.length;
+      const idx = compTileKeys.length;
       const queue: TileData[] = [tile];
-      const members: TileData[] = [];
+      const members: string[] = [];
       tileComp.set(tk, idx);
       while (queue.length > 0) {
         const t = queue.shift()!;
-        members.push(t);
+        members.push(`${t.q},${t.r}`);
         for (const [nq, nr] of hexNeighbors(t.q, t.r)) {
           const n = wrapNeighbor(nq, nr);
           if (!n || n.terrain === 'Sea') continue;
@@ -973,7 +1047,7 @@ export default function HexMap({
         }
       }
       compVg.push(vg);
-      compTiles.push(members);
+      compTileKeys.push(members);
     }
 
     // Collect each component's boundary edges with type (coast vs country).
@@ -1010,7 +1084,11 @@ export default function HexMap({
     // canonical per-edge normals make shared edges displace identically on
     // both sides, so two neighbouring nations' clips kiss exactly along the
     // border with no gap and no overlap.
-    const componentClips: Array<{ path: Path2D; tileKeys: Set<string> }> = [];
+    // memberKeys is bundled into each entry so render passes that pair a clip
+    // path with its component members iterate the same array — no parallel-
+    // index assumption between componentClips and compTileKeys (a degenerate
+    // component with an empty boundary would skew that alignment).
+    const componentClips: Array<{ path: Path2D; tileKeys: Set<string>; memberKeys: string[] }> = [];
     for (let idx = 0; idx < compVg.length; idx++) {
       const boundary = compBoundary[idx];
       if (boundary.length === 0) continue;
@@ -1053,8 +1131,9 @@ export default function HexMap({
         const loop = smoothLoop(keys, false);
         if (loop && loop.length >= 2) appendLoop(loop);
       }
-      const tileKeys = new Set(compTiles[idx].map(t => `${t.q},${t.r}`));
-      componentClips.push({ path, tileKeys });
+      const memberKeys = compTileKeys[idx];
+      const tileKeys = new Set(memberKeys);
+      componentClips.push({ path, tileKeys, memberKeys });
     }
 
     // Precompute vertex-key → land tile keys so the open-polyline fallback
@@ -1111,6 +1190,7 @@ export default function HexMap({
 
     // Pad the sea-fill rect so it overshoots any noise-displaced coastline.
     const PAD = HEX_SIZE * 1.2;
+    end();
     return {
       seaBox: { x: minX - PAD, y: minY - PAD, w: (maxX - minX) + 2 * PAD, h: (maxY - minY) + 2 * PAD },
       clipPath: buildClipPath(),
@@ -1121,9 +1201,9 @@ export default function HexMap({
       provincePolylinesClosed: province.closed,
       provincePolylinesOpen: province.open,
       componentClips,
-      compTiles,
     };
-  }, [tiles, organicBorders]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [borderSignature, organicBorders]);
 
   /** Pre-classified hex edges (flat [x1,y1,x2,y2,...] arrays). Depends only
    *  on tiles/tileMap — not on scale/offset — so it doesn't recompute during
@@ -1131,6 +1211,8 @@ export default function HexMap({
    *  smoothed polylines handle those), but they're cheap to produce and the
    *  non-organic fallback in render uses them without a second pass. */
   const classifiedEdges = useMemo(() => {
+    const tiles = tilesRef.current;
+    const end = perfMark(`classifiedEdges (${tiles.length} tiles)`);
     const verts = hexVertices(HEX_SIZE);
     const normalEdges: number[] = [];
     const provinceEdges: number[] = [];
@@ -1140,9 +1222,13 @@ export default function HexMap({
     // must follow the wrapped neighbour (else the non-organic fallback also
     // shows a phantom country stroke at the seam).
     const mw = tiles[0]?.map_width ?? 0;
+    // Wrap in offset-q space — see mapGeometry's wrapNeighbor for the why.
     const neighborAt = (nq: number, nr: number): TileData | undefined => {
       if (mw <= 0) return tileMap.get(`${nq},${nr}`);
-      const wq = ((nq % mw) + mw) % mw;
+      const shift = Math.floor(nr / 2);
+      const qoff = nq + shift;
+      const wqoff = ((qoff % mw) + mw) % mw;
+      const wq = wqoff - shift;
       return tileMap.get(`${wq},${nr}`);
     };
     for (const tile of tiles) {
@@ -1173,8 +1259,12 @@ export default function HexMap({
         normalEdges.push(x1, y1, x2, y2);
       }
     }
+    end();
     return { normalEdges, provinceEdges, countryEdges };
-  }, [tiles, tileMap]);
+    // tileMap and tiles read via refs; recompute only when border-relevant
+    // fields change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [borderSignature]);
 
   /** Max army firepower across all capitals — used to normalize the per-capital
    *  strength-bar width. Previously re-scanned every frame. */
@@ -1191,6 +1281,7 @@ export default function HexMap({
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    const endRender = perfMark(`render (scale=${scaleRef.current.toFixed(2)})`);
 
     // Canvas size is assigned by the ResizeObserver (not every frame).
     // Fill the whole canvas with sea color so any region outside the map's
@@ -1276,8 +1367,37 @@ export default function HexMap({
       : 0;
     const zoomedInPastLabels = fitScaleForLabels > 0 && scale > fitScaleForLabels * 1.5;
 
+    // Frustum-culling pad: a hex's bounding box extends HEX_SIZE*SQRT3 in x
+    // (across the wide flat-side dimension of a pointy-top hex) and HEX_SIZE*2
+    // in y. Add a small margin so anti-aliased edges aren't clipped.
+    const cullPadX = HEX_SIZE * SQRT3 + 2;
+    const cullPadY = HEX_SIZE * 2 + 2;
+
     for (let k = kMin; k <= kMax; k++) {
       ctx.setTransform(scale, 0, 0, scale, offset.x + k * periodScreen, offset.y);
+
+    // Visible world rect for this wrap copy. (px, py) → screen is
+    // (scale*px + offset.x + k*periodScreen, scale*py + offset.y); invert to
+    // get the world-x range that maps onto [0, canvas.width] and likewise y.
+    const worldXMin = (-offset.x - k * periodScreen) / scale - cullPadX;
+    const worldXMax = (canvas.width - offset.x - k * periodScreen) / scale + cullPadX;
+    const worldYMin = (-offset.y) / scale - cullPadY;
+    const worldYMax = (canvas.height - offset.y) / scale + cullPadY;
+
+    // visibleTiles: only the hex centers inside the viewport rect for this
+    // wrap copy. Used by every per-tile pass below to avoid touching the
+    // ~thousands of off-screen hexes when the user is zoomed in.
+    const visibleTiles: TileData[] = [];
+    for (let i = 0; i < tilePositions.length; i++) {
+      const tp = tilePositions[i];
+      if (tp.px < worldXMin || tp.px > worldXMax) continue;
+      if (tp.py < worldYMin || tp.py > worldYMax) continue;
+      visibleTiles.push(tp.tile);
+    }
+    // If this wrap copy contributes no visible tiles, skip the rest of the
+    // per-copy work (sea zones, borders, label passes also gain no value when
+    // there's nothing on-screen for this copy).
+    if (visibleTiles.length === 0) continue;
 
     if (mapGeometry) {
       // Sea backdrop is the canvas-wide fill above the loop. Drawing the
@@ -1286,22 +1406,29 @@ export default function HexMap({
 
       // ── Pass 1: Land fills, clipped PER visual-group component so a
       // nation's color can't leak past its smoothed border onto the neighbour.
+      // Resolve each component-member key to the live tile via tileMap so
+      // non-border field changes (terrain subtype, owner_color, is_incorporated_minor)
+      // take effect on the next render — borderSignature deliberately omits
+      // those fields, so the cached memberKeys array is stable but the tile
+      // data it points to is not.
       for (let i = 0; i < mapGeometry.componentClips.length; i++) {
         const comp = mapGeometry.componentClips[i];
-        const compTilesArr = mapGeometry.compTiles[i];
+        const compKeys = comp.memberKeys;
         // Fatten pass: fill the full component polygon with a representative
         // color so the boundary anti-aliasing zone ends up land-tinted
         // instead of sea-tinted. Without this, the AA-blended pixels at the
         // smoothed edge let the sea background bleed through as a blue
         // sliver below the stroke.
-        const first = compTilesArr[0];
+        const first = compKeys.length > 0 ? tileMap.get(compKeys[0]) : undefined;
         if (first) {
           ctx.fillStyle = tileFillColor(first);
           ctx.fill(comp.path, 'evenodd');
         }
         ctx.save();
         ctx.clip(comp.path, 'evenodd');
-        for (const tile of compTilesArr) {
+        for (const key of compKeys) {
+          const tile = tileMap.get(key);
+          if (!tile) continue;
           const [px, py] = hexToPixel(tile.q, tile.r);
           drawHexagon(ctx, px, py, HEX_SIZE);
           ctx.fillStyle = tileFillColor(tile);
@@ -1311,7 +1438,7 @@ export default function HexMap({
       }
     } else {
       // ── Original non-organic rendering: per-hex fills for every tile ──
-      for (const tile of tiles) {
+      for (const tile of visibleTiles) {
         const [px, py] = hexToPixel(tile.q, tile.r);
         drawHexagon(ctx, px, py, HEX_SIZE);
         ctx.fillStyle = tileFillColor(tile);
@@ -1322,7 +1449,7 @@ export default function HexMap({
     // Fog of war — applied per-hex (land and sea) in both modes.
     if (!disableFogOfWar) {
       ctx.fillStyle = 'rgba(128, 128, 128, 0.35)';
-      for (const tile of tiles) {
+      for (const tile of visibleTiles) {
         if (tile.visible) continue;
         const [px, py] = hexToPixel(tile.q, tile.r);
         drawHexagon(ctx, px, py, HEX_SIZE);
@@ -1404,7 +1531,10 @@ export default function HexMap({
       // Thin subtle intra-province hex grid — drawn straight in both modes
       // (hex edges that aren't at a border stay hexagonal by design). Can be
       // hidden entirely via the Hide Hex Grid toggle.
-      if (!hideHexGrid) {
+      // LOD: 0.5px-wide strokes at scale < 0.4 fall below ~0.2 screen px and
+      // are imperceptible against the fog/border layers — skip the path build
+      // entirely instead of paying the per-edge cost for invisible output.
+      if (!hideHexGrid && scale > 0.4) {
         ctx.strokeStyle = 'rgba(0,0,0,0.08)';
         ctx.lineWidth = 0.5;
         ctx.lineCap = 'butt';
@@ -1480,16 +1610,25 @@ export default function HexMap({
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
         for (let i = 0; i < mapGeometry.componentClips.length; i++) {
-          const compTilesArr = mapGeometry.compTiles[i];
-          if (!compTilesArr.some(t => t.nation_id === highlightedNationId)) continue;
-          ctx.stroke(mapGeometry.componentClips[i].path);
+          const comp = mapGeometry.componentClips[i];
+          const compKeys = comp.memberKeys;
+          // Resolve to live tiles via tileMap — nation_id is not in
+          // borderSignature so the cached memberKeys may outlive a nation_id
+          // change on those tiles.
+          let matches = false;
+          for (const key of compKeys) {
+            const t = tileMap.get(key);
+            if (t && t.nation_id === highlightedNationId) { matches = true; break; }
+          }
+          if (!matches) continue;
+          ctx.stroke(comp.path);
         }
       } else {
         ctx.strokeStyle = PREVIEW_HIGHLIGHT_COLOR;
         ctx.lineWidth = PREVIEW_HIGHLIGHT_WIDTH;
         ctx.lineCap = 'butt';
         ctx.lineJoin = 'miter';
-        for (const tile of tiles) {
+        for (const tile of visibleTiles) {
           if (tile.terrain === 'Sea') continue;
           if (tile.nation_id !== highlightedNationId) continue;
           const [px, py] = hexToPixel(tile.q, tile.r);
@@ -1500,7 +1639,7 @@ export default function HexMap({
     }
 
     // ── Pass 3: Capitals ──
-    for (const tile of tiles) {
+    for (const tile of visibleTiles) {
       if (!tile.is_capital || tile.terrain === 'Sea') continue;
       const [px, py] = hexToPixel(tile.q, tile.r);
 
@@ -1537,7 +1676,7 @@ export default function HexMap({
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.font = resourceFontStr;
-      for (const tile of tiles) {
+      for (const tile of visibleTiles) {
         if (tile.terrain === 'Sea' || !tile.owner) continue;
         if (tile.is_capital || tile.is_country_capital) continue;
         // Skip hidden resources unless debug toggle is on
@@ -1578,7 +1717,7 @@ export default function HexMap({
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.font = iconFontStr;
-      for (const tile of tiles) {
+      for (const tile of visibleTiles) {
         if (tile.terrain === 'Sea') continue;
         if (!tile.has_railroad && !tile.has_depot && !tile.has_port && !tile.has_fort) continue;
         const [px, py] = hexToPixel(tile.q, tile.r);
@@ -1701,7 +1840,7 @@ export default function HexMap({
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
-      for (const tile of tiles) {
+      for (const tile of visibleTiles) {
         if (tile.terrain === 'Sea') continue;
         if (!tile.is_capital) continue;
         if (tile.army_unit_count === 0) continue;
@@ -1760,7 +1899,7 @@ export default function HexMap({
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
-      for (const tile of tiles) {
+      for (const tile of visibleTiles) {
         if (!tile.civilian_on_tile) continue;
         // Skip AI civilians unless toggle is on
         if (!tile.civilian_on_tile.is_human && !showAiCivilians) continue;
@@ -1877,7 +2016,7 @@ export default function HexMap({
       for (const t of validMoveTargets.friendly) provinceIdSet.set(t.province_id, 'friendly');
       for (const t of validMoveTargets.hostile) provinceIdSet.set(t.province_id, 'hostile');
 
-      for (const tile of tiles) {
+      for (const tile of visibleTiles) {
         if (tile.province_id == null) continue;
         const kind = provinceIdSet.get(tile.province_id);
         if (!kind) continue;
@@ -1893,7 +2032,7 @@ export default function HexMap({
 
     // ── Pass 9b: Deploy mode tile highlighting ────────────────
     if (isDeployMode && deployableTiles && deployableTiles.size > 0) {
-      for (const tile of tiles) {
+      for (const tile of visibleTiles) {
         const key = `${tile.q},${tile.r}`;
         if (!deployableTiles.has(key)) continue;
 
@@ -1945,7 +2084,8 @@ export default function HexMap({
     } // end wrap-copies loop
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-  }, [tiles, showPoliticalColors, showHiddenResources, showAiCivilians, mapMode, nationFillMap,
+    endRender();
+  }, [tiles, tilePositions, showPoliticalColors, showHiddenResources, showAiCivilians, mapMode, nationFillMap,
       isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves, nationLabels, disableFogOfWar,
       navyMarkers, seaZones, selectedNavyKey, mapGeometry, tileMap, diplomacyOverlay,
       hideHexGrid, highlightedNationId, classifiedEdges, maxArmyFP, mapDims,

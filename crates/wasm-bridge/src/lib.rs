@@ -18,7 +18,7 @@ use domain::game_state::{
 #[cfg(test)]
 use domain::game_state::{new_game, new_observer_game};
 use domain::hex::HexCoord;
-use domain::map::MapGenConfig;
+use domain::map::{MapGenConfig, TerrainMix};
 use domain::military::combat::BattleResult;
 use domain::military::naval::NavalBattleResult;
 use domain::military::ships::{Ship, ShipCategory, ShipType};
@@ -50,22 +50,79 @@ fn game_from_json(json: &str) -> Result<GameState, String> {
 }
 
 /// Build a `MapGenConfig` from raw frontend values, clamped to safe ranges.
+///
+/// `terrain_json` is a JSON object with optional fields matching `TerrainMix`
+/// (snake_case). Empty string or invalid JSON falls back to the default mix,
+/// so older frontends keep working without changes.
 fn build_map_config(
     map_width: i32,
     map_height: i32,
     num_great_powers: u32,
     num_minor_nations: u32,
+    terrain_json: &str,
 ) -> MapGenConfig {
     MapGenConfig {
         width: map_width.clamp(30, 200),
         height: map_height.clamp(20, 150),
         num_great_powers: (num_great_powers as usize).clamp(1, 20),
         num_minor_nations: (num_minor_nations as usize).min(32),
+        terrain: parse_terrain_mix(terrain_json),
     }
+}
+
+/// Parse a JSON `TerrainMix` patch from the frontend. Missing fields fall
+/// back to the default mix so the caller can omit anything they don't want
+/// to override. Returns the default mix on any parse error.
+pub(crate) fn parse_terrain_mix(json: &str) -> TerrainMix {
+    if json.trim().is_empty() {
+        return TerrainMix::default();
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return TerrainMix::default();
+    };
+    let mut mix = TerrainMix::default();
+    let Some(obj) = value.as_object() else {
+        return mix;
+    };
+    let f32_field = |key: &str, fallback: f32| -> f32 {
+        obj.get(key)
+            .and_then(|v| v.as_f64())
+            .map(|v| v as f32)
+            .unwrap_or(fallback)
+    };
+    let i32_field = |key: &str, fallback: i32| -> i32 {
+        obj.get(key)
+            .and_then(|v| v.as_f64())
+            .map(|v| v as i32)
+            .unwrap_or(fallback)
+    };
+    mix.grassland = f32_field("grassland", mix.grassland).max(0.0);
+    mix.forest = f32_field("forest", mix.forest).max(0.0);
+    mix.hills = f32_field("hills", mix.hills).max(0.0);
+    mix.mountain = f32_field("mountain", mix.mountain).max(0.0);
+    mix.desert = f32_field("desert", mix.desert).max(0.0);
+    mix.swamp = f32_field("swamp", mix.swamp).max(0.0);
+    mix.tundra = f32_field("tundra", mix.tundra).max(0.0);
+    mix.forest_cluster = i32_field("forest_cluster", mix.forest_cluster).clamp(0, 100);
+    mix.hills_cluster = i32_field("hills_cluster", mix.hills_cluster).clamp(0, 100);
+    mix.mountain_cluster = i32_field("mountain_cluster", mix.mountain_cluster).clamp(0, 100);
+    mix.desert_cluster = i32_field("desert_cluster", mix.desert_cluster).clamp(0, 100);
+    mix.swamp_cluster = i32_field("swamp_cluster", mix.swamp_cluster).clamp(0, 100);
+    mix.pole_tundra_strength =
+        f32_field("pole_tundra_strength", mix.pole_tundra_strength).clamp(0.0, 1.0);
+    mix.sea_hard_margin = i32_field("sea_hard_margin", mix.sea_hard_margin).clamp(0, 10);
+    // Falloff radius must always exceed the hard margin or there's no soft band.
+    let falloff = i32_field("sea_falloff_radius", mix.sea_falloff_radius)
+        .clamp(mix.sea_hard_margin + 1, 30);
+    mix.sea_falloff_radius = falloff;
+    mix.land_amount = f32_field("land_amount", mix.land_amount).clamp(0.1, 4.0);
+    mix
 }
 
 /// Create a new game. Returns JSON string of the full game state.
 /// `flavor_key` seeds names/flags; pass an empty string to reuse `map_key`.
+/// `terrain_json` is an optional JSON object overriding fields of `TerrainMix`
+/// (snake_case keys). Empty string = use the default mix.
 #[wasm_bindgen]
 pub fn wasm_new_game(
     map_key: &str,
@@ -76,9 +133,16 @@ pub fn wasm_new_game(
     num_great_powers: u32,
     num_minor_nations: u32,
     flavor_key: &str,
+    terrain_json: &str,
 ) -> String {
     let diff = difficulty_from_u8(difficulty);
-    let cfg = build_map_config(map_width, map_height, num_great_powers, num_minor_nations);
+    let cfg = build_map_config(
+        map_width,
+        map_height,
+        num_great_powers,
+        num_minor_nations,
+        terrain_json,
+    );
     let mut game = new_game_with_data_and_config(
         map_key,
         diff,
@@ -143,8 +207,15 @@ pub fn wasm_new_observer_game(
     num_great_powers: u32,
     num_minor_nations: u32,
     flavor_key: &str,
+    terrain_json: &str,
 ) -> String {
-    let cfg = build_map_config(map_width, map_height, num_great_powers, num_minor_nations);
+    let cfg = build_map_config(
+        map_width,
+        map_height,
+        num_great_powers,
+        num_minor_nations,
+        terrain_json,
+    );
     let mut game = new_observer_game_with_data_and_config(
         map_key,
         difficulty_from_u8(difficulty),

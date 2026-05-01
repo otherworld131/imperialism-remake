@@ -356,6 +356,7 @@ impl GameState {
 // ── Great Power colors (matched to original game) ───────────────
 
 const GP_COLORS: &[NationColor] = &[
+    // Original 7 — match the canonical game
     NationColor::Yellow,    // Deneb
     NationColor::Orange,    // Devron
     NationColor::LightBlue, // Haxaco
@@ -363,6 +364,20 @@ const GP_COLORS: &[NationColor] = &[
     NationColor::Green,     // Ordune
     NationColor::Purple,    // Patagon
     NationColor::Blue,      // Zimm
+    // Extended pool for 8th-20th GPs when num_great_powers > 7
+    NationColor::Crimson,
+    NationColor::Magenta,
+    NationColor::Forest,
+    NationColor::Gold,
+    NationColor::Aqua,
+    NationColor::Violet,
+    NationColor::BurntOrange,
+    NationColor::HotPink,
+    NationColor::Turquoise,
+    NationColor::Slate,
+    NationColor::Mauve,
+    NationColor::Sage,
+    NationColor::Mustard,
 ];
 
 const MN_COLORS: &[NationColor] = &[

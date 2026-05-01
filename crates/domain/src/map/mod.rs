@@ -1,3 +1,4 @@
+pub mod bounds;
 pub mod generator;
 pub mod hex_map;
 pub mod infrastructure;
@@ -5,8 +6,10 @@ mod province;
 pub mod sea_zones;
 pub mod tile;
 
+pub use bounds::MapBounds;
 pub use generator::{
-    GeneratedMap, MapGenConfig, NationSetup, generate_map, generate_map_with_config, validate_map,
+    GeneratedMap, MapGenConfig, NationSetup, TerrainMix, generate_map, generate_map_with_config,
+    validate_map,
 };
 pub use hex_map::HexMap;
 pub use infrastructure::{

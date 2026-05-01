@@ -1,12 +1,13 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   getScenarios, newGame, newScenarioGame, getMapData,
   newObserverGame, newObserverScenarioGame, setHumanPlayer,
   applyFlavor,
   DEFAULT_MAP_GEN_CONFIG,
+  DEFAULT_TERRAIN_MIX,
   parseGameJson,
 } from '../wasm';
-import type { TileData, MapMode, MapGenConfig } from '../wasm';
+import type { TileData, MapMode, MapGenConfig, TerrainMix } from '../wasm';
 import HexMap from './HexMap';
 import Flag from './Flag';
 
@@ -19,7 +20,13 @@ const MAP_SIZE_PRESETS: Array<{ key: string; label: string; width: number; heigh
 const NATION_COLORS: Record<string, string> = {
   Yellow: '#ffd900', Orange: '#ff8c00', LightBlue: '#66b3ff',
   Red: '#e62626', Green: '#1abf1a', Purple: '#a633d9',
-  Blue: '#3359e6', Gray: '#999', Brown: '#8c5926',
+  Blue: '#3359e6',
+  Crimson: '#b00020', Magenta: '#d913a8', Forest: '#1f5b2c',
+  Gold: '#d4a52a', Aqua: '#00b8c4', Violet: '#8a2be2',
+  BurntOrange: '#cc5500', HotPink: '#ff44a0', Turquoise: '#14b89c',
+  Slate: '#5a6e8c', Mauve: '#b07ab0', Sage: '#7a9b6a',
+  Mustard: '#b88a00',
+  Gray: '#999', Brown: '#8c5926',
   Pink: '#ff80b3', Teal: '#00b3a6', Olive: '#808000',
 };
 
@@ -71,10 +78,11 @@ export default function GameSetup({ onStartGame }: Props) {
   const [numGreatPowers, setNumGreatPowers] = useState(DEFAULT_MAP_GEN_CONFIG.numGreatPowers);
   const [numMinorNations, setNumMinorNations] = useState(DEFAULT_MAP_GEN_CONFIG.numMinorNations);
   const [showAdvancedSize, setShowAdvancedSize] = useState(false);
+  const [terrainMix, setTerrainMix] = useState<TerrainMix>(DEFAULT_TERRAIN_MIX);
 
   const mapGenConfig: MapGenConfig = useMemo(
-    () => ({ width: mapWidth, height: mapHeight, numGreatPowers, numMinorNations }),
-    [mapWidth, mapHeight, numGreatPowers, numMinorNations],
+    () => ({ width: mapWidth, height: mapHeight, numGreatPowers, numMinorNations, terrain: terrainMix }),
+    [mapWidth, mapHeight, numGreatPowers, numMinorNations, terrainMix],
   );
   const activePreset = MAP_SIZE_PRESETS.find(p => p.width === mapWidth && p.height === mapHeight);
 
@@ -109,7 +117,7 @@ export default function GameSetup({ onStartGame }: Props) {
         flagSvg: n.flag_svg || '',
       }));
 
-  const buildPreview = async (keyOverride?: string, flavorOverride?: string) => {
+  const buildPreview = useCallback(async (keyOverride?: string, flavorOverride?: string) => {
     setPreviewError(null);
     const key = keyOverride ?? effectiveMapKey;
     const fkey = flavorOverride ?? flavorKey;
@@ -136,7 +144,55 @@ export default function GameSetup({ onStartGame }: Props) {
     } catch (e) {
       setPreviewError(String(e));
     }
-  };
+    // pickedNationIdx intentionally omitted: we only consult it to clear an
+    // out-of-range pick, which is fine to skip when the pick is stale.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveMapKey, flavorKey, selectedScenario, difficulty, mapGenConfig]);
+
+  // While the preview is open, debounced re-roll on terrain-mix changes so the
+  // sliders feel live. Same seed → same continents, just regenerated with the
+  // new terrain knobs. The skip-on-mount ref prevents a redundant rebuild when
+  // the user first lands on the preview.
+  const skipNextTerrainRebuild = useRef(true);
+  useEffect(() => {
+    if (step !== 'preview') {
+      skipNextTerrainRebuild.current = true;
+      return;
+    }
+    if (skipNextTerrainRebuild.current) {
+      skipNextTerrainRebuild.current = false;
+      return;
+    }
+    const t = setTimeout(() => { buildPreview(); }, 200);
+    return () => clearTimeout(t);
+  }, [terrainMix, step, buildPreview]);
+
+  // Randomize all terrain sliders within sensible ranges. Used by the "Randomize
+  // terrain" button in the preview sidebar — gives the player a one-click way
+  // to explore wildly different worlds without dragging seven sliders.
+  const randomizeTerrain = useCallback(() => {
+    const rand = (lo: number, hi: number) => lo + Math.random() * (hi - lo);
+    const hardMargin = Math.round(rand(0, 3));
+    const falloff = Math.round(rand(hardMargin + 2, 12));
+    setTerrainMix({
+      grassland: rand(20, 70),
+      forest: rand(5, 35),
+      hills: rand(3, 25),
+      mountain: rand(2, 18),
+      desert: rand(0, 18),
+      swamp: rand(0, 12),
+      tundra: rand(0, 10),
+      forest_cluster: Math.round(rand(10, 50)),
+      hills_cluster: Math.round(rand(10, 40)),
+      mountain_cluster: Math.round(rand(5, 25)),
+      desert_cluster: Math.round(rand(5, 30)),
+      swamp_cluster: Math.round(rand(5, 25)),
+      pole_tundra_strength: rand(0, 1),
+      sea_hard_margin: hardMargin,
+      sea_falloff_radius: falloff,
+      land_amount: rand(0.5, 1.6),
+    });
+  }, []);
 
   const handleReroll = () => {
     const fresh = randomSeed();
@@ -444,6 +500,131 @@ export default function GameSetup({ onStartGame }: Props) {
           />
         </div>
         <div style={s.sidebar}>
+          {!selectedScenario && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={s.sidebarTitle}>
+                <span>Terrain</span>
+                <span
+                  style={{ marginLeft: 12, fontSize: 11, color: '#daa520', cursor: 'pointer', textDecoration: 'underline', textTransform: 'none', letterSpacing: 0 }}
+                  onClick={randomizeTerrain}
+                >
+                  Randomize
+                </span>
+                <span
+                  style={{ marginLeft: 10, fontSize: 11, color: '#9a9a9a', cursor: 'pointer', textDecoration: 'underline', textTransform: 'none', letterSpacing: 0 }}
+                  onClick={() => setTerrainMix(DEFAULT_TERRAIN_MIX)}
+                >
+                  Reset
+                </span>
+              </div>
+              <div style={s.sidebarHint}>
+                Same seed — only the world regenerates as you adjust.
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div>
+                  <div style={s.sliderLabelRow}>
+                    <span>Land amount</span>
+                    <span style={s.sliderValue}>{terrainMix.land_amount.toFixed(2)}×</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={30}
+                    max={250}
+                    step={5}
+                    value={Math.round(terrainMix.land_amount * 100)}
+                    onChange={e => {
+                      const v = Number(e.target.value) / 100;
+                      setTerrainMix(prev => ({ ...prev, land_amount: v }));
+                    }}
+                    style={s.slider}
+                  />
+                </div>
+                <div>
+                  <div style={s.sliderLabelRow}>
+                    <span>Sea ring (cells)</span>
+                    <span style={s.sliderValue}>{terrainMix.sea_hard_margin}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(0, terrainMix.sea_falloff_radius - 1)}
+                    step={1}
+                    value={terrainMix.sea_hard_margin}
+                    onChange={e => {
+                      const v = Number(e.target.value);
+                      setTerrainMix(prev => ({ ...prev, sea_hard_margin: v }));
+                    }}
+                    style={s.slider}
+                  />
+                </div>
+                <div>
+                  <div style={s.sliderLabelRow}>
+                    <span>Coastline falloff (cells)</span>
+                    <span style={s.sliderValue}>{terrainMix.sea_falloff_radius}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={Math.max(1, terrainMix.sea_hard_margin + 1)}
+                    max={20}
+                    step={1}
+                    value={terrainMix.sea_falloff_radius}
+                    onChange={e => {
+                      const v = Number(e.target.value);
+                      setTerrainMix(prev => ({ ...prev, sea_falloff_radius: v }));
+                    }}
+                    style={s.slider}
+                  />
+                </div>
+                <div style={{ borderTop: '1px solid #2a2a3a', marginTop: 4, paddingTop: 6 }} />
+                {([
+                  ['grassland', 'Grassland'],
+                  ['forest', 'Forest'],
+                  ['hills', 'Hills'],
+                  ['mountain', 'Mountain'],
+                  ['desert', 'Desert'],
+                  ['swamp', 'Swamp'],
+                  ['tundra', 'Tundra'],
+                ] as Array<[keyof TerrainMix, string]>).map(([key, label]) => (
+                  <div key={key as string}>
+                    <div style={s.sliderLabelRow}>
+                      <span>{label}</span>
+                      <span style={s.sliderValue}>{Math.round((terrainMix[key] as number) * 10) / 10}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={terrainMix[key] as number}
+                      onChange={e => {
+                        const v = Number(e.target.value);
+                        setTerrainMix(prev => ({ ...prev, [key]: v }));
+                      }}
+                      style={s.slider}
+                    />
+                  </div>
+                ))}
+                <div>
+                  <div style={s.sliderLabelRow}>
+                    <span>Tundra at poles</span>
+                    <span style={s.sliderValue}>{Math.round(terrainMix.pole_tundra_strength * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={Math.round(terrainMix.pole_tundra_strength * 100)}
+                    onChange={e => {
+                      const v = Number(e.target.value) / 100;
+                      setTerrainMix(prev => ({ ...prev, pole_tundra_strength: v }));
+                    }}
+                    style={s.slider}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
           <div style={s.sidebarTitle}>
             {observerMode ? 'Viewpoint Nation' : 'Choose Your Empire'}
           </div>
