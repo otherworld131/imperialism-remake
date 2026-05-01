@@ -390,7 +390,6 @@ pub fn ai_manage_diplomacy(
                 .filter(|n| {
                     n.is_great_power()
                         && n.id != nation_id
-                        && n.id != game.human_player_nation
                         && !n.diplomacy.is_in_anarchy
                 })
                 .map(|n| n.id)

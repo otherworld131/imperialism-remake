@@ -520,10 +520,6 @@ pub(crate) fn ai_declare_wars(
             if target_id == ai_id {
                 continue;
             }
-            // Skip human player
-            if target_id == game.human_player_nation {
-                continue;
-            }
             // Skip already at war
             if game
                 .world.diplomacy
@@ -932,6 +928,21 @@ pub(crate) fn ai_declare_wars(
         }
         let turn = game.turn;
         game.world.diplomacy.declare_war_at(ai_id, target_id, turn);
+        // When the defender is the human player, queue a WarDeclaration
+        // notification proposal so the modal opens with a prominent alert.
+        // Both Accept and Reject are dismissals — the war is already live.
+        if target_id == game.human_player_nation {
+            game.world.diplomacy.pending_proposals.push(
+                crate::diplomacy::DiplomaticProposal {
+                    from: ai_id,
+                    to: target_id,
+                    proposal_type: crate::events::TreatyType::WarDeclaration,
+                    turn_proposed: turn,
+                    attacker: None,
+                    cascade_remaining: None,
+                },
+            );
+        }
         // Attack is NOT queued here. ai_declare_wars runs before the per-nation
         // loop (see ai/mod.rs), so ai_military_strategy will pick up the new
         // war on the same turn and apply the rest_health_threshold filter when
@@ -1546,6 +1557,18 @@ mod tests {
                 ProvinceId(2),
             ));
         }
+        // Card #4: AI no longer skips the human player. Give the human a
+        // strong defending army so AI scoring picks the unarmed adjacent minor
+        // — the test's intent is "AI declares war on the vulnerable minor".
+        let human = game.get_nation_mut(NationId(1)).unwrap();
+        for i in 0..40 {
+            human.military.army.push(ArmyUnit::new(
+                UnitId(7000 + i),
+                ArmyUnitType::Regulars,
+                NationId(1),
+                ProvinceId(1),
+            ));
+        }
         game.turn = TurnNumber::new(10);
 
         let mut actions = Vec::new();
@@ -1554,19 +1577,26 @@ mod tests {
         ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
         ai_military_strategy(&mut game, NationId(2), &mut actions);
 
-        // AI should declare war on the minor — it has provinces, low army, no relationship
-        let rel = game.world.diplomacy.get_relation(NationId(2), NationId(3));
-        assert!(rel.is_some(), "Relation between AI and minor should exist");
+        // The human is heavily defended (40 Regulars above) so the unarmed
+        // adjacent minor is unambiguously the more attractive target. This
+        // verifies AI war-target scoring under Card #4 (no human exemption).
+        let at_war_with_minor = game.world.diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .is_some_and(|r| r.at_war);
+        let at_war_with_human = game.world.diplomacy
+            .get_relation(NationId(2), NationId(1))
+            .is_some_and(|r| r.at_war);
+        assert!(at_war_with_minor, "AI should be at war with the vulnerable minor");
         assert!(
-            rel.unwrap().at_war,
-            "AI should be at war with the minor nation"
+            !at_war_with_human,
+            "AI should not target the heavily-defended human GP when a softer target exists"
         );
-        // Should have queued a pending attack
+        // Should have queued a pending attack against the minor
         assert!(
             game.transient.pending_attacks
                 .iter()
-                .any(|(attacker, _)| *attacker == NationId(2)),
-            "AI should queue an attack on the minor"
+                .any(|(attacker, target)| *attacker == NationId(2) && *target == ProvinceId(3)),
+            "AI should queue an attack on the minor's province"
         );
     }
 
@@ -1670,9 +1700,16 @@ mod tests {
         let mut actions = Vec::new();
         ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
 
-        let rel = game.world.diplomacy.get_relation(NationId(2), NationId(3));
+        // Card #4: AI may target the minor or the human; either is fine — the
+        // assertion is about the AI declaring war at all under low threshold.
+        let at_war_with_someone = game.world.diplomacy
+            .get_relation(NationId(2), NationId(1))
+            .is_some_and(|r| r.at_war)
+            || game.world.diplomacy
+                .get_relation(NationId(2), NationId(3))
+                .is_some_and(|r| r.at_war);
         assert!(
-            rel.is_some() && rel.unwrap().at_war,
+            at_war_with_someone,
             "Aggressive AI should declare war with low threshold and small army"
         );
     }
@@ -1761,18 +1798,44 @@ mod tests {
                 ProvinceId(3),
             ));
         }
+        // Card #4: AI no longer skips the human player. Match the human's
+        // field army to the minor's so the parity gate applies to that target
+        // too — otherwise AI would declare war on the unarmed human instead.
+        let human = game.get_nation_mut(NationId(1)).unwrap();
+        for i in 0..4 {
+            human.military.army.push(ArmyUnit::new(
+                UnitId(7000 + i),
+                ArmyUnitType::Regulars,
+                NationId(1),
+                ProvinceId(1),
+            ));
+        }
+        for i in 0..2 {
+            human.military.army.push(ArmyUnit::new(
+                UnitId(7100 + i),
+                ArmyUnitType::LightArtillery,
+                NationId(1),
+                ProvinceId(1),
+            ));
+        }
         game.turn = TurnNumber::new(1);
 
         let mut actions = Vec::new();
         ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
 
-        let at_war = game
+        // No war should be declared on either neighbor at parity.
+        let at_war_with_minor = game
             .world.diplomacy
             .get_relation(NationId(2), NationId(3))
             .map(|r| r.at_war)
             .unwrap_or(false);
+        let at_war_with_human = game
+            .world.diplomacy
+            .get_relation(NationId(2), NationId(1))
+            .map(|r| r.at_war)
+            .unwrap_or(false);
         assert!(
-            !at_war,
+            !at_war_with_minor && !at_war_with_human,
             "Balanced AI at turn 1 with no firepower advantage must not declare war"
         );
         // After review fix for card #97, the gate-blocked explanation is a
@@ -1818,13 +1881,16 @@ mod tests {
         let mut actions = Vec::new();
         ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
 
-        let at_war = game
-            .world.diplomacy
-            .get_relation(NationId(2), NationId(3))
-            .map(|r| r.at_war)
-            .unwrap_or(false);
+        // Card #4: AI may target either the minor or the human GP — both are
+        // valid given overwhelming firepower clears the early-game gate.
+        let at_war_with_someone = game.world.diplomacy
+            .get_relation(NationId(2), NationId(1))
+            .is_some_and(|r| r.at_war)
+            || game.world.diplomacy
+                .get_relation(NationId(2), NationId(3))
+                .is_some_and(|r| r.at_war);
         assert!(
-            at_war,
+            at_war_with_someone,
             "Aggressive AI with overwhelming firepower should clear the gate even on turn 0"
         );
     }
@@ -2125,6 +2191,20 @@ mod tests {
         // WeakGP has 0 army units — very vulnerable
         game.world.nations.push(gp3);
 
+        // Card #4: AI no longer skips the human player. Give the human a
+        // strong defending army so the weak GP3 is unambiguously the more
+        // attractive target — this test specifically checks that the AI
+        // discriminates between strong and weak GP targets.
+        let human = game.get_nation_mut(NationId(1)).unwrap();
+        for i in 0..40 {
+            human.military.army.push(ArmyUnit::new(
+                UnitId(7000 + i),
+                ArmyUnitType::Regulars,
+                NationId(1),
+                ProvinceId(1),
+            ));
+        }
+
         // Give the AI attacker a strong army (enough to overcome garrison defense)
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
@@ -2149,7 +2229,9 @@ mod tests {
         let mut actions = Vec::new();
         ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
 
-        // AI should target the weak GP (NationId(3)), not the human (NationId(1))
+        // AI should target the weak GP3, not the strongly-defended human GP.
+        // This validates that the war-target scoring discriminates by
+        // vulnerability now that the human-player exemption (Card #4) is gone.
         let at_war_with_gp3 = game
             .world.diplomacy
             .get_relation(NationId(2), NationId(3))
@@ -2162,11 +2244,77 @@ mod tests {
             .unwrap_or(false);
         assert!(
             at_war_with_gp3,
-            "AI should be able to declare war on a weak Great Power"
+            "AI should declare war on the weak Great Power (GP3)"
         );
         assert!(
             !at_war_with_human,
-            "AI should never target the human player"
+            "AI should prefer the unarmed weak GP over a heavily-defended human GP"
+        );
+    }
+
+    #[test]
+    fn ai_war_declaration_on_human_queues_modal_proposal() {
+        // When the AI declares war on the human player, a WarDeclaration
+        // proposal must be pushed to the modal so the player gets a
+        // prominent notification (the war is already in effect).
+        let mut game = test_game_with_ai_and_minor();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
+        for i in 0..40 {
+            ai.military.army.push(ArmyUnit::new(
+                UnitId(5000 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        for i in 0..20 {
+            ai.military.army.push(ArmyUnit::new(
+                UnitId(5200 + i),
+                ArmyUnitType::LightArtillery,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        // Strip the minor so the human is the only candidate.
+        if let Some(p) = game.world.provinces.iter_mut().find(|p| p.id == ProvinceId(3)) {
+            p.owner = NationId(2);
+        }
+        if let Some(minor) = game.get_nation_mut(NationId(3)) {
+            minor.province_ids.clear();
+        }
+        if let Some(ai) = game.get_nation_mut(NationId(2)) {
+            ai.add_province(ProvinceId(3));
+        }
+        // Move the human's province adjacent to the AI so reachability/scoring works.
+        if let Some(p) = game.world.provinces.iter_mut().find(|p| p.id == ProvinceId(1)) {
+            p.tiles = vec![crate::hex::HexCoord::new(2, 3)];
+            p.capital_tile = crate::hex::HexCoord::new(2, 3);
+        }
+        game.world.hex_map.set_tile(
+            crate::hex::HexCoord::new(2, 3),
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        game.turn = TurnNumber::new(20);
+
+        let mut actions = Vec::new();
+        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
+
+        let at_war = game.world.diplomacy
+            .get_relation(NationId(2), NationId(1))
+            .is_some_and(|r| r.at_war);
+        assert!(at_war, "precondition: AI should declare war on the human in this setup");
+
+        let modal_proposal_count = game.world.diplomacy
+            .pending_proposals
+            .iter()
+            .filter(|p| p.proposal_type == crate::events::TreatyType::WarDeclaration
+                && p.from == NationId(2)
+                && p.to == NationId(1))
+            .count();
+        assert_eq!(
+            modal_proposal_count, 1,
+            "AI war declaration on human must produce exactly one WarDeclaration modal proposal"
         );
     }
 

@@ -4510,6 +4510,49 @@ pub fn accept_pact_defense(
     );
 }
 
+/// Accept a RequestToJoinEmpire proposal: incorporate the minor into the
+/// human player's empire (called by the WASM bridge on accept).
+pub fn accept_request_to_join_empire(
+    game: &mut GameState,
+    overlord_id: NationId,
+    minor_id: NationId,
+    report: &mut TurnReport,
+) {
+    // Precondition: minor must still exist with provinces and not be in anarchy.
+    let minor_valid = game
+        .get_nation(minor_id)
+        .is_some_and(|n| !n.is_great_power() && !n.province_ids.is_empty() && !n.diplomacy.is_in_anarchy);
+    if !minor_valid {
+        return;
+    }
+    // Overlord must be a non-anarchic Great Power.
+    let overlord_valid = game
+        .get_nation(overlord_id)
+        .is_some_and(|n| n.is_great_power() && !n.diplomacy.is_in_anarchy);
+    if !overlord_valid {
+        return;
+    }
+    incorporate_minor_into_empire(
+        game,
+        minor_id,
+        overlord_id,
+        report,
+        IncorporationReason::VoluntarilyJoinedEmpire,
+    );
+}
+
+/// Reject a RequestToJoinEmpire proposal: the snubbed minor's relationship
+/// score with the rejecting Great Power drops sharply.
+pub fn reject_request_to_join_empire(
+    game: &mut GameState,
+    overlord_id: NationId,
+    minor_id: NationId,
+) {
+    if let Some(rel) = game.world.diplomacy.get_relation_mut(minor_id, overlord_id) {
+        rel.improve_score(-20);
+    }
+}
+
 /// Continue the pact defense cascade after the human player rejects.
 /// Evaluates remaining AI candidates in order.
 pub fn continue_pact_defense_cascade(
@@ -5081,13 +5124,48 @@ fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnRepor
         }
 
         if let Some(gp_id) = best_gp {
-            incorporate_minor_into_empire(
-                game,
-                *minor_id,
-                gp_id,
-                report,
-                IncorporationReason::VoluntarilyJoinedEmpire,
-            );
+            // When the most-favored protector is the human player, queue a
+            // RequestToJoinEmpire proposal so the player can accept or refuse.
+            // AI overlords still auto-incorporate.
+            if gp_id == game.human_player_nation {
+                // Dedup: only one outstanding RequestToJoinEmpire per (minor, human) pair.
+                let already_pending = game.world.diplomacy.pending_proposals.iter().any(|p| {
+                    p.proposal_type == crate::events::TreatyType::RequestToJoinEmpire
+                        && p.from == *minor_id
+                        && p.to == gp_id
+                });
+                if !already_pending {
+                    let minor_name = game
+                        .get_nation(*minor_id)
+                        .map(|n| n.name.clone())
+                        .unwrap_or_default();
+                    game.world.diplomacy.pending_proposals.push(
+                        crate::diplomacy::DiplomaticProposal {
+                            from: *minor_id,
+                            to: gp_id,
+                            proposal_type: crate::events::TreatyType::RequestToJoinEmpire,
+                            turn_proposed: game.turn,
+                            attacker: None,
+                            cascade_remaining: None,
+                        },
+                    );
+                    report.newspaper_headlines.push(
+                        crate::events::Headline::new(
+                            format!("{} requests to join your empire", minor_name),
+                            crate::events::HeadlineCategory::Diplomacy,
+                        )
+                        .for_nations(&[*minor_id, gp_id]),
+                    );
+                }
+            } else {
+                incorporate_minor_into_empire(
+                    game,
+                    *minor_id,
+                    gp_id,
+                    report,
+                    IncorporationReason::VoluntarilyJoinedEmpire,
+                );
+            }
         }
     }
 }
@@ -7791,27 +7869,82 @@ mod tests {
 
         resolve_voluntary_incorporations(&mut game, &mut report);
 
-        // Minor nation's provinces should be transferred
-        assert_eq!(report.incorporations.len(), 1);
-        assert_eq!(report.incorporations[0], (NationId(2), NationId(1)));
-
-        // Great power now has province 2
-        let gp = game.get_nation(NationId(1)).unwrap();
-        assert!(gp.province_ids.contains(&ProvinceId(2)));
-
-        // Minor nation has no provinces
+        // NationId(1) is the human player in this fixture, so the minor's
+        // request must surface as a RequestToJoinEmpire proposal rather than
+        // auto-incorporating. The minor keeps its provinces until the player
+        // accepts.
+        assert!(report.incorporations.is_empty(), "must not auto-incorporate into human");
+        assert_eq!(
+            game.world.diplomacy
+                .pending_proposals
+                .iter()
+                .filter(|p| p.proposal_type == crate::events::TreatyType::RequestToJoinEmpire
+                    && p.from == NationId(2)
+                    && p.to == NationId(1))
+                .count(),
+            1,
+            "exactly one RequestToJoinEmpire proposal must be queued for the human"
+        );
         let mn = game.get_nation(NationId(2)).unwrap();
-        assert!(mn.province_ids.is_empty());
-
-        // Province owner updated
+        assert!(mn.province_ids.contains(&ProvinceId(2)), "minor keeps its province pending decision");
         let prov = game.get_province(ProvinceId(2)).unwrap();
-        assert_eq!(prov.owner, NationId(1));
+        assert_eq!(prov.owner, NationId(2));
+    }
 
-        // History recorded
-        assert!(!game.archive.history.is_empty());
-        let rendered = game.render_history_event(&game.archive.history[0].1);
-        assert!(rendered.contains("Smallton"));
-        assert!(rendered.contains("Testlandia"));
+    #[test]
+    fn voluntary_incorporation_into_ai_great_power_still_auto_incorporates() {
+        // When the highest-relationship GP is an AI (not the human), the
+        // minor is auto-incorporated as before — RequestToJoinEmpire
+        // proposals are only queued when the chosen overlord is the player.
+        let mut game = test_game_state_with_minor_nation();
+        // Add an AI GP at NationId(3) and make it the most-favored.
+        let mut gp_b = Nation::new(
+            NationId(3),
+            "Healthy Empire".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        gp_b.economy.treasury = Money::dollars(1000);
+        game.world.nations.push(gp_b);
+        game.world.diplomacy.initialize_great_powers(&[NationId(1), NationId(3)]);
+        // Human (NationId(1)) below threshold; AI GP at threshold.
+        game.world.diplomacy.ensure_relation(NationId(2), NationId(1)).score = 50;
+        game.world.diplomacy.ensure_relation(NationId(2), NationId(3)).score = 95;
+
+        let mut report = TurnReport::empty();
+        resolve_voluntary_incorporations(&mut game, &mut report);
+
+        assert_eq!(report.incorporations.len(), 1);
+        assert_eq!(report.incorporations[0], (NationId(2), NationId(3)));
+        assert!(
+            game.world.diplomacy
+                .pending_proposals
+                .iter()
+                .all(|p| p.proposal_type != crate::events::TreatyType::RequestToJoinEmpire),
+            "AI overlord path must not queue a RequestToJoinEmpire proposal"
+        );
+    }
+
+    #[test]
+    fn voluntary_incorporation_proposal_to_human_is_deduplicated() {
+        // Running resolve_voluntary_incorporations twice in a row must not
+        // accumulate duplicate RequestToJoinEmpire proposals.
+        let mut game = test_game_state_with_minor_nation();
+        game.world.diplomacy.ensure_relation(NationId(2), NationId(1)).score = 95;
+        let mut report = TurnReport::empty();
+        resolve_voluntary_incorporations(&mut game, &mut report);
+        let mut report = TurnReport::empty();
+        resolve_voluntary_incorporations(&mut game, &mut report);
+        assert_eq!(
+            game.world.diplomacy
+                .pending_proposals
+                .iter()
+                .filter(|p| p.proposal_type == crate::events::TreatyType::RequestToJoinEmpire)
+                .count(),
+            1,
+            "duplicate RequestToJoinEmpire proposals must be suppressed"
+        );
     }
 
     #[test]
@@ -13320,7 +13453,20 @@ mod tests {
     // player got "Could not compute move targets" when clicking them.
     #[test]
     fn incorporation_transfers_minor_army_to_overlord() {
+        // Use an AI overlord (NationId(3)) so resolve_voluntary_incorporations
+        // takes the auto-incorporate path. (For the human overlord path we
+        // queue a RequestToJoinEmpire proposal — see the dedicated tests.)
         let mut game = test_game_state_with_minor_nation();
+        let mut gp_b = Nation::new(
+            NationId(3),
+            "Healthy Empire".to_string(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        gp_b.economy.treasury = Money::dollars(1000);
+        game.world.nations.push(gp_b);
+        game.world.diplomacy.initialize_great_powers(&[NationId(1), NationId(3)]);
 
         // Seed the minor with a field army unit on its own province.
         let minor = game.get_nation_mut(NationId(2)).unwrap();
@@ -13331,14 +13477,13 @@ mod tests {
             ProvinceId(2),
         ));
 
-        // Push the relationship over the voluntary-incorporation threshold.
-        let rel = game.world.diplomacy.ensure_relation(NationId(2), NationId(1));
-        rel.score = 95;
+        // Push the relationship with the AI overlord over threshold.
+        game.world.diplomacy.ensure_relation(NationId(2), NationId(3)).score = 95;
 
         let mut report = TurnReport::empty();
         resolve_voluntary_incorporations(&mut game, &mut report);
 
-        let overlord = game.get_nation(NationId(1)).unwrap();
+        let overlord = game.get_nation(NationId(3)).unwrap();
         let moved = overlord
             .military.army
             .iter()
@@ -13346,7 +13491,7 @@ mod tests {
             .expect("minor's army unit must live on the overlord after annexation");
         assert_eq!(
             moved.owner,
-            NationId(1),
+            NationId(3),
             "unit ownership must flip to the overlord so move-target queries find it"
         );
 
