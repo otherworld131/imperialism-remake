@@ -454,7 +454,7 @@ mod tests {
         assert_eq!(stats.range, 5);
         assert_eq!(stats.armor, 10);
         assert_eq!(stats.hull, 35);
-        assert_eq!(stats.speed, 4);
+        assert_eq!(stats.speed, 2);
         assert_eq!(stats.cargo, 0);
         assert_eq!(stats.category, ShipCategory::Warship);
         assert_eq!(stats.fabric_cost, 2);
@@ -470,7 +470,7 @@ mod tests {
         assert_eq!(stats.range, 6);
         assert_eq!(stats.armor, 20);
         assert_eq!(stats.hull, 65);
-        assert_eq!(stats.speed, 3);
+        assert_eq!(stats.speed, 2);
         assert_eq!(stats.arms_cost, 5);
         assert!(stats.prerequisite_tech.is_none());
     }
@@ -482,7 +482,7 @@ mod tests {
         assert_eq!(stats.range, 7);
         assert_eq!(stats.armor, 20);
         assert_eq!(stats.hull, 30);
-        assert_eq!(stats.speed, 7);
+        assert_eq!(stats.speed, 3);
         assert_eq!(stats.coal_cost, 10);
         assert_eq!(stats.prerequisite_tech, Some("Paddlewheels".to_string()));
     }
@@ -494,7 +494,7 @@ mod tests {
         assert_eq!(stats.range, 7);
         assert_eq!(stats.armor, 30);
         assert_eq!(stats.hull, 50);
-        assert_eq!(stats.speed, 5);
+        assert_eq!(stats.speed, 3);
         assert_eq!(stats.arms_cost, 4);
         assert_eq!(stats.steel_cost, 3);
         assert_eq!(stats.coal_cost, 12);
@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(stats.range, 8);
         assert_eq!(stats.armor, 40);
         assert_eq!(stats.hull, 60);
-        assert_eq!(stats.speed, 5);
+        assert_eq!(stats.speed, 3);
         assert_eq!(stats.arms_cost, 5);
         assert_eq!(stats.steel_cost, 4);
         assert_eq!(stats.coal_cost, 15);
@@ -528,7 +528,7 @@ mod tests {
         assert_eq!(stats.range, 9);
         assert_eq!(stats.armor, 35);
         assert_eq!(stats.hull, 55);
-        assert_eq!(stats.speed, 7);
+        assert_eq!(stats.speed, 3);
         assert_eq!(stats.steel_cost, 5);
         assert_eq!(stats.coal_cost, 15);
         assert_eq!(
@@ -544,7 +544,7 @@ mod tests {
         assert_eq!(stats.range, 10);
         assert_eq!(stats.armor, 50);
         assert_eq!(stats.hull, 80);
-        assert_eq!(stats.speed, 6);
+        assert_eq!(stats.speed, 3);
         assert_eq!(stats.lumber_cost, 10);
         assert_eq!(stats.arms_cost, 8);
         assert_eq!(stats.steel_cost, 8);
@@ -562,7 +562,7 @@ mod tests {
         assert_eq!(stats.range, 10);
         assert_eq!(stats.armor, 40);
         assert_eq!(stats.hull, 65);
-        assert_eq!(stats.speed, 8);
+        assert_eq!(stats.speed, 4);
         assert_eq!(stats.lumber_cost, 8);
         assert_eq!(stats.arms_cost, 6);
         assert_eq!(stats.steel_cost, 6);

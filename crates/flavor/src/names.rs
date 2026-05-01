@@ -310,9 +310,9 @@ mod tests {
         for _ in 0..50 {
             let n = generate_country_name(&mut rng);
             assert!(!n.name.is_empty());
-            assert!(!n.archives.adjective.is_empty());
-            assert!(!n.archives.demonym_singular.is_empty());
-            assert!(!n.archives.demonym_plural.is_empty());
+            assert!(!n.adjective.is_empty());
+            assert!(!n.demonym_singular.is_empty());
+            assert!(!n.demonym_plural.is_empty());
             assert!(
                 n.name.chars().next().unwrap().is_uppercase(),
                 "{} not capitalized",
@@ -359,7 +359,7 @@ mod tests {
         let names = generate_country_names(&mut rng, 30);
         let any_s = names
             .iter()
-            .any(|n| n.archives.demonym_plural == format!("{}s", n.archives.demonym_singular));
+            .any(|n| n.demonym_plural == format!("{}s", n.demonym_singular));
         assert!(any_s);
     }
 }

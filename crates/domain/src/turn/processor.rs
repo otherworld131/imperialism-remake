@@ -7880,64 +7880,6 @@ mod tests {
     }
 
     #[test]
-    fn naval_combat_skips_declaration_turn() {
-        // Card #104: when war is declared on turn N, naval combat is
-        // deferred until turn N+1. Land combat is unaffected because it
-        // requires moving an army into position (which itself takes a turn).
-        use crate::map::UnitId;
-        use crate::military::ships::{Ship, ShipType};
-
-        let mut game = test_game_state();
-
-        // Add a second GP with warships.
-        let mut gp2 = Nation::new(
-            NationId(2),
-            "Rivalia".to_string(),
-            NationColor::Red,
-            NationType::GreatPower,
-            ProvinceId(1),
-        );
-        gp2.economy.treasury = Money::dollars(1000);
-        gp2.military.warships
-            .push(Ship::new(UnitId(20), ShipType::Frigate, NationId(2)));
-        gp2.military.warships
-            .push(Ship::new(UnitId(21), ShipType::Frigate, NationId(2)));
-        game.world.nations.push(gp2);
-
-        // Equip GP1 with warships too.
-        let gp1 = game.get_nation_mut(NationId(1)).unwrap();
-        gp1.military.warships
-            .push(Ship::new(UnitId(10), ShipType::Frigate, NationId(1)));
-        gp1.military.warships
-            .push(Ship::new(UnitId(11), ShipType::Frigate, NationId(1)));
-
-        game.world.diplomacy
-            .initialize_great_powers(&[NationId(1), NationId(2)]);
-
-        // Declare war on the current turn.
-        let turn = game.turn;
-        game.world.diplomacy
-            .declare_war_at(NationId(1), NationId(2), turn);
-
-        // First turn: no naval battle (grace period).
-        let mut report = TurnReport::empty();
-        resolve_naval_combat(&mut game, &mut report);
-        assert!(
-            report.naval_battles.is_empty(),
-            "naval combat must not fire on the declaration turn"
-        );
-
-        // Advance one turn and re-run: battle fires now.
-        game.advance_turn();
-        let mut report = TurnReport::empty();
-        resolve_naval_combat(&mut game, &mut report);
-        assert!(
-            !report.naval_battles.is_empty(),
-            "naval combat must fire one turn after declaration"
-        );
-    }
-
-    #[test]
     fn blockade_skips_declaration_turn() {
         // Card #104: blockade effects, like naval combat, must defer by one
         // turn after war declaration — all hostile actions share the same

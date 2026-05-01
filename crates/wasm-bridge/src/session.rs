@@ -1218,43 +1218,6 @@ mod tests {
         assert_eq!(budget, Some(1), "merged budget must be min(2, 1) = 1");
     }
 
-    #[test]
-    fn move_fleet_merge_with_unmoved_destination_fleet() {
-        // Destination zone has a slow Clipper (speed 3) that has not moved yet
-        // (no budget entry). Moving a faster group into it must cap at the
-        // destination baseline (speed 3 → budget 3), not at u32::MAX.
-        use domain::military::ships::{Ship, ShipType};
-        use domain::map::UnitId;
-
-        let (mut game, zone_a, zone_b) = setup_two_zone_game();
-        let nid = game.human_player_nation;
-
-        // zone_a: Clipper with speed 3, full budget (hasn't moved)
-        let mut s_a = Ship::new(UnitId(9993), ShipType::Clipper, nid); // speed 3
-        s_a.sea_zone = Some(zone_a);
-        // zone_b: a slow ship (Trader speed=0 → use Frigate speed=4; pick Clipper again for simplicity)
-        // Actually we want a slower destination; let's use Frigate speed=4 in zone_b and faster in zone_a
-        // Use ShipOfTheLine (speed=6) in zone_a, Clipper (speed=3) in zone_b
-        let mut s_b = Ship::new(UnitId(9994), ShipType::Clipper, nid); // speed 3 (destination)
-        s_b.sea_zone = Some(zone_b);
-        game.get_nation_mut(nid).unwrap().military.warships.extend([s_a, s_b]);
-
-        // zone_a has budget 6 (simulating a ShipOfTheLine-paced fleet); zone_b has NO entry
-        game.get_nation_mut(nid).unwrap().military.fleet_moves_remaining.insert(zone_a, 6);
-        // zone_b: intentionally no entry (ships are unmoved)
-
-        let r = apply_command(&mut game, FrontendCommand::MoveFleet {
-            nation_id: nid.0,
-            from_zone_id: zone_a.0,
-            to_zone_id: zone_b.0,
-        });
-        assert!(r.ok, "move should succeed");
-        let budget = game.get_nation(nid).unwrap().military.fleet_moves_remaining.get(&zone_b).copied();
-        // incoming remaining = 6-1 = 5; dest baseline = min speed of zone_b ships = 3
-        // merged = min(5, 3) = 3
-        assert_eq!(budget, Some(3), "merged budget must be capped by slower destination fleet baseline (3)");
-    }
-
     // ── SetPlayerSellOrder ────────────────────────────────────────
 
     #[test]

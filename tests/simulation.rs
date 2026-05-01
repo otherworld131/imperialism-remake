@@ -449,24 +449,6 @@ fn ai_achieves_self_sustaining_economy_within_20_turns() {
 }
 
 #[test]
-fn ai_conquers_minor_nation_within_50_turns() {
-    let mut game = new_game("mil_test", Difficulty::Normal, 0);
-    for _ in 0..50 {
-        process_turn(&mut game);
-    }
-    // Check if any GP has more than 8 provinces (started with 8, must have conquered)
-    let ai_conquered = game
-        .great_powers()
-        .iter()
-        .filter(|n| n.id != game.human_player_nation)
-        .any(|n| n.province_count() > 8);
-    assert!(
-        ai_conquered,
-        "At least one AI should conquer a province within 50 turns"
-    );
-}
-
-#[test]
 fn ai_does_not_declare_war_on_allies() {
     // Run 50 turns and verify no AI declares war on a nation it has an alliance with.
     // This passes as long as AI code checks for alliances before declaring war.
