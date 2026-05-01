@@ -732,6 +732,20 @@ export default function HexMap({
   const tilesRef = useRef(tiles);
   tilesRef.current = tiles;
 
+  // Bake-relevant per-tile fields not covered by borderSignature: full
+  // terrain subtype (Forest vs Desert), owner_color, is_incorporated_minor.
+  // These all affect tileFillColor() output, so we must invalidate the
+  // static cache when any of them change. They live in a separate signature
+  // so border-only memos (mapGeometry / classifiedEdges) stay independent.
+  const fillSignature = useMemo(() => {
+    const bits = new Array<string>(tiles.length);
+    for (let i = 0; i < tiles.length; i++) {
+      const t = tiles[i];
+      bits[i] = `${t.terrain},${t.owner_color ?? ''},${t.is_incorporated_minor ? 1 : 0}`;
+    }
+    return bits.join('|');
+  }, [tiles]);
+
   const SEA_ZONE_FILL_COLOR = 'rgba(20, 70, 130, 0.12)';
   const SEA_ZONE_BORDER_COLOR = 'rgba(0, 40, 100, 0.45)';
 
@@ -768,6 +782,20 @@ export default function HexMap({
     }
     return m;
   }, [mapMode, diplomacyOverlay, militaryOverlay]);
+  const nationFillMapRef = useRef(nationFillMap);
+  nationFillMapRef.current = nationFillMap;
+
+  // Content signature for nationFillMap. The Map's reference churns on every
+  // wasm poll because diplomacyOverlay/militaryOverlay are re-fetched each
+  // poll (new prop refs even when content is identical). Pinning the static
+  // bake to a content-string instead of the Map ref means polls without
+  // overlay-content changes don't invalidate the cache.
+  const nationFillSignature = useMemo(() => {
+    const entries: string[] = [];
+    for (const [k, v] of nationFillMap) entries.push(`${k}=${v}`);
+    entries.sort();
+    return entries.join(',');
+  }, [nationFillMap]);
 
   // Memoize nation label BFS — only recompute when tiles change, not on pan/zoom
   // Uses visual_group so incorporated minor nations get their own label
@@ -1276,6 +1304,367 @@ export default function HexMap({
     return m < 1 ? 1 : m;
   }, [tiles]);
 
+  // ── Static-layer cache (terrain fills + sea zones + borders) ─────────────
+  // The heaviest passes (Pass 1 land fills, Pass 1.5 sea zones, Pass 2 hex
+  // grid + smoothed border strokes) only depend on tile content, map mode,
+  // and the rendering scale. Bake them into an offscreen canvas keyed by the
+  // bucketed scale; per-frame work then becomes a single drawImage per wrap
+  // copy plus the cheap dynamic overlays. The cache invalidates when:
+  //   - tile content relevant to borders or fills changes (borderSignature,
+  //     mapMode, nationFillMap)
+  //   - sea zones change
+  //   - the geometry memos themselves change (mapGeometry, classifiedEdges)
+  //   - the scale bucket changes — see staticScaleBucket below
+  //   - the user toggles hideHexGrid / organicBorders / showPoliticalColors
+  // Within a bucket, smooth pan/zoom never invalidates → cost dominates the
+  // *first* frame after a state change, with subsequent frames being a blit.
+  // Only-grow bucketing: bake once at the zoom-in resolution and never
+  // re-bake on zoom out (drawImage downsampling is fast and crisp). The
+  // bucket grows when the user zooms past it, capped at a memory-safe max.
+  // A new map (tiles ref change) resets the bucket to fit current scale.
+  const computeBucket = (s: number) => Math.min(2.5, Math.max(0.5, Math.round(s * 2) / 2));
+  const [staticScaleBucket, setStaticScaleBucket] = useState(() => computeBucket(scale));
+  // Note: deliberately do NOT reset the bucket on tiles change — `tiles`
+  // ref churns on every wasm poll (even when content is identical), and
+  // resetting the bucket per-poll triggers a fresh re-bake. The cap at 2.5
+  // is enough to keep memory bounded across game sessions.
+  useEffect(() => {
+    const desired = computeBucket(scale);
+    if (desired > staticScaleBucket) setStaticScaleBucket(desired);
+  }, [scale, staticScaleBucket]);
+
+  // Fog of war is part of the static layer (visibility is stable within a
+  // turn). Encoding `tile.visible` as a per-tile bit string lets the static
+  // cache invalidate exactly when fog flips, without dragging in unrelated
+  // tile fields.
+  const fogSignature = useMemo(() => {
+    if (disableFogOfWar) return 'off';
+    const bits = new Array<string>(tiles.length);
+    for (let i = 0; i < tiles.length; i++) bits[i] = tiles[i].visible ? '1' : '0';
+    return bits.join('');
+  }, [tiles, disableFogOfWar]);
+
+  // Sea zones come from the wasm bridge as a fresh array on every poll, even
+  // when content is identical. Pinning the static bake to a content sig
+  // keeps the cache valid across polls that don't change zone membership.
+  const seaZonesSignature = useMemo(() => {
+    if (seaZones.length === 0) return '';
+    const parts = new Array<string>(seaZones.length);
+    for (let i = 0; i < seaZones.length; i++) {
+      const z = seaZones[i];
+      parts[i] = `${z.id}:${z.hexes.length}:${z.center_q},${z.center_r}:${z.name}`;
+    }
+    return parts.join('|');
+  }, [seaZones]);
+  const seaZonesRef = useRef(seaZones);
+  seaZonesRef.current = seaZones;
+
+  // Refs let the staticLayer memo read these inside its body without listing
+  // them as deps — their refs churn per poll but their content is captured
+  // by the various *Signature memos.
+  const tilePositionsRef = useRef(tilePositions);
+  tilePositionsRef.current = tilePositions;
+  const tileMapRef = useRef(tileMap);
+  tileMapRef.current = tileMap;
+  const mapGeometryRef = useRef(mapGeometry);
+  mapGeometryRef.current = mapGeometry;
+  const classifiedEdgesRef = useRef(classifiedEdges);
+  classifiedEdgesRef.current = classifiedEdges;
+  const mapDimsRef = useRef(mapDims);
+  mapDimsRef.current = mapDims;
+
+  const staticBbox = useMemo(() => {
+    const tilePositions = tilePositionsRef.current;
+    if (tilePositions.length === 0) {
+      return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    }
+    const verts = hexVertices(HEX_SIZE);
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (let i = 0; i < tilePositions.length; i++) {
+      const tp = tilePositions[i];
+      for (const [vx, vy] of verts) {
+        const x = tp.px + vx, y = tp.py + vy;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+    return { minX, minY, maxX, maxY };
+    // borderSignature covers q/r — the only fields the bbox reads through
+    // tilePositions. Pinning to it (instead of tilePositions ref) keeps the
+    // bbox stable across polls.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [borderSignature]);
+
+  // Tracks which dep changed between bakes. Helpful when the cache appears
+  // to invalidate unexpectedly (e.g. during pan, which should never re-bake).
+  const lastStaticDepsRef = useRef<Record<string, unknown> | null>(null);
+  const staticLayer = useMemo(() => {
+    if (PERF_LOG) {
+      const cur: Record<string, unknown> = {
+        borderSignature, fillSignature, fogSignature,
+        seaZonesSignature, nationFillSignature,
+        mapMode, hideHexGrid, organicBorders, disableFogOfWar,
+        staticBbox, staticScaleBucket, canvasSize_h: canvasSize.h,
+      };
+      const prev = lastStaticDepsRef.current;
+      if (prev) {
+        const changed: string[] = [];
+        for (const k of Object.keys(cur)) {
+          if (cur[k] !== prev[k]) changed.push(k);
+        }
+        if (changed.length > 0) {
+          console.log(`[hexmap] staticLayer rebake — changed deps: ${changed.join(', ')}`);
+        }
+      }
+      lastStaticDepsRef.current = cur;
+    }
+    // Read all ref-churning values from refs so they don't appear in the
+    // dep array. The various *Signature deps below capture content stability.
+    const tiles = tilesRef.current;
+    const tilePositions = tilePositionsRef.current;
+    const tileMap = tileMapRef.current;
+    const mapGeometry = mapGeometryRef.current;
+    const classifiedEdges = classifiedEdgesRef.current;
+    const nationFillMap = nationFillMapRef.current;
+    const seaZones = seaZonesRef.current;
+    const mapDims = mapDimsRef.current;
+
+    if (tiles.length === 0) return null;
+    const PAD = HEX_SIZE * 1.5;
+    const originX = staticBbox.minX - PAD;
+    const originY = staticBbox.minY - PAD;
+    const wWorld = (staticBbox.maxX - staticBbox.minX) + 2 * PAD;
+    const hWorld = (staticBbox.maxY - staticBbox.minY) + 2 * PAD;
+    const cw = Math.max(1, Math.ceil(wWorld * staticScaleBucket));
+    const ch = Math.max(1, Math.ceil(hWorld * staticScaleBucket));
+    // Hard cap on canvas size to avoid OOM at extreme zoom (browsers also
+    // refuse to allocate canvases above ~16k on a side). At staticBucket=2
+    // and a 200×200 map this would be ~14k×7k — comfortably under cap.
+    const MAX_DIM = 12000;
+    if (cw > MAX_DIM || ch > MAX_DIM) return null;
+    const sc = document.createElement('canvas');
+    sc.width = cw;
+    sc.height = ch;
+    const sctx = sc.getContext('2d');
+    if (!sctx) return null;
+    const end = perfMark(`staticLayer bake (bucket=${staticScaleBucket}, ${cw}×${ch})`);
+
+    // World (originX, originY) → canvas (0, 0). Scale by bucket so 1 world
+    // unit = bucket device px on the offscreen canvas.
+    sctx.setTransform(staticScaleBucket, 0, 0, staticScaleBucket, -originX * staticScaleBucket, -originY * staticScaleBucket);
+
+    // Use the bucketed scale for any pass logic that previously read the
+    // live scale (line widths, label visibility gates). The composite blit
+    // below stretches the result to live scale — small bucket-vs-live gaps
+    // show as proportional resampling, not as gameplay changes.
+    const bScale = staticScaleBucket;
+    const zoomedInPastLabelsBucket = mapDims.mapPixelHeight > 0
+      ? bScale > (canvasSize.h / mapDims.mapPixelHeight) * 1.5
+      : false;
+
+    // Helpers replicated from render() — same fill semantics.
+    const pickPoliticalColor = (tile: TileData): string => {
+      if (!tile.owner_color) return TERRAIN_COLORS[tile.terrain] || '#666';
+      const nc = NATION_COLORS[tile.owner_color];
+      if (!nc) return TERRAIN_COLORS[tile.terrain] || '#666';
+      return tile.is_incorporated_minor ? incorporatedFill(nc) : politicalFill(nc);
+    };
+    const tileFillColor = (tile: TileData): string => {
+      if (tile.terrain === 'Sea') return TERRAIN_COLORS.Sea;
+      if (mapMode === 'terrain') {
+        let color = TERRAIN_COLORS[tile.terrain] || '#666';
+        if (tile.owner_color) {
+          const nc = NATION_COLORS[tile.owner_color];
+          if (nc) color = tintColor(color, nc, tile.is_incorporated_minor ? 0.10 : 0.15);
+        }
+        return color;
+      }
+      if (mapMode === 'diplomatic' || mapMode === 'relationship' ||
+          mapMode === 'military' || mapMode === 'naval') {
+        const overlayColor = tile.owner ? nationFillMap.get(tile.owner) : null;
+        return overlayColor ?? pickPoliticalColor(tile);
+      }
+      return pickPoliticalColor(tile);
+    };
+
+    // Pass 1: Land fills (organic clipped or non-organic per-hex).
+    if (mapGeometry) {
+      for (let i = 0; i < mapGeometry.componentClips.length; i++) {
+        const comp = mapGeometry.componentClips[i];
+        const compKeys = comp.memberKeys;
+        const first = compKeys.length > 0 ? tileMap.get(compKeys[0]) : undefined;
+        if (first) {
+          sctx.fillStyle = tileFillColor(first);
+          sctx.fill(comp.path, 'evenodd');
+        }
+        sctx.save();
+        sctx.clip(comp.path, 'evenodd');
+        for (const key of compKeys) {
+          const tile = tileMap.get(key);
+          if (!tile) continue;
+          const [px, py] = hexToPixel(tile.q, tile.r);
+          drawHexagon(sctx, px, py, HEX_SIZE);
+          sctx.fillStyle = tileFillColor(tile);
+          sctx.fill();
+        }
+        sctx.restore();
+      }
+    } else {
+      for (let i = 0; i < tilePositions.length; i++) {
+        const { tile, px, py } = tilePositions[i];
+        drawHexagon(sctx, px, py, HEX_SIZE);
+        sctx.fillStyle = tileFillColor(tile);
+        sctx.fill();
+      }
+    }
+
+    // Fog of war — drawn over land fills, under sea zones (preserves the
+    // existing layering where fogged sea hexes still show zone shading).
+    if (!disableFogOfWar) {
+      sctx.fillStyle = 'rgba(128, 128, 128, 0.35)';
+      for (let i = 0; i < tilePositions.length; i++) {
+        const { tile, px, py } = tilePositions[i];
+        if (tile.visible) continue;
+        drawHexagon(sctx, px, py, HEX_SIZE);
+        sctx.fill();
+      }
+    }
+
+    // Pass 1.5: Sea zones (fill + borders + zoom-gated labels).
+    if (seaZones.length > 0) {
+      const hexZoneMap = new Map<string, number>();
+      for (const zone of seaZones) {
+        for (const hex of zone.hexes) hexZoneMap.set(`${hex.q},${hex.r}`, zone.id);
+      }
+      sctx.fillStyle = SEA_ZONE_FILL_COLOR;
+      for (const zone of seaZones) {
+        for (const hex of zone.hexes) {
+          const [px, py] = hexToPixel(hex.q, hex.r);
+          drawHexagon(sctx, px, py, HEX_SIZE);
+          sctx.fill();
+        }
+      }
+      const verts = hexVertices(HEX_SIZE);
+      sctx.strokeStyle = SEA_ZONE_BORDER_COLOR;
+      sctx.lineWidth = 1.5 / bScale;
+      sctx.lineCap = 'round';
+      sctx.beginPath();
+      for (const zone of seaZones) {
+        for (const hex of zone.hexes) {
+          const [px, py] = hexToPixel(hex.q, hex.r);
+          const neighbors = hexNeighbors(hex.q, hex.r);
+          for (let d = 0; d < 6; d++) {
+            const [nq, nr] = neighbors[d];
+            const nzId = hexZoneMap.get(`${nq},${nr}`);
+            if (nzId !== undefined && nzId !== zone.id) {
+              sctx.moveTo(px + verts[d][0], py + verts[d][1]);
+              sctx.lineTo(px + verts[(d + 1) % 6][0], py + verts[(d + 1) % 6][1]);
+            }
+          }
+        }
+      }
+      sctx.stroke();
+
+      if (bScale > 0.4) {
+        sctx.textAlign = 'center';
+        sctx.textBaseline = 'middle';
+        const labelFontSize = Math.max(9, Math.min(16, HEX_SIZE * bScale * 0.9));
+        sctx.font = `italic ${labelFontSize / bScale}px Georgia, serif`;
+        sctx.globalAlpha = 0.6;
+        for (const zone of seaZones) {
+          if (zone.hexes.length === 0) continue;
+          const [cx, cy] = hexToPixel(zone.center_q, zone.center_r);
+          const label = zone.name.toUpperCase();
+          sctx.strokeStyle = 'rgba(0,0,0,0.5)';
+          sctx.lineWidth = 2 / bScale;
+          sctx.strokeText(label, cx, cy);
+          sctx.fillStyle = 'rgba(200,230,255,0.95)';
+          sctx.fillText(label, cx, cy);
+        }
+        sctx.globalAlpha = 1.0;
+      }
+    }
+
+    // Pass 2: Edge strokes (hex grid + borders).
+    {
+      const { normalEdges, provinceEdges, countryEdges } = classifiedEdges;
+      if (!hideHexGrid && bScale > 0.4) {
+        sctx.strokeStyle = 'rgba(0,0,0,0.08)';
+        sctx.lineWidth = 0.5;
+        sctx.lineCap = 'butt';
+        sctx.beginPath();
+        for (let i = 0; i < normalEdges.length; i += 4) {
+          sctx.moveTo(normalEdges[i], normalEdges[i + 1]);
+          sctx.lineTo(normalEdges[i + 2], normalEdges[i + 3]);
+        }
+        sctx.stroke();
+      }
+
+      if (mapGeometry) {
+        const strokePolyline = (pts: Vec2[], closed: boolean) => {
+          if (pts.length < 2) return;
+          sctx.beginPath();
+          sctx.moveTo(pts[0][0], pts[0][1]);
+          for (let k = 1; k < pts.length; k++) sctx.lineTo(pts[k][0], pts[k][1]);
+          if (closed) sctx.closePath();
+          sctx.stroke();
+        };
+        sctx.lineJoin = 'round';
+        sctx.lineCap = 'round';
+        if (mapMode !== 'diplomatic' && zoomedInPastLabelsBucket) {
+          sctx.strokeStyle = 'rgba(20,15,10,0.5)';
+          sctx.lineWidth = 1.5;
+          for (const loop of mapGeometry.provincePolylinesClosed) strokePolyline(loop, true);
+          for (const line of mapGeometry.provincePolylinesOpen) strokePolyline(line, false);
+        }
+        sctx.strokeStyle = 'rgba(10,5,0,0.9)';
+        sctx.lineWidth = 3.5;
+        for (const loop of mapGeometry.countryPolylinesClosed) strokePolyline(loop, true);
+        for (const line of mapGeometry.countryPolylinesOpen) strokePolyline(line, false);
+        sctx.strokeStyle = 'rgba(10,5,0,0.85)';
+        sctx.lineWidth = 2.5;
+        for (const loop of mapGeometry.coastPolylinesClosed) strokePolyline(loop, true);
+        for (const line of mapGeometry.coastPolylinesOpen) strokePolyline(line, false);
+      } else {
+        if (mapMode !== 'diplomatic' && zoomedInPastLabelsBucket) {
+          sctx.strokeStyle = 'rgba(20,15,10,0.5)';
+          sctx.lineWidth = 1.5;
+          sctx.beginPath();
+          for (let i = 0; i < provinceEdges.length; i += 4) {
+            sctx.moveTo(provinceEdges[i], provinceEdges[i + 1]);
+            sctx.lineTo(provinceEdges[i + 2], provinceEdges[i + 3]);
+          }
+          sctx.stroke();
+        }
+        sctx.strokeStyle = 'rgba(10,5,0,0.9)';
+        sctx.lineWidth = 3.5;
+        sctx.beginPath();
+        for (let i = 0; i < countryEdges.length; i += 4) {
+          sctx.moveTo(countryEdges[i], countryEdges[i + 1]);
+          sctx.lineTo(countryEdges[i + 2], countryEdges[i + 3]);
+        }
+        sctx.stroke();
+      }
+    }
+
+    end();
+    return { canvas: sc, originX, originY, scaleBucket: staticScaleBucket };
+    // Pinned to *content* signatures rather than memo refs. The wasm bridge
+    // hands us a fresh `tiles` / `seaZones` / `diplomacyOverlay` etc. on
+    // every poll even when content is unchanged; depending on those refs
+    // would re-bake every poll (including during pan, when polls happen to
+    // fire). The signatures below recompute O(n) each render but only flip
+    // values when something *meaningful* has changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    borderSignature, fillSignature, fogSignature,
+    seaZonesSignature, nationFillSignature,
+    mapMode, hideHexGrid, organicBorders, disableFogOfWar,
+    staticBbox, staticScaleBucket, canvasSize.h,
+  ]);
+
   const render = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1399,18 +1788,26 @@ export default function HexMap({
     // there's nothing on-screen for this copy).
     if (visibleTiles.length === 0) continue;
 
-    if (mapGeometry) {
-      // Sea backdrop is the canvas-wide fill above the loop. Drawing the
-      // per-copy seaBox here would overpaint the previous copy's land where
-      // their world rects overlap on the canvas (wrap-copy land vanishes).
-
-      // ── Pass 1: Land fills, clipped PER visual-group component so a
-      // nation's color can't leak past its smoothed border onto the neighbour.
-      // Resolve each component-member key to the live tile via tileMap so
-      // non-border field changes (terrain subtype, owner_color, is_incorporated_minor)
-      // take effect on the next render — borderSignature deliberately omits
-      // those fields, so the cached memberKeys array is stable but the tile
-      // data it points to is not.
+    // Static blit: terrain fills, fog, sea zones, hex grid, and borders all
+    // come from the offscreen cache. Single drawImage per wrap copy replaces
+    // the four heaviest per-frame passes. Stretch by (scale / scaleBucket)
+    // when the live scale differs from the bake bucket; the resampling is
+    // imperceptible within the 25% bucket window.
+    if (staticLayer) {
+      const ratio = scale / staticLayer.scaleBucket;
+      const dstW = staticLayer.canvas.width * ratio;
+      const dstH = staticLayer.canvas.height * ratio;
+      // Reset to identity so drawImage args are in screen px (drawImage
+      // honors the active transform; using identity makes the math obvious).
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      const dstX = staticLayer.originX * scale + offset.x + k * periodScreen;
+      const dstY = staticLayer.originY * scale + offset.y;
+      ctx.drawImage(staticLayer.canvas, dstX, dstY, dstW, dstH);
+      // Restore the per-copy world transform for the dynamic passes below.
+      ctx.setTransform(scale, 0, 0, scale, offset.x + k * periodScreen, offset.y);
+    } else if (mapGeometry) {
+      // Static cache unavailable (e.g. canvas allocation failed) — fall back
+      // to inline organic-mode pass 1.
       for (let i = 0; i < mapGeometry.componentClips.length; i++) {
         const comp = mapGeometry.componentClips[i];
         const compKeys = comp.memberKeys;
@@ -1446,6 +1843,10 @@ export default function HexMap({
       }
     }
 
+    // Fallback path: when staticLayer is unavailable, fog + sea zones +
+    // borders are drawn inline. The static cache normally renders these
+    // ahead of time so they're already in the blit above.
+    if (!staticLayer) {
     // Fog of war — applied per-hex (land and sea) in both modes.
     if (!disableFogOfWar) {
       ctx.fillStyle = 'rgba(128, 128, 128, 0.35)';
@@ -1597,6 +1998,7 @@ export default function HexMap({
         ctx.stroke();
       }
     }
+    } // end !staticLayer fallback for fog+seaZones+borders
 
     // ── Pass 2.5: Highlight selected nation (setup preview) ──
     // In organic mode, stroke the smoothed outline of each of the nation's
@@ -2089,7 +2491,7 @@ export default function HexMap({
       isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves, nationLabels, disableFogOfWar,
       navyMarkers, seaZones, selectedNavyKey, mapGeometry, tileMap, diplomacyOverlay,
       hideHexGrid, highlightedNationId, classifiedEdges, maxArmyFP, mapDims,
-      selectedTileKey, blinkOn, showDiplomacyMarkers, provinceLabels]);
+      selectedTileKey, blinkOn, showDiplomacyMarkers, provinceLabels, staticLayer]);
 
   const scheduleFrame = useCallback(() => {
     if (rafIdRef.current != null) return;
