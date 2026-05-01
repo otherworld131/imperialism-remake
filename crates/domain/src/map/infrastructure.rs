@@ -156,6 +156,78 @@ pub fn place_depot_unchecked(hex_map: &mut HexMap, coord: HexCoord) -> Result<()
     Ok(())
 }
 
+/// True if `coord` has at least one neighbor that is a sea tile by terrain.
+/// Used by `build_port` to preserve the historical port-placement rule
+/// (lake-coast tiles still allow port construction).
+fn coord_is_sea_adjacent(hex_map: &HexMap, coord: HexCoord) -> bool {
+    coord
+        .neighbors()
+        .iter()
+        .any(|n| hex_map.get_tile(*n).is_some_and(|t| !t.terrain().is_land()))
+}
+
+/// True if `coord` has at least one neighbor that lies in a non-lake ocean
+/// `SeaZone`. This is the predicate used for sea-trade connectivity (cards
+/// #408, #419, #421): only ocean-facing ports/capitals act as sea hubs.
+///
+/// When `sea_zones` is empty (e.g. unit tests that don't construct zones),
+/// this falls back to terrain-based adjacency so existing test setups keep
+/// working.
+pub fn coord_has_ocean_neighbor(
+    hex_map: &HexMap,
+    sea_zones: &[crate::map::sea_zones::SeaZone],
+    coord: HexCoord,
+) -> bool {
+    if sea_zones.is_empty() {
+        return coord_is_sea_adjacent(hex_map, coord);
+    }
+    coord.neighbors().iter().any(|n| {
+        sea_zones.iter().any(|z| !z.is_lake && z.hexes.contains(n))
+    })
+}
+
+/// True if a tile acts as a port for connectivity purposes — a literal built
+/// port adjacent to ocean, or a country-capital tile adjacent to ocean.
+///
+/// Card #419: a country capital adjacent to the ocean is treated as having an
+/// implicit port. F-001 review fix: only ocean-adjacent ports/capitals count
+/// for sea-trade connectivity — lake-side ports do not, even when constructed.
+///
+/// `sea_zones` empty → terrain-only fallback (test mode).
+pub fn has_effective_port(
+    hex_map: &HexMap,
+    sea_zones: &[crate::map::sea_zones::SeaZone],
+    coord: HexCoord,
+) -> bool {
+    has_effective_port_filtered(hex_map, sea_zones, coord, &HashSet::new())
+}
+
+/// Like `has_effective_port` but treats any port tile in `blockaded_ports` as
+/// disconnected. Card #408: a port adjacent to a sea zone under undisputed
+/// enemy command loses its sea-trade link until a friendly warship returns to
+/// the zone.
+pub fn has_effective_port_filtered(
+    hex_map: &HexMap,
+    sea_zones: &[crate::map::sea_zones::SeaZone],
+    coord: HexCoord,
+    blockaded_ports: &HashSet<HexCoord>,
+) -> bool {
+    if blockaded_ports.contains(&coord) {
+        return false;
+    }
+    let Some(tile) = hex_map.get_tile(coord) else {
+        return false;
+    };
+    let ocean_adjacent = coord_has_ocean_neighbor(hex_map, sea_zones, coord);
+    if tile.infrastructure.has_port && ocean_adjacent {
+        return true;
+    }
+    if tile.is_country_capital && ocean_adjacent {
+        return true;
+    }
+    false
+}
+
 /// Build a port on a coastal tile. Caller must own the tile's province.
 pub fn build_port(
     hex_map: &mut HexMap,
@@ -174,11 +246,7 @@ pub fn build_port(
     if tile.infrastructure.has_port {
         return Err(DomainError::illegal("Port already exists"));
     }
-    let is_coastal = coord
-        .neighbors()
-        .iter()
-        .any(|n| hex_map.get_tile(*n).is_some_and(|t| !t.terrain().is_land()));
-    if !is_coastal {
+    if !coord_is_sea_adjacent(hex_map, coord) {
         return Err(DomainError::illegal("Port must be on a coastal tile"));
     }
     let tile = hex_map.get_tile_mut(coord).ok_or(DomainError::TileNotFound(coord))?;
@@ -290,6 +358,27 @@ pub fn is_province_connected_multi(
     target_province_id: ProvinceId,
     provinces: &[Province],
 ) -> bool {
+    is_province_connected_multi_filtered(
+        hex_map,
+        &[],
+        capital_tiles,
+        target_province_id,
+        provinces,
+        &HashSet::new(),
+    )
+}
+
+/// Like `is_province_connected_multi` but ignores any port whose tile is in
+/// `blockaded_ports` and uses zone-aware port detection (only ocean — not
+/// lake — adjacency counts). Card #408 + F-001 review fix.
+pub fn is_province_connected_multi_filtered(
+    hex_map: &HexMap,
+    sea_zones: &[crate::map::sea_zones::SeaZone],
+    capital_tiles: &[HexCoord],
+    target_province_id: ProvinceId,
+    provinces: &[Province],
+    blockaded_ports: &HashSet<HexCoord>,
+) -> bool {
     // Shortcut: if the target province contains any of the seed tiles (the
     // nation's capital or a captured country capital), it's trivially connected.
     if let Some(prov) = provinces.iter().find(|p| p.id == target_province_id) {
@@ -308,11 +397,9 @@ pub fn is_province_connected_multi(
         visited.insert(c);
     }
 
-    let any_seed_has_port = capital_tiles.iter().any(|c| {
-        hex_map
-            .get_tile(*c)
-            .is_some_and(|t| t.infrastructure.has_port)
-    });
+    let any_seed_has_port = capital_tiles
+        .iter()
+        .any(|c| has_effective_port_filtered(hex_map, sea_zones, *c, blockaded_ports));
 
     while let Some(current) = queue.pop_front() {
         if let Some(tile) = hex_map.get_tile(current) {
@@ -333,15 +420,14 @@ pub fn is_province_connected_multi(
         }
     }
 
-    // Port-to-port: if any seed tile has a port and the target province has a
-    // port, they are connected by sea.
+    // Port-to-port: if any seed tile has a port (real or capital-implicit) and
+    // the target province has a port (real or capital-implicit), they are
+    // connected by sea (card #419). Blockaded ports are skipped (card #408).
     if any_seed_has_port {
         let target_prov = provinces.iter().find(|p| p.id == target_province_id);
         if let Some(prov) = target_prov {
             for tile_coord in &prov.tiles {
-                if let Some(tile) = hex_map.get_tile(*tile_coord)
-                    && tile.infrastructure.has_port
-                {
+                if has_effective_port_filtered(hex_map, sea_zones, *tile_coord, blockaded_ports) {
                     return true;
                 }
             }
@@ -803,6 +889,173 @@ mod tests {
             target_pid,
             &provinces
         ));
+    }
+
+    #[test]
+    fn lake_adjacent_port_does_not_grant_sea_connectivity() {
+        // F-001 review fix: a port adjacent only to a lake (not ocean) must
+        // not act as a sea hub, even though it's a built port. Two such
+        // ports facing the same lake are NOT connected by sea.
+        use crate::map::sea_zones::{SeaZone, SeaZoneId};
+        use std::collections::BTreeSet;
+
+        let mut map = HexMap::new(10, 10);
+        let capital_coord = HexCoord::new(0, 0);
+        let lake_near_capital = HexCoord::new(1, 0);
+        let target_coord = HexCoord::new(5, 5);
+        let lake_near_target = HexCoord::new(6, 5);
+
+        let capital_pid = ProvinceId(1);
+        let target_pid = ProvinceId(2);
+
+        let mut capital_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
+        capital_tile.is_capital = true;
+        capital_tile.is_country_capital = true;
+        capital_tile.infrastructure.has_port = true;
+        map.set_tile(capital_coord, capital_tile);
+        map.set_tile(lake_near_capital, Tile::new(TerrainType::Sea));
+
+        let mut target_tile = Tile::with_province(TerrainType::Grassland, target_pid);
+        target_tile.infrastructure.has_port = true;
+        map.set_tile(target_coord, target_tile);
+        map.set_tile(lake_near_target, Tile::new(TerrainType::Sea));
+
+        // Both sea hexes belong to lake zones (is_lake = true), not ocean.
+        let lake_a = SeaZone {
+            id: SeaZoneId(0),
+            name: "Lake A".to_string(),
+            hexes: BTreeSet::from([lake_near_capital]),
+            is_lake: true,
+            adjacent_zone_ids: Vec::new(),
+            coastal_provinces: Vec::new(),
+        };
+        let lake_b = SeaZone {
+            id: SeaZoneId(1),
+            name: "Lake B".to_string(),
+            hexes: BTreeSet::from([lake_near_target]),
+            is_lake: true,
+            adjacent_zone_ids: Vec::new(),
+            coastal_provinces: Vec::new(),
+        };
+        let zones = vec![lake_a, lake_b];
+
+        let provinces = vec![
+            Province::new(capital_pid, "Capital".into(), NationId(1), capital_coord, vec![capital_coord], 4),
+            Province::new(target_pid, "Target".into(), NationId(1), target_coord, vec![target_coord], 3),
+        ];
+
+        assert!(
+            !is_province_connected_multi_filtered(
+                &map,
+                &zones,
+                &[capital_coord],
+                target_pid,
+                &provinces,
+                &HashSet::new(),
+            ),
+            "two lake-side ports must NOT establish sea-trade connectivity"
+        );
+    }
+
+    #[test]
+    fn coastal_capital_acts_as_port_without_built_port() {
+        // Card #419: a country-capital tile adjacent to the sea is treated as
+        // having an implicit port for connectivity, so a remote province with
+        // a built port is reachable even when no port has been built on the
+        // capital itself.
+        let mut map = HexMap::new(10, 10);
+        let capital_coord = HexCoord::new(0, 0);
+        let sea_near_capital = HexCoord::new(1, 0);
+        let target_coord = HexCoord::new(5, 5);
+        let sea_near_target = HexCoord::new(6, 5);
+
+        let capital_pid = ProvinceId(1);
+        let target_pid = ProvinceId(2);
+
+        // Capital tile WITHOUT a built port — only the country-capital flag and
+        // sea adjacency.
+        let mut capital_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
+        capital_tile.is_capital = true;
+        capital_tile.is_country_capital = true;
+        map.set_tile(capital_coord, capital_tile);
+        map.set_tile(sea_near_capital, Tile::new(TerrainType::Sea));
+
+        // Target province has a real, built port.
+        let mut target_tile = Tile::with_province(TerrainType::Grassland, target_pid);
+        target_tile.infrastructure.has_port = true;
+        map.set_tile(target_coord, target_tile);
+        map.set_tile(sea_near_target, Tile::new(TerrainType::Sea));
+
+        let provinces = vec![
+            Province::new(
+                capital_pid,
+                "Capital".to_string(),
+                NationId(1),
+                capital_coord,
+                vec![capital_coord],
+                4,
+            ),
+            Province::new(
+                target_pid,
+                "Target".to_string(),
+                NationId(1),
+                target_coord,
+                vec![target_coord],
+                3,
+            ),
+        ];
+
+        assert!(
+            is_province_connected(&map, capital_coord, target_pid, &provinces),
+            "coastal country capital must act as a port without a built port"
+        );
+    }
+
+    #[test]
+    fn inland_capital_does_not_act_as_port() {
+        // Inverse of the above: a country-capital tile NOT adjacent to sea
+        // gets no implicit port, so port-only routes don't reach it.
+        let mut map = HexMap::new(10, 10);
+        let capital_coord = HexCoord::new(0, 0);
+        let target_coord = HexCoord::new(5, 5);
+        let sea_near_target = HexCoord::new(6, 5);
+
+        let capital_pid = ProvinceId(1);
+        let target_pid = ProvinceId(2);
+
+        let mut capital_tile = Tile::with_province(TerrainType::Grassland, capital_pid);
+        capital_tile.is_country_capital = true;
+        // No sea-adjacent neighbor — capital is inland.
+        map.set_tile(capital_coord, capital_tile);
+
+        let mut target_tile = Tile::with_province(TerrainType::Grassland, target_pid);
+        target_tile.infrastructure.has_port = true;
+        map.set_tile(target_coord, target_tile);
+        map.set_tile(sea_near_target, Tile::new(TerrainType::Sea));
+
+        let provinces = vec![
+            Province::new(
+                capital_pid,
+                "Capital".to_string(),
+                NationId(1),
+                capital_coord,
+                vec![capital_coord],
+                4,
+            ),
+            Province::new(
+                target_pid,
+                "Target".to_string(),
+                NationId(1),
+                target_coord,
+                vec![target_coord],
+                3,
+            ),
+        ];
+
+        assert!(
+            !is_province_connected(&map, capital_coord, target_pid, &provinces),
+            "inland country capital must NOT act as a port"
+        );
     }
 
     #[test]

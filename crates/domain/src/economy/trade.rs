@@ -127,6 +127,7 @@ pub fn base_price(resource: ResourceType) -> Money {
         ResourceType::Gems => Money::dollars(1000),
         ResourceType::Grain => Money::dollars(40),
         ResourceType::Horses => Money::dollars(60),
+        ResourceType::Fish => Money::dollars(40),
     }
 }
 

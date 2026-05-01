@@ -183,6 +183,9 @@ pub enum ResourceType {
     Oil,
     Gold,
     Gems,
+    /// Card #418: a food resource collected by ports from adjacent sea tiles.
+    /// Behaves like Livestock for consumption and trade purposes.
+    Fish,
 }
 
 impl ResourceType {
@@ -208,7 +211,10 @@ impl ResourceType {
     /// Whether this resource is a food type (consumed by workers).
     /// Horses are a military resource, not food.
     pub const fn is_food(self) -> bool {
-        matches!(self, Self::Grain | Self::Fruit | Self::Livestock)
+        matches!(
+            self,
+            Self::Grain | Self::Fruit | Self::Livestock | Self::Fish
+        )
     }
 
     /// Maximum improvement level for this resource.
@@ -238,6 +244,7 @@ impl std::str::FromStr for ResourceType {
             "Oil" => Ok(Self::Oil),
             "Gold" => Ok(Self::Gold),
             "Gems" => Ok(Self::Gems),
+            "Fish" => Ok(Self::Fish),
             other => Err(format!("unknown resource type: {}", other)),
         }
     }
@@ -661,11 +668,12 @@ mod tests {
             ResourceType::Oil,
             ResourceType::Gold,
             ResourceType::Gems,
+            ResourceType::Fish,
         ];
 
         // All resources are tradeable
         let tradeable: Vec<_> = all_resources.iter().filter(|r| r.is_tradeable()).collect();
-        assert_eq!(tradeable.len(), 12);
+        assert_eq!(tradeable.len(), 13);
     }
 
     // ── Money checked_sub edge cases ───────────────────────────

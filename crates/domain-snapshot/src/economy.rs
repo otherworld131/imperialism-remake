@@ -47,6 +47,10 @@ pub struct LogisticsState {
     pub freight_committed: u32,
     pub freight_unused: u32,
     #[serde(default)]
+    pub rail_total: u32,
+    #[serde(default)]
+    pub sea_total: u32,
+    #[serde(default)]
     pub per_resource: BTreeMap<ResourceType, FreightDemand>,
 }
 
@@ -402,6 +406,8 @@ impl From<&d::transport::LogisticsState> for LogisticsState {
             freight_total: v.freight_total,
             freight_committed: v.freight_committed,
             freight_unused: v.freight_unused,
+            rail_total: v.rail_total,
+            sea_total: v.sea_total,
             per_resource: v.per_resource.iter().map(|(k, fd)| ((*k).into(), fd.into())).collect(),
         }
     }
@@ -412,6 +418,8 @@ impl From<LogisticsState> for d::transport::LogisticsState {
             freight_total: v.freight_total,
             freight_committed: v.freight_committed,
             freight_unused: v.freight_unused,
+            rail_total: v.rail_total,
+            sea_total: v.sea_total,
             per_resource: v.per_resource.into_iter().map(|(k, fd)| (k.into(), fd.into())).collect(),
         }
     }

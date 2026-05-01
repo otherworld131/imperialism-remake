@@ -12,7 +12,7 @@ use crate::economy::trade::TradeTransaction;
 use crate::events::*;
 use crate::game_state::{GameState, PoliticalSnapshot, PoliticalSnapshotEntry};
 use crate::map::SettlementLevel;
-use crate::map::infrastructure::is_province_connected_multi;
+use crate::map::infrastructure::is_province_connected_multi_filtered;
 use crate::military::battle_outcome::{BattleParams, compute_battle_outcome};
 use crate::military::combat::{
     BattleConfig, BattleResult, CombatForce, TargetingPriority,
@@ -907,14 +907,24 @@ pub fn connected_provinces(game: &GameState, nation_id: NationId) -> HashSet<Pro
         }
     }
 
+    let blockaded_ports = crate::military::naval::compute_blockaded_ports(game, nation_id);
+
     for &pid in &nation.province_ids {
         if pid == capital_pid {
             continue;
         }
 
         // Infrastructure connection (railroad/depot/port) seeded from every
-        // owned country-capital tile.
-        if is_province_connected_multi(&game.world.hex_map, &seed_tiles, pid, &game.world.provinces) {
+        // owned country-capital tile. Ports under undisputed enemy blockade
+        // are skipped (card #408).
+        if is_province_connected_multi_filtered(
+            &game.world.hex_map,
+            &game.world.sea_zones,
+            &seed_tiles,
+            pid,
+            &game.world.provinces,
+            &blockaded_ports,
+        ) {
             connected.insert(pid);
             continue;
         }
@@ -1015,6 +1025,55 @@ pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
                 }
             }
         }
+
+        // Card #418: ports and coastal country capitals haul Fish out of the
+        // sea. A port (or capital acting as one, card #419) yields 1 Fish per
+        // adjacent ocean tile, capped at 3 per port. Lake-adjacent ports
+        // yield nothing — only true ocean tiles are fisheries.
+        for tile_coord in &province.tiles {
+            let Some(tile) = game.world.hex_map.get_tile(*tile_coord) else {
+                continue;
+            };
+            let is_port = tile.infrastructure.has_port;
+            let is_coastal_capital = tile.is_country_capital
+                && tile_coord.neighbors().iter().any(|n| {
+                    game.world
+                        .hex_map
+                        .get_tile(*n)
+                        .is_some_and(|t| !t.terrain().is_land())
+                });
+            if !is_port && !is_coastal_capital {
+                continue;
+            }
+            // Count adjacent ocean (non-lake) sea tiles.
+            let ocean_neighbors = tile_coord
+                .neighbors()
+                .iter()
+                .filter(|n| {
+                    let Some(t) = game.world.hex_map.get_tile(**n) else {
+                        return false;
+                    };
+                    if t.terrain().is_land() {
+                        return false;
+                    }
+                    // Exclude lake hexes — only true ocean fisheries yield Fish.
+                    !game
+                        .world
+                        .sea_zones
+                        .iter()
+                        .any(|z| z.is_lake && z.hexes.contains(*n))
+                })
+                .count() as u32;
+            let yield_qty = ocean_neighbors.min(3);
+            if yield_qty == 0 {
+                continue;
+            }
+            if is_connected {
+                production_data.push((province.owner, ResourceType::Fish, yield_qty));
+            } else {
+                disconnected_data.push((province.owner, ResourceType::Fish, yield_qty));
+            }
+        }
     }
 
     // Phase 2: apply connected resources to nations using mutable borrows,
@@ -1106,7 +1165,13 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
             continue;
         }
 
-        let freight_capacity = nation.military.transport.total_capacity();
+        // Card #84: rail and merchant-marine cargo are tracked as separate
+        // legs of the remote-delivery budget. Sea (merchant-fleet) cargo
+        // contributes to the same combined pool as rail freight; the split
+        // is surfaced for telemetry and UI ("rail X / sea Y").
+        let rail_capacity = nation.military.transport.total_capacity();
+        let sea_capacity = nation.total_cargo_capacity(&game.game_data);
+        let freight_capacity = rail_capacity + sea_capacity;
 
         // Aggregate this turn's resource production for this nation, split by source
         let capital_province_id = nation.capital_province_id;
@@ -1196,13 +1261,17 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
                 let requested_items = proportional_split(&produced_this_turn, remote_delivery);
                 let delivered_items = proportional_split(&produced_this_turn, delivered_remote);
                 nation.economy.logistics.update(
-                    freight_capacity,
+                    rail_capacity,
+                    sea_capacity,
                     &requested_items,
                     &delivered_items,
                 );
             } else {
                 // All production was local — no freight was needed or used.
-                nation.economy.logistics.update(freight_capacity, &[], &[]);
+                nation
+                    .economy
+                    .logistics
+                    .update(rail_capacity, sea_capacity, &[], &[]);
             }
         }
     }
@@ -1261,7 +1330,8 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
         let grain = nation.resource_amount(ResourceType::Grain);
         let fruit = nation.resource_amount(ResourceType::Fruit);
         let livestock = nation.resource_amount(ResourceType::Livestock);
-        let total_food = grain + fruit + livestock;
+        let fish = nation.resource_amount(ResourceType::Fish);
+        let total_food = grain + fruit + livestock + fish;
         let total_workers = nation.economy.labor.total_workers();
 
         if total_food <= total_workers {
@@ -2076,7 +2146,8 @@ fn process_food(game: &mut GameState, report: &mut TurnReport) {
         let grain = nation.resource_amount(ResourceType::Grain);
         let fruit = nation.resource_amount(ResourceType::Fruit);
         let livestock = nation.resource_amount(ResourceType::Livestock);
-        let total_raw_food = grain + fruit + livestock;
+        let fish = nation.resource_amount(ResourceType::Fish);
+        let total_raw_food = grain + fruit + livestock + fish;
 
         // Reserve raw food for worker consumption (runs next step).
         // Only convert surplus beyond what workers need to eat.
@@ -2105,6 +2176,9 @@ fn process_food(game: &mut GameState, report: &mut TurnReport) {
         remaining_to_consume -= fruit_used;
 
         let livestock_used = livestock.min(remaining_to_consume);
+        remaining_to_consume -= livestock_used;
+
+        let fish_used = fish.min(remaining_to_consume);
         // remaining_to_consume should be 0 now
 
         let Some(nation) = game.world.nations.iter_mut().find(|n| n.id == nation_id) else {
@@ -2132,6 +2206,14 @@ fn process_food(game: &mut GameState, report: &mut TurnReport) {
                 nation_id,
                 ResourceType::Livestock,
                 livestock_used,
+            ));
+        }
+        if fish_used > 0 {
+            nation.remove_resource(ResourceType::Fish, fish_used);
+            report.stockpile_flows.food_processed_inputs.push((
+                nation_id,
+                ResourceType::Fish,
+                fish_used,
             ));
         }
 
@@ -2167,17 +2249,19 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
         let grain = nation.resource_amount(ResourceType::Grain);
         let fruit = nation.resource_amount(ResourceType::Fruit);
         let livestock = nation.resource_amount(ResourceType::Livestock);
+        let fish = nation.resource_amount(ResourceType::Fish);
         let canned = nation.material_amount(MaterialType::CannedFood);
-        let total_food = grain + fruit + livestock + canned;
+        let total_food = grain + fruit + livestock + fish + canned;
 
         if ai_debug && nation.is_great_power() {
             eprintln!(
-                "[FOOD:{}] workers={}, grain={}, fruit={}, livestock={}, canned={}, total={}, deficit={}",
+                "[FOOD:{}] workers={}, grain={}, fruit={}, livestock={}, fish={}, canned={}, total={}, deficit={}",
                 nation.name,
                 population,
                 grain,
                 fruit,
                 livestock,
+                fish,
                 canned,
                 total_food,
                 population.saturating_sub(total_food)
@@ -2222,6 +2306,17 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
             ));
         }
         remaining -= livestock_consumed;
+
+        let fish_consumed = fish.min(remaining);
+        if fish_consumed > 0 {
+            nation.remove_resource(ResourceType::Fish, fish_consumed);
+            report.stockpile_flows.worker_food_consumed.push((
+                nation_id,
+                ResourceType::Fish,
+                fish_consumed,
+            ));
+        }
+        remaining -= fish_consumed;
 
         // CannedFood as fallback when raw food is insufficient
         let canned_consumed = canned.min(remaining);

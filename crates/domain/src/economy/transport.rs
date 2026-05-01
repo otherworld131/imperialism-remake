@@ -19,14 +19,23 @@ pub struct FreightDemand {
 /// Populated by the turn processor after transport resolution completes.
 /// Exposes the codebase answer to "what freight is available?", "what is committed?",
 /// and "which resources are starved by transport capacity?".
+///
+/// Card #84: rail freight (`freight_total`) and merchant-marine cargo
+/// (`sea_total`) are tracked as separate components of the unified
+/// remote-delivery budget so the UI can show "rail X / sea Y" and the
+/// player understands which leg of the supply chain is the bottleneck.
 #[derive(Debug, Clone, Default)]
 pub struct LogisticsState {
-    /// Total freight capacity owned by this nation.
+    /// Total *combined* (rail + sea) remote-delivery capacity.
     pub freight_total: u32,
     /// Freight capacity consumed this turn (sum of `granted` across all resources).
     pub freight_committed: u32,
     /// Remaining freight capacity after all deliveries: `freight_total - freight_committed`.
     pub freight_unused: u32,
+    /// Card #84: rail-only component of `freight_total` (sum of freight cars).
+    pub rail_total: u32,
+    /// Card #84: sea-only component of `freight_total` (merchant-marine cargo).
+    pub sea_total: u32,
     /// Per-resource freight demand: how much was requested vs actually delivered.
     pub per_resource: BTreeMap<ResourceType, FreightDemand>,
 }
@@ -38,15 +47,21 @@ impl LogisticsState {
 
     /// Update logistics state from a completed delivery run.
     ///
-    /// `capacity` is the total freight capacity. `requested` lists what each
-    /// resource wanted; `delivered` lists what was actually granted.
+    /// `rail_capacity` and `sea_capacity` are the rail and merchant-marine
+    /// components; their sum is the total freight capacity. `requested`
+    /// lists what each resource wanted; `delivered` lists what was actually
+    /// granted. (Card #84.)
     pub fn update(
         &mut self,
-        capacity: u32,
+        rail_capacity: u32,
+        sea_capacity: u32,
         requested: &[(ResourceType, u32)],
         delivered: &[(ResourceType, u32)],
     ) {
+        let capacity = rail_capacity + sea_capacity;
         self.freight_total = capacity;
+        self.rail_total = rail_capacity;
+        self.sea_total = sea_capacity;
         self.per_resource.clear();
 
         let mut committed = 0u32;

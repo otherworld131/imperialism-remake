@@ -605,6 +605,10 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
 
     let visible_hexes = compute_visible_hexes(&game, disable_fog);
 
+    // Card #408: precompute the set of port-tile coords blockaded for the
+    // human player so the UI can render them with a "blockaded" indicator.
+    let blockaded_ports = domain::military::naval::compute_blockaded_ports(&game, human_nation_id);
+
     let map_width = game.world.hex_map.width();
     let map_height = game.world.hex_map.height();
 
@@ -712,6 +716,7 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
                 "has_railroad": tile.infrastructure.has_railroad,
                 "has_depot": tile.infrastructure.has_depot,
                 "has_port": tile.infrastructure.has_port,
+                "port_blockaded": blockaded_ports.contains(&coord),
                 "has_fort": tile.infrastructure.has_fort,
                 "fort_level": tile.infrastructure.fort_level,
                 "map_width": map_width,
@@ -2500,6 +2505,7 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         ResourceType::Oil,
         ResourceType::Gold,
         ResourceType::Gems,
+        ResourceType::Fish,
     ];
 
     let available: Vec<(ResourceType, u32)> = all_resources
@@ -2508,7 +2514,17 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         .filter(|(_, qty)| *qty > 0)
         .collect();
 
-    let deliveries = transport.calculate_deliveries(&available);
+    // F-004 review fix: project deliveries against the full remote-delivery
+    // budget (rail freight + merchant-marine cargo) so the player-facing
+    // numbers match domain transport semantics. Telemetry of the rail-only
+    // result is kept under `rail_deliveries` for diagnostics.
+    let merchant_cargo = nation.total_cargo_capacity(&game.game_data);
+    let combined_transport = domain::economy::TransportSystem {
+        freight_cars: transport.freight_cars + merchant_cargo,
+        allocations: transport.allocations.clone(),
+    };
+    let deliveries = combined_transport.calculate_deliveries(&available);
+    let rail_only_deliveries = transport.calculate_deliveries(&available);
 
     let allocations_json: Vec<serde_json::Value> = transport
         .allocations
@@ -2537,10 +2553,29 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         })
         .collect();
 
+    let merchant_ship_count = nation.merchant_ship_count();
+    let rail_only_deliveries_json: Vec<serde_json::Value> = available
+        .iter()
+        .map(|(r, _avail)| {
+            let delivered = rail_only_deliveries
+                .iter()
+                .find(|(dr, _)| *dr == *r)
+                .map(|(_, qty)| *qty)
+                .unwrap_or(0);
+            serde_json::json!({
+                "resource": format!("{:?}", r),
+                "delivered": delivered,
+            })
+        })
+        .collect();
+
     serde_json::json!({
         "freight_cars": transport.freight_cars,
         "total_capacity": transport.total_capacity(),
         "military_transport_capacity": transport.military_transport_capacity(),
+        "merchant_marine_cargo": merchant_cargo,
+        "merchant_ship_count": merchant_ship_count,
+        "remote_delivery_capacity": transport.total_capacity() + merchant_cargo,
         "allocations": allocations_json,
         "build_cost": {
             "labor": labor_cost,
@@ -2552,6 +2587,7 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         "available_steel": available_steel,
         "available_labor": available_labor,
         "deliveries": deliveries_json,
+        "rail_only_deliveries": rail_only_deliveries_json,
     })
     .to_string()
 }

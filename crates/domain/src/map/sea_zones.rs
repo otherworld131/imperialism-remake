@@ -225,6 +225,20 @@ pub fn zone_for_hex(zones: &[SeaZone], hex: HexCoord) -> Option<SeaZoneId> {
     zones.iter().find(|z| z.hexes.contains(&hex)).map(|z| z.id)
 }
 
+/// Return all non-lake sea zones adjacent to a single hex (the zones containing
+/// any sea-tile neighbor of the hex). Used by the port-blockade rule (card #408).
+pub fn ocean_zones_adjacent_to_hex(zones: &[SeaZone], hex: HexCoord) -> Vec<SeaZoneId> {
+    let mut result: HashSet<SeaZoneId> = HashSet::new();
+    for neighbor in hex.neighbors() {
+        for zone in zones.iter().filter(|z| !z.is_lake) {
+            if zone.hexes.contains(&neighbor) {
+                result.insert(zone.id);
+            }
+        }
+    }
+    result.into_iter().collect()
+}
+
 /// Return all non-lake sea zones adjacent to a given province (touching any of its tiles).
 pub fn ocean_zones_adjacent_to_province(
     zones: &[SeaZone],

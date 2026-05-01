@@ -29,6 +29,7 @@ pub enum ResourceType {
     Oil,
     Gold,
     Gems,
+    Fish,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
@@ -127,6 +128,7 @@ impl From<d::ResourceType> for ResourceType {
             d::ResourceType::Oil => Self::Oil,
             d::ResourceType::Gold => Self::Gold,
             d::ResourceType::Gems => Self::Gems,
+            d::ResourceType::Fish => Self::Fish,
         }
     }
 }
@@ -145,6 +147,7 @@ impl From<ResourceType> for d::ResourceType {
             ResourceType::Oil => Self::Oil,
             ResourceType::Gold => Self::Gold,
             ResourceType::Gems => Self::Gems,
+            ResourceType::Fish => Self::Fish,
         }
     }
 }

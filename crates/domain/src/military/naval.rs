@@ -218,6 +218,115 @@ pub(crate) fn move_warship_group_one_zone(
     true
 }
 
+/// Card #408: compute the set of port tiles owned by `nation_id` that are
+/// blockaded — i.e. adjacent to a sea zone where a hostile fleet is present
+/// AND the owner has zero warships. Country-capital tiles that act as
+/// implicit ports (card #419) are included when sea-adjacent.
+///
+/// "Hostile fleet" = any warship of a nation currently at war with `nation_id`,
+/// excluding warships of anarchic nations (consistent with the trade-blockade
+/// rule). Ships with no sea zone assigned (`sea_zone == None`) are ignored,
+/// since unzoned ships represent transient state and do not exert blockade.
+pub fn compute_blockaded_ports(
+    game: &GameState,
+    nation_id: NationId,
+) -> std::collections::HashSet<crate::hex::HexCoord> {
+    use std::collections::{HashMap, HashSet};
+
+    let mut out: HashSet<crate::hex::HexCoord> = HashSet::new();
+    if game.world.sea_zones.is_empty() {
+        return out;
+    }
+    let Some(nation) = game.get_nation(nation_id) else {
+        return out;
+    };
+    if nation.diplomacy.is_in_anarchy {
+        return out;
+    }
+
+    // Per-zone enemy warship counts (only zones that hold a hostile ship).
+    let mut hostile_per_zone: HashMap<SeaZoneId, u32> = HashMap::new();
+    for other in &game.world.nations {
+        if other.id == nation_id || other.diplomacy.is_in_anarchy {
+            continue;
+        }
+        let hostile = game
+            .world
+            .diplomacy
+            .get_relation(nation_id, other.id)
+            .is_some_and(|r| r.hostilities_active_on(game.turn));
+        if !hostile {
+            continue;
+        }
+        for ship in &other.military.warships {
+            if let Some(zid) = ship.sea_zone {
+                *hostile_per_zone.entry(zid).or_insert(0) += 1;
+            }
+        }
+    }
+    if hostile_per_zone.is_empty() {
+        return out;
+    }
+
+    // Per-zone friendly warship counts.
+    let mut friendly_per_zone: HashMap<SeaZoneId, u32> = HashMap::new();
+    for ship in &nation.military.warships {
+        if let Some(zid) = ship.sea_zone {
+            *friendly_per_zone.entry(zid).or_insert(0) += 1;
+        }
+    }
+
+    // For each owned province, walk every tile that acts as a port (built
+    // port, or country-capital adjacent to sea). Mark blockaded if any
+    // adjacent ocean zone has hostile ships and zero friendlies.
+    for &pid in &nation.province_ids {
+        let Some(province) = game.get_province(pid) else {
+            continue;
+        };
+        for &tile_coord in &province.tiles {
+            let Some(tile) = game.world.hex_map.get_tile(tile_coord) else {
+                continue;
+            };
+            let acts_as_port = tile.infrastructure.has_port
+                || (tile.is_country_capital
+                    && tile_coord.neighbors().iter().any(|n| {
+                        game.world
+                            .hex_map
+                            .get_tile(*n)
+                            .is_some_and(|t| !t.terrain().is_land())
+                    }));
+            if !acts_as_port {
+                continue;
+            }
+            let zones =
+                crate::map::sea_zones::ocean_zones_adjacent_to_hex(&game.world.sea_zones, tile_coord);
+            if zones.is_empty() {
+                continue;
+            }
+            // F-002 review fix: a port is blockaded only when it has no open
+            // ocean approach — i.e. EVERY adjacent zone is hostile-undefended
+            // and at least one zone actually has hostile fleet presence. A
+            // port touching two zones with one open lane stays connected.
+            let any_hostile_present = zones.iter().any(|zid| {
+                hostile_per_zone.get(zid).copied().unwrap_or(0) > 0
+            });
+            if !any_hostile_present {
+                continue;
+            }
+            let all_zones_blockaded = zones.iter().all(|zid| {
+                let hostile = hostile_per_zone.get(zid).copied().unwrap_or(0);
+                let friendly = friendly_per_zone.get(zid).copied().unwrap_or(0);
+                hostile > 0 && friendly == 0
+            });
+            if all_zones_blockaded {
+                out.insert(tile_coord);
+            }
+        }
+    }
+
+    out
+}
+
 /// Perform naval reconnaissance: estimate enemy ground forces.
 ///
 /// Returns an estimated strength based on provinces owned and army size.

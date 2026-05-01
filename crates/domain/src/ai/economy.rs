@@ -151,7 +151,8 @@ pub(super) fn compute_resource_demand(
 
     let total_food = nation.resource_amount(ResourceType::Grain)
         + nation.resource_amount(ResourceType::Fruit)
-        + nation.resource_amount(ResourceType::Livestock);
+        + nation.resource_amount(ResourceType::Livestock)
+        + nation.resource_amount(ResourceType::Fish);
     let workers = nation.economy.labor.total_workers();
     let food_urgency = if total_food <= workers {
         10.0

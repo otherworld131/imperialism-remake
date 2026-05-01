@@ -293,11 +293,12 @@ impl NationEconomySnapshot {
 
     // ── Food helpers ─────────────────────────────────────────────────────────
 
-    /// Total food (Grain + Fruit + Livestock) in inventory.
+    /// Total food (Grain + Fruit + Livestock + Fish) in inventory.
     pub fn total_food(&self) -> u32 {
         self.resource(ResourceType::Grain)
             + self.resource(ResourceType::Fruit)
             + self.resource(ResourceType::Livestock)
+            + self.resource(ResourceType::Fish)
     }
 }
 

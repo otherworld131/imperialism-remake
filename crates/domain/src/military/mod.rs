@@ -13,7 +13,8 @@ pub use combat::{
 pub use combat::create_garrison;
 pub use naval::{
     NavalBattleResult, NavalOperation, ReconResult, beachhead_force_size, blockade_with_escorts,
-    calculate_blockade_effect, escort_protection, naval_reconnaissance, resolve_naval_battle,
+    calculate_blockade_effect, compute_blockaded_ports, escort_protection, naval_reconnaissance,
+    resolve_naval_battle,
 };
 pub use ships::{Ship, ShipCategory, ShipStats, ShipType};
 pub use units::{ArmyUnit, ArmyUnitType, UnitCategory, UnitStats};

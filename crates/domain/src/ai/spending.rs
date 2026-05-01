@@ -1437,6 +1437,28 @@ fn execute_infrastructure(
         None => return,
     };
 
+    // Card #421: before committing to depot+rail, check whether building a
+    // port instead would connect the target province more cheaply / faster.
+    // Ports take 3 turns vs. (depot 2 turns + 1 turn per rail tile), so on
+    // distant coastal targets a port wins on both cost and elapsed time.
+    if let Some(port_coord) = find_port_alternative(game, nation_id, plan, &cfg) {
+        // F-003 review fix: clear the depot commitment so the planner
+        // re-plans next turn instead of trying to keep building rail to
+        // the same target the port now serves.
+        if let Some(nation) = game.get_nation_mut(nation_id) {
+            nation.diplomacy.ai_priority_state.committed_infra_target = None;
+        }
+        start_engineer_task(
+            game,
+            nation_id,
+            engineer_idx,
+            port_coord,
+            BuildTask::Port,
+            &cfg,
+        );
+        return;
+    }
+
     // Path empty → candidate is already reachable, just build the depot there.
     if plan.path.is_empty() {
         start_engineer_task(
@@ -1570,6 +1592,127 @@ fn start_engineer_task(
         let civ = &mut nation.military.civilians[engineer_idx];
         civ.deploy(coord);
         civ.start_build(task, cfg);
+    }
+}
+
+/// Card #421: decide whether a port is a better build target than the
+/// depot+rail plan returned by `plan_next_depot`.
+///
+/// A port wins when:
+/// 1. The nation has a sea hub (a coastal country-capital — implicit port —
+///    or any owned tile with a literal port).
+/// 2. The depot plan's candidate province has a coastal tile (real ocean,
+///    not a lake) owned by the nation.
+/// 3. The depot+rail elapsed cost beats the port option:
+///    - $: `depot_cost + path_cost > port_cost`
+///    - turns: `depot_turns + path_len > port_turns`
+///
+/// Returns the coastal tile the engineer should head to. The engineer's own
+/// idle/working state is checked by the caller.
+fn find_port_alternative(
+    game: &GameState,
+    nation_id: NationId,
+    plan: &super::economy::DepotPlan,
+    cfg: &crate::data::GameConfig,
+) -> Option<HexCoord> {
+    let nation = game.get_nation(nation_id)?;
+
+    // (1) Nation must have a sea hub already (built port or coastal capital).
+    let owned_hexes: Vec<HexCoord> = game
+        .world
+        .provinces
+        .iter()
+        .filter(|p| p.owner == nation_id)
+        .flat_map(|p| p.tiles.iter().copied())
+        .collect();
+    let has_sea_hub = owned_hexes.iter().any(|c| {
+        crate::map::infrastructure::has_effective_port(
+            &game.world.hex_map,
+            &game.world.sea_zones,
+            *c,
+        )
+    });
+    if !has_sea_hub {
+        return None;
+    }
+
+    // (2) Find the candidate province that the depot plan is heading to.
+    // Use the candidate tile's province_id.
+    let candidate_pid = game
+        .world
+        .hex_map
+        .get_tile(plan.candidate)
+        .and_then(|t| t.province_id)?;
+    if candidate_pid == nation.capital_province_id {
+        return None;
+    }
+    let province = game.get_province(candidate_pid)?;
+    if province.owner != nation_id {
+        return None;
+    }
+
+    // Skip if the province already has a port — depot+rail is the right call.
+    let already_has_port = province.tiles.iter().any(|c| {
+        game.world
+            .hex_map
+            .get_tile(*c)
+            .is_some_and(|t| t.infrastructure.has_port)
+    });
+    if already_has_port {
+        return None;
+    }
+
+    // (3) Find an owned coastal land tile (sea-adjacent, real ocean, no
+    // building yet, no civilian assigned). Prefer the province centroid if
+    // it qualifies, else any qualifying tile in the province.
+    let mut centroid_first = std::iter::once(province.capital_tile)
+        .chain(province.tiles.iter().copied().filter(|c| *c != province.capital_tile));
+
+    let coastal_tile = centroid_first.find(|c| {
+        let Some(tile) = game.world.hex_map.get_tile(*c) else {
+            return false;
+        };
+        if !tile.terrain().is_land() || tile.infrastructure.has_port {
+            return false;
+        }
+        if tile.assigned_civilian.is_some() {
+            return false;
+        }
+        // Must be adjacent to a real ocean tile (not a lake).
+        c.neighbors().iter().any(|n| {
+            let Some(nt) = game.world.hex_map.get_tile(*n) else {
+                return false;
+            };
+            if nt.terrain().is_land() {
+                return false;
+            }
+            !game
+                .world
+                .sea_zones
+                .iter()
+                .any(|z| z.is_lake && z.hexes.contains(n))
+        })
+    })?;
+
+    // (4) Compare depot+rail cost/turns vs. port cost/turns.
+    let depot_cost = cfg.depot_cost as i64;
+    let port_cost = cfg.port_cost as i64;
+    let path_cost_dollars = plan.path.iter()
+        .filter_map(|c| game.world.hex_map.get_tile(*c))
+        .filter(|t| !t.infrastructure.has_railroad && !t.infrastructure.has_depot)
+        .filter_map(|t| crate::map::infrastructure::railroad_cost(t.terrain(), cfg))
+        .map(|m| m.as_dollars())
+        .sum::<i64>();
+    let depot_total_cost = depot_cost + path_cost_dollars;
+
+    let depot_turns: u32 =
+        cfg.build_turns_depot as u32 + plan.path.len() as u32 * cfg.build_turns_railroad as u32;
+    let port_turns: u32 = cfg.build_turns_port as u32;
+
+    if port_cost < depot_total_cost && port_turns < depot_turns {
+        Some(coastal_tile)
+    } else {
+        None
     }
 }
 

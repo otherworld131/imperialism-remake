@@ -27,7 +27,8 @@ pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
     let grain = nation.resource_amount(ResourceType::Grain);
     let fruit = nation.resource_amount(ResourceType::Fruit);
     let livestock = nation.resource_amount(ResourceType::Livestock);
-    let total_food = grain + fruit + livestock;
+    let fish = nation.resource_amount(ResourceType::Fish);
+    let total_food = grain + fruit + livestock + fish;
 
     // Scale max workers with province count, min floor.
     // Wealthy nations invest in workforce growth.
@@ -40,13 +41,15 @@ pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
 
     // Only recruit if workforce is below target AND there is surplus food
     if total_workers < max_workers && total_food > total_workers {
-        // Consume 1 grain (or fruit/livestock) to recruit
+        // Consume 1 grain (or fruit/livestock/fish) to recruit
         if nation.resource_amount(ResourceType::Grain) > 0 {
             nation.remove_resource(ResourceType::Grain, 1);
         } else if nation.resource_amount(ResourceType::Fruit) > 0 {
             nation.remove_resource(ResourceType::Fruit, 1);
         } else if nation.resource_amount(ResourceType::Livestock) > 0 {
             nation.remove_resource(ResourceType::Livestock, 1);
+        } else if nation.resource_amount(ResourceType::Fish) > 0 {
+            nation.remove_resource(ResourceType::Fish, 1);
         }
         nation.economy.labor.recruit_immigrant();
     }
@@ -74,7 +77,8 @@ fn ai_process_food(game: &mut GameState, nation_id: NationId) {
     let grain = nation.resource_amount(ResourceType::Grain);
     let fruit = nation.resource_amount(ResourceType::Fruit);
     let livestock = nation.resource_amount(ResourceType::Livestock);
-    let total_raw = grain + fruit + livestock;
+    let fish = nation.resource_amount(ResourceType::Fish);
+    let total_raw = grain + fruit + livestock + fish;
 
     // Only process if we have excess food beyond worker needs
     let workers = nation.economy.labor.total_workers();
@@ -94,13 +98,15 @@ fn ai_process_food(game: &mut GameState, nation_id: NationId) {
         return;
     }
 
-    // Consume grain first, then fruit, then livestock
+    // Consume grain first, then fruit, then livestock, then fish
     let mut remaining = units * 2;
     let grain_used = grain.min(remaining);
     remaining -= grain_used;
     let fruit_used = fruit.min(remaining);
     remaining -= fruit_used;
     let livestock_used = livestock.min(remaining);
+    remaining -= livestock_used;
+    let fish_used = fish.min(remaining);
 
     if grain_used > 0 {
         nation.remove_resource(ResourceType::Grain, grain_used);
@@ -110,6 +116,9 @@ fn ai_process_food(game: &mut GameState, nation_id: NationId) {
     }
     if livestock_used > 0 {
         nation.remove_resource(ResourceType::Livestock, livestock_used);
+    }
+    if fish_used > 0 {
+        nation.remove_resource(ResourceType::Fish, fish_used);
     }
     nation.add_material(MaterialType::CannedFood, units);
 }
