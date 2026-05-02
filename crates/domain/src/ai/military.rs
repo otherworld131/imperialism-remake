@@ -1326,7 +1326,17 @@ pub(crate) fn ai_military_strategy(
 /// `UnitStats.prerequisite_tech` field carries a different (project-
 /// specific) name set in some rows and used to silently disagree with
 /// the canonical tech-tree wiring.
+///
+/// Garrison units (Minutemen / Militia / Conscript / GarrisonArtillery)
+/// are persistent province defenders — they are auto-spawned and capped
+/// per province by `regenerate_garrisons`. Auto-upgrading them would
+/// drain the Minutemen pool every turn (Minutemen → Militia → Conscript
+/// is free), and `regenerate_garrisons` would keep re-seeding fresh
+/// Minutemen up to the cap, accumulating Conscripts without bound. Only
+/// field-army units (Infantry/Cavalry/Artillery/Special) auto-upgrade.
 fn ai_upgrade_units(game: &mut GameState, nation_id: NationId) {
+    use crate::military::units::UnitCategory;
+
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,
         None => return,
@@ -1340,6 +1350,9 @@ fn ai_upgrade_units(game: &mut GameState, nation_id: NationId) {
         .iter()
         .enumerate()
         .filter_map(|(i, unit)| {
+            if unit.unit_type.category() == UnitCategory::Garrison {
+                return None;
+            }
             unit.unit_type.upgrade_to().and_then(|new_type| {
                 match new_type.required_tech() {
                     Some(tech_name) => {

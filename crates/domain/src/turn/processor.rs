@@ -5382,9 +5382,18 @@ fn resolve_unit_upgrades(game: &mut GameState, report: &mut TurnReport) {
             .map(|t| t.name.clone())
             .collect();
 
-        // Find upgrades to perform
+        // Find upgrades to perform. Garrison units (Minutemen / Militia /
+        // Conscript / GarrisonArtillery) are persistent province defenders;
+        // auto-upgrading them would drain the Minutemen pool every turn and
+        // `regenerate_garrisons` would re-seed forever. Field-army units
+        // only.
         let mut upgrades: Vec<(usize, ArmyUnitType, ArmyUnitType)> = Vec::new();
         for (i, unit) in nation.military.army.iter().enumerate() {
+            if unit.unit_type.category()
+                == crate::military::units::UnitCategory::Garrison
+            {
+                continue;
+            }
             if let Some(target_type) = unit.unit_type.upgrade_to()
                 && let Some(required_tech_name) = target_type.required_tech()
                 && researched_tech_names
@@ -12045,6 +12054,64 @@ mod tests {
                 uid
             );
         }
+    }
+
+    /// Regression: before this fix, `resolve_unit_upgrades` walked the full
+    /// upgrade chain for *every* unit, including the persistent garrison
+    /// (Minutemen → Militia → Conscript is free since Militia has no tech
+    /// gate). That converted seeded Minutemen into Militia/Conscript every
+    /// turn, while `regenerate_garrisons` re-seeded fresh Minutemen up to
+    /// the cap → unbounded militia growth. Garrison units must stay put.
+    #[test]
+    fn unit_upgrades_do_not_touch_garrison_units() {
+        let mut game = test_game_for_counter_attack();
+        // Make Nation 2 AI-controlled so resolve_unit_upgrades considers it.
+        if let Some(n) = game.get_nation_mut(NationId(2)) {
+            n.diplomacy.ai_personality = Some(crate::ai::common::AiPersonality::Balanced);
+        }
+        let before = game
+            .get_nation(NationId(2))
+            .unwrap()
+            .military
+            .army
+            .iter()
+            .filter(|u| u.unit_type == ArmyUnitType::Minutemen)
+            .count();
+        assert!(before > 0, "fixture should seed at least one Minutemen");
+
+        let mut report = TurnReport::empty();
+        resolve_unit_upgrades(&mut game, &mut report);
+
+        let after = game
+            .get_nation(NationId(2))
+            .unwrap()
+            .military
+            .army
+            .iter()
+            .filter(|u| u.unit_type == ArmyUnitType::Minutemen)
+            .count();
+        assert_eq!(
+            before, after,
+            "garrison Minutemen must not be auto-upgraded by resolve_unit_upgrades"
+        );
+        // And no Militia/Conscript should have appeared as a side-effect.
+        let new_garrison_evos = game
+            .get_nation(NationId(2))
+            .unwrap()
+            .military
+            .army
+            .iter()
+            .filter(|u| {
+                matches!(
+                    u.unit_type,
+                    ArmyUnitType::Militia | ArmyUnitType::Conscript
+                )
+            })
+            .count();
+        assert_eq!(
+            new_garrison_evos, 0,
+            "no Militia/Conscript should appear from auto-upgrading Minutemen"
+        );
     }
 
     #[test]
