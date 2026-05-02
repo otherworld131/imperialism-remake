@@ -1824,16 +1824,17 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
         // Existing units of the obsolete type stay on the board and remain
         // upgradable — only the recruit menu changes.
         .filter(|t| !t.is_recruit_obsoleted(|tech| nation_has_tech(nation, tech, &game.game_data)))
+        // Hide units whose required tech is not yet researched. Affordability
+        // (cost / arms) stays visible-but-greyed so the player sees what's
+        // about to become available, but locked-by-tech is too noisy.
+        .filter(|t| match t.required_tech() {
+            Some(tech) => nation_has_tech(nation, tech, &game.game_data),
+            None => true,
+        })
         .map(|t| {
             let stats = t.stats();
-            let tech_met = match t.required_tech() {
-                Some(tech) => nation_has_tech(nation, tech, &game.game_data),
-                None => true,
-            };
             let can_afford = treasury >= stats.cost && arms_available >= stats.arms_required;
-            let reason = if !tech_met {
-                Some(format!("Requires {}", t.required_tech().unwrap_or("?")))
-            } else if treasury < stats.cost {
+            let reason = if treasury < stats.cost {
                 Some("Insufficient funds".to_string())
             } else if arms_available < stats.arms_required {
                 Some("Not enough arms".to_string())
@@ -1849,7 +1850,9 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
                 "firepower": stats.firepower,
                 "movement": stats.movement,
                 "can_afford": can_afford,
-                "tech_met": tech_met,
+                // Always true now that locked-by-tech variants are filtered out
+                // upstream; kept on the wire so the TS interface doesn't shift.
+                "tech_met": true,
                 "reason": reason,
                 "requires_horse": stats.requires_horse,
             })
