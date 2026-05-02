@@ -67,7 +67,7 @@ units = {
 
   -- ── Line infantry ───────────────────────────────────────
   { name = "Regulars",       category = "Infantry",  era = 1,
-    firepower = 10, firepower_mounted = 10, defense =  5, defense_terrain_bonus = 1,
+    firepower = 10, firepower_mounted = 5, defense =  5, defense_terrain_bonus = 1,
     range = 1, movement = 4, arms_required = 1, requires_horse = false,
     fuel_required = 0, recruit_tier = "Untrained",
     cost = 100, maintenance_per_turn = 25, prerequisite_tech = nil },
@@ -94,8 +94,8 @@ units = {
     fuel_required = 0, recruit_tier = "Trained",
     cost = 250, maintenance_per_turn = 75, prerequisite_tech = "Professional Army" },
   { name = "MachineGunners", category = "Infantry",  era = 3,
-    firepower = 25, firepower_mounted = 25, defense = 20, defense_terrain_bonus = 5,
-    range = 2, movement = 4, arms_required = 4, requires_horse = false,
+    firepower = 28, firepower_mounted = 25, defense = 12, defense_terrain_bonus = 5,
+    range = 2, movement = 4, arms_required = 2, requires_horse = false,
     fuel_required = 0, recruit_tier = "Expert",
     cost = 400, maintenance_per_turn = 100, prerequisite_tech = "Machine Guns" },
 
@@ -111,7 +111,7 @@ units = {
     fuel_required = 0, recruit_tier = "Trained",
     cost = 200, maintenance_per_turn = 50, prerequisite_tech = "Breech-Loading Rifles" },
   { name = "Carbineers",     category = "Cavalry",   era = 2,
-    firepower = 20, firepower_mounted = 26, defense =  5, defense_terrain_bonus = 0,
+    firepower = 20, firepower_mounted = 13, defense =  5, defense_terrain_bonus = 0,
     range = 2, movement = 7, arms_required = 2, requires_horse = true,
     fuel_required = 0, recruit_tier = "Trained",
     cost = 250, maintenance_per_turn = 50, prerequisite_tech = "Carbines" },
@@ -129,7 +129,7 @@ units = {
     cost = 200, maintenance_per_turn = 50, prerequisite_tech = nil },
   { name = "Armour",         category = "Cavalry",   era = 3,
     firepower = 45, firepower_mounted = 60, defense = 20, defense_terrain_bonus = 5,
-    range = 6, movement = 6, arms_required = 10, requires_horse = false,
+    range = 6, movement = 6, arms_required = 4, requires_horse = false,
     fuel_required = 1, recruit_tier = "Expert",
     cost = 500, maintenance_per_turn = 100, prerequisite_tech = "Armoured Vehicles" },
 
@@ -162,8 +162,8 @@ units = {
     fuel_required = 0, recruit_tier = "Untrained",
     cost = 300, maintenance_per_turn = 75, prerequisite_tech = "Improved Artillery" },
   { name = "SiegeArtillery", category = "Artillery", era = 2,
-    firepower = 30, firepower_mounted = 8,  defense =  3, defense_terrain_bonus = 1,
-    range = 6, movement = 2, arms_required = 4, requires_horse = false,
+    firepower = 30, firepower_mounted = 8,  defense =  9, defense_terrain_bonus = 11,
+    range = 6, movement = 2, arms_required = 3, requires_horse = false,
     fuel_required = 0, recruit_tier = "Trained",
     cost = 500, maintenance_per_turn = 100, prerequisite_tech = "Siege Warfare" },
   { name = "RailroadGuns",   category = "Artillery", era = 3,

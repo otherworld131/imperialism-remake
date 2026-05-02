@@ -958,10 +958,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_game_data_has_28_unit_types() {
-        // 26 from the original manual roster + General + GarrisonArtillery.
+    fn default_game_data_has_31_unit_types() {
+        // 26 from the original manual roster + General + GarrisonArtillery + Scouts + HorseArtillery + Commandos.
         let data = GameData::default();
-        assert_eq!(data.unit_stats.len(), 28);
+        assert_eq!(data.unit_stats.len(), 31);
     }
 
     #[test]
