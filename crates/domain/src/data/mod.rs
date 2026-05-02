@@ -543,6 +543,11 @@ impl GameData {
             engine
         };
 
+        // F-002: install the loaded map into the process-wide registry so
+        // every `ArmyUnitType::stats()` call site reads Lua-sourced values
+        // instead of the hardcoded baseline.
+        crate::military::units::install_unit_stats(unit_stats.clone());
+
         GameData {
             tech_tree,
             unit_stats,
@@ -594,6 +599,9 @@ impl Default for GameData {
             }
             engine
         };
+
+        // F-002: see `from_parts` for rationale.
+        crate::military::units::install_unit_stats(unit_stats.clone());
 
         GameData {
             tech_tree,
@@ -654,7 +662,11 @@ pub fn default_unit_stats() -> HashMap<ArmyUnitType, UnitStats> {
         // Project-specific (minor-nation capital defense)
         GarrisonArtillery,
     ];
-    all_types.into_iter().map(|t| (t, t.stats())).collect()
+    // Use `stats_baseline()` (not `stats()`) so this bootstrap path never
+    // round-trips through the OnceLock registry that gets installed from
+    // this very map (avoids a chicken-and-egg ordering hazard during early
+    // GameData init).
+    all_types.into_iter().map(|t| (t, t.stats_baseline())).collect()
 }
 
 /// Built-in ship stats baseline — used only by `GameData::default()` as a
@@ -950,6 +962,70 @@ mod tests {
     fn default_game_data_has_13_ship_types() {
         let data = GameData::default();
         assert_eq!(data.ship_stats.len(), 13);
+    }
+
+    /// F-001 follow-up: assert the Lua-loaded unit map (the runtime source
+    /// of truth) agrees with the hardcoded `stats_baseline()` table for every
+    /// variant on the fields combat actually consumes today (FPN/cost/arms/
+    /// defense/range/movement). If a future drift introduces a manual-vs-
+    /// Lua mismatch this test catches it before it ships.
+    #[cfg(feature = "lua")]
+    #[test]
+    fn lua_baseline_unit_stats_match() {
+        let data = GameData::default();
+        for (unit_type, lua_stats) in &data.unit_stats {
+            let baseline = unit_type.stats_baseline();
+            assert_eq!(
+                lua_stats.firepower, baseline.firepower,
+                "FPN mismatch for {:?}",
+                unit_type
+            );
+            assert_eq!(
+                lua_stats.firepower_mounted, baseline.firepower_mounted,
+                "FPM mismatch for {:?}",
+                unit_type
+            );
+            assert_eq!(
+                lua_stats.defense, baseline.defense,
+                "DEF mismatch for {:?}",
+                unit_type
+            );
+            assert_eq!(
+                lua_stats.defense_terrain_bonus, baseline.defense_terrain_bonus,
+                "DEF terrain bonus mismatch for {:?}",
+                unit_type
+            );
+            assert_eq!(
+                lua_stats.range, baseline.range,
+                "range mismatch for {:?}",
+                unit_type
+            );
+            assert_eq!(
+                lua_stats.movement, baseline.movement,
+                "movement mismatch for {:?}",
+                unit_type
+            );
+            assert_eq!(
+                lua_stats.arms_required, baseline.arms_required,
+                "arms_required mismatch for {:?}",
+                unit_type
+            );
+            assert_eq!(
+                lua_stats.cost, baseline.cost,
+                "cost mismatch for {:?}",
+                unit_type
+            );
+            assert_eq!(
+                lua_stats.maintenance_per_turn, baseline.maintenance_per_turn,
+                "maintenance mismatch for {:?}",
+                unit_type
+            );
+            assert_eq!(
+                lua_stats.era, baseline.era,
+                "era mismatch for {:?}",
+                unit_type
+            );
+        }
     }
 
     #[test]

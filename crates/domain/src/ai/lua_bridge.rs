@@ -562,24 +562,36 @@ pub fn load_unit_stats(
         let row = match row_res {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("[units.lua] skipping malformed row: {}", e);
-                continue;
+                eprintln!("[units.lua] malformed row, refusing partial load: {}", e);
+                return None;
             }
         };
         let name: String = match row.get("name") {
             Ok(s) => s,
-            Err(_) => continue,
+            Err(_) => {
+                eprintln!("[units.lua] row missing `name`, refusing partial load");
+                return None;
+            }
         };
         let unit_type: ArmyUnitType = match name.parse() {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("[units.lua] unknown unit '{}': {}", name, e);
-                continue;
+                eprintln!(
+                    "[units.lua] unknown unit '{}': {}, refusing partial load",
+                    name, e
+                );
+                return None;
             }
         };
         let category_str: String = match row.get("category") {
             Ok(s) => s,
-            Err(_) => continue,
+            Err(_) => {
+                eprintln!(
+                    "[units.lua] '{}' missing `category`, refusing partial load",
+                    name
+                );
+                return None;
+            }
         };
         let category = match category_str.as_str() {
             "Garrison" => UnitCategory::Garrison,
@@ -588,8 +600,11 @@ pub fn load_unit_stats(
             "Artillery" => UnitCategory::Artillery,
             "Special" => UnitCategory::Special,
             other => {
-                eprintln!("[units.lua] '{}' has unknown category '{}'", name, other);
-                continue;
+                eprintln!(
+                    "[units.lua] '{}' has unknown category '{}', refusing partial load",
+                    name, other
+                );
+                return None;
             }
         };
         let era_n: u8 = row.get::<u8>("era").unwrap_or(1);
@@ -598,8 +613,11 @@ pub fn load_unit_stats(
             2 => Era::Two,
             3 => Era::Three,
             other => {
-                eprintln!("[units.lua] '{}' has invalid era {}", name, other);
-                continue;
+                eprintln!(
+                    "[units.lua] '{}' has invalid era {}, refusing partial load",
+                    name, other
+                );
+                return None;
             }
         };
         let cost_dollars: i64 = row.get("cost").unwrap_or(0);
@@ -621,7 +639,24 @@ pub fn load_unit_stats(
         };
         map.insert(unit_type, stats);
     }
-    if map.is_empty() { None } else { Some(map) }
+    // F-007: require full coverage of every ArmyUnitType variant. The
+    // hardcoded `default_unit_stats()` enumerates the canonical set; any
+    // missing key here means the Lua file drifted and we should fall back
+    // to the in-process defaults rather than run with a partial table.
+    let expected = crate::data::default_unit_stats();
+    let missing: Vec<_> = expected
+        .keys()
+        .filter(|k| !map.contains_key(k))
+        .collect();
+    if !missing.is_empty() {
+        eprintln!(
+            "[units.lua] missing {} unit type(s): {:?} — refusing partial load",
+            missing.len(),
+            missing
+        );
+        return None;
+    }
+    Some(map)
 }
 
 /// Load the tech tree from the Lua `tech_tree` global table.

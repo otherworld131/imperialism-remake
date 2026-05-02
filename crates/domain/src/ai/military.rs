@@ -1320,6 +1320,12 @@ pub(crate) fn ai_military_strategy(
 }
 
 /// Upgrade units when tech prerequisites have been researched.
+///
+/// F-003 (round-1 review): use `required_tech()` for gating, the same
+/// source consulted by the recruit menu and `upgrade_player_unit`. The
+/// `UnitStats.prerequisite_tech` field carries a different (project-
+/// specific) name set in some rows and used to silently disagree with
+/// the canonical tech-tree wiring.
 fn ai_upgrade_units(game: &mut GameState, nation_id: NationId) {
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,
@@ -1335,19 +1341,16 @@ fn ai_upgrade_units(game: &mut GameState, nation_id: NationId) {
         .enumerate()
         .filter_map(|(i, unit)| {
             unit.unit_type.upgrade_to().and_then(|new_type| {
-                let prereq = new_type.stats().prerequisite_tech;
-                match prereq {
-                    // If the upgrade requires a tech, check it's researched
-                    Some(ref tech_name) => {
+                match new_type.required_tech() {
+                    Some(tech_name) => {
                         let has_tech = game
                             .game_data
                             .tech_tree
                             .all_techs()
                             .iter()
-                            .any(|t| t.name == *tech_name && researched.contains(&t.id));
+                            .any(|t| t.name == tech_name && researched.contains(&t.id));
                         if has_tech { Some((i, new_type)) } else { None }
                     }
-                    // No tech prereq: always upgrade
                     None => Some((i, new_type)),
                 }
             })

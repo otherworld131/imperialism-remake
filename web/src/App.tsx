@@ -961,15 +961,19 @@ function App() {
   }, [isObserver, gameJson, playerNationId, applyGameJson, selectedTile, showError, runMutation]);
 
   // Card #417: bulk-upgrade every selected unit that has an unlocked target.
-  // Failures on individual ids don't abort the batch; we surface the count.
+  // Per-unit failures don't abort the batch (they show up in result.failed);
+  // a top-level wasm error short-circuits before we touch game state.
   const handleUpgradeSelected = useCallback(async () => {
     if (isObserver || selectedUnitIds.length === 0) return;
     await runMutation(async () => {
       const result = await upgradeUnits(gameJson, playerNationId, selectedUnitIds);
-      const newJson = JSON.stringify(result.game);
-      if (await applyGameJson(newJson)) {
+      if (result.kind === 'error') {
+        showError(`Upgrade failed: ${result.error}`);
+        return;
+      }
+      if (await applyGameJson(result.gameJson)) {
         if (selectedTile?.province_id != null) {
-          setProvinceUnits(await getUnitsInProvince(newJson, selectedTile.province_id));
+          setProvinceUnits(await getUnitsInProvince(result.gameJson, selectedTile.province_id));
         }
         if (result.failed.length > 0) {
           showError(`Upgraded ${result.upgraded} — ${result.failed.length} failed (${result.failed[0].error})`);

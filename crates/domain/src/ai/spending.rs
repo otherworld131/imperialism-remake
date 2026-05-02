@@ -595,8 +595,21 @@ fn score_military(
     let raw = (threat + deficit + territory - saturation).max(0.0) * economy_penalty;
     let score = raw * weights.military_weight;
 
-    // Cost of cheapest unit
-    let cost = Money::dollars(500); // Regulars
+    // F-004: cost estimate must reflect what `execute_military` will
+    // actually spend, not the old $500 Regulars baseline. Use the cheapest
+    // currently-unlocked variant in the line-infantry chain (Regulars →
+    // RifleInfantry → Infantry) — same role the recruiter most often picks.
+    let researched = &nation.researched_techs;
+    let cost = ArmyUnitType::Regulars
+        .latest_unlocked_in_chain(|tech_name| {
+            game.game_data
+                .tech_tree
+                .all_techs()
+                .iter()
+                .any(|t| t.name == tech_name && researched.contains(&t.id))
+        })
+        .stats()
+        .cost;
 
     if score > 0.0 {
         Some(ScoredAction {

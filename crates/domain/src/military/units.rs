@@ -162,14 +162,56 @@ pub struct ArmyUnit {
     pub movement_remaining: u32,
 }
 
+/// Process-global registry populated by the Lua loader at GameData init
+/// (see [`install_unit_stats`]). When set, `ArmyUnitType::stats()` reads
+/// from this map; the hardcoded [`ArmyUnitType::stats_baseline`] table
+/// is the fallback for tests that bypass GameData and for the brief
+/// window during snapshot restore before GameData rehydrates.
+///
+/// Resolves F-002 from the round-1 review: making Lua actually authoritative
+/// at runtime instead of leaving `data.unit_stats` shelf-bound.
+static UNIT_STATS_REGISTRY: std::sync::OnceLock<
+    std::sync::RwLock<std::collections::HashMap<ArmyUnitType, UnitStats>>,
+> = std::sync::OnceLock::new();
+
+/// Install (or replace) the process-wide unit stats registry. Called by
+/// GameData when Lua data loads successfully. Idempotent — subsequent
+/// calls swap the contents under a write lock.
+pub fn install_unit_stats(map: std::collections::HashMap<ArmyUnitType, UnitStats>) {
+    let cell = UNIT_STATS_REGISTRY
+        .get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+    if let Ok(mut guard) = cell.write() {
+        *guard = map;
+    }
+}
+
 impl ArmyUnitType {
-    /// Returns the base stats for each unit type.
+    /// Returns the base stats for this unit type.
     ///
     /// Combat numbers (FPN/FPM/DEF/terrain bonus) come from the original
-    /// Imperialism (1997) manual unit table. Dollar `cost`/`maintenance` and
-    /// `prerequisite_tech` are project-specific and may differ from the
-    /// original.
+    /// Imperialism (1997) manual unit table. Dollar `cost`/`maintenance` are
+    /// project-specific.
+    ///
+    /// The values are sourced from `scripts/config/units.lua` at runtime
+    /// when GameData has installed the registry; the hardcoded
+    /// [`Self::stats_baseline`] table is the fallback for tests and the
+    /// snapshot-restore window. Both shapes are kept in sync by the
+    /// `lua_baseline_unit_stats_match` test in `data::tests`.
     pub fn stats(&self) -> UnitStats {
+        if let Some(cell) = UNIT_STATS_REGISTRY.get() {
+            if let Ok(guard) = cell.read() {
+                if let Some(s) = guard.get(self) {
+                    return s.clone();
+                }
+            }
+        }
+        self.stats_baseline()
+    }
+
+    /// Hardcoded baseline stats — the source of truth in the absence of
+    /// `scripts/config/units.lua`. Same values as the Lua file; the
+    /// `lua_baseline_unit_stats_match` test asserts they agree.
+    pub fn stats_baseline(&self) -> UnitStats {
         use ArmyUnitType::*;
         // Helper to keep the table readable.
         let s = |firepower,
@@ -757,26 +799,31 @@ impl ArmyUnitType {
         self.upgrade_to()
     }
 
-    /// True when a newer variant in this unit's role chain has been unlocked
-    /// for the caller's nation, i.e. the recruit menu should hide this unit.
-    /// Existing units of this type stay on the board and can still be
-    /// upgraded.
+    /// True when ANY newer variant in this unit's role chain has been
+    /// unlocked for the caller's nation, i.e. the recruit menu should hide
+    /// this unit. Existing units of this type stay on the board and can
+    /// still be upgraded.
+    ///
+    /// Walks the entire chain (Era I → II → III) so that if Era III is
+    /// unlocked while Era II is not, the Era I variant is still hidden
+    /// (resolves F-005 from the round-1 review).
     ///
     /// `has_tech` is a closure that answers "has the nation researched the
     /// tech with this name?". Caller-supplied so this method stays decoupled
     /// from `Nation` / `GameData`.
     pub fn is_recruit_obsoleted<F: Fn(&str) -> bool>(&self, has_tech: F) -> bool {
-        match self.obsoleted_by() {
-            None => false,
-            Some(next) => match next.required_tech() {
-                // Era I → II → III chains: the next variant always has a tech
-                // requirement. If a future chain ever upgrades to a base-tech
-                // unit, treat it as obsoleting (the upgrade is always
-                // unlocked).
+        let mut cur = *self;
+        while let Some(next) = cur.upgrade_to() {
+            let unlocked = match next.required_tech() {
                 Some(tech) => has_tech(tech),
                 None => true,
-            },
+            };
+            if unlocked {
+                return true;
+            }
+            cur = next;
         }
+        false
     }
 
     /// Walk this unit's role chain to the latest variant the nation has

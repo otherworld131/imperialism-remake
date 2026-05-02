@@ -799,21 +799,41 @@ export interface BulkUpgradeFailure {
   error: string;
 }
 
-export interface BulkUpgradeResult {
-  upgraded: number;
-  failed: BulkUpgradeFailure[];
-  game: any;
-}
+/**
+ * Discriminated outcome of `upgradeUnits`. Either a top-level command
+ * error (unparsable input, snapshot decode failure, etc.) or the bulk
+ * result with per-unit failures embedded.
+ */
+export type BulkUpgradeResult =
+  | { kind: 'error'; error: string }
+  | { kind: 'ok'; upgraded: number; failed: BulkUpgradeFailure[]; gameJson: string };
 
 /**
- * Upgrade many units in a single call. Each id is processed in order;
- * a failure on one id does not abort the rest. Returns the per-unit
- * outcomes plus the final game state — caller passes that state on to
- * the renderer.
+ * Upgrade many units in a single call. Per-unit failures don't abort the
+ * batch — they show up in `failed[]`. Top-level wasm errors (e.g. bad
+ * JSON, unknown nation) are surfaced as `{ kind: 'error' }` so the caller
+ * never tries to apply an undefined game state.
  */
 export async function upgradeUnits(gameJson: string, nationId: number, unitIds: number[]): Promise<BulkUpgradeResult> {
   const raw = await call<string>('wasm_upgrade_units', gameJson, nationId, JSON.stringify(unitIds));
-  return JSON.parse(raw) as BulkUpgradeResult;
+  let parsed: any;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return { kind: 'error', error: `bad bulk-upgrade JSON: ${(e as Error).message}` };
+  }
+  if (parsed && typeof parsed === 'object' && typeof parsed.error === 'string') {
+    return { kind: 'error', error: parsed.error };
+  }
+  if (!parsed || typeof parsed.upgraded !== 'number' || !parsed.game) {
+    return { kind: 'error', error: 'bulk-upgrade result missing game state' };
+  }
+  return {
+    kind: 'ok',
+    upgraded: parsed.upgraded,
+    failed: Array.isArray(parsed.failed) ? parsed.failed : [],
+    gameJson: JSON.stringify(parsed.game),
+  };
 }
 
 export interface UpgradeInfo {
