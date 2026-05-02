@@ -1636,6 +1636,10 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
     let army: Vec<serde_json::Value> = all_army_types
         .iter()
         .filter(|t| t.can_build())
+        // Card #420: drop obsolete variants once the next-era tech lands.
+        // Existing units of the obsolete type stay on the board and remain
+        // upgradable — only the recruit menu changes.
+        .filter(|t| !t.is_recruit_obsoleted(|tech| nation_has_tech(nation, tech, &game.game_data)))
         .map(|t| {
             let stats = t.stats();
             let tech_met = match t.required_tech() {
@@ -2195,6 +2199,14 @@ pub fn wasm_recruit_army_unit(game_json: &str, nation_id: u32, unit_type_str: &s
             && !nation_has_tech(nation, tech, &game.game_data)
         {
             return format!("{{\"error\":\"requires tech: {}\"}}", tech);
+        }
+        // Card #420: refuse to recruit a unit that's been obsoleted by a
+        // researched newer variant in its role chain.
+        if unit_type.is_recruit_obsoleted(|tech| nation_has_tech(nation, tech, &game.game_data)) {
+            return format!(
+                "{{\"error\":\"{:?} is obsoleted by a researched newer variant; recruit the upgrade instead\"}}",
+                unit_type
+            );
         }
         if nation.economy.treasury < stats.cost {
             return "{\"error\":\"insufficient funds\"}".to_string();

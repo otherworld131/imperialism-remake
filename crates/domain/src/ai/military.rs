@@ -1406,10 +1406,13 @@ mod tests {
         assert_eq!(built.unit_type, ArmyUnitType::Regulars);
         assert_eq!(built.owner, NationId(2));
         assert_eq!(built.position, ProvinceId(2)); // capital
+        // Card #420 follow-up: the AI now spends the unit's actual stat
+        // cost ($100 for Regulars per the manual) instead of the old
+        // hardcoded $500 fallback in `execute_military`.
         assert_eq!(
             ai.economy.treasury,
-            Money::dollars(2500),
-            "Treasury should be reduced by $500"
+            Money::dollars(2900),
+            "Treasury should be reduced by Regulars stats().cost = $100"
         );
     }
 

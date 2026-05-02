@@ -757,6 +757,48 @@ impl ArmyUnitType {
         self.upgrade_to()
     }
 
+    /// True when a newer variant in this unit's role chain has been unlocked
+    /// for the caller's nation, i.e. the recruit menu should hide this unit.
+    /// Existing units of this type stay on the board and can still be
+    /// upgraded.
+    ///
+    /// `has_tech` is a closure that answers "has the nation researched the
+    /// tech with this name?". Caller-supplied so this method stays decoupled
+    /// from `Nation` / `GameData`.
+    pub fn is_recruit_obsoleted<F: Fn(&str) -> bool>(&self, has_tech: F) -> bool {
+        match self.obsoleted_by() {
+            None => false,
+            Some(next) => match next.required_tech() {
+                // Era I → II → III chains: the next variant always has a tech
+                // requirement. If a future chain ever upgrades to a base-tech
+                // unit, treat it as obsoleting (the upgrade is always
+                // unlocked).
+                Some(tech) => has_tech(tech),
+                None => true,
+            },
+        }
+    }
+
+    /// Walk this unit's role chain to the latest variant the nation has
+    /// unlocked. Used by the AI so its picks don't stick to Era I when
+    /// later-era variants are available.
+    ///
+    /// `has_tech` mirrors [`Self::is_recruit_obsoleted`].
+    pub fn latest_unlocked_in_chain<F: Fn(&str) -> bool>(&self, has_tech: F) -> ArmyUnitType {
+        let mut cur = *self;
+        while let Some(next) = cur.upgrade_to() {
+            let unlocked = match next.required_tech() {
+                Some(tech) => has_tech(tech),
+                None => true,
+            };
+            if !unlocked {
+                break;
+            }
+            cur = next;
+        }
+        cur
+    }
+
     /// Era bucket (I/II/III) per the original-game grouping.
     pub fn era(&self) -> Era {
         self.stats().era
@@ -1141,6 +1183,71 @@ mod tests {
         // Armour: 4 arms × 250¢ = $10
         let unit = ArmyUnit::new(UnitId(1), ArmyUnitType::Armour, NationId(1), ProvinceId(1));
         assert_eq!(unit.maintenance_cost(250), Money::from_cents(1000));
+    }
+
+    // ── Obsoletion helpers (Card #420) ──────────────────────────
+
+    #[test]
+    fn era1_units_obsoleted_when_era2_tech_researched() {
+        // Regulars (Era I line) is obsoleted once "Breech-Loading Rifles"
+        // (the tech for RifleInfantry per `required_tech()`) is researched.
+        let has_blr = |t: &str| t == "Breech-Loading Rifles";
+        assert!(ArmyUnitType::Regulars.is_recruit_obsoleted(has_blr));
+        // RifleInfantry itself is not obsoleted at this point — Infantry's
+        // tech ("Modern Warfare") isn't researched.
+        assert!(!ArmyUnitType::RifleInfantry.is_recruit_obsoleted(has_blr));
+    }
+
+    #[test]
+    fn era3_units_never_obsoleted() {
+        // End-of-line variants have no upgrade target.
+        let always_true = |_: &str| true;
+        for t in [
+            ArmyUnitType::Conscript,
+            ArmyUnitType::Rangers,
+            ArmyUnitType::Infantry,
+            ArmyUnitType::MachineGunners,
+            ArmyUnitType::Mechanised,
+            ArmyUnitType::Armour,
+            ArmyUnitType::MobileArtillery,
+            ArmyUnitType::RailroadGuns,
+            ArmyUnitType::Saboteur,
+        ] {
+            assert!(
+                !t.is_recruit_obsoleted(always_true),
+                "{:?} should never be obsoleted",
+                t
+            );
+        }
+    }
+
+    #[test]
+    fn latest_unlocked_in_chain_walks_all_eras() {
+        // With Breech-Loading Rifles + Modern Warfare researched, picking
+        // Regulars walks to Infantry (Era III line).
+        let has_blr_and_modern =
+            |t: &str| matches!(t, "Breech-Loading Rifles" | "Modern Warfare");
+        let latest = ArmyUnitType::Regulars.latest_unlocked_in_chain(has_blr_and_modern);
+        assert_eq!(latest, ArmyUnitType::Infantry);
+    }
+
+    #[test]
+    fn latest_unlocked_in_chain_stops_at_first_locked_link() {
+        // Only Breech-Loading Rifles researched → Regulars upgrades to
+        // RifleInfantry but stops there because "Modern Warfare" (Infantry's
+        // tech) isn't met.
+        let only_blr = |t: &str| t == "Breech-Loading Rifles";
+        let latest = ArmyUnitType::Regulars.latest_unlocked_in_chain(only_blr);
+        assert_eq!(latest, ArmyUnitType::RifleInfantry);
+    }
+
+    #[test]
+    fn latest_unlocked_in_chain_is_identity_when_nothing_unlocked() {
+        let nothing = |_: &str| false;
+        assert_eq!(
+            ArmyUnitType::Regulars.latest_unlocked_in_chain(nothing),
+            ArmyUnitType::Regulars
+        );
     }
 
     #[test]

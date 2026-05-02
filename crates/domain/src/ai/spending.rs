@@ -1210,7 +1210,7 @@ fn execute_hire_engineer(game: &mut GameState, nation_id: NationId) {
 fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec<super::AiAction>) {
     let turn_number = game.turn.0;
     let (capital, nation_name, unit_type, cost, can_afford) = {
-        let nation = match game.get_nation_mut(nation_id) {
+        let nation = match game.get_nation(nation_id) {
             Some(n) => n,
             None => return,
         };
@@ -1222,9 +1222,11 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
         // choices aren't skewed by the always-present home garrison.
         let army_count = nation.field_army_count();
 
-        // Pick unit type based on army composition and variety
-        let unit_type = if army_count < 3 {
-            // Early game: mostly regulars
+        // Pick role based on army composition and variety. The role is then
+        // upgraded to the latest variant the nation has unlocked, so once
+        // RifleInfantry / FieldArtillery / Guards land the AI starts
+        // recruiting them in place of their Era I parents (Card #420).
+        let role = if army_count < 3 {
             let options = [
                 ArmyUnitType::Regulars,
                 ArmyUnitType::Regulars,
@@ -1232,7 +1234,6 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
             ];
             options[variety_seed % options.len()]
         } else if army_count < 8 {
-            // Mid game: mix
             let options = [
                 ArmyUnitType::Grenadiers,
                 ArmyUnitType::LightArtillery,
@@ -1240,7 +1241,6 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
             ];
             options[variety_seed % options.len()]
         } else {
-            // Late game: artillery focus
             let options = [
                 ArmyUnitType::LightArtillery,
                 ArmyUnitType::Grenadiers,
@@ -1249,11 +1249,16 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
             options[variety_seed % options.len()]
         };
 
-        let cost = match unit_type {
-            ArmyUnitType::LightArtillery => Money::dollars(2000),
-            ArmyUnitType::Grenadiers => Money::dollars(1000),
-            _ => Money::dollars(500),
-        };
+        let researched = &nation.researched_techs;
+        let unit_type = role.latest_unlocked_in_chain(|tech_name| {
+            game.game_data
+                .tech_tree
+                .all_techs()
+                .iter()
+                .any(|t| t.name == tech_name && researched.contains(&t.id))
+        });
+
+        let cost = unit_type.stats().cost;
 
         let can_afford = nation.economy.treasury >= cost;
         (capital, nation_name, unit_type, cost, can_afford)
