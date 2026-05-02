@@ -2666,10 +2666,10 @@ fn resolve_military_movement(
 
             // Perform the move. Military rail costs are accumulated in
             // rail_committed_military and flushed to logistics after the loop.
-            if let Some(nation) = game.get_nation_mut(nation_id) {
-                if let Some(unit) = nation.military.army.iter_mut().find(|u| u.id == unit_id) {
-                    unit.position = dest_province_id;
-                }
+            if let Some(nation) = game.get_nation_mut(nation_id)
+                && let Some(unit) = nation.military.army.iter_mut().find(|u| u.id == unit_id)
+            {
+                unit.position = dest_province_id;
             }
             if is_non_adjacent {
                 let rail_cost = 5 * transport_size;

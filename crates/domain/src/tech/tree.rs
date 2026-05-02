@@ -98,10 +98,9 @@ impl TechTree {
                         terrain: eff_class,
                         max_level,
                     } = effect
+                        && eff_class == class && *max_level > max
                     {
-                        if eff_class == class && *max_level > max {
-                            max = *max_level;
-                        }
+                        max = *max_level;
                     }
                 }
             }

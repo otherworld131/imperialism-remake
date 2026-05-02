@@ -551,6 +551,157 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
     PlanOutcome::Fresh(best)
 }
 
+/// Find the best coastal tile in an owned province that is completely
+/// unreachable by rail from any country capital given current technology.
+///
+/// Returns `Some(coord)` when such a province exists and has a coastal tile
+/// suitable for a port build — i.e. the province is tech-blocked (no path
+/// through the Dijkstra graph) and not yet served by a built port.
+/// Returns `None` when every owned province is either rail-reachable, already
+/// has a port, or has no qualifying coastal tile.
+pub(super) fn find_stranded_port_target(
+    game: &GameState,
+    nation_id: NationId,
+) -> Option<HexCoord> {
+    use crate::map::infrastructure::collectable_hexes;
+    use crate::turn::connected_provinces;
+
+    let nation = game.get_nation(nation_id)?;
+    let cfg = &game.game_data.game_config;
+
+    let owned_provinces: Vec<&crate::map::Province> = game
+        .world
+        .provinces
+        .iter()
+        .filter(|p| p.owner == nation_id)
+        .collect();
+
+    let owned_hexes: HashSet<HexCoord> = owned_provinces
+        .iter()
+        .flat_map(|p| p.tiles.iter().copied())
+        .collect();
+
+    // Capital seeds — same construction as plan_next_depot.
+    let capital_tile = game.get_province(nation.capital_province_id)?.capital_tile;
+    let mut capital_seeds: HashSet<HexCoord> = std::iter::once(capital_tile).collect();
+    for &h in &owned_hexes {
+        if h == capital_tile {
+            continue;
+        }
+        if game
+            .world
+            .hex_map
+            .get_tile(h)
+            .is_some_and(|t| t.is_country_capital)
+        {
+            capital_seeds.insert(h);
+        }
+    }
+
+    // Tech-gated Dijkstra — same as plan_next_depot.
+    let (dist, _, _) = dijkstra_from_seeds(
+        &game.world.hex_map,
+        &capital_seeds,
+        &owned_hexes,
+        cfg,
+        &nation.researched_techs,
+        &game.game_data,
+    );
+
+    let connected = connected_provinces(game, nation_id);
+    let already_covered =
+        collectable_hexes(&game.world.hex_map, &owned_provinces, &connected);
+    let demand = compute_resource_demand(nation, game, cfg);
+
+    let mut best_coord: Option<HexCoord> = None;
+    let mut best_coverage: u32 = 0;
+
+    for province in &owned_provinces {
+        if province.id == nation.capital_province_id {
+            continue;
+        }
+
+        // Province is rail-reachable — the normal depot path handles it.
+        let any_rail_reachable = province
+            .tiles
+            .iter()
+            .any(|c| capital_seeds.contains(c) || dist.contains_key(c));
+        if any_rail_reachable {
+            continue;
+        }
+
+        // Already served by a port — nothing to do.
+        let already_has_port = province.tiles.iter().any(|c| {
+            game.world
+                .hex_map
+                .get_tile(*c)
+                .is_some_and(|t| t.infrastructure.has_port)
+        });
+        if already_has_port {
+            continue;
+        }
+
+        // Only bother if there's resource value worth connecting.
+        let coverage = coverage_around(
+            &game.world.hex_map,
+            province.capital_tile,
+            &owned_hexes,
+            &already_covered,
+            &demand,
+            &game.game_data.tech_tree,
+            &nation.researched_techs,
+            cfg.infra_improvability_weight,
+        );
+        if coverage == 0 {
+            continue;
+        }
+
+        // Find a qualifying coastal tile (prefer province capital first).
+        let coastal = std::iter::once(province.capital_tile)
+            .chain(
+                province
+                    .tiles
+                    .iter()
+                    .copied()
+                    .filter(|&c| c != province.capital_tile),
+            )
+            .find(|c| {
+                let Some(tile) = game.world.hex_map.get_tile(*c) else {
+                    return false;
+                };
+                if !tile.terrain().is_land() || tile.infrastructure.has_port {
+                    return false;
+                }
+                if tile.assigned_civilian.is_some() {
+                    return false;
+                }
+                // Must be adjacent to real ocean (not a lake).
+                c.neighbors().iter().any(|n| {
+                    let Some(nt) = game.world.hex_map.get_tile(*n) else {
+                        return false;
+                    };
+                    if nt.terrain().is_land() {
+                        return false;
+                    }
+                    !game
+                        .world
+                        .sea_zones
+                        .iter()
+                        .any(|z| z.is_lake && z.hexes.contains(n))
+                })
+            });
+
+        if let Some(coord) = coastal
+            && coverage > best_coverage
+        {
+            best_coverage = coverage;
+            best_coord = Some(coord);
+        }
+    }
+
+    best_coord
+}
+
 /// Demand-weighted coverage of the 1-hex radius around `center`, excluding
 /// tiles already covered by another connected collector.
 ///

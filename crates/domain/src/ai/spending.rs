@@ -651,12 +651,27 @@ fn score_infrastructure(
         return None;
     }
 
+    let cfg = &game.game_data.game_config;
+
+    // No depot plan: check whether there's a stranded coastal province that
+    // can only be reached by sea. If so, score a port build at that cost.
+    if plan.is_none() {
+        super::economy::find_stranded_port_target(game, nation_id)?;
+        let port_cost = Money::dollars(cfg.port_cost);
+        nation.economy.treasury.checked_sub(port_cost)?;
+        let score = 10.0_f64 * weights.economy_weight;
+        return Some(ScoredAction {
+            category: SpendingCategory::Infrastructure,
+            score,
+            cost: port_cost,
+        });
+    }
+
     // Planner picks the best depot candidate. No plan → no infrastructure need.
     let plan = plan?;
 
     // Minimum cost the AI can afford right now to keep progressing: the
     // cheapest next hex on the path, or the depot cost if the path is empty.
-    let cfg = &game.game_data.game_config;
     let next_cost = if let Some(next_coord) = plan.path.first() {
         game.world.hex_map
             .get_tile(*next_coord)
@@ -1448,11 +1463,25 @@ fn execute_infrastructure(
         return;
     }
 
-    // Use the cached plan from the spending loop. If `None`, the planner
-    // decided there was nothing worth building.
+    // Use the cached plan from the spending loop. If `None`, check for
+    // stranded coastal provinces that are tech-blocked from rail.
     let plan = match plan {
         Some(p) => p,
-        None => return,
+        None => {
+            if let Some(port_coord) =
+                super::economy::find_stranded_port_target(game, nation_id)
+            {
+                start_engineer_task(
+                    game,
+                    nation_id,
+                    engineer_idx,
+                    port_coord,
+                    BuildTask::Port,
+                    &cfg,
+                );
+            }
+            return;
+        }
     };
 
     // Card #421: before committing to depot+rail, check whether building a
@@ -1713,8 +1742,8 @@ fn find_port_alternative(
     })?;
 
     // (4) Compare depot+rail cost/turns vs. port cost/turns.
-    let depot_cost = cfg.depot_cost as i64;
-    let port_cost = cfg.port_cost as i64;
+    let depot_cost = cfg.depot_cost;
+    let port_cost = cfg.port_cost;
     let path_cost_dollars = plan.path.iter()
         .filter_map(|c| game.world.hex_map.get_tile(*c))
         .filter(|t| !t.infrastructure.has_railroad && !t.infrastructure.has_depot)

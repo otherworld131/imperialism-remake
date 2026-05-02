@@ -289,6 +289,9 @@ interface Props {
   renderTooltipModeExtras?: (tile: TileData) => ReactNode;
   showHiddenResources?: boolean;
   showAiCivilians?: boolean;
+  showResources?: boolean;
+  showTransportNetwork?: boolean;
+  showArmies?: boolean;
   selectedUnit?: ArmyUnitDetail | null;
   pendingMoves?: PendingMoveArrow[];
   validMoveTargets?: ValidMoveTargets | null;
@@ -348,6 +351,7 @@ import { NAVY_MARKER_RADIUS, navyMarkerKey, navyMarkerOffset } from './HexMap.he
 export default function HexMap({
   tiles, mapMode, diplomacyOverlay, militaryOverlay,
   onMapModeChange, onTileClick, onTileHover, showHiddenResources = false, showAiCivilians = false,
+  showResources = true, showTransportNetwork = true, showArmies = true,
   selectedUnit, pendingMoves = [], validMoveTargets, isMovementMode = false,
   isDeployMode = false, deployableTiles, disableFogOfWar = false,
   organicBorders = true,
@@ -2067,7 +2071,7 @@ export default function HexMap({
     }
 
     // ── Pass 4: Resource icons on producing tiles (terrain view only) ──
-    if (scale > 0.6 && mapMode === 'terrain') {
+    if (showResources && scale > 0.6 && mapMode === 'terrain') {
       const rSize = Math.max(10, HEX_SIZE * 0.7);
       const badgeFont = Math.max(7, HEX_SIZE * 0.32);
       const resourceFontStr = `${rSize}px sans-serif`;
@@ -2124,7 +2128,7 @@ export default function HexMap({
         if (!tile.has_railroad && !tile.has_depot && !tile.has_port && !tile.has_fort) continue;
         const [px, py] = hexToPixel(tile.q, tile.r);
 
-        if (tile.has_railroad && mapMode === 'terrain') {
+        if (showTransportNetwork && tile.has_railroad && mapMode === 'terrain') {
           // Draw small railroad tracks (two parallel lines)
           const rw = HEX_SIZE * 0.35;
           ctx.strokeStyle = 'rgba(100,60,20,0.8)';
@@ -2138,7 +2142,7 @@ export default function HexMap({
           }
           ctx.stroke();
         }
-        if (tile.has_depot && mapMode === 'terrain') {
+        if (showTransportNetwork && tile.has_depot && mapMode === 'terrain') {
           ctx.fillStyle = 'rgba(139,90,43,0.9)';
           const ds = HEX_SIZE * 0.2;
           ctx.fillRect(px - ds + HEX_SIZE * 0.3, py - ds, ds * 2, ds * 2);
@@ -2146,7 +2150,7 @@ export default function HexMap({
           ctx.lineWidth = 0.8;
           ctx.strokeRect(px - ds + HEX_SIZE * 0.3, py - ds, ds * 2, ds * 2);
         }
-        if (tile.has_port) {
+        if (showTransportNetwork && tile.has_port) {
           const ax = px - HEX_SIZE * 0.3;
           ctx.lineWidth = 1;
           ctx.strokeStyle = 'rgba(0,0,0,0.6)';
@@ -2240,7 +2244,7 @@ export default function HexMap({
     // ── Pass 7: Troop emoji indicators at capitals ──────────────
     // Single ⚔️ emoji for all nation types; font size scales with unit count.
     // Selected tile's indicator blinks.
-    if (scale > 0.6 && mapMode !== 'diplomatic') {
+    if (showArmies && scale > 0.6 && mapMode !== 'diplomatic') {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
@@ -2489,7 +2493,7 @@ export default function HexMap({
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     endRender();
-  }, [tiles, tilePositions, showPoliticalColors, showHiddenResources, showAiCivilians, mapMode, nationFillMap,
+  }, [tiles, tilePositions, showPoliticalColors, showHiddenResources, showAiCivilians, showResources, showTransportNetwork, showArmies, mapMode, nationFillMap,
       isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves, nationLabels, disableFogOfWar,
       navyMarkers, seaZones, selectedNavyKey, mapGeometry, tileMap, diplomacyOverlay,
       hideHexGrid, highlightedNationId, classifiedEdges, maxArmyFP, mapDims,

@@ -180,7 +180,7 @@ pub fn compute_sea_zones(hex_map: &HexMap) -> Vec<SeaZone> {
 /// Populate `coastal_provinces` on each sea zone by checking which province tiles
 /// are adjacent to zone hexes. Call after generating provinces.
 pub fn assign_coastal_provinces(
-    zones: &mut Vec<SeaZone>,
+    zones: &mut [SeaZone],
     provinces: &[crate::map::province::Province],
     hex_map: &HexMap,
 ) {
@@ -304,7 +304,7 @@ fn hex_distance(a: HexCoord, b: HexCoord) -> i32 {
     (dq + dr + ds) / 2
 }
 
-fn compute_zone_adjacency(zones: &mut Vec<SeaZone>) {
+fn compute_zone_adjacency(zones: &mut [SeaZone]) {
     // Build hex → zone_id lookup
     let mut hex_to_zone: HashMap<HexCoord, usize> = HashMap::new();
     for (idx, zone) in zones.iter().enumerate() {
@@ -319,11 +319,11 @@ fn compute_zone_adjacency(zones: &mut Vec<SeaZone>) {
     for (idx, zone) in zones.iter().enumerate() {
         for &hex in &zone.hexes {
             for neighbor in hex.neighbors() {
-                if let Some(&other_idx) = hex_to_zone.get(&neighbor) {
-                    if other_idx != idx {
-                        adjacency[idx].insert(other_idx);
-                        adjacency[other_idx].insert(idx);
-                    }
+                if let Some(&other_idx) = hex_to_zone.get(&neighbor)
+                    && other_idx != idx
+                {
+                    adjacency[idx].insert(other_idx);
+                    adjacency[other_idx].insert(idx);
                 }
             }
         }

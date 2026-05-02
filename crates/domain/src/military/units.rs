@@ -208,12 +208,11 @@ impl ArmyUnitType {
     /// snapshot-restore window. Both shapes are kept in sync by the
     /// `lua_baseline_unit_stats_match` test in `data::tests`.
     pub fn stats(&self) -> UnitStats {
-        if let Some(cell) = UNIT_STATS_REGISTRY.get() {
-            if let Ok(guard) = cell.read() {
-                if let Some(s) = guard.get(self) {
-                    return s.clone();
-                }
-            }
+        if let Some(cell) = UNIT_STATS_REGISTRY.get()
+            && let Ok(guard) = cell.read()
+            && let Some(s) = guard.get(self)
+        {
+            return s.clone();
         }
         self.stats_baseline()
     }

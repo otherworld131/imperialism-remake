@@ -144,6 +144,9 @@ function App() {
   const [disableFogOfWar, setDisableFogOfWar] = useState(false);
   const [organicBorders, setOrganicBorders] = useState(true);
   const [hideHexGrid, setHideHexGrid] = useState(false);
+  const [showResources, setShowResources] = useState(true);
+  const [showTransportNetwork, setShowTransportNetwork] = useState(true);
+  const [showArmies, setShowArmies] = useState(true);
   const [uiFontSize, setUiFontSize] = useState(14);
   const [newsFilterCategory, setNewsFilterCategory] = useState<string>('all');
   const [newsFilterCountry, setNewsFilterCountry] = useState<string>('all');
@@ -1378,6 +1381,9 @@ function App() {
             onTileClick={handleTileClick}
             showHiddenResources={showHiddenResources}
             showAiCivilians={showAiCivilians}
+            showResources={showResources}
+            showTransportNetwork={showTransportNetwork}
+            showArmies={showArmies}
             selectedUnit={null}
             pendingMoves={pendingMoveArrows}
             validMoveTargets={validMoveTargets}
@@ -1721,6 +1727,18 @@ function App() {
                 <label>
                   <input type="checkbox" checked={hideHexGrid} onChange={e => setHideHexGrid(e.target.checked)} />
                   {' '}Hide hex grid
+                </label>
+                <label>
+                  <input type="checkbox" checked={showResources} onChange={e => setShowResources(e.target.checked)} />
+                  {' '}Show resources
+                </label>
+                <label>
+                  <input type="checkbox" checked={showTransportNetwork} onChange={e => setShowTransportNetwork(e.target.checked)} />
+                  {' '}Show transport network
+                </label>
+                <label>
+                  <input type="checkbox" checked={showArmies} onChange={e => setShowArmies(e.target.checked)} />
+                  {' '}Show armies
                 </label>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span>Font:</span>
