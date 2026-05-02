@@ -291,8 +291,14 @@ pub(crate) fn ai_scored_spending(
                     &connected,
                     depot_plan.as_ref(),
                 );
-                // Reset the backlog counter for the executed category.
-                if let Some(nation) = game.get_nation_mut(nation_id) {
+                let treasury_after = game.get_nation(nation_id).map(|n| n.economy.treasury);
+                let treasury_changed = treasury_before != treasury_after;
+                // For Military, only count as invested when a unit was actually
+                // purchased (treasury changed). Skipped executions (no arms/oil/
+                // labor) must not reset the backlog counter.
+                if (cat != SpendingCategory::Military || treasury_changed)
+                    && let Some(nation) = game.get_nation_mut(nation_id)
+                {
                     nation
                         .diplomacy
                         .ai_priority_state
@@ -321,8 +327,6 @@ pub(crate) fn ai_scored_spending(
                                 .count()
                         })
                         .unwrap_or(0);
-                    let treasury_after = game.get_nation(nation_id).map(|n| n.economy.treasury);
-                    let treasury_changed = treasury_before != treasury_after;
                     let engineer_transitioned = engineer_working_count_before
                         .is_some_and(|before| engineer_working_count_after > before);
                     if !engineer_transitioned && !treasury_changed {

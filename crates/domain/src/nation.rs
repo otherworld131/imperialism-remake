@@ -1850,4 +1850,106 @@ mod tests {
             "reservation should remain in ledger after failed commit"
         );
     }
+
+    // ── Recruit gating ────────────────────────────────────────
+
+    fn recruit_ready_nation() -> Nation {
+        let mut n = sample_great_power();
+        n.economy.treasury = Money::dollars(200);
+        n.add_material(MaterialType::Arms, 2);
+        n.economy.labor.untrained = 2;
+        n.economy.labor.trained = 2;
+        n.economy.labor.expert = 2;
+        n.add_resource(ResourceType::Horses, 2);
+        n.add_resource(ResourceType::Oil, 2);
+        n
+    }
+
+    #[test]
+    fn can_recruit_unit_returns_true_when_all_resources_available() {
+        let n = recruit_ready_nation();
+        assert!(n.can_recruit_unit(ArmyUnitType::Regulars));
+    }
+
+    #[test]
+    fn can_recruit_unit_fails_when_treasury_insufficient() {
+        let mut n = recruit_ready_nation();
+        n.economy.treasury = Money::ZERO;
+        assert!(!n.can_recruit_unit(ArmyUnitType::Regulars));
+    }
+
+    #[test]
+    fn can_recruit_unit_fails_when_arms_insufficient() {
+        let mut n = recruit_ready_nation();
+        n.economy.materials.clear();
+        assert!(!n.can_recruit_unit(ArmyUnitType::Regulars));
+    }
+
+    #[test]
+    fn can_recruit_unit_fails_when_untrained_labor_exhausted() {
+        let mut n = recruit_ready_nation();
+        n.economy.labor.untrained = 0;
+        assert!(!n.can_recruit_unit(ArmyUnitType::Regulars));
+    }
+
+    #[test]
+    fn can_recruit_unit_fails_when_trained_labor_exhausted() {
+        let mut n = recruit_ready_nation();
+        n.economy.treasury = Money::dollars(10_000);
+        n.add_material(MaterialType::Arms, 10);
+        n.economy.labor.trained = 0;
+        assert!(!n.can_recruit_unit(ArmyUnitType::RifleInfantry));
+    }
+
+    #[test]
+    fn can_recruit_unit_fails_when_horse_unavailable() {
+        let mut n = recruit_ready_nation();
+        n.economy.warehouse.clear();
+        assert!(!n.can_recruit_unit(ArmyUnitType::Hussars));
+    }
+
+    #[test]
+    fn can_recruit_unit_fails_when_fuel_unavailable() {
+        let mut n = recruit_ready_nation();
+        n.economy.treasury = Money::dollars(10_000);
+        n.add_material(MaterialType::Arms, 10);
+        n.economy.labor.expert = 5;
+        n.economy.warehouse.clear();
+        assert!(!n.can_recruit_unit(ArmyUnitType::Mechanised));
+    }
+
+    #[test]
+    fn failed_can_recruit_does_not_mutate_state() {
+        let mut n = recruit_ready_nation();
+        n.economy.labor.untrained = 0;
+        let treasury_before = n.economy.treasury;
+        let arms_before = n.material_amount(MaterialType::Arms);
+        assert!(!n.can_recruit_unit(ArmyUnitType::Regulars));
+        assert_eq!(n.economy.treasury, treasury_before);
+        assert_eq!(n.material_amount(MaterialType::Arms), arms_before);
+    }
+
+    #[test]
+    fn deduct_recruit_resources_consumes_treasury_arms_and_labor() {
+        let mut n = recruit_ready_nation();
+        let treasury_before = n.economy.treasury;
+        let stats = ArmyUnitType::Regulars.stats();
+        n.deduct_recruit_resources(ArmyUnitType::Regulars);
+        assert_eq!(n.economy.treasury, treasury_before - stats.cost);
+        assert_eq!(
+            n.material_amount(MaterialType::Arms),
+            2 - stats.arms_required
+        );
+        assert_eq!(n.economy.labor.untrained, 1);
+    }
+
+    #[test]
+    fn deduct_recruit_resources_consumes_horse_when_required() {
+        let mut n = recruit_ready_nation();
+        n.economy.treasury = Money::dollars(10_000);
+        n.add_material(MaterialType::Arms, 5);
+        let horses_before = n.resource_amount(ResourceType::Horses);
+        n.deduct_recruit_resources(ArmyUnitType::Hussars);
+        assert_eq!(n.resource_amount(ResourceType::Horses), horses_before - 1);
+    }
 }
