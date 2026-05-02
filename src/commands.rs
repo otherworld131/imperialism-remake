@@ -72,7 +72,7 @@ pub(crate) fn parse_buildable(name: &str) -> Option<BuildingType> {
 /// Parse a unit type name string.
 pub(crate) fn parse_unit_type(name: &str) -> Option<ArmyUnitType> {
     match name.to_lowercase().as_str() {
-        "militia" => Some(ArmyUnitType::Militia),
+        "militia" => Some(ArmyUnitType::Minutemen),
         "regulars" => Some(ArmyUnitType::Regulars),
         "grenadiers" => Some(ArmyUnitType::Grenadiers),
         "cuirassiers" => Some(ArmyUnitType::Cuirassiers),

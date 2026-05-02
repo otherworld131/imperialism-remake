@@ -510,7 +510,9 @@ impl GameData {
     /// Construct GameData from pre-parsed parts supplied by infrastructure.
     ///
     /// Infrastructure parses RON files and calls this constructor so that
-    /// domain never needs a ron dependency.
+    /// domain never needs a ron dependency. Land-unit stats are sourced
+    /// from `scripts/config/units.lua` when Lua is available, so the
+    /// `unit_stats` argument is treated as a fallback.
     pub fn from_parts(
         tech_tree: TechTree,
         unit_stats: HashMap<ArmyUnitType, UnitStats>,
@@ -518,6 +520,8 @@ impl GameData {
     ) -> Self {
         #[allow(unused_mut)]
         let mut game_config = GameConfig::default();
+        #[allow(unused_mut)]
+        let mut unit_stats = unit_stats;
 
         #[cfg(feature = "lua")]
         let lua_engine = {
@@ -527,6 +531,14 @@ impl GameData {
                     eprintln!("[GameData] Warning: Lua script loading failed: {}", err);
                 }
                 game_config = crate::ai::lua_bridge::load_game_config(e);
+                if let Some(loaded) = crate::ai::lua_bridge::load_unit_stats(e) {
+                    unit_stats = loaded;
+                } else {
+                    eprintln!(
+                        "[GameData] WARNING: scripts/config/units.lua failed to load. \
+                         Using hardcoded unit stats fallback."
+                    );
+                }
             }
             engine
         };
@@ -553,6 +565,9 @@ impl Default for GameData {
         #[allow(unused_mut)]
         let mut tech_tree = TechTree::default(); // empty until Lua populates
 
+        #[allow(unused_mut)]
+        let mut unit_stats = default_unit_stats();
+
         #[cfg(feature = "lua")]
         let lua_engine = {
             let engine = LuaEngine::new().ok();
@@ -568,13 +583,21 @@ impl Default for GameData {
                          Tech tree is empty; tech-gating and research will not function."
                     ),
                 }
+                if let Some(loaded) = crate::ai::lua_bridge::load_unit_stats(e) {
+                    unit_stats = loaded;
+                } else {
+                    eprintln!(
+                        "[GameData] WARNING: scripts/config/units.lua failed to load. \
+                         Using hardcoded unit stats fallback."
+                    );
+                }
             }
             engine
         };
 
         GameData {
             tech_tree,
-            unit_stats: default_unit_stats(),
+            unit_stats,
             ship_stats: default_ship_stats(),
             #[cfg(feature = "lua")]
             lua_engine,
@@ -584,31 +607,52 @@ impl Default for GameData {
 }
 
 /// Build default unit stats from the hardcoded `ArmyUnitType::stats()` method.
+///
+/// Used as the snapshot-restore placeholder and as the fallback when no
+/// data file is provided. Production builds replace this with Lua-loaded
+/// data via `scripts/config/units.lua`.
 pub fn default_unit_stats() -> HashMap<ArmyUnitType, UnitStats> {
     use ArmyUnitType::*;
     let all_types = [
+        // Garrison
+        Minutemen,
         Militia,
-        Regulars,
-        Grenadiers,
-        RifleInfantry,
-        Guards,
+        Conscript,
+        // Skirmisher
+        Skirmishers,
         Sharpshooters,
-        ModernInfantry,
-        MachineGunners,
         Rangers,
-        Cuirassiers,
-        Scouts,
-        CarbineCavalry,
-        Armour,
+        // Line infantry
+        Regulars,
+        RifleInfantry,
+        Infantry,
+        // Elite infantry
+        Grenadiers,
+        Guards,
+        MachineGunners,
+        // Light cavalry
+        Hussars,
+        Carbineers,
         Mechanised,
+        // Heavy cavalry
+        Cuirassiers,
+        Armour,
+        // Light artillery
         LightArtillery,
-        StandardArtillery,
         FieldArtillery,
-        SiegeArtillery,
-        RailroadGun,
         MobileArtillery,
+        // Heavy artillery
+        Artillery,
+        SiegeArtillery,
+        RailroadGuns,
+        // Engineer
         Sapper,
+        CombatEngineer,
+        Saboteur,
+        // Special
         General,
+        // Project-specific (minor-nation capital defense)
+        GarrisonArtillery,
     ];
     all_types.into_iter().map(|t| (t, t.stats())).collect()
 }
@@ -621,8 +665,18 @@ pub fn default_ship_stats() -> HashMap<ShipType, ShipStats> {
     use ShipType::*;
     let merchant = ShipCategory::Merchant;
     let warship = ShipCategory::Warship;
-    let s = |firepower, range, armor, hull, speed, cargo, category,
-             fabric_cost, lumber_cost, arms_cost, steel_cost, coal_cost,
+    let s = |firepower,
+             range,
+             armor,
+             hull,
+             speed,
+             cargo,
+             category,
+             fabric_cost,
+             lumber_cost,
+             arms_cost,
+             steel_cost,
+             coal_cost,
              prerequisite_tech: Option<&str>| ShipStats {
         firepower,
         range,
@@ -639,19 +693,178 @@ pub fn default_ship_stats() -> HashMap<ShipType, ShipStats> {
         prerequisite_tech: prerequisite_tech.map(String::from),
     };
     [
-        (Trader,           s(0,  0,  0, 25, 0,  2, merchant, 2, 4, 0, 0,  0, None)),
-        (Indiaman,         s(0,  0,  5, 40, 0,  4, merchant, 3, 7, 0, 0,  0, None)),
-        (Clipper,          s(0,  0,  0, 25, 0,  4, merchant, 2, 6, 0, 0,  0, Some("Streamlined Hulls"))),
-        (Paddlewheeler,    s(0,  0,  5, 35, 0,  8, merchant, 0, 6, 0, 2, 10, Some("Paddlewheels"))),
-        (Freighter,        s(0,  0, 10, 50, 0, 12, merchant, 0, 8, 0, 4, 15, Some("Marine Engineering"))),
-        (Frigate,          s(3,  5, 10, 35, 2,  0, warship,  2, 5, 2, 0,  0, None)),
-        (ShipOfTheLine,    s(6,  6, 20, 65, 2,  0, warship,  3, 8, 5, 0,  0, None)),
-        (Raider,           s(3,  7, 20, 30, 3,  0, warship,  0, 6, 3, 0, 10, Some("Paddlewheels"))),
-        (Ironclad,         s(8,  7, 30, 50, 3,  0, warship,  0, 6, 4, 3, 12, Some("Advanced Iron Working"))),
-        (AdvancedIronclad, s(10, 8, 40, 60, 3,  0, warship,  0, 6, 5, 4, 15, Some("Steel Armour Plate"))),
-        (ArmouredCruiser,  s(8,  9, 35, 55, 3,  0, warship,  0, 7, 4, 5, 15, Some("Marine Engineering"))),
-        (Dreadnought,      s(15, 10, 50, 80, 3, 0, warship,  0, 10, 8, 8, 20, Some("Improved Range-Finding"))),
-        (Battlecruiser,    s(12, 10, 40, 65, 4, 0, warship,  0, 8, 6, 6, 18, Some("Improved Range-Finding"))),
+        (Trader, s(0, 0, 0, 25, 0, 2, merchant, 2, 4, 0, 0, 0, None)),
+        (
+            Indiaman,
+            s(0, 0, 5, 40, 0, 4, merchant, 3, 7, 0, 0, 0, None),
+        ),
+        (
+            Clipper,
+            s(
+                0,
+                0,
+                0,
+                25,
+                0,
+                4,
+                merchant,
+                2,
+                6,
+                0,
+                0,
+                0,
+                Some("Streamlined Hulls"),
+            ),
+        ),
+        (
+            Paddlewheeler,
+            s(
+                0,
+                0,
+                5,
+                35,
+                0,
+                8,
+                merchant,
+                0,
+                6,
+                0,
+                2,
+                10,
+                Some("Paddlewheels"),
+            ),
+        ),
+        (
+            Freighter,
+            s(
+                0,
+                0,
+                10,
+                50,
+                0,
+                12,
+                merchant,
+                0,
+                8,
+                0,
+                4,
+                15,
+                Some("Marine Engineering"),
+            ),
+        ),
+        (Frigate, s(3, 5, 10, 35, 2, 0, warship, 2, 5, 2, 0, 0, None)),
+        (
+            ShipOfTheLine,
+            s(6, 6, 20, 65, 2, 0, warship, 3, 8, 5, 0, 0, None),
+        ),
+        (
+            Raider,
+            s(
+                3,
+                7,
+                20,
+                30,
+                3,
+                0,
+                warship,
+                0,
+                6,
+                3,
+                0,
+                10,
+                Some("Paddlewheels"),
+            ),
+        ),
+        (
+            Ironclad,
+            s(
+                8,
+                7,
+                30,
+                50,
+                3,
+                0,
+                warship,
+                0,
+                6,
+                4,
+                3,
+                12,
+                Some("Advanced Iron Working"),
+            ),
+        ),
+        (
+            AdvancedIronclad,
+            s(
+                10,
+                8,
+                40,
+                60,
+                3,
+                0,
+                warship,
+                0,
+                6,
+                5,
+                4,
+                15,
+                Some("Steel Armour Plate"),
+            ),
+        ),
+        (
+            ArmouredCruiser,
+            s(
+                8,
+                9,
+                35,
+                55,
+                3,
+                0,
+                warship,
+                0,
+                7,
+                4,
+                5,
+                15,
+                Some("Marine Engineering"),
+            ),
+        ),
+        (
+            Dreadnought,
+            s(
+                15,
+                10,
+                50,
+                80,
+                3,
+                0,
+                warship,
+                0,
+                10,
+                8,
+                8,
+                20,
+                Some("Improved Range-Finding"),
+            ),
+        ),
+        (
+            Battlecruiser,
+            s(
+                12,
+                10,
+                40,
+                65,
+                4,
+                0,
+                warship,
+                0,
+                8,
+                6,
+                6,
+                18,
+                Some("Improved Range-Finding"),
+            ),
+        ),
     ]
     .into_iter()
     .collect()
@@ -668,7 +881,8 @@ fn convert_test_tech_effect(def: TestTechEffectDef) -> crate::tech::tree::TechEf
             TechEffect::UnlockUnit(name.parse().expect("valid army unit in test data"))
         }
         TestTechEffectDef::UnlockBuilding(name) => TechEffect::UnlockBuilding(
-            name.parse::<BuildingType>().expect("valid building type in test data"),
+            name.parse::<BuildingType>()
+                .expect("valid building type in test data"),
         ),
         TestTechEffectDef::EnableTerrainImprovement { terrain, max_level } => {
             TechEffect::EnableTerrainImprovement { terrain, max_level }
@@ -680,7 +894,8 @@ fn convert_test_tech_effect(def: TestTechEffectDef) -> crate::tech::tree::TechEf
             to: to.parse().expect("valid army unit in test data"),
         },
         TestTechEffectDef::EnableCivilian(name) => TechEffect::EnableCivilian(
-            name.parse::<CivilianType>().expect("valid civilian type in test data"),
+            name.parse::<CivilianType>()
+                .expect("valid civilian type in test data"),
         ),
         TestTechEffectDef::LuaScript(script) => TechEffect::LuaScript(script),
     }
@@ -692,8 +907,10 @@ pub fn test_game_data() -> GameData {
     use crate::tech::tree::Technology;
     use crate::types::Money;
 
-    let defs: TestTechDefsFile = ron::from_str(include_str!("../../../../data/definitions/technologies.ron"))
-        .expect("technologies.ron must be valid");
+    let defs: TestTechDefsFile = ron::from_str(include_str!(
+        "../../../../data/definitions/technologies.ron"
+    ))
+    .expect("technologies.ron must be valid");
     let tech_tree = TechTree::from_technologies(
         defs.technologies
             .into_iter()
@@ -704,7 +921,11 @@ pub fn test_game_data() -> GameData {
                 earliest_year: def.earliest_year,
                 latest_year: def.latest_year,
                 prerequisites: def.prerequisites.into_iter().map(TechId).collect(),
-                effects: def.effects.into_iter().map(convert_test_tech_effect).collect(),
+                effects: def
+                    .effects
+                    .into_iter()
+                    .map(convert_test_tech_effect)
+                    .collect(),
             })
             .collect(),
     );
@@ -719,9 +940,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_game_data_has_22_unit_types() {
+    fn default_game_data_has_28_unit_types() {
+        // 26 from the original manual roster + General + GarrisonArtillery.
         let data = GameData::default();
-        assert_eq!(data.unit_stats.len(), 22);
+        assert_eq!(data.unit_stats.len(), 28);
     }
 
     #[test]
@@ -732,11 +954,13 @@ mod tests {
 
     #[test]
     fn default_unit_stats_spot_check() {
+        // Minutemen are the auto-spawn Era I garrison: free, immovable, FPN=5
+        // per the original-game manual.
         let data = GameData::default();
-        let militia = &data.unit_stats[&ArmyUnitType::Militia];
-        assert_eq!(militia.firepower, 1);
-        assert_eq!(militia.movement, 0);
-        assert_eq!(militia.cost, crate::types::Money::dollars(50));
+        let minutemen = &data.unit_stats[&ArmyUnitType::Minutemen];
+        assert_eq!(minutemen.firepower, 5);
+        assert_eq!(minutemen.movement, 0);
+        assert_eq!(minutemen.cost, crate::types::Money::ZERO);
     }
 
     #[test]
@@ -746,5 +970,4 @@ mod tests {
         assert_eq!(frigate.firepower, 3);
         assert_eq!(frigate.hull, 35);
     }
-
 }

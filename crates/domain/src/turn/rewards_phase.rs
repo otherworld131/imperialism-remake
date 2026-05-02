@@ -30,7 +30,7 @@ pub(super) fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
         let total_arms: u32 = nation
             .military.army
             .iter()
-            .filter(|u| !matches!(u.unit_type, ArmyUnitType::Militia | ArmyUnitType::General))
+            .filter(|u| !matches!(u.unit_type, ArmyUnitType::Minutemen | ArmyUnitType::General))
             .map(|u| u.unit_type.stats().arms_required)
             .sum();
 

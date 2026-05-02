@@ -15,6 +15,7 @@ use super::common::AiPersonality;
 // Embed scripts at compile time for sandboxing safety.
 const GAME_CONFIG_LUA: &str = include_str!("../../../../scripts/config/game.lua");
 const TECH_TREE_LUA: &str = include_str!("../../../../scripts/config/tech_tree.lua");
+const UNITS_LUA: &str = include_str!("../../../../scripts/config/units.lua");
 const BALANCED_LUA: &str = include_str!("../../../../scripts/ai/balanced.lua");
 const AGGRESSIVE_LUA: &str = include_str!("../../../../scripts/ai/aggressive.lua");
 const DIPLOMATIC_LUA: &str = include_str!("../../../../scripts/ai/diplomatic.lua");
@@ -124,18 +125,12 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         civilian_target_tiles_per_worker: table
             .get("civilian_target_tiles_per_worker")
             .unwrap_or(3),
-        civilian_coverage_collectable: table
-            .get("civilian_coverage_collectable")
-            .unwrap_or(3.0),
+        civilian_coverage_collectable: table.get("civilian_coverage_collectable").unwrap_or(3.0),
         civilian_coverage_rail_adjacent: table
             .get("civilian_coverage_rail_adjacent")
             .unwrap_or(1.5),
-        civilian_coverage_unconnected: table
-            .get("civilian_coverage_unconnected")
-            .unwrap_or(0.5),
-        civilian_coverage_undiscovered: table
-            .get("civilian_coverage_undiscovered")
-            .unwrap_or(1.5),
+        civilian_coverage_unconnected: table.get("civilian_coverage_unconnected").unwrap_or(0.5),
+        civilian_coverage_undiscovered: table.get("civilian_coverage_undiscovered").unwrap_or(1.5),
         civilian_hire_bootstrap: table.get("civilian_hire_bootstrap").unwrap_or(15.0),
         civilian_idle_penalty: table.get("civilian_idle_penalty").unwrap_or(8.0),
         civilian_connectivity_planned_weight: table
@@ -277,16 +272,10 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         fort_defense_level1: table.get("fort_defense_level1").unwrap_or(0.20),
         fort_defense_level2: table.get("fort_defense_level2").unwrap_or(0.40),
         fort_defense_level3: table.get("fort_defense_level3").unwrap_or(0.60),
-        battle_attacker_fp_loss_ratio: table
-            .get("battle_attacker_fp_loss_ratio")
-            .unwrap_or(0.60),
-        battle_defender_fp_loss_ratio: table
-            .get("battle_defender_fp_loss_ratio")
-            .unwrap_or(2.0),
+        battle_attacker_fp_loss_ratio: table.get("battle_attacker_fp_loss_ratio").unwrap_or(0.60),
+        battle_defender_fp_loss_ratio: table.get("battle_defender_fp_loss_ratio").unwrap_or(2.0),
         // D-6: labor/civilian hiring thresholds
-        labor_workers_per_province_base: table
-            .get("labor_workers_per_province_base")
-            .unwrap_or(2),
+        labor_workers_per_province_base: table.get("labor_workers_per_province_base").unwrap_or(2),
         labor_workers_per_province_wealthy: table
             .get("labor_workers_per_province_wealthy")
             .unwrap_or(3),
@@ -307,9 +296,7 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
             .get("ai_consulate_treasury_threshold")
             .unwrap_or(2000),
         // Minor nation trade behaviour
-        minor_resource_withhold_chance: table
-            .get("minor_resource_withhold_chance")
-            .unwrap_or(20),
+        minor_resource_withhold_chance: table.get("minor_resource_withhold_chance").unwrap_or(20),
         minor_goods_buy_price: table.get("minor_goods_buy_price").unwrap_or(150),
     };
     // Sanitize: ensure no zero-or-negative values for fields used as divisors/multipliers
@@ -541,11 +528,100 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
 pub fn load_scripts(engine: &LuaEngine) -> Result<(), String> {
     engine.exec(GAME_CONFIG_LUA)?;
     engine.exec(TECH_TREE_LUA)?;
+    engine.exec(UNITS_LUA)?;
     engine.exec(BALANCED_LUA)?;
     engine.exec(AGGRESSIVE_LUA)?;
     engine.exec(DIPLOMATIC_LUA)?;
     engine.exec(ECONOMIC_LUA)?;
     Ok(())
+}
+
+/// Load land-unit stats from the Lua `units` global table populated by
+/// `scripts/config/units.lua`.
+///
+/// Returns `None` if the table is absent or contains no rows; callers fall
+/// back to `default_unit_stats()` (which mirrors the same numbers in Rust).
+/// Per-row parse failures are logged and skipped — a typo on one unit must
+/// not silently disable the rest.
+pub fn load_unit_stats(
+    engine: &LuaEngine,
+) -> Option<
+    std::collections::HashMap<
+        crate::military::units::ArmyUnitType,
+        crate::military::units::UnitStats,
+    >,
+> {
+    use crate::military::units::{ArmyUnitType, Era, UnitCategory, UnitStats};
+    use std::collections::HashMap;
+
+    let lua = engine.lua();
+    let table: mlua::Table = lua.globals().get("units").ok()?;
+
+    let mut map: HashMap<ArmyUnitType, UnitStats> = HashMap::new();
+    for row_res in table.sequence_values::<mlua::Table>() {
+        let row = match row_res {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[units.lua] skipping malformed row: {}", e);
+                continue;
+            }
+        };
+        let name: String = match row.get("name") {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let unit_type: ArmyUnitType = match name.parse() {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[units.lua] unknown unit '{}': {}", name, e);
+                continue;
+            }
+        };
+        let category_str: String = match row.get("category") {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let category = match category_str.as_str() {
+            "Garrison" => UnitCategory::Garrison,
+            "Infantry" => UnitCategory::Infantry,
+            "Cavalry" => UnitCategory::Cavalry,
+            "Artillery" => UnitCategory::Artillery,
+            "Special" => UnitCategory::Special,
+            other => {
+                eprintln!("[units.lua] '{}' has unknown category '{}'", name, other);
+                continue;
+            }
+        };
+        let era_n: u8 = row.get::<u8>("era").unwrap_or(1);
+        let era = match era_n {
+            1 => Era::One,
+            2 => Era::Two,
+            3 => Era::Three,
+            other => {
+                eprintln!("[units.lua] '{}' has invalid era {}", name, other);
+                continue;
+            }
+        };
+        let cost_dollars: i64 = row.get("cost").unwrap_or(0);
+        let maint_dollars: i64 = row.get("maintenance_per_turn").unwrap_or(0);
+        let stats = UnitStats {
+            firepower: row.get("firepower").unwrap_or(0),
+            firepower_mounted: row.get("firepower_mounted").unwrap_or(0),
+            defense: row.get("defense").unwrap_or(0),
+            defense_terrain_bonus: row.get("defense_terrain_bonus").unwrap_or(0),
+            range: row.get("range").unwrap_or(0),
+            movement: row.get("movement").unwrap_or(0),
+            arms_required: row.get("arms_required").unwrap_or(0),
+            requires_horse: row.get("requires_horse").unwrap_or(false),
+            category,
+            cost: Money::dollars(cost_dollars),
+            maintenance_per_turn: Money::dollars(maint_dollars),
+            prerequisite_tech: row.get::<String>("prerequisite_tech").ok(),
+            era,
+        };
+        map.insert(unit_type, stats);
+    }
+    if map.is_empty() { None } else { Some(map) }
 }
 
 /// Load the tech tree from the Lua `tech_tree` global table.
@@ -607,10 +683,9 @@ pub fn load_tech_tree(engine: &LuaEngine) -> Option<crate::tech::tree::TechTree>
                         let terrain: Option<String> = eff.get("terrain").ok();
                         let max_level: Option<u8> = eff.get("max_level").ok();
                         match (terrain, max_level) {
-                            (Some(terrain), Some(max_level)) => Some(TechEffect::EnableTerrainImprovement {
-                                terrain,
-                                max_level,
-                            }),
+                            (Some(terrain), Some(max_level)) => {
+                                Some(TechEffect::EnableTerrainImprovement { terrain, max_level })
+                            }
                             _ => None,
                         }
                     }
@@ -628,7 +703,10 @@ pub fn load_tech_tree(engine: &LuaEngine) -> Option<crate::tech::tree::TechTree>
                     "UpgradeUnit" => {
                         let from: Option<String> = eff.get("from").ok();
                         let to: Option<String> = eff.get("to").ok();
-                        match (from.and_then(|s| s.parse().ok()), to.and_then(|s| s.parse().ok())) {
+                        match (
+                            from.and_then(|s| s.parse().ok()),
+                            to.and_then(|s| s.parse().ok()),
+                        ) {
                             (Some(from), Some(to)) => Some(TechEffect::UpgradeUnit { from, to }),
                             _ => None,
                         }

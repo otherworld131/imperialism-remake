@@ -661,14 +661,14 @@ fn land_battle_balance_various_compositions() {
             3,
             ArmyUnitType::Regulars,
             4,
-            ArmyUnitType::Militia,
+            ArmyUnitType::Minutemen,
         ),
         (
             "5 Regulars vs 4 Militia",
             5,
             ArmyUnitType::Regulars,
             4,
-            ArmyUnitType::Militia,
+            ArmyUnitType::Minutemen,
         ),
         (
             "2 Grenadiers vs 3 Regulars",

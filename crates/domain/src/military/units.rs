@@ -1,6 +1,6 @@
+use crate::DomainError;
 use crate::map::UnitId;
 use crate::types::*;
-use crate::DomainError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnitCategory {
@@ -8,84 +8,147 @@ pub enum UnitCategory {
     Cavalry,
     Artillery,
     Special,
-    Garrison, // Militia/Minutemen - immovable
+    Garrison,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Era {
+    One = 1,
+    Two = 2,
+    Three = 3,
+}
+
+/// All army unit types from the original Imperialism (1997).
+///
+/// Three eras of progression per role; Garrison/Infantry/Cavalry/Artillery/
+/// Engineer roles each have an Era I → II → III chain. `General` is special
+/// (earned, not built).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArmyUnitType {
-    // Garrison
-    Militia,
-    GarrisonArtillery, // Minor nation defensive artillery (immovable)
-    // Infantry
-    Regulars,
-    Grenadiers,
-    RifleInfantry,
-    Guards,
-    Sharpshooters,
-    ModernInfantry,
-    MachineGunners,
-    Rangers,
-    // Cavalry
-    Cuirassiers,
-    Scouts,
-    CarbineCavalry,
-    Armour,
-    Mechanised,
-    // Artillery
-    LightArtillery,
-    StandardArtillery,
-    FieldArtillery,
-    SiegeArtillery,
-    RailroadGun,
-    MobileArtillery,
-    // Special
-    Sapper,
-    General, // earned as reward, boosts initiative
+    // ── Garrison (immovable, defend only) ─────
+    Minutemen, // Era I
+    Militia,   // Era II
+    Conscript, // Era III
+
+    // ── Skirmisher infantry (light scouts) ────
+    Skirmishers,   // Era I
+    Sharpshooters, // Era II
+    Rangers,       // Era III
+
+    // ── Line infantry (general purpose) ───────
+    Regulars,      // Era I
+    RifleInfantry, // Era II
+    Infantry,      // Era III
+
+    // ── Elite/heavy infantry ──────────────────
+    Grenadiers,     // Era I
+    Guards,         // Era II
+    MachineGunners, // Era III
+
+    // ── Light cavalry (fast, scouting) ────────
+    Hussars,    // Era I
+    Carbineers, // Era II
+    Mechanised, // Era III
+
+    // ── Heavy cavalry ─────────────────────────
+    Cuirassiers, // Era I  (no Era II in original)
+    Armour,      // Era III
+
+    // ── Light artillery ───────────────────────
+    LightArtillery,  // Era I
+    FieldArtillery,  // Era II
+    MobileArtillery, // Era III
+
+    // ── Heavy artillery ───────────────────────
+    Artillery,      // Era I
+    SiegeArtillery, // Era II
+    RailroadGuns,   // Era III
+
+    // ── Engineer ──────────────────────────────
+    Sapper,         // Era I
+    CombatEngineer, // Era II
+    Saboteur,       // Era III
+
+    // ── Special ───────────────────────────────
+    General,
+
+    // ── Project-specific (not in original manual) ─
+    /// Defensive artillery auto-spawned at minor-nation capitals. Immovable,
+    /// no upkeep, never built by the player. Kept as a project extension to
+    /// preserve the existing minor-nation defense balance.
+    GarrisonArtillery,
 }
 
 impl std::str::FromStr for ArmyUnitType {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "Minutemen" => Ok(Self::Minutemen),
             "Militia" => Ok(Self::Militia),
-            "GarrisonArtillery" => Ok(Self::GarrisonArtillery),
-            "Regulars" => Ok(Self::Regulars),
-            "Grenadiers" => Ok(Self::Grenadiers),
-            "RifleInfantry" => Ok(Self::RifleInfantry),
-            "Guards" => Ok(Self::Guards),
+            "Conscript" => Ok(Self::Conscript),
+            "Skirmishers" => Ok(Self::Skirmishers),
             "Sharpshooters" => Ok(Self::Sharpshooters),
-            "ModernInfantry" => Ok(Self::ModernInfantry),
-            "MachineGunners" => Ok(Self::MachineGunners),
             "Rangers" => Ok(Self::Rangers),
-            "Cuirassiers" => Ok(Self::Cuirassiers),
-            "Scouts" => Ok(Self::Scouts),
-            "CarbineCavalry" => Ok(Self::CarbineCavalry),
-            "Armour" => Ok(Self::Armour),
+            "Regulars" => Ok(Self::Regulars),
+            "RifleInfantry" => Ok(Self::RifleInfantry),
+            "Infantry" => Ok(Self::Infantry),
+            "Grenadiers" => Ok(Self::Grenadiers),
+            "Guards" => Ok(Self::Guards),
+            "MachineGunners" => Ok(Self::MachineGunners),
+            "Hussars" => Ok(Self::Hussars),
+            "Carbineers" => Ok(Self::Carbineers),
             "Mechanised" => Ok(Self::Mechanised),
+            "Cuirassiers" => Ok(Self::Cuirassiers),
+            "Armour" => Ok(Self::Armour),
             "LightArtillery" => Ok(Self::LightArtillery),
-            "StandardArtillery" => Ok(Self::StandardArtillery),
             "FieldArtillery" => Ok(Self::FieldArtillery),
-            "SiegeArtillery" => Ok(Self::SiegeArtillery),
-            "RailroadGun" => Ok(Self::RailroadGun),
             "MobileArtillery" => Ok(Self::MobileArtillery),
+            "Artillery" => Ok(Self::Artillery),
+            "SiegeArtillery" => Ok(Self::SiegeArtillery),
+            "RailroadGuns" => Ok(Self::RailroadGuns),
             "Sapper" => Ok(Self::Sapper),
+            "CombatEngineer" => Ok(Self::CombatEngineer),
+            "Saboteur" => Ok(Self::Saboteur),
             "General" => Ok(Self::General),
+            "GarrisonArtillery" => Ok(Self::GarrisonArtillery),
             _ => Err(format!("unknown ArmyUnitType: {}", s)),
         }
     }
 }
 
+/// Stats for a unit type. Fields mirror the original Imperialism manual:
+///
+/// - `firepower` (FPN) — base attack vs infantry/garrison.
+/// - `firepower_mounted` (FPM) — bonus attack vs cavalry / when charging.
+///   Currently unused by combat resolution (file: Trello "wire up FPM").
+/// - `defense` (DEF) — base defensive value.
+///   Currently unused by combat resolution (file: Trello "wire up DEF & terrain bonus").
+/// - `defense_terrain_bonus` — extra DEF when defending in favorable terrain
+///   (forest/hills/fort). Original game bracketed this as e.g. `5(6)`; the
+///   bonus is the bracketed delta.
+///   Currently unused by combat resolution.
+/// - `range` — attack range in hexes.
+/// - `movement` — base movement points per turn.
+/// - `arms_required` — Arms unit consumed at recruitment (and per upgrade diff).
+/// - `cost` — dollar cost to recruit. Resource costs are resolved separately.
+/// - `maintenance_per_turn` — upkeep paid each turn (Garrison units pay 0).
+/// - `prerequisite_tech` — tech name required to unlock this unit, or `None`.
+/// - `era` — historical era bucket (1/2/3) for UI grouping and obsoletion.
 #[derive(Debug, Clone)]
 pub struct UnitStats {
     pub firepower: u32,
+    pub firepower_mounted: u32,
+    pub defense: u32,
+    pub defense_terrain_bonus: u32,
     pub movement: u32,
     pub range: u32,
     pub cost: Money,
     pub arms_required: u32,
     pub requires_horse: bool,
     pub category: UnitCategory,
-    pub maintenance_per_turn: Money, // $25 per arm
+    pub maintenance_per_turn: Money,
     pub prerequisite_tech: Option<String>,
+    pub era: Era,
 }
 
 #[derive(Debug, Clone)]
@@ -101,367 +164,606 @@ pub struct ArmyUnit {
 
 impl ArmyUnitType {
     /// Returns the base stats for each unit type.
+    ///
+    /// Combat numbers (FPN/FPM/DEF/terrain bonus) come from the original
+    /// Imperialism (1997) manual unit table. Dollar `cost`/`maintenance` and
+    /// `prerequisite_tech` are project-specific and may differ from the
+    /// original.
     pub fn stats(&self) -> UnitStats {
+        use ArmyUnitType::*;
+        // Helper to keep the table readable.
+        let s = |firepower,
+                 firepower_mounted,
+                 defense,
+                 defense_terrain_bonus,
+                 range,
+                 movement,
+                 arms_required,
+                 requires_horse,
+                 category,
+                 cost: i64,
+                 maintenance: i64,
+                 era,
+                 prerequisite_tech: Option<&str>| UnitStats {
+            firepower,
+            firepower_mounted,
+            defense,
+            defense_terrain_bonus,
+            range,
+            movement,
+            arms_required,
+            requires_horse,
+            category,
+            cost: Money::dollars(cost),
+            maintenance_per_turn: Money::dollars(maintenance),
+            era,
+            prerequisite_tech: prerequisite_tech.map(String::from),
+        };
         match self {
             // ── Garrison ──────────────────────────────────────────
-            ArmyUnitType::Militia => UnitStats {
-                firepower: 1,
-                movement: 0,
-                range: 1,
-                cost: Money::dollars(50),
-                arms_required: 1,
-                requires_horse: false,
-                category: UnitCategory::Garrison,
-                maintenance_per_turn: Money::dollars(25),
-                prerequisite_tech: None,
-            },
-            ArmyUnitType::GarrisonArtillery => UnitStats {
-                firepower: 4,
-                movement: 0,
-                range: 3,
-                cost: Money::dollars(0),
-                arms_required: 0,
-                requires_horse: false,
-                category: UnitCategory::Garrison,
-                maintenance_per_turn: Money::dollars(0),
-                prerequisite_tech: None,
-            },
+            // FPN FPM DEF DEFT RNG MVR ARMS HORSE  CAT       COST  MTN  ERA
+            Minutemen => s(
+                5,
+                0,
+                5,
+                0,
+                1,
+                0,
+                0,
+                false,
+                UnitCategory::Garrison,
+                0,
+                0,
+                Era::One,
+                None,
+            ),
+            Militia => s(
+                10,
+                0,
+                7,
+                0,
+                2,
+                0,
+                1,
+                false,
+                UnitCategory::Garrison,
+                0,
+                0,
+                Era::Two,
+                None,
+            ),
+            Conscript => s(
+                17,
+                0,
+                5,
+                0,
+                2,
+                4,
+                1,
+                false,
+                UnitCategory::Garrison,
+                100,
+                25,
+                Era::Three,
+                Some("Modern Warfare"),
+            ),
 
-            // ── Infantry ─────────────────────────────────────────
-            ArmyUnitType::Regulars => UnitStats {
-                firepower: 2,
-                movement: 3,
-                range: 1,
-                cost: Money::dollars(100),
-                arms_required: 1,
-                requires_horse: false,
-                category: UnitCategory::Infantry,
-                maintenance_per_turn: Money::dollars(25),
-                prerequisite_tech: None,
-            },
-            ArmyUnitType::Grenadiers => UnitStats {
-                firepower: 3,
-                movement: 3,
-                range: 1,
-                cost: Money::dollars(150),
-                arms_required: 2,
-                requires_horse: false,
-                category: UnitCategory::Infantry,
-                maintenance_per_turn: Money::dollars(50),
-                prerequisite_tech: Some("Grenadier Tactics".to_string()),
-            },
-            ArmyUnitType::RifleInfantry => UnitStats {
-                firepower: 4,
-                movement: 3,
-                range: 2,
-                cost: Money::dollars(200),
-                arms_required: 2,
-                requires_horse: false,
-                category: UnitCategory::Infantry,
-                maintenance_per_turn: Money::dollars(50),
-                prerequisite_tech: Some("Rifling".to_string()),
-            },
-            ArmyUnitType::Guards => UnitStats {
-                firepower: 5,
-                movement: 3,
-                range: 2,
-                cost: Money::dollars(250),
-                arms_required: 3,
-                requires_horse: false,
-                category: UnitCategory::Infantry,
-                maintenance_per_turn: Money::dollars(75),
-                prerequisite_tech: Some("Professional Army".to_string()),
-            },
-            ArmyUnitType::Sharpshooters => UnitStats {
-                firepower: 4,
-                movement: 3,
-                range: 3,
-                cost: Money::dollars(200),
-                arms_required: 2,
-                requires_horse: false,
-                category: UnitCategory::Infantry,
-                maintenance_per_turn: Money::dollars(50),
-                prerequisite_tech: Some("Sharpshooter Training".to_string()),
-            },
-            ArmyUnitType::ModernInfantry => UnitStats {
-                firepower: 6,
-                movement: 4,
-                range: 2,
-                cost: Money::dollars(300),
-                arms_required: 3,
-                requires_horse: false,
-                category: UnitCategory::Infantry,
-                maintenance_per_turn: Money::dollars(75),
-                prerequisite_tech: Some("Modern Warfare".to_string()),
-            },
-            ArmyUnitType::MachineGunners => UnitStats {
-                firepower: 8,
-                movement: 2,
-                range: 2,
-                cost: Money::dollars(400),
-                arms_required: 4,
-                requires_horse: false,
-                category: UnitCategory::Infantry,
-                maintenance_per_turn: Money::dollars(100),
-                prerequisite_tech: Some("Machine Guns".to_string()),
-            },
-            ArmyUnitType::Rangers => UnitStats {
-                firepower: 5,
-                movement: 5,
-                range: 2,
-                cost: Money::dollars(250),
-                arms_required: 2,
-                requires_horse: false,
-                category: UnitCategory::Infantry,
-                maintenance_per_turn: Money::dollars(50),
-                prerequisite_tech: Some("Ranger Training".to_string()),
-            },
+            // ── Skirmisher infantry ─────────────────────────────
+            Skirmishers => s(
+                5,
+                0,
+                5,
+                0,
+                1,
+                4,
+                1,
+                false,
+                UnitCategory::Infantry,
+                100,
+                25,
+                Era::One,
+                None,
+            ),
+            Sharpshooters => s(
+                11,
+                0,
+                5,
+                0,
+                3,
+                4,
+                1,
+                false,
+                UnitCategory::Infantry,
+                200,
+                50,
+                Era::Two,
+                Some("Sharpshooter Training"),
+            ),
+            Rangers => s(
+                15,
+                0,
+                10,
+                0,
+                5,
+                4,
+                1,
+                false,
+                UnitCategory::Infantry,
+                250,
+                50,
+                Era::Three,
+                Some("Ranger Training"),
+            ),
 
-            // ── Cavalry ──────────────────────────────────────────
-            ArmyUnitType::Cuirassiers => UnitStats {
-                firepower: 3,
-                movement: 5,
-                range: 1,
-                cost: Money::dollars(200),
-                arms_required: 2,
-                requires_horse: true,
-                category: UnitCategory::Cavalry,
-                maintenance_per_turn: Money::dollars(50),
-                prerequisite_tech: None,
-            },
-            ArmyUnitType::Scouts => UnitStats {
-                firepower: 1,
-                movement: 7,
-                range: 1,
-                cost: Money::dollars(100),
-                arms_required: 1,
-                requires_horse: true,
-                category: UnitCategory::Cavalry,
-                maintenance_per_turn: Money::dollars(25),
-                prerequisite_tech: None,
-            },
-            ArmyUnitType::CarbineCavalry => UnitStats {
-                firepower: 4,
-                movement: 5,
-                range: 2,
-                cost: Money::dollars(250),
-                arms_required: 2,
-                requires_horse: true,
-                category: UnitCategory::Cavalry,
-                maintenance_per_turn: Money::dollars(50),
-                prerequisite_tech: Some("Carbines".to_string()),
-            },
-            ArmyUnitType::Armour => UnitStats {
-                firepower: 8,
-                movement: 4,
-                range: 2,
-                cost: Money::dollars(500),
-                arms_required: 4,
-                requires_horse: false,
-                category: UnitCategory::Cavalry,
-                maintenance_per_turn: Money::dollars(100),
-                prerequisite_tech: Some("Armoured Vehicles".to_string()),
-            },
-            ArmyUnitType::Mechanised => UnitStats {
-                firepower: 6,
-                movement: 6,
-                range: 2,
-                cost: Money::dollars(400),
-                arms_required: 3,
-                requires_horse: false,
-                category: UnitCategory::Cavalry,
-                maintenance_per_turn: Money::dollars(75),
-                prerequisite_tech: Some("Mechanisation".to_string()),
-            },
+            // ── Line infantry ───────────────────────────────────
+            Regulars => s(
+                10,
+                5,
+                5,
+                0,
+                1,
+                4,
+                1,
+                false,
+                UnitCategory::Infantry,
+                100,
+                25,
+                Era::One,
+                None,
+            ),
+            RifleInfantry => s(
+                15,
+                0,
+                7,
+                1,
+                2,
+                4,
+                1,
+                false,
+                UnitCategory::Infantry,
+                200,
+                50,
+                Era::Two,
+                Some("Rifling"),
+            ),
+            Infantry => s(
+                22,
+                0,
+                10,
+                0,
+                2,
+                4,
+                2,
+                false,
+                UnitCategory::Infantry,
+                300,
+                75,
+                Era::Three,
+                Some("Modern Warfare"),
+            ),
 
-            // ── Artillery ────────────────────────────────────────
-            ArmyUnitType::LightArtillery => UnitStats {
-                firepower: 3,
-                movement: 3,
-                range: 3,
-                cost: Money::dollars(200),
-                arms_required: 2,
-                requires_horse: false,
-                category: UnitCategory::Artillery,
-                maintenance_per_turn: Money::dollars(50),
-                prerequisite_tech: None,
-            },
-            ArmyUnitType::StandardArtillery => UnitStats {
-                firepower: 5,
-                movement: 2,
-                range: 4,
-                cost: Money::dollars(300),
-                arms_required: 3,
-                requires_horse: false,
-                category: UnitCategory::Artillery,
-                maintenance_per_turn: Money::dollars(75),
-                prerequisite_tech: Some("Improved Artillery".to_string()),
-            },
-            ArmyUnitType::FieldArtillery => UnitStats {
-                firepower: 6,
-                movement: 3,
-                range: 4,
-                cost: Money::dollars(350),
-                arms_required: 3,
-                requires_horse: false,
-                category: UnitCategory::Artillery,
-                maintenance_per_turn: Money::dollars(75),
-                prerequisite_tech: Some("Field Artillery".to_string()),
-            },
-            ArmyUnitType::SiegeArtillery => UnitStats {
-                firepower: 10,
-                movement: 1,
-                range: 5,
-                cost: Money::dollars(500),
-                arms_required: 4,
-                requires_horse: false,
-                category: UnitCategory::Artillery,
-                maintenance_per_turn: Money::dollars(100),
-                prerequisite_tech: Some("Siege Warfare".to_string()),
-            },
-            ArmyUnitType::RailroadGun => UnitStats {
-                firepower: 12,
-                movement: 1,
-                range: 6,
-                cost: Money::dollars(600),
-                arms_required: 5,
-                requires_horse: false,
-                category: UnitCategory::Artillery,
-                maintenance_per_turn: Money::dollars(125),
-                prerequisite_tech: Some("Railroad Artillery".to_string()),
-            },
-            ArmyUnitType::MobileArtillery => UnitStats {
-                firepower: 7,
-                movement: 4,
-                range: 4,
-                cost: Money::dollars(450),
-                arms_required: 4,
-                requires_horse: false,
-                category: UnitCategory::Artillery,
-                maintenance_per_turn: Money::dollars(100),
-                prerequisite_tech: Some("Mobile Artillery".to_string()),
-            },
+            // ── Elite/heavy infantry ────────────────────────────
+            Grenadiers => s(
+                12,
+                0,
+                5,
+                1,
+                1,
+                4,
+                1,
+                false,
+                UnitCategory::Infantry,
+                150,
+                50,
+                Era::One,
+                Some("Grenadier Tactics"),
+            ),
+            Guards => s(
+                17,
+                0,
+                9,
+                0,
+                2,
+                4,
+                1,
+                false,
+                UnitCategory::Infantry,
+                250,
+                75,
+                Era::Two,
+                Some("Professional Army"),
+            ),
+            MachineGunners => s(
+                28,
+                0,
+                12,
+                0,
+                2,
+                4,
+                2,
+                false,
+                UnitCategory::Infantry,
+                400,
+                100,
+                Era::Three,
+                Some("Machine Guns"),
+            ),
 
-            // ── Special ──────────────────────────────────────────
-            ArmyUnitType::Sapper => UnitStats {
-                firepower: 1,
-                movement: 3,
-                range: 1,
-                cost: Money::dollars(150),
-                arms_required: 1,
-                requires_horse: false,
-                category: UnitCategory::Special,
-                maintenance_per_turn: Money::dollars(25),
-                prerequisite_tech: Some("Engineering".to_string()),
-            },
-            ArmyUnitType::General => UnitStats {
-                firepower: 0,
-                movement: 8,
-                range: 0,
-                cost: Money::dollars(0),
-                arms_required: 0,
-                requires_horse: false,
-                category: UnitCategory::Special,
-                maintenance_per_turn: Money::dollars(0),
-                prerequisite_tech: None,
-            },
+            // ── Light cavalry ───────────────────────────────────
+            Hussars => s(
+                7,
+                10,
+                4,
+                0,
+                1,
+                7,
+                1,
+                true,
+                UnitCategory::Cavalry,
+                150,
+                25,
+                Era::One,
+                None,
+            ),
+            Carbineers => s(
+                11,
+                13,
+                7,
+                0,
+                2,
+                7,
+                1,
+                true,
+                UnitCategory::Cavalry,
+                250,
+                50,
+                Era::Two,
+                Some("Carbines"),
+            ),
+            Mechanised => s(
+                30,
+                0,
+                10,
+                2,
+                4,
+                6,
+                2,
+                false,
+                UnitCategory::Cavalry,
+                400,
+                75,
+                Era::Three,
+                Some("Mechanisation"),
+            ),
+
+            // ── Heavy cavalry ───────────────────────────────────
+            Cuirassiers => s(
+                15,
+                0,
+                9,
+                0,
+                1,
+                7,
+                1,
+                true,
+                UnitCategory::Cavalry,
+                200,
+                50,
+                Era::One,
+                None,
+            ),
+            Armour => s(
+                30,
+                0,
+                16,
+                0,
+                6,
+                6,
+                4,
+                false,
+                UnitCategory::Cavalry,
+                500,
+                100,
+                Era::Three,
+                Some("Armoured Vehicles"),
+            ),
+
+            // ── Light artillery ─────────────────────────────────
+            LightArtillery => s(
+                10,
+                0,
+                9,
+                0,
+                3,
+                3,
+                2,
+                false,
+                UnitCategory::Artillery,
+                200,
+                50,
+                Era::One,
+                None,
+            ),
+            FieldArtillery => s(
+                17,
+                0,
+                12,
+                1,
+                5,
+                3,
+                2,
+                false,
+                UnitCategory::Artillery,
+                350,
+                75,
+                Era::Two,
+                Some("Field Artillery"),
+            ),
+            MobileArtillery => s(
+                22,
+                0,
+                12,
+                1,
+                5,
+                4,
+                2,
+                false,
+                UnitCategory::Artillery,
+                450,
+                100,
+                Era::Three,
+                Some("Mobile Artillery"),
+            ),
+
+            // ── Heavy artillery ─────────────────────────────────
+            Artillery => s(
+                16,
+                0,
+                11,
+                1,
+                4,
+                2,
+                2,
+                false,
+                UnitCategory::Artillery,
+                300,
+                75,
+                Era::One,
+                Some("Improved Artillery"),
+            ),
+            SiegeArtillery => s(
+                21,
+                0,
+                9,
+                11,
+                6,
+                2,
+                3,
+                false,
+                UnitCategory::Artillery,
+                500,
+                100,
+                Era::Two,
+                Some("Siege Warfare"),
+            ),
+            RailroadGuns => s(
+                50,
+                0,
+                20,
+                5,
+                17,
+                0,
+                4,
+                false,
+                UnitCategory::Artillery,
+                600,
+                125,
+                Era::Three,
+                Some("Railroad Artillery"),
+            ),
+
+            // ── Engineer ────────────────────────────────────────
+            Sapper => s(
+                5,
+                0,
+                4,
+                0,
+                1,
+                4,
+                1,
+                false,
+                UnitCategory::Special,
+                150,
+                25,
+                Era::One,
+                Some("Engineering"),
+            ),
+            CombatEngineer => s(
+                7,
+                0,
+                7,
+                0,
+                2,
+                4,
+                1,
+                false,
+                UnitCategory::Special,
+                200,
+                50,
+                Era::Two,
+                Some("Engineering"),
+            ),
+            Saboteur => s(
+                9,
+                0,
+                10,
+                2,
+                1,
+                4,
+                1,
+                false,
+                UnitCategory::Special,
+                250,
+                50,
+                Era::Three,
+                Some("Modern Warfare"),
+            ),
+
+            // ── Special ─────────────────────────────────────────
+            General => s(
+                0,
+                0,
+                0,
+                0,
+                0,
+                8,
+                0,
+                false,
+                UnitCategory::Special,
+                0,
+                0,
+                Era::One,
+                None,
+            ),
+
+            // ── Project-specific: minor-nation capital defense ──
+            GarrisonArtillery => s(
+                4,
+                0,
+                0,
+                0,
+                3,
+                0,
+                0,
+                false,
+                UnitCategory::Garrison,
+                0,
+                0,
+                Era::One,
+                None,
+            ),
         }
     }
 
-    /// Returns the unit category for this unit type.
     pub fn category(&self) -> UnitCategory {
         self.stats().category
     }
 
-    /// Returns whether this unit type can move. Garrison units cannot.
+    /// Garrison units cannot move; everything else can.
     pub fn can_move(&self) -> bool {
         !matches!(
             self,
-            ArmyUnitType::Militia | ArmyUnitType::GarrisonArtillery
+            ArmyUnitType::Minutemen | ArmyUnitType::Militia | ArmyUnitType::GarrisonArtillery
         )
+        // Note: Conscript is Garrison-category but has movement (per manual).
     }
 
-    /// Returns whether this unit type can be manually built by the player.
-    /// Generals and GarrisonArtillery cannot be built.
+    /// `General` is earned via combat reward, not built.
+    /// `Minutemen` and `Militia` (Era I/II garrison) spawn automatically when
+    /// a province is captured — they aren't placed by the recruit menu either.
+    /// `GarrisonArtillery` is a minor-nation capital defense extension.
     pub fn can_build(&self) -> bool {
         !matches!(
             self,
-            ArmyUnitType::General | ArmyUnitType::GarrisonArtillery
+            ArmyUnitType::General
+                | ArmyUnitType::Minutemen
+                | ArmyUnitType::Militia
+                | ArmyUnitType::GarrisonArtillery
         )
     }
 
-    /// Returns the tech tree name required to build/unlock this unit type, if any.
-    /// Base units available from game start return `None`.
-    /// Names match entries in the tech tree (`TechTree::get_by_name`).
+    /// Returns the tech tree name required to build/unlock this unit type,
+    /// if any. Era I units are available from game start. Names match entries
+    /// in the tech tree (`TechTree::get_by_name`).
     pub fn required_tech(&self) -> Option<&str> {
+        use ArmyUnitType::*;
         match self {
-            // Base units — available from game start
-            Self::Regulars => None,
-            Self::Militia => None,
-            Self::GarrisonArtillery => None,
-            Self::Cuirassiers => None,
-            Self::Scouts => None,
-            Self::LightArtillery => None,
-            // Infantry
-            Self::Grenadiers => Some("Breech-Loading Rifles"),
-            Self::RifleInfantry => Some("Breech-Loading Rifles"),
-            Self::Guards => Some("Breech-Loading Rifles"),
-            Self::Sharpshooters => Some("Bessemer Converter"),
-            Self::ModernInfantry => Some("Machine Guns"),
-            Self::MachineGunners => Some("Machine Guns"),
-            Self::Rangers => Some("Machine Guns"),
-            // Cavalry
-            Self::CarbineCavalry => Some("Breech-Loading Rifles"),
-            Self::Armour => Some("Internal Combustion"),
-            Self::Mechanised => Some("Internal Combustion"),
-            // Artillery
-            Self::StandardArtillery => Some("Rifled Artillery"),
-            Self::FieldArtillery => Some("Rifled Artillery"),
-            Self::SiegeArtillery => Some("Large Artillery"),
-            Self::RailroadGun => Some("Large Artillery"),
-            Self::MobileArtillery => Some("Internal Combustion"),
-            // Special
-            Self::Sapper => Some("Bessemer Converter"),
-            Self::General => None, // earned, not built
+            // Era I — base units, no tech needed
+            Minutemen | Militia | Skirmishers | Regulars | Grenadiers | Hussars | Cuirassiers
+            | LightArtillery | Artillery | Sapper | General | GarrisonArtillery => None,
+            // Era II
+            Sharpshooters => Some("Bessemer Converter"),
+            RifleInfantry => Some("Breech-Loading Rifles"),
+            Guards => Some("Breech-Loading Rifles"),
+            Carbineers => Some("Breech-Loading Rifles"),
+            FieldArtillery => Some("Rifled Artillery"),
+            SiegeArtillery => Some("Large Artillery"),
+            CombatEngineer => Some("Bessemer Converter"),
+            // Era III
+            Conscript => Some("Modern Warfare"),
+            Rangers => Some("Machine Guns"),
+            Infantry => Some("Modern Warfare"),
+            MachineGunners => Some("Machine Guns"),
+            Mechanised => Some("Internal Combustion"),
+            Armour => Some("Internal Combustion"),
+            MobileArtillery => Some("Internal Combustion"),
+            RailroadGuns => Some("Large Artillery"),
+            Saboteur => Some("Modern Warfare"),
         }
     }
 
-    /// Returns the next upgrade for this unit type, if any.
+    /// Returns the next-era unit in the same role chain, if any.
     ///
-    /// Upgrade paths:
-    /// - Regulars -> RifleInfantry -> ModernInfantry
-    /// - Grenadiers -> Guards
-    /// - Sharpshooters -> Rangers
-    /// - Cuirassiers -> CarbineCavalry
-    /// - Scouts -> CarbineCavalry
-    /// - LightArtillery -> FieldArtillery -> MobileArtillery
-    /// - StandardArtillery -> SiegeArtillery -> RailroadGun
+    /// Chains (per original-game manual roster):
+    /// - Garrison: Minutemen → Militia → Conscript
+    /// - Skirmisher: Skirmishers → Sharpshooters → Rangers
+    /// - Line infantry: Regulars → RifleInfantry → Infantry
+    /// - Elite infantry: Grenadiers → Guards → MachineGunners
+    /// - Light cavalry: Hussars → Carbineers → Mechanised
+    /// - Heavy cavalry: Cuirassiers → Armour (no Era II)
+    /// - Light artillery: LightArtillery → FieldArtillery → MobileArtillery
+    /// - Heavy artillery: Artillery → SiegeArtillery → RailroadGuns
+    /// - Engineer: Sapper → CombatEngineer → Saboteur
     pub fn upgrade_to(&self) -> Option<ArmyUnitType> {
+        use ArmyUnitType::*;
         match self {
-            // Infantry upgrades
-            ArmyUnitType::Regulars => Some(ArmyUnitType::RifleInfantry),
-            ArmyUnitType::RifleInfantry => Some(ArmyUnitType::ModernInfantry),
-            ArmyUnitType::Grenadiers => Some(ArmyUnitType::Guards),
-            ArmyUnitType::Sharpshooters => Some(ArmyUnitType::Rangers),
-
-            // Cavalry upgrades
-            ArmyUnitType::Cuirassiers => Some(ArmyUnitType::CarbineCavalry),
-            ArmyUnitType::Scouts => Some(ArmyUnitType::CarbineCavalry),
-
-            // Artillery upgrades
-            ArmyUnitType::LightArtillery => Some(ArmyUnitType::FieldArtillery),
-            ArmyUnitType::FieldArtillery => Some(ArmyUnitType::MobileArtillery),
-            ArmyUnitType::StandardArtillery => Some(ArmyUnitType::SiegeArtillery),
-            ArmyUnitType::SiegeArtillery => Some(ArmyUnitType::RailroadGun),
-
-            // No upgrade available
-            _ => None,
+            // Garrison
+            Minutemen => Some(Militia),
+            Militia => Some(Conscript),
+            // Skirmisher
+            Skirmishers => Some(Sharpshooters),
+            Sharpshooters => Some(Rangers),
+            // Line infantry
+            Regulars => Some(RifleInfantry),
+            RifleInfantry => Some(Infantry),
+            // Elite infantry
+            Grenadiers => Some(Guards),
+            Guards => Some(MachineGunners),
+            // Light cavalry
+            Hussars => Some(Carbineers),
+            Carbineers => Some(Mechanised),
+            // Heavy cavalry (no Era II — jumps straight to Armour)
+            Cuirassiers => Some(Armour),
+            // Light artillery
+            LightArtillery => Some(FieldArtillery),
+            FieldArtillery => Some(MobileArtillery),
+            // Heavy artillery
+            Artillery => Some(SiegeArtillery),
+            SiegeArtillery => Some(RailroadGuns),
+            // Engineer
+            Sapper => Some(CombatEngineer),
+            CombatEngineer => Some(Saboteur),
+            // End-of-line
+            Conscript | Rangers | Infantry | MachineGunners | Mechanised | Armour
+            | MobileArtillery | RailroadGuns | Saboteur | General | GarrisonArtillery => None,
         }
+    }
+
+    /// `obsoleted_by` is the same chain as `upgrade_to`, but expresses the
+    /// recruit-menu filter: once the upgrade target is unlocked, the older
+    /// variant disappears from the build menu (existing units stay in play
+    /// and can be upgraded).
+    pub fn obsoleted_by(&self) -> Option<ArmyUnitType> {
+        self.upgrade_to()
+    }
+
+    /// Era bucket (I/II/III) per the original-game grouping.
+    pub fn era(&self) -> Era {
+        self.stats().era
     }
 }
 
 impl ArmyUnit {
-    /// Create a new army unit at 100% health with 0 medals.
     pub fn new(id: UnitId, unit_type: ArmyUnitType, owner: NationId, position: ProvinceId) -> Self {
         let stats = unit_type.stats();
         Self {
@@ -485,21 +787,15 @@ impl ArmyUnit {
         base_fp * medal_modifier * health_scale
     }
 
-    /// Reduce health by the given amount in 5% increments (round-to-nearest),
-    /// with a minimum of 5 damage when amount > 0 to prevent immortal units.
     pub fn take_damage(&mut self, amount: u8) {
         let effective = if amount == 0 {
             0
         } else {
-            // Round to nearest 5% increment, minimum 5
             ((amount as u16 + 2) / 5 * 5).max(5) as u8
         };
         self.health = self.health.saturating_sub(effective);
     }
 
-    /// Heal the unit by the given amount. Medal holders heal faster:
-    /// effective healing = amount * (1 + medals / 2).
-    /// Health is capped at 100.
     pub fn heal(&mut self, amount: u8) {
         let multiplier = 1 + self.medals / 2;
         let effective = (amount as u16) * (multiplier as u16);
@@ -511,25 +807,19 @@ impl ArmyUnit {
         };
     }
 
-    /// Award a medal to this unit, incrementing the medal count.
-    /// Capped at 4 medals (2x firepower multiplier) per the original game.
     pub fn award_medal(&mut self) {
         if self.medals < 4 {
             self.medals += 1;
         }
     }
 
-    /// Returns true if the unit is still alive (health > 0).
     pub fn is_alive(&self) -> bool {
         self.health > 0
     }
 
-    /// Calculate the per-turn maintenance cost for this unit.
-    ///
-    /// Garrison units (militia, garrison artillery — tied to provinces, can't
-    /// be disbanded) pay no upkeep per card #216. All other units pay
-    /// `cents_per_arm * arms_required`. The rate lives in `GameConfig` so
-    /// balance can be tuned from Lua.
+    /// Per-turn maintenance. Garrison units pay no upkeep (tied to
+    /// provinces, can't be disbanded). All others pay
+    /// `cents_per_arm * arms_required`.
     pub fn maintenance_cost(&self, cents_per_arm: i64) -> Money {
         if self.unit_type.category() == UnitCategory::Garrison {
             return Money::ZERO;
@@ -541,10 +831,8 @@ impl ArmyUnit {
 
 /// Disband (dismiss) a player's army unit.
 ///
-/// Returns `Err` if the unit isn't found in the given nation's army or if it is a
-/// `Garrison` unit (militia / garrison artillery — those are tied to province defense
-/// and cannot be dismissed by the player). Removes the unit from the nation's army
-/// and clears any pending move targeting it.
+/// Errors if the unit isn't found, or if it is a Garrison unit (Minutemen /
+/// Militia / Conscript — tied to province defense and not dismissable).
 pub fn disband_unit(
     game: &mut crate::game_state::GameState,
     nation_id: NationId,
@@ -554,7 +842,8 @@ pub fn disband_unit(
         .get_nation_mut(nation_id)
         .ok_or(DomainError::NationNotFound(nation_id))?;
     let pos = nation
-        .military.army
+        .military
+        .army
         .iter()
         .position(|u| u.id == unit_id)
         .ok_or_else(|| DomainError::illegal("unit not found"))?;
@@ -562,7 +851,8 @@ pub fn disband_unit(
         return Err(DomainError::illegal("garrison units cannot be dismissed"));
     }
     nation.military.army.remove(pos);
-    game.transient.pending_moves
+    game.transient
+        .pending_moves
         .retain(|(nid, id, _)| *nid != nation_id || *id != unit_id);
     Ok(())
 }
@@ -571,122 +861,230 @@ pub fn disband_unit(
 mod tests {
     use super::*;
 
-    // ── Stats for key units ─────────────────────────────────────
+    // ── Roster invariants ───────────────────────────────────────
+
+    /// All 26 unit types from the original Imperialism (1997) manual table
+    /// (heavy cavalry skips Era II, hence 26 not 27), plus `General` (earned,
+    /// not built) and `GarrisonArtillery` (project extension for minor-nation
+    /// capital defense). Used by the data tests below.
+    const ALL_TYPES: [ArmyUnitType; 28] = [
+        ArmyUnitType::Minutemen,
+        ArmyUnitType::Militia,
+        ArmyUnitType::Conscript,
+        ArmyUnitType::Skirmishers,
+        ArmyUnitType::Sharpshooters,
+        ArmyUnitType::Rangers,
+        ArmyUnitType::Regulars,
+        ArmyUnitType::RifleInfantry,
+        ArmyUnitType::Infantry,
+        ArmyUnitType::Grenadiers,
+        ArmyUnitType::Guards,
+        ArmyUnitType::MachineGunners,
+        ArmyUnitType::Hussars,
+        ArmyUnitType::Carbineers,
+        ArmyUnitType::Mechanised,
+        ArmyUnitType::Cuirassiers,
+        ArmyUnitType::Armour,
+        ArmyUnitType::LightArtillery,
+        ArmyUnitType::FieldArtillery,
+        ArmyUnitType::MobileArtillery,
+        ArmyUnitType::Artillery,
+        ArmyUnitType::SiegeArtillery,
+        ArmyUnitType::RailroadGuns,
+        ArmyUnitType::Sapper,
+        ArmyUnitType::CombatEngineer,
+        ArmyUnitType::Saboteur,
+        ArmyUnitType::General,
+        ArmyUnitType::GarrisonArtillery,
+    ];
 
     #[test]
-    fn regulars_stats() {
-        let stats = ArmyUnitType::Regulars.stats();
-        assert_eq!(stats.firepower, 2);
-        assert_eq!(stats.movement, 3);
-        assert_eq!(stats.range, 1);
-        assert_eq!(stats.cost, Money::dollars(100));
-        assert_eq!(stats.arms_required, 1);
-        assert!(!stats.requires_horse);
-        assert_eq!(stats.category, UnitCategory::Infantry);
-        assert_eq!(stats.maintenance_per_turn, Money::dollars(25));
-        assert!(stats.prerequisite_tech.is_none());
+    fn all_types_round_trip_via_from_str() {
+        for t in ALL_TYPES {
+            let name = format!("{:?}", t);
+            let parsed: ArmyUnitType = name.parse().expect("FromStr should round-trip Debug");
+            assert_eq!(parsed, t);
+        }
     }
 
     #[test]
-    fn guards_stats() {
-        let stats = ArmyUnitType::Guards.stats();
-        assert_eq!(stats.firepower, 5);
-        assert_eq!(stats.movement, 3);
-        assert_eq!(stats.range, 2);
-        assert_eq!(stats.cost, Money::dollars(250));
-        assert_eq!(stats.arms_required, 3);
-        assert!(!stats.requires_horse);
-        assert_eq!(stats.category, UnitCategory::Infantry);
-        assert_eq!(stats.maintenance_per_turn, Money::dollars(75));
+    fn upgrade_chains_match_original_eras() {
+        use ArmyUnitType::*;
+        let chains = [
+            (Minutemen, Militia, Conscript),
+            (Skirmishers, Sharpshooters, Rangers),
+            (Regulars, RifleInfantry, Infantry),
+            (Grenadiers, Guards, MachineGunners),
+            (Hussars, Carbineers, Mechanised),
+            (LightArtillery, FieldArtillery, MobileArtillery),
+            (Artillery, SiegeArtillery, RailroadGuns),
+            (Sapper, CombatEngineer, Saboteur),
+        ];
+        for (era1, era2, era3) in chains {
+            assert_eq!(era1.upgrade_to(), Some(era2));
+            assert_eq!(era2.upgrade_to(), Some(era3));
+            assert_eq!(era3.upgrade_to(), None);
+        }
+    }
+
+    #[test]
+    fn cuirassiers_skip_to_armour() {
+        // Heavy cavalry has no Era II in the original.
         assert_eq!(
-            stats.prerequisite_tech,
-            Some("Professional Army".to_string())
+            ArmyUnitType::Cuirassiers.upgrade_to(),
+            Some(ArmyUnitType::Armour)
         );
+        assert_eq!(ArmyUnitType::Armour.upgrade_to(), None);
     }
 
     #[test]
-    fn siege_artillery_stats() {
-        let stats = ArmyUnitType::SiegeArtillery.stats();
-        assert_eq!(stats.firepower, 10);
-        assert_eq!(stats.movement, 1);
-        assert_eq!(stats.range, 5);
-        assert_eq!(stats.cost, Money::dollars(500));
-        assert_eq!(stats.arms_required, 4);
-        assert!(!stats.requires_horse);
-        assert_eq!(stats.category, UnitCategory::Artillery);
-        assert_eq!(stats.maintenance_per_turn, Money::dollars(100));
-        assert_eq!(stats.prerequisite_tech, Some("Siege Warfare".to_string()));
-    }
-
-    #[test]
-    fn cuirassiers_stats() {
-        let stats = ArmyUnitType::Cuirassiers.stats();
-        assert_eq!(stats.firepower, 3);
-        assert_eq!(stats.movement, 5);
-        assert_eq!(stats.range, 1);
-        assert_eq!(stats.cost, Money::dollars(200));
-        assert_eq!(stats.arms_required, 2);
-        assert!(stats.requires_horse);
-        assert_eq!(stats.category, UnitCategory::Cavalry);
-        assert_eq!(stats.maintenance_per_turn, Money::dollars(50));
-        assert!(stats.prerequisite_tech.is_none());
-    }
-
-    // ── Medal firepower scaling ─────────────────────────────────
-
-    #[test]
-    fn medal_firepower_0_medals_is_1x() {
-        let unit = ArmyUnit::new(
-            UnitId(1),
-            ArmyUnitType::Regulars,
-            NationId(1),
-            ProvinceId(1),
-        );
-        assert_eq!(unit.medals, 0);
-        // Regulars base fp = 2, 0 medals = 1.0x => 2.0
-        assert!((unit.effective_firepower() - 2.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn medal_firepower_1_medal_is_1_25x() {
-        let mut unit = ArmyUnit::new(
-            UnitId(1),
-            ArmyUnitType::Regulars,
-            NationId(1),
-            ProvinceId(1),
-        );
-        unit.award_medal();
-        // 2 * 1.25 = 2.5
-        assert!((unit.effective_firepower() - 2.5).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn medal_firepower_4_medals_is_2x() {
-        let mut unit = ArmyUnit::new(
-            UnitId(1),
-            ArmyUnitType::Regulars,
-            NationId(1),
-            ProvinceId(1),
-        );
-        for _ in 0..4 {
-            unit.award_medal();
+    fn obsoleted_by_matches_upgrade_to() {
+        for t in ALL_TYPES {
+            assert_eq!(t.obsoleted_by(), t.upgrade_to());
         }
-        assert_eq!(unit.medals, 4);
-        // 2 * 2.0 = 4.0
-        assert!((unit.effective_firepower() - 4.0).abs() < f64::EPSILON);
     }
 
     #[test]
-    fn medal_firepower_guards_with_3_medals() {
-        let mut unit = ArmyUnit::new(UnitId(2), ArmyUnitType::Guards, NationId(1), ProvinceId(1));
-        for _ in 0..3 {
-            unit.award_medal();
+    fn era_buckets_match_chain_position() {
+        use ArmyUnitType::*;
+        for (era, units) in [
+            (
+                Era::One,
+                &[
+                    Minutemen,
+                    Skirmishers,
+                    Regulars,
+                    Grenadiers,
+                    Hussars,
+                    Cuirassiers,
+                    LightArtillery,
+                    Artillery,
+                    Sapper,
+                ] as &[_],
+            ),
+            (
+                Era::Two,
+                &[
+                    Militia,
+                    Sharpshooters,
+                    RifleInfantry,
+                    Guards,
+                    Carbineers,
+                    FieldArtillery,
+                    SiegeArtillery,
+                    CombatEngineer,
+                ],
+            ),
+            (
+                Era::Three,
+                &[
+                    Conscript,
+                    Rangers,
+                    Infantry,
+                    MachineGunners,
+                    Mechanised,
+                    Armour,
+                    MobileArtillery,
+                    RailroadGuns,
+                    Saboteur,
+                ],
+            ),
+        ] {
+            for u in units {
+                assert_eq!(u.era(), era, "{:?} should be {:?}", u, era);
+            }
         }
-        // Guards base fp = 5, 3 medals = 1.75x => 8.75
-        assert!((unit.effective_firepower() - 8.75).abs() < f64::EPSILON);
     }
 
-    // ── Health damage in 5% increments ──────────────────────────
+    // ── New stat fields exist for every type ────────────────────
+
+    #[test]
+    fn every_unit_type_has_stats() {
+        for t in ALL_TYPES {
+            let _ = t.stats(); // panics if match is non-exhaustive
+        }
+    }
+
+    #[test]
+    fn carbineers_have_mounted_firepower() {
+        assert_eq!(ArmyUnitType::Carbineers.stats().firepower_mounted, 13);
+    }
+
+    #[test]
+    fn rifle_infantry_has_terrain_bonus() {
+        let s = ArmyUnitType::RifleInfantry.stats();
+        assert_eq!(s.defense, 7);
+        assert_eq!(s.defense_terrain_bonus, 1);
+    }
+
+    #[test]
+    fn siege_artillery_has_large_terrain_bonus() {
+        // Manual: 9(20) — base 9, +11 in defensive terrain.
+        let s = ArmyUnitType::SiegeArtillery.stats();
+        assert_eq!(s.defense, 9);
+        assert_eq!(s.defense_terrain_bonus, 11);
+    }
+
+    // ── Original-game stat spot-checks ──────────────────────────
+
+    #[test]
+    fn regulars_match_manual() {
+        let s = ArmyUnitType::Regulars.stats();
+        assert_eq!(s.firepower, 10);
+        assert_eq!(s.firepower_mounted, 5);
+        assert_eq!(s.range, 1);
+        assert_eq!(s.defense, 5);
+        assert_eq!(s.movement, 4);
+        assert_eq!(s.arms_required, 1);
+    }
+
+    #[test]
+    fn machine_gunners_match_manual() {
+        let s = ArmyUnitType::MachineGunners.stats();
+        assert_eq!(s.firepower, 28);
+        assert_eq!(s.defense, 12);
+        assert_eq!(s.arms_required, 2);
+    }
+
+    #[test]
+    fn railroad_guns_match_manual() {
+        let s = ArmyUnitType::RailroadGuns.stats();
+        assert_eq!(s.firepower, 50);
+        assert_eq!(s.range, 17);
+        assert_eq!(s.movement, 0); // rail-bound
+    }
+
+    // ── can_move / can_build ────────────────────────────────────
+
+    #[test]
+    fn era1_and_era2_garrison_cannot_move() {
+        assert!(!ArmyUnitType::Minutemen.can_move());
+        assert!(!ArmyUnitType::Militia.can_move());
+    }
+
+    #[test]
+    fn auto_spawned_garrison_cannot_be_built_manually() {
+        assert!(!ArmyUnitType::Minutemen.can_build());
+        assert!(!ArmyUnitType::Militia.can_build());
+        assert!(!ArmyUnitType::General.can_build());
+    }
+
+    #[test]
+    fn buildable_units_include_all_combat_types() {
+        for t in [
+            ArmyUnitType::Regulars,
+            ArmyUnitType::RifleInfantry,
+            ArmyUnitType::Infantry,
+            ArmyUnitType::Sapper,
+            ArmyUnitType::CombatEngineer,
+            ArmyUnitType::Saboteur,
+            ArmyUnitType::Conscript,
+        ] {
+            assert!(t.can_build(), "{:?} should be buildable", t);
+        }
+    }
+
+    // ── Health / damage / heal ──────────────────────────────────
 
     #[test]
     fn take_damage_rounds_to_5_percent() {
@@ -696,469 +1094,68 @@ mod tests {
             NationId(1),
             ProvinceId(1),
         );
-        assert_eq!(unit.health, 100);
-
-        // 7 damage rounds to nearest 5 = 5
         unit.take_damage(7);
         assert_eq!(unit.health, 95);
-
-        // 13 damage rounds to nearest 5 = 15
         unit.take_damage(13);
         assert_eq!(unit.health, 80);
     }
 
     #[test]
-    fn take_damage_exact_5_increment() {
+    fn medal_firepower_scales_correctly() {
         let mut unit = ArmyUnit::new(
             UnitId(1),
             ArmyUnitType::Regulars,
             NationId(1),
             ProvinceId(1),
         );
-        unit.take_damage(20);
-        assert_eq!(unit.health, 80);
+        // Regulars FPN = 10, 0 medals = 1.0× → 10
+        assert!((unit.effective_firepower() - 10.0).abs() < f64::EPSILON);
+        unit.award_medal();
+        // 10 × 1.25 = 12.5
+        assert!((unit.effective_firepower() - 12.5).abs() < f64::EPSILON);
     }
 
     #[test]
-    fn take_damage_cannot_go_below_zero() {
-        let mut unit = ArmyUnit::new(
-            UnitId(1),
-            ArmyUnitType::Regulars,
-            NationId(1),
-            ProvinceId(1),
-        );
-        unit.take_damage(250); // way more than 100 hp
-        assert_eq!(unit.health, 0);
-        assert!(!unit.is_alive());
+    fn maintenance_cost_zero_for_garrison() {
+        let cents_per_arm = 250;
+        for t in [
+            ArmyUnitType::Minutemen,
+            ArmyUnitType::Militia,
+            ArmyUnitType::Conscript,
+        ] {
+            let unit = ArmyUnit::new(UnitId(1), t, NationId(1), ProvinceId(1));
+            assert_eq!(unit.maintenance_cost(cents_per_arm), Money::ZERO);
+        }
     }
 
     #[test]
-    fn take_damage_less_than_5_applies_minimum() {
-        let mut unit = ArmyUnit::new(
-            UnitId(1),
-            ArmyUnitType::Regulars,
-            NationId(1),
-            ProvinceId(1),
-        );
-        // Any non-zero damage applies at least 5 (minimum floor)
-        unit.take_damage(4);
-        assert_eq!(unit.health, 95);
-
-        // Zero damage does nothing
-        unit.take_damage(0);
-        assert_eq!(unit.health, 95);
-    }
-
-    // ── Healing ─────────────────────────────────────────────────
-
-    #[test]
-    fn heal_basic() {
-        let mut unit = ArmyUnit::new(
-            UnitId(1),
-            ArmyUnitType::Regulars,
-            NationId(1),
-            ProvinceId(1),
-        );
-        unit.health = 50;
-        unit.heal(10);
-        assert_eq!(unit.health, 60);
-    }
-
-    #[test]
-    fn heal_caps_at_100() {
-        let mut unit = ArmyUnit::new(
-            UnitId(1),
-            ArmyUnitType::Regulars,
-            NationId(1),
-            ProvinceId(1),
-        );
-        unit.health = 95;
-        unit.heal(20);
-        assert_eq!(unit.health, 100);
-    }
-
-    #[test]
-    fn heal_medal_bonus() {
-        let mut unit = ArmyUnit::new(
-            UnitId(1),
-            ArmyUnitType::Regulars,
-            NationId(1),
-            ProvinceId(1),
-        );
-        unit.health = 50;
-        unit.medals = 2;
-        // effective healing = 10 * (1 + 2/2) = 10 * 2 = 20
-        unit.heal(10);
-        assert_eq!(unit.health, 70);
-    }
-
-    #[test]
-    fn heal_4_medals_bonus() {
-        let mut unit = ArmyUnit::new(
-            UnitId(1),
-            ArmyUnitType::Regulars,
-            NationId(1),
-            ProvinceId(1),
-        );
-        unit.health = 50;
-        unit.medals = 4;
-        // effective healing = 10 * (1 + 4/2) = 10 * 3 = 30
-        unit.heal(10);
-        assert_eq!(unit.health, 80);
-    }
-
-    // ── Militia cannot move ─────────────────────────────────────
-
-    #[test]
-    fn militia_cannot_move() {
-        assert!(!ArmyUnitType::Militia.can_move());
-        assert_eq!(ArmyUnitType::Militia.stats().movement, 0);
-    }
-
-    #[test]
-    fn regulars_can_move() {
-        assert!(ArmyUnitType::Regulars.can_move());
-    }
-
-    #[test]
-    fn militia_is_garrison_category() {
-        assert_eq!(ArmyUnitType::Militia.category(), UnitCategory::Garrison);
-    }
-
-    // ── Upgrade paths ───────────────────────────────────────────
-
-    #[test]
-    fn regulars_upgrade_to_rifle_infantry() {
-        assert_eq!(
-            ArmyUnitType::Regulars.upgrade_to(),
-            Some(ArmyUnitType::RifleInfantry)
-        );
-    }
-
-    #[test]
-    fn rifle_infantry_upgrade_to_modern_infantry() {
-        assert_eq!(
-            ArmyUnitType::RifleInfantry.upgrade_to(),
-            Some(ArmyUnitType::ModernInfantry)
-        );
-    }
-
-    #[test]
-    fn modern_infantry_no_upgrade() {
-        assert_eq!(ArmyUnitType::ModernInfantry.upgrade_to(), None);
-    }
-
-    #[test]
-    fn grenadiers_upgrade_to_guards() {
-        assert_eq!(
-            ArmyUnitType::Grenadiers.upgrade_to(),
-            Some(ArmyUnitType::Guards)
-        );
-    }
-
-    #[test]
-    fn cuirassiers_upgrade_to_carbine_cavalry() {
-        assert_eq!(
-            ArmyUnitType::Cuirassiers.upgrade_to(),
-            Some(ArmyUnitType::CarbineCavalry)
-        );
-    }
-
-    #[test]
-    fn light_artillery_upgrade_chain() {
-        assert_eq!(
-            ArmyUnitType::LightArtillery.upgrade_to(),
-            Some(ArmyUnitType::FieldArtillery)
-        );
-        assert_eq!(
-            ArmyUnitType::FieldArtillery.upgrade_to(),
-            Some(ArmyUnitType::MobileArtillery)
-        );
-        assert_eq!(ArmyUnitType::MobileArtillery.upgrade_to(), None);
-    }
-
-    #[test]
-    fn standard_artillery_upgrade_chain() {
-        assert_eq!(
-            ArmyUnitType::StandardArtillery.upgrade_to(),
-            Some(ArmyUnitType::SiegeArtillery)
-        );
-        assert_eq!(
-            ArmyUnitType::SiegeArtillery.upgrade_to(),
-            Some(ArmyUnitType::RailroadGun)
-        );
-        assert_eq!(ArmyUnitType::RailroadGun.upgrade_to(), None);
-    }
-
-    #[test]
-    fn militia_no_upgrade() {
-        assert_eq!(ArmyUnitType::Militia.upgrade_to(), None);
-    }
-
-    #[test]
-    fn sapper_no_upgrade() {
-        assert_eq!(ArmyUnitType::Sapper.upgrade_to(), None);
-    }
-
-    // ── Maintenance cost calculations ───────────────────────────
-    //
-    // Card #216: maintenance is now $2.50/arm (250 ¢) by default and Garrison
-    // units are exempt. Tests pass the rate explicitly so the production rate
-    // can change without breaking the unit-cost arithmetic.
-
-    const TEST_RATE: i64 = 250; // $2.50 per arm
-
-    #[test]
-    fn regulars_maintenance_1_arm() {
+    fn maintenance_cost_scales_with_arms() {
+        // Regulars: 1 arm × 250¢ = $2.50
         let unit = ArmyUnit::new(
             UnitId(1),
             ArmyUnitType::Regulars,
             NationId(1),
             ProvinceId(1),
         );
-        assert_eq!(unit.maintenance_cost(TEST_RATE), Money::from_cents(250));
+        assert_eq!(unit.maintenance_cost(250), Money::from_cents(250));
+        // Armour: 4 arms × 250¢ = $10
+        let unit = ArmyUnit::new(UnitId(1), ArmyUnitType::Armour, NationId(1), ProvinceId(1));
+        assert_eq!(unit.maintenance_cost(250), Money::from_cents(1000));
     }
 
     #[test]
-    fn cuirassiers_maintenance_2_arms() {
-        let unit = ArmyUnit::new(
-            UnitId(2),
+    fn era1_units_need_no_tech() {
+        for t in [
+            ArmyUnitType::Minutemen,
+            ArmyUnitType::Skirmishers,
+            ArmyUnitType::Regulars,
+            ArmyUnitType::Hussars,
             ArmyUnitType::Cuirassiers,
-            NationId(1),
-            ProvinceId(1),
-        );
-        assert_eq!(unit.maintenance_cost(TEST_RATE), Money::from_cents(500));
-    }
-
-    #[test]
-    fn guards_maintenance_3_arms() {
-        let unit = ArmyUnit::new(UnitId(3), ArmyUnitType::Guards, NationId(1), ProvinceId(1));
-        assert_eq!(unit.maintenance_cost(TEST_RATE), Money::from_cents(750));
-    }
-
-    #[test]
-    fn siege_artillery_maintenance_4_arms() {
-        let unit = ArmyUnit::new(
-            UnitId(4),
-            ArmyUnitType::SiegeArtillery,
-            NationId(1),
-            ProvinceId(1),
-        );
-        assert_eq!(unit.maintenance_cost(TEST_RATE), Money::from_cents(1000));
-    }
-
-    #[test]
-    fn railroad_gun_maintenance_5_arms() {
-        let unit = ArmyUnit::new(
-            UnitId(5),
-            ArmyUnitType::RailroadGun,
-            NationId(1),
-            ProvinceId(1),
-        );
-        assert_eq!(unit.maintenance_cost(TEST_RATE), Money::from_cents(1250));
-    }
-
-    /// Card #216: Garrison units (militia) pay no upkeep regardless of the
-    /// configured rate — they are tied to provinces and can't be disbanded.
-    #[test]
-    fn militia_maintenance_is_zero() {
-        let unit = ArmyUnit::new(UnitId(6), ArmyUnitType::Militia, NationId(1), ProvinceId(1));
-        assert_eq!(unit.maintenance_cost(TEST_RATE), Money::ZERO);
-    }
-
-    #[test]
-    fn garrison_artillery_maintenance_is_zero() {
-        let unit = ArmyUnit::new(
-            UnitId(7),
-            ArmyUnitType::GarrisonArtillery,
-            NationId(1),
-            ProvinceId(1),
-        );
-        assert_eq!(unit.maintenance_cost(TEST_RATE), Money::ZERO);
-    }
-
-    // ── ArmyUnit::new defaults ──────────────────────────────────
-
-    #[test]
-    fn new_unit_starts_at_full_health() {
-        let unit = ArmyUnit::new(
-            UnitId(1),
-            ArmyUnitType::Regulars,
-            NationId(1),
-            ProvinceId(1),
-        );
-        assert_eq!(unit.health, 100);
-        assert_eq!(unit.medals, 0);
-        assert!(unit.is_alive());
-    }
-
-    #[test]
-    fn new_unit_movement_matches_stats() {
-        let unit = ArmyUnit::new(UnitId(1), ArmyUnitType::Scouts, NationId(1), ProvinceId(1));
-        assert_eq!(unit.movement_remaining, 7);
-    }
-
-    // ── is_alive ────────────────────────────────────────────────
-
-    #[test]
-    fn unit_at_zero_health_is_dead() {
-        let mut unit = ArmyUnit::new(
-            UnitId(1),
-            ArmyUnitType::Regulars,
-            NationId(1),
-            ProvinceId(1),
-        );
-        unit.health = 0;
-        assert!(!unit.is_alive());
-    }
-
-    #[test]
-    fn unit_at_5_health_is_alive() {
-        let mut unit = ArmyUnit::new(
-            UnitId(1),
-            ArmyUnitType::Regulars,
-            NationId(1),
-            ProvinceId(1),
-        );
-        unit.health = 5;
-        assert!(unit.is_alive());
-    }
-
-    // ── Category helper ─────────────────────────────────────────
-
-    #[test]
-    fn all_categories_are_correct() {
-        assert_eq!(ArmyUnitType::Militia.category(), UnitCategory::Garrison);
-        assert_eq!(ArmyUnitType::Regulars.category(), UnitCategory::Infantry);
-        assert_eq!(ArmyUnitType::Cuirassiers.category(), UnitCategory::Cavalry);
-        assert_eq!(
-            ArmyUnitType::LightArtillery.category(),
-            UnitCategory::Artillery
-        );
-        assert_eq!(ArmyUnitType::Sapper.category(), UnitCategory::Special);
-    }
-
-    // ── required_tech ──────────────────────────────────────────────
-
-    #[test]
-    fn base_units_have_no_required_tech() {
-        assert!(ArmyUnitType::Regulars.required_tech().is_none());
-        assert!(ArmyUnitType::Militia.required_tech().is_none());
-        assert!(ArmyUnitType::Cuirassiers.required_tech().is_none());
-        assert!(ArmyUnitType::Scouts.required_tech().is_none());
-        assert!(ArmyUnitType::LightArtillery.required_tech().is_none());
-    }
-
-    #[test]
-    fn advanced_units_have_required_tech() {
-        assert_eq!(
-            ArmyUnitType::RifleInfantry.required_tech(),
-            Some("Breech-Loading Rifles")
-        );
-        assert_eq!(
-            ArmyUnitType::Guards.required_tech(),
-            Some("Breech-Loading Rifles")
-        );
-        assert_eq!(
-            ArmyUnitType::MachineGunners.required_tech(),
-            Some("Machine Guns")
-        );
-        assert_eq!(
-            ArmyUnitType::CarbineCavalry.required_tech(),
-            Some("Breech-Loading Rifles")
-        );
-        assert_eq!(
-            ArmyUnitType::SiegeArtillery.required_tech(),
-            Some("Large Artillery")
-        );
-    }
-
-    #[test]
-    fn upgrade_target_has_required_tech() {
-        // Regulars -> RifleInfantry requires "Breech-Loading Rifles"
-        let target = ArmyUnitType::Regulars.upgrade_to().unwrap();
-        assert_eq!(target, ArmyUnitType::RifleInfantry);
-        assert_eq!(target.required_tech(), Some("Breech-Loading Rifles"));
-    }
-
-    // ── General unit type ─────────────────────────────────────────
-
-    #[test]
-    fn general_stats() {
-        let stats = ArmyUnitType::General.stats();
-        assert_eq!(stats.firepower, 0);
-        assert_eq!(stats.movement, 8);
-        assert_eq!(stats.range, 0);
-        assert_eq!(stats.cost, Money::dollars(0));
-        assert_eq!(stats.arms_required, 0);
-        assert!(!stats.requires_horse);
-        assert_eq!(stats.category, UnitCategory::Special);
-        assert_eq!(stats.maintenance_per_turn, Money::dollars(0));
-        assert!(stats.prerequisite_tech.is_none());
-    }
-
-    #[test]
-    fn general_is_special_category() {
-        assert_eq!(ArmyUnitType::General.category(), UnitCategory::Special);
-    }
-
-    #[test]
-    fn general_can_move() {
-        assert!(ArmyUnitType::General.can_move());
-    }
-
-    #[test]
-    fn general_cannot_be_built() {
-        assert!(!ArmyUnitType::General.can_build());
-    }
-
-    #[test]
-    fn general_has_no_required_tech() {
-        assert!(ArmyUnitType::General.required_tech().is_none());
-    }
-
-    #[test]
-    fn general_has_no_upgrade() {
-        assert_eq!(ArmyUnitType::General.upgrade_to(), None);
-    }
-
-    #[test]
-    fn general_zero_maintenance() {
-        let unit = ArmyUnit::new(
-            UnitId(99),
+            ArmyUnitType::LightArtillery,
+            ArmyUnitType::Sapper,
             ArmyUnitType::General,
-            NationId(1),
-            ProvinceId(1),
-        );
-        assert_eq!(unit.maintenance_cost(TEST_RATE), Money::ZERO);
-    }
-
-    #[test]
-    fn general_zero_effective_firepower() {
-        let unit = ArmyUnit::new(
-            UnitId(99),
-            ArmyUnitType::General,
-            NationId(1),
-            ProvinceId(1),
-        );
-        assert!((unit.effective_firepower() - 0.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn general_movement_is_8() {
-        let unit = ArmyUnit::new(
-            UnitId(99),
-            ArmyUnitType::General,
-            NationId(1),
-            ProvinceId(1),
-        );
-        assert_eq!(unit.movement_remaining, 8);
-    }
-
-    #[test]
-    fn other_units_can_be_built() {
-        assert!(ArmyUnitType::Regulars.can_build());
-        assert!(ArmyUnitType::Sapper.can_build());
-        assert!(ArmyUnitType::Militia.can_build());
+        ] {
+            assert!(t.required_tech().is_none(), "{:?} should not need tech", t);
+        }
     }
 }

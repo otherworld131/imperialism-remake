@@ -95,7 +95,7 @@ pub fn spawn_militia_unit(
     use crate::map::UnitId;
     let id = *id_counter;
     *id_counter += 1;
-    ArmyUnit::new(UnitId(id), ArmyUnitType::Militia, owner, position)
+    ArmyUnit::new(UnitId(id), ArmyUnitType::Minutemen, owner, position)
 }
 
 /// Spawn a single `GarrisonArtillery` unit tagged to the given owner/position.
@@ -132,7 +132,7 @@ pub fn seed_militia_from_garrison_count(game: &mut crate::game_state::GameState)
             .map(|n| {
                 n.military.army
                     .iter()
-                    .filter(|u| u.position == pid && u.unit_type == ArmyUnitType::Militia)
+                    .filter(|u| u.position == pid && u.unit_type == ArmyUnitType::Minutemen)
                     .count()
             })
             .unwrap_or(0);
@@ -233,14 +233,14 @@ fn total_firepower(units: &[ArmyUnit]) -> f64 {
 fn militia_count(units: &[ArmyUnit]) -> usize {
     units
         .iter()
-        .filter(|u| u.unit_type == ArmyUnitType::Militia)
+        .filter(|u| u.unit_type == ArmyUnitType::Minutemen)
         .count()
 }
 
 /// Check if a force contains any siege artillery units.
 fn has_siege_artillery(units: &[ArmyUnit]) -> bool {
     units.iter().any(|u| {
-        u.unit_type == ArmyUnitType::SiegeArtillery || u.unit_type == ArmyUnitType::RailroadGun
+        u.unit_type == ArmyUnitType::SiegeArtillery || u.unit_type == ArmyUnitType::RailroadGuns
     })
 }
 
@@ -770,7 +770,7 @@ pub fn create_garrison(nation_type: NationType) -> Vec<ArmyUnit> {
             let id = GARRISON_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
             ArmyUnit::new(
                 UnitId(id),
-                ArmyUnitType::Militia,
+                ArmyUnitType::Minutemen,
                 NationId(0),   // placeholder — caller should set owner
                 ProvinceId(0), // placeholder — caller should set position
             )
@@ -825,7 +825,7 @@ mod tests {
 
         let defender = make_force(
             def_nation,
-            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+            vec![make_unit(10, ArmyUnitType::Minutemen, def_nation)],
         );
 
         let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 0);
@@ -854,10 +854,10 @@ mod tests {
         let defender = make_force(
             def_nation,
             vec![
-                make_unit(10, ArmyUnitType::Militia, def_nation),
-                make_unit(11, ArmyUnitType::Militia, def_nation),
-                make_unit(12, ArmyUnitType::Militia, def_nation),
-                make_unit(13, ArmyUnitType::Militia, def_nation),
+                make_unit(10, ArmyUnitType::Minutemen, def_nation),
+                make_unit(11, ArmyUnitType::Minutemen, def_nation),
+                make_unit(12, ArmyUnitType::Minutemen, def_nation),
+                make_unit(13, ArmyUnitType::Minutemen, def_nation),
             ],
         );
 
@@ -922,14 +922,14 @@ mod tests {
 
         let defender = make_force(
             def_nation,
-            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+            vec![make_unit(10, ArmyUnitType::Minutemen, def_nation)],
         );
 
         let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 0);
         assert!(result.attacker_won);
         // The militia should be destroyed
         assert!(
-            result.defender_casualties.contains(&ArmyUnitType::Militia),
+            result.defender_casualties.contains(&ArmyUnitType::Minutemen),
             "Defender militia should appear in casualties"
         );
         // Total casualties + survivors should equal original force size
@@ -962,7 +962,7 @@ mod tests {
 
         let defender = make_force(
             def_nation,
-            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+            vec![make_unit(10, ArmyUnitType::Minutemen, def_nation)],
         );
 
         let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 0);
@@ -986,7 +986,7 @@ mod tests {
         let garrison = create_garrison(NationType::GreatPower);
         assert_eq!(garrison.len(), 4);
         for unit in &garrison {
-            assert_eq!(unit.unit_type, ArmyUnitType::Militia);
+            assert_eq!(unit.unit_type, ArmyUnitType::Minutemen);
             assert_eq!(unit.health, 100);
         }
     }
@@ -997,7 +997,7 @@ mod tests {
         assert_eq!(garrison.len(), 4); // 3 Militia + 1 GarrisonArtillery
         let militia_count = garrison
             .iter()
-            .filter(|u| u.unit_type == ArmyUnitType::Militia)
+            .filter(|u| u.unit_type == ArmyUnitType::Minutemen)
             .count();
         let ga_count = garrison
             .iter()
@@ -1039,7 +1039,7 @@ mod tests {
         let attacker = make_force(NationId(1), vec![]);
         let defender = make_force(
             NationId(2),
-            vec![make_unit(10, ArmyUnitType::Militia, NationId(2))],
+            vec![make_unit(10, ArmyUnitType::Minutemen, NationId(2))],
         );
 
         let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 0);
@@ -1341,7 +1341,7 @@ mod tests {
 
         let defender = make_force(
             def_nation,
-            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+            vec![make_unit(10, ArmyUnitType::Minutemen, def_nation)],
         );
 
         let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 0);
@@ -1358,8 +1358,8 @@ mod tests {
         let attacker = make_force(
             atk_nation,
             vec![
-                make_unit(1, ArmyUnitType::Militia, atk_nation),
-                make_unit(2, ArmyUnitType::Militia, atk_nation),
+                make_unit(1, ArmyUnitType::Minutemen, atk_nation),
+                make_unit(2, ArmyUnitType::Minutemen, atk_nation),
             ],
         );
 
@@ -1480,12 +1480,12 @@ mod tests {
             atk_nation,
             vec![
                 make_unit(1, ArmyUnitType::Guards, atk_nation),
-                make_unit(2, ArmyUnitType::RailroadGun, atk_nation),
+                make_unit(2, ArmyUnitType::RailroadGuns, atk_nation),
             ],
         );
         let defender = make_force(
             def_nation,
-            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+            vec![make_unit(10, ArmyUnitType::Minutemen, def_nation)],
         );
 
         let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 2);
@@ -1506,7 +1506,7 @@ mod tests {
         );
         let defender = make_force(
             def_nation,
-            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+            vec![make_unit(10, ArmyUnitType::Minutemen, def_nation)],
         );
 
         let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 2);
@@ -1531,7 +1531,7 @@ mod tests {
 
         let defender = make_force(
             def_nation,
-            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+            vec![make_unit(10, ArmyUnitType::Minutemen, def_nation)],
         );
 
         let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 0);
@@ -1587,7 +1587,7 @@ mod tests {
             def_nation,
             vec![
                 make_unit(10, ArmyUnitType::Guards, def_nation),
-                make_unit(11, ArmyUnitType::Militia, def_nation),
+                make_unit(11, ArmyUnitType::Minutemen, def_nation),
             ],
         );
 
@@ -1646,7 +1646,7 @@ mod tests {
         );
         let defender = make_force(
             def_nation,
-            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+            vec![make_unit(10, ArmyUnitType::Minutemen, def_nation)],
         );
 
         // Default resolve_battle should produce the same result as explicit StrongestFirst
@@ -1674,22 +1674,23 @@ mod tests {
     // ── Damage calculation uses firepower and modifiers ──────────
 
     /// Verify combat uses FP * medal_modifier * terrain_modifier formula.
+    /// FP numbers come from the original Imperialism (1997) manual table.
     #[test]
     fn damage_calculation_uses_firepower_and_modifiers() {
-        // Base effective firepower: Regulars base FP = 2, no medals => 2.0
+        // Base effective firepower: Regulars FPN = 10, no medals => 10.0.
         let unit = make_unit(1, ArmyUnitType::Regulars, NationId(1));
-        assert!((unit.effective_firepower() - 2.0).abs() < f64::EPSILON);
+        assert!((unit.effective_firepower() - 10.0).abs() < f64::EPSILON);
 
-        // With 1 medal: FP = 2 * 1.25 = 2.5
+        // With 1 medal: FP = 10 * 1.25 = 12.5
         let mut medaled_unit = make_unit(2, ArmyUnitType::Regulars, NationId(1));
         medaled_unit.award_medal();
-        assert!((medaled_unit.effective_firepower() - 2.5).abs() < f64::EPSILON);
+        assert!((medaled_unit.effective_firepower() - 12.5).abs() < f64::EPSILON);
 
-        // Guards base FP = 5, 2 medals: 5 * 1.5 = 7.5
+        // Guards FPN = 17, 2 medals (1.5×) => 25.5.
         let mut guards = make_unit(3, ArmyUnitType::Guards, NationId(1));
         guards.award_medal();
         guards.award_medal();
-        assert!((guards.effective_firepower() - 7.5).abs() < f64::EPSILON);
+        assert!((guards.effective_firepower() - 25.5).abs() < f64::EPSILON);
 
         // Terrain defense bonus applied to defender
         let cfg = GameConfig::default();
@@ -1729,7 +1730,7 @@ mod tests {
         );
         let defender = make_force(
             def_nation,
-            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+            vec![make_unit(10, ArmyUnitType::Minutemen, def_nation)],
         );
 
         let cfg = BattleConfig {
@@ -1773,7 +1774,7 @@ mod tests {
         );
         let defender = make_force(
             def_nation,
-            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+            vec![make_unit(10, ArmyUnitType::Minutemen, def_nation)],
         );
         // can_retreat=false simulates capital defense or no neighbors.
         let cfg = BattleConfig {
@@ -1853,7 +1854,7 @@ mod tests {
         let defender = make_force(
             def_nation,
             (10..14)
-                .map(|i| make_unit(i, ArmyUnitType::Militia, def_nation))
+                .map(|i| make_unit(i, ArmyUnitType::Minutemen, def_nation))
                 .collect(),
         );
         let cfg = BattleConfig {
@@ -1892,7 +1893,7 @@ mod tests {
         let defender = make_force(
             def_nation,
             (10..18)
-                .map(|i| make_unit(i, ArmyUnitType::Militia, def_nation))
+                .map(|i| make_unit(i, ArmyUnitType::Minutemen, def_nation))
                 .collect(),
         );
         let cfg = BattleConfig {
@@ -1928,7 +1929,7 @@ mod tests {
         );
         let defender = make_force(
             def_nation,
-            vec![make_unit(10, ArmyUnitType::Militia, def_nation)],
+            vec![make_unit(10, ArmyUnitType::Minutemen, def_nation)],
         );
         let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 0);
         assert!(

@@ -9,28 +9,43 @@ const CATEGORY_ICONS: Record<string, string> = {
 };
 
 const UNIT_TYPE_CATEGORY: Record<string, string> = {
+  // Garrison
+  Minutemen: 'Garrison',
   Militia: 'Garrison',
+  Conscript: 'Garrison',
   GarrisonArtillery: 'Garrison',
-  Regulars: 'Infantry',
-  Grenadiers: 'Infantry',
-  RifleInfantry: 'Infantry',
-  Guards: 'Infantry',
+  // Skirmisher
+  Skirmishers: 'Infantry',
   Sharpshooters: 'Infantry',
-  ModernInfantry: 'Infantry',
-  MachineGunners: 'Infantry',
   Rangers: 'Infantry',
-  Cuirassiers: 'Cavalry',
-  Scouts: 'Cavalry',
-  CarbineCavalry: 'Cavalry',
-  Armour: 'Cavalry',
+  // Line infantry
+  Regulars: 'Infantry',
+  RifleInfantry: 'Infantry',
+  Infantry: 'Infantry',
+  // Elite infantry
+  Grenadiers: 'Infantry',
+  Guards: 'Infantry',
+  MachineGunners: 'Infantry',
+  // Light cavalry
+  Hussars: 'Cavalry',
+  Carbineers: 'Cavalry',
   Mechanised: 'Cavalry',
+  // Heavy cavalry
+  Cuirassiers: 'Cavalry',
+  Armour: 'Cavalry',
+  // Light artillery
   LightArtillery: 'Artillery',
-  StandardArtillery: 'Artillery',
   FieldArtillery: 'Artillery',
-  SiegeArtillery: 'Artillery',
-  RailroadGun: 'Artillery',
   MobileArtillery: 'Artillery',
+  // Heavy artillery
+  Artillery: 'Artillery',
+  SiegeArtillery: 'Artillery',
+  RailroadGuns: 'Artillery',
+  // Engineer
   Sapper: 'Special',
+  CombatEngineer: 'Special',
+  Saboteur: 'Special',
+  // Special
   General: 'Special',
 };
 

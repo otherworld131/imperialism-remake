@@ -8,7 +8,9 @@ use domain::events::HistoryEvent;
 use domain::game_state::{GameState, new_game};
 use domain::map::UnitId;
 use domain::military::battle_outcome::{BattleParams, BattleSite, compute_battle_outcome};
-use domain::military::combat::{BattleConfig, CombatForce, TargetingPriority, resolve_battle_with_config};
+use domain::military::combat::{
+    BattleConfig, CombatForce, TargetingPriority, resolve_battle_with_config,
+};
 use domain::military::ships::{Ship, ShipType};
 use domain::military::units::{ArmyUnit, ArmyUnitType};
 use domain::turn::process_turn;
@@ -88,7 +90,10 @@ fn upgrade_regulars_to_rifle_infantry_preserves_medals() {
     // Verify
     let player = game.get_nation(player_id).unwrap();
     assert_eq!(player.economy.treasury, initial_treasury - upgrade_cost);
-    assert_eq!(player.military.army[idx].unit_type, ArmyUnitType::RifleInfantry);
+    assert_eq!(
+        player.military.army[idx].unit_type,
+        ArmyUnitType::RifleInfantry
+    );
     assert_eq!(player.military.army[idx].medals, old_medals);
     assert_eq!(player.military.army[idx].medals, 2);
     assert_eq!(player.military.army[idx].health, old_health);
@@ -157,7 +162,8 @@ fn general_earned_at_6_arms_total() {
     // Verify General was earned
     let player = game.get_nation(player_id).unwrap();
     let has_general = player
-        .military.army
+        .military
+        .army
         .iter()
         .any(|u| u.unit_type == ArmyUnitType::General);
     assert!(has_general, "Should have earned a General at 6 arms total");
@@ -203,7 +209,8 @@ fn no_general_earned_below_6_arms() {
     // Verify no General was earned
     let player = game.get_nation(player_id).unwrap();
     let has_general = player
-        .military.army
+        .military
+        .army
         .iter()
         .any(|u| u.unit_type == ArmyUnitType::General);
     assert!(
@@ -320,9 +327,12 @@ fn build_frigate_deducts_resources_and_adds_ship() {
     nation.consume_material(MaterialType::Fabric, fabric_cost);
     nation.consume_material(MaterialType::Lumber, lumber_cost);
     nation.consume_material(MaterialType::Arms, arms_cost);
-    nation
-        .military.warships
-        .push(Ship::new(UnitId(9999), ShipType::Frigate, player, frigate_hull));
+    nation.military.warships.push(Ship::new(
+        UnitId(9999),
+        ShipType::Frigate,
+        player,
+        frigate_hull,
+    ));
 
     assert_eq!(nation.military.warships.len(), initial_warships + 1);
     // Easy difficulty starts with 20 Lumber, 10 Steel, 5 Fabric (bumped
@@ -337,36 +347,55 @@ fn build_frigate_deducts_resources_and_adds_ship() {
 
 #[test]
 fn all_unit_types_have_valid_stats() {
+    use domain::military::units::UnitCategory;
     let types = [
+        // Garrison
+        ArmyUnitType::Minutemen,
         ArmyUnitType::Militia,
-        ArmyUnitType::Regulars,
-        ArmyUnitType::Grenadiers,
-        ArmyUnitType::RifleInfantry,
-        ArmyUnitType::Guards,
+        ArmyUnitType::Conscript,
+        // Skirmisher
+        ArmyUnitType::Skirmishers,
         ArmyUnitType::Sharpshooters,
-        ArmyUnitType::ModernInfantry,
-        ArmyUnitType::MachineGunners,
         ArmyUnitType::Rangers,
-        ArmyUnitType::Cuirassiers,
-        ArmyUnitType::Scouts,
-        ArmyUnitType::CarbineCavalry,
-        ArmyUnitType::Armour,
+        // Line infantry
+        ArmyUnitType::Regulars,
+        ArmyUnitType::RifleInfantry,
+        ArmyUnitType::Infantry,
+        // Elite infantry
+        ArmyUnitType::Grenadiers,
+        ArmyUnitType::Guards,
+        ArmyUnitType::MachineGunners,
+        // Light cavalry
+        ArmyUnitType::Hussars,
+        ArmyUnitType::Carbineers,
         ArmyUnitType::Mechanised,
+        // Heavy cavalry
+        ArmyUnitType::Cuirassiers,
+        ArmyUnitType::Armour,
+        // Light artillery
         ArmyUnitType::LightArtillery,
-        ArmyUnitType::StandardArtillery,
         ArmyUnitType::FieldArtillery,
-        ArmyUnitType::SiegeArtillery,
-        ArmyUnitType::RailroadGun,
         ArmyUnitType::MobileArtillery,
+        // Heavy artillery (RailroadGuns is rail-bound, MVR=0 per manual)
+        ArmyUnitType::Artillery,
+        ArmyUnitType::SiegeArtillery,
+        ArmyUnitType::RailroadGuns,
+        // Engineer
         ArmyUnitType::Sapper,
+        ArmyUnitType::CombatEngineer,
+        ArmyUnitType::Saboteur,
+        // Special
         ArmyUnitType::General,
     ];
     for unit_type in &types {
         let stats = unit_type.stats();
-        // Every unit has non-negative movement
+        // Garrison units (Minutemen / Militia per the manual) and the
+        // rail-bound RailroadGuns are immovable; every other unit moves.
+        let immovable_ok =
+            stats.category == UnitCategory::Garrison || *unit_type == ArmyUnitType::RailroadGuns;
         assert!(
-            stats.movement > 0 || *unit_type == ArmyUnitType::Militia,
-            "{:?} should have positive movement (or be Militia)",
+            stats.movement > 0 || immovable_ok,
+            "{:?} should have positive movement",
             unit_type
         );
         // Every unit has a category
@@ -493,10 +522,18 @@ fn expert_worker_reward_not_awarded_twice() {
 
     // Process two turns
     process_turn(&mut game);
-    let bonus_after_first = game.get_nation(player_id).unwrap().military.capitol_bonus_capacity;
+    let bonus_after_first = game
+        .get_nation(player_id)
+        .unwrap()
+        .military
+        .capitol_bonus_capacity;
 
     process_turn(&mut game);
-    let bonus_after_second = game.get_nation(player_id).unwrap().military.capitol_bonus_capacity;
+    let bonus_after_second = game
+        .get_nation(player_id)
+        .unwrap()
+        .military
+        .capitol_bonus_capacity;
 
     assert_eq!(
         bonus_after_first, bonus_after_second,
@@ -527,14 +564,28 @@ fn battle_outcome_attacker_wins_province_changes_hands() {
         battle_unit(3, ArmyUnitType::Guards, ATK_NAT, ProvinceId(5)),
         battle_unit(4, ArmyUnitType::SiegeArtillery, ATK_NAT, ProvinceId(5)),
     ];
-    let defenders = vec![battle_unit(10, ArmyUnitType::Militia, DEF_NAT, BATTLE_PROV)];
+    let defenders = vec![battle_unit(
+        10,
+        ArmyUnitType::Minutemen,
+        DEF_NAT,
+        BATTLE_PROV,
+    )];
 
     let outcome = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers, &defenders, BattleSite::open(), &default_cfg(),
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers,
+        &defenders,
+        BattleSite::open(),
+        &default_cfg(),
     ));
 
     assert_eq!(outcome.winner, ATK_NAT);
-    let conquest = outcome.province_change.as_ref().expect("should have province change");
+    let conquest = outcome
+        .province_change
+        .as_ref()
+        .expect("should have province change");
     assert_eq!(conquest.new_owner, ATK_NAT);
     assert_eq!(conquest.old_owner, DEF_NAT);
     assert_eq!(conquest.province_id, BATTLE_PROV);
@@ -544,7 +595,12 @@ fn battle_outcome_attacker_wins_province_changes_hands() {
 // 2. Defender wins — no province change.
 #[test]
 fn battle_outcome_defender_wins_no_province_change() {
-    let attackers = vec![battle_unit(1, ArmyUnitType::Militia, ATK_NAT, ProvinceId(5))];
+    let attackers = vec![battle_unit(
+        1,
+        ArmyUnitType::Minutemen,
+        ATK_NAT,
+        ProvinceId(5),
+    )];
     let defenders = vec![
         battle_unit(10, ArmyUnitType::Guards, DEF_NAT, BATTLE_PROV),
         battle_unit(11, ArmyUnitType::Guards, DEF_NAT, BATTLE_PROV),
@@ -553,7 +609,13 @@ fn battle_outcome_defender_wins_no_province_change() {
     ];
 
     let outcome = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers, &defenders, BattleSite::open(), &default_cfg(),
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers,
+        &defenders,
+        BattleSite::open(),
+        &default_cfg(),
     ));
 
     assert_eq!(outcome.winner, DEF_NAT);
@@ -565,10 +627,21 @@ fn battle_outcome_defender_wins_no_province_change() {
 #[test]
 fn battle_outcome_empty_attacker_defender_wins() {
     let attackers: Vec<ArmyUnit> = vec![];
-    let defenders = vec![battle_unit(10, ArmyUnitType::Militia, DEF_NAT, BATTLE_PROV)];
+    let defenders = vec![battle_unit(
+        10,
+        ArmyUnitType::Minutemen,
+        DEF_NAT,
+        BATTLE_PROV,
+    )];
 
     let outcome = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers, &defenders, BattleSite::open(), &default_cfg(),
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers,
+        &defenders,
+        BattleSite::open(),
+        &default_cfg(),
     ));
 
     assert_eq!(outcome.winner, DEF_NAT);
@@ -579,11 +652,22 @@ fn battle_outcome_empty_attacker_defender_wins() {
 // 4. Empty defender — attacker wins immediately.
 #[test]
 fn battle_outcome_empty_defender_attacker_wins_immediately() {
-    let attackers = vec![battle_unit(1, ArmyUnitType::Regulars, ATK_NAT, ProvinceId(5))];
+    let attackers = vec![battle_unit(
+        1,
+        ArmyUnitType::Regulars,
+        ATK_NAT,
+        ProvinceId(5),
+    )];
     let defenders: Vec<ArmyUnit> = vec![];
 
     let outcome = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers, &defenders, BattleSite::open(), &default_cfg(),
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers,
+        &defenders,
+        BattleSite::open(),
+        &default_cfg(),
     ));
 
     assert_eq!(outcome.winner, ATK_NAT);
@@ -598,7 +682,13 @@ fn battle_outcome_both_empty_defender_wins() {
     let defenders: Vec<ArmyUnit> = vec![];
 
     let outcome = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers, &defenders, BattleSite::open(), &default_cfg(),
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers,
+        &defenders,
+        BattleSite::open(),
+        &default_cfg(),
     ));
 
     assert_eq!(outcome.winner, DEF_NAT);
@@ -618,7 +708,13 @@ fn battle_outcome_mountain_terrain_defense_bonus_helps_defender() {
     ];
 
     let flat = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers, &defenders, BattleSite::open(), &default_cfg(),
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers,
+        &defenders,
+        BattleSite::open(),
+        &default_cfg(),
     ));
     let mountain = compute_battle_outcome(BattleParams::with_default_config(
         ATK_NAT,
@@ -632,8 +728,14 @@ fn battle_outcome_mountain_terrain_defense_bonus_helps_defender() {
 
     // Mountain terrain boosts defender — attacker should take equal or more damage.
     let atk_ids: Vec<UnitId> = attackers.iter().map(|u| u.id).collect();
-    let flat_atk_dmg: u32 = atk_ids.iter().map(|id| flat.casualties.get(id).copied().unwrap_or(0)).sum();
-    let mtn_atk_dmg: u32 = atk_ids.iter().map(|id| mountain.casualties.get(id).copied().unwrap_or(0)).sum();
+    let flat_atk_dmg: u32 = atk_ids
+        .iter()
+        .map(|id| flat.casualties.get(id).copied().unwrap_or(0))
+        .sum();
+    let mtn_atk_dmg: u32 = atk_ids
+        .iter()
+        .map(|id| mountain.casualties.get(id).copied().unwrap_or(0))
+        .sum();
     assert!(
         mtn_atk_dmg >= flat_atk_dmg,
         "Mountain terrain should cause >= attacker casualties: flat={flat_atk_dmg}, mountain={mtn_atk_dmg}"
@@ -653,15 +755,33 @@ fn battle_outcome_fort_level_provides_defense_bonus() {
     ];
 
     let no_fort = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers, &defenders, BattleSite::open(), &default_cfg(),
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers,
+        &defenders,
+        BattleSite::open(),
+        &default_cfg(),
     ));
     let fort3 = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers, &defenders, BattleSite::fort(3), &default_cfg(),
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers,
+        &defenders,
+        BattleSite::fort(3),
+        &default_cfg(),
     ));
 
     let atk_ids: Vec<UnitId> = attackers.iter().map(|u| u.id).collect();
-    let no_fort_atk: u32 = atk_ids.iter().map(|id| no_fort.casualties.get(id).copied().unwrap_or(0)).sum();
-    let fort3_atk: u32 = atk_ids.iter().map(|id| fort3.casualties.get(id).copied().unwrap_or(0)).sum();
+    let no_fort_atk: u32 = atk_ids
+        .iter()
+        .map(|id| no_fort.casualties.get(id).copied().unwrap_or(0))
+        .sum();
+    let fort3_atk: u32 = atk_ids
+        .iter()
+        .map(|id| fort3.casualties.get(id).copied().unwrap_or(0))
+        .sum();
 
     assert!(
         fort3_atk >= no_fort_atk,
@@ -690,28 +810,60 @@ fn battle_outcome_siege_artillery_reduces_fort_bonus() {
     ];
 
     let no_siege = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers_no_siege, &defenders, BattleSite::fort(3), &default_cfg(),
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers_no_siege,
+        &defenders,
+        BattleSite::fort(3),
+        &default_cfg(),
     ));
     let with_siege = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers_with_siege, &defenders, BattleSite::fort(3), &default_cfg(),
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers_with_siege,
+        &defenders,
+        BattleSite::fort(3),
+        &default_cfg(),
     ));
 
     // siege_reduced_fort must be set when siege artillery is present and fort > 0.
-    assert!(!no_siege.siege_reduced_fort, "No siege artillery → fort not reduced");
-    assert!(with_siege.siege_reduced_fort, "Siege artillery + fort-3 → fort should be reduced");
+    assert!(
+        !no_siege.siege_reduced_fort,
+        "No siege artillery → fort not reduced"
+    );
+    assert!(
+        with_siege.siege_reduced_fort,
+        "Siege artillery + fort-3 → fort should be reduced"
+    );
 
     // Attacker with siege should take fewer casualties (reduced fort bonus helps them)
     // OR win when they would otherwise lose. Either direction proves siege helps.
     let ns_ids: Vec<UnitId> = attackers_no_siege.iter().map(|u| u.id).collect();
     let ws_ids: Vec<UnitId> = attackers_with_siege.iter().map(|u| u.id).collect();
-    let no_siege_atk_dmg: u32 = ns_ids.iter().map(|id| no_siege.casualties.get(id).copied().unwrap_or(0)).sum();
-    let with_siege_atk_dmg: u32 = ws_ids.iter().map(|id| with_siege.casualties.get(id).copied().unwrap_or(0)).sum();
+    let no_siege_atk_dmg: u32 = ns_ids
+        .iter()
+        .map(|id| no_siege.casualties.get(id).copied().unwrap_or(0))
+        .sum();
+    let with_siege_atk_dmg: u32 = ws_ids
+        .iter()
+        .map(|id| with_siege.casualties.get(id).copied().unwrap_or(0))
+        .sum();
     // Siege force wins or takes less damage per-unit
     let no_siege_win = no_siege.province_change.is_some();
     let with_siege_win = with_siege.province_change.is_some();
     // Per-unit damage: with_siege has 4 units vs no_siege's 3 — normalize
-    let ns_per_unit = if !attackers_no_siege.is_empty() { no_siege_atk_dmg / attackers_no_siege.len() as u32 } else { 0 };
-    let ws_per_unit = if !attackers_with_siege.is_empty() { with_siege_atk_dmg / attackers_with_siege.len() as u32 } else { 0 };
+    let ns_per_unit = if !attackers_no_siege.is_empty() {
+        no_siege_atk_dmg / attackers_no_siege.len() as u32
+    } else {
+        0
+    };
+    let ws_per_unit = if !attackers_with_siege.is_empty() {
+        with_siege_atk_dmg / attackers_with_siege.len() as u32
+    } else {
+        0
+    };
     assert!(
         with_siege_win || ws_per_unit <= ns_per_unit || (!no_siege_win && with_siege_win),
         "Siege artillery should improve attacker outcome: no_siege_win={no_siege_win}, with_siege_win={with_siege_win}, ns_per_unit={ns_per_unit}, ws_per_unit={ws_per_unit}"
@@ -727,17 +879,34 @@ fn battle_outcome_medals_awarded_to_winning_side() {
         battle_unit(3, ArmyUnitType::Guards, ATK_NAT, ProvinceId(5)),
         battle_unit(4, ArmyUnitType::SiegeArtillery, ATK_NAT, ProvinceId(5)),
     ];
-    let defenders = vec![battle_unit(10, ArmyUnitType::Militia, DEF_NAT, BATTLE_PROV)];
+    let defenders = vec![battle_unit(
+        10,
+        ArmyUnitType::Minutemen,
+        DEF_NAT,
+        BATTLE_PROV,
+    )];
 
     let outcome = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers, &defenders, BattleSite::open(), &default_cfg(),
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers,
+        &defenders,
+        BattleSite::open(),
+        &default_cfg(),
     ));
 
     assert_eq!(outcome.winner, ATK_NAT);
-    assert!(!outcome.medals_awarded.is_empty(), "Winners should receive medals");
+    assert!(
+        !outcome.medals_awarded.is_empty(),
+        "Winners should receive medals"
+    );
     let atk_ids: Vec<UnitId> = attackers.iter().map(|u| u.id).collect();
     for (uid, _) in &outcome.medals_awarded {
-        assert!(atk_ids.contains(uid), "Medal should be for an attacker unit");
+        assert!(
+            atk_ids.contains(uid),
+            "Medal should be for an attacker unit"
+        );
     }
 }
 
@@ -750,10 +919,21 @@ fn battle_outcome_casualties_include_destroyed_units_at_full_health() {
         battle_unit(3, ArmyUnitType::Guards, ATK_NAT, ProvinceId(5)),
         battle_unit(4, ArmyUnitType::SiegeArtillery, ATK_NAT, ProvinceId(5)),
     ];
-    let defenders = vec![battle_unit(10, ArmyUnitType::Militia, DEF_NAT, BATTLE_PROV)];
+    let defenders = vec![battle_unit(
+        10,
+        ArmyUnitType::Minutemen,
+        DEF_NAT,
+        BATTLE_PROV,
+    )];
 
     let outcome = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers, &defenders, BattleSite::open(), &default_cfg(),
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers,
+        &defenders,
+        BattleSite::open(),
+        &default_cfg(),
     ));
 
     let def_uid = UnitId(10);
@@ -761,7 +941,10 @@ fn battle_outcome_casualties_include_destroyed_units_at_full_health() {
         outcome.casualties.contains_key(&def_uid),
         "Destroyed defender unit should appear in casualties"
     );
-    assert_eq!(outcome.casualties[&def_uid], 100, "Destroyed unit damage should equal full health");
+    assert_eq!(
+        outcome.casualties[&def_uid], 100,
+        "Destroyed unit damage should equal full health"
+    );
 }
 
 // 11. History events contain ProvinceConquered on attacker win.
@@ -772,10 +955,21 @@ fn battle_outcome_history_events_province_conquered_on_win() {
         battle_unit(2, ArmyUnitType::Guards, ATK_NAT, ProvinceId(5)),
         battle_unit(3, ArmyUnitType::Guards, ATK_NAT, ProvinceId(5)),
     ];
-    let defenders = vec![battle_unit(10, ArmyUnitType::Militia, DEF_NAT, BATTLE_PROV)];
+    let defenders = vec![battle_unit(
+        10,
+        ArmyUnitType::Minutemen,
+        DEF_NAT,
+        BATTLE_PROV,
+    )];
 
     let outcome = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers, &defenders, BattleSite::open(), &default_cfg(),
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers,
+        &defenders,
+        BattleSite::open(),
+        &default_cfg(),
     ));
 
     assert_eq!(outcome.winner, ATK_NAT);
@@ -790,7 +984,12 @@ fn battle_outcome_history_events_province_conquered_on_win() {
 // 12. No history events when defender wins.
 #[test]
 fn battle_outcome_no_history_events_on_defender_win() {
-    let attackers = vec![battle_unit(1, ArmyUnitType::Militia, ATK_NAT, ProvinceId(5))];
+    let attackers = vec![battle_unit(
+        1,
+        ArmyUnitType::Minutemen,
+        ATK_NAT,
+        ProvinceId(5),
+    )];
     let defenders = vec![
         battle_unit(10, ArmyUnitType::Guards, DEF_NAT, BATTLE_PROV),
         battle_unit(11, ArmyUnitType::Guards, DEF_NAT, BATTLE_PROV),
@@ -798,7 +997,13 @@ fn battle_outcome_no_history_events_on_defender_win() {
     ];
 
     let outcome = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers, &defenders, BattleSite::open(), &default_cfg(),
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers,
+        &defenders,
+        BattleSite::open(),
+        &default_cfg(),
     ));
 
     assert_eq!(outcome.winner, DEF_NAT);
@@ -808,11 +1013,17 @@ fn battle_outcome_no_history_events_on_defender_win() {
 // 13. Attacker retreat via custom BattleConfig.
 #[test]
 fn battle_outcome_attacker_retreat_via_config() {
-    let mut config = BattleConfig::with_targeting(TargetingPriority::StrongestFirst, &default_cfg());
+    let mut config =
+        BattleConfig::with_targeting(TargetingPriority::StrongestFirst, &default_cfg());
     config.attacker_can_retreat = true;
     config.attacker_retreat_ratio = 1.0; // retreat if defender has any advantage
 
-    let attackers = vec![battle_unit(1, ArmyUnitType::Militia, ATK_NAT, ProvinceId(5))];
+    let attackers = vec![battle_unit(
+        1,
+        ArmyUnitType::Minutemen,
+        ATK_NAT,
+        ProvinceId(5),
+    )];
     let defenders = vec![
         battle_unit(10, ArmyUnitType::Guards, DEF_NAT, BATTLE_PROV),
         battle_unit(11, ArmyUnitType::Guards, DEF_NAT, BATTLE_PROV),
@@ -834,7 +1045,10 @@ fn battle_outcome_attacker_retreat_via_config() {
     });
 
     assert!(outcome.attacker_retreated, "Attacker should have retreated");
-    assert!(outcome.province_change.is_none(), "Retreating attacker should not take province");
+    assert!(
+        outcome.province_change.is_none(),
+        "Retreating attacker should not take province"
+    );
     assert_eq!(outcome.winner, DEF_NAT);
 }
 
@@ -852,18 +1066,38 @@ fn battle_outcome_parity_attacker_wins() {
         battle_unit(3, ArmyUnitType::Guards, ATK_NAT, ProvinceId(5)),
         battle_unit(4, ArmyUnitType::SiegeArtillery, ATK_NAT, ProvinceId(5)),
     ];
-    let defenders = vec![battle_unit(10, ArmyUnitType::Militia, DEF_NAT, BATTLE_PROV)];
+    let defenders = vec![battle_unit(
+        10,
+        ArmyUnitType::Minutemen,
+        DEF_NAT,
+        BATTLE_PROV,
+    )];
     let cfg = default_cfg();
 
     let outcome = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers, &defenders, BattleSite::open(), &cfg,
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers,
+        &defenders,
+        BattleSite::open(),
+        &cfg,
     ));
 
     // raw_result must be consistent with BattleOutcome signals
-    assert_eq!(outcome.raw_result.attacker_won, outcome.province_change.is_some());
+    assert_eq!(
+        outcome.raw_result.attacker_won,
+        outcome.province_change.is_some()
+    );
     assert_eq!(outcome.raw_result.retreated, outcome.attacker_retreated);
-    assert_eq!(outcome.raw_result.defender_retreated, outcome.defender_retreated);
-    assert_eq!(outcome.raw_result.siege_reduced_fort, outcome.siege_reduced_fort);
+    assert_eq!(
+        outcome.raw_result.defender_retreated,
+        outcome.defender_retreated
+    );
+    assert_eq!(
+        outcome.raw_result.siege_reduced_fort,
+        outcome.siege_reduced_fort
+    );
     assert_eq!(outcome.winner, ATK_NAT);
     assert!(outcome.raw_result.attacker_won);
 }
@@ -871,7 +1105,12 @@ fn battle_outcome_parity_attacker_wins() {
 // 15. Defender-win parity.
 #[test]
 fn battle_outcome_parity_defender_wins() {
-    let attackers = vec![battle_unit(1, ArmyUnitType::Militia, ATK_NAT, ProvinceId(5))];
+    let attackers = vec![battle_unit(
+        1,
+        ArmyUnitType::Minutemen,
+        ATK_NAT,
+        ProvinceId(5),
+    )];
     let defenders = vec![
         battle_unit(10, ArmyUnitType::Guards, DEF_NAT, BATTLE_PROV),
         battle_unit(11, ArmyUnitType::Guards, DEF_NAT, BATTLE_PROV),
@@ -880,10 +1119,19 @@ fn battle_outcome_parity_defender_wins() {
     let cfg = default_cfg();
 
     let outcome = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers, &defenders, BattleSite::open(), &cfg,
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers,
+        &defenders,
+        BattleSite::open(),
+        &cfg,
     ));
 
-    assert_eq!(outcome.raw_result.attacker_won, outcome.province_change.is_some());
+    assert_eq!(
+        outcome.raw_result.attacker_won,
+        outcome.province_change.is_some()
+    );
     assert!(!outcome.raw_result.attacker_won);
     assert_eq!(outcome.winner, DEF_NAT);
     assert!(outcome.province_change.is_none());
@@ -897,23 +1145,45 @@ fn battle_outcome_survivors_match_raw_result() {
         battle_unit(2, ArmyUnitType::Guards, ATK_NAT, ProvinceId(5)),
     ];
     let defenders = vec![
-        battle_unit(10, ArmyUnitType::Militia, DEF_NAT, BATTLE_PROV),
-        battle_unit(11, ArmyUnitType::Militia, DEF_NAT, BATTLE_PROV),
+        battle_unit(10, ArmyUnitType::Minutemen, DEF_NAT, BATTLE_PROV),
+        battle_unit(11, ArmyUnitType::Minutemen, DEF_NAT, BATTLE_PROV),
     ];
     let cfg = default_cfg();
 
     let outcome = compute_battle_outcome(BattleParams::with_default_config(
-        ATK_NAT, DEF_NAT, BATTLE_PROV, &attackers, &defenders, BattleSite::open(), &cfg,
+        ATK_NAT,
+        DEF_NAT,
+        BATTLE_PROV,
+        &attackers,
+        &defenders,
+        BattleSite::open(),
+        &cfg,
     ));
 
     // Survivor unit IDs must be identical between the two representations
     let outcome_atk_ids: Vec<UnitId> = outcome.attacker_survivors.iter().map(|u| u.id).collect();
-    let raw_atk_ids: Vec<UnitId> = outcome.raw_result.attacker_survivors.iter().map(|u| u.id).collect();
-    assert_eq!(outcome_atk_ids, raw_atk_ids, "attacker survivors must match raw_result");
+    let raw_atk_ids: Vec<UnitId> = outcome
+        .raw_result
+        .attacker_survivors
+        .iter()
+        .map(|u| u.id)
+        .collect();
+    assert_eq!(
+        outcome_atk_ids, raw_atk_ids,
+        "attacker survivors must match raw_result"
+    );
 
     let outcome_def_ids: Vec<UnitId> = outcome.defender_survivors.iter().map(|u| u.id).collect();
-    let raw_def_ids: Vec<UnitId> = outcome.raw_result.defender_survivors.iter().map(|u| u.id).collect();
-    assert_eq!(outcome_def_ids, raw_def_ids, "defender survivors must match raw_result");
+    let raw_def_ids: Vec<UnitId> = outcome
+        .raw_result
+        .defender_survivors
+        .iter()
+        .map(|u| u.id)
+        .collect();
+    assert_eq!(
+        outcome_def_ids, raw_def_ids,
+        "defender survivors must match raw_result"
+    );
 }
 
 // 17. compute_battle_outcome agrees with a direct resolve_battle_with_config call
@@ -947,8 +1217,14 @@ fn battle_outcome_parity_terrain_fort() {
     });
 
     // Cross-check: call resolve_battle_with_config directly with same inputs
-    let atk_force = CombatForce { nation: ATK_NAT, units: attackers.clone() };
-    let def_force = CombatForce { nation: DEF_NAT, units: defenders.clone() };
+    let atk_force = CombatForce {
+        nation: ATK_NAT,
+        units: attackers.clone(),
+    };
+    let def_force = CombatForce {
+        nation: DEF_NAT,
+        units: defenders.clone(),
+    };
     let direct = resolve_battle_with_config(
         &atk_force,
         &def_force,
@@ -961,18 +1237,15 @@ fn battle_outcome_parity_terrain_fort() {
 
     // Both must agree on the winner
     assert_eq!(
-        outcome.raw_result.attacker_won,
-        direct.attacker_won,
+        outcome.raw_result.attacker_won, direct.attacker_won,
         "compute_battle_outcome and resolve_battle_with_config must agree on winner"
     );
     assert_eq!(
-        outcome.raw_result.retreated,
-        direct.retreated,
+        outcome.raw_result.retreated, direct.retreated,
         "retreat flags must agree"
     );
     assert_eq!(
-        outcome.raw_result.siege_reduced_fort,
-        direct.siege_reduced_fort,
+        outcome.raw_result.siege_reduced_fort, direct.siege_reduced_fort,
         "siege_reduced_fort must agree"
     );
     // Survivor counts must match

@@ -165,7 +165,7 @@
             earliest_year: 1841,
             latest_year: 1845,
             prerequisites: [],
-            effects: [UpgradeUnit(from: "LightArtillery", to: "StandardArtillery")],
+            effects: [UpgradeUnit(from: "LightArtillery", to: "Artillery")],
         ),
         (
             id: 15,

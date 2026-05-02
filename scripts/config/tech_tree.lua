@@ -102,7 +102,7 @@ tech_tree = {
       effects = { { kind = "UpgradeUnit", from = "Regulars", to = "RifleInfantry" } } },
 
     { id = 14, name = "Rifled Artillery", cost = 10000, earliest_year = 1841, latest_year = 1845, prerequisites = {},
-      effects = { { kind = "UpgradeUnit", from = "LightArtillery", to = "StandardArtillery" } } },
+      effects = { { kind = "UpgradeUnit", from = "LightArtillery", to = "Artillery" } } },
 
     -- 1846-50
     { id = 15, name = "Advanced Iron Working", cost = 12000, earliest_year = 1846, latest_year = 1850, prerequisites = {},

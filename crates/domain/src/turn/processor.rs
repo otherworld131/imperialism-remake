@@ -3815,7 +3815,7 @@ fn place_defender_retreat(
         for uid in survivor_ids {
             if let Some(u) = nation.military.army.iter().find(|u| u.id == *uid) {
                 match u.unit_type {
-                    crate::military::units::ArmyUnitType::Militia => militia.push(*uid),
+                    crate::military::units::ArmyUnitType::Minutemen => militia.push(*uid),
                     crate::military::units::ArmyUnitType::GarrisonArtillery => {
                         dying_artillery.push(*uid)
                     }
@@ -3966,7 +3966,7 @@ fn rebalance_militia_into(game: &mut GameState, new_owner: NationId, province: P
             };
             let Some(unit) = nm.military.army.iter_mut().find(|u| {
                 u.position == src_pid
-                    && u.unit_type == crate::military::units::ArmyUnitType::Militia
+                    && u.unit_type == crate::military::units::ArmyUnitType::Minutemen
             }) else {
                 // Shouldn't happen — we just counted them above — but stay safe.
                 break;
@@ -11559,11 +11559,11 @@ mod tests {
         let militia_in_battle = battle
             .defender_casualties
             .iter()
-            .any(|t| *t == ArmyUnitType::Militia)
+            .any(|t| *t == ArmyUnitType::Minutemen)
             || battle
                 .defender_survivors
                 .iter()
-                .any(|u| u.unit_type == ArmyUnitType::Militia);
+                .any(|u| u.unit_type == ArmyUnitType::Minutemen);
         assert!(
             militia_in_battle,
             "militia from garrison_count must join combat"
@@ -11775,7 +11775,7 @@ mod tests {
             .unwrap()
             .military.army
             .iter()
-            .find(|u| u.position == ProvinceId(2) && u.unit_type == ArmyUnitType::Militia)
+            .find(|u| u.position == ProvinceId(2) && u.unit_type == ArmyUnitType::Minutemen)
             .expect("fixture should seed militia at P2")
             .id;
         game.transient.pending_moves
@@ -11801,7 +11801,7 @@ mod tests {
         let mut game = test_game_for_counter_attack();
         // Strip all militia (keep field army + artillery).
         if let Some(n2) = game.get_nation_mut(NationId(2)) {
-            n2.military.army.retain(|u| u.unit_type != ArmyUnitType::Militia);
+            n2.military.army.retain(|u| u.unit_type != ArmyUnitType::Minutemen);
         }
         // Sync caches so we start at 0.
         sync_garrison_cache(&mut game, ProvinceId(2));
@@ -11927,7 +11927,7 @@ mod tests {
         let mut game = test_game_for_counter_attack();
         let n1 = game.get_nation_mut(NationId(1)).unwrap();
         // Drop field army to none — only militia remain at P1.
-        n1.military.army.retain(|u| u.unit_type == ArmyUnitType::Militia);
+        n1.military.army.retain(|u| u.unit_type == ArmyUnitType::Minutemen);
         // Attack P2.
         game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
@@ -11939,7 +11939,7 @@ mod tests {
             assert!(
                 !b.attacker_casualties
                     .iter()
-                    .any(|t| *t == ArmyUnitType::Militia),
+                    .any(|t| *t == ArmyUnitType::Minutemen),
                 "no Militia should appear in attacker_casualties"
             );
         }
@@ -12023,7 +12023,7 @@ mod tests {
             .unwrap()
             .military.army
             .iter()
-            .filter(|u| u.position == ProvinceId(2) && u.unit_type == ArmyUnitType::Militia)
+            .filter(|u| u.position == ProvinceId(2) && u.unit_type == ArmyUnitType::Minutemen)
             .map(|u| u.id)
             .collect();
         let placements =
@@ -12056,7 +12056,7 @@ mod tests {
         game.game_data.game_config.garrison_regen_interval_turns = 0;
         // Clear all militia so every province is under-strength.
         if let Some(n) = game.get_nation_mut(NationId(2)) {
-            n.military.army.retain(|u| u.unit_type != ArmyUnitType::Militia);
+            n.military.army.retain(|u| u.unit_type != ArmyUnitType::Minutemen);
         }
         sync_garrison_cache(&mut game, ProvinceId(2));
         sync_garrison_cache(&mut game, ProvinceId(3));
@@ -12154,7 +12154,7 @@ mod tests {
             .unwrap()
             .military.army
             .iter()
-            .filter(|u| u.position == ProvinceId(2) && u.unit_type == ArmyUnitType::Militia)
+            .filter(|u| u.position == ProvinceId(2) && u.unit_type == ArmyUnitType::Minutemen)
             .map(|u| u.id)
             .collect();
         assert!(
@@ -12938,7 +12938,7 @@ mod tests {
         // Give Nation 2 a defender unit at P2 so a real battle occurs (not auto-conquer)
         nation2.military.army.push(ArmyUnit::new(
             UnitId(400),
-            ArmyUnitType::Militia,
+            ArmyUnitType::Minutemen,
             NationId(2),
             ProvinceId(2),
         ));
@@ -14159,7 +14159,7 @@ mod tests {
         );
         defender.military.army.push(ArmyUnit::new(
             UnitId(400),
-            ArmyUnitType::Militia,
+            ArmyUnitType::Minutemen,
             NationId(3),
             ProvinceId(3),
         ));
@@ -14391,7 +14391,7 @@ mod tests {
         for i in 0..10 {
             nation.military.army.push(ArmyUnit::new(
                 UnitId(3000 + i),
-                ArmyUnitType::Militia,
+                ArmyUnitType::Minutemen,
                 NationId(1),
                 ProvinceId(1),
             ));

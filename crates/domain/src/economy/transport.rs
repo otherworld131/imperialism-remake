@@ -739,12 +739,17 @@ mod tests {
     }
 
     #[test]
-    fn army_transport_size_guards() {
+    fn army_transport_size_siege_artillery() {
         use crate::map::UnitId;
         use crate::military::units::{ArmyUnit, ArmyUnitType};
 
-        let unit = ArmyUnit::new(UnitId(1), ArmyUnitType::Guards, NationId(1), ProvinceId(1));
-        // Guards arms_required = 3
+        let unit = ArmyUnit::new(
+            UnitId(1),
+            ArmyUnitType::SiegeArtillery,
+            NationId(1),
+            ProvinceId(1),
+        );
+        // SiegeArtillery arms_required = 3 in the original-game manual.
         assert_eq!(army_transport_size(&unit), 3);
     }
 
@@ -762,7 +767,13 @@ mod tests {
         use crate::map::UnitId;
         use crate::military::units::{ArmyUnit, ArmyUnitType};
 
-        let unit = ArmyUnit::new(UnitId(1), ArmyUnitType::Guards, NationId(1), ProvinceId(1));
+        // SiegeArtillery arms_required = 3 in the original-game manual.
+        let unit = ArmyUnit::new(
+            UnitId(1),
+            ArmyUnitType::SiegeArtillery,
+            NationId(1),
+            ProvinceId(1),
+        );
         assert_eq!(unit_transport_size(&unit), 3);
     }
 

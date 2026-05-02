@@ -1159,7 +1159,7 @@ pub(crate) fn ai_military_strategy(
                     } else {
                         0.0
                     };
-                    let militia_base_fp = crate::military::units::ArmyUnitType::Militia
+                    let militia_base_fp = crate::military::units::ArmyUnitType::Minutemen
                         .stats()
                         .firepower as f64;
                     let their_local_fp = stationed_fp

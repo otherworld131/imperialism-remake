@@ -935,7 +935,7 @@ impl Nation {
             .iter()
             .filter(|u| {
                 u.position == province
-                    && u.unit_type == crate::military::units::ArmyUnitType::Militia
+                    && u.unit_type == crate::military::units::ArmyUnitType::Minutemen
             })
             .count()
     }
@@ -1374,16 +1374,16 @@ mod tests {
         );
         unit1.award_medal();
         unit1.award_medal();
-        // Regulars base fp = 2, 2 medals = 1.5x => 3.0
+        // Regulars FPN = 10 (per manual), 2 medals = 1.5× => 15.0
         n.military.army.push(unit1);
 
-        // Add a Guards unit with 0 medals
+        // Add a Guards unit with 0 medals.
         let unit2 = ArmyUnit::new(UnitId(2), ArmyUnitType::Guards, NationId(1), ProvinceId(10));
-        // Guards base fp = 5, 0 medals = 1.0x => 5.0
+        // Guards FPN = 17 (per manual), 0 medals = 1.0× => 17.0
         n.military.army.push(unit2);
 
-        // Total: 3.0 + 5.0 = 8.0
-        assert!((n.total_military_firepower() - 8.0).abs() < f64::EPSILON);
+        // Total: 15.0 + 17.0 = 32.0
+        assert!((n.total_military_firepower() - 32.0).abs() < f64::EPSILON);
     }
 
     // ── Building ownership checks ────────────────────────────

@@ -9,10 +9,45 @@ use domain::military as d;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ArmyUnitType {
-    Militia, GarrisonArtillery, Regulars, Grenadiers, RifleInfantry, Guards, Sharpshooters,
-    ModernInfantry, MachineGunners, Rangers, Cuirassiers, Scouts, CarbineCavalry, Armour,
-    Mechanised, LightArtillery, StandardArtillery, FieldArtillery, SiegeArtillery, RailroadGun,
-    MobileArtillery, Sapper, General,
+    // Garrison
+    Minutemen,
+    Militia,
+    Conscript,
+    // Skirmisher
+    Skirmishers,
+    Sharpshooters,
+    Rangers,
+    // Line infantry
+    Regulars,
+    RifleInfantry,
+    Infantry,
+    // Elite infantry
+    Grenadiers,
+    Guards,
+    MachineGunners,
+    // Light cavalry
+    Hussars,
+    Carbineers,
+    Mechanised,
+    // Heavy cavalry
+    Cuirassiers,
+    Armour,
+    // Light artillery
+    LightArtillery,
+    FieldArtillery,
+    MobileArtillery,
+    // Heavy artillery
+    Artillery,
+    SiegeArtillery,
+    RailroadGuns,
+    // Engineer
+    Sapper,
+    CombatEngineer,
+    Saboteur,
+    // Special
+    General,
+    // Project-specific
+    GarrisonArtillery,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -30,9 +65,19 @@ pub struct ArmyUnit {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ShipType {
-    Trader, Indiaman, Clipper, Paddlewheeler, Freighter,
-    Frigate, ShipOfTheLine, Raider, Ironclad, AdvancedIronclad,
-    ArmouredCruiser, Dreadnought, Battlecruiser,
+    Trader,
+    Indiaman,
+    Clipper,
+    Paddlewheeler,
+    Freighter,
+    Frigate,
+    ShipOfTheLine,
+    Raider,
+    Ironclad,
+    AdvancedIronclad,
+    ArmouredCruiser,
+    Dreadnought,
+    Battlecruiser,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -137,29 +182,34 @@ impl From<d::units::ArmyUnitType> for ArmyUnitType {
     fn from(v: d::units::ArmyUnitType) -> Self {
         use d::units::ArmyUnitType as D;
         match v {
+            D::Minutemen => Self::Minutemen,
             D::Militia => Self::Militia,
-            D::GarrisonArtillery => Self::GarrisonArtillery,
-            D::Regulars => Self::Regulars,
-            D::Grenadiers => Self::Grenadiers,
-            D::RifleInfantry => Self::RifleInfantry,
-            D::Guards => Self::Guards,
+            D::Conscript => Self::Conscript,
+            D::Skirmishers => Self::Skirmishers,
             D::Sharpshooters => Self::Sharpshooters,
-            D::ModernInfantry => Self::ModernInfantry,
-            D::MachineGunners => Self::MachineGunners,
             D::Rangers => Self::Rangers,
-            D::Cuirassiers => Self::Cuirassiers,
-            D::Scouts => Self::Scouts,
-            D::CarbineCavalry => Self::CarbineCavalry,
-            D::Armour => Self::Armour,
+            D::Regulars => Self::Regulars,
+            D::RifleInfantry => Self::RifleInfantry,
+            D::Infantry => Self::Infantry,
+            D::Grenadiers => Self::Grenadiers,
+            D::Guards => Self::Guards,
+            D::MachineGunners => Self::MachineGunners,
+            D::Hussars => Self::Hussars,
+            D::Carbineers => Self::Carbineers,
             D::Mechanised => Self::Mechanised,
+            D::Cuirassiers => Self::Cuirassiers,
+            D::Armour => Self::Armour,
             D::LightArtillery => Self::LightArtillery,
-            D::StandardArtillery => Self::StandardArtillery,
             D::FieldArtillery => Self::FieldArtillery,
-            D::SiegeArtillery => Self::SiegeArtillery,
-            D::RailroadGun => Self::RailroadGun,
             D::MobileArtillery => Self::MobileArtillery,
+            D::Artillery => Self::Artillery,
+            D::SiegeArtillery => Self::SiegeArtillery,
+            D::RailroadGuns => Self::RailroadGuns,
             D::Sapper => Self::Sapper,
+            D::CombatEngineer => Self::CombatEngineer,
+            D::Saboteur => Self::Saboteur,
             D::General => Self::General,
+            D::GarrisonArtillery => Self::GarrisonArtillery,
         }
     }
 }
@@ -167,29 +217,34 @@ impl From<ArmyUnitType> for d::units::ArmyUnitType {
     fn from(v: ArmyUnitType) -> Self {
         use d::units::ArmyUnitType as D;
         match v {
+            ArmyUnitType::Minutemen => D::Minutemen,
             ArmyUnitType::Militia => D::Militia,
-            ArmyUnitType::GarrisonArtillery => D::GarrisonArtillery,
-            ArmyUnitType::Regulars => D::Regulars,
-            ArmyUnitType::Grenadiers => D::Grenadiers,
-            ArmyUnitType::RifleInfantry => D::RifleInfantry,
-            ArmyUnitType::Guards => D::Guards,
+            ArmyUnitType::Conscript => D::Conscript,
+            ArmyUnitType::Skirmishers => D::Skirmishers,
             ArmyUnitType::Sharpshooters => D::Sharpshooters,
-            ArmyUnitType::ModernInfantry => D::ModernInfantry,
-            ArmyUnitType::MachineGunners => D::MachineGunners,
             ArmyUnitType::Rangers => D::Rangers,
-            ArmyUnitType::Cuirassiers => D::Cuirassiers,
-            ArmyUnitType::Scouts => D::Scouts,
-            ArmyUnitType::CarbineCavalry => D::CarbineCavalry,
-            ArmyUnitType::Armour => D::Armour,
+            ArmyUnitType::Regulars => D::Regulars,
+            ArmyUnitType::RifleInfantry => D::RifleInfantry,
+            ArmyUnitType::Infantry => D::Infantry,
+            ArmyUnitType::Grenadiers => D::Grenadiers,
+            ArmyUnitType::Guards => D::Guards,
+            ArmyUnitType::MachineGunners => D::MachineGunners,
+            ArmyUnitType::Hussars => D::Hussars,
+            ArmyUnitType::Carbineers => D::Carbineers,
             ArmyUnitType::Mechanised => D::Mechanised,
+            ArmyUnitType::Cuirassiers => D::Cuirassiers,
+            ArmyUnitType::Armour => D::Armour,
             ArmyUnitType::LightArtillery => D::LightArtillery,
-            ArmyUnitType::StandardArtillery => D::StandardArtillery,
             ArmyUnitType::FieldArtillery => D::FieldArtillery,
-            ArmyUnitType::SiegeArtillery => D::SiegeArtillery,
-            ArmyUnitType::RailroadGun => D::RailroadGun,
             ArmyUnitType::MobileArtillery => D::MobileArtillery,
+            ArmyUnitType::Artillery => D::Artillery,
+            ArmyUnitType::SiegeArtillery => D::SiegeArtillery,
+            ArmyUnitType::RailroadGuns => D::RailroadGuns,
             ArmyUnitType::Sapper => D::Sapper,
+            ArmyUnitType::CombatEngineer => D::CombatEngineer,
+            ArmyUnitType::Saboteur => D::Saboteur,
             ArmyUnitType::General => D::General,
+            ArmyUnitType::GarrisonArtillery => D::GarrisonArtillery,
         }
     }
 }
@@ -210,7 +265,12 @@ impl From<&d::units::ArmyUnit> for ArmyUnit {
 impl From<ArmyUnit> for d::units::ArmyUnit {
     fn from(v: ArmyUnit) -> Self {
         use domain::map::UnitId;
-        let mut unit = Self::new(UnitId(v.id), v.unit_type.into(), v.owner.into(), v.position.into());
+        let mut unit = Self::new(
+            UnitId(v.id),
+            v.unit_type.into(),
+            v.owner.into(),
+            v.position.into(),
+        );
         unit.health = v.health;
         unit.medals = v.medals;
         unit.movement_remaining = v.movement_remaining;
@@ -296,7 +356,7 @@ impl From<&d::ships::Ship> for Ship {
 }
 impl From<Ship> for d::ships::Ship {
     fn from(v: Ship) -> Self {
-        use domain::map::{sea_zones::SeaZoneId, UnitId};
+        use domain::map::{UnitId, sea_zones::SeaZoneId};
         // Hull is overridden immediately, so the initial value is irrelevant.
         let mut s = d::ships::Ship::new(UnitId(v.id), v.ship_type.into(), v.owner.into(), 0);
         s.hull_remaining = v.hull_remaining;
@@ -313,8 +373,18 @@ impl From<&d::combat::BattleResult> for BattleResult {
             defender: v.defender.into(),
             province: v.province.into(),
             attacker_won: v.attacker_won,
-            attacker_casualties: v.attacker_casualties.iter().copied().map(Into::into).collect(),
-            defender_casualties: v.defender_casualties.iter().copied().map(Into::into).collect(),
+            attacker_casualties: v
+                .attacker_casualties
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
+            defender_casualties: v
+                .defender_casualties
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
             attacker_survivors: v.attacker_survivors.iter().map(Into::into).collect(),
             defender_survivors: v.defender_survivors.iter().map(Into::into).collect(),
             terrain: v.terrain.map(Into::into),
@@ -325,11 +395,28 @@ impl From<&d::combat::BattleResult> for BattleResult {
             defender_initial_count: v.defender_initial_count,
             retreated: v.retreated,
             defender_retreated: v.defender_retreated,
-            attacker_retreated_to: v.attacker_retreated_to.iter().map(|(uid, pid)| (uid.0, (*pid).into())).collect(),
-            defender_retreated_to: v.defender_retreated_to.iter().map(|(uid, pid)| (uid.0, (*pid).into())).collect(),
+            attacker_retreated_to: v
+                .attacker_retreated_to
+                .iter()
+                .map(|(uid, pid)| (uid.0, (*pid).into()))
+                .collect(),
+            defender_retreated_to: v
+                .defender_retreated_to
+                .iter()
+                .map(|(uid, pid)| (uid.0, (*pid).into()))
+                .collect(),
             siege_reduced_fort: v.siege_reduced_fort,
-            medal_awards: v.medal_awards.iter().map(|(ut, m)| ((*ut).into(), *m)).collect(),
-            attacker_origin_provinces: v.attacker_origin_provinces.iter().copied().map(Into::into).collect(),
+            medal_awards: v
+                .medal_awards
+                .iter()
+                .map(|(ut, m)| ((*ut).into(), *m))
+                .collect(),
+            attacker_origin_provinces: v
+                .attacker_origin_provinces
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
             is_naval_landing: v.is_naval_landing,
         }
     }
@@ -354,11 +441,27 @@ impl From<BattleResult> for d::combat::BattleResult {
             defender_initial_count: v.defender_initial_count,
             retreated: v.retreated,
             defender_retreated: v.defender_retreated,
-            attacker_retreated_to: v.attacker_retreated_to.into_iter().map(|(id, p)| (UnitId(id), p.into())).collect(),
-            defender_retreated_to: v.defender_retreated_to.into_iter().map(|(id, p)| (UnitId(id), p.into())).collect(),
+            attacker_retreated_to: v
+                .attacker_retreated_to
+                .into_iter()
+                .map(|(id, p)| (UnitId(id), p.into()))
+                .collect(),
+            defender_retreated_to: v
+                .defender_retreated_to
+                .into_iter()
+                .map(|(id, p)| (UnitId(id), p.into()))
+                .collect(),
             siege_reduced_fort: v.siege_reduced_fort,
-            medal_awards: v.medal_awards.into_iter().map(|(ut, m)| (ut.into(), m)).collect(),
-            attacker_origin_provinces: v.attacker_origin_provinces.into_iter().map(Into::into).collect(),
+            medal_awards: v
+                .medal_awards
+                .into_iter()
+                .map(|(ut, m)| (ut.into(), m))
+                .collect(),
+            attacker_origin_provinces: v
+                .attacker_origin_provinces
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             is_naval_landing: v.is_naval_landing,
         }
     }
@@ -370,8 +473,18 @@ impl From<&d::naval::NavalBattleResult> for NavalBattleResult {
             attacker: v.attacker.into(),
             defender: v.defender.into(),
             attacker_won: v.attacker_won,
-            attacker_ships_lost: v.attacker_ships_lost.iter().copied().map(Into::into).collect(),
-            defender_ships_lost: v.defender_ships_lost.iter().copied().map(Into::into).collect(),
+            attacker_ships_lost: v
+                .attacker_ships_lost
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
+            defender_ships_lost: v
+                .defender_ships_lost
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
             attacker_survivors: v.attacker_survivors.iter().map(Into::into).collect(),
             defender_survivors: v.defender_survivors.iter().map(Into::into).collect(),
         }
