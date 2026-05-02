@@ -163,8 +163,9 @@ function App() {
   // Ref keeps the latest diplo handlers so handleTileClick (declared earlier) can call them
   const diploActionsRef = useRef<((action: QueuedDiplomacyAction, targetId: number) => void) | null>(null);
 
-  // Clear queued diplomacy action when leaving the Diplomacy screen
+  // Clear queued diplomacy action and stale hover target on every screen change
   useEffect(() => {
+    setHoveredDiploTile(null);
     if (activeScreen !== 'diplomacy') setQueuedDiplomacyAction(null);
   }, [activeScreen]);
 
@@ -738,6 +739,10 @@ function App() {
         showError('Select a foreign nation for this diplomatic action.');
         return;
       }
+      if (mutationLockRef.current) {
+        showError('Another action is in progress — please wait.');
+        return; // preserve queued action so user can retry
+      }
       const action = queuedDiplomacyAction;
       setQueuedDiplomacyAction(null);
       diploActionsRef.current?.(action, targetNationId);
@@ -822,7 +827,7 @@ function App() {
       setProvinceUnits(null);
       setSelectedUnitIds([]);
     }
-  }, [mapMode, gameJson, playerNationId, selectedUnitIds, validMoveTargets, isDeployMode, deployingCivilian, deployableTiles, applyGameJson, provinceUnits, showError, runMutation, queuedDiplomacyAction, activeScreen, diploActionsRef]);
+  }, [mapMode, gameJson, playerNationId, selectedUnitIds, validMoveTargets, isDeployMode, deployingCivilian, deployableTiles, applyGameJson, provinceUnits, showError, runMutation, queuedDiplomacyAction, activeScreen, diploActionsRef, mutationLockRef]);
 
   const handleNavyMarkerClick = useCallback((marker: NavyMarker | null) => {
     if (!marker) {
