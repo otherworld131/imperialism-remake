@@ -1513,10 +1513,8 @@ pub fn wasm_get_units_in_province(game_json: &str, province_id: u32) -> String {
                             if tech_met {
                                 let cost =
                                     domain::military::units::upgrade_cost(unit.unit_type, to);
-                                let arms_delta = to
-                                    .stats()
-                                    .arms_required
-                                    .saturating_sub(stats.arms_required);
+                                let arms_delta =
+                                    to.stats().arms_required.saturating_sub(stats.arms_required);
                                 (
                                     Some(format!("{:?}", to)),
                                     Some(cost.as_dollars()),
@@ -2401,6 +2399,25 @@ pub fn wasm_recruit_army_unit(game_json: &str, nation_id: u32, unit_type_str: &s
         if nation.material_amount(MaterialType::Arms) < stats.arms_required {
             return "{\"error\":\"not enough arms\"}".to_string();
         }
+        if stats.requires_horse && nation.resource_amount(domain::types::ResourceType::Horses) < 1 {
+            return "{\"error\":\"not enough horses\"}".to_string();
+        }
+        if stats.fuel_required > 0
+            && nation.resource_amount(domain::types::ResourceType::Oil) < stats.fuel_required
+        {
+            return "{\"error\":\"not enough fuel (oil)\"}".to_string();
+        }
+        let labor_available = match stats.recruit_tier {
+            domain::economy::labor::WorkerType::Untrained => nation.economy.labor.untrained,
+            domain::economy::labor::WorkerType::Trained => nation.economy.labor.trained,
+            domain::economy::labor::WorkerType::Expert => nation.economy.labor.expert,
+        };
+        if labor_available < 1 {
+            return format!(
+                "{{\"error\":\"not enough {:?} workers\"}}",
+                stats.recruit_tier
+            );
+        }
     }
 
     // Deduct costs and create unit
@@ -2411,6 +2428,23 @@ pub fn wasm_recruit_army_unit(game_json: &str, nation_id: u32, unit_type_str: &s
         };
         nation.economy.treasury -= stats.cost;
         nation.consume_material(MaterialType::Arms, stats.arms_required);
+        if stats.requires_horse {
+            nation.remove_resource(domain::types::ResourceType::Horses, 1);
+        }
+        if stats.fuel_required > 0 {
+            nation.remove_resource(domain::types::ResourceType::Oil, stats.fuel_required);
+        }
+        match stats.recruit_tier {
+            domain::economy::labor::WorkerType::Untrained => {
+                nation.economy.labor.untrained = nation.economy.labor.untrained.saturating_sub(1);
+            }
+            domain::economy::labor::WorkerType::Trained => {
+                nation.economy.labor.trained = nation.economy.labor.trained.saturating_sub(1);
+            }
+            domain::economy::labor::WorkerType::Expert => {
+                nation.economy.labor.expert = nation.economy.labor.expert.saturating_sub(1);
+            }
+        }
         nation.capital_province_id
     };
     let uid = game.alloc_unit_id();

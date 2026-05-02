@@ -17,9 +17,9 @@ use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::turn::connected_provinces;
 use crate::types::*;
 
-use super::common::{AiPersonality, PersonalityConfig, get_personality};
 #[cfg(feature = "lua")]
 use super::common::lua_or;
+use super::common::{AiPersonality, PersonalityConfig, get_personality};
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -202,28 +202,23 @@ pub(crate) fn ai_scored_spending(
         // collectable). Only kicks in when an idle engineer is on hand —
         // otherwise the depot can't be built anyway and we shouldn't starve
         // other categories.
-        let saving_for_depot = depot_plan
-            .as_ref()
-            .is_some_and(|p| p.path.is_empty())
-            && {
-                let nation = game.get_nation(nation_id);
-                let any_idle_engineer = nation.is_some_and(|n| {
-                    n.military.civilians.iter().any(|c| {
-                        c.civilian_type == CivilianType::Engineer
-                            && !c.working
-                            && c.turns_remaining == 0
-                    })
-                });
-                let depot_total =
-                    weights.reserve + Money::dollars(game.game_data.game_config.depot_cost);
-                let cant_afford_yet = nation
-                    .map(|n| n.economy.treasury < depot_total)
-                    .unwrap_or(false);
-                any_idle_engineer && cant_afford_yet
-            };
-        if !saving_for_depot
-            && let Some(mut opt) = score_civilian(game, nation_id, &weights)
-        {
+        let saving_for_depot = depot_plan.as_ref().is_some_and(|p| p.path.is_empty()) && {
+            let nation = game.get_nation(nation_id);
+            let any_idle_engineer = nation.is_some_and(|n| {
+                n.military.civilians.iter().any(|c| {
+                    c.civilian_type == CivilianType::Engineer
+                        && !c.working
+                        && c.turns_remaining == 0
+                })
+            });
+            let depot_total =
+                weights.reserve + Money::dollars(game.game_data.game_config.depot_cost);
+            let cant_afford_yet = nation
+                .map(|n| n.economy.treasury < depot_total)
+                .unwrap_or(false);
+            any_idle_engineer && cant_afford_yet
+        };
+        if !saving_for_depot && let Some(mut opt) = score_civilian(game, nation_id, &weights) {
             opt.score += backlog_bonus(
                 game,
                 nation_id,
@@ -278,7 +273,8 @@ pub(crate) fn ai_scored_spending(
                 // engineer transitioning to working still grows the count.
                 let engineer_working_count_before = if cat == SpendingCategory::Infrastructure {
                     game.get_nation(nation_id).map(|n| {
-                        n.military.civilians
+                        n.military
+                            .civilians
                             .iter()
                             .filter(|c| c.civilian_type == CivilianType::Engineer && c.working)
                             .count()
@@ -298,7 +294,8 @@ pub(crate) fn ai_scored_spending(
                 // Reset the backlog counter for the executed category.
                 if let Some(nation) = game.get_nation_mut(nation_id) {
                     nation
-                        .diplomacy.ai_priority_state
+                        .diplomacy
+                        .ai_priority_state
                         .last_invest_turn
                         .insert(cat, current_turn);
                 }
@@ -317,7 +314,8 @@ pub(crate) fn ai_scored_spending(
                     let engineer_working_count_after = game
                         .get_nation(nation_id)
                         .map(|n| {
-                            n.military.civilians
+                            n.military
+                                .civilians
                                 .iter()
                                 .filter(|c| c.civilian_type == CivilianType::Engineer && c.working)
                                 .count()
@@ -401,12 +399,20 @@ fn backlog_bonus(
     // hard toward Military (high weight × small province count = army spam
     // before any threat exists). The cap still applies for genuinely
     // long-neglected categories deeper in the game.
-    let backlog_turns = match nation.diplomacy.ai_priority_state.last_invest_turn.get(&category) {
+    let backlog_turns = match nation
+        .diplomacy
+        .ai_priority_state
+        .last_invest_turn
+        .get(&category)
+    {
         Some(&last) => current_turn.saturating_sub(last),
         None => current_turn.saturating_sub(1).min(cfg.backlog_initial_cap),
     };
 
-    let personality = nation.diplomacy.ai_personality.unwrap_or(AiPersonality::Balanced);
+    let personality = nation
+        .diplomacy
+        .ai_personality
+        .unwrap_or(AiPersonality::Balanced);
     // Card #112: Warship shares the Military backlog weight — navy growth
     // is still a flavor of military investment; only the execute path is
     // different. Aliasing here lets the match reuse the existing Military
@@ -510,7 +516,8 @@ fn is_military_priority(game: &GameState, nation_id: NationId) -> bool {
             continue;
         }
         if game
-            .world.diplomacy
+            .world
+            .diplomacy
             .get_relation(nation_id, other.id)
             .is_some_and(|r| r.at_war)
         {
@@ -521,7 +528,8 @@ fn is_military_priority(game: &GameState, nation_id: NationId) -> bool {
     // Garrison militia stay home and are excluded from the comparison.
     let my_army = nation.field_army_count() as f64;
     let strongest_rival = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.id != nation_id && n.is_great_power())
         .map(|n| n.field_army_count() as f64)
@@ -550,7 +558,8 @@ fn score_military(
         }
         strongest_rival_army = strongest_rival_army.max(other.field_army_count());
         let at_war = game
-            .world.diplomacy
+            .world
+            .diplomacy
             .get_relation(nation_id, other.id)
             .is_some_and(|r| r.at_war);
         if at_war {
@@ -641,10 +650,8 @@ fn score_infrastructure(
     // — that's fine, the executor will pick an idle one. Returning None
     // only when *no* engineer is idle prevents infinite infra picks while
     // still letting parallelism work when the AI has staff to spare.
-    let any_idle_engineer = nation
-        .military.civilians
-        .iter()
-        .any(|c| {
+    let any_idle_engineer =
+        nation.military.civilians.iter().any(|c| {
             c.civilian_type == CivilianType::Engineer && !c.working && c.turns_remaining == 0
         });
     if !any_idle_engineer {
@@ -673,7 +680,8 @@ fn score_infrastructure(
     // Minimum cost the AI can afford right now to keep progressing: the
     // cheapest next hex on the path, or the depot cost if the path is empty.
     let next_cost = if let Some(next_coord) = plan.path.first() {
-        game.world.hex_map
+        game.world
+            .hex_map
             .get_tile(*next_coord)
             .and_then(|t| crate::map::infrastructure::railroad_cost(t.terrain(), cfg))
             .unwrap_or_else(|| Money::dollars(cfg.railroad_cost_grassland))
@@ -749,7 +757,8 @@ fn score_consulate(
     // a consulate with us, the score is huge — locking in early-game trade
     // partners is the most important diplomacy goal until it's done.
     let priority_unsecured = nation
-        .diplomacy.ai_priority_state
+        .diplomacy
+        .ai_priority_state
         .priority_minor_targets
         .iter()
         .filter(|mn_id| {
@@ -757,7 +766,8 @@ fn score_consulate(
                 .is_some_and(|n| !n.province_ids.is_empty())
         })
         .any(|mn_id| {
-            game.world.diplomacy
+            game.world
+                .diplomacy
                 .get_relation(nation_id, *mn_id)
                 .is_none_or(|r| !r.has_consulate)
         });
@@ -786,12 +796,14 @@ fn score_consulate(
         }
         // Count tradeable resource tiles
         let potential: u32 = game
-            .world.provinces
+            .world
+            .provinces
             .iter()
             .filter(|p| p.owner == n.id)
             .flat_map(|p| &p.tiles)
             .filter_map(|coord| {
-                game.world.hex_map
+                game.world
+                    .hex_map
                     .get_tile(*coord)
                     .and_then(|t| t.calculate_yield())
             })
@@ -924,8 +936,11 @@ fn score_civilian(
         .filter(|p| p.owner == nation_id)
         .collect();
     let connected = connected_provinces(game, nation_id);
-    let collectable: HashSet<HexCoord> =
-        crate::map::infrastructure::collectable_hexes(&game.world.hex_map, &owned_provinces, &connected);
+    let collectable: HashSet<HexCoord> = crate::map::infrastructure::collectable_hexes(
+        &game.world.hex_map,
+        &owned_provinces,
+        &connected,
+    );
     let owned_hexes: HashSet<HexCoord> = owned_provinces
         .iter()
         .flat_map(|p| p.tiles.iter().copied())
@@ -990,12 +1005,14 @@ fn score_civilian(
     let any_demand = visible_improvable_count + undiscovered_count > 0;
 
     let civilian_count = nation
-        .military.civilians
+        .military
+        .civilians
         .iter()
         .filter(|c| c.civilian_type != CivilianType::Engineer)
         .count();
     let idle_civilians = nation
-        .military.civilians
+        .military
+        .civilians
         .iter()
         .filter(|c| {
             c.civilian_type != CivilianType::Engineer && !c.working && c.turns_remaining == 0
@@ -1053,7 +1070,8 @@ fn score_hire_engineer(
 
     // Cap engineer count to avoid unbounded hiring.
     let engineer_count = nation
-        .military.civilians
+        .military
+        .civilians
         .iter()
         .filter(|c| c.civilian_type == CivilianType::Engineer)
         .count() as u32;
@@ -1128,12 +1146,14 @@ fn score_warship(
             continue;
         }
         let at_war = game
-            .world.diplomacy
+            .world
+            .diplomacy
             .get_relation(nation_id, other.id)
             .is_some_and(|r| r.at_war);
         if at_war {
             any_at_war = true;
-            max_enemy_naval_fp = max_enemy_naval_fp.max(other.total_naval_firepower(&game.game_data));
+            max_enemy_naval_fp =
+                max_enemy_naval_fp.max(other.total_naval_firepower(&game.game_data));
         }
     }
     if any_at_war {
@@ -1225,7 +1245,10 @@ fn execute_hire_engineer(game: &mut GameState, nation_id: NationId) {
         if cfg.civilian_costs_expert {
             nation.economy.labor.expert -= 1;
         }
-        nation.military.civilians.push(Civilian::new(civ_id, CivilianType::Engineer, nation_id));
+        nation
+            .military
+            .civilians
+            .push(Civilian::new(civ_id, CivilianType::Engineer, nation_id));
     }
     game.transient.pending_ai_cash_spending.push((
         nation_id,
@@ -1235,8 +1258,46 @@ fn execute_hire_engineer(game: &mut GameState, nation_id: NationId) {
     ));
 }
 
+/// Pick the unit type from `options` whose current share in `current_types` is
+/// furthest below its target share (derived from the frequency of each type in
+/// `options`). Falls back to `fallback_seed % len` for an empty army.
+fn pick_unit_for_balance(
+    options: &[ArmyUnitType],
+    current_types: &[ArmyUnitType],
+    fallback_seed: usize,
+) -> ArmyUnitType {
+    if current_types.is_empty() {
+        return options[fallback_seed % options.len()];
+    }
+    let n = options.len() as f64;
+    let mut unique: Vec<ArmyUnitType> = Vec::new();
+    for &t in options {
+        if !unique.contains(&t) {
+            unique.push(t);
+        }
+    }
+    let tracked = unique
+        .iter()
+        .map(|&t| current_types.iter().filter(|&&u| u == t).count())
+        .sum::<usize>()
+        .max(1) as f64;
+    unique
+        .into_iter()
+        .max_by(|&a, &b| {
+            let ta = options.iter().filter(|&&t| t == a).count() as f64 / n;
+            let tb = options.iter().filter(|&&t| t == b).count() as f64 / n;
+            let ca = current_types.iter().filter(|&&u| u == a).count() as f64 / tracked;
+            let cb = current_types.iter().filter(|&&u| u == b).count() as f64 / tracked;
+            (ta - ca)
+                .partial_cmp(&(tb - cb))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or(options[fallback_seed % options.len()])
+}
+
 fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec<super::AiAction>) {
     let turn_number = game.turn.0;
+    let personality = get_personality(game, nation_id);
     let (capital, nation_name, unit_type, cost, can_afford) = {
         let nation = match game.get_nation(nation_id) {
             Some(n) => n,
@@ -1249,32 +1310,66 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
         // Field army count — ignore garrison militia so early-game recruit
         // choices aren't skewed by the always-present home garrison.
         let army_count = nation.field_army_count();
+        // Snapshot unit types for balance calculation.
+        let army_types: Vec<ArmyUnitType> =
+            nation.military.army.iter().map(|u| u.unit_type).collect();
 
-        // Pick role based on army composition and variety. The role is then
-        // upgraded to the latest variant the nation has unlocked, so once
-        // RifleInfantry / FieldArtillery / Guards land the AI starts
-        // recruiting them in place of their Era I parents (Card #420).
+        // Pick role based on army composition, personality, and balance.
+        // The role is then upgraded to the latest variant the nation has
+        // unlocked, so once RifleInfantry / FieldArtillery / Guards land
+        // the AI starts recruiting them in place of their Era I parents.
         let role = if army_count < 3 {
-            let options = [
-                ArmyUnitType::Regulars,
-                ArmyUnitType::Regulars,
-                ArmyUnitType::Grenadiers,
-            ];
-            options[variety_seed % options.len()]
+            let options: &[ArmyUnitType] = match personality {
+                AiPersonality::Aggressive => &[
+                    ArmyUnitType::Regulars,
+                    ArmyUnitType::Regulars,
+                    ArmyUnitType::Grenadiers,
+                ],
+                AiPersonality::Diplomatic => &[
+                    ArmyUnitType::Regulars,
+                    ArmyUnitType::Regulars,
+                    ArmyUnitType::Regulars,
+                ],
+                AiPersonality::Economic | AiPersonality::Balanced => &[
+                    ArmyUnitType::Regulars,
+                    ArmyUnitType::Grenadiers,
+                    ArmyUnitType::Regulars,
+                ],
+            };
+            pick_unit_for_balance(options, &army_types, variety_seed)
         } else if army_count < 8 {
-            let options = [
-                ArmyUnitType::Grenadiers,
-                ArmyUnitType::LightArtillery,
-                ArmyUnitType::Grenadiers,
-            ];
-            options[variety_seed % options.len()]
+            let options: &[ArmyUnitType] = match personality {
+                AiPersonality::Aggressive => &[
+                    ArmyUnitType::LightArtillery,
+                    ArmyUnitType::Grenadiers,
+                    ArmyUnitType::LightArtillery,
+                ],
+                AiPersonality::Diplomatic => &[
+                    ArmyUnitType::Grenadiers,
+                    ArmyUnitType::Grenadiers,
+                    ArmyUnitType::LightArtillery,
+                ],
+                AiPersonality::Economic | AiPersonality::Balanced => &[
+                    ArmyUnitType::Grenadiers,
+                    ArmyUnitType::LightArtillery,
+                    ArmyUnitType::Grenadiers,
+                ],
+            };
+            pick_unit_for_balance(options, &army_types, variety_seed)
         } else {
-            let options = [
-                ArmyUnitType::LightArtillery,
-                ArmyUnitType::Grenadiers,
-                ArmyUnitType::LightArtillery,
-            ];
-            options[variety_seed % options.len()]
+            let options: &[ArmyUnitType] = match personality {
+                AiPersonality::Aggressive => &[
+                    ArmyUnitType::LightArtillery,
+                    ArmyUnitType::LightArtillery,
+                    ArmyUnitType::Grenadiers,
+                ],
+                _ => &[
+                    ArmyUnitType::LightArtillery,
+                    ArmyUnitType::Grenadiers,
+                    ArmyUnitType::LightArtillery,
+                ],
+            };
+            pick_unit_for_balance(options, &army_types, variety_seed)
         };
 
         let researched = &nation.researched_techs;
@@ -1365,15 +1460,13 @@ fn execute_infrastructure(
     // only when the nation has zero engineers; if the nation has engineers
     // but all are busy, score_infrastructure already returned None and we
     // wouldn't be here.
-    let engineer_idx = nation
-        .military.civilians
-        .iter()
-        .position(|c| {
-            c.civilian_type == CivilianType::Engineer && !c.working && c.turns_remaining == 0
-        });
+    let engineer_idx = nation.military.civilians.iter().position(|c| {
+        c.civilian_type == CivilianType::Engineer && !c.working && c.turns_remaining == 0
+    });
 
     let any_engineer_present = nation
-        .military.civilians
+        .military
+        .civilians
         .iter()
         .any(|c| c.civilian_type == CivilianType::Engineer);
 
@@ -1406,7 +1499,11 @@ fn execute_infrastructure(
                 if civilian_costs_expert {
                     nation.economy.labor.expert -= 1;
                 }
-                nation.military.civilians.push(Civilian::new(civ_id, CivilianType::Engineer, nation_id));
+                nation.military.civilians.push(Civilian::new(
+                    civ_id,
+                    CivilianType::Engineer,
+                    nation_id,
+                ));
             }
             game.transient.pending_ai_cash_spending.push((
                 nation_id,
@@ -1422,7 +1519,8 @@ fn execute_infrastructure(
     // no longer owns, clear its position (will redeploy this turn).
     {
         let owned_hexes: HashSet<HexCoord> = game
-            .world.provinces
+            .world
+            .provinces
             .iter()
             .filter(|p| p.owner == nation_id)
             .flat_map(|p| p.tiles.iter().copied())
@@ -1468,9 +1566,7 @@ fn execute_infrastructure(
     let plan = match plan {
         Some(p) => p,
         None => {
-            if let Some(port_coord) =
-                super::economy::find_stranded_port_target(game, nation_id)
-            {
+            if let Some(port_coord) = super::economy::find_stranded_port_target(game, nation_id) {
                 start_engineer_task(
                     game,
                     nation_id,
@@ -1530,14 +1626,11 @@ fn execute_infrastructure(
     // different path tile when the first engineer is already mid-build on
     // the closest one.
     let unbuilt_unassigned = |c: HexCoord| -> bool {
-        game.world
-            .hex_map
-            .get_tile(c)
-            .is_some_and(|t| {
-                !t.infrastructure.has_railroad
-                    && !t.infrastructure.has_depot
-                    && t.assigned_civilian.is_none()
-            })
+        game.world.hex_map.get_tile(c).is_some_and(|t| {
+            !t.infrastructure.has_railroad
+                && !t.infrastructure.has_depot
+                && t.assigned_civilian.is_none()
+        })
     };
     let build_coord = plan
         .path
@@ -1595,7 +1688,8 @@ fn start_engineer_task(
     }
     // Target hex must be owned and empty of another civilian.
     let owned = game
-        .world.provinces
+        .world
+        .provinces
         .iter()
         .filter(|p| p.owner == nation_id)
         .any(|p| p.tiles.contains(&coord));
@@ -1603,7 +1697,8 @@ fn start_engineer_task(
         return;
     }
     let target_ok = game
-        .world.hex_map
+        .world
+        .hex_map
         .get_tile(coord)
         .is_some_and(|t| t.assigned_civilian.is_none() || t.assigned_civilian == Some(civ_id));
     if !target_ok {
@@ -1712,8 +1807,13 @@ fn find_port_alternative(
     // (3) Find an owned coastal land tile (sea-adjacent, real ocean, no
     // building yet, no civilian assigned). Prefer the province centroid if
     // it qualifies, else any qualifying tile in the province.
-    let mut centroid_first = std::iter::once(province.capital_tile)
-        .chain(province.tiles.iter().copied().filter(|c| *c != province.capital_tile));
+    let mut centroid_first = std::iter::once(province.capital_tile).chain(
+        province
+            .tiles
+            .iter()
+            .copied()
+            .filter(|c| *c != province.capital_tile),
+    );
 
     let coastal_tile = centroid_first.find(|c| {
         let Some(tile) = game.world.hex_map.get_tile(*c) else {
@@ -1744,7 +1844,9 @@ fn find_port_alternative(
     // (4) Compare depot+rail cost/turns vs. port cost/turns.
     let depot_cost = cfg.depot_cost;
     let port_cost = cfg.port_cost;
-    let path_cost_dollars = plan.path.iter()
+    let path_cost_dollars = plan
+        .path
+        .iter()
         .filter_map(|c| game.world.hex_map.get_tile(*c))
         .filter(|t| !t.infrastructure.has_railroad && !t.infrastructure.has_depot)
         .filter_map(|t| crate::map::infrastructure::railroad_cost(t.terrain(), cfg))
@@ -1769,14 +1871,16 @@ fn execute_consulate(game: &mut GameState, nation_id: NationId) {
     // Prefer unsecured priority targets first. Only fall back to best-trade
     // match among non-priority minors once all priority targets are secured.
     let priority_pick: Option<NationId> = game.get_nation(nation_id).and_then(|n| {
-        n.diplomacy.ai_priority_state
+        n.diplomacy
+            .ai_priority_state
             .priority_minor_targets
             .iter()
             .find(|mn_id| {
                 game.get_nation(**mn_id)
                     .is_some_and(|m| !m.province_ids.is_empty() && !m.diplomacy.is_in_anarchy)
                     && game
-                        .world.diplomacy
+                        .world
+                        .diplomacy
                         .get_relation(nation_id, **mn_id)
                         .is_none_or(|r| !r.has_consulate)
             })
@@ -1791,19 +1895,22 @@ fn execute_consulate(game: &mut GameState, nation_id: NationId) {
                 continue;
             }
             if game
-                .world.diplomacy
+                .world
+                .diplomacy
                 .get_relation(nation_id, n.id)
                 .is_some_and(|r| r.has_consulate)
             {
                 continue;
             }
             let potential: u32 = game
-                .world.provinces
+                .world
+                .provinces
                 .iter()
                 .filter(|p| p.owner == n.id)
                 .flat_map(|p| &p.tiles)
                 .filter_map(|coord| {
-                    game.world.hex_map
+                    game.world
+                        .hex_map
                         .get_tile(*coord)
                         .and_then(|t| t.calculate_yield())
                 })
@@ -1819,7 +1926,11 @@ fn execute_consulate(game: &mut GameState, nation_id: NationId) {
     });
 
     if let Some(mn_id) = best_mn
-        && game.world.diplomacy.build_consulate(nation_id, mn_id).is_ok()
+        && game
+            .world
+            .diplomacy
+            .build_consulate(nation_id, mn_id)
+            .is_ok()
     {
         if let Some(nation) = game.get_nation_mut(nation_id) {
             nation.economy.treasury -= cost;
@@ -1916,7 +2027,8 @@ fn execute_hire_improver(game: &mut GameState, nation_id: NationId) {
         };
 
         let already_idle_unplaced = nation
-            .military.civilians
+            .military
+            .civilians
             .iter()
             .any(|c| c.civilian_type == civ_type && c.position.is_none());
         if already_idle_unplaced {
@@ -1935,7 +2047,10 @@ fn execute_hire_improver(game: &mut GameState, nation_id: NationId) {
         if civilian_costs_expert {
             nation.economy.labor.expert -= 1;
         }
-        nation.military.civilians.push(Civilian::new(civ_id, civ_type, nation_id));
+        nation
+            .military
+            .civilians
+            .push(Civilian::new(civ_id, civ_type, nation_id));
     }
     game.transient.pending_ai_cash_spending.push((
         nation_id,
@@ -2099,7 +2214,8 @@ fn refresh_priority_targets(game: &mut GameState, nation_id: NationId, personali
 
     let mut kept: Vec<NationId> = match game.get_nation(nation_id) {
         Some(n) => n
-            .diplomacy.ai_priority_state
+            .diplomacy
+            .ai_priority_state
             .priority_minor_targets
             .iter()
             .filter(|mn_id| {
@@ -2161,11 +2277,17 @@ pub fn pick_priority_minor_targets(
             continue;
         }
         let score: f64 = game
-            .world.provinces
+            .world
+            .provinces
             .iter()
             .filter(|p| p.owner == minor.id)
             .flat_map(|p| &p.tiles)
-            .filter_map(|c| game.world.hex_map.get_tile(*c).and_then(|t| t.calculate_yield()))
+            .filter_map(|c| {
+                game.world
+                    .hex_map
+                    .get_tile(*c)
+                    .and_then(|t| t.calculate_yield())
+            })
             .filter(|y| y.resource.is_tradeable())
             .map(|y| {
                 let w = demand.get(&y.resource).copied().unwrap_or(0.0);
@@ -2191,11 +2313,22 @@ fn load_weights(game: &GameState, personality: AiPersonality) -> SpendingWeights
     if let Some(engine) = &game.game_data.lua_engine
         && let Some(cfg) = super::lua_bridge::lua_get_config(engine, personality)
     {
-        w.military_weight = lua_or(cfg.spending_military_weight, defaults.spending_military_weight);
-        w.economy_weight = lua_or(cfg.spending_economy_weight, defaults.spending_economy_weight);
-        w.diplomacy_weight =
-            lua_or(cfg.spending_diplomacy_weight, defaults.spending_diplomacy_weight);
-        w.reserve = lua_or(cfg.treasury_reserve.map(Money::dollars), defaults.spending_reserve);
+        w.military_weight = lua_or(
+            cfg.spending_military_weight,
+            defaults.spending_military_weight,
+        );
+        w.economy_weight = lua_or(
+            cfg.spending_economy_weight,
+            defaults.spending_economy_weight,
+        );
+        w.diplomacy_weight = lua_or(
+            cfg.spending_diplomacy_weight,
+            defaults.spending_diplomacy_weight,
+        );
+        w.reserve = lua_or(
+            cfg.treasury_reserve.map(Money::dollars),
+            defaults.spending_reserve,
+        );
         w.min_threshold = lua_or(cfg.min_score_threshold, defaults.spending_min_threshold);
     }
 
@@ -2262,11 +2395,8 @@ mod tests {
             ai.military.civilians.clear();
             // One *non-idle* civilian so idle_penalty stays at 0 and the
             // bucket weight differences come through cleanly.
-            let mut working_civ = Civilian::new(
-                next_civilian_id(),
-                CivilianType::Farmer,
-                NationId(2),
-            );
+            let mut working_civ =
+                Civilian::new(next_civilian_id(), CivilianType::Farmer, NationId(2));
             working_civ.working = true;
             working_civ.turns_remaining = 2;
             ai.military.civilians.push(working_civ);
@@ -2534,7 +2664,11 @@ mod tests {
         rel.score = 0; // cold despite priority status
 
         let nation = game.get_nation_mut(ai).unwrap();
-        nation.diplomacy.ai_priority_state.priority_minor_targets.push(mn);
+        nation
+            .diplomacy
+            .ai_priority_state
+            .priority_minor_targets
+            .push(mn);
 
         let weights = load_weights(&game, super::super::common::AiPersonality::Balanced);
         let scored = score_embassy(&game, ai, &weights);
@@ -2559,13 +2693,17 @@ mod tests {
         rel.score = threshold;
 
         let nation = game.get_nation_mut(ai).unwrap();
-        nation.diplomacy.ai_priority_state.priority_minor_targets.push(mn);
+        nation
+            .diplomacy
+            .ai_priority_state
+            .priority_minor_targets
+            .push(mn);
 
         let weights = load_weights(&game, super::super::common::AiPersonality::Balanced);
         let scored = score_embassy(&game, ai, &weights).expect("embassy should score");
 
-        let expected = game.game_data.game_config.priority_minor_target_score
-            * weights.diplomacy_weight;
+        let expected =
+            game.game_data.game_config.priority_minor_target_score * weights.diplomacy_weight;
         assert!(
             (scored.score - expected).abs() < 1e-6,
             "warm priority target should get headline score {expected}, got {}",
@@ -2580,13 +2718,7 @@ mod tests {
     #[test]
     fn backlog_bonus_zero_on_turn_1_for_uninvested_category() {
         let game = test_game_with_ai();
-        let bonus = backlog_bonus(
-            &game,
-            NationId(2),
-            SpendingCategory::Military,
-            1,
-            false,
-        );
+        let bonus = backlog_bonus(&game, NationId(2), SpendingCategory::Military, 1, false);
         assert_eq!(
             bonus, 0.0,
             "fresh AI must not get backlog credit on turn 1 for never-invested category",
@@ -2598,13 +2730,7 @@ mod tests {
     #[test]
     fn backlog_bonus_accrues_after_turn_1() {
         let game = test_game_with_ai();
-        let bonus = backlog_bonus(
-            &game,
-            NationId(2),
-            SpendingCategory::Military,
-            5,
-            false,
-        );
+        let bonus = backlog_bonus(&game, NationId(2), SpendingCategory::Military, 5, false);
         // 4 turns of accrual × Balanced military weight (30) = 120
         assert_eq!(bonus, 120.0);
     }
@@ -2634,14 +2760,8 @@ mod tests {
             let mut tile = Tile::with_province(TerrainType::Grassland, prov_id);
             tile.set_resource(ResourceType::Grain);
             game.world.hex_map.set_tile(coord, tile);
-            let mut prov = Province::new(
-                prov_id,
-                format!("Minor {i}"),
-                mn_id,
-                coord,
-                vec![coord],
-                3,
-            );
+            let mut prov =
+                Province::new(prov_id, format!("Minor {i}"), mn_id, coord, vec![coord], 3);
             prov.tiles.push(coord);
             game.world.provinces.push(prov);
             let mut mn = Nation::new(
@@ -2688,8 +2808,7 @@ mod tests {
     fn score_consulate_cap_lifted_when_wealthy() {
         let (mut game, ai_id, minors) = game_with_extra_minors(7);
         let threshold = game.game_data.game_config.labor_wealthy_treasury_threshold;
-        game.get_nation_mut(ai_id).unwrap().economy.treasury =
-            Money::dollars(threshold + 1_000);
+        game.get_nation_mut(ai_id).unwrap().economy.treasury = Money::dollars(threshold + 1_000);
         for &mn in minors.iter().take(4) {
             game.world.diplomacy.build_consulate(ai_id, mn).unwrap();
         }

@@ -83,11 +83,13 @@ pub(crate) fn capital_threat_level(game: &GameState, nation_id: NationId) -> Cap
 
     // Enemies at war with us.
     let enemies: Vec<NationId> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.id != nation_id)
         .filter(|n| {
-            game.world.diplomacy
+            game.world
+                .diplomacy
                 .get_relation(nation_id, n.id)
                 .map(|r| r.at_war)
                 .unwrap_or(false)
@@ -204,29 +206,39 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
 
     // Enemies we are at war with.
     let enemies: Vec<NationId> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.id != nation_id)
         .filter(|n| {
-            game.world.diplomacy
+            game.world
+                .diplomacy
                 .get_relation(nation_id, n.id)
                 .map(|r| r.at_war)
                 .unwrap_or(false)
         })
         .map(|n| n.id)
         .collect();
-    if enemies.is_empty() {
-        return;
-    }
-
     let threat = capital_threat_level(game, nation_id);
 
-    let enemy_province_ids: Vec<ProvinceId> = game
-        .world.provinces
-        .iter()
-        .filter(|p| enemies.contains(&p.owner))
-        .map(|p| p.id)
-        .collect();
+    // Wartime: frontier = enemy-owned provinces.
+    // Peacetime: frontier = any province owned by a different nation, so
+    // border provinces are still identified for peacetime distribution.
+    let frontier_province_ids: Vec<ProvinceId> = if enemies.is_empty() {
+        game.world
+            .provinces
+            .iter()
+            .filter(|p| p.owner != nation_id)
+            .map(|p| p.id)
+            .collect()
+    } else {
+        game.world
+            .provinces
+            .iter()
+            .filter(|p| enemies.contains(&p.owner))
+            .map(|p| p.id)
+            .collect()
+    };
 
     // Count our MOVABLE field-army units stationed in each province.
     // Militia/GarrisonArtillery (movement = 0) cannot redeploy — counting
@@ -253,15 +265,16 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
         let Some(prov) = game.get_province(pid) else {
             continue;
         };
-        let borders_enemy = prov.tiles.iter().any(|&tile_coord| {
+        let borders_frontier = prov.tiles.iter().any(|&tile_coord| {
             tile_coord.neighbors().iter().any(|neighbor| {
-                game.world.hex_map
+                game.world
+                    .hex_map
                     .get_tile(*neighbor)
                     .and_then(|t| t.province_id)
-                    .is_some_and(|npid| enemy_province_ids.contains(&npid))
+                    .is_some_and(|npid| frontier_province_ids.contains(&npid))
             })
         });
-        if borders_enemy {
+        if borders_frontier {
             border_provinces.push(pid);
         } else {
             interior_provinces.push(pid);
@@ -289,8 +302,12 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
             // Precompute the set of already-pending unit ids ONCE and update
             // it incrementally as we push moves. Rebuilding per iteration
             // made the whole distribution O(N²) in the number of moves.
-            let mut already_pending: std::collections::HashSet<crate::map::UnitId> =
-                game.transient.pending_moves.iter().map(|(_, uid, _)| *uid).collect();
+            let mut already_pending: std::collections::HashSet<crate::map::UnitId> = game
+                .transient
+                .pending_moves
+                .iter()
+                .map(|(_, uid, _)| *uid)
+                .collect();
 
             let mut pulled = 0;
             for src_pid in pull_sources {
@@ -301,7 +318,8 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
                     return;
                 };
                 let candidate_unit_ids: Vec<crate::map::UnitId> = nation
-                    .military.army
+                    .military
+                    .army
                     .iter()
                     .filter(|u| {
                         u.unit_type.can_move()
@@ -314,7 +332,9 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
                     if pulled >= deficit {
                         break;
                     }
-                    game.transient.pending_moves.push((nation_id, uid, capital_pid));
+                    game.transient
+                        .pending_moves
+                        .push((nation_id, uid, capital_pid));
                     already_pending.insert(uid);
                     pulled += 1;
                 }
@@ -332,7 +352,8 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
     let capital_have_now: usize = {
         let nation = game.get_nation(nation_id).expect("nation present");
         nation
-            .military.army
+            .military
+            .army
             .iter()
             .filter(|u| u.unit_type.can_move() && u.position == capital_pid)
             .count()
@@ -353,7 +374,8 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
     // Forward staging: provinces we own that are adjacent to a province
     // currently in pending_attacks targeted by this nation.
     let pending_attack_targets: Vec<ProvinceId> = game
-        .transient.pending_attacks
+        .transient
+        .pending_attacks
         .iter()
         .filter(|(a, _)| *a == nation_id)
         .map(|(_, p)| *p)
@@ -367,8 +389,9 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
                 continue;
             };
             let is_staging = pending_attack_targets.iter().any(|&tpid| {
-                game.get_province(tpid)
-                    .is_some_and(|tp| crate::map::provinces_are_adjacent(&game.world.hex_map, prov, tp))
+                game.get_province(tpid).is_some_and(|tp| {
+                    crate::map::provinces_are_adjacent(&game.world.hex_map, prov, tp)
+                })
             });
             if is_staging {
                 dest_priority.push(pid);
@@ -398,8 +421,12 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
     // cap — surplus redistributes in one pass. We also bail if every chosen
     // destination equals the current source (otherwise the while loop would
     // spin forever when the only staging province IS the source).
-    let mut already_pending: std::collections::HashSet<crate::map::UnitId> =
-        game.transient.pending_moves.iter().map(|(_, uid, _)| *uid).collect();
+    let mut already_pending: std::collections::HashSet<crate::map::UnitId> = game
+        .transient
+        .pending_moves
+        .iter()
+        .map(|(_, uid, _)| *uid)
+        .collect();
     let mut dest_idx = 0usize;
     for (src_pid, src_surplus) in spread_sources {
         let mut remaining = src_surplus;
@@ -417,7 +444,8 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
                 return;
             };
             let candidate = nation
-                .military.army
+                .military
+                .army
                 .iter()
                 .find(|u| {
                     u.unit_type.can_move()
@@ -428,7 +456,9 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
             let Some(uid) = candidate else {
                 break; // nothing left to move from this source
             };
-            game.transient.pending_moves.push((nation_id, uid, dest_pid));
+            game.transient
+                .pending_moves
+                .push((nation_id, uid, dest_pid));
             already_pending.insert(uid);
             remaining -= 1;
         }
@@ -465,12 +495,14 @@ fn ai_build_forts(
     // Anarchic enemies are excluded: you cannot sue for peace with a country
     // whose government has collapsed (card #81).
     let enemies: Vec<NationId> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.id != nation_id)
         .filter(|n| !n.diplomacy.is_in_anarchy)
         .filter(|n| {
-            game.world.diplomacy
+            game.world
+                .diplomacy
                 .get_relation(nation_id, n.id)
                 .map(|r| r.at_war)
                 .unwrap_or(false)
@@ -491,7 +523,8 @@ fn ai_build_forts(
 
     // Collect enemy-owned tiles for adjacency check
     let enemy_province_ids: Vec<ProvinceId> = game
-        .world.provinces
+        .world
+        .provinces
         .iter()
         .filter(|p| enemies.contains(&p.owner))
         .map(|p| p.id)
@@ -503,7 +536,8 @@ fn ai_build_forts(
         if let Some(prov) = game.get_province(pid) {
             let is_border = prov.tiles.iter().any(|&tile_coord| {
                 tile_coord.neighbors().iter().any(|neighbor| {
-                    game.world.hex_map
+                    game.world
+                        .hex_map
                         .get_tile(*neighbor)
                         .and_then(|t| t.province_id)
                         .is_some_and(|npid| enemy_province_ids.contains(&npid))
@@ -533,7 +567,10 @@ fn ai_build_forts(
     // Choose which province to fort based on personality / Lua fort_strategy
     let fort_capital: bool = 'val: {
         #[cfg(feature = "lua")]
-        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.fort_strategy.as_deref().map(|s| s == "capital")) {
+        if let Some(v) = lua_cfg
+            .as_ref()
+            .and_then(|c| c.fort_strategy.as_deref().map(|s| s == "capital"))
+        {
             break 'val v;
         }
         pc.fort_capital
@@ -559,7 +596,8 @@ fn ai_build_forts(
 
     // Check if there's already a fort at max level
     let current_level = game
-        .world.hex_map
+        .world
+        .hex_map
         .get_tile(fort_coord)
         .map(|t| t.infrastructure.fort_level)
         .unwrap_or(0);
@@ -583,7 +621,13 @@ fn ai_build_forts(
         return;
     }
 
-    if build_fort(&mut game.world.hex_map, fort_coord, &game.game_data.game_config).is_ok() {
+    if build_fort(
+        &mut game.world.hex_map,
+        fort_coord,
+        &game.game_data.game_config,
+    )
+    .is_ok()
+    {
         let treasury_after = {
             let Some(nation) = game.get_nation_mut(nation_id) else {
                 return;
@@ -674,12 +718,14 @@ fn ai_propose_peace(
     // Anarchic enemies are excluded: you cannot sue for peace with a country
     // whose government has collapsed (card #81).
     let enemies: Vec<NationId> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.id != nation_id)
         .filter(|n| !n.diplomacy.is_in_anarchy)
         .filter(|n| {
-            game.world.diplomacy
+            game.world
+                .diplomacy
                 .get_relation(nation_id, n.id)
                 .map(|r| r.at_war)
                 .unwrap_or(false)
@@ -703,12 +749,16 @@ fn ai_propose_peace(
             .unwrap_or_default();
 
         // Skip peace if we have pending attacks against provinces owned by this enemy
-        let has_pending_attack = game.transient.pending_attacks.iter().any(|(attacker, prov_id)| {
-            *attacker == nation_id
-                && game
-                    .get_province(*prov_id)
-                    .is_some_and(|p| p.owner == enemy_id)
-        });
+        let has_pending_attack =
+            game.transient
+                .pending_attacks
+                .iter()
+                .any(|(attacker, prov_id)| {
+                    *attacker == nation_id
+                        && game
+                            .get_province(*prov_id)
+                            .is_some_and(|p| p.owner == enemy_id)
+                });
         if has_pending_attack {
             continue;
         }
@@ -866,7 +916,10 @@ fn ai_propose_peace(
             }
         } else if target_is_human {
             // AI-to-human: create a pending proposal for the UI
-            let _ = game.world.diplomacy.propose_peace(nation_id, enemy_id, game.turn);
+            let _ = game
+                .world
+                .diplomacy
+                .propose_peace(nation_id, enemy_id, game.turn);
             let reason = if worthiness.lost_enough {
                 " (heavy losses)"
             } else if worthiness.won_enough {
@@ -1063,7 +1116,8 @@ mod tests {
 
         // Should have a pending move to the border province (ProvinceId(2))
         assert!(
-            game.transient.pending_moves
+            game.transient
+                .pending_moves
                 .iter()
                 .any(|(nation, _, dest)| *nation == NationId(2) && *dest == ProvinceId(2)),
             "AI should queue a move to the threatened border province"
@@ -1177,31 +1231,31 @@ mod tests {
         diplomacy.declare_war(NationId(2), NationId(3));
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: provinces,
-            nations: vec![human, ai, enemy],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: crate::data::GameData::default(),
-            diplomacy: diplomacy,
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: provinces,
+        nations: vec![human, ai, enemy],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: crate::data::GameData::default(),
+        diplomacy: diplomacy,
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         ai_distribute_field_army(&mut game, NationId(2), AiPersonality::Balanced);
 
@@ -1209,7 +1263,8 @@ mod tests {
         // province touches the capital), so Phase B spreads the surplus.
         // Expect moves to each of the three undefended border provinces.
         let destinations: std::collections::HashSet<ProvinceId> = game
-            .transient.pending_moves
+            .transient
+            .pending_moves
             .iter()
             .filter(|(nid, _, _)| *nid == NationId(2))
             .map(|(_, _, dest)| *dest)
@@ -1366,31 +1421,31 @@ mod tests {
         diplomacy.declare_war(NationId(2), NationId(3));
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: provinces,
-            nations: vec![human, ai, enemy],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: crate::data::GameData::default(),
-            diplomacy: diplomacy,
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: provinces,
+        nations: vec![human, ai, enemy],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: crate::data::GameData::default(),
+        diplomacy: diplomacy,
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         assert_eq!(
             capital_threat_level(&game, NationId(2)),
@@ -1401,7 +1456,8 @@ mod tests {
         ai_distribute_field_army(&mut game, NationId(2), AiPersonality::Balanced);
 
         let moves_to_capital: usize = game
-            .transient.pending_moves
+            .transient
+            .pending_moves
             .iter()
             .filter(|(nid, _, dest)| *nid == NationId(2) && *dest == ProvinceId(1))
             .count();
@@ -1489,31 +1545,31 @@ mod tests {
         diplomacy.declare_war(NationId(2), NationId(3));
 
         let game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".into(),
-            hex_map: hex_map,
-            provinces: provinces,
-            nations: vec![human, ai, enemy],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: crate::data::GameData::default(),
-            diplomacy: diplomacy,
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".into(),
+        hex_map: hex_map,
+        provinces: provinces,
+        nations: vec![human, ai, enemy],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: crate::data::GameData::default(),
+        diplomacy: diplomacy,
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
         assert_eq!(
             capital_threat_level(&game, NationId(2)),
             CapitalThreat::Safe,
@@ -1584,31 +1640,31 @@ mod tests {
         diplomacy.declare_war(NationId(2), NationId(3));
 
         let game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".into(),
-            hex_map: hex_map,
-            provinces: provinces,
-            nations: vec![human, ai, enemy],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: crate::data::GameData::default(),
-            diplomacy: diplomacy,
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: vec![(NationId(3), ProvinceId(1), TurnNumber::new(2))],
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".into(),
+        hex_map: hex_map,
+        provinces: provinces,
+        nations: vec![human, ai, enemy],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: crate::data::GameData::default(),
+        diplomacy: diplomacy,
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: vec![(NationId(3), ProvinceId(1), TurnNumber::new(2))],
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
         assert_eq!(
             capital_threat_level(&game, NationId(2)),
             CapitalThreat::Imminent,
@@ -1688,7 +1744,8 @@ mod tests {
 
         // Should have made peace (AI-to-MinorNation: auto-accepted)
         let at_war = game
-            .world.diplomacy
+            .world
+            .diplomacy
             .get_relation(NationId(2), NationId(3))
             .map(|r| r.at_war)
             .unwrap_or(true);
@@ -1734,7 +1791,8 @@ mod tests {
         );
 
         let at_war = game
-            .world.diplomacy
+            .world
+            .diplomacy
             .get_relation(NationId(2), NationId(3))
             .map(|r| r.at_war)
             .unwrap_or(true);
@@ -1777,7 +1835,8 @@ mod tests {
 
         // At turn 25 with war starting at turn 1: 24 turns of war < 30 threshold
         let at_war = game
-            .world.diplomacy
+            .world
+            .diplomacy
             .get_relation(NationId(2), NationId(3))
             .map(|r| r.at_war)
             .unwrap_or(false);

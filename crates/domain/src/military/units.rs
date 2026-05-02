@@ -1,4 +1,5 @@
 use crate::DomainError;
+use crate::economy::labor::WorkerType;
 use crate::map::UnitId;
 use crate::types::*;
 
@@ -47,7 +48,8 @@ pub enum ArmyUnitType {
 
     // ── Light cavalry (fast, scouting) ────────
     Hussars,    // Era I
-    Carbineers, // Era II
+    Scouts,     // Era II (recon)
+    Carbineers, // Era II (heavy)
     Mechanised, // Era III
 
     // ── Heavy cavalry ─────────────────────────
@@ -56,6 +58,7 @@ pub enum ArmyUnitType {
 
     // ── Light artillery ───────────────────────
     LightArtillery,  // Era I
+    HorseArtillery,  // Era II (horse-drawn mobile)
     FieldArtillery,  // Era II
     MobileArtillery, // Era III
 
@@ -67,6 +70,7 @@ pub enum ArmyUnitType {
     // ── Engineer ──────────────────────────────
     Sapper,         // Era I
     CombatEngineer, // Era II
+    Commandos,      // Era III (special forces)
     Saboteur,       // Era III
 
     // ── Special ───────────────────────────────
@@ -95,11 +99,13 @@ impl std::fmt::Display for ArmyUnitType {
             Self::Guards => "Guards",
             Self::MachineGunners => "Machine Gunners",
             Self::Hussars => "Hussars",
+            Self::Scouts => "Scouts",
             Self::Carbineers => "Carbineers",
             Self::Mechanised => "Mechanised",
             Self::Cuirassiers => "Cuirassiers",
             Self::Armour => "Armour",
             Self::LightArtillery => "Light Artillery",
+            Self::HorseArtillery => "Horse Artillery",
             Self::FieldArtillery => "Field Artillery",
             Self::MobileArtillery => "Mobile Artillery",
             Self::Artillery => "Artillery",
@@ -107,6 +113,7 @@ impl std::fmt::Display for ArmyUnitType {
             Self::RailroadGuns => "Railroad Guns",
             Self::Sapper => "Sapper",
             Self::CombatEngineer => "Combat Engineer",
+            Self::Commandos => "Commandos",
             Self::Saboteur => "Saboteur",
             Self::General => "General",
             Self::GarrisonArtillery => "Garrison Artillery",
@@ -132,11 +139,13 @@ impl std::str::FromStr for ArmyUnitType {
             "Guards" => Ok(Self::Guards),
             "MachineGunners" => Ok(Self::MachineGunners),
             "Hussars" => Ok(Self::Hussars),
+            "Scouts" => Ok(Self::Scouts),
             "Carbineers" => Ok(Self::Carbineers),
             "Mechanised" => Ok(Self::Mechanised),
             "Cuirassiers" => Ok(Self::Cuirassiers),
             "Armour" => Ok(Self::Armour),
             "LightArtillery" => Ok(Self::LightArtillery),
+            "HorseArtillery" => Ok(Self::HorseArtillery),
             "FieldArtillery" => Ok(Self::FieldArtillery),
             "MobileArtillery" => Ok(Self::MobileArtillery),
             "Artillery" => Ok(Self::Artillery),
@@ -144,6 +153,7 @@ impl std::str::FromStr for ArmyUnitType {
             "RailroadGuns" => Ok(Self::RailroadGuns),
             "Sapper" => Ok(Self::Sapper),
             "CombatEngineer" => Ok(Self::CombatEngineer),
+            "Commandos" => Ok(Self::Commandos),
             "Saboteur" => Ok(Self::Saboteur),
             "General" => Ok(Self::General),
             "GarrisonArtillery" => Ok(Self::GarrisonArtillery),
@@ -168,6 +178,8 @@ impl std::str::FromStr for ArmyUnitType {
 /// - `arms_required` — Arms unit consumed at recruitment (and per upgrade diff).
 /// - `cost` — dollar cost to recruit. Resource costs are resolved separately.
 /// - `maintenance_per_turn` — upkeep paid each turn (Garrison units pay 0).
+/// - `fuel_required` — Oil units consumed at recruitment (for motorised Era III units).
+/// - `recruit_tier` — labor tier consumed from the nation's labor pool at recruitment.
 /// - `prerequisite_tech` — tech name required to unlock this unit, or `None`.
 /// - `era` — historical era bucket (1/2/3) for UI grouping and obsoletion.
 #[derive(Debug, Clone)]
@@ -181,6 +193,8 @@ pub struct UnitStats {
     pub cost: Money,
     pub arms_required: u32,
     pub requires_horse: bool,
+    pub fuel_required: u32,
+    pub recruit_tier: WorkerType,
     pub category: UnitCategory,
     pub maintenance_per_turn: Money,
     pub prerequisite_tech: Option<String>,
@@ -259,6 +273,7 @@ impl ArmyUnitType {
     pub fn stats_baseline(&self) -> UnitStats {
         use ArmyUnitType::*;
         // Helper to keep the table readable.
+        #[allow(clippy::too_many_arguments)]
         let s = |firepower,
                  firepower_mounted,
                  defense,
@@ -271,7 +286,9 @@ impl ArmyUnitType {
                  cost: i64,
                  maintenance: i64,
                  era,
-                 prerequisite_tech: Option<&str>| UnitStats {
+                 prerequisite_tech: Option<&str>,
+                 fuel_required: u32,
+                 recruit_tier: WorkerType| UnitStats {
             firepower,
             firepower_mounted,
             defense,
@@ -280,6 +297,8 @@ impl ArmyUnitType {
             movement,
             arms_required,
             requires_horse,
+            fuel_required,
+            recruit_tier,
             category,
             cost: Money::dollars(cost),
             maintenance_per_turn: Money::dollars(maintenance),
@@ -288,12 +307,12 @@ impl ArmyUnitType {
         };
         match self {
             // ── Garrison ──────────────────────────────────────────
-            // FPN FPM DEF DEFT RNG MVR ARMS HORSE  CAT       COST  MTN  ERA
+            // FPN FPM DEF DEFT RNG MVR ARMS HORSE  CAT       COST  MTN  ERA   PREREQ FUEL TIER
             Minutemen => s(
                 5,
-                0,
                 5,
-                0,
+                4,
+                1,
                 1,
                 0,
                 0,
@@ -303,44 +322,50 @@ impl ArmyUnitType {
                 0,
                 Era::One,
                 None,
+                0,
+                WorkerType::Untrained,
             ),
             Militia => s(
-                10,
-                0,
                 7,
-                0,
+                7,
+                4,
+                1,
                 2,
                 0,
-                1,
+                0,
                 false,
                 UnitCategory::Garrison,
                 0,
                 0,
                 Era::Two,
-                None,
+                Some("Breech-Loading Rifles"),
+                0,
+                WorkerType::Untrained,
             ),
             Conscript => s(
-                17,
-                0,
-                5,
-                0,
+                10,
+                10,
+                10,
+                2,
                 2,
                 4,
-                1,
+                0,
                 false,
                 UnitCategory::Garrison,
                 100,
                 25,
                 Era::Three,
                 Some("Modern Warfare"),
+                0,
+                WorkerType::Untrained,
             ),
 
             // ── Skirmisher infantry ─────────────────────────────
             Skirmishers => s(
                 5,
-                0,
                 5,
-                0,
+                7,
+                1,
                 1,
                 4,
                 1,
@@ -350,44 +375,50 @@ impl ArmyUnitType {
                 25,
                 Era::One,
                 None,
+                0,
+                WorkerType::Untrained,
             ),
             Sharpshooters => s(
-                11,
-                0,
-                5,
-                0,
+                10,
+                10,
+                7,
+                1,
                 3,
                 4,
-                1,
+                2,
                 false,
                 UnitCategory::Infantry,
                 200,
                 50,
                 Era::Two,
                 Some("Sharpshooter Training"),
+                0,
+                WorkerType::Trained,
             ),
             Rangers => s(
                 15,
-                0,
-                10,
-                0,
+                15,
+                20,
+                5,
                 5,
                 4,
-                1,
+                4,
                 false,
                 UnitCategory::Infantry,
                 250,
                 50,
                 Era::Three,
                 Some("Ranger Training"),
+                0,
+                WorkerType::Expert,
             ),
 
             // ── Line infantry ───────────────────────────────────
             Regulars => s(
                 10,
+                10,
                 5,
-                5,
-                0,
+                1,
                 1,
                 4,
                 1,
@@ -397,42 +428,48 @@ impl ArmyUnitType {
                 25,
                 Era::One,
                 None,
+                0,
+                WorkerType::Untrained,
             ),
             RifleInfantry => s(
                 15,
-                0,
+                15,
                 7,
                 1,
                 2,
                 4,
-                1,
+                2,
                 false,
                 UnitCategory::Infantry,
                 200,
                 50,
                 Era::Two,
                 Some("Rifling"),
+                0,
+                WorkerType::Trained,
             ),
             Infantry => s(
                 22,
-                0,
-                10,
-                0,
+                22,
+                20,
+                5,
                 2,
                 4,
-                2,
+                4,
                 false,
                 UnitCategory::Infantry,
                 300,
                 75,
                 Era::Three,
                 Some("Modern Warfare"),
+                0,
+                WorkerType::Expert,
             ),
 
             // ── Elite/heavy infantry ────────────────────────────
             Grenadiers => s(
                 12,
-                0,
+                12,
                 5,
                 1,
                 1,
@@ -444,43 +481,49 @@ impl ArmyUnitType {
                 50,
                 Era::One,
                 Some("Grenadier Tactics"),
+                0,
+                WorkerType::Untrained,
             ),
             Guards => s(
                 17,
-                0,
-                9,
-                0,
+                17,
+                7,
+                1,
                 2,
                 4,
-                1,
+                2,
                 false,
                 UnitCategory::Infantry,
                 250,
                 75,
                 Era::Two,
                 Some("Professional Army"),
+                0,
+                WorkerType::Trained,
             ),
             MachineGunners => s(
-                28,
-                0,
-                12,
-                0,
+                25,
+                25,
+                20,
+                5,
                 2,
                 4,
-                2,
+                4,
                 false,
                 UnitCategory::Infantry,
                 400,
                 100,
                 Era::Three,
                 Some("Machine Guns"),
+                0,
+                WorkerType::Expert,
             ),
 
             // ── Light cavalry ───────────────────────────────────
             Hussars => s(
                 7,
                 10,
-                4,
+                7,
                 0,
                 1,
                 7,
@@ -491,43 +534,66 @@ impl ArmyUnitType {
                 25,
                 Era::One,
                 None,
+                0,
+                WorkerType::Untrained,
             ),
-            Carbineers => s(
-                11,
+            Scouts => s(
+                10,
                 13,
                 7,
                 0,
+                1,
+                7,
+                2,
+                true,
+                UnitCategory::Cavalry,
+                200,
+                50,
+                Era::Two,
+                Some("Breech-Loading Rifles"),
+                0,
+                WorkerType::Trained,
+            ),
+            Carbineers => s(
+                20,
+                26,
+                5,
+                0,
                 2,
                 7,
-                1,
+                2,
                 true,
                 UnitCategory::Cavalry,
                 250,
                 50,
                 Era::Two,
                 Some("Carbines"),
+                0,
+                WorkerType::Trained,
             ),
             Mechanised => s(
-                30,
-                0,
+                22,
+                28,
                 10,
                 2,
                 4,
                 6,
-                2,
+                4,
                 false,
                 UnitCategory::Cavalry,
                 400,
                 75,
                 Era::Three,
                 Some("Mechanisation"),
+                1,
+                WorkerType::Expert,
             ),
 
             // ── Heavy cavalry ───────────────────────────────────
             Cuirassiers => s(
                 15,
-                0,
-                9,
+                19,
+                5,
                 0,
                 1,
                 7,
@@ -538,29 +604,33 @@ impl ArmyUnitType {
                 50,
                 Era::One,
                 None,
+                0,
+                WorkerType::Untrained,
             ),
             Armour => s(
-                30,
-                0,
-                16,
-                0,
+                45,
+                60,
+                20,
+                5,
                 6,
                 6,
-                4,
+                10,
                 false,
                 UnitCategory::Cavalry,
                 500,
                 100,
                 Era::Three,
                 Some("Armoured Vehicles"),
+                1,
+                WorkerType::Expert,
             ),
 
             // ── Light artillery ─────────────────────────────────
             LightArtillery => s(
                 10,
-                0,
-                9,
-                0,
+                3,
+                3,
+                1,
                 3,
                 3,
                 2,
@@ -570,43 +640,66 @@ impl ArmyUnitType {
                 50,
                 Era::One,
                 None,
+                0,
+                WorkerType::Untrained,
+            ),
+            HorseArtillery => s(
+                13,
+                4,
+                4,
+                1,
+                4,
+                5,
+                2,
+                true,
+                UnitCategory::Artillery,
+                300,
+                75,
+                Era::Two,
+                Some("Rifled Artillery"),
+                0,
+                WorkerType::Trained,
             ),
             FieldArtillery => s(
                 17,
-                0,
-                12,
+                5,
+                3,
                 1,
                 5,
                 3,
-                2,
+                4,
                 false,
                 UnitCategory::Artillery,
                 350,
                 75,
                 Era::Two,
                 Some("Field Artillery"),
+                0,
+                WorkerType::Trained,
             ),
             MobileArtillery => s(
-                22,
-                0,
-                12,
-                1,
+                25,
+                8,
+                20,
+                5,
                 5,
                 4,
-                2,
+                6,
                 false,
                 UnitCategory::Artillery,
                 450,
                 100,
                 Era::Three,
                 Some("Mobile Artillery"),
+                1,
+                WorkerType::Expert,
             ),
 
             // ── Heavy artillery ─────────────────────────────────
             Artillery => s(
                 16,
-                0,
-                11,
+                4,
+                2,
                 1,
                 4,
                 2,
@@ -617,83 +710,112 @@ impl ArmyUnitType {
                 75,
                 Era::One,
                 Some("Improved Artillery"),
+                0,
+                WorkerType::Untrained,
             ),
             SiegeArtillery => s(
-                21,
-                0,
-                9,
-                11,
+                30,
+                8,
+                3,
+                1,
                 6,
                 2,
-                3,
+                4,
                 false,
                 UnitCategory::Artillery,
                 500,
                 100,
                 Era::Two,
                 Some("Siege Warfare"),
+                0,
+                WorkerType::Trained,
             ),
             RailroadGuns => s(
                 50,
-                0,
+                12,
                 20,
                 5,
                 17,
                 0,
-                4,
+                8,
                 false,
                 UnitCategory::Artillery,
                 600,
                 125,
                 Era::Three,
                 Some("Railroad Artillery"),
+                0,
+                WorkerType::Expert,
             ),
 
             // ── Engineer ────────────────────────────────────────
             Sapper => s(
-                5,
                 0,
-                4,
                 0,
+                3,
+                1,
                 1,
                 4,
-                1,
+                2,
                 false,
                 UnitCategory::Special,
                 150,
                 25,
                 Era::One,
                 Some("Engineering"),
+                0,
+                WorkerType::Untrained,
             ),
             CombatEngineer => s(
-                7,
                 0,
-                7,
                 0,
-                2,
                 4,
                 1,
+                2,
+                4,
+                2,
                 false,
                 UnitCategory::Special,
                 200,
                 50,
                 Era::Two,
                 Some("Engineering"),
+                0,
+                WorkerType::Trained,
+            ),
+            Commandos => s(
+                15,
+                15,
+                15,
+                3,
+                2,
+                6,
+                3,
+                false,
+                UnitCategory::Special,
+                400,
+                100,
+                Era::Three,
+                Some("Modern Warfare"),
+                0,
+                WorkerType::Expert,
             ),
             Saboteur => s(
-                9,
+                0,
                 0,
                 10,
                 2,
                 1,
                 4,
-                1,
+                3,
                 false,
                 UnitCategory::Special,
                 250,
                 50,
                 Era::Three,
                 Some("Modern Warfare"),
+                0,
+                WorkerType::Expert,
             ),
 
             // ── Special ─────────────────────────────────────────
@@ -711,6 +833,8 @@ impl ArmyUnitType {
                 0,
                 Era::One,
                 None,
+                0,
+                WorkerType::Untrained,
             ),
 
             // ── Project-specific: minor-nation capital defense ──
@@ -728,6 +852,8 @@ impl ArmyUnitType {
                 0,
                 Era::One,
                 None,
+                0,
+                WorkerType::Untrained,
             ),
         }
     }
@@ -766,26 +892,30 @@ impl ArmyUnitType {
         use ArmyUnitType::*;
         match self {
             // Era I — base units, no tech needed
-            Minutemen | Militia | Skirmishers | Regulars | Grenadiers | Hussars | Cuirassiers
+            Minutemen | Skirmishers | Regulars | Grenadiers | Hussars | Cuirassiers
             | LightArtillery | Artillery | Sapper | General | GarrisonArtillery => None,
             // Era II
+            Militia => Some("Breech-Loading Rifles"),
             Sharpshooters => Some("Bessemer Converter"),
             RifleInfantry => Some("Breech-Loading Rifles"),
             Guards => Some("Breech-Loading Rifles"),
+            Scouts => Some("Breech-Loading Rifles"),
             Carbineers => Some("Breech-Loading Rifles"),
+            HorseArtillery => Some("Rifled Artillery"),
             FieldArtillery => Some("Rifled Artillery"),
             SiegeArtillery => Some("Large Artillery"),
             CombatEngineer => Some("Bessemer Converter"),
             // Era III
-            Conscript => Some("Modern Warfare"),
+            Conscript => Some("Machine Guns"),
             Rangers => Some("Machine Guns"),
-            Infantry => Some("Modern Warfare"),
+            Infantry => Some("Machine Guns"),
             MachineGunners => Some("Machine Guns"),
             Mechanised => Some("Internal Combustion"),
             Armour => Some("Internal Combustion"),
             MobileArtillery => Some("Internal Combustion"),
             RailroadGuns => Some("Large Artillery"),
-            Saboteur => Some("Modern Warfare"),
+            Commandos => Some("Internal Combustion"),
+            Saboteur => Some("Machine Guns"),
         }
     }
 
@@ -830,6 +960,8 @@ impl ArmyUnitType {
             // Engineer
             Sapper => Some(CombatEngineer),
             CombatEngineer => Some(Saboteur),
+            // Standalone (no upgrade chain)
+            Scouts | HorseArtillery | Commandos => None,
             // End-of-line
             Conscript | Rangers | Infantry | MachineGunners | Mechanised | Armour
             | MobileArtillery | RailroadGuns | Saboteur | General | GarrisonArtillery => None,
@@ -916,6 +1048,26 @@ impl ArmyUnit {
     /// Health scaling: firepower degrades linearly with damage.
     pub fn effective_firepower(&self) -> f64 {
         let base_fp = self.unit_type.stats().firepower as f64;
+        let medal_modifier = 1.0 + self.medals as f64 * 0.25;
+        let health_scale = self.health as f64 / 100.0;
+        base_fp * medal_modifier * health_scale
+    }
+
+    /// Effective firepower when charging (attacker role).
+    ///
+    /// Cavalry units with range == 1 and firepower_mounted > 0 use FPM
+    /// instead of FPN — the mounted charge attack per the original manual.
+    /// All other units fall back to `effective_firepower()`.
+    pub fn effective_firepower_charging(&self) -> f64 {
+        let stats = self.unit_type.stats();
+        let base_fp = if stats.category == UnitCategory::Cavalry
+            && stats.range == 1
+            && stats.firepower_mounted > 0
+        {
+            stats.firepower_mounted as f64
+        } else {
+            stats.firepower as f64
+        };
         let medal_modifier = 1.0 + self.medals as f64 * 0.25;
         let health_scale = self.health as f64 / 100.0;
         base_fp * medal_modifier * health_scale
@@ -1436,8 +1588,7 @@ mod tests {
     fn latest_unlocked_in_chain_walks_all_eras() {
         // With Breech-Loading Rifles + Modern Warfare researched, picking
         // Regulars walks to Infantry (Era III line).
-        let has_blr_and_modern =
-            |t: &str| matches!(t, "Breech-Loading Rifles" | "Modern Warfare");
+        let has_blr_and_modern = |t: &str| matches!(t, "Breech-Loading Rifles" | "Modern Warfare");
         let latest = ArmyUnitType::Regulars.latest_unlocked_in_chain(has_blr_and_modern);
         assert_eq!(latest, ArmyUnitType::Infantry);
     }

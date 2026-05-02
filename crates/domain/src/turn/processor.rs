@@ -14,22 +14,20 @@ use crate::game_state::{GameState, PoliticalSnapshot, PoliticalSnapshotEntry};
 use crate::map::SettlementLevel;
 use crate::map::infrastructure::is_province_connected_multi_filtered;
 use crate::military::battle_outcome::{BattleParams, compute_battle_outcome};
-use crate::military::combat::{
-    BattleConfig, BattleResult, CombatForce, TargetingPriority,
-};
+use crate::military::combat::{BattleConfig, BattleResult, CombatForce, TargetingPriority};
 use crate::military::naval::{NavalBattleResult, resolve_naval_battle};
 use crate::military::ships::Ship;
 use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::turn::civilian_phase::{update_province_connectivity, update_settlements};
-use crate::turn::economy_phase::{
-    apply_blockade_effects, apply_maintenance, apply_warehouse_caps, tick_buildings,
-};
-#[cfg(test)]
-use crate::turn::economy_phase::compute_blockade_capacity;
-use crate::turn::news_phase::generate_newspaper;
 use crate::turn::diplomacy_phase::{
     record_broken_alliance_headlines, resolve_diplomatic_proposals,
 };
+#[cfg(test)]
+use crate::turn::economy_phase::compute_blockade_capacity;
+use crate::turn::economy_phase::{
+    apply_blockade_effects, apply_maintenance, apply_warehouse_caps, tick_buildings,
+};
+use crate::turn::news_phase::generate_newspaper;
 use crate::turn::rewards_phase::resolve_rewards;
 use crate::turn::scoring::{CouncilVoteResult, calculate_score, run_council_vote};
 use crate::types::*;
@@ -223,7 +221,9 @@ fn format_number_with_commas(n: i64) -> String {
 /// Called when a GP either conquers a Minor Nation province or receives one
 /// through voluntary incorporation. Awards 2 Clippers and sets the `has_colony` flag.
 fn award_first_colony_clippers(game: &mut GameState, nation_id: NationId, report: &mut TurnReport) {
-    let already_has_colony = game.get_nation(nation_id).is_some_and(|n| n.military.has_colony);
+    let already_has_colony = game
+        .get_nation(nation_id)
+        .is_some_and(|n| n.military.has_colony);
     if already_has_colony {
         return;
     }
@@ -235,12 +235,18 @@ fn award_first_colony_clippers(game: &mut GameState, nation_id: NationId, report
     };
     nation.military.has_colony = true;
     let base_id = 5_000_000 + nation.id.0 * 100;
-    nation
-        .military.merchant_fleet
-        .push(Ship::new(UnitId(base_id + 1), ShipType::Clipper, nation_id, clipper_hull));
-    nation
-        .military.merchant_fleet
-        .push(Ship::new(UnitId(base_id + 2), ShipType::Clipper, nation_id, clipper_hull));
+    nation.military.merchant_fleet.push(Ship::new(
+        UnitId(base_id + 1),
+        ShipType::Clipper,
+        nation_id,
+        clipper_hull,
+    ));
+    nation.military.merchant_fleet.push(Ship::new(
+        UnitId(base_id + 2),
+        ShipType::Clipper,
+        nation_id,
+        clipper_hull,
+    ));
     let name = nation.name.clone();
     report.rewards_earned.push((
         nation_id,
@@ -249,13 +255,16 @@ fn award_first_colony_clippers(game: &mut GameState, nation_id: NationId, report
             name
         ),
     ));
-    report.newspaper_headlines.push(Headline::new(
-        format!(
-            "{} receives free Clipper ships for establishing its first colony!",
-            name
-        ),
-        HeadlineCategory::Trade,
-    ).for_nation(nation_id));
+    report.newspaper_headlines.push(
+        Headline::new(
+            format!(
+                "{} receives free Clipper ships for establishing its first colony!",
+                name
+            ),
+            HeadlineCategory::Trade,
+        )
+        .for_nation(nation_id),
+    );
 }
 
 fn clear_economy_batch_reservations(game: &mut GameState) {
@@ -328,7 +337,9 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         nation.military.fleet_moves_remaining.clear();
     }
     for nation in &game.world.nations {
-        report.opening_treasury.insert(nation.id, nation.economy.treasury);
+        report
+            .opening_treasury
+            .insert(nation.id, nation.economy.treasury);
     }
 
     // 0. AI decisions for computer-controlled Great Powers
@@ -338,7 +349,10 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 0-post. Resolve pending diplomatic proposals (AI-to-AI evaluated inline,
     // but this handles any proposals from the turn processor level — e.g. mutual proposals)
     resolve_diplomatic_proposals(game, &mut report);
-    let broken_alliances = game.world.diplomacy.finalize_pending_separate_peace_breaks();
+    let broken_alliances = game
+        .world
+        .diplomacy
+        .finalize_pending_separate_peace_breaks();
     record_broken_alliance_headlines(game, &mut report, &broken_alliances);
 
     // 0a. Alliance obligations: AI allies automatically join wars
@@ -357,8 +371,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // Only collect_resources fires here; production and trade run after their
     // interleaved steps (transport, monetary conversion, town production).
     use crate::turn::economy_phase::{
-        EconomicOrderKind, collect_economic_orders, validate_and_reserve,
-        execute_reserved_economy,
+        EconomicOrderKind, collect_economic_orders, execute_reserved_economy, validate_and_reserve,
     };
     let collect_orders: Vec<_> = collect_economic_orders(game)
         .into_iter()
@@ -468,7 +481,8 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     generate_newspaper(game, &mut report);
 
     // 11b. Archive headlines for history browsing
-    game.archive.newspaper_archive
+    game.archive
+        .newspaper_archive
         .push((game.turn, report.newspaper_headlines.clone()));
 
     // 11c. Archive battle results for history browsing
@@ -484,12 +498,14 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // history view. Capitals are archived explicitly because minor-nation
     // capitals can be reassigned during the game.
     let provinces: Vec<PoliticalSnapshotEntry> = game
-        .world.provinces
+        .world
+        .provinces
         .iter()
         .map(|p| (p.id, p.owner, p.incorporated_from))
         .collect();
     let capitals: Vec<(NationId, ProvinceId)> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .map(|n| (n.id, n.capital_province_id))
         .collect();
@@ -508,7 +524,9 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     report.ai_cash_spending = std::mem::take(&mut game.transient.pending_ai_cash_spending);
     report.ai_goods_sale_revenue = std::mem::take(&mut game.transient.pending_ai_cash_income);
     for nation in &game.world.nations {
-        report.closing_treasury.insert(nation.id, nation.economy.treasury);
+        report
+            .closing_treasury
+            .insert(nation.id, nation.economy.treasury);
     }
     finalize_cash_flow(game, &mut report);
     finalize_resource_flow(game, &mut report);
@@ -623,7 +641,11 @@ fn finalize_cash_flow(game: &mut GameState, report: &mut TurnReport) {
     for nation in &mut game.world.nations {
         if let Some(flow) = flows.get(&nation.id) {
             for (source, dollars) in flow.income_totals_by_source() {
-                *nation.archives.cash_income_totals.entry(source).or_insert(0) += dollars;
+                *nation
+                    .archives
+                    .cash_income_totals
+                    .entry(source)
+                    .or_insert(0) += dollars;
             }
             for (sink, dollars) in flow.expense_totals_by_sink() {
                 *nation.archives.cash_expense_totals.entry(sink).or_insert(0) += dollars;
@@ -759,11 +781,7 @@ fn finalize_resource_flow(game: &mut GameState, report: &mut TurnReport) {
     }
     for (nid, good, amount) in &sf.factory_produced_goods {
         if let Some(flow) = flows.get_mut(nid) {
-            flow.add_inflow(
-                Stockpile::Goods(*good),
-                ResourceIn::FactoryOutput,
-                *amount,
-            );
+            flow.add_inflow(Stockpile::Goods(*good), ResourceIn::FactoryOutput, *amount);
         }
     }
     for (nid, material, amount) in &sf.town_produced_materials {
@@ -777,11 +795,7 @@ fn finalize_resource_flow(game: &mut GameState, report: &mut TurnReport) {
     }
     for (nid, good, amount) in &sf.town_produced_goods {
         if let Some(flow) = flows.get_mut(nid) {
-            flow.add_inflow(
-                Stockpile::Goods(*good),
-                ResourceIn::TownProduced,
-                *amount,
-            );
+            flow.add_inflow(Stockpile::Goods(*good), ResourceIn::TownProduced, *amount);
         }
     }
     for (nid, resource, amount) in &sf.food_processed_inputs {
@@ -965,15 +979,22 @@ pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
             if game.get_nation(nid).is_none() {
                 return (nid, HashSet::new());
             }
-            let owned: Vec<&crate::map::Province> =
-                game.world.provinces.iter().filter(|p| p.owner == nid).collect();
+            let owned: Vec<&crate::map::Province> = game
+                .world
+                .provinces
+                .iter()
+                .filter(|p| p.owner == nid)
+                .collect();
             let connected = connected_map
                 .iter()
                 .find(|(id, _)| *id == nid)
                 .map(|(_, s)| s.clone())
                 .unwrap_or_default();
-            let set =
-                crate::map::infrastructure::collectable_hexes(&game.world.hex_map, &owned, &connected);
+            let set = crate::map::infrastructure::collectable_hexes(
+                &game.world.hex_map,
+                &owned,
+                &connected,
+            );
             (nid, set)
         })
         .collect();
@@ -1180,7 +1201,8 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
         // Aggregate this turn's resource production for this nation, split by source
         let capital_province_id = nation.capital_province_id;
         let capital_tiles: std::collections::HashSet<crate::hex::HexCoord> = game
-            .world.provinces
+            .world
+            .provinces
             .iter()
             .find(|p| p.id == capital_province_id)
             .map(|p| p.tiles.iter().copied().collect())
@@ -1204,7 +1226,9 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
             // No production this turn, but still record capacity so freight_unused
             // is non-zero and military rail-move checks later in the turn work correctly.
             if let Some(n) = game.world.nations.iter_mut().find(|n| n.id == nation_id) {
-                n.economy.logistics.update(rail_capacity, sea_capacity, &[], &[]);
+                n.economy
+                    .logistics
+                    .update(rail_capacity, sea_capacity, &[], &[]);
             }
             continue;
         }
@@ -1342,7 +1366,8 @@ fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
 
         // Immigration limit: 1 per 4 provinces, or 1 per 3 if Capitol expanded
         let capitol_expanded = nation
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .find(|b| b.building_type == BuildingType::Capitol)
             .map(|b| b.effective_capacity() > 1)
@@ -1599,7 +1624,8 @@ fn resolve_civilian_actions(game: &mut GameState, report: &mut TurnReport) {
             if let Some(tile) = game.world.hex_map.get_tile_mut(work.position)
                 && let Some(nation) = game.world.nations.iter().find(|n| n.id == work.nation_id)
                 && let Some(civ) = nation
-                    .military.civilians
+                    .military
+                    .civilians
                     .iter()
                     .find(|c| c.position == Some(work.position))
                 && tile.assigned_civilian == Some(civ.id)
@@ -1723,20 +1749,26 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
         }
 
         // Gather current resource inventory as slices
-        let resources: Vec<(ResourceType, u32)> =
-            nation.economy.warehouse.iter().map(|(r, q)| (*r, *q)).collect();
+        let resources: Vec<(ResourceType, u32)> = nation
+            .economy
+            .warehouse
+            .iter()
+            .map(|(r, q)| (*r, *q))
+            .collect();
 
         // Labor is a shared pool across all production this turn
         let mut remaining_labor =
             nation
-                .economy.labor
+                .economy
+                .labor
                 .total_labor_units_with(untrained_mult, trained_mult, expert_mult);
 
         // ── Mills: resources → materials (consume labor first) ──
 
         // Timber chain: LumberMill
         let lumber_mill_cap = nation
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .find(|b| b.building_type == BuildingType::LumberMill)
             .map(|b| b.effective_capacity())
@@ -1757,7 +1789,8 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
 
         // Metal chain: SteelMill
         let steel_mill_cap = nation
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .find(|b| b.building_type == BuildingType::SteelMill)
             .map(|b| b.effective_capacity())
@@ -1778,7 +1811,8 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
 
         // Textile chain: TextileMill
         let textile_mill_cap = nation
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .find(|b| b.building_type == BuildingType::TextileMill)
             .map(|b| b.effective_capacity())
@@ -1838,12 +1872,17 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
         // ── Factories: materials → goods ──
 
         // Build the current materials inventory for factory input
-        let materials_inventory: Vec<(MaterialType, u32)> =
-            nation.economy.materials.iter().map(|(m, q)| (*m, *q)).collect();
+        let materials_inventory: Vec<(MaterialType, u32)> = nation
+            .economy
+            .materials
+            .iter()
+            .map(|(m, q)| (*m, *q))
+            .collect();
 
         // Furniture: LumberMill output → FurnitureFactory
         let furniture_cap = nation
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .find(|b| b.building_type == BuildingType::FurnitureFactory)
             .map(|b| b.effective_capacity())
@@ -1864,7 +1903,8 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
 
         // Hardware: SteelMill output → HardwareFactory
         let hardware_cap = nation
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .find(|b| b.building_type == BuildingType::HardwareFactory)
             .map(|b| b.effective_capacity())
@@ -1885,7 +1925,8 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
 
         // Clothing: TextileMill output → ClothingFactory
         let clothing_cap = nation
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .find(|b| b.building_type == BuildingType::ClothingFactory)
             .map(|b| b.effective_capacity())
@@ -2135,7 +2176,8 @@ fn process_food(game: &mut GameState, report: &mut TurnReport) {
         }
 
         let food_processing_cap = nation
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .find(|b| b.building_type == BuildingType::FoodProcessing)
             .map(|b| b.effective_capacity())
@@ -2352,7 +2394,6 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
     }
 }
 
-
 /// Apply maintenance costs for army units.
 /// Resolve beachhead (naval landing) operations.
 ///
@@ -2370,7 +2411,8 @@ fn resolve_beachheads(game: &mut GameState, report: &mut TurnReport) {
 
     // Remove landings where the nation no longer has warships assigned to that target
     let active_assignments: Vec<(NationId, ProvinceId)> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .flat_map(|nation| {
             nation.military.warships.iter().filter_map(move |ship| {
@@ -2386,7 +2428,8 @@ fn resolve_beachheads(game: &mut GameState, report: &mut TurnReport) {
     // Keep existing landings that still have ships assigned AND remain diplomatically valid.
     // Pre-compute valid landing IDs to avoid borrow conflict with retain.
     let valid_landings: Vec<(NationId, ProvinceId)> = game
-        .transient.pending_landings
+        .transient
+        .pending_landings
         .iter()
         .filter(|(nid, pid, _)| {
             let has_ships = active_assignments
@@ -2399,24 +2442,29 @@ fn resolve_beachheads(game: &mut GameState, report: &mut TurnReport) {
             let target_valid = game.get_province(*pid).is_some_and(|p| {
                 p.ocean_coastal && {
                     let at_war = game
-                        .world.diplomacy
+                        .world
+                        .diplomacy
                         .get_relation(*nid, p.owner)
                         .is_some_and(|r| r.at_war);
-                    let target_anarchic = game.get_nation(p.owner).is_some_and(|n| n.diplomacy.is_in_anarchy);
+                    let target_anarchic = game
+                        .get_nation(p.owner)
+                        .is_some_and(|n| n.diplomacy.is_in_anarchy);
                     at_war || target_anarchic
                 }
             });
             // Revalidate embarkation: attacker must still own an ocean-coastal province
             let attacker_has_coast = game.get_nation(*nid).is_some_and(|n| {
-                n.province_ids
-                    .iter()
-                    .any(|&pid| game.get_province(pid).is_some_and(|p| p.ocean_coastal || p.coastal))
+                n.province_ids.iter().any(|&pid| {
+                    game.get_province(pid)
+                        .is_some_and(|p| p.ocean_coastal || p.coastal)
+                })
             });
             target_valid && attacker_has_coast
         })
         .map(|(nid, pid, _)| (*nid, *pid))
         .collect();
-    game.transient.pending_landings
+    game.transient
+        .pending_landings
         .retain(|(nid, pid, _)| valid_landings.iter().any(|(n, p)| *n == *nid && *p == *pid));
 
     // Collect new beachhead assignments: (nation_id, target_province_id)
@@ -2443,9 +2491,10 @@ fn resolve_beachheads(game: &mut GameState, report: &mut TurnReport) {
         let attacker_has_coast = game
             .get_nation(attacker_id)
             .map(|n| {
-                n.province_ids
-                    .iter()
-                    .any(|&pid| game.get_province(pid).is_some_and(|p| p.ocean_coastal || p.coastal))
+                n.province_ids.iter().any(|&pid| {
+                    game.get_province(pid)
+                        .is_some_and(|p| p.ocean_coastal || p.coastal)
+                })
             })
             .unwrap_or(false);
         if !attacker_has_coast {
@@ -2475,25 +2524,32 @@ fn resolve_beachheads(game: &mut GameState, report: &mut TurnReport) {
             } else {
                 // At least one assigned ship must be in an ocean zone bordering the target
                 attacker_ship_zones.iter().any(|&zone_id| {
-                    game.world.sea_zones.iter()
+                    game.world
+                        .sea_zones
+                        .iter()
                         .find(|z| z.id == zone_id)
                         .is_some_and(|z| !z.is_lake && z.coastal_provinces.contains(&target_pid))
                 })
             }
         };
-        let valid = fleet_zone_ok && game.get_province(target_pid).is_some_and(|p| {
-            p.ocean_coastal && {
-                let at_war = game
-                    .world.diplomacy
-                    .get_relation(attacker_id, p.owner)
-                    .is_some_and(|r| r.at_war);
-                let target_anarchic = game.get_nation(p.owner).is_some_and(|n| n.diplomacy.is_in_anarchy);
-                at_war || target_anarchic
-            }
-        });
+        let valid = fleet_zone_ok
+            && game.get_province(target_pid).is_some_and(|p| {
+                p.ocean_coastal && {
+                    let at_war = game
+                        .world
+                        .diplomacy
+                        .get_relation(attacker_id, p.owner)
+                        .is_some_and(|r| r.at_war);
+                    let target_anarchic = game
+                        .get_nation(p.owner)
+                        .is_some_and(|n| n.diplomacy.is_in_anarchy);
+                    at_war || target_anarchic
+                }
+            });
 
         if valid {
-            game.transient.pending_landings
+            game.transient
+                .pending_landings
                 .push((attacker_id, target_pid, current_turn));
             let attacker_name = game
                 .get_nation(attacker_id)
@@ -2503,13 +2559,16 @@ fn resolve_beachheads(game: &mut GameState, report: &mut TurnReport) {
                 .get_province(target_pid)
                 .map(|p| p.name.clone())
                 .unwrap_or_default();
-            report.newspaper_headlines.push(Headline::new(
-                format!(
-                    "{} establishes a naval landing site at {}",
-                    attacker_name, target_name
-                ),
-                HeadlineCategory::Military,
-            ).for_nation(attacker_id));
+            report.newspaper_headlines.push(
+                Headline::new(
+                    format!(
+                        "{} establishes a naval landing site at {}",
+                        attacker_name, target_name
+                    ),
+                    HeadlineCategory::Military,
+                )
+                .for_nation(attacker_id),
+            );
         }
     }
 }
@@ -2527,9 +2586,14 @@ fn can_attack_province(
 ) -> bool {
     // Check for active landing site established on a previous turn
     let current_turn = game.turn;
-    if game.transient.pending_landings.iter().any(|(nid, pid, established)| {
-        *nid == attacker_id && *pid == target_province_id && *established < current_turn
-    }) {
+    if game
+        .transient
+        .pending_landings
+        .iter()
+        .any(|(nid, pid, established)| {
+            *nid == attacker_id && *pid == target_province_id && *established < current_turn
+        })
+    {
         return true;
     }
 
@@ -2571,12 +2635,33 @@ fn resolve_military_movement(
     // Per-nation rail freight consumed by military moves this turn (separate from
     // resource-delivery freight_committed so the two don't interfere in the rail gate).
     let mut rail_committed_military: HashMap<NationId, u32> = HashMap::new();
-    let moves: Vec<(NationId, crate::map::UnitId, ProvinceId)> =
+    let mut moves: Vec<(NationId, crate::map::UnitId, ProvinceId)> =
         game.transient.pending_moves.drain(..).collect();
+
+    // Sort moves so highest-firepower units (highest strategic value) are
+    // processed first within each nation. When freight capacity runs out, the
+    // most powerful units get through; low-value surplus moves are dropped.
+    moves.sort_by(|a, b| {
+        a.0.cmp(&b.0).then_with(|| {
+            let fp = |nid: NationId, uid: crate::map::UnitId| -> u32 {
+                game.world
+                    .nations
+                    .iter()
+                    .find(|n| n.id == nid)
+                    .and_then(|n| n.military.army.iter().find(|u| u.id == uid))
+                    .map(|u| u.unit_type.stats().firepower)
+                    .unwrap_or(0)
+            };
+            fp(b.0, b.1).cmp(&fp(a.0, a.1))
+        })
+    });
 
     for (nation_id, unit_id, dest_province_id) in moves {
         // Anarchic nations' armies don't move
-        if game.get_nation(nation_id).is_some_and(|n| n.diplomacy.is_in_anarchy) {
+        if game
+            .get_nation(nation_id)
+            .is_some_and(|n| n.diplomacy.is_in_anarchy)
+        {
             continue;
         }
 
@@ -2622,7 +2707,11 @@ fn resolve_military_movement(
             // point (manual p. 47).  Adjacent moves are free marches.
             let is_non_adjacent = {
                 let src = game.world.provinces.iter().find(|p| p.id == src_pos);
-                let dst = game.world.provinces.iter().find(|p| p.id == dest_province_id);
+                let dst = game
+                    .world
+                    .provinces
+                    .iter()
+                    .find(|p| p.id == dest_province_id);
                 match (src, dst) {
                     (Some(s), Some(d)) => {
                         !crate::map::provinces_are_adjacent(&game.world.hex_map, s, d)
@@ -2637,7 +2726,10 @@ fn resolve_military_movement(
                 // Available rail = rail_total
                 //   - resource-delivery portion of freight_committed (committed beyond sea_total)
                 //   - rail already used by earlier military moves this turn (tracked separately)
-                let mil_rail_used = rail_committed_military.get(&nation_id).copied().unwrap_or(0);
+                let mil_rail_used = rail_committed_military
+                    .get(&nation_id)
+                    .copied()
+                    .unwrap_or(0);
                 let rail_available = game
                     .world
                     .nations
@@ -2685,15 +2777,20 @@ fn resolve_military_movement(
         } else {
             // Check if at war with the destination owner, or if target is anarchic
             let at_war = game
-                .world.diplomacy
+                .world
+                .diplomacy
                 .get_relation(nation_id, dest_owner)
                 .is_some_and(|r| r.at_war);
-            let target_is_anarchic = game.get_nation(dest_owner).is_some_and(|n| n.diplomacy.is_in_anarchy);
+            let target_is_anarchic = game
+                .get_nation(dest_owner)
+                .is_some_and(|n| n.diplomacy.is_in_anarchy);
             if at_war || target_is_anarchic {
                 // Validate adjacency: attacker must own an adjacent province
                 // or have an active landing site on the target.
                 if can_attack_province(game, nation_id, dest_province_id) {
-                    game.transient.pending_attacks.push((nation_id, dest_province_id));
+                    game.transient
+                        .pending_attacks
+                        .push((nation_id, dest_province_id));
                     report.unit_movements.push((
                         nation_id,
                         format!("Attack ordered on {} (enemy territory)", dest_name),
@@ -2718,8 +2815,11 @@ fn resolve_military_movement(
     for (nation_id, mil_cost) in rail_committed_military {
         if let Some(nation) = game.get_nation_mut(nation_id) {
             nation.economy.logistics.freight_committed += mil_cost;
-            nation.economy.logistics.freight_unused =
-                nation.economy.logistics.freight_unused.saturating_sub(mil_cost);
+            nation.economy.logistics.freight_unused = nation
+                .economy
+                .logistics
+                .freight_unused
+                .saturating_sub(mil_cost);
         }
     }
 
@@ -2740,7 +2840,8 @@ fn resolve_combat(
     moved_unit_ids: &HashSet<crate::map::UnitId>,
 ) -> HashSet<crate::map::UnitId> {
     let mut fought_unit_ids: HashSet<crate::map::UnitId> = HashSet::new();
-    let all_attacks: Vec<(NationId, ProvinceId)> = game.transient.pending_attacks.drain(..).collect();
+    let all_attacks: Vec<(NationId, ProvinceId)> =
+        game.transient.pending_attacks.drain(..).collect();
     // Filter out attacks from anarchic nations (their armies only defend)
     let attacks: Vec<(NationId, ProvinceId)> = all_attacks
         .into_iter()
@@ -2791,7 +2892,8 @@ fn resolve_combat(
 
         // Re-check diplomatic legality: skip if peace was made earlier this turn
         let still_at_war = game
-            .world.diplomacy
+            .world
+            .diplomacy
             .get_relation(attacker_id, defender_id)
             .is_some_and(|r| r.at_war);
         let defender_anarchic = game
@@ -2818,18 +2920,21 @@ fn resolve_combat(
             .map(|p| p.owner)
             .unwrap_or(defender_id);
         if current_owner != defender_id {
-            report.newspaper_headlines.push(Headline::new(
-                format!(
-                    "{}'s attack on {} is thwarted by intervention!",
-                    game.get_nation(attacker_id)
-                        .map(|n| n.name.as_str())
-                        .unwrap_or("Unknown"),
-                    game.get_nation(defender_id)
-                        .map(|n| n.name.as_str())
-                        .unwrap_or("Unknown"),
-                ),
-                HeadlineCategory::War,
-            ).for_nations(&[attacker_id, defender_id]));
+            report.newspaper_headlines.push(
+                Headline::new(
+                    format!(
+                        "{}'s attack on {} is thwarted by intervention!",
+                        game.get_nation(attacker_id)
+                            .map(|n| n.name.as_str())
+                            .unwrap_or("Unknown"),
+                        game.get_nation(defender_id)
+                            .map(|n| n.name.as_str())
+                            .unwrap_or("Unknown"),
+                    ),
+                    HeadlineCategory::War,
+                )
+                .for_nations(&[attacker_id, defender_id]),
+            );
             continue;
         }
 
@@ -2861,7 +2966,8 @@ fn resolve_combat(
             .map(|n| {
                 use crate::military::naval::NavalOperation;
                 let assigned_ships: Vec<_> = n
-                    .military.warships
+                    .military
+                    .warships
                     .iter()
                     .filter(|s| s.operation == Some(NavalOperation::Beachhead(province_id)))
                     .cloned()
@@ -2887,7 +2993,8 @@ fn resolve_combat(
             match game.get_nation(attacker_id) {
                 Some(n) => {
                     let (land, other): (Vec<_>, Vec<_>) = n
-                        .military.army
+                        .military
+                        .army
                         .iter()
                         // Militia / GarrisonArtillery can never join an
                         // outgoing attack — they defend their home province
@@ -2952,7 +3059,8 @@ fn resolve_combat(
         // up automatically — no per-battle synthesis needed.
         let defense_units: Vec<_> = match game.get_nation(defender_id) {
             Some(n) => n
-                .military.army
+                .military
+                .army
                 .iter()
                 .filter(|u| u.position == province_id)
                 .cloned()
@@ -2990,7 +3098,10 @@ fn resolve_combat(
                     .province_ids
                     .retain(|&pid| pid != province_id);
                 // Destroy any defender units in the conquered province
-                defender_nation.military.army.retain(|u| u.position != province_id);
+                defender_nation
+                    .military
+                    .army
+                    .retain(|u| u.position != province_id);
             }
             if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
                 attacker_nation.add_province(province_id);
@@ -3034,13 +3145,16 @@ fn resolve_combat(
                 report
                     .settlement_upgrades
                     .push((province_id, "Village".to_string()));
-                report.newspaper_headlines.push(Headline::new(
-                    format!(
-                        "{} immediately industrializes under new management!",
-                        province.name
-                    ),
-                    HeadlineCategory::Growth,
-                ).for_nation(attacker_id));
+                report.newspaper_headlines.push(
+                    Headline::new(
+                        format!(
+                            "{} immediately industrializes under new management!",
+                            province.name
+                        ),
+                        HeadlineCategory::Growth,
+                    )
+                    .for_nation(attacker_id),
+                );
             }
 
             let turn = game.turn;
@@ -3121,9 +3235,13 @@ fn resolve_combat(
             let battle_ids: HashSet<crate::map::UnitId> =
                 attacker_force.units.iter().map(|u| u.id).collect();
             if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
-                attacker_nation.military.army.retain(|u| !battle_ids.contains(&u.id));
                 attacker_nation
-                    .military.army
+                    .military
+                    .army
+                    .retain(|u| !battle_ids.contains(&u.id));
+                attacker_nation
+                    .military
+                    .army
                     .extend(result.attacker_survivors.iter().cloned());
             }
         }
@@ -3133,9 +3251,13 @@ fn resolve_combat(
             let battle_ids: HashSet<crate::map::UnitId> =
                 defender_force.units.iter().map(|u| u.id).collect();
             if let Some(defender_nation) = game.get_nation_mut(defender_id) {
-                defender_nation.military.army.retain(|u| !battle_ids.contains(&u.id));
                 defender_nation
-                    .military.army
+                    .military
+                    .army
+                    .retain(|u| !battle_ids.contains(&u.id));
+                defender_nation
+                    .military
+                    .army
                     .extend(result.defender_survivors.iter().cloned());
             }
         }
@@ -3244,7 +3366,10 @@ fn resolve_combat(
                     .province_ids
                     .retain(|pid| *pid != province_id);
                 // Destroy any remaining defender units in the conquered province
-                defender_nation.military.army.retain(|u| u.position != province_id);
+                defender_nation
+                    .military
+                    .army
+                    .retain(|u| u.position != province_id);
             }
             if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
                 attacker_nation.add_province(province_id);
@@ -3273,13 +3398,16 @@ fn resolve_combat(
                 report
                     .settlement_upgrades
                     .push((province_id, "Village".to_string()));
-                report.newspaper_headlines.push(Headline::new(
-                    format!(
-                        "{} immediately industrializes under new management!",
-                        province.name
-                    ),
-                    HeadlineCategory::Growth,
-                ).for_nation(attacker_id));
+                report.newspaper_headlines.push(
+                    Headline::new(
+                        format!(
+                            "{} immediately industrializes under new management!",
+                            province.name
+                        ),
+                        HeadlineCategory::Growth,
+                    )
+                    .for_nation(attacker_id),
+                );
             }
 
             // Award conquest medal if this is a Minor Nation capital
@@ -3323,13 +3451,16 @@ fn resolve_combat(
                 .get_province(province_id)
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
-            report.newspaper_headlines.push(Headline::new(
-                format!(
-                    "BREAKING: {} conquers {} from {}!{}",
-                    atk_name, prov_name, def_name_conquest, origin_suffix
-                ),
-                HeadlineCategory::War,
-            ).for_nations(&[attacker_id, defender_id]));
+            report.newspaper_headlines.push(
+                Headline::new(
+                    format!(
+                        "BREAKING: {} conquers {} from {}!{}",
+                        atk_name, prov_name, def_name_conquest, origin_suffix
+                    ),
+                    HeadlineCategory::War,
+                )
+                .for_nations(&[attacker_id, defender_id]),
+            );
 
             // Record history event
             game.archive.history.push((
@@ -3350,10 +3481,13 @@ fn resolve_combat(
                 .get_nation(defender_id)
                 .is_some_and(|n| n.is_great_power() && n.province_ids.is_empty());
             if defender_eliminated {
-                report.newspaper_headlines.push(Headline::new(
-                    format!("{} has been eliminated!", def_name_conquest),
-                    HeadlineCategory::War,
-                ).for_nation(defender_id));
+                report.newspaper_headlines.push(
+                    Headline::new(
+                        format!("{} has been eliminated!", def_name_conquest),
+                        HeadlineCategory::War,
+                    )
+                    .for_nation(defender_id),
+                );
             }
         } else {
             let def_name = game
@@ -3364,13 +3498,16 @@ fn resolve_combat(
                 .get_province(province_id)
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
-            report.newspaper_headlines.push(Headline::new(
-                format!(
-                    "{} repels attack on {}!{}",
-                    def_name, prov_name, origin_suffix
-                ),
-                HeadlineCategory::Battle,
-            ).for_nation(defender_id));
+            report.newspaper_headlines.push(
+                Headline::new(
+                    format!(
+                        "{} repels attack on {}!{}",
+                        def_name, prov_name, origin_suffix
+                    ),
+                    HeadlineCategory::Battle,
+                )
+                .for_nation(defender_id),
+            );
         }
 
         // Keep the defender's garrison_count cache in sync with surviving
@@ -3452,7 +3589,8 @@ fn resolve_combat(
         // Militia / GarrisonArtillery are locked to their home province.
         let counter_units: Vec<ArmyUnit> = match game.get_nation(counter_attacker_id) {
             Some(n) => n
-                .military.army
+                .military
+                .army
                 .iter()
                 .filter(|u| {
                     u.unit_type.can_move()
@@ -3478,7 +3616,8 @@ fn resolve_combat(
         // Defender of counter-attack is the new occupier — use units in the target province
         let occupier_units: Vec<ArmyUnit> = match game.get_nation(new_owner_id) {
             Some(n) => n
-                .military.army
+                .military
+                .army
                 .iter()
                 .filter(|u| u.position == target_province_id)
                 .cloned()
@@ -3549,9 +3688,13 @@ fn resolve_combat(
             let battle_ids: HashSet<crate::map::UnitId> =
                 counter_force.units.iter().map(|u| u.id).collect();
             if let Some(ca_nation) = game.get_nation_mut(counter_attacker_id) {
-                ca_nation.military.army.retain(|u| !battle_ids.contains(&u.id));
                 ca_nation
-                    .military.army
+                    .military
+                    .army
+                    .retain(|u| !battle_ids.contains(&u.id));
+                ca_nation
+                    .military
+                    .army
                     .extend(result.attacker_survivors.iter().cloned());
             }
         }
@@ -3561,9 +3704,13 @@ fn resolve_combat(
             let battle_ids: HashSet<crate::map::UnitId> =
                 defender_force.units.iter().map(|u| u.id).collect();
             if let Some(occ_nation) = game.get_nation_mut(new_owner_id) {
-                occ_nation.military.army.retain(|u| !battle_ids.contains(&u.id));
                 occ_nation
-                    .military.army
+                    .military
+                    .army
+                    .retain(|u| !battle_ids.contains(&u.id));
+                occ_nation
+                    .military
+                    .army
                     .extend(result.defender_survivors.iter().cloned());
             }
         }
@@ -3618,7 +3765,10 @@ fn resolve_combat(
                     .province_ids
                     .retain(|pid| *pid != target_province_id);
                 // Destroy any occupier units in the re-conquered province
-                occ_nation.military.army.retain(|u| u.position != target_province_id);
+                occ_nation
+                    .military
+                    .army
+                    .retain(|u| u.position != target_province_id);
             }
             // Move surviving counter-attacker units into the recaptured province
             // (counter-attacks are always land-based — from adjacent provinces)
@@ -3651,10 +3801,13 @@ fn resolve_combat(
                 .get_province(target_province_id)
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
-            report.newspaper_headlines.push(Headline::new(
-                format!("{} counter-attacks and recaptures {}!", ca_name, prov_name),
-                HeadlineCategory::War,
-            ).for_nation(counter_attacker_id));
+            report.newspaper_headlines.push(
+                Headline::new(
+                    format!("{} counter-attacks and recaptures {}!", ca_name, prov_name),
+                    HeadlineCategory::War,
+                )
+                .for_nation(counter_attacker_id),
+            );
             // Anarchy is evaluated in the end-of-combat sweep.
         } else {
             let occ_name = game
@@ -3665,10 +3818,13 @@ fn resolve_combat(
                 .get_province(target_province_id)
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
-            report.newspaper_headlines.push(Headline::new(
-                format!("{} repels counter-attack on {}!", occ_name, prov_name),
-                HeadlineCategory::Battle,
-            ).for_nation(new_owner_id));
+            report.newspaper_headlines.push(
+                Headline::new(
+                    format!("{} repels counter-attack on {}!", occ_name, prov_name),
+                    HeadlineCategory::Battle,
+                )
+                .for_nation(new_owner_id),
+            );
         }
 
         // Keep garrison_count cache in sync for the counter-attack site too.
@@ -4149,7 +4305,9 @@ fn check_and_apply_anarchy(
     // purposes — clear any pact-defense requests so fresh cascades can run
     // if this nation ever recovers (future feature) or if any remaining
     // state queries consult the set.
-    game.world.diplomacy.clear_pact_defense_for_nation(nation_id);
+    game.world
+        .diplomacy
+        .clear_pact_defense_for_nation(nation_id);
     // Card #79: integrated minors regain their independence when the
     // overlord falls into anarchy. Runs before the NationEnteredAnarchy
     // event so consumers that snapshot state see the newly-released minors.
@@ -4160,15 +4318,20 @@ fn check_and_apply_anarchy(
         .push(DomainEvent::NationEnteredAnarchy(NationEnteredAnarchy {
             nation: nation_id,
         }));
-    report.newspaper_headlines.push(Headline::new(
-        format!(
-            "ANARCHY: {} collapses into chaos after losing its capital!",
-            name
-        ),
-        HeadlineCategory::War,
-    ).for_nation(nation_id));
-    game.archive.history
-        .push((game.turn, HistoryEvent::FellIntoAnarchy { nation: nation_id }));
+    report.newspaper_headlines.push(
+        Headline::new(
+            format!(
+                "ANARCHY: {} collapses into chaos after losing its capital!",
+                name
+            ),
+            HeadlineCategory::War,
+        )
+        .for_nation(nation_id),
+    );
+    game.archive.history.push((
+        game.turn,
+        HistoryEvent::FellIntoAnarchy { nation: nation_id },
+    ));
     true
 }
 
@@ -4193,7 +4356,8 @@ fn release_integrated_minors(
     // because the minor still has independent territory elsewhere).
     let mut released: Vec<NationId> = Vec::new();
     let minor_ids: Vec<NationId> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| !n.is_great_power())
         .map(|n| n.id)
@@ -4204,7 +4368,8 @@ fn release_integrated_minors(
         // minor's — either by diplomatic incorporation (incorporated_from)
         // or by military conquest (conquest_origin).
         let provinces_to_restore: Vec<ProvinceId> = game
-            .world.provinces
+            .world
+            .provinces
             .iter()
             .filter(|p| {
                 p.owner == overlord_id
@@ -4236,7 +4401,9 @@ fn release_integrated_minors(
         // Determine the actual recipient of the restored provinces. If the
         // minor is currently integrated by a different GP, route the provinces
         // to that GP so the minor's integration state remains consistent.
-        let minor_current_overlord = game.get_nation(minor_id).and_then(|n| n.diplomacy.integrated_by);
+        let minor_current_overlord = game
+            .get_nation(minor_id)
+            .and_then(|n| n.diplomacy.integrated_by);
         let actual_owner = if let Some(other) = minor_current_overlord
             && other != overlord_id
         {
@@ -4265,7 +4432,8 @@ fn release_integrated_minors(
                 .province_ids
                 .retain(|p| !provinces_to_restore.contains(p));
             overlord
-                .military.army
+                .military
+                .army
                 .retain(|u| !provinces_to_restore.contains(&u.position));
         }
 
@@ -4334,19 +4502,22 @@ fn release_integrated_minors(
                 former_overlord: overlord_id,
             },
         ));
-        report.newspaper_headlines.push(Headline::with_reason(
-            format!(
-                "{} regains its independence as {} collapses into chaos",
-                minor_name, overlord_name
-            ),
-            HeadlineCategory::Diplomacy,
-            format!(
-                "{} fell into anarchy; {} reclaimed {} province(s)",
-                overlord_name,
-                minor_name,
-                provinces_to_restore.len()
-            ),
-        ).for_nations(&[minor_id, overlord_id]));
+        report.newspaper_headlines.push(
+            Headline::with_reason(
+                format!(
+                    "{} regains its independence as {} collapses into chaos",
+                    minor_name, overlord_name
+                ),
+                HeadlineCategory::Diplomacy,
+                format!(
+                    "{} fell into anarchy; {} reclaimed {} province(s)",
+                    overlord_name,
+                    minor_name,
+                    provinces_to_restore.len()
+                ),
+            )
+            .for_nations(&[minor_id, overlord_id]),
+        );
         game.archive.history.push((
             game.turn,
             HistoryEvent::RegainedIndependence {
@@ -4436,7 +4607,8 @@ fn trigger_pact_defense(
     // and minor skip the cascade entirely. The entry is cleared when the war
     // ends (peace, incorporation, anarchy).
     if game
-        .world.diplomacy
+        .world
+        .diplomacy
         .is_pact_defense_requested(attacker_nation_id, defender_nation_id)
     {
         return;
@@ -4444,7 +4616,8 @@ fn trigger_pact_defense(
 
     // Collect eligible pact holders (GPs with NAP, not already at war with attacker)
     let mut candidates: Vec<(NationId, i32)> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.is_great_power() && n.id != attacker_nation_id)
         .map(|n| n.id)
@@ -4454,13 +4627,15 @@ fn trigger_pact_defense(
                 defender_nation_id,
                 crate::events::TreatyType::NonAggressionPact,
             ) && !game
-                .world.diplomacy
+                .world
+                .diplomacy
                 .get_relation(gp_id, attacker_nation_id)
                 .is_some_and(|r| r.at_war)
         })
         .map(|gp_id| {
             let score = game
-                .world.diplomacy
+                .world
+                .diplomacy
                 .get_relation(gp_id, defender_nation_id)
                 .map(|r| r.score)
                 .unwrap_or(0);
@@ -4505,7 +4680,8 @@ fn trigger_pact_defense(
         .get_nation(defender_nation_id)
         .is_some_and(|n| !n.province_ids.is_empty());
     if minor_still_independent {
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .mark_pact_defense_requested(attacker_nation_id, defender_nation_id);
     }
 }
@@ -4555,7 +4731,9 @@ fn run_pact_defense_cascade(
             if accepts {
                 // Protector accepts: declare war and incorporate the minor
                 let turn = game.turn;
-                game.world.diplomacy.declare_war_at(gp_id, attacker_id, turn);
+                game.world
+                    .diplomacy
+                    .declare_war_at(gp_id, attacker_id, turn);
                 report.newspaper_headlines.push(Headline::with_reason(
                     format!(
                         "{} intervenes to protect {} and declares war on {}!",
@@ -4601,7 +4779,8 @@ fn run_pact_defense_cascade(
         } else {
             // Human player: create a PactDefenseRequest proposal and pause cascade
             let remaining: Vec<NationId> = candidates[i + 1..].to_vec();
-            game.world.diplomacy
+            game.world
+                .diplomacy
                 .pending_proposals
                 .push(crate::diplomacy::DiplomaticProposal {
                     from: minor_id,
@@ -4615,25 +4794,31 @@ fn run_pact_defense_cascade(
                         Some(remaining)
                     },
                 });
-            report.newspaper_headlines.push(Headline::new(
-                format!(
-                    "{} requests your protection against {}!",
-                    defender_name, attacker_name
-                ),
-                HeadlineCategory::Diplomacy,
-            ).for_nations(&[gp_id, minor_id, attacker_id]));
+            report.newspaper_headlines.push(
+                Headline::new(
+                    format!(
+                        "{} requests your protection against {}!",
+                        defender_name, attacker_name
+                    ),
+                    HeadlineCategory::Diplomacy,
+                )
+                .for_nations(&[gp_id, minor_id, attacker_id]),
+            );
             return; // Pause cascade until human responds
         }
     }
 
     // No one accepted
-    report.newspaper_headlines.push(Headline::new(
-        format!(
-            "No protector came to {}'s defense against {}",
-            defender_name, attacker_name
-        ),
-        HeadlineCategory::Diplomacy,
-    ).for_nations(&[minor_id, attacker_id]));
+    report.newspaper_headlines.push(
+        Headline::new(
+            format!(
+                "No protector came to {}'s defense against {}",
+                defender_name, attacker_name
+            ),
+            HeadlineCategory::Diplomacy,
+        )
+        .for_nations(&[minor_id, attacker_id]),
+    );
 }
 
 /// Accept a pact defense request: protector declares war on attacker and
@@ -4668,15 +4853,19 @@ pub fn accept_pact_defense(
         .unwrap_or_default();
 
     let turn = game.turn;
-    game.world.diplomacy
+    game.world
+        .diplomacy
         .declare_war_at(protector_id, attacker_id, turn);
-    report.newspaper_headlines.push(Headline::new(
-        format!(
-            "{} intervenes to protect {} and declares war on {}!",
-            protector_name, minor_name, attacker_name
-        ),
-        HeadlineCategory::War,
-    ).for_nations(&[protector_id, attacker_id, minor_id]));
+    report.newspaper_headlines.push(
+        Headline::new(
+            format!(
+                "{} intervenes to protect {} and declares war on {}!",
+                protector_name, minor_name, attacker_name
+            ),
+            HeadlineCategory::War,
+        )
+        .for_nations(&[protector_id, attacker_id, minor_id]),
+    );
     game.archive.history.push((
         game.turn,
         HistoryEvent::WarDeclared {
@@ -4704,9 +4893,9 @@ pub fn accept_request_to_join_empire(
     report: &mut TurnReport,
 ) {
     // Precondition: minor must still exist with provinces and not be in anarchy.
-    let minor_valid = game
-        .get_nation(minor_id)
-        .is_some_and(|n| !n.is_great_power() && !n.province_ids.is_empty() && !n.diplomacy.is_in_anarchy);
+    let minor_valid = game.get_nation(minor_id).is_some_and(|n| {
+        !n.is_great_power() && !n.province_ids.is_empty() && !n.diplomacy.is_in_anarchy
+    });
     if !minor_valid {
         return;
     }
@@ -4783,7 +4972,8 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
     use crate::map::sea_zones::SeaZoneId;
 
     let gp_ids: Vec<NationId> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.is_great_power())
         .map(|n| n.id)
@@ -4801,7 +4991,8 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
             // a war declared this turn defers all hostile actions — naval
             // combat, blockade — to the next turn).
             let combat_active = game
-                .world.diplomacy
+                .world
+                .diplomacy
                 .get_relation(a, b)
                 .is_some_and(|r| r.hostilities_active_on(game.turn));
 
@@ -4814,7 +5005,9 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
                 let mut zones: Vec<SeaZoneId> = game
                     .get_nation(a)
                     .map(|n| {
-                        n.military.warships.iter()
+                        n.military
+                            .warships
+                            .iter()
                             .filter_map(|s| s.sea_zone)
                             .collect::<HashSet<_>>()
                             .into_iter()
@@ -4827,9 +5020,12 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
 
             // Schedule a battle for each zone where B also has warships
             for zone_id in a_zones {
-                let b_has_in_zone = game
-                    .get_nation(b)
-                    .is_some_and(|n| n.military.warships.iter().any(|s| s.sea_zone == Some(zone_id)));
+                let b_has_in_zone = game.get_nation(b).is_some_and(|n| {
+                    n.military
+                        .warships
+                        .iter()
+                        .any(|s| s.sea_zone == Some(zone_id))
+                });
                 if b_has_in_zone {
                     battles_to_resolve.push((a, b, zone_id));
                 }
@@ -4839,14 +5035,20 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
 
     for (attacker_id, defender_id, zone_id) in battles_to_resolve {
         let atk_ships: Vec<_> = match game.get_nation(attacker_id) {
-            Some(n) => n.military.warships.iter()
+            Some(n) => n
+                .military
+                .warships
+                .iter()
                 .filter(|s| s.sea_zone == Some(zone_id))
                 .cloned()
                 .collect(),
             None => continue,
         };
         let def_ships: Vec<_> = match game.get_nation(defender_id) {
-            Some(n) => n.military.warships.iter()
+            Some(n) => n
+                .military
+                .warships
+                .iter()
                 .filter(|s| s.sea_zone == Some(zone_id))
                 .cloned()
                 .collect(),
@@ -4856,7 +5058,13 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
             continue;
         }
 
-        let result = resolve_naval_battle(&atk_ships, &def_ships, attacker_id, defender_id, &game.game_data);
+        let result = resolve_naval_battle(
+            &atk_ships,
+            &def_ships,
+            attacker_id,
+            defender_id,
+            &game.game_data,
+        );
 
         let atk_name = game
             .get_nation(attacker_id)
@@ -4873,35 +5081,47 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
         let atk_survivor_ids: HashSet<_> = result.attacker_survivors.iter().map(|s| s.id).collect();
         let def_survivor_ids: HashSet<_> = result.defender_survivors.iter().map(|s| s.id).collect();
         if let Some(nation) = game.get_nation_mut(attacker_id) {
-            nation.military.warships.retain(|s| s.sea_zone != Some(zone_id) || atk_survivor_ids.contains(&s.id));
+            nation
+                .military
+                .warships
+                .retain(|s| s.sea_zone != Some(zone_id) || atk_survivor_ids.contains(&s.id));
             nation.military.warships_lost += result.attacker_ships_lost.len() as u32;
         }
         if let Some(nation) = game.get_nation_mut(defender_id) {
-            nation.military.warships.retain(|s| s.sea_zone != Some(zone_id) || def_survivor_ids.contains(&s.id));
+            nation
+                .military
+                .warships
+                .retain(|s| s.sea_zone != Some(zone_id) || def_survivor_ids.contains(&s.id));
             nation.military.warships_lost += result.defender_ships_lost.len() as u32;
         }
 
         // Add headline
         if result.attacker_won {
-            report.newspaper_headlines.push(Headline::new(
-                format!(
-                    "NAVAL VICTORY: {} defeats {} fleet! ({} ships sunk)",
-                    atk_name,
-                    def_name,
-                    result.defender_ships_lost.len()
-                ),
-                HeadlineCategory::Battle,
-            ).for_nations(&[attacker_id, defender_id]));
+            report.newspaper_headlines.push(
+                Headline::new(
+                    format!(
+                        "NAVAL VICTORY: {} defeats {} fleet! ({} ships sunk)",
+                        atk_name,
+                        def_name,
+                        result.defender_ships_lost.len()
+                    ),
+                    HeadlineCategory::Battle,
+                )
+                .for_nations(&[attacker_id, defender_id]),
+            );
         } else {
-            report.newspaper_headlines.push(Headline::new(
-                format!(
-                    "NAVAL VICTORY: {} defeats {} fleet! ({} ships sunk)",
-                    def_name,
-                    atk_name,
-                    result.attacker_ships_lost.len()
-                ),
-                HeadlineCategory::Battle,
-            ).for_nations(&[defender_id, attacker_id]));
+            report.newspaper_headlines.push(
+                Headline::new(
+                    format!(
+                        "NAVAL VICTORY: {} defeats {} fleet! ({} ships sunk)",
+                        def_name,
+                        atk_name,
+                        result.attacker_ships_lost.len()
+                    ),
+                    HeadlineCategory::Battle,
+                )
+                .for_nations(&[defender_id, attacker_id]),
+            );
         }
 
         report.naval_battles.push(result);
@@ -4965,10 +5185,12 @@ fn resolve_human_tech_research(game: &mut GameState, report: &mut TurnReport) {
     nation.economy.treasury -= tech_cost;
     nation.research_tech_in_year(tech_id, year);
 
-    report.events.push(DomainEvent::TechnologyResearched(TechnologyResearched {
-        nation: human_id,
-        tech: tech_id,
-    }));
+    report
+        .events
+        .push(DomainEvent::TechnologyResearched(TechnologyResearched {
+            nation: human_id,
+            tech: tech_id,
+        }));
 }
 
 /// Report which technologies are available for research by the human player.
@@ -5017,7 +5239,6 @@ fn resolve_technology(game: &mut GameState, report: &mut TurnReport) {
     }
 }
 
-
 ///
 /// When a nation is at war, check if the defender has allies (Alliance treaty).
 /// AI allies automatically join the war by declaring war on the attacker.
@@ -5050,7 +5271,10 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
             continue;
         }
         // Skip alliance obligations for anarchic defenders
-        if game.get_nation(*defender).is_some_and(|n| n.diplomacy.is_in_anarchy) {
+        if game
+            .get_nation(*defender)
+            .is_some_and(|n| n.diplomacy.is_in_anarchy)
+        {
             continue;
         }
         // Check defender's allies
@@ -5060,7 +5284,10 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
                 continue;
             }
             // Skip anarchic allies
-            if game.get_nation(*ally).is_some_and(|n| n.diplomacy.is_in_anarchy) {
+            if game
+                .get_nation(*ally)
+                .is_some_and(|n| n.diplomacy.is_in_anarchy)
+            {
                 continue;
             }
             // Skip joining wars against nations that have 0 provinces (already defeated)
@@ -5072,7 +5299,8 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
             }
             // Check if this ally is already at war with the attacker
             let already_at_war = game
-                .world.diplomacy
+                .world
+                .diplomacy
                 .get_relation(*ally, *attacker)
                 .is_some_and(|r| r.at_war);
             if already_at_war {
@@ -5120,7 +5348,10 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
                 continue;
             }
             // Skip anarchic allies
-            if game.get_nation(*ally).is_some_and(|n| n.diplomacy.is_in_anarchy) {
+            if game
+                .get_nation(*ally)
+                .is_some_and(|n| n.diplomacy.is_in_anarchy)
+            {
                 continue;
             }
             // Skip joining wars against nations that have 0 provinces (already defeated)
@@ -5131,7 +5362,8 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
                 continue;
             }
             let already_at_war = game
-                .world.diplomacy
+                .world
+                .diplomacy
                 .get_relation(*ally, *defender)
                 .is_some_and(|r| r.at_war);
             if already_at_war {
@@ -5212,13 +5444,16 @@ fn resolve_alliance_obligations(game: &mut GameState, report: &mut TurnReport) {
                 .get_nation(cid)
                 .map(|n| n.name.clone())
                 .unwrap_or_default();
-            report.newspaper_headlines.push(Headline::new(
-                format!(
-                    "{} remains neutral due to conflicting alliance obligations",
-                    name
-                ),
-                HeadlineCategory::Diplomacy,
-            ).for_nation(cid));
+            report.newspaper_headlines.push(
+                Headline::new(
+                    format!(
+                        "{} remains neutral due to conflicting alliance obligations",
+                        name
+                    ),
+                    HeadlineCategory::Diplomacy,
+                )
+                .for_nation(cid),
+            );
         }
     }
 
@@ -5298,7 +5533,9 @@ fn incorporate_minor_into_empire(
         }
         gp.military.army.append(&mut transferred_army);
         gp.military.warships.append(&mut transferred_warships);
-        gp.military.merchant_fleet.append(&mut transferred_merchants);
+        gp.military
+            .merchant_fleet
+            .append(&mut transferred_merchants);
     }
 
     // Card #68: once absorbed, the minor is no longer an independent war
@@ -5328,7 +5565,8 @@ fn incorporate_minor_into_empire(
 
 fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnReport) {
     let minor_ids: Vec<NationId> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| !n.is_great_power())
         .map(|n| n.id)
@@ -5340,7 +5578,8 @@ fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnRepor
     // same anarchic overlord on the very next turn, since pre-collapse
     // relations are still near-100.
     let gp_ids: Vec<NationId> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.is_great_power() && !n.diplomacy.is_in_anarchy)
         .map(|n| n.id)
@@ -5428,7 +5667,8 @@ fn resolve_voluntary_incorporations(game: &mut GameState, report: &mut TurnRepor
 /// Player units are not auto-upgraded (player uses `upgrade <index>` command).
 fn resolve_unit_upgrades(game: &mut GameState, report: &mut TurnReport) {
     let ai_nation_ids: Vec<NationId> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.diplomacy.ai_personality.is_some() && !n.diplomacy.is_in_anarchy)
         .map(|n| n.id)
@@ -5455,9 +5695,7 @@ fn resolve_unit_upgrades(game: &mut GameState, report: &mut TurnReport) {
         // only.
         let mut upgrades: Vec<(usize, ArmyUnitType, ArmyUnitType)> = Vec::new();
         for (i, unit) in nation.military.army.iter().enumerate() {
-            if unit.unit_type.category()
-                == crate::military::units::UnitCategory::Garrison
-            {
+            if unit.unit_type.category() == crate::military::units::UnitCategory::Garrison {
                 continue;
             }
             if let Some(target_type) = unit.unit_type.upgrade_to()
@@ -5496,11 +5734,11 @@ fn resolve_unit_upgrades(game: &mut GameState, report: &mut TurnReport) {
     }
 }
 
-
 /// Calculate scores for all Great Powers and store them in the report.
 fn calculate_scores(game: &GameState, report: &mut TurnReport) {
     let mut scores: Vec<(NationId, String, u32)> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.is_great_power())
         .map(|n| {
@@ -5518,24 +5756,32 @@ fn check_council_vote(game: &GameState, report: &mut TurnReport) {
     }
 
     let is_final = game.turn.is_game_end();
-    let result = run_council_vote(&game.world.nations, &game.world.provinces, is_final, &game.world.diplomacy);
+    let result = run_council_vote(
+        &game.world.nations,
+        &game.world.provinces,
+        is_final,
+        &game.world.diplomacy,
+    );
 
     if let Some(winner_id) = result.winner {
         if let Some(winner) = game.get_nation(winner_id) {
-            report.newspaper_headlines.push(Headline::new(
-                format!(
-                    "BREAKING: {} wins the Council of Governors with {} of {} votes!",
-                    winner.name,
-                    result
-                        .votes
-                        .iter()
-                        .find(|(id, _)| *id == winner_id)
-                        .map(|(_, v)| *v)
-                        .unwrap_or(0),
-                    result.total_governors
-                ),
-                HeadlineCategory::Politics,
-            ).for_nation(winner_id));
+            report.newspaper_headlines.push(
+                Headline::new(
+                    format!(
+                        "BREAKING: {} wins the Council of Governors with {} of {} votes!",
+                        winner.name,
+                        result
+                            .votes
+                            .iter()
+                            .find(|(id, _)| *id == winner_id)
+                            .map(|(_, v)| *v)
+                            .unwrap_or(0),
+                        result.total_governors
+                    ),
+                    HeadlineCategory::Politics,
+                )
+                .for_nation(winner_id),
+            );
         }
     } else {
         report.newspaper_headlines.push(Headline::new(
@@ -5604,31 +5850,31 @@ mod tests {
         nation1.economy.treasury = Money::dollars(1000);
 
         crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province1],
-            nations: vec![nation1],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: crate::data::test_game_data(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,}
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province1],
+        nations: vec![nation1],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: crate::data::test_game_data(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,}
     }
 
     /// Build a game state with a gold mine for testing monetary conversion.
@@ -5665,31 +5911,31 @@ mod tests {
         nation1.economy.treasury = Money::dollars(2000);
 
         crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province1],
-            nations: vec![nation1],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,}
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province1],
+        nations: vec![nation1],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,}
     }
 
     // ── Turn advancement ──────────────────────────────────────
@@ -5775,7 +6021,10 @@ mod tests {
         let nation = game.get_nation(NationId(1)).unwrap();
 
         // 1 Gold collected => $500 added to treasury
-        assert_eq!(nation.economy.treasury, initial_treasury + Money::dollars(500));
+        assert_eq!(
+            nation.economy.treasury,
+            initial_treasury + Money::dollars(500)
+        );
 
         // Gold should have been removed from warehouse
         assert_eq!(nation.resource_amount(ResourceType::Gold), 0);
@@ -5801,7 +6050,10 @@ mod tests {
         let nation = game.get_nation(NationId(1)).unwrap();
 
         // 3 Gems => $3,000
-        assert_eq!(nation.economy.treasury, initial_treasury + Money::dollars(3000));
+        assert_eq!(
+            nation.economy.treasury,
+            initial_treasury + Money::dollars(3000)
+        );
         assert_eq!(nation.resource_amount(ResourceType::Gems), 0);
         assert!(!report.gold_income.is_empty());
     }
@@ -6035,31 +6287,31 @@ mod tests {
         nation.economy.treasury = Money::dollars(500);
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province],
-            nations: vec![nation],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province],
+        nations: vec![nation],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         let report = process_turn(&mut game);
 
@@ -6121,50 +6373,56 @@ mod tests {
 
         // Add mills and factories
         nation
-            .economy.buildings
+            .economy
+            .buildings
             .push(Building::new(BuildingType::LumberMill, 2));
         nation
-            .economy.buildings
+            .economy
+            .buildings
             .push(Building::new(BuildingType::SteelMill, 2));
         nation
-            .economy.buildings
+            .economy
+            .buildings
             .push(Building::new(BuildingType::TextileMill, 2));
         nation
-            .economy.buildings
+            .economy
+            .buildings
             .push(Building::new(BuildingType::FurnitureFactory, 1));
         nation
-            .economy.buildings
+            .economy
+            .buildings
             .push(Building::new(BuildingType::HardwareFactory, 1));
         nation
-            .economy.buildings
+            .economy
+            .buildings
             .push(Building::new(BuildingType::ClothingFactory, 1));
 
         crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province],
-            nations: vec![nation],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,}
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province],
+        nations: vec![nation],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,}
     }
 
     #[test]
@@ -6183,7 +6441,8 @@ mod tests {
         // Net lumber: 2 - 2 = 0
         assert_eq!(
             nation
-                .economy.materials
+                .economy
+                .materials
                 .get(&MaterialType::Lumber)
                 .copied()
                 .unwrap_or(0),
@@ -6194,7 +6453,8 @@ mod tests {
         // Furniture produced by factory
         assert_eq!(
             nation
-                .economy.goods
+                .economy
+                .goods
                 .get(&GoodsType::Furniture)
                 .copied()
                 .unwrap_or(0),
@@ -6226,7 +6486,8 @@ mod tests {
         // Net steel: 2 - 2 = 0
         assert_eq!(
             nation
-                .economy.materials
+                .economy
+                .materials
                 .get(&MaterialType::Steel)
                 .copied()
                 .unwrap_or(0),
@@ -6237,7 +6498,12 @@ mod tests {
         assert_eq!(nation.resource_amount(ResourceType::Iron), 1);
         // Hardware produced
         assert_eq!(
-            nation.economy.goods.get(&GoodsType::Hardware).copied().unwrap_or(0),
+            nation
+                .economy
+                .goods
+                .get(&GoodsType::Hardware)
+                .copied()
+                .unwrap_or(0),
             1
         );
 
@@ -6264,7 +6530,8 @@ mod tests {
         // Net fabric: 2 - 2 = 0
         assert_eq!(
             nation
-                .economy.materials
+                .economy
+                .materials
                 .get(&MaterialType::Fabric)
                 .copied()
                 .unwrap_or(0),
@@ -6273,7 +6540,12 @@ mod tests {
         assert_eq!(nation.resource_amount(ResourceType::Cotton), 0);
         // Clothing produced
         assert_eq!(
-            nation.economy.goods.get(&GoodsType::Clothing).copied().unwrap_or(0),
+            nation
+                .economy
+                .goods
+                .get(&GoodsType::Clothing)
+                .copied()
+                .unwrap_or(0),
             1
         );
 
@@ -6291,7 +6563,11 @@ mod tests {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
         // Pre-stock lumber (bypassing mill)
-        *nation.economy.materials.entry(MaterialType::Lumber).or_insert(0) = 4;
+        *nation
+            .economy
+            .materials
+            .entry(MaterialType::Lumber)
+            .or_insert(0) = 4;
 
         let report = process_turn(&mut game);
 
@@ -6299,7 +6575,8 @@ mod tests {
         // Factory capacity 1, 4 lumber / 2 per unit = 2, limited by capacity = 1
         assert_eq!(
             nation
-                .economy.goods
+                .economy
+                .goods
                 .get(&GoodsType::Furniture)
                 .copied()
                 .unwrap_or(0),
@@ -6308,7 +6585,8 @@ mod tests {
         // 4 - 2 consumed = 2 lumber remaining
         assert_eq!(
             nation
-                .economy.materials
+                .economy
+                .materials
                 .get(&MaterialType::Lumber)
                 .copied()
                 .unwrap_or(0),
@@ -6328,19 +6606,29 @@ mod tests {
     fn hardware_factory_produces_from_steel() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        *nation.economy.materials.entry(MaterialType::Steel).or_insert(0) = 4;
+        *nation
+            .economy
+            .materials
+            .entry(MaterialType::Steel)
+            .or_insert(0) = 4;
 
         let report = process_turn(&mut game);
 
         let nation = game.get_nation(NationId(1)).unwrap();
         // Factory capacity 1, 4 steel / 2 = 2, limited by capacity = 1
         assert_eq!(
-            nation.economy.goods.get(&GoodsType::Hardware).copied().unwrap_or(0),
+            nation
+                .economy
+                .goods
+                .get(&GoodsType::Hardware)
+                .copied()
+                .unwrap_or(0),
             1
         );
         assert_eq!(
             nation
-                .economy.materials
+                .economy
+                .materials
                 .get(&MaterialType::Steel)
                 .copied()
                 .unwrap_or(0),
@@ -6360,19 +6648,29 @@ mod tests {
     fn clothing_factory_produces_from_fabric() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        *nation.economy.materials.entry(MaterialType::Fabric).or_insert(0) = 6;
+        *nation
+            .economy
+            .materials
+            .entry(MaterialType::Fabric)
+            .or_insert(0) = 6;
 
         let report = process_turn(&mut game);
 
         let nation = game.get_nation(NationId(1)).unwrap();
         // Factory capacity 1, 6 fabric / 2 = 3, limited by capacity = 1
         assert_eq!(
-            nation.economy.goods.get(&GoodsType::Clothing).copied().unwrap_or(0),
+            nation
+                .economy
+                .goods
+                .get(&GoodsType::Clothing)
+                .copied()
+                .unwrap_or(0),
             1
         );
         assert_eq!(
             nation
-                .economy.materials
+                .economy
+                .materials
                 .get(&MaterialType::Fabric)
                 .copied()
                 .unwrap_or(0),
@@ -6403,7 +6701,8 @@ mod tests {
         assert_eq!(nation.resource_amount(ResourceType::Timber), 4);
         assert_eq!(
             nation
-                .economy.materials
+                .economy
+                .materials
                 .get(&MaterialType::Lumber)
                 .copied()
                 .unwrap_or(0),
@@ -6411,7 +6710,8 @@ mod tests {
         );
         assert_eq!(
             nation
-                .economy.goods
+                .economy
+                .goods
                 .get(&GoodsType::Furniture)
                 .copied()
                 .unwrap_or(0),
@@ -6588,7 +6888,8 @@ mod tests {
         nation.economy.labor.untrained = 1;
         // Add a FoodProcessing building with capacity 3
         nation
-            .economy.buildings
+            .economy
+            .buildings
             .push(Building::new(BuildingType::FoodProcessing, 3));
         // 9 grain: 6 consumed by processing (cap 3 × 2), 1 consumed by worker, 2 remain
         nation.add_resource(ResourceType::Grain, 9);
@@ -6629,7 +6930,8 @@ mod tests {
 
         let nation = game.get_nation(NationId(1)).unwrap();
         let mill = nation
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .find(|b| b.building_type == BuildingType::LumberMill)
             .unwrap();
@@ -6641,7 +6943,8 @@ mod tests {
 
         let nation = game.get_nation(NationId(1)).unwrap();
         let mill = nation
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .find(|b| b.building_type == BuildingType::LumberMill)
             .unwrap();
@@ -6672,7 +6975,8 @@ mod tests {
         assert_eq!(nation.resource_amount(ResourceType::Timber), 8);
         assert_eq!(
             nation
-                .economy.goods
+                .economy
+                .goods
                 .get(&GoodsType::Furniture)
                 .copied()
                 .unwrap_or(0),
@@ -6718,7 +7022,8 @@ mod tests {
         // Give nation freight cars: capacity 10, production is 2 (1 Grain + 1 Timber)
         game.get_nation_mut(NationId(1))
             .unwrap()
-            .military.transport
+            .military
+            .transport
             .build_freight_cars(10);
 
         let report = process_turn(&mut game);
@@ -6778,31 +7083,31 @@ mod tests {
         nation.economy.labor = LaborPool::new();
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province],
-            nations: vec![nation],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province],
+        nations: vec![nation],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         let report = process_turn(&mut game);
 
@@ -6878,7 +7183,10 @@ mod tests {
         );
 
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.economy.labor.untrained, 1, "Should have 1 untrained worker");
+        assert_eq!(
+            nation.economy.labor.untrained, 1,
+            "Should have 1 untrained worker"
+        );
     }
 
     #[test]
@@ -6977,7 +7285,8 @@ mod tests {
 
         // Verify initial state
         let mill = nation
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .find(|b| b.building_type == BuildingType::SteelMill)
             .unwrap();
@@ -6988,7 +7297,8 @@ mod tests {
         process_turn(&mut game);
         let nation = game.get_nation(NationId(1)).unwrap();
         let mill = nation
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .find(|b| b.building_type == BuildingType::SteelMill)
             .unwrap();
@@ -6999,7 +7309,8 @@ mod tests {
         process_turn(&mut game);
         let nation = game.get_nation(NationId(1)).unwrap();
         let mill = nation
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .find(|b| b.building_type == BuildingType::SteelMill)
             .unwrap();
@@ -7048,31 +7359,31 @@ mod tests {
         nation.add_province(ProvinceId(2));
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province_capital, province_remote],
-            nations: vec![nation],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province_capital, province_remote],
+        nations: vec![nation],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         // Process 7 turns: 1 turn to start countdown (set to 6), then 6 turns to count down
         for _ in 0..7 {
@@ -7123,31 +7434,31 @@ mod tests {
         nation.add_province(ProvinceId(2));
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province_capital, province_disconnected],
-            nations: vec![nation],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province_capital, province_disconnected],
+        nations: vec![nation],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         for _ in 0..10 {
             process_turn(&mut game);
@@ -7267,31 +7578,31 @@ mod tests {
         nation.add_province(ProvinceId(2));
 
         crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province_capital, province_village],
-            nations: vec![nation],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,}
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province_capital, province_village],
+        nations: vec![nation],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,}
     }
 
     #[test]
@@ -7379,31 +7690,31 @@ mod tests {
         nation.add_province(ProvinceId(2));
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province_capital, province_village],
-            nations: vec![nation],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province_capital, province_village],
+        nations: vec![nation],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         let report = process_turn(&mut game);
 
@@ -7469,7 +7780,8 @@ mod tests {
         let mut game =
             test_game_state_with_village(&[(TerrainType::Forest, Some(ResourceType::Timber)); 4]);
         // Override to Hamlet
-        game.world.provinces
+        game.world
+            .provinces
             .iter_mut()
             .find(|p| p.id == ProvinceId(2))
             .unwrap()
@@ -7492,7 +7804,8 @@ mod tests {
         let mut game =
             test_game_state_with_village(&[(TerrainType::Forest, Some(ResourceType::Timber)); 4]);
         // Upgrade to Town
-        game.world.provinces
+        game.world
+            .provinces
             .iter_mut()
             .find(|p| p.id == ProvinceId(2))
             .unwrap()
@@ -7561,31 +7874,31 @@ mod tests {
         nation.add_province(ProvinceId(2));
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province_capital, province_village],
-            nations: vec![nation],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province_capital, province_village],
+        nations: vec![nation],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         // Process 12 turns to count down the town_countdown
         for _ in 0..12 {
@@ -7639,31 +7952,31 @@ mod tests {
         nation.add_province(ProvinceId(2));
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province_capital, province_village],
-            nations: vec![nation],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province_capital, province_village],
+        nations: vec![nation],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         // Process only 11 turns — not enough
         for _ in 0..11 {
@@ -7718,31 +8031,31 @@ mod tests {
         nation.add_province(ProvinceId(2));
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province_capital, province_remote],
-            nations: vec![nation],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province_capital, province_remote],
+        nations: vec![nation],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         // 7 turns: Hamlet → Village (1 to start countdown + 6 to count down)
         for _ in 0..7 {
@@ -7820,7 +8133,8 @@ mod tests {
 
         // Add food processing building
         nation
-            .economy.buildings
+            .economy
+            .buildings
             .push(Building::new(BuildingType::FoodProcessing, 5));
 
         // Plenty of raw food for canning and surplus
@@ -8045,31 +8359,31 @@ mod tests {
         diplomacy.initialize_great_powers(&[NationId(1)]);
 
         crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province1, province2],
-            nations: vec![nation1, nation2],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: diplomacy,
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,}
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province1, province2],
+        nations: vec![nation1, nation2],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: diplomacy,
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,}
     }
 
     #[test]
@@ -8077,7 +8391,10 @@ mod tests {
         let mut game = test_game_state_with_minor_nation();
 
         // Set diplomacy score to exactly 90 (incorporation threshold)
-        let rel = game.world.diplomacy.ensure_relation(NationId(2), NationId(1));
+        let rel = game
+            .world
+            .diplomacy
+            .ensure_relation(NationId(2), NationId(1));
         rel.score = 90;
 
         let mut report = TurnReport {
@@ -8130,20 +8447,29 @@ mod tests {
         // request must surface as a RequestToJoinEmpire proposal rather than
         // auto-incorporating. The minor keeps its provinces until the player
         // accepts.
-        assert!(report.incorporations.is_empty(), "must not auto-incorporate into human");
+        assert!(
+            report.incorporations.is_empty(),
+            "must not auto-incorporate into human"
+        );
         assert_eq!(
-            game.world.diplomacy
+            game.world
+                .diplomacy
                 .pending_proposals
                 .iter()
-                .filter(|p| p.proposal_type == crate::events::TreatyType::RequestToJoinEmpire
-                    && p.from == NationId(2)
-                    && p.to == NationId(1))
+                .filter(
+                    |p| p.proposal_type == crate::events::TreatyType::RequestToJoinEmpire
+                        && p.from == NationId(2)
+                        && p.to == NationId(1)
+                )
                 .count(),
             1,
             "exactly one RequestToJoinEmpire proposal must be queued for the human"
         );
         let mn = game.get_nation(NationId(2)).unwrap();
-        assert!(mn.province_ids.contains(&ProvinceId(2)), "minor keeps its province pending decision");
+        assert!(
+            mn.province_ids.contains(&ProvinceId(2)),
+            "minor keeps its province pending decision"
+        );
         let prov = game.get_province(ProvinceId(2)).unwrap();
         assert_eq!(prov.owner, NationId(2));
     }
@@ -8164,10 +8490,18 @@ mod tests {
         );
         gp_b.economy.treasury = Money::dollars(1000);
         game.world.nations.push(gp_b);
-        game.world.diplomacy.initialize_great_powers(&[NationId(1), NationId(3)]);
+        game.world
+            .diplomacy
+            .initialize_great_powers(&[NationId(1), NationId(3)]);
         // Human (NationId(1)) below threshold; AI GP at threshold.
-        game.world.diplomacy.ensure_relation(NationId(2), NationId(1)).score = 50;
-        game.world.diplomacy.ensure_relation(NationId(2), NationId(3)).score = 95;
+        game.world
+            .diplomacy
+            .ensure_relation(NationId(2), NationId(1))
+            .score = 50;
+        game.world
+            .diplomacy
+            .ensure_relation(NationId(2), NationId(3))
+            .score = 95;
 
         let mut report = TurnReport::empty();
         resolve_voluntary_incorporations(&mut game, &mut report);
@@ -8175,7 +8509,8 @@ mod tests {
         assert_eq!(report.incorporations.len(), 1);
         assert_eq!(report.incorporations[0], (NationId(2), NationId(3)));
         assert!(
-            game.world.diplomacy
+            game.world
+                .diplomacy
                 .pending_proposals
                 .iter()
                 .all(|p| p.proposal_type != crate::events::TreatyType::RequestToJoinEmpire),
@@ -8188,13 +8523,17 @@ mod tests {
         // Running resolve_voluntary_incorporations twice in a row must not
         // accumulate duplicate RequestToJoinEmpire proposals.
         let mut game = test_game_state_with_minor_nation();
-        game.world.diplomacy.ensure_relation(NationId(2), NationId(1)).score = 95;
+        game.world
+            .diplomacy
+            .ensure_relation(NationId(2), NationId(1))
+            .score = 95;
         let mut report = TurnReport::empty();
         resolve_voluntary_incorporations(&mut game, &mut report);
         let mut report = TurnReport::empty();
         resolve_voluntary_incorporations(&mut game, &mut report);
         assert_eq!(
-            game.world.diplomacy
+            game.world
+                .diplomacy
                 .pending_proposals
                 .iter()
                 .filter(|p| p.proposal_type == crate::events::TreatyType::RequestToJoinEmpire)
@@ -8209,7 +8548,10 @@ mod tests {
         let mut game = test_game_state_with_minor_nation();
 
         // Set diplomacy score to 89 (just below threshold of 90)
-        let rel = game.world.diplomacy.ensure_relation(NationId(2), NationId(1));
+        let rel = game
+            .world
+            .diplomacy
+            .ensure_relation(NationId(2), NationId(1));
         rel.score = 89;
 
         let mut report = TurnReport {
@@ -8291,8 +8633,12 @@ mod tests {
         );
         gp2.economy.treasury = Money::dollars(1000);
         for i in 0..4 {
-            gp2.military.warships
-                .push(Ship::with_data(UnitId(20 + i), ShipType::Frigate, NationId(2), &game.game_data));
+            gp2.military.warships.push(Ship::with_data(
+                UnitId(20 + i),
+                ShipType::Frigate,
+                NationId(2),
+                &game.game_data,
+            ));
         }
         // Give gp2 a real province so it's "active" in the blockade sweep.
         let extra_province = Province::new(
@@ -8311,20 +8657,29 @@ mod tests {
         let clipper_hull = game.game_data.ship_stats(ShipType::Clipper).hull;
         let gp1 = game.get_nation_mut(NationId(1)).unwrap();
         for i in 0..3 {
-            gp1.military.merchant_fleet
-                .push(Ship::new(UnitId(100 + i), ShipType::Clipper, NationId(1), clipper_hull));
+            gp1.military.merchant_fleet.push(Ship::new(
+                UnitId(100 + i),
+                ShipType::Clipper,
+                NationId(1),
+                clipper_hull,
+            ));
         }
 
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .initialize_great_powers(&[NationId(1), NationId(2)]);
 
         let turn = game.turn;
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .declare_war_at(NationId(1), NationId(2), turn);
 
         // Declaration turn: compute_blockade_capacity must return the
         // victim's raw cargo (no reduction).
-        let raw_cargo = game.get_nation(NationId(1)).unwrap().total_cargo_capacity(&game.game_data);
+        let raw_cargo = game
+            .get_nation(NationId(1))
+            .unwrap()
+            .total_cargo_capacity(&game.game_data);
         assert!(
             raw_cargo > 0,
             "victim must have cargo for this test to be meaningful"
@@ -8374,15 +8729,25 @@ mod tests {
         );
         gp_b.economy.treasury = Money::dollars(1000);
         game.world.nations.push(gp_b);
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .initialize_great_powers(&[NationId(1), NationId(3)]);
 
         // Mark GP A (Testlandia) as anarchic, with maxed score to the minor.
-        game.get_nation_mut(NationId(1)).unwrap().diplomacy.is_in_anarchy = true;
-        let rel_a = game.world.diplomacy.ensure_relation(NationId(2), NationId(1));
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .diplomacy
+            .is_in_anarchy = true;
+        let rel_a = game
+            .world
+            .diplomacy
+            .ensure_relation(NationId(2), NationId(1));
         rel_a.score = 100;
         // GP B (Healthy Empire) has a below-threshold score.
-        let rel_b = game.world.diplomacy.ensure_relation(NationId(2), NationId(3));
+        let rel_b = game
+            .world
+            .diplomacy
+            .ensure_relation(NationId(2), NationId(3));
         rel_b.score = 50;
 
         let mut report = TurnReport::empty();
@@ -8396,7 +8761,10 @@ mod tests {
         assert!(mn.province_ids.contains(&ProvinceId(2)));
 
         // Now raise GP B above threshold: it should win.
-        let rel_b = game.world.diplomacy.ensure_relation(NationId(2), NationId(3));
+        let rel_b = game
+            .world
+            .diplomacy
+            .ensure_relation(NationId(2), NationId(3));
         rel_b.score = 95;
         let mut report = TurnReport::empty();
         resolve_voluntary_incorporations(&mut game, &mut report);
@@ -8480,7 +8848,10 @@ mod tests {
 
         // The Regulars should be upgraded to RifleInfantry
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.military.army[0].unit_type, ArmyUnitType::RifleInfantry);
+        assert_eq!(
+            nation.military.army[0].unit_type,
+            ArmyUnitType::RifleInfantry
+        );
 
         // Report should record the upgrade
         assert_eq!(report.unit_upgrades.len(), 1);
@@ -8558,9 +8929,18 @@ mod tests {
         resolve_unit_upgrades(&mut game, &mut report);
 
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.military.army[0].unit_type, ArmyUnitType::RifleInfantry);
-        assert_eq!(nation.military.army[0].medals, 3, "Medals should be preserved");
-        assert_eq!(nation.military.army[0].health, 75, "Health should be preserved");
+        assert_eq!(
+            nation.military.army[0].unit_type,
+            ArmyUnitType::RifleInfantry
+        );
+        assert_eq!(
+            nation.military.army[0].medals, 3,
+            "Medals should be preserved"
+        );
+        assert_eq!(
+            nation.military.army[0].health, 75,
+            "Health should be preserved"
+        );
     }
 
     // ── Pact defense tests ──────────────────────────────────────
@@ -8634,12 +9014,15 @@ mod tests {
         pact_holder.economy.treasury = Money::dollars(10000);
         // Give the pact holder a strong army so it accepts the defense request
         for i in 0..10 {
-            pact_holder.military.army.push(crate::military::units::ArmyUnit::new(
-                crate::map::UnitId(8000 + i),
-                crate::military::units::ArmyUnitType::Regulars,
-                NationId(4),
-                ProvinceId(3),
-            ));
+            pact_holder
+                .military
+                .army
+                .push(crate::military::units::ArmyUnit::new(
+                    crate::map::UnitId(8000 + i),
+                    crate::military::units::ArmyUnitType::Regulars,
+                    NationId(4),
+                    ProvinceId(3),
+                ));
         }
 
         let mut diplomacy = DiplomacyState::new();
@@ -8653,31 +9036,31 @@ mod tests {
         diplomacy.propose_pact(NationId(4), NationId(3)).unwrap();
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province1, province2, province3],
-            nations: vec![human, attacker, minor, pact_holder],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: diplomacy,
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province1, province2, province3],
+        nations: vec![human, attacker, minor, pact_holder],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: diplomacy,
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         // Verify pact exists
         assert!(game.world.diplomacy.has_treaty(
@@ -8735,7 +9118,8 @@ mod tests {
 
         // PactHolder (AI) should strategically accept and be at war with Attacker
         assert!(
-            game.world.diplomacy
+            game.world
+                .diplomacy
                 .get_relation(NationId(4), NationId(2))
                 .is_some_and(|r| r.at_war),
             "PactHolder should declare war on attacker after strategic evaluation"
@@ -8796,31 +9180,31 @@ mod tests {
         nation2.economy.treasury = Money::dollars(10000);
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province1],
-            nations: vec![nation1, nation2],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province1],
+        nations: vec![nation1, nation2],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         let mut report = TurnReport {
             turn: TurnNumber::new(1),
@@ -8883,7 +9267,8 @@ mod tests {
         game.world.nations[0].economy.treasury = Money::dollars(10000);
         // Set a subsidy with a fictional MN
         game.world.nations[0]
-            .diplomacy.trade_subsidies
+            .diplomacy
+            .trade_subsidies
             .insert(NationId(10), Money::dollars(200));
 
         let report = process_turn(&mut game);
@@ -8978,38 +9363,39 @@ mod tests {
             .unwrap_or(0);
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![gp_province, mn_province],
-            nations: vec![gp, mn],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: diplomacy,
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![gp_province, mn_province],
+        nations: vec![gp, mn],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: diplomacy,
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         let report = process_turn(&mut game);
 
         // If trade happened, relationship should have improved
         if !report.trade_transactions.is_empty() {
             let score_after = game
-                .world.diplomacy
+                .world
+                .diplomacy
                 .get_relation(NationId(1), NationId(10))
                 .map(|r| r.score)
                 .unwrap_or(0);
@@ -9093,31 +9479,31 @@ mod tests {
             .unwrap();
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![gp_province, mn_province],
-            nations: vec![gp, mn],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: diplomacy,
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![gp_province, mn_province],
+        nations: vec![gp, mn],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: diplomacy,
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         let report = process_turn(&mut game);
 
@@ -9194,7 +9580,8 @@ mod tests {
 
         // Add food processing building
         nation
-            .economy.buildings
+            .economy
+            .buildings
             .push(Building::new(BuildingType::FoodProcessing, 5));
 
         // Plenty of raw food (surplus for immigration)
@@ -9344,31 +9731,31 @@ mod tests {
         nation2.add_province(ProvinceId(3));
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province1, province2, province3],
-            nations: vec![nation1, nation2],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province1, province2, province3],
+        nations: vec![nation1, nation2],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
         crate::military::combat::seed_militia_from_garrison_count(&mut game);
         game
     }
@@ -9391,7 +9778,9 @@ mod tests {
         }
 
         // Queue attack on Province 2
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let report = process_turn(&mut game);
@@ -9421,7 +9810,9 @@ mod tests {
 
         // Defender has NO army units (only garrison)
         // Queue attack on Province 2
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let report = process_turn(&mut game);
@@ -9457,7 +9848,9 @@ mod tests {
         );
 
         // Queue attack on Province 2 (attacker has strong army, will win)
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let report = process_turn(&mut game);
@@ -9490,7 +9883,9 @@ mod tests {
         // Province 2 is Minor Nation (garrison_count=3).
         // After being conquered by GP Nation 1, garrison_count = 0.
         // But if garrison is rebuilt, it should use GP type (4 Militia).
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         process_turn(&mut game);
@@ -9619,31 +10014,31 @@ mod tests {
         nation1.economy.treasury = Money::dollars(1000);
 
         let game_state = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province1, province2],
-            nations: vec![nation1],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province1, province2],
+        nations: vec![nation1],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         let mut game = game_state;
 
@@ -9769,31 +10164,31 @@ mod tests {
         nation1.add_province(ProvinceId(2));
 
         let game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province1, province2],
-            nations: vec![nation1],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province1, province2],
+        nations: vec![nation1],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         let connected = connected_provinces(&game, NationId(1));
         assert!(
@@ -9987,31 +10382,31 @@ mod tests {
         );
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province_gp, province_mn],
-            nations: vec![nation_gp, nation_mn],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province_gp, province_mn],
+        nations: vec![nation_gp, nation_mn],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         // Process several turns
         for _ in 0..10 {
@@ -10089,31 +10484,31 @@ mod tests {
         diplomacy.declare_war(NationId(1), NationId(2));
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province_atk, province_def],
-            nations: vec![nation_atk, nation_def],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: diplomacy,
-            pending_attacks: vec![(NationId(1), ProvinceId(2))],
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province_atk, province_def],
+        nations: vec![nation_atk, nation_def],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: diplomacy,
+        pending_attacks: vec![(NationId(1), ProvinceId(2))],
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         process_turn(&mut game);
 
@@ -10210,31 +10605,31 @@ mod tests {
         diplomacy.declare_war(NationId(1), NationId(2));
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province_atk, province_def],
-            nations: vec![nation_atk, nation_def],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: diplomacy,
-            pending_attacks: vec![(NationId(1), ProvinceId(2))],
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province_atk, province_def],
+        nations: vec![nation_atk, nation_def],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: diplomacy,
+        pending_attacks: vec![(NationId(1), ProvinceId(2))],
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
         // Seed persistent militia so the defender actually has units in
         // the fortified province (otherwise the auto-conquer path fires
         // and the siege-reduction logic never runs).
@@ -10262,7 +10657,10 @@ mod tests {
         let mut game = test_game_state_with_minor_nation();
 
         // Set diplomacy score to 95 (above threshold)
-        let rel = game.world.diplomacy.ensure_relation(NationId(2), NationId(1));
+        let rel = game
+            .world
+            .diplomacy
+            .ensure_relation(NationId(2), NationId(1));
         rel.score = 95;
 
         // Simulate that the minor nation was already incorporated (0 provinces)
@@ -10386,31 +10784,31 @@ mod tests {
         diplomacy.declare_war(NationId(1), NationId(2));
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province1, province2, province3],
-            nations: vec![nation1, nation2],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: diplomacy,
-            pending_attacks: vec![(NationId(1), ProvinceId(2))],
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province1, province2, province3],
+        nations: vec![nation1, nation2],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: diplomacy,
+        pending_attacks: vec![(NationId(1), ProvinceId(2))],
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         process_turn(&mut game);
 
@@ -10444,10 +10842,16 @@ mod tests {
         let mut game = test_game_state();
         // Default warehouse capacity is 1, so raw cap = 50
         game.world.nations[0].add_resource(ResourceType::Timber, 100);
-        assert_eq!(game.world.nations[0].resource_amount(ResourceType::Timber), 100);
+        assert_eq!(
+            game.world.nations[0].resource_amount(ResourceType::Timber),
+            100
+        );
 
         apply_warehouse_caps(&mut game);
-        assert_eq!(game.world.nations[0].resource_amount(ResourceType::Timber), 50);
+        assert_eq!(
+            game.world.nations[0].resource_amount(ResourceType::Timber),
+            50
+        );
     }
 
     #[test]
@@ -10457,7 +10861,10 @@ mod tests {
         game.world.nations[0].add_material(MaterialType::Lumber, 80);
 
         apply_warehouse_caps(&mut game);
-        assert_eq!(game.world.nations[0].material_amount(MaterialType::Lumber), 50);
+        assert_eq!(
+            game.world.nations[0].material_amount(MaterialType::Lumber),
+            50
+        );
     }
 
     #[test]
@@ -10475,7 +10882,8 @@ mod tests {
         let mut game = test_game_state();
         // Add a Warehouse building with capacity 4: raw cap = 200, material cap = 200, goods cap = 100
         game.world.nations[0]
-            .economy.buildings
+            .economy
+            .buildings
             .push(Building::new(BuildingType::Warehouse, 4));
 
         game.world.nations[0].add_resource(ResourceType::Coal, 250);
@@ -10483,8 +10891,14 @@ mod tests {
         game.world.nations[0].add_goods(GoodsType::Hardware, 150);
 
         apply_warehouse_caps(&mut game);
-        assert_eq!(game.world.nations[0].resource_amount(ResourceType::Coal), 200);
-        assert_eq!(game.world.nations[0].material_amount(MaterialType::Steel), 200);
+        assert_eq!(
+            game.world.nations[0].resource_amount(ResourceType::Coal),
+            200
+        );
+        assert_eq!(
+            game.world.nations[0].material_amount(MaterialType::Steel),
+            200
+        );
         assert_eq!(game.world.nations[0].goods_amount(GoodsType::Hardware), 100);
     }
 
@@ -10496,7 +10910,10 @@ mod tests {
 
         apply_warehouse_caps(&mut game);
         // Should remain unchanged since 30 < 50
-        assert_eq!(game.world.nations[0].resource_amount(ResourceType::Iron), 30);
+        assert_eq!(
+            game.world.nations[0].resource_amount(ResourceType::Iron),
+            30
+        );
     }
 
     // ── Blockade capacity tests ──────────────────────────────────
@@ -10559,7 +10976,10 @@ mod tests {
         let capacity = compute_blockade_capacity(&game);
 
         // Without blockade: raw cargo = 4 * clipper_capacity
-        let raw_cargo = game.get_nation(NationId(1)).unwrap().total_cargo_capacity(&game.game_data);
+        let raw_cargo = game
+            .get_nation(NationId(1))
+            .unwrap()
+            .total_cargo_capacity(&game.game_data);
         let effective = capacity.get(&NationId(1)).copied().unwrap_or(raw_cargo);
 
         // Blockade should reduce capacity when enemy has warships
@@ -10611,7 +11031,10 @@ mod tests {
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let capacity = compute_blockade_capacity(&game);
-        let raw_cargo = game.get_nation(NationId(1)).unwrap().total_cargo_capacity(&game.game_data);
+        let raw_cargo = game
+            .get_nation(NationId(1))
+            .unwrap()
+            .total_cargo_capacity(&game.game_data);
         let effective = capacity.get(&NationId(1)).copied().unwrap_or(raw_cargo);
 
         // Anarchic nation's warships should NOT reduce trade
@@ -10664,7 +11087,14 @@ mod tests {
         }
 
         let coord2 = HexCoord::new(5, 5);
-        let province2 = Province::new(ProvinceId(200), "EnemyLand".to_string(), NationId(2), coord2, vec![coord2], 4);
+        let province2 = Province::new(
+            ProvinceId(200),
+            "EnemyLand".to_string(),
+            NationId(2),
+            coord2,
+            vec![coord2],
+            4,
+        );
         game.world.provinces.push(province2);
         game.world.nations.push(nation2);
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
@@ -10680,7 +11110,10 @@ mod tests {
         }];
 
         let capacity = compute_blockade_capacity(&game);
-        let raw_cargo = game.get_nation(NationId(1)).unwrap().total_cargo_capacity(&game.game_data);
+        let raw_cargo = game
+            .get_nation(NationId(1))
+            .unwrap()
+            .total_cargo_capacity(&game.game_data);
         let effective = capacity.get(&NationId(1)).copied().unwrap_or(raw_cargo);
 
         assert_eq!(
@@ -10727,10 +11160,12 @@ mod tests {
         nation.researched_techs.push(crate::events::TechId(1)); // tech_score = 1 * 30 = 30
         nation.researched_techs.push(crate::events::TechId(2)); // tech_score = 2 * 30 = 60
         nation
-            .economy.buildings
+            .economy
+            .buildings
             .push(Building::new(BuildingType::LumberMill, 1)); // building_score = 1 * 10 = 10
         nation
-            .economy.buildings
+            .economy
+            .buildings
             .push(Building::new(BuildingType::SteelMill, 1)); // building_score = 2 * 10 = 20
 
         let data = crate::data::GameData::default();
@@ -10810,31 +11245,31 @@ mod tests {
         diplomacy.declare_war(NationId(1), NationId(2));
 
         let game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".into(),
-            hex_map: hex_map,
-            provinces: vec![prov1, prov2],
-            nations: vec![n1, n2],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: diplomacy,
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".into(),
+        hex_map: hex_map,
+        provinces: vec![prov1, prov2],
+        nations: vec![n1, n2],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: diplomacy,
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         assert!(
             can_attack_province(&game, NationId(1), ProvinceId(2)),
@@ -10888,31 +11323,31 @@ mod tests {
         );
 
         let game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".into(),
-            hex_map: hex_map,
-            provinces: vec![prov1, prov2],
-            nations: vec![n1, n2],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".into(),
+        hex_map: hex_map,
+        provinces: vec![prov1, prov2],
+        nations: vec![n1, n2],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         assert!(
             !can_attack_province(&game, NationId(1), ProvinceId(2)),
@@ -10958,32 +11393,32 @@ mod tests {
         );
 
         let game = crate::test_game_state! {
-            turn: TurnNumber::new(2),
-            difficulty: Difficulty::Normal,
-            map_key: "test".into(),
-            hex_map: hex_map,
-            provinces: vec![prov1, prov2],
-            nations: vec![n1, n2],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            // Landing established on turn 1, current turn is 2
-            pending_landings: vec![(NationId(1), ProvinceId(2), TurnNumber::new(1))],
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(2),
+        difficulty: Difficulty::Normal,
+        map_key: "test".into(),
+        hex_map: hex_map,
+        provinces: vec![prov1, prov2],
+        nations: vec![n1, n2],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        // Landing established on turn 1, current turn is 2
+        pending_landings: vec![(NationId(1), ProvinceId(2), TurnNumber::new(1))],
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         assert!(
             can_attack_province(&game, NationId(1), ProvinceId(2)),
@@ -11029,32 +11464,32 @@ mod tests {
         );
 
         let game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".into(),
-            hex_map: hex_map,
-            provinces: vec![prov1, prov2],
-            nations: vec![n1, n2],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            // Landing established on turn 1, current turn is also 1
-            pending_landings: vec![(NationId(1), ProvinceId(2), TurnNumber::new(1))],
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".into(),
+        hex_map: hex_map,
+        provinces: vec![prov1, prov2],
+        nations: vec![n1, n2],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        // Landing established on turn 1, current turn is also 1
+        pending_landings: vec![(NationId(1), ProvinceId(2), TurnNumber::new(1))],
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         assert!(
             !can_attack_province(&game, NationId(1), ProvinceId(2)),
@@ -11168,31 +11603,31 @@ mod tests {
         rel.improve_score(60);
 
         crate::test_game_state! {
-            turn: TurnNumber::new(5),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![p1, p2],
-            nations: vec![n1, n2],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: diplomacy,
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,}
+        turn: TurnNumber::new(5),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![p1, p2],
+        nations: vec![n1, n2],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: diplomacy,
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,}
     }
 
     #[test]
@@ -11202,14 +11637,16 @@ mod tests {
         let ai = NationId(2);
 
         // Queue a NAP proposal (same as what WASM bridge now does)
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .propose_treaty(human, ai, TreatyType::NonAggressionPact, game.turn)
             .unwrap();
 
         // Should be pending, not yet an active treaty
         assert!(
             !game
-                .world.diplomacy
+                .world
+                .diplomacy
                 .get_relation(human, ai)
                 .unwrap()
                 .has_treaty(TreatyType::NonAggressionPact),
@@ -11235,7 +11672,8 @@ mod tests {
         }
 
         // Queue proposal (AI is Diplomatic personality with score +60 → should accept)
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .propose_treaty(human, ai, TreatyType::NonAggressionPact, game.turn)
             .unwrap();
 
@@ -11247,7 +11685,8 @@ mod tests {
 
         // Treaty should be active
         assert!(
-            game.world.diplomacy
+            game.world
+                .diplomacy
                 .get_relation(human, ai)
                 .unwrap()
                 .has_treaty(TreatyType::NonAggressionPact),
@@ -11290,7 +11729,8 @@ mod tests {
         let rel = game.world.diplomacy.ensure_relation(human, ai);
         rel.score = -50; // terrible relationship
 
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .propose_treaty(human, ai, TreatyType::NonAggressionPact, game.turn)
             .unwrap();
 
@@ -11300,7 +11740,8 @@ mod tests {
         // Treaty should NOT be active
         assert!(
             !game
-                .world.diplomacy
+                .world
+                .diplomacy
                 .get_relation(human, ai)
                 .unwrap()
                 .has_treaty(TreatyType::NonAggressionPact),
@@ -11340,14 +11781,16 @@ mod tests {
         // Pre-apply NAP so propose_pact() will fail with "already active"
         game.world.diplomacy.propose_pact(human, ai).unwrap();
         assert!(
-            game.world.diplomacy
+            game.world
+                .diplomacy
                 .get_relation(human, ai)
                 .unwrap()
                 .has_treaty(TreatyType::NonAggressionPact)
         );
 
         // Manually insert a duplicate pending NAP proposal (bypassing validation)
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .pending_proposals
             .push(crate::diplomacy::DiplomaticProposal {
                 from: human,
@@ -11381,7 +11824,8 @@ mod tests {
             game.game_data.lua_engine = None;
         }
 
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .propose_treaty(human, ai, TreatyType::Alliance, game.turn)
             .unwrap();
 
@@ -11389,7 +11833,8 @@ mod tests {
         resolve_diplomatic_proposals(&mut game, &mut report);
 
         assert!(
-            game.world.diplomacy
+            game.world
+                .diplomacy
                 .get_relation(human, ai)
                 .unwrap()
                 .has_treaty(TreatyType::Alliance),
@@ -11417,7 +11862,8 @@ mod tests {
         let rel = game.world.diplomacy.ensure_relation(human, ai);
         rel.score = -50;
 
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .propose_treaty(human, ai, TreatyType::Alliance, game.turn)
             .unwrap();
 
@@ -11426,7 +11872,8 @@ mod tests {
 
         assert!(
             !game
-                .world.diplomacy
+                .world
+                .diplomacy
                 .get_relation(human, ai)
                 .unwrap()
                 .has_treaty(TreatyType::Alliance),
@@ -11444,7 +11891,8 @@ mod tests {
         let ai = NationId(2);
 
         // AI proposes alliance to human
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .propose_treaty(ai, human, TreatyType::Alliance, game.turn)
             .unwrap();
 
@@ -11466,10 +11914,15 @@ mod tests {
         let mut game = test_game_for_counter_attack();
 
         // Queue attack on Province 2
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
-        assert!(game.archive.battle_archive.is_empty(), "archive should start empty");
+        assert!(
+            game.archive.battle_archive.is_empty(),
+            "archive should start empty"
+        );
 
         let report = process_turn(&mut game);
 
@@ -11539,7 +11992,8 @@ mod tests {
         for i in 0..20 {
             game.get_nation_mut(NationId(2))
                 .unwrap()
-                .military.army
+                .military
+                .army
                 .push(ArmyUnit::new(
                     UnitId(500 + i),
                     ArmyUnitType::Guards,
@@ -11548,7 +12002,9 @@ mod tests {
                 ));
         }
 
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let report = process_turn(&mut game);
@@ -11572,14 +12028,16 @@ mod tests {
         // `retain(|u| u.position != province)` cleanup.
         let n1 = game.get_nation(NationId(1)).unwrap();
         let survivors_at_home = n1
-            .military.army
+            .military
+            .army
             .iter()
             .filter(|u| u.position == ProvinceId(1))
             .count();
         assert!(
             survivors_at_home > 0,
             "Nation 1 retreating Guards should land at Province 1; army: {:?}",
-            n1.military.army
+            n1.military
+                .army
                 .iter()
                 .map(|u| (u.id, u.position))
                 .collect::<Vec<_>>()
@@ -11620,7 +12078,9 @@ mod tests {
         // (which has 3 militia from the fixture) and confirm militia
         // appear in the battle result's casualties or survivors.
         let _ = UnitId(0);
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let report = process_turn(&mut game);
@@ -11663,19 +12123,44 @@ mod tests {
         cap_tile.is_country_capital = true;
         cap_tile.infrastructure.has_depot = true;
         hex_map.set_tile(cap, cap_tile);
-        hex_map.set_tile(far, Tile::with_province(TerrainType::Grassland, ProvinceId(2)));
+        hex_map.set_tile(
+            far,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
 
-        let p1 = Province::new(ProvinceId(1), "Cap".to_string(), NationId(1), cap, vec![cap], 4);
-        let p2 = Province::new(ProvinceId(2), "Far".to_string(), NationId(1), far, vec![far], 4);
+        let p1 = Province::new(
+            ProvinceId(1),
+            "Cap".to_string(),
+            NationId(1),
+            cap,
+            vec![cap],
+            4,
+        );
+        let p2 = Province::new(
+            ProvinceId(2),
+            "Far".to_string(),
+            NationId(1),
+            far,
+            vec![far],
+            4,
+        );
 
         let mut nation = Nation::new(
-            NationId(1), "Test".to_string(), NationColor::Blue,
-            NationType::GreatPower, ProvinceId(1),
+            NationId(1),
+            "Test".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
         );
         nation.add_province(ProvinceId(2));
         nation.economy.treasury = Money::dollars(1000);
         // Zero freight cars — rail moves must be blocked.
-        let unit = ArmyUnit::new(UnitId(1), ArmyUnitType::Regulars, NationId(1), ProvinceId(1));
+        let unit = ArmyUnit::new(
+            UnitId(1),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(1),
+        );
         let unit_id = unit.id;
         nation.military.army.push(unit);
 
@@ -11696,12 +12181,25 @@ mod tests {
             next_unit_id: 6_000_000,
         };
 
-        game.transient.pending_moves.push((NationId(1), unit_id, ProvinceId(2)));
+        game.transient
+            .pending_moves
+            .push((NationId(1), unit_id, ProvinceId(2)));
         process_turn(&mut game);
 
-        let pos = game.get_nation(NationId(1)).unwrap()
-            .military.army.iter().find(|u| u.id == unit_id).unwrap().position;
-        assert_eq!(pos, ProvinceId(1), "rail move must be blocked with zero freight cars");
+        let pos = game
+            .get_nation(NationId(1))
+            .unwrap()
+            .military
+            .army
+            .iter()
+            .find(|u| u.id == unit_id)
+            .unwrap()
+            .position;
+        assert_eq!(
+            pos,
+            ProvinceId(1),
+            "rail move must be blocked with zero freight cars"
+        );
     }
 
     #[test]
@@ -11719,20 +12217,45 @@ mod tests {
         cap_tile.is_country_capital = true;
         cap_tile.infrastructure.has_depot = true;
         hex_map.set_tile(cap, cap_tile);
-        hex_map.set_tile(far, Tile::with_province(TerrainType::Grassland, ProvinceId(2)));
+        hex_map.set_tile(
+            far,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
 
-        let p1 = Province::new(ProvinceId(1), "Cap".to_string(), NationId(1), cap, vec![cap], 4);
-        let p2 = Province::new(ProvinceId(2), "Far".to_string(), NationId(1), far, vec![far], 4);
+        let p1 = Province::new(
+            ProvinceId(1),
+            "Cap".to_string(),
+            NationId(1),
+            cap,
+            vec![cap],
+            4,
+        );
+        let p2 = Province::new(
+            ProvinceId(2),
+            "Far".to_string(),
+            NationId(1),
+            far,
+            vec![far],
+            4,
+        );
 
         let mut nation = Nation::new(
-            NationId(1), "Test".to_string(), NationColor::Blue,
-            NationType::GreatPower, ProvinceId(1),
+            NationId(1),
+            "Test".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
         );
         nation.add_province(ProvinceId(2));
         nation.economy.treasury = Money::dollars(1000);
         // 10 freight cars: enough for 2 Regulars (5 cars each, arms=1).
         nation.military.transport.build_freight_cars(10);
-        let unit = ArmyUnit::new(UnitId(1), ArmyUnitType::Regulars, NationId(1), ProvinceId(1));
+        let unit = ArmyUnit::new(
+            UnitId(1),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(1),
+        );
         let unit_id = unit.id;
         nation.military.army.push(unit);
 
@@ -11753,12 +12276,24 @@ mod tests {
             next_unit_id: 6_000_000,
         };
 
-        game.transient.pending_moves.push((NationId(1), unit_id, ProvinceId(2)));
+        game.transient
+            .pending_moves
+            .push((NationId(1), unit_id, ProvinceId(2)));
         process_turn(&mut game);
 
         let nation = game.get_nation(NationId(1)).unwrap();
-        let pos = nation.military.army.iter().find(|u| u.id == unit_id).unwrap().position;
-        assert_eq!(pos, ProvinceId(2), "rail move must succeed with sufficient freight");
+        let pos = nation
+            .military
+            .army
+            .iter()
+            .find(|u| u.id == unit_id)
+            .unwrap()
+            .position;
+        assert_eq!(
+            pos,
+            ProvinceId(2),
+            "rail move must succeed with sufficient freight"
+        );
         // Regulars have arms_required = 1, so cost = 5 freight cars.
         // freight_committed should have increased by 5 (all capacity was also used
         // by resources or just by the military move).
@@ -11785,24 +12320,64 @@ mod tests {
         cap_tile.is_country_capital = true;
         cap_tile.infrastructure.has_depot = true;
         hex_map.set_tile(cap, cap_tile);
-        hex_map.set_tile(far1, Tile::with_province(TerrainType::Grassland, ProvinceId(2)));
-        hex_map.set_tile(far2, Tile::with_province(TerrainType::Grassland, ProvinceId(3)));
+        hex_map.set_tile(
+            far1,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+        hex_map.set_tile(
+            far2,
+            Tile::with_province(TerrainType::Grassland, ProvinceId(3)),
+        );
 
-        let p1 = Province::new(ProvinceId(1), "Cap".to_string(), NationId(1), cap, vec![cap], 4);
-        let p2 = Province::new(ProvinceId(2), "Far1".to_string(), NationId(1), far1, vec![far1], 4);
-        let p3 = Province::new(ProvinceId(3), "Far2".to_string(), NationId(1), far2, vec![far2], 4);
+        let p1 = Province::new(
+            ProvinceId(1),
+            "Cap".to_string(),
+            NationId(1),
+            cap,
+            vec![cap],
+            4,
+        );
+        let p2 = Province::new(
+            ProvinceId(2),
+            "Far1".to_string(),
+            NationId(1),
+            far1,
+            vec![far1],
+            4,
+        );
+        let p3 = Province::new(
+            ProvinceId(3),
+            "Far2".to_string(),
+            NationId(1),
+            far2,
+            vec![far2],
+            4,
+        );
 
         let mut nation = Nation::new(
-            NationId(1), "Test".to_string(), NationColor::Blue,
-            NationType::GreatPower, ProvinceId(1),
+            NationId(1),
+            "Test".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
         );
         nation.add_province(ProvinceId(2));
         nation.add_province(ProvinceId(3));
         nation.economy.treasury = Money::dollars(1000);
         // Only 5 freight cars (enough for 1 Regulars move at cost=5, not 2).
         nation.military.transport.build_freight_cars(5);
-        let unit1 = ArmyUnit::new(UnitId(1), ArmyUnitType::Regulars, NationId(1), ProvinceId(1));
-        let unit2 = ArmyUnit::new(UnitId(2), ArmyUnitType::Regulars, NationId(1), ProvinceId(1));
+        let unit1 = ArmyUnit::new(
+            UnitId(1),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(1),
+        );
+        let unit2 = ArmyUnit::new(
+            UnitId(2),
+            ArmyUnitType::Regulars,
+            NationId(1),
+            ProvinceId(1),
+        );
         let uid1 = unit1.id;
         let uid2 = unit2.id;
         nation.military.army.push(unit1);
@@ -11825,19 +12400,40 @@ mod tests {
             next_unit_id: 6_000_000,
         };
 
-        game.transient.pending_moves.push((NationId(1), uid1, ProvinceId(2)));
-        game.transient.pending_moves.push((NationId(1), uid2, ProvinceId(3)));
+        game.transient
+            .pending_moves
+            .push((NationId(1), uid1, ProvinceId(2)));
+        game.transient
+            .pending_moves
+            .push((NationId(1), uid2, ProvinceId(3)));
         process_turn(&mut game);
 
         let nation = game.get_nation(NationId(1)).unwrap();
-        let pos1 = nation.military.army.iter().find(|u| u.id == uid1).unwrap().position;
-        let pos2 = nation.military.army.iter().find(|u| u.id == uid2).unwrap().position;
+        let pos1 = nation
+            .military
+            .army
+            .iter()
+            .find(|u| u.id == uid1)
+            .unwrap()
+            .position;
+        let pos2 = nation
+            .military
+            .army
+            .iter()
+            .find(|u| u.id == uid2)
+            .unwrap()
+            .position;
         // Exactly one move should succeed, one should be blocked.
         let moved = [pos1 != ProvinceId(1), pos2 != ProvinceId(1)];
-        assert_eq!(moved.iter().filter(|&&m| m).count(), 1,
-            "exactly one of the two moves should succeed with 5 freight cars");
-        assert_eq!(nation.economy.logistics.freight_committed, 5,
-            "freight_committed should reflect exactly one rail move");
+        assert_eq!(
+            moved.iter().filter(|&&m| m).count(),
+            1,
+            "exactly one of the two moves should succeed with 5 freight cars"
+        );
+        assert_eq!(
+            nation.economy.logistics.freight_committed, 5,
+            "freight_committed should reflect exactly one rail move"
+        );
     }
 
     #[test]
@@ -11848,12 +12444,14 @@ mod tests {
         let militia_id = game
             .get_nation(NationId(2))
             .unwrap()
-            .military.army
+            .military
+            .army
             .iter()
             .find(|u| u.position == ProvinceId(2) && u.unit_type == ArmyUnitType::Minutemen)
             .expect("fixture should seed militia at P2")
             .id;
-        game.transient.pending_moves
+        game.transient
+            .pending_moves
             .push((NationId(2), militia_id, ProvinceId(3)));
 
         process_turn(&mut game);
@@ -11861,7 +12459,8 @@ mod tests {
         let pos = game
             .get_nation(NationId(2))
             .unwrap()
-            .military.army
+            .military
+            .army
             .iter()
             .find(|u| u.id == militia_id)
             .expect("militia must still exist")
@@ -11876,7 +12475,9 @@ mod tests {
         let mut game = test_game_for_counter_attack();
         // Strip all militia (keep field army + artillery).
         if let Some(n2) = game.get_nation_mut(NationId(2)) {
-            n2.military.army.retain(|u| u.unit_type != ArmyUnitType::Minutemen);
+            n2.military
+                .army
+                .retain(|u| u.unit_type != ArmyUnitType::Minutemen);
         }
         // Sync caches so we start at 0.
         sync_garrison_cache(&mut game, ProvinceId(2));
@@ -11964,7 +12565,9 @@ mod tests {
             8
         );
 
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         process_turn(&mut game);
@@ -12002,9 +12605,13 @@ mod tests {
         let mut game = test_game_for_counter_attack();
         let n1 = game.get_nation_mut(NationId(1)).unwrap();
         // Drop field army to none — only militia remain at P1.
-        n1.military.army.retain(|u| u.unit_type == ArmyUnitType::Minutemen);
+        n1.military
+            .army
+            .retain(|u| u.unit_type == ArmyUnitType::Minutemen);
         // Attack P2.
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let report = process_turn(&mut game);
@@ -12096,7 +12703,8 @@ mod tests {
         let survivor_ids: Vec<UnitId> = game
             .get_nation(NationId(2))
             .unwrap()
-            .military.army
+            .military
+            .army
             .iter()
             .filter(|u| u.position == ProvinceId(2) && u.unit_type == ArmyUnitType::Minutemen)
             .map(|u| u.id)
@@ -12113,7 +12721,8 @@ mod tests {
             assert!(
                 game.get_nation(NationId(2))
                     .unwrap()
-                    .military.army
+                    .military
+                    .army
                     .iter()
                     .all(|u| u.id != *uid),
                 "overflow militia {:?} should have been destroyed",
@@ -12167,12 +12776,7 @@ mod tests {
             .military
             .army
             .iter()
-            .filter(|u| {
-                matches!(
-                    u.unit_type,
-                    ArmyUnitType::Militia | ArmyUnitType::Conscript
-                )
-            })
+            .filter(|u| matches!(u.unit_type, ArmyUnitType::Militia | ArmyUnitType::Conscript))
             .count();
         assert_eq!(
             new_garrison_evos, 0,
@@ -12189,7 +12793,9 @@ mod tests {
         game.game_data.game_config.garrison_regen_interval_turns = 0;
         // Clear all militia so every province is under-strength.
         if let Some(n) = game.get_nation_mut(NationId(2)) {
-            n.military.army.retain(|u| u.unit_type != ArmyUnitType::Minutemen);
+            n.military
+                .army
+                .retain(|u| u.unit_type != ArmyUnitType::Minutemen);
         }
         sync_garrison_cache(&mut game, ProvinceId(2));
         sync_garrison_cache(&mut game, ProvinceId(3));
@@ -12214,11 +12820,8 @@ mod tests {
         use crate::map::UnitId;
         use crate::military::combat::spawn_garrison_artillery_unit;
         let mut game = test_game_for_counter_attack();
-        let artillery = spawn_garrison_artillery_unit(
-            &mut game.next_unit_id,
-            NationId(2),
-            ProvinceId(2),
-        );
+        let artillery =
+            spawn_garrison_artillery_unit(&mut game.next_unit_id, NationId(2), ProvinceId(2));
         let artillery_id = artillery.id;
         let n2 = game.get_nation_mut(NationId(2)).unwrap();
         n2.military.army.push(artillery);
@@ -12234,7 +12837,9 @@ mod tests {
             ));
         }
 
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         process_turn(&mut game);
@@ -12243,7 +12848,8 @@ mod tests {
         let n2_still_has_artillery = game
             .get_nation(NationId(2))
             .unwrap()
-            .military.army
+            .military
+            .army
             .iter()
             .any(|u| u.id == artillery_id);
         assert!(
@@ -12285,7 +12891,8 @@ mod tests {
         let defender_militia_ids: Vec<UnitId> = game
             .get_nation(NationId(2))
             .unwrap()
-            .military.army
+            .military
+            .army
             .iter()
             .filter(|u| u.position == ProvinceId(2) && u.unit_type == ArmyUnitType::Minutemen)
             .map(|u| u.id)
@@ -12295,7 +12902,9 @@ mod tests {
             "fixture should seed militia at P2"
         );
 
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let report = process_turn(&mut game);
@@ -12323,7 +12932,8 @@ mod tests {
         let defender = game.get_nation(NationId(2)).unwrap();
         for mid in &defender_militia_ids {
             let pos = defender
-                .military.army
+                .military
+                .army
                 .iter()
                 .find(|u| u.id == *mid)
                 .map(|u| u.position)
@@ -12350,7 +12960,9 @@ mod tests {
         let mut game = test_game_for_counter_attack();
 
         // Attacker (Nation 1) has 6 Guards in Province 1, attacks Province 2
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let report = process_turn(&mut game);
@@ -12367,7 +12979,8 @@ mod tests {
         // Verify surviving attacker units are now positioned in the conquered province
         let attacker = game.get_nation(NationId(1)).unwrap();
         let units_in_conquered = attacker
-            .military.army
+            .military
+            .army
             .iter()
             .filter(|u| u.position == ProvinceId(2))
             .count();
@@ -12395,7 +13008,9 @@ mod tests {
             ));
         }
 
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let report = process_turn(&mut game);
@@ -12449,11 +13064,14 @@ mod tests {
 
         // Move one unit to Province 4 (friendly move)
         let unit_to_move = game.get_nation(NationId(1)).unwrap().military.army[0].id;
-        game.transient.pending_moves
+        game.transient
+            .pending_moves
             .push((NationId(1), unit_to_move, ProvinceId(4)));
 
         // Also queue an attack on Province 2
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let report = process_turn(&mut game);
@@ -12503,7 +13121,9 @@ mod tests {
             ));
         }
 
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let report = process_turn(&mut game);
@@ -12518,7 +13138,8 @@ mod tests {
         // Units in Province 5 should retain their position after victory
         let nation1 = game.get_nation(NationId(1)).unwrap();
         let far_units_still_far = nation1
-            .military.army
+            .military
+            .army
             .iter()
             .filter(|u| u.id.0 >= 300 && u.id.0 < 302)
             .filter(|u| u.position == ProvinceId(5))
@@ -12610,33 +13231,35 @@ mod tests {
         nation2.add_province(ProvinceId(2));
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![p1, p2, p10],
-            nations: vec![nation1, nation2],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![p1, p2, p10],
+        nations: vec![nation1, nation2],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let report = process_turn(&mut game);
@@ -12651,7 +13274,8 @@ mod tests {
         // Verify Nation 1's units from adjacent P1 are now in P2
         let attacker = game.get_nation(NationId(1)).unwrap();
         let units_in_p2 = attacker
-            .military.army
+            .military
+            .army
             .iter()
             .filter(|u| u.position == ProvinceId(2))
             .count();
@@ -12689,7 +13313,9 @@ mod tests {
             ));
         }
 
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let report = process_turn(&mut game);
@@ -12715,7 +13341,8 @@ mod tests {
         // Verify counter-attack survivors ended up in the recaptured province
         let nation2 = game.get_nation(NationId(2)).unwrap();
         let units_in_recaptured = nation2
-            .military.army
+            .military
+            .army
             .iter()
             .filter(|u| u.position == ProvinceId(2))
             .count();
@@ -12802,33 +13429,35 @@ mod tests {
         );
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(5),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![p1, p2],
-            nations: vec![nation1, nation2],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            // Landing established on turn 4 (before current turn 5) — valid for attack
-            pending_landings: vec![(NationId(1), ProvinceId(2), TurnNumber::new(4))],
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        turn: TurnNumber::new(5),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![p1, p2],
+        nations: vec![nation1, nation2],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        // Landing established on turn 4 (before current turn 5) — valid for attack
+        pending_landings: vec![(NationId(1), ProvinceId(2), TurnNumber::new(4))],
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         process_turn(&mut game);
@@ -12843,12 +13472,14 @@ mod tests {
         // Verify all surviving attacker units are at origin (P1), not conquered P2
         let attacker = game.get_nation(NationId(1)).unwrap();
         let units_in_p2 = attacker
-            .military.army
+            .military
+            .army
             .iter()
             .filter(|u| u.position == ProvinceId(2))
             .count();
         let units_in_p1 = attacker
-            .military.army
+            .military
+            .army
             .iter()
             .filter(|u| u.position == ProvinceId(1))
             .count();
@@ -12909,17 +13540,21 @@ mod tests {
         let moved_uid = game
             .get_nation(NationId(2))
             .unwrap()
-            .military.army
+            .military
+            .army
             .iter()
             // Pick a MOVABLE unit at P3 (skip garrison militia — they
             // refuse to move).
             .find(|u| u.position == ProvinceId(3) && u.unit_type.can_move())
             .unwrap()
             .id;
-        game.transient.pending_moves
+        game.transient
+            .pending_moves
             .push((NationId(2), moved_uid, ProvinceId(2)));
 
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let report = process_turn(&mut game);
@@ -13077,32 +13712,34 @@ mod tests {
         ));
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(5),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![p1, p2, p3, p4],
-            nations: vec![nation1, nation2],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: vec![(NationId(1), ProvinceId(2), TurnNumber::new(4))],
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(2)));
+        turn: TurnNumber::new(5),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![p1, p2, p3, p4],
+        nations: vec![nation1, nation2],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: vec![(NationId(1), ProvinceId(2), TurnNumber::new(4))],
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(2)));
         game.world.diplomacy.declare_war(NationId(1), NationId(2));
 
         let report = process_turn(&mut game);
@@ -13130,7 +13767,8 @@ mod tests {
 
         // Land cohort (from P3, IDs 200-201) should be in P2 (conquered)
         let land_in_p2 = attacker
-            .military.army
+            .military
+            .army
             .iter()
             .filter(|u| u.id.0 >= 200 && u.id.0 < 202)
             .filter(|u| u.position == ProvinceId(2))
@@ -13143,7 +13781,8 @@ mod tests {
 
         // Naval cohort (from P1, IDs 100-102) should still be at P1 (origin)
         let naval_still_at_port = attacker
-            .military.army
+            .military
+            .army
             .iter()
             .filter(|u| u.id.0 >= 100 && u.id.0 < 103)
             .filter(|u| u.position == ProvinceId(1))
@@ -13156,7 +13795,8 @@ mod tests {
 
         // Inland unit (ID 300 at P4) must NOT have participated — still at P4
         let inland_still_at_p4 = attacker
-            .military.army
+            .military
+            .army
             .iter()
             .find(|u| u.id.0 == 300)
             .map(|u| u.position == ProvinceId(4))
@@ -13223,31 +13863,31 @@ mod tests {
         diplomacy.declare_war(NationId(1), NationId(2));
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(5),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: provinces,
-            nations: nations,
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: diplomacy,
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(5),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: provinces,
+        nations: nations,
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: diplomacy,
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         let mut report = TurnReport::empty();
         resolve_alliance_obligations(&mut game, &mut report);
@@ -13298,7 +13938,8 @@ mod tests {
         // Before: no railroad.
         assert!(
             !game
-                .world.hex_map
+                .world
+                .hex_map
                 .get_tile(target)
                 .unwrap()
                 .infrastructure
@@ -13309,7 +13950,8 @@ mod tests {
 
         // After one turn: railroad built, engineer is idle and freed from the tile.
         assert!(
-            game.world.hex_map
+            game.world
+                .hex_map
                 .get_tile(target)
                 .unwrap()
                 .infrastructure
@@ -13317,7 +13959,8 @@ mod tests {
             "railroad should have been built after engineer's 1-turn task"
         );
         let eng = game
-            .world.nations
+            .world
+            .nations
             .iter()
             .flat_map(|n| n.military.civilians.iter())
             .find(|c| c.civilian_type == CivilianType::Engineer)
@@ -13325,7 +13968,11 @@ mod tests {
         assert!(!eng.working);
         assert_eq!(eng.build_task, None);
         assert_eq!(
-            game.world.hex_map.get_tile(target).unwrap().assigned_civilian,
+            game.world
+                .hex_map
+                .get_tile(target)
+                .unwrap()
+                .assigned_civilian,
             None,
             "engineer should be released from the tile after completion"
         );
@@ -13376,7 +14023,10 @@ mod tests {
                 4,
             ));
             game.world.nations[0].add_province(ProvinceId(2));
-            game.world.nations[0].military.transport.build_freight_cars(50);
+            game.world.nations[0]
+                .military
+                .transport
+                .build_freight_cars(50);
 
             let before = game.world.nations[0].resource_amount(ResourceType::Iron);
             let _ = process_turn(&mut game);
@@ -13422,7 +14072,8 @@ mod tests {
 
         // The in-flight engineer should have been cancelled — not "working" any more.
         let eng = game.world.nations[0]
-            .military.civilians
+            .military
+            .civilians
             .iter()
             .find(|c| c.civilian_type == CivilianType::Engineer)
             .expect("engineer still exists");
@@ -13489,31 +14140,31 @@ mod tests {
         minor.diplomacy.integrated_by = Some(NationId(1));
 
         let game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "test".into(),
-            hex_map: hex_map,
-            provinces: vec![gp_prov, minor_prov],
-            nations: vec![gp, minor],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".into(),
+        hex_map: hex_map,
+        provinces: vec![gp_prov, minor_prov],
+        nations: vec![gp, minor],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         (game, NationId(1), NationId(2), ProvinceId(1), ProvinceId(2))
     }
@@ -13564,7 +14215,10 @@ mod tests {
             prov.owner = NationId(99);
         }
         // Seed the minor as anarchic to prove the release path clears it.
-        game.get_nation_mut(minor_id).unwrap().diplomacy.is_in_anarchy = true;
+        game.get_nation_mut(minor_id)
+            .unwrap()
+            .diplomacy
+            .is_in_anarchy = true;
         let mut report = TurnReport::empty();
 
         release_integrated_minors(&mut game, overlord_id, &mut report);
@@ -13691,7 +14345,10 @@ mod tests {
 
         // Overlord collapsed into anarchy.
         assert!(
-            game.get_nation(overlord_id).unwrap().diplomacy.is_in_anarchy,
+            game.get_nation(overlord_id)
+                .unwrap()
+                .diplomacy
+                .is_in_anarchy,
             "overlord must enter anarchy after losing its capital"
         );
         // Released minor must NOT be anarchic despite having no provinces.
@@ -13757,31 +14414,31 @@ mod tests {
         conqueror.province_ids = vec![province_id];
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(5),
-            difficulty: Difficulty::Normal,
-            map_key: "test".into(),
-            hex_map: hex_map,
-            provinces: vec![captured],
-            nations: vec![conqueror, minor],
-            human_player_nation: NationId(99),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(5),
+        difficulty: Difficulty::Normal,
+        map_key: "test".into(),
+        hex_map: hex_map,
+        provinces: vec![captured],
+        nations: vec![conqueror, minor],
+        human_player_nation: NationId(99),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         let mut report = TurnReport::empty();
         apply_end_of_combat_anarchy(&mut game, &mut report);
@@ -13897,7 +14554,10 @@ mod tests {
         );
 
         // Rewire: minor is now integrated by GP-B, not GP-A
-        game.get_nation_mut(minor_id).unwrap().diplomacy.integrated_by = Some(overlord_b);
+        game.get_nation_mut(minor_id)
+            .unwrap()
+            .diplomacy
+            .integrated_by = Some(overlord_b);
 
         let mut report = TurnReport::empty();
         release_integrated_minors(&mut game, overlord_a, &mut report);
@@ -13950,8 +14610,7 @@ mod tests {
             .map(|n| n.militia_at(minor_cap_pid))
             .unwrap_or(0) as u8;
         assert_eq!(
-            prov_after.garrison_count,
-            expected_garrison,
+            prov_after.garrison_count, expected_garrison,
             "garrison_count must reflect the new owner's actual militia after routing"
         );
     }
@@ -13976,26 +14635,35 @@ mod tests {
         );
         gp_b.economy.treasury = Money::dollars(1000);
         game.world.nations.push(gp_b);
-        game.world.diplomacy.initialize_great_powers(&[NationId(1), NationId(3)]);
+        game.world
+            .diplomacy
+            .initialize_great_powers(&[NationId(1), NationId(3)]);
 
         // Seed the minor with a field army unit on its own province.
         let minor = game.get_nation_mut(NationId(2)).unwrap();
-        minor.military.army.push(crate::military::units::ArmyUnit::new(
-            crate::map::UnitId(999),
-            crate::military::units::ArmyUnitType::Regulars,
-            NationId(2),
-            ProvinceId(2),
-        ));
+        minor
+            .military
+            .army
+            .push(crate::military::units::ArmyUnit::new(
+                crate::map::UnitId(999),
+                crate::military::units::ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
 
         // Push the relationship with the AI overlord over threshold.
-        game.world.diplomacy.ensure_relation(NationId(2), NationId(3)).score = 95;
+        game.world
+            .diplomacy
+            .ensure_relation(NationId(2), NationId(3))
+            .score = 95;
 
         let mut report = TurnReport::empty();
         resolve_voluntary_incorporations(&mut game, &mut report);
 
         let overlord = game.get_nation(NationId(3)).unwrap();
         let moved = overlord
-            .military.army
+            .military
+            .army
             .iter()
             .find(|u| u.id == crate::map::UnitId(999))
             .expect("minor's army unit must live on the overlord after annexation");
@@ -14069,7 +14737,11 @@ mod tests {
         apply_end_of_combat_anarchy(&mut game, &mut report);
 
         assert!(
-            !game.get_nation(NationId(1)).unwrap().diplomacy.is_in_anarchy,
+            !game
+                .get_nation(NationId(1))
+                .unwrap()
+                .diplomacy
+                .is_in_anarchy,
             "capital captured then recaptured within the turn must not leave the owner anarchic"
         );
         assert!(
@@ -14088,7 +14760,10 @@ mod tests {
     #[test]
     fn absorbed_minor_does_not_enter_anarchy_during_sweep() {
         let mut game = test_game_state_with_minor_nation();
-        let rel = game.world.diplomacy.ensure_relation(NationId(2), NationId(1));
+        let rel = game
+            .world
+            .diplomacy
+            .ensure_relation(NationId(2), NationId(1));
         rel.score = 95;
 
         let mut report = TurnReport::empty();
@@ -14118,12 +14793,15 @@ mod tests {
         // Plant an overlord unit on the minor's (now overlord-owned) capital —
         // representing a unit transferred during incorporation.
         if let Some(overlord) = game.get_nation_mut(overlord_id) {
-            overlord.military.army.push(crate::military::units::ArmyUnit::new(
-                crate::map::UnitId(8080),
-                crate::military::units::ArmyUnitType::Regulars,
-                overlord_id,
-                minor_cap_pid,
-            ));
+            overlord
+                .military
+                .army
+                .push(crate::military::units::ArmyUnit::new(
+                    crate::map::UnitId(8080),
+                    crate::military::units::ArmyUnitType::Regulars,
+                    overlord_id,
+                    minor_cap_pid,
+                ));
         }
 
         let mut report = TurnReport::empty();
@@ -14131,7 +14809,11 @@ mod tests {
 
         let overlord = game.get_nation(overlord_id).unwrap();
         assert!(
-            !overlord.military.army.iter().any(|u| u.position == minor_cap_pid),
+            !overlord
+                .military
+                .army
+                .iter()
+                .any(|u| u.position == minor_cap_pid),
             "overlord units on restored provinces must be disbanded when the empire collapses"
         );
     }
@@ -14153,7 +14835,10 @@ mod tests {
         apply_end_of_combat_anarchy(&mut game, &mut report);
 
         assert!(
-            game.get_nation(NationId(1)).unwrap().diplomacy.is_in_anarchy,
+            game.get_nation(NationId(1))
+                .unwrap()
+                .diplomacy
+                .is_in_anarchy,
             "nation without its capital at end of combat must enter anarchy"
         );
     }
@@ -14298,32 +14983,34 @@ mod tests {
         ));
 
         let mut game = crate::test_game_state! {
-            turn: TurnNumber::new(5),
-            difficulty: Difficulty::Normal,
-            map_key: "test".to_string(),
-            hex_map: hex_map,
-            provinces: vec![p1, p2, p3],
-            nations: vec![attacker, defender],
-            human_player_nation: NationId(1),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: vec![(NationId(1), ProvinceId(3), TurnNumber::new(4))],
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
-        game.transient.pending_attacks.push((NationId(1), ProvinceId(3)));
+        turn: TurnNumber::new(5),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![p1, p2, p3],
+        nations: vec![attacker, defender],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: vec![(NationId(1), ProvinceId(3), TurnNumber::new(4))],
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
+        game.transient
+            .pending_attacks
+            .push((NationId(1), ProvinceId(3)));
         game.world.diplomacy.declare_war(NationId(1), NationId(3));
 
         let report = process_turn(&mut game);
@@ -14352,12 +15039,14 @@ mod tests {
         // not just one.
         let attacker = game.get_nation(NationId(1)).unwrap();
         let survivors_p1 = attacker
-            .military.army
+            .military
+            .army
             .iter()
             .filter(|u| (100..102).contains(&u.id.0) && u.position == ProvinceId(1))
             .count();
         let survivors_p2 = attacker
-            .military.army
+            .military
+            .army
             .iter()
             .filter(|u| (200..202).contains(&u.id.0) && u.position == ProvinceId(2))
             .count();
@@ -14411,7 +15100,8 @@ mod tests {
 
         let nation = game.get_nation_mut(NationId(1)).unwrap();
         nation
-            .military.army
+            .military
+            .army
             .extend([wounded_idle, wounded_moved, wounded_fought, healthy_idle]);
 
         let mut moved = HashSet::new();
@@ -14424,7 +15114,8 @@ mod tests {
         let nation = game.get_nation(NationId(1)).unwrap();
         let hp = |uid: u32| {
             nation
-                .military.army
+                .military
+                .army
                 .iter()
                 .find(|u| u.id == UnitId(uid))
                 .map(|u| u.health)
@@ -14453,14 +15144,19 @@ mod tests {
             ProvinceId(1),
         );
         wounded.health = 50;
-        game.get_nation_mut(NationId(1)).unwrap().military.army.push(wounded);
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .military
+            .army
+            .push(wounded);
 
         heal_resting_units(&mut game, &HashSet::new(), &HashSet::new());
 
         let hp = game
             .get_nation(NationId(1))
             .unwrap()
-            .military.army
+            .military
+            .army
             .iter()
             .find(|u| u.id == UnitId(201))
             .unwrap()
@@ -14480,7 +15176,8 @@ mod tests {
         near_full.health = 98;
         game.get_nation_mut(NationId(1))
             .unwrap()
-            .military.army
+            .military
+            .army
             .push(near_full);
 
         heal_resting_units(&mut game, &HashSet::new(), &HashSet::new());
@@ -14488,7 +15185,8 @@ mod tests {
         let hp2 = game
             .get_nation(NationId(1))
             .unwrap()
-            .military.army
+            .military
+            .army
             .iter()
             .find(|u| u.id == UnitId(202))
             .unwrap()
@@ -14558,18 +15256,35 @@ mod tests {
         let mut game = test_game_state();
         // Turn 1 = 1815 Q1; "High Pressure Steam Engine" (id=1) is free and available.
         let tech_id = crate::events::TechId(1);
-        game.get_nation_mut(NationId(1)).unwrap().pending_tech_research = Some(tech_id);
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .pending_tech_research = Some(tech_id);
 
         let mut report = TurnReport::empty();
         resolve_human_tech_research(&mut game, &mut report);
 
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert!(nation.has_researched(tech_id), "tech should be researched after turn");
-        assert_eq!(nation.pending_tech_research, None, "pending queue should be cleared");
-        assert!(!nation.researched_tech_years.is_empty(), "year should be recorded");
-        assert_eq!(nation.researched_tech_years[0], 1815, "year should match turn 1 year");
         assert!(
-            report.events.iter().any(|e| matches!(e, DomainEvent::TechnologyResearched(_))),
+            nation.has_researched(tech_id),
+            "tech should be researched after turn"
+        );
+        assert_eq!(
+            nation.pending_tech_research, None,
+            "pending queue should be cleared"
+        );
+        assert!(
+            !nation.researched_tech_years.is_empty(),
+            "year should be recorded"
+        );
+        assert_eq!(
+            nation.researched_tech_years[0], 1815,
+            "year should match turn 1 year"
+        );
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|e| matches!(e, DomainEvent::TechnologyResearched(_))),
             "TechnologyResearched event should be emitted"
         );
     }
@@ -14589,9 +15304,19 @@ mod tests {
         resolve_human_tech_research(&mut game, &mut report);
 
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert!(!nation.has_researched(tech_id), "tech should NOT be researched on funds failure");
-        assert_eq!(nation.pending_tech_research, None, "pending queue cleared even on failure");
-        assert_eq!(nation.economy.treasury, Money::dollars(500), "treasury unchanged");
+        assert!(
+            !nation.has_researched(tech_id),
+            "tech should NOT be researched on funds failure"
+        );
+        assert_eq!(
+            nation.pending_tech_research, None,
+            "pending queue cleared even on failure"
+        );
+        assert_eq!(
+            nation.economy.treasury,
+            Money::dollars(500),
+            "treasury unchanged"
+        );
         assert!(
             !report.newspaper_headlines.is_empty(),
             "a failure headline should be emitted"
@@ -14604,16 +15329,27 @@ mod tests {
         // Cotton Gin (id=3) expires after 1820. Advance to turn 25 = 1821 Q1.
         game.turn = TurnNumber::new(25);
         let tech_id = crate::events::TechId(3);
-        game.get_nation_mut(NationId(1)).unwrap().pending_tech_research = Some(tech_id);
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .pending_tech_research = Some(tech_id);
 
         let mut report = TurnReport::empty();
         resolve_human_tech_research(&mut game, &mut report);
 
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert!(!nation.has_researched(tech_id), "expired tech should not be researched");
-        assert_eq!(nation.pending_tech_research, None, "queue should be cleared");
+        assert!(
+            !nation.has_researched(tech_id),
+            "expired tech should not be researched"
+        );
+        assert_eq!(
+            nation.pending_tech_research, None,
+            "queue should be cleared"
+        );
         // No headline for expired tech — it was silently dropped
-        assert!(report.newspaper_headlines.is_empty(), "no headline for expired tech");
+        assert!(
+            report.newspaper_headlines.is_empty(),
+            "no headline for expired tech"
+        );
     }
 
     #[test]
@@ -14629,7 +15365,10 @@ mod tests {
         resolve_human_tech_research(&mut game, &mut report);
 
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert!(!nation.has_researched(tech_id), "cancelled tech should not be researched");
+        assert!(
+            !nation.has_researched(tech_id),
+            "cancelled tech should not be researched"
+        );
         assert!(report.events.is_empty(), "no events for cancelled tech");
     }
 }

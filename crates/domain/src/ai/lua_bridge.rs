@@ -556,6 +556,7 @@ pub fn load_unit_stats(
         crate::military::units::UnitStats,
     >,
 > {
+    use crate::economy::labor::WorkerType;
     use crate::military::units::{ArmyUnitType, Era, UnitCategory, UnitStats};
     use std::collections::HashMap;
 
@@ -645,6 +646,19 @@ pub fn load_unit_stats(
         };
         let cost_dollars: i64 = require!("cost", i64);
         let maint_dollars: i64 = require!("maintenance_per_turn", i64);
+        let recruit_tier_str: String = require!("recruit_tier", String);
+        let recruit_tier = match recruit_tier_str.as_str() {
+            "Untrained" => WorkerType::Untrained,
+            "Trained" => WorkerType::Trained,
+            "Expert" => WorkerType::Expert,
+            other => {
+                eprintln!(
+                    "[units.lua] '{}' has unknown recruit_tier '{}', refusing partial load",
+                    name, other
+                );
+                return None;
+            }
+        };
         let stats = UnitStats {
             firepower: require!("firepower", u32),
             firepower_mounted: require!("firepower_mounted", u32),
@@ -654,6 +668,8 @@ pub fn load_unit_stats(
             movement: require!("movement", u32),
             arms_required: require!("arms_required", u32),
             requires_horse: require!("requires_horse", bool),
+            fuel_required: require!("fuel_required", u32),
+            recruit_tier,
             category,
             cost: Money::dollars(cost_dollars),
             maintenance_per_turn: Money::dollars(maint_dollars),
@@ -667,10 +683,7 @@ pub fn load_unit_stats(
     // missing key here means the Lua file drifted and we should fall back
     // to the in-process defaults rather than run with a partial table.
     let expected = crate::data::default_unit_stats();
-    let missing: Vec<_> = expected
-        .keys()
-        .filter(|k| !map.contains_key(k))
-        .collect();
+    let missing: Vec<_> = expected.keys().filter(|k| !map.contains_key(k)).collect();
     if !missing.is_empty() {
         eprintln!(
             "[units.lua] missing {} unit type(s): {:?} — refusing partial load",

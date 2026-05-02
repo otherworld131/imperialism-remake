@@ -27,6 +27,7 @@ pub enum ArmyUnitType {
     MachineGunners,
     // Light cavalry
     Hussars,
+    Scouts,
     Carbineers,
     Mechanised,
     // Heavy cavalry
@@ -34,6 +35,7 @@ pub enum ArmyUnitType {
     Armour,
     // Light artillery
     LightArtillery,
+    HorseArtillery,
     FieldArtillery,
     MobileArtillery,
     // Heavy artillery
@@ -43,6 +45,7 @@ pub enum ArmyUnitType {
     // Engineer
     Sapper,
     CombatEngineer,
+    Commandos,
     Saboteur,
     // Special
     General,
@@ -195,11 +198,13 @@ impl From<d::units::ArmyUnitType> for ArmyUnitType {
             D::Guards => Self::Guards,
             D::MachineGunners => Self::MachineGunners,
             D::Hussars => Self::Hussars,
+            D::Scouts => Self::Scouts,
             D::Carbineers => Self::Carbineers,
             D::Mechanised => Self::Mechanised,
             D::Cuirassiers => Self::Cuirassiers,
             D::Armour => Self::Armour,
             D::LightArtillery => Self::LightArtillery,
+            D::HorseArtillery => Self::HorseArtillery,
             D::FieldArtillery => Self::FieldArtillery,
             D::MobileArtillery => Self::MobileArtillery,
             D::Artillery => Self::Artillery,
@@ -207,6 +212,7 @@ impl From<d::units::ArmyUnitType> for ArmyUnitType {
             D::RailroadGuns => Self::RailroadGuns,
             D::Sapper => Self::Sapper,
             D::CombatEngineer => Self::CombatEngineer,
+            D::Commandos => Self::Commandos,
             D::Saboteur => Self::Saboteur,
             D::General => Self::General,
             D::GarrisonArtillery => Self::GarrisonArtillery,
@@ -230,11 +236,13 @@ impl From<ArmyUnitType> for d::units::ArmyUnitType {
             ArmyUnitType::Guards => D::Guards,
             ArmyUnitType::MachineGunners => D::MachineGunners,
             ArmyUnitType::Hussars => D::Hussars,
+            ArmyUnitType::Scouts => D::Scouts,
             ArmyUnitType::Carbineers => D::Carbineers,
             ArmyUnitType::Mechanised => D::Mechanised,
             ArmyUnitType::Cuirassiers => D::Cuirassiers,
             ArmyUnitType::Armour => D::Armour,
             ArmyUnitType::LightArtillery => D::LightArtillery,
+            ArmyUnitType::HorseArtillery => D::HorseArtillery,
             ArmyUnitType::FieldArtillery => D::FieldArtillery,
             ArmyUnitType::MobileArtillery => D::MobileArtillery,
             ArmyUnitType::Artillery => D::Artillery,
@@ -242,6 +250,7 @@ impl From<ArmyUnitType> for d::units::ArmyUnitType {
             ArmyUnitType::RailroadGuns => D::RailroadGuns,
             ArmyUnitType::Sapper => D::Sapper,
             ArmyUnitType::CombatEngineer => D::CombatEngineer,
+            ArmyUnitType::Commandos => D::Commandos,
             ArmyUnitType::Saboteur => D::Saboteur,
             ArmyUnitType::General => D::General,
             ArmyUnitType::GarrisonArtillery => D::GarrisonArtillery,

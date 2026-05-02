@@ -640,6 +640,7 @@ pub fn default_unit_stats() -> HashMap<ArmyUnitType, UnitStats> {
         MachineGunners,
         // Light cavalry
         Hussars,
+        Scouts,
         Carbineers,
         Mechanised,
         // Heavy cavalry
@@ -647,6 +648,7 @@ pub fn default_unit_stats() -> HashMap<ArmyUnitType, UnitStats> {
         Armour,
         // Light artillery
         LightArtillery,
+        HorseArtillery,
         FieldArtillery,
         MobileArtillery,
         // Heavy artillery
@@ -656,6 +658,7 @@ pub fn default_unit_stats() -> HashMap<ArmyUnitType, UnitStats> {
         // Engineer
         Sapper,
         CombatEngineer,
+        Commandos,
         Saboteur,
         // Special
         General,
@@ -666,7 +669,10 @@ pub fn default_unit_stats() -> HashMap<ArmyUnitType, UnitStats> {
     // round-trips through the OnceLock registry that gets installed from
     // this very map (avoids a chicken-and-egg ordering hazard during early
     // GameData init).
-    all_types.into_iter().map(|t| (t, t.stats_baseline())).collect()
+    all_types
+        .into_iter()
+        .map(|t| (t, t.stats_baseline()))
+        .collect()
 }
 
 /// Built-in ship stats baseline — used only by `GameData::default()` as a
@@ -972,8 +978,7 @@ mod tests {
     #[cfg(feature = "lua")]
     #[test]
     fn lua_baseline_unit_stats_match() {
-        let engine = crate::scripting::LuaEngine::new()
-            .expect("Lua engine must initialise");
+        let engine = crate::scripting::LuaEngine::new().expect("Lua engine must initialise");
         crate::ai::lua_bridge::load_scripts(&engine)
             .expect("scripts/config/*.lua must execute cleanly");
         let lua_map = crate::ai::lua_bridge::load_unit_stats(&engine)
@@ -1043,6 +1048,16 @@ mod tests {
             assert_eq!(
                 lua_stats.era, baseline.era,
                 "era mismatch for {:?}",
+                unit_type
+            );
+            assert_eq!(
+                lua_stats.fuel_required, baseline.fuel_required,
+                "fuel_required mismatch for {:?}",
+                unit_type
+            );
+            assert_eq!(
+                lua_stats.recruit_tier, baseline.recruit_tier,
+                "recruit_tier mismatch for {:?}",
                 unit_type
             );
         }
