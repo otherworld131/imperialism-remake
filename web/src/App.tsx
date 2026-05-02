@@ -74,7 +74,7 @@ import CivilianPanel from './components/CivilianPanel';
 import NavalPanel from './components/NavalPanel';
 import TransportPanel from './components/TransportPanel';
 import IndustryPanel from './components/IndustryPanel';
-import DiplomacyPanel from './components/DiplomacyPanel';
+import DiplomacyBottomBar, { type QueuedDiplomacyAction } from './components/DiplomacyBottomBar';
 import LedgerPanel from './components/LedgerPanel';
 import NewspaperScreen from './components/NewspaperScreen';
 import PoliticalMapModal from './components/PoliticalMapModal';
@@ -158,6 +158,10 @@ function App() {
   const [statusMessage, setStatusMessage] = useState<string>('');
   const [diplomacyOverlay, setDiplomacyOverlay] = useState<DiplomacyOverlay | null>(null);
   const [militaryOverlay, setMilitaryOverlay] = useState<MilitaryOverlayEntry[] | null>(null);
+  const [queuedDiplomacyAction, setQueuedDiplomacyAction] = useState<QueuedDiplomacyAction | null>(null);
+  const [hoveredDiploTile, setHoveredDiploTile] = useState<TileData | null>(null);
+  // Ref keeps the latest diplo handlers so handleTileClick (declared earlier) can call them
+  const diploActionsRef = useRef<((action: QueuedDiplomacyAction, targetId: number) => void) | null>(null);
 
   // Newspaper archive state
   const [archiveData, setArchiveData] = useState<ArchivedNewspaper[]>([]);
@@ -644,7 +648,8 @@ function App() {
         }
       }
       if (e.code === 'Escape') {
-        if (selectedUnitIds.length > 0) { setSelectedUnitIds([]); }
+        if (queuedDiplomacyAction) { setQueuedDiplomacyAction(null); }
+        else if (selectedUnitIds.length > 0) { setSelectedUnitIds([]); }
         else if (isDeployMode) { setIsDeployMode(false); setDeployingCivilian(null); setDeployableTiles(new Set()); }
         else if (showProposals) setShowProposals(false);
         else if (activeScreen === 'newspaper') dismissNewspaper();
@@ -663,7 +668,7 @@ function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeScreen, showProposals, handleEndTurn, dismissNewspaper, selectedUnitIds, isDeployMode]);
+  }, [activeScreen, showProposals, handleEndTurn, dismissNewspaper, selectedUnitIds, isDeployMode, queuedDiplomacyAction]);
 
   // Fetch overlay data when map mode, active screen, or selected nation changes
   useEffect(() => {
@@ -721,6 +726,19 @@ function App() {
   const isMovementMode = selectedUnitIds.length > 0 && validMoveTargets !== null;
 
   const handleTileClick = useCallback(async (tile: TileData) => {
+    // Queued diplomacy action: fire the action against the clicked nation.
+    if (queuedDiplomacyAction) {
+      const targetNationId = tile.nation_id;
+      if (targetNationId == null || targetNationId === playerNationId) {
+        showError('Select a foreign nation for this diplomatic action.');
+        return;
+      }
+      const action = queuedDiplomacyAction;
+      setQueuedDiplomacyAction(null);
+      diploActionsRef.current?.(action, targetNationId);
+      return;
+    }
+
     // Implicit movement mode: if units are selected and the clicked tile is a valid target, move them.
     if (validMoveTargets && selectedUnitIds.length > 0 && tile.province_id != null) {
       const isValidTarget = (
@@ -790,6 +808,8 @@ function App() {
           .filter(u => u.category !== 'Garrison')
           .map(u => u.id);
         setSelectedUnitIds(selectableIds);
+        // Card #431: switch to Map tab when units are selected from another screen
+        if (activeScreen !== 'map') setActiveScreen('map');
       } else {
         setSelectedUnitIds([]);
       }
@@ -797,7 +817,7 @@ function App() {
       setProvinceUnits(null);
       setSelectedUnitIds([]);
     }
-  }, [mapMode, gameJson, playerNationId, selectedUnitIds, validMoveTargets, isDeployMode, deployingCivilian, deployableTiles, applyGameJson, provinceUnits, showError, runMutation]);
+  }, [mapMode, gameJson, playerNationId, selectedUnitIds, validMoveTargets, isDeployMode, deployingCivilian, deployableTiles, applyGameJson, provinceUnits, showError, runMutation, queuedDiplomacyAction, activeScreen, diploActionsRef]);
 
   const handleNavyMarkerClick = useCallback((marker: NavyMarker | null) => {
     if (!marker) {
@@ -822,22 +842,21 @@ function App() {
       const nid = typeof m[0] === 'number' ? m[0] : m[0]?.[0] ?? 0;
       return nid === playerNationId;
     });
-    return playerMoves.map((m: any) => {
+    // Only search the player's own nation to avoid collisions with identical unit IDs in other nations
+    const playerNation = (gameState?.nations || []).find((n: any) => {
+      const nid = typeof n.id === 'number' ? n.id : n.id?.[0] ?? -1;
+      return nid === playerNationId;
+    });
+    return playerMoves.flatMap((m: any) => {
       const unitId = typeof m[1] === 'number' ? m[1] : m[1]?.[0] ?? 0;
       const destId = typeof m[2] === 'number' ? m[2] : m[2]?.[0] ?? 0;
-      // Find source province for this unit
-      let sourceId = 0;
-      for (const n of (gameState?.nations || [])) {
-        const unit = n.army?.find((u: any) => {
-          const uid = typeof u.id === 'number' ? u.id : u.id?.[0] ?? 0;
-          return uid === unitId;
-        });
-        if (unit) {
-          sourceId = typeof unit.position === 'number' ? unit.position : unit.position?.[0] ?? 0;
-          break;
-        }
-      }
-      return { unit_id: unitId, source_province_id: sourceId, dest_province_id: destId };
+      const unit = playerNation?.army?.find((u: any) => {
+        const uid = typeof u.id === 'number' ? u.id : u.id?.[0] ?? -1;
+        return uid === unitId;
+      });
+      if (!unit) return []; // unit not found — skip rather than drawing a misleading arrow
+      const sourceId = typeof unit.position === 'number' ? unit.position : unit.position?.[0] ?? 0;
+      return [{ unit_id: unitId, source_province_id: sourceId, dest_province_id: destId }];
     });
   }, [gameState, playerNationId]);
 
@@ -932,10 +951,13 @@ function App() {
       if (succeeded > 0) {
         await applyGameJson(currentJson);
         setSelectedUnitIds([]);
+        if (selectedTile?.province_id != null) {
+          setProvinceUnits(await getUnitsInProvince(currentJson, selectedTile.province_id));
+        }
       }
       if (failed > 0) showError(`Dismissed ${succeeded} of ${n} units \u2014 ${failed} failed`);
     });
-  }, [isObserver, selectedUnitIds, gameJson, applyGameJson, showError, runMutation]);
+  }, [isObserver, selectedUnitIds, gameJson, applyGameJson, selectedTile, showError, runMutation]);
 
   const handleRecruit = useCallback(async (unitType: string) => {
     await runMutation(async () => {
@@ -1138,6 +1160,20 @@ function App() {
       else if (cmd.error) showError(`Break treaty failed: ${cmd.error}`);
     });
   }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
+
+  // Keep diploActionsRef up to date on every render so handleTileClick can dispatch without forward-referencing these handlers
+  diploActionsRef.current = (action: QueuedDiplomacyAction, targetId: number) => {
+    switch (action.kind) {
+      case 'consulate': handleDiploBuildConsulate(targetId); break;
+      case 'embassy': handleDiploBuildEmbassy(targetId); break;
+      case 'nap': handleDiploProposeNap(targetId); break;
+      case 'alliance': handleDiploProposeAlliance(targetId); break;
+      case 'peace': handleDiploProposePeace(targetId); break;
+      case 'grant': handleDiploSendGrant(targetId, action.amount); break;
+      case 'breakTreaty': handleDiploBreakTreaty(targetId, action.treatyType); break;
+      case 'war': handleDiploDeclareWar(targetId); break;
+    }
+  };
 
   // Proposal modal handlers
   const handleAcceptProposal = useCallback(async (index: number) => {
@@ -1409,12 +1445,32 @@ function App() {
             selectedNavyKey={selectedNavyKey}
             onNavyMarkerClick={handleNavyMarkerClick}
             onNavyMarkerHover={handleNavyMarkerHover}
+            onTileHover={activeScreen === 'diplomacy' ? setHoveredDiploTile : undefined}
             renderTooltipModeExtras={renderTooltipModeExtras}
             governmentTitleByNationId={governmentTitleByNationId}
             selectedTileKey={selectedTile ? `${selectedTile.q},${selectedTile.r}` : null}
             lockZoom={activeScreen === 'diplomacy'}
             showDiplomacyMarkers={mapMode === 'diplomatic'}
+            isDiplomacyTargetMode={activeScreen === 'diplomacy' && queuedDiplomacyAction != null}
           />
+          {activeScreen === 'diplomacy' && diplomacyScreenData && (
+            <DiplomacyBottomBar
+              diplomacy={diplomacyScreenData}
+              hoveredNationId={hoveredDiploTile?.nation_id ?? null}
+              playerNationId={playerNationId}
+              playerStanding={diplomacyScreenData.player_standing}
+              queuedAction={queuedDiplomacyAction}
+              onQueue={setQueuedDiplomacyAction}
+              onBuildConsulate={handleDiploBuildConsulate}
+              onBuildEmbassy={handleDiploBuildEmbassy}
+              onProposeNap={handleDiploProposeNap}
+              onProposeAlliance={handleDiploProposeAlliance}
+              onDeclareWar={handleDiploDeclareWar}
+              onSendGrant={handleDiploSendGrant}
+              onBreakTreaty={handleDiploBreakTreaty}
+              onProposePeace={handleDiploProposePeace}
+            />
+          )}
         </div>
 
         {/* Full-screen views */}
@@ -1836,23 +1892,7 @@ function App() {
               <p style={styles.hint}>Loading industry data...</p>
             )
           )}
-          {activeScreen === 'diplomacy' && (
-            diplomacyScreenData ? (
-              <DiplomacyPanel
-                diplomacy={diplomacyScreenData}
-                onBuildConsulate={handleDiploBuildConsulate}
-                onBuildEmbassy={handleDiploBuildEmbassy}
-                onProposeNap={handleDiploProposeNap}
-                onProposeAlliance={handleDiploProposeAlliance}
-                onDeclareWar={handleDiploDeclareWar}
-                onSendGrant={handleDiploSendGrant}
-                onBreakTreaty={handleDiploBreakTreaty}
-                onProposePeace={handleDiploProposePeace}
-              />
-            ) : (
-              <p style={styles.hint}>Loading diplomacy data...</p>
-            )
-          )}
+          {/* Diplomacy sidebar replaced by DiplomacyBottomBar inside mapContainer */}
         </div>
         )}
       </div>{/* end mainArea */}
