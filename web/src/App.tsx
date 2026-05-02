@@ -163,6 +163,11 @@ function App() {
   // Ref keeps the latest diplo handlers so handleTileClick (declared earlier) can call them
   const diploActionsRef = useRef<((action: QueuedDiplomacyAction, targetId: number) => void) | null>(null);
 
+  // Clear queued diplomacy action when leaving the Diplomacy screen
+  useEffect(() => {
+    if (activeScreen !== 'diplomacy') setQueuedDiplomacyAction(null);
+  }, [activeScreen]);
+
   // Newspaper archive state
   const [archiveData, setArchiveData] = useState<ArchivedNewspaper[]>([]);
   const [archiveLoadState, setArchiveLoadState] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
@@ -727,7 +732,7 @@ function App() {
 
   const handleTileClick = useCallback(async (tile: TileData) => {
     // Queued diplomacy action: fire the action against the clicked nation.
-    if (queuedDiplomacyAction) {
+    if (queuedDiplomacyAction && activeScreen === 'diplomacy') {
       const targetNationId = tile.nation_id;
       if (targetNationId == null || targetNationId === playerNationId) {
         showError('Select a foreign nation for this diplomatic action.');
@@ -808,8 +813,8 @@ function App() {
           .filter(u => u.category !== 'Garrison')
           .map(u => u.id);
         setSelectedUnitIds(selectableIds);
-        // Card #431: switch to Map tab when units are selected from another screen
-        if (activeScreen !== 'map') setActiveScreen('map');
+        // Card #431: switch to Map tab when units are actually selected from another screen
+        if (selectableIds.length > 0 && activeScreen !== 'map') setActiveScreen('map');
       } else {
         setSelectedUnitIds([]);
       }
@@ -1457,18 +1462,9 @@ function App() {
             <DiplomacyBottomBar
               diplomacy={diplomacyScreenData}
               hoveredNationId={hoveredDiploTile?.nation_id ?? null}
-              playerNationId={playerNationId}
               playerStanding={diplomacyScreenData.player_standing}
               queuedAction={queuedDiplomacyAction}
               onQueue={setQueuedDiplomacyAction}
-              onBuildConsulate={handleDiploBuildConsulate}
-              onBuildEmbassy={handleDiploBuildEmbassy}
-              onProposeNap={handleDiploProposeNap}
-              onProposeAlliance={handleDiploProposeAlliance}
-              onDeclareWar={handleDiploDeclareWar}
-              onSendGrant={handleDiploSendGrant}
-              onBreakTreaty={handleDiploBreakTreaty}
-              onProposePeace={handleDiploProposePeace}
             />
           )}
         </div>

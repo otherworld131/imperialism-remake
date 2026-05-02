@@ -14,18 +14,9 @@ export type QueuedDiplomacyAction =
 interface Props {
   diplomacy: DiplomacyScreenData;
   hoveredNationId: number | null;
-  playerNationId: number;
   playerStanding: number;
   queuedAction: QueuedDiplomacyAction | null;
   onQueue: (action: QueuedDiplomacyAction | null) => void;
-  onBuildConsulate: (targetId: number) => void;
-  onBuildEmbassy: (targetId: number) => void;
-  onProposeNap: (targetId: number) => void;
-  onProposeAlliance: (targetId: number) => void;
-  onDeclareWar: (targetId: number) => void;
-  onSendGrant: (targetId: number, amount: number) => void;
-  onBreakTreaty: (targetId: number, treatyType: string) => void;
-  onProposePeace: (targetId: number) => void;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -53,22 +44,13 @@ export default function DiplomacyBottomBar({
   playerStanding,
   queuedAction,
   onQueue,
-  onBuildConsulate,
-  onBuildEmbassy,
-  onProposeNap,
-  onProposeAlliance,
-  onDeclareWar,
-  onSendGrant,
-  onBreakTreaty,
-  onProposePeace,
 }: Props) {
   const [showGrantPicker, setShowGrantPicker] = useState(false);
   const [showBreakPicker, setShowBreakPicker] = useState(false);
   const [confirmWar, setConfirmWar] = useState(false);
 
-  const focusedId = hoveredNationId;
-  const rel: DiplomacyScreenRelation | undefined = focusedId != null
-    ? diplomacy.relations.find(r => r.nation_id === focusedId)
+  const rel: DiplomacyScreenRelation | undefined = hoveredNationId != null
+    ? diplomacy.relations.find(r => r.nation_id === hoveredNationId)
     : undefined;
 
   const standingColor = playerStanding > 60 ? '#4a4' : playerStanding > 30 ? '#ca4' : '#e44';
@@ -76,25 +58,9 @@ export default function DiplomacyBottomBar({
 
   const queuedLabel = queuedAction ? ACTION_LABELS[queuedAction.kind] : null;
 
-  function fireAction(action: QueuedDiplomacyAction) {
-    if (focusedId == null || rel == null) {
-      onQueue(action);
-    } else {
-      dispatchAction(action, focusedId);
-    }
-  }
-
-  function dispatchAction(action: QueuedDiplomacyAction, targetId: number) {
-    switch (action.kind) {
-      case 'consulate': onBuildConsulate(targetId); break;
-      case 'embassy': onBuildEmbassy(targetId); break;
-      case 'nap': onProposeNap(targetId); break;
-      case 'alliance': onProposeAlliance(targetId); break;
-      case 'peace': onProposePeace(targetId); break;
-      case 'grant': onSendGrant(targetId, action.amount); break;
-      case 'breakTreaty': onBreakTreaty(targetId, action.treatyType); break;
-      case 'war': onDeclareWar(targetId); break;
-    }
+  // All button clicks queue the action — execution happens only when user clicks a nation on the map
+  function queueAction(action: QueuedDiplomacyAction) {
+    onQueue(action);
   }
 
   const a = rel?.actions;
@@ -160,31 +126,31 @@ export default function DiplomacyBottomBar({
           label={`🏛️ Consulate${a ? ` $${a.consulate_cost}` : ''}`}
           active={queuedAction?.kind === 'consulate'}
           disabled={isAnarchy || (a ? !a.can_build_consulate : false)}
-          onClick={() => { fireAction({ kind: 'consulate' }); setShowGrantPicker(false); setShowBreakPicker(false); setConfirmWar(false); }}
+          onClick={() => { queueAction({ kind: 'consulate' }); setShowGrantPicker(false); setShowBreakPicker(false); setConfirmWar(false); }}
         />
         <ActionBtn
           label={`🏰 Embassy${a ? ` $${a.embassy_cost}` : ''}`}
           active={queuedAction?.kind === 'embassy'}
           disabled={isAnarchy || (a ? !a.can_build_embassy : false)}
-          onClick={() => { fireAction({ kind: 'embassy' }); setShowGrantPicker(false); setShowBreakPicker(false); setConfirmWar(false); }}
+          onClick={() => { queueAction({ kind: 'embassy' }); setShowGrantPicker(false); setShowBreakPicker(false); setConfirmWar(false); }}
         />
         <ActionBtn
           label="🤝 NAP"
           active={queuedAction?.kind === 'nap'}
           disabled={isAnarchy || (a ? !a.can_propose_nap : false)}
-          onClick={() => { fireAction({ kind: 'nap' }); setShowGrantPicker(false); setShowBreakPicker(false); setConfirmWar(false); }}
+          onClick={() => { queueAction({ kind: 'nap' }); setShowGrantPicker(false); setShowBreakPicker(false); setConfirmWar(false); }}
         />
         <ActionBtn
           label="🛡️ Alliance"
           active={queuedAction?.kind === 'alliance'}
           disabled={isAnarchy || (a ? !a.can_propose_alliance : false)}
-          onClick={() => { fireAction({ kind: 'alliance' }); setShowGrantPicker(false); setShowBreakPicker(false); setConfirmWar(false); }}
+          onClick={() => { queueAction({ kind: 'alliance' }); setShowGrantPicker(false); setShowBreakPicker(false); setConfirmWar(false); }}
         />
         <ActionBtn
           label="🕊️ Peace"
           active={queuedAction?.kind === 'peace'}
           disabled={isAnarchy || (a ? !a.can_propose_peace : false)}
-          onClick={() => { fireAction({ kind: 'peace' }); setShowGrantPicker(false); setShowBreakPicker(false); setConfirmWar(false); }}
+          onClick={() => { queueAction({ kind: 'peace' }); setShowGrantPicker(false); setShowBreakPicker(false); setConfirmWar(false); }}
         />
 
         {/* Grant */}
@@ -201,7 +167,7 @@ export default function DiplomacyBottomBar({
               border: '1px solid #3a3520', borderRadius: 3, padding: 4, display: 'flex', gap: 3, zIndex: 20,
             }}>
               {[500, 1000, 2000, 5000].map(amt => (
-                <button key={amt} onClick={() => { fireAction({ kind: 'grant', amount: amt }); setShowGrantPicker(false); }}
+                <button key={amt} onClick={() => { queueAction({ kind: 'grant', amount: amt }); setShowGrantPicker(false); }}
                   style={btnStyle('#456')}>
                   ${amt}
                 </button>
@@ -225,7 +191,7 @@ export default function DiplomacyBottomBar({
                 border: '1px solid #3a3520', borderRadius: 3, padding: 4, display: 'flex', gap: 3, zIndex: 20,
               }}>
                 {a.breakable_treaties.map(t => (
-                  <button key={t} onClick={() => { fireAction({ kind: 'breakTreaty', treatyType: t }); setShowBreakPicker(false); }}
+                  <button key={t} onClick={() => { queueAction({ kind: 'breakTreaty', treatyType: t }); setShowBreakPicker(false); }}
                     style={btnStyle('#a63')}>
                     {t}
                   </button>
@@ -248,7 +214,7 @@ export default function DiplomacyBottomBar({
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <span style={{ fontSize: 11, color: '#e44' }}>Breaks all treaties. Sure?</span>
             <ActionBtn label="Confirm ⚔️" color="#a33"
-              onClick={() => { fireAction({ kind: 'war' }); setConfirmWar(false); }} />
+              onClick={() => { queueAction({ kind: 'war' }); setConfirmWar(false); }} />
             <ActionBtn label="Cancel" color="#555"
               onClick={() => setConfirmWar(false)} />
           </div>
