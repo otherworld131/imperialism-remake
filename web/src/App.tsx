@@ -772,8 +772,9 @@ function App() {
           }
           if (ok) {
             await applyGameJson(currentJson);
-            if (provinceUnits) {
-              setProvinceUnits(await getUnitsInProvince(currentJson, tile.province_id!));
+            // Refresh the origin province (selectedTile) — units there now have pending-move markers
+            if (provinceUnits && selectedTile?.province_id != null) {
+              setProvinceUnits(await getUnitsInProvince(currentJson, selectedTile.province_id));
             }
           }
           setSelectedUnitIds([]);
@@ -1437,7 +1438,7 @@ function App() {
             showResources={showResources}
             showTransportNetwork={showTransportNetwork}
             showArmies={showArmies}
-            selectedUnit={null}
+
             pendingMoves={pendingMoveArrows}
             validMoveTargets={validMoveTargets}
             isMovementMode={isMovementMode}
@@ -1556,8 +1557,8 @@ function App() {
           />
         )}
 
-        {/* Side panel — context-sensitive, hidden for full-screen views */}
-        {!isFullScreen(activeScreen) && (
+        {/* Side panel — context-sensitive, hidden for full-screen views and diplomacy (which uses a bottom bar) */}
+        {!isFullScreen(activeScreen) && activeScreen !== 'diplomacy' && (
         <div style={styles.sidePanel} className="side-panel-responsive">
           {activeScreen === 'map' && (
             <>

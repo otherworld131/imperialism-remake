@@ -292,7 +292,6 @@ interface Props {
   showResources?: boolean;
   showTransportNetwork?: boolean;
   showArmies?: boolean;
-  selectedUnit?: ArmyUnitDetail | null;
   pendingMoves?: PendingMoveArrow[];
   validMoveTargets?: ValidMoveTargets | null;
   isMovementMode?: boolean;
@@ -354,7 +353,7 @@ export default function HexMap({
   tiles, mapMode, diplomacyOverlay, militaryOverlay,
   onMapModeChange, onTileClick, onTileHover, showHiddenResources = false, showAiCivilians = false,
   showResources = true, showTransportNetwork = true, showArmies = true,
-  selectedUnit, pendingMoves = [], validMoveTargets, isMovementMode = false,
+  pendingMoves = [], validMoveTargets, isMovementMode = false,
   isDeployMode = false, deployableTiles, disableFogOfWar = false,
   organicBorders = true,
   hideHexGrid = false,
