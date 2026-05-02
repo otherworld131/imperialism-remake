@@ -41,8 +41,7 @@ const CODAS: &[&str] = &[
 /// regeneration. English profanity or unfortunate coincidences. The list is
 /// deliberately small; add to it as offenders show up.
 const BLOCKED_SUBSTRINGS: &[&str] = &[
-    "piss", "shit", "fuck", "cunt", "cock", "dick", "tit", "slut", "nazi", "jap", "nigg",
-    "ass",
+    "piss", "shit", "fuck", "cunt", "cock", "dick", "tit", "slut", "nazi", "jap", "nigg", "ass",
 ];
 
 /// Capitalize the first ASCII character of `s`.
@@ -101,14 +100,14 @@ fn trim_trailing_vowel(s: &str) -> String {
 /// `(country, adjective, demonym_singular, demonym_plural)` from a raw stem.
 #[derive(Debug, Clone, Copy)]
 enum Pattern {
-    LatinateIa,   // Devron -> Devronia, Devronian, Devronians
-    GermanicLand, // Kess    -> Kessland, Kessish, Kesslander(s)
-    GermanicMark, // Ven     -> Venmark, Venish, Venmarker(s)
-    TurkicStan,   // Kaza    -> Kazastan, Kazai, Kazais
-    EshteSuffix,  // Bang    -> Bangesh, Bangeshi, Bangeshis
-    RomanicAr,    // Sard    -> Sardaria, Sardarian, Sardarians
+    LatinateIa,    // Devron -> Devronia, Devronian, Devronians
+    GermanicLand,  // Kess    -> Kessland, Kessish, Kesslander(s)
+    GermanicMark,  // Ven     -> Venmark, Venish, Venmarker(s)
+    TurkicStan,    // Kaza    -> Kazastan, Kazai, Kazais
+    EshteSuffix,   // Bang    -> Bangesh, Bangeshi, Bangeshis
+    RomanicAr,     // Sard    -> Sardaria, Sardarian, Sardarians
     CitystateBurg, // Ham    -> Hamburg, Hamburgian, Hamburger(s)
-    AsianTese,    // Hun     -> Hunang, Hunese, Hunese
+    AsianTese,     // Hun     -> Hunang, Hunese, Hunese
 }
 
 const PATTERNS: &[Pattern] = &[
@@ -326,7 +325,10 @@ mod tests {
         let mut a = Rng::from_seed(999);
         let mut b = Rng::from_seed(999);
         for _ in 0..20 {
-            assert_eq!(generate_country_name(&mut a).name, generate_country_name(&mut b).name);
+            assert_eq!(
+                generate_country_name(&mut a).name,
+                generate_country_name(&mut b).name
+            );
         }
     }
 

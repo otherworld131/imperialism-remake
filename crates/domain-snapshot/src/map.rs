@@ -40,7 +40,11 @@ pub struct HexMap {
 // ── Province ──────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum SettlementLevel { Hamlet, Village, Town }
+pub enum SettlementLevel {
+    Hamlet,
+    Village,
+    Town,
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Province {
@@ -137,7 +141,10 @@ impl From<Tile> for dm::Tile {
 impl From<&dm::HexMap> for HexMap {
     fn from(v: &dm::HexMap) -> Self {
         Self {
-            tiles: v.all_tiles().map(|(coord, tile)| (coord.into(), tile.into())).collect(),
+            tiles: v
+                .all_tiles()
+                .map(|(coord, tile)| (coord.into(), tile.into()))
+                .collect(),
             width: v.width(),
             height: v.height(),
         }

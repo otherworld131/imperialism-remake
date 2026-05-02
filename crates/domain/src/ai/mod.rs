@@ -47,10 +47,13 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<AiAction> {
     // Collect AI nation IDs. In observer mode, all 7 Great Powers are AI-controlled
     // (the human seat is just a viewpoint; it also gets an AI personality at setup).
     let ai_nation_ids: Vec<NationId> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| {
-            (game.observer_mode || n.id != human_id) && n.is_great_power() && !n.diplomacy.is_in_anarchy
+            (game.observer_mode || n.id != human_id)
+                && n.is_great_power()
+                && !n.diplomacy.is_in_anarchy
         })
         .map(|n| n.id)
         .collect();
@@ -190,9 +193,11 @@ mod tests {
         ally.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         game.world.nations.push(ally);
 
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .initialize_great_powers(&[NationId(1), NationId(2), NationId(3)]);
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .propose_alliance(NationId(2), NationId(3))
             .unwrap();
         game.world.diplomacy.declare_war(NationId(2), NationId(1));
@@ -201,13 +206,15 @@ mod tests {
 
         assert!(
             !game
-                .world.diplomacy
+                .world
+                .diplomacy
                 .get_allies(NationId(2))
                 .contains(&NationId(3)),
             "queued separate peace should hide suspended allies from AI war planning"
         );
         assert!(
-            game.world.diplomacy
+            game.world
+                .diplomacy
                 .has_treaty(NationId(2), NationId(3), TreatyType::Alliance),
             "the alliance treaty should remain active until same-turn reconciliation finalizes it"
         );

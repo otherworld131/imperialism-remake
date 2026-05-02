@@ -23,7 +23,10 @@ impl std::fmt::Display for PersistenceError {
         match self {
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::Serialization(msg) => write!(f, "serialization error: {msg}"),
-            Self::UnsupportedVersion { found, max_supported } => write!(
+            Self::UnsupportedVersion {
+                found,
+                max_supported,
+            } => write!(
                 f,
                 "save file version {found} is newer than the supported version {max_supported}"
             ),

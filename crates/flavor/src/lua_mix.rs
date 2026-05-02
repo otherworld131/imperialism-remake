@@ -19,10 +19,10 @@ pub fn load_default_mixes() -> (GovernmentMix, GovernmentMix) {
 /// Parse a Lua-syntax mix file and return `(great_power_mix, minor_nation_mix)`.
 /// Each table missing from the source falls back to its hardcoded default.
 pub fn load_mixes_from(source: &str) -> (GovernmentMix, GovernmentMix) {
-    let gp = parse_table(source, "great_power_mix")
-        .unwrap_or_else(GovernmentMix::great_power_default);
-    let mn = parse_table(source, "minor_nation_mix")
-        .unwrap_or_else(GovernmentMix::minor_nation_default);
+    let gp =
+        parse_table(source, "great_power_mix").unwrap_or_else(GovernmentMix::great_power_default);
+    let mn =
+        parse_table(source, "minor_nation_mix").unwrap_or_else(GovernmentMix::minor_nation_default);
     (gp, mn)
 }
 

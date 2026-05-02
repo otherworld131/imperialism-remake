@@ -11,7 +11,8 @@ pub(super) fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
     use crate::military::ships::{Ship, ShipType};
 
     let nation_ids: Vec<NationId> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.is_great_power())
         .map(|n| n.id)
@@ -28,7 +29,8 @@ pub(super) fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
         // provinces rather than built from arms, and Generals are the reward,
         // not the input. (Trello card #128.)
         let total_arms: u32 = nation
-            .military.army
+            .military
+            .army
             .iter()
             .filter(|u| !matches!(u.unit_type, ArmyUnitType::Minutemen | ArmyUnitType::General))
             .map(|u| u.unit_type.stats().arms_required)
@@ -59,7 +61,8 @@ pub(super) fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
 
             for _ in 0..new_generals {
                 nation.military.generals_earned += 1;
-                let gen_id = UnitId(3_000_000 + nation.id.0 * 100 + nation.military.generals_earned);
+                let gen_id =
+                    UnitId(3_000_000 + nation.id.0 * 100 + nation.military.generals_earned);
                 let general_unit = ArmyUnit::new(
                     gen_id,
                     ArmyUnitType::General,
@@ -72,10 +75,13 @@ pub(super) fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                 report
                     .rewards_earned
                     .push((*nation_id, format!("{} has earned a General!", nation_name)));
-                report.newspaper_headlines.push(Headline::new(
-                    format!("{} has earned a General!", nation_name),
-                    HeadlineCategory::Military,
-                ).for_nation(*nation_id));
+                report.newspaper_headlines.push(
+                    Headline::new(
+                        format!("{} has earned a General!", nation_name),
+                        HeadlineCategory::Military,
+                    )
+                    .for_nation(*nation_id),
+                );
             }
         }
     }
@@ -90,7 +96,8 @@ pub(super) fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
 
         // Count Ships-of-the-Line in warship fleet
         let sol_count: u32 = nation
-            .military.warships
+            .military
+            .warships
             .iter()
             .filter(|s| s.ship_type == ShipType::ShipOfTheLine)
             .count() as u32;
@@ -121,8 +128,10 @@ pub(super) fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
             for _ in 0..new_admirals {
                 nation.military.admirals_earned += 1;
                 // Award a free Ship-of-the-Line as the Admiral bonus warship
-                let ship_id = UnitId(4_000_000 + nation.id.0 * 100 + nation.military.admirals_earned);
-                let bonus_ship = Ship::new(ship_id, ShipType::ShipOfTheLine, *nation_id, bonus_hull);
+                let ship_id =
+                    UnitId(4_000_000 + nation.id.0 * 100 + nation.military.admirals_earned);
+                let bonus_ship =
+                    Ship::new(ship_id, ShipType::ShipOfTheLine, *nation_id, bonus_hull);
                 nation.military.warships.push(bonus_ship);
 
                 let nation_name = nation.name.clone();
@@ -130,10 +139,13 @@ pub(super) fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                     *nation_id,
                     format!("{} has earned an Admiral!", nation_name),
                 ));
-                report.newspaper_headlines.push(Headline::new(
-                    format!("{} has earned an Admiral!", nation_name),
-                    HeadlineCategory::Military,
-                ).for_nation(*nation_id));
+                report.newspaper_headlines.push(
+                    Headline::new(
+                        format!("{} has earned an Admiral!", nation_name),
+                        HeadlineCategory::Military,
+                    )
+                    .for_nation(*nation_id),
+                );
             }
         }
     }
@@ -166,10 +178,13 @@ pub(super) fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                     attacker_name
                 ),
             ));
-            report.newspaper_headlines.push(Headline::new(
-                format!("{}'s capitol building has expanded!", attacker_name),
-                HeadlineCategory::Growth,
-            ).for_nation(attacker_id));
+            report.newspaper_headlines.push(
+                Headline::new(
+                    format!("{}'s capitol building has expanded!", attacker_name),
+                    HeadlineCategory::Growth,
+                )
+                .for_nation(attacker_id),
+            );
         }
     }
 
@@ -211,13 +226,16 @@ pub(super) fn resolve_rewards(game: &mut GameState, report: &mut TurnReport) {
                         nation_name
                     ),
                 ));
-                report.newspaper_headlines.push(Headline::new(
-                    format!(
-                        "{}'s expert workforce drives capitol expansion!",
-                        nation_name
-                    ),
-                    HeadlineCategory::Growth,
-                ).for_nation(*nation_id));
+                report.newspaper_headlines.push(
+                    Headline::new(
+                        format!(
+                            "{}'s expert workforce drives capitol expansion!",
+                            nation_name
+                        ),
+                        HeadlineCategory::Growth,
+                    )
+                    .for_nation(*nation_id),
+                );
             }
         }
     }

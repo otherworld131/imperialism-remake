@@ -25,10 +25,14 @@ pub enum ApplicationError {
 
 impl ApplicationError {
     pub fn invalid(reason: impl std::fmt::Display) -> Self {
-        Self::InvalidCommand { reason: reason.to_string() }
+        Self::InvalidCommand {
+            reason: reason.to_string(),
+        }
     }
     pub fn not_found(reason: impl std::fmt::Display) -> Self {
-        Self::NotFound { reason: reason.to_string() }
+        Self::NotFound {
+            reason: reason.to_string(),
+        }
     }
 }
 

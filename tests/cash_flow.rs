@@ -70,10 +70,9 @@ fn observer_cash_flow_populates_cumulative_totals_on_nations() {
 
     // At least one Great Power should have recorded some income or expense
     // over 3 turns (gold/gems conversion, maintenance, or AI spending).
-    let any_activity = game
-        .great_powers()
-        .iter()
-        .any(|n| !n.archives.cash_income_totals.is_empty() || !n.archives.cash_expense_totals.is_empty());
+    let any_activity = game.great_powers().iter().any(|n| {
+        !n.archives.cash_income_totals.is_empty() || !n.archives.cash_expense_totals.is_empty()
+    });
     assert!(
         any_activity,
         "expected at least one GP to have non-empty cash totals after 3 observer turns"
@@ -86,7 +85,8 @@ fn debug_dump_turn_one() {
     let mut game = new_observer_game("cashflow_debug", Difficulty::Normal);
     println!(
         "Starting treasuries: {:?}",
-        game.world.nations
+        game.world
+            .nations
             .iter()
             .filter(|n| n.is_great_power())
             .map(|n| (n.name.clone(), n.economy.treasury.as_dollars()))

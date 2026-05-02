@@ -1,8 +1,8 @@
 use crate::diplomacy::DiplomacyState;
 use crate::economy::{CashFlow, MarketState, ResourceFlow};
 use crate::events::{Headline, HistoryEvent};
-use crate::military::{BattleResult, NavalBattleResult};
 use crate::map::{HexMap, Province};
+use crate::military::{BattleResult, NavalBattleResult};
 use crate::nation::Nation;
 use crate::types::{Difficulty, NationId, ProvinceId, TurnNumber};
 use domain::game_state as dgs;
@@ -84,7 +84,9 @@ pub struct GameState {
     pub transient: TransientState,
 }
 
-fn default_next_unit_id() -> u32 { 6_000_000 }
+fn default_next_unit_id() -> u32 {
+    6_000_000
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 // From impls
@@ -93,10 +95,14 @@ fn default_next_unit_id() -> u32 { 6_000_000 }
 impl From<&dgs::PoliticalSnapshot> for PoliticalSnapshot {
     fn from(v: &dgs::PoliticalSnapshot) -> Self {
         Self {
-            provinces: v.provinces.iter()
+            provinces: v
+                .provinces
+                .iter()
                 .map(|(p, n, i)| ((*p).into(), (*n).into(), i.map(Into::into)))
                 .collect(),
-            capitals: v.capitals.iter()
+            capitals: v
+                .capitals
+                .iter()
                 .map(|(n, p)| ((*n).into(), (*p).into()))
                 .collect(),
         }
@@ -105,10 +111,14 @@ impl From<&dgs::PoliticalSnapshot> for PoliticalSnapshot {
 impl From<PoliticalSnapshot> for dgs::PoliticalSnapshot {
     fn from(v: PoliticalSnapshot) -> Self {
         Self {
-            provinces: v.provinces.into_iter()
+            provinces: v
+                .provinces
+                .into_iter()
                 .map(|(p, n, i)| (p.into(), n.into(), i.map(Into::into)))
                 .collect(),
-            capitals: v.capitals.into_iter()
+            capitals: v
+                .capitals
+                .into_iter()
                 .map(|(n, p)| (n.into(), p.into()))
                 .collect(),
         }
@@ -155,21 +165,31 @@ impl From<WorldState> for dgs::WorldState {
 impl From<&dgs::GameArchive> for GameArchive {
     fn from(v: &dgs::GameArchive) -> Self {
         Self {
-            history: v.history.iter()
+            history: v
+                .history
+                .iter()
                 .map(|(t, e)| ((*t).into(), e.into()))
                 .collect(),
             high_scores: v.high_scores.clone(),
-            newspaper_archive: v.newspaper_archive.iter()
+            newspaper_archive: v
+                .newspaper_archive
+                .iter()
                 .map(|(t, hs)| ((*t).into(), hs.iter().map(Into::into).collect()))
                 .collect(),
-            battle_archive: v.battle_archive.iter()
-                .map(|(t, lb, nb): &(_, Vec<_>, Vec<_>)| (
-                    (*t).into(),
-                    lb.iter().map(Into::into).collect(),
-                    nb.iter().map(Into::into).collect(),
-                ))
+            battle_archive: v
+                .battle_archive
+                .iter()
+                .map(|(t, lb, nb): &(_, Vec<_>, Vec<_>)| {
+                    (
+                        (*t).into(),
+                        lb.iter().map(Into::into).collect(),
+                        nb.iter().map(Into::into).collect(),
+                    )
+                })
                 .collect(),
-            political_archive: v.political_archive.iter()
+            political_archive: v
+                .political_archive
+                .iter()
                 .map(|(t, ps)| ((*t).into(), ps.into()))
                 .collect(),
         }
@@ -178,21 +198,31 @@ impl From<&dgs::GameArchive> for GameArchive {
 impl From<GameArchive> for dgs::GameArchive {
     fn from(v: GameArchive) -> Self {
         Self {
-            history: v.history.into_iter()
+            history: v
+                .history
+                .into_iter()
                 .map(|(t, e)| (t.into(), e.into()))
                 .collect(),
             high_scores: v.high_scores,
-            newspaper_archive: v.newspaper_archive.into_iter()
+            newspaper_archive: v
+                .newspaper_archive
+                .into_iter()
                 .map(|(t, hs)| (t.into(), hs.into_iter().map(Into::into).collect()))
                 .collect(),
-            battle_archive: v.battle_archive.into_iter()
-                .map(|(t, lb, nb)| (
-                    t.into(),
-                    lb.into_iter().map(Into::into).collect(),
-                    nb.into_iter().map(Into::into).collect(),
-                ))
+            battle_archive: v
+                .battle_archive
+                .into_iter()
+                .map(|(t, lb, nb)| {
+                    (
+                        t.into(),
+                        lb.into_iter().map(Into::into).collect(),
+                        nb.into_iter().map(Into::into).collect(),
+                    )
+                })
                 .collect(),
-            political_archive: v.political_archive.into_iter()
+            political_archive: v
+                .political_archive
+                .into_iter()
                 .map(|(t, ps)| (t.into(), ps.into()))
                 .collect(),
         }
@@ -202,19 +232,29 @@ impl From<GameArchive> for dgs::GameArchive {
 impl From<&dgs::TransientState> for TransientState {
     fn from(v: &dgs::TransientState) -> Self {
         Self {
-            pending_attacks: v.pending_attacks.iter()
+            pending_attacks: v
+                .pending_attacks
+                .iter()
                 .map(|(n, p)| ((*n).into(), (*p).into()))
                 .collect(),
-            pending_moves: v.pending_moves.iter()
+            pending_moves: v
+                .pending_moves
+                .iter()
                 .map(|(n, uid, p)| ((*n).into(), uid.0, (*p).into()))
                 .collect(),
-            pending_landings: v.pending_landings.iter()
+            pending_landings: v
+                .pending_landings
+                .iter()
                 .map(|(n, p, t)| ((*n).into(), (*p).into(), (*t).into()))
                 .collect(),
-            last_cash_flow: v.last_cash_flow.iter()
+            last_cash_flow: v
+                .last_cash_flow
+                .iter()
                 .map(|(n, cf)| ((*n).into(), cf.into()))
                 .collect(),
-            last_resource_flow: v.last_resource_flow.iter()
+            last_resource_flow: v
+                .last_resource_flow
+                .iter()
                 .map(|(n, rf)| ((*n).into(), rf.into()))
                 .collect(),
         }
@@ -227,22 +267,32 @@ impl From<TransientState> for dgs::TransientState {
         use std::collections::HashMap;
         Self {
             events: Vec::new(),
-            pending_attacks: v.pending_attacks.into_iter()
+            pending_attacks: v
+                .pending_attacks
+                .into_iter()
                 .map(|(n, p)| (n.into(), p.into()))
                 .collect(),
-            pending_moves: v.pending_moves.into_iter()
+            pending_moves: v
+                .pending_moves
+                .into_iter()
                 .map(|(n, uid, p)| (n.into(), UnitId(uid), p.into()))
                 .collect(),
-            pending_landings: v.pending_landings.into_iter()
+            pending_landings: v
+                .pending_landings
+                .into_iter()
                 .map(|(n, p, t)| (n.into(), p.into(), t.into()))
                 .collect(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),
             pending_economy_orders: HashMap::new(),
-            last_cash_flow: v.last_cash_flow.into_iter()
+            last_cash_flow: v
+                .last_cash_flow
+                .into_iter()
                 .map(|(n, cf)| (DN::from(n), cf.into()))
                 .collect::<HashMap<_, _>>(),
-            last_resource_flow: v.last_resource_flow.into_iter()
+            last_resource_flow: v
+                .last_resource_flow
+                .into_iter()
                 .map(|(n, rf)| (DN::from(n), rf.into()))
                 .collect::<HashMap<_, _>>(),
             pending_ai_material_outflows: Vec::new(),

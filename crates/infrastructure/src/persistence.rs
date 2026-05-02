@@ -229,7 +229,10 @@ mod tests {
         assert_eq!(loaded.human_player_nation, game.human_player_nation);
         assert_eq!(loaded.world.nations.len(), game.world.nations.len());
         assert_eq!(loaded.world.provinces.len(), game.world.provinces.len());
-        assert_eq!(loaded.world.hex_map.tile_count(), game.world.hex_map.tile_count());
+        assert_eq!(
+            loaded.world.hex_map.tile_count(),
+            game.world.hex_map.tile_count()
+        );
 
         // events are transient — not persisted
         assert!(loaded.transient.events.is_empty());
@@ -237,7 +240,10 @@ mod tests {
         let original_player = game.get_nation(game.human_player_nation).unwrap();
         let loaded_player = loaded.get_nation(loaded.human_player_nation).unwrap();
         assert_eq!(loaded_player.name, original_player.name);
-        assert_eq!(loaded_player.economy.treasury, original_player.economy.treasury);
+        assert_eq!(
+            loaded_player.economy.treasury,
+            original_player.economy.treasury
+        );
         assert_eq!(
             loaded_player.province_count(),
             original_player.province_count()
@@ -274,13 +280,16 @@ mod tests {
         let loaded_player = loaded.get_nation(player_id).unwrap();
         assert_eq!(
             loaded_player.resource_amount(domain::types::ResourceType::Timber),
-            35  // 20 starting (Easy) + 15 added
+            35 // 20 starting (Easy) + 15 added
         );
         assert_eq!(
             loaded_player.resource_amount(domain::types::ResourceType::Coal),
-            18  // 10 starting (Easy) + 8 added
+            18 // 10 starting (Easy) + 8 added
         );
-        assert_eq!(loaded_player.economy.treasury, domain::types::Money::dollars(7500));
+        assert_eq!(
+            loaded_player.economy.treasury,
+            domain::types::Money::dollars(7500)
+        );
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
@@ -357,7 +366,10 @@ mod tests {
 
         let result = load_game(&path);
         match result {
-            Err(PersistenceError::UnsupportedVersion { found, max_supported }) => {
+            Err(PersistenceError::UnsupportedVersion {
+                found,
+                max_supported,
+            }) => {
                 assert_eq!(found, CURRENT_SAVE_VERSION + 1);
                 assert_eq!(max_supported, CURRENT_SAVE_VERSION);
             }
@@ -383,7 +395,11 @@ mod tests {
         std::fs::write(&path, serde_json::to_string_pretty(&v1_json).unwrap()).unwrap();
         let result = load_game(&path);
         assert!(
-            matches!(result, Err(PersistenceError::UnsupportedVersion { .. }) | Err(PersistenceError::UnrecognizedFormat)),
+            matches!(
+                result,
+                Err(PersistenceError::UnsupportedVersion { .. })
+                    | Err(PersistenceError::UnrecognizedFormat)
+            ),
             "Expected version-mismatch or unrecognized-format error, got {:?}",
             result.err()
         );
@@ -402,7 +418,11 @@ mod tests {
         std::fs::write(&path, &raw_json).unwrap();
         let result = load_game(&path);
         assert!(
-            matches!(result, Err(PersistenceError::UnsupportedVersion { .. }) | Err(PersistenceError::UnrecognizedFormat)),
+            matches!(
+                result,
+                Err(PersistenceError::UnsupportedVersion { .. })
+                    | Err(PersistenceError::UnrecognizedFormat)
+            ),
             "Expected version-mismatch or unrecognized-format error, got {:?}",
             result.err()
         );

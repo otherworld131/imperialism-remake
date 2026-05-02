@@ -237,10 +237,7 @@ pub enum HistoryEvent {
         protectee: Option<NationId>,
     },
     /// "{joiner} joined war against {target} (alliance obligation)".
-    JoinedWar {
-        joiner: NationId,
-        target: NationId,
-    },
+    JoinedWar { joiner: NationId, target: NationId },
     /// "{a} made peace with {b}" — AI auto-accept against a passive minor.
     PeaceMade { a: NationId, b: NationId },
     /// "{a} signed peace with {b}" — human-driven CLI peace command.
@@ -260,15 +257,9 @@ pub enum HistoryEvent {
         tech_name: String,
     },
     /// "{signer} signed a non-aggression pact with {partner}".
-    NonAggressionPactSigned {
-        signer: NationId,
-        partner: NationId,
-    },
+    NonAggressionPactSigned { signer: NationId, partner: NationId },
     /// "{signer} formed an alliance with {partner}".
-    AllianceFormed {
-        signer: NationId,
-        partner: NationId,
-    },
+    AllianceFormed { signer: NationId, partner: NationId },
     /// "{acceptor} accepted {proposer}'s {treaty_type} proposal".
     TreatyProposalAccepted {
         acceptor: NationId,
@@ -289,15 +280,9 @@ pub enum HistoryEvent {
         reason: IncorporationReason,
     },
     /// "Trade consulate built with {target}".
-    ConsulateBuilt {
-        player: NationId,
-        target: NationId,
-    },
+    ConsulateBuilt { player: NationId, target: NationId },
     /// "Embassy built with {target}".
-    EmbassyBuilt {
-        player: NationId,
-        target: NationId,
-    },
+    EmbassyBuilt { player: NationId, target: NationId },
 }
 
 // ── Wrapper enum ───────────────────────────────────────────────

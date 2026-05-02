@@ -1,10 +1,10 @@
+use crate::DomainError;
 use crate::data::{GameConfig, GameData};
 use crate::hex::HexCoord;
 use crate::map::hex_map::HexMap;
 use crate::map::province::Province;
 use crate::nation::Nation;
 use crate::types::*;
-use crate::DomainError;
 use std::collections::{HashSet, VecDeque};
 
 /// Name of the tech (from Lua `game_config`) that gates railroad construction
@@ -100,20 +100,30 @@ pub fn build_railroad(
     cfg: &GameConfig,
 ) -> Result<Money, DomainError> {
     if !tile_owned_by(hex_map, coord, provinces, nation_id) {
-        return Err(DomainError::illegal("Cannot build railroad on tile not owned by this nation"));
+        return Err(DomainError::illegal(
+            "Cannot build railroad on tile not owned by this nation",
+        ));
     }
-    let tile = hex_map.get_tile(coord).ok_or(DomainError::TileNotFound(coord))?;
+    let tile = hex_map
+        .get_tile(coord)
+        .ok_or(DomainError::TileNotFound(coord))?;
     if tile.infrastructure.has_railroad {
         return Err(DomainError::illegal("Railroad already exists"));
     }
     let terrain = tile.terrain();
-    let cost = railroad_cost(terrain, cfg).ok_or(DomainError::illegal("Cannot build railroad on sea"))?;
+    let cost =
+        railroad_cost(terrain, cfg).ok_or(DomainError::illegal("Cannot build railroad on sea"))?;
     if !rail_terrain_enabled(terrain, researched_techs, game_data, cfg) {
         let tech = railroad_required_tech(terrain, cfg).unwrap_or("?");
-        return Err(DomainError::illegal(format!("Railroad on {:?} requires tech: {}", terrain, tech)));
+        return Err(DomainError::illegal(format!(
+            "Railroad on {:?} requires tech: {}",
+            terrain, tech
+        )));
     }
 
-    let tile = hex_map.get_tile_mut(coord).ok_or(DomainError::TileNotFound(coord))?;
+    let tile = hex_map
+        .get_tile_mut(coord)
+        .ok_or(DomainError::TileNotFound(coord))?;
     tile.infrastructure.has_railroad = true;
     Ok(cost)
 }
@@ -128,9 +138,13 @@ pub fn build_depot(
     cfg: &GameConfig,
 ) -> Result<Money, DomainError> {
     if !tile_owned_by(hex_map, coord, provinces, nation_id) {
-        return Err(DomainError::illegal("Cannot build depot on tile not owned by this nation"));
+        return Err(DomainError::illegal(
+            "Cannot build depot on tile not owned by this nation",
+        ));
     }
-    let tile = hex_map.get_tile(coord).ok_or(DomainError::TileNotFound(coord))?;
+    let tile = hex_map
+        .get_tile(coord)
+        .ok_or(DomainError::TileNotFound(coord))?;
     if !tile.terrain().is_land() {
         return Err(DomainError::illegal("Cannot build depot on sea"));
     }
@@ -138,9 +152,13 @@ pub fn build_depot(
         return Err(DomainError::illegal("Depot already exists"));
     }
     if !tile.infrastructure.has_railroad {
-        return Err(DomainError::illegal("Depot requires a railroad on the tile"));
+        return Err(DomainError::illegal(
+            "Depot requires a railroad on the tile",
+        ));
     }
-    let tile = hex_map.get_tile_mut(coord).ok_or(DomainError::TileNotFound(coord))?;
+    let tile = hex_map
+        .get_tile_mut(coord)
+        .ok_or(DomainError::TileNotFound(coord))?;
     tile.infrastructure.has_depot = true;
     Ok(Money::dollars(cfg.depot_cost))
 }
@@ -148,7 +166,9 @@ pub fn build_depot(
 /// Unchecked depot placement used during scenario setup (pre-builds the capital's
 /// depot before the prerequisite rules are in force).
 pub fn place_depot_unchecked(hex_map: &mut HexMap, coord: HexCoord) -> Result<(), DomainError> {
-    let tile = hex_map.get_tile_mut(coord).ok_or(DomainError::TileNotFound(coord))?;
+    let tile = hex_map
+        .get_tile_mut(coord)
+        .ok_or(DomainError::TileNotFound(coord))?;
     if !tile.terrain().is_land() {
         return Err(DomainError::illegal("Cannot place depot on sea"));
     }
@@ -181,9 +201,10 @@ pub fn coord_has_ocean_neighbor(
     if sea_zones.is_empty() {
         return coord_is_sea_adjacent(hex_map, coord);
     }
-    coord.neighbors().iter().any(|n| {
-        sea_zones.iter().any(|z| !z.is_lake && z.hexes.contains(n))
-    })
+    coord
+        .neighbors()
+        .iter()
+        .any(|n| sea_zones.iter().any(|z| !z.is_lake && z.hexes.contains(n)))
 }
 
 /// True if a tile acts as a port for connectivity purposes — a literal built
@@ -237,9 +258,13 @@ pub fn build_port(
     cfg: &GameConfig,
 ) -> Result<Money, DomainError> {
     if !tile_owned_by(hex_map, coord, provinces, nation_id) {
-        return Err(DomainError::illegal("Cannot build port on tile not owned by this nation"));
+        return Err(DomainError::illegal(
+            "Cannot build port on tile not owned by this nation",
+        ));
     }
-    let tile = hex_map.get_tile(coord).ok_or(DomainError::TileNotFound(coord))?;
+    let tile = hex_map
+        .get_tile(coord)
+        .ok_or(DomainError::TileNotFound(coord))?;
     if !tile.terrain().is_land() {
         return Err(DomainError::illegal("Cannot build port on sea"));
     }
@@ -249,7 +274,9 @@ pub fn build_port(
     if !coord_is_sea_adjacent(hex_map, coord) {
         return Err(DomainError::illegal("Port must be on a coastal tile"));
     }
-    let tile = hex_map.get_tile_mut(coord).ok_or(DomainError::TileNotFound(coord))?;
+    let tile = hex_map
+        .get_tile_mut(coord)
+        .ok_or(DomainError::TileNotFound(coord))?;
     tile.infrastructure.has_port = true;
     Ok(Money::dollars(cfg.port_cost))
 }
@@ -270,7 +297,9 @@ pub fn build_fort(
     coord: HexCoord,
     cfg: &GameConfig,
 ) -> Result<(u8, Money), DomainError> {
-    let tile = hex_map.get_tile(coord).ok_or(DomainError::TileNotFound(coord))?;
+    let tile = hex_map
+        .get_tile(coord)
+        .ok_or(DomainError::TileNotFound(coord))?;
     if !tile.terrain().is_land() {
         return Err(DomainError::illegal("Cannot build fort on sea"));
     }
@@ -281,7 +310,9 @@ pub fn build_fort(
     let new_level = current_level + 1;
     let cost = fort_cost(new_level, cfg)?;
 
-    let tile = hex_map.get_tile_mut(coord).ok_or(DomainError::TileNotFound(coord))?;
+    let tile = hex_map
+        .get_tile_mut(coord)
+        .ok_or(DomainError::TileNotFound(coord))?;
     tile.infrastructure.has_fort = true;
     tile.infrastructure.fort_level = new_level;
     Ok((new_level, cost))
@@ -577,7 +608,10 @@ mod tests {
         test_build_railroad(&mut map, coord, NationId(1), &provinces).unwrap();
         let result = test_build_railroad(&mut map, coord, NationId(1), &provinces);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "illegal move: Railroad already exists");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "illegal move: Railroad already exists"
+        );
     }
 
     #[test]
@@ -587,7 +621,10 @@ mod tests {
         let provinces = owned_land(&mut map, coord, TerrainType::Sea);
         let result = test_build_railroad(&mut map, coord, NationId(1), &provinces);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "illegal move: Cannot build railroad on sea");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "illegal move: Cannot build railroad on sea"
+        );
     }
 
     #[test]
@@ -654,7 +691,10 @@ mod tests {
         build_depot(&mut map, coord, NationId(1), &provinces, &cfg()).unwrap();
         let result = build_depot(&mut map, coord, NationId(1), &provinces, &cfg());
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "illegal move: Depot already exists");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "illegal move: Depot already exists"
+        );
     }
 
     #[test]
@@ -735,7 +775,10 @@ mod tests {
         build_port(&mut map, land, NationId(1), &provinces, &cfg()).unwrap();
         let result = build_port(&mut map, land, NationId(1), &provinces, &cfg());
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "illegal move: Port already exists");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "illegal move: Port already exists"
+        );
     }
 
     // ── is_province_connected ─────────────────────────────────
@@ -940,8 +983,22 @@ mod tests {
         let zones = vec![lake_a, lake_b];
 
         let provinces = vec![
-            Province::new(capital_pid, "Capital".into(), NationId(1), capital_coord, vec![capital_coord], 4),
-            Province::new(target_pid, "Target".into(), NationId(1), target_coord, vec![target_coord], 3),
+            Province::new(
+                capital_pid,
+                "Capital".into(),
+                NationId(1),
+                capital_coord,
+                vec![capital_coord],
+                4,
+            ),
+            Province::new(
+                target_pid,
+                "Target".into(),
+                NationId(1),
+                target_coord,
+                vec![target_coord],
+                3,
+            ),
         ];
 
         assert!(
@@ -1602,7 +1659,12 @@ mod tests {
             "swamp railroad without tech must fail, got {:?}",
             result
         );
-        assert!(result.unwrap_err().to_string().contains("Iron Railroad Bridge"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Iron Railroad Bridge")
+        );
     }
 
     // ── connectivity edge cases ─────────────────────────────

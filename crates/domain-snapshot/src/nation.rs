@@ -2,31 +2,71 @@ use crate::economy::{CashSink, CashSource, NationEconomy};
 use crate::events::TechId;
 use crate::military::NationMilitary;
 use crate::types::{NationId, NationType, ProvinceId};
-use domain::nation as dn;
 use domain::ai;
+use domain::nation as dn;
 
 // ── NationColor ──────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum NationColor {
-    Yellow, Orange, LightBlue, Red, Green, Purple, Blue,
-    Crimson, Magenta, Forest, Gold, Aqua, Violet, BurntOrange,
-    HotPink, Turquoise, Slate, Mauve, Sage, Mustard,
-    Gray, Brown, Pink, Teal, Olive, Maroon, Navy, Cyan, Lime,
-    Coral, Lavender, Tan, Salmon, Khaki, Indigo,
+    Yellow,
+    Orange,
+    LightBlue,
+    Red,
+    Green,
+    Purple,
+    Blue,
+    Crimson,
+    Magenta,
+    Forest,
+    Gold,
+    Aqua,
+    Violet,
+    BurntOrange,
+    HotPink,
+    Turquoise,
+    Slate,
+    Mauve,
+    Sage,
+    Mustard,
+    Gray,
+    Brown,
+    Pink,
+    Teal,
+    Olive,
+    Maroon,
+    Navy,
+    Cyan,
+    Lime,
+    Coral,
+    Lavender,
+    Tan,
+    Salmon,
+    Khaki,
+    Indigo,
 }
 
 // ── AiPersonality ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum AiPersonality { Aggressive, Diplomatic, Economic, Balanced }
+pub enum AiPersonality {
+    Aggressive,
+    Diplomatic,
+    Economic,
+    Balanced,
+}
 
 // ── SpendingCategory ─────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum SpendingCategory {
-    Military, Infrastructure, Consulate, Embassy,
-    HireEngineer, HireImprover, Warship,
+    Military,
+    Infrastructure,
+    Consulate,
+    Embassy,
+    HireEngineer,
+    HireImprover,
+    Warship,
 }
 
 // ── CommittedInfraTarget ─────────────────────────────────────────────
@@ -278,8 +318,15 @@ impl From<CommittedInfraTarget> for dn::CommittedInfraTarget {
 impl From<&dn::AiPriorityState> for AiPriorityState {
     fn from(v: &dn::AiPriorityState) -> Self {
         Self {
-            priority_minor_targets: v.priority_minor_targets.iter().copied().map(Into::into).collect(),
-            last_invest_turn: v.last_invest_turn.iter()
+            priority_minor_targets: v
+                .priority_minor_targets
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
+            last_invest_turn: v
+                .last_invest_turn
+                .iter()
                 .map(|(k, val)| ((*k).into(), *val))
                 .collect(),
             committed_infra_target: v.committed_infra_target.as_ref().map(Into::into),
@@ -289,8 +336,14 @@ impl From<&dn::AiPriorityState> for AiPriorityState {
 impl From<AiPriorityState> for dn::AiPriorityState {
     fn from(v: AiPriorityState) -> Self {
         Self {
-            priority_minor_targets: v.priority_minor_targets.into_iter().map(Into::into).collect(),
-            last_invest_turn: v.last_invest_turn.into_iter()
+            priority_minor_targets: v
+                .priority_minor_targets
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            last_invest_turn: v
+                .last_invest_turn
+                .into_iter()
                 .map(|(k, val)| (k.into(), val))
                 .collect(),
             committed_infra_target: v.committed_infra_target.map(Into::into),
@@ -302,7 +355,9 @@ impl From<&dn::NationDiplomacy> for NationDiplomacy {
     fn from(v: &dn::NationDiplomacy) -> Self {
         Self {
             ai_personality: v.ai_personality.map(Into::into),
-            trade_subsidies: v.trade_subsidies.iter()
+            trade_subsidies: v
+                .trade_subsidies
+                .iter()
                 .map(|(k, m)| (k.0, m.cents()))
                 .collect(),
             is_in_anarchy: v.is_in_anarchy,
@@ -318,7 +373,9 @@ impl From<NationDiplomacy> for dn::NationDiplomacy {
         use domain::types::{Money, NationId as DN};
         Self {
             ai_personality: v.ai_personality.map(Into::into),
-            trade_subsidies: v.trade_subsidies.into_iter()
+            trade_subsidies: v
+                .trade_subsidies
+                .into_iter()
                 .map(|(k, cents)| (DN(k), Money::from_cents(cents)))
                 .collect(),
             is_in_anarchy: v.is_in_anarchy,
@@ -334,10 +391,14 @@ impl From<&dn::NationArchives> for NationArchives {
     fn from(v: &dn::NationArchives) -> Self {
         Self {
             trade_history: v.trade_history.iter().map(Into::into).collect(),
-            cash_income_totals: v.cash_income_totals.iter()
+            cash_income_totals: v
+                .cash_income_totals
+                .iter()
                 .map(|(k, val)| ((*k).into(), *val))
                 .collect(),
-            cash_expense_totals: v.cash_expense_totals.iter()
+            cash_expense_totals: v
+                .cash_expense_totals
+                .iter()
                 .map(|(k, val)| ((*k).into(), *val))
                 .collect(),
             goods_sales_revenue_dollars: v.goods_sales_revenue_dollars,
@@ -351,14 +412,18 @@ impl From<&dn::NationArchives> for NationArchives {
 }
 impl From<NationArchives> for dn::NationArchives {
     fn from(v: NationArchives) -> Self {
-        use domain::economy::CashSource as DCS;
         use domain::economy::CashSink as DCSink;
+        use domain::economy::CashSource as DCS;
         Self {
             trade_history: v.trade_history.into_iter().map(Into::into).collect(),
-            cash_income_totals: v.cash_income_totals.into_iter()
+            cash_income_totals: v
+                .cash_income_totals
+                .into_iter()
                 .map(|(k, val)| (DCS::from(k), val))
                 .collect(),
-            cash_expense_totals: v.cash_expense_totals.into_iter()
+            cash_expense_totals: v
+                .cash_expense_totals
+                .into_iter()
                 .map(|(k, val)| (DCSink::from(k), val))
                 .collect(),
             goods_sales_revenue_dollars: v.goods_sales_revenue_dollars,
@@ -400,9 +465,15 @@ impl From<Nation> for dn::Nation {
             v.nation_type.into(),
             v.capital_province_id.into(),
         );
-        n.province_ids = v.province_ids.into_iter().map(|p: ProvinceId| DP(p.0)).collect();
+        n.province_ids = v
+            .province_ids
+            .into_iter()
+            .map(|p: ProvinceId| DP(p.0))
+            .collect();
         n.economy = v.economy.into();
-        n.researched_techs = v.researched_techs.into_iter()
+        n.researched_techs = v
+            .researched_techs
+            .into_iter()
             .map(|t: TechId| domain::events::TechId(t.0))
             .collect();
         n.researched_tech_years = v.researched_tech_years;
@@ -413,5 +484,3 @@ impl From<Nation> for dn::Nation {
         n
     }
 }
-
-

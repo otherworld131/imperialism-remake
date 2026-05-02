@@ -239,7 +239,13 @@ impl Default for FlagRules {
 
         let mut pattern_weights: HashMap<GovernmentForm, Vec<(FlagPattern, u32)>> = HashMap::new();
         // Monarchies: classical & heraldic feel.
-        for m in [AbsoluteMonarchy, ConstitutionalMonarchy, Empire, Kingdom, GrandDuchy] {
+        for m in [
+            AbsoluteMonarchy,
+            ConstitutionalMonarchy,
+            Empire,
+            Kingdom,
+            GrandDuchy,
+        ] {
             pattern_weights.insert(
                 m,
                 vec![
@@ -287,10 +293,23 @@ impl Default for FlagRules {
             );
         }
         // Monarchies prefer regal motifs.
-        for m in [AbsoluteMonarchy, ConstitutionalMonarchy, Empire, Kingdom, GrandDuchy] {
+        for m in [
+            AbsoluteMonarchy,
+            ConstitutionalMonarchy,
+            Empire,
+            Kingdom,
+            GrandDuchy,
+        ] {
             emblem_weights.insert(
                 m,
-                vec![(Cross, 4), (None, 4), (Star, 2), (Sun, 2), (Disk, 1), (Anchor, 1)],
+                vec![
+                    (Cross, 4),
+                    (None, 4),
+                    (Star, 2),
+                    (Sun, 2),
+                    (Disk, 1),
+                    (Anchor, 1),
+                ],
             );
         }
         // Theocracies freely use religious emblems.
@@ -300,10 +319,7 @@ impl Default for FlagRules {
         );
         // Islamic realms prefer crescent/star.
         for e in [Sultanate, Emirate] {
-            emblem_weights.insert(
-                e,
-                vec![(Crescent, 4), (Star, 3), (Sun, 1), (None, 2)],
-            );
+            emblem_weights.insert(e, vec![(Crescent, 4), (Star, 3), (Sun, 1), (None, 2)]);
         }
 
         // Structural pairings we disallow.
@@ -373,7 +389,12 @@ impl FlagRules {
             .any(|(x, y)| (*x == a && *y == b) || (*x == b && *y == a))
     }
 
-    fn emblem_forbidden_on(&self, emblem: Emblem, form: GovernmentForm, pattern: FlagPattern) -> bool {
+    fn emblem_forbidden_on(
+        &self,
+        emblem: Emblem,
+        form: GovernmentForm,
+        pattern: FlagPattern,
+    ) -> bool {
         self.forbidden_pairings.iter().any(|ex| match *ex {
             FlagExclusion::EmblemOnGovernment(e, f) => e == emblem && f == form,
             FlagExclusion::EmblemWithPattern(e, p) => e == emblem && p == pattern,
@@ -402,11 +423,7 @@ fn weighted_pick<T: Copy>(rng: &mut Rng, pool: &[(T, u32)]) -> T {
     pool[pool.len() - 1].0
 }
 
-fn pick_distinct_colors_filtered(
-    rng: &mut Rng,
-    n: usize,
-    rules: &FlagRules,
-) -> Vec<FlagColor> {
+fn pick_distinct_colors_filtered(rng: &mut Rng, n: usize, rules: &FlagRules) -> Vec<FlagColor> {
     let mut out: Vec<FlagColor> = Vec::with_capacity(n);
     let mut tries = 0;
     while out.len() < n && tries < 200 {
@@ -482,7 +499,9 @@ pub fn random_for(rng: &mut Rng, form: GovernmentForm, rules: &FlagRules) -> Fla
         let mut candidate = *rng.pick(PALETTE);
         for _ in 0..10 {
             if !colors.contains(&candidate)
-                && !colors.iter().any(|&c| rules.color_pair_forbidden(c, candidate))
+                && !colors
+                    .iter()
+                    .any(|&c| rules.color_pair_forbidden(c, candidate))
             {
                 break;
             }
@@ -527,7 +546,10 @@ fn emblem_svg(emblem: Emblem, color: FlagColor, cx: i32, cy: i32, size: i32) -> 
     let c = color.hex();
     match emblem {
         Emblem::None => String::new(),
-        Emblem::Disk => format!(r#"<circle cx="{cx}" cy="{cy}" r="{r}" fill="{c}"/>"#, r = size / 2),
+        Emblem::Disk => format!(
+            r#"<circle cx="{cx}" cy="{cy}" r="{r}" fill="{c}"/>"#,
+            r = size / 2
+        ),
         Emblem::Star => {
             // 5-point star as a polygon.
             let r = size as f32 / 2.0;
@@ -688,7 +710,13 @@ pub fn svg_for(design: &FlagDesign) -> String {
     }
 
     let (ex, ey, esize) = design.emblem_position.layout();
-    body.push_str(&emblem_svg(design.emblem, design.emblem_color, ex, ey, esize));
+    body.push_str(&emblem_svg(
+        design.emblem,
+        design.emblem_color,
+        ex,
+        ey,
+        esize,
+    ));
 
     format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}">{body}</svg>"#

@@ -13,9 +13,13 @@ pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
     ai_process_food(game, nation_id);
 
     // Extract config values before borrowing nation mutably.
-    let wealthy_threshold = Money::dollars(game.game_data.game_config.labor_wealthy_treasury_threshold);
+    let wealthy_threshold =
+        Money::dollars(game.game_data.game_config.labor_wealthy_treasury_threshold);
     let workers_per_province_base = game.game_data.game_config.labor_workers_per_province_base;
-    let workers_per_province_wealthy = game.game_data.game_config.labor_workers_per_province_wealthy;
+    let workers_per_province_wealthy = game
+        .game_data
+        .game_config
+        .labor_workers_per_province_wealthy;
     let min_workers_floor = game.game_data.game_config.labor_min_workers_floor;
 
     let nation = match game.get_nation_mut(nation_id) {
@@ -37,7 +41,8 @@ pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
     } else {
         workers_per_province_base
     };
-    let max_workers = (nation.province_count() as u32 * workers_per_province).max(min_workers_floor);
+    let max_workers =
+        (nation.province_count() as u32 * workers_per_province).max(min_workers_floor);
 
     // Only recruit if workforce is below target AND there is surplus food
     if total_workers < max_workers && total_food > total_workers {
@@ -64,7 +69,8 @@ fn ai_process_food(game: &mut GameState, nation_id: NationId) {
     };
 
     let food_processing_cap = nation
-        .economy.buildings
+        .economy
+        .buildings
         .iter()
         .find(|b| b.building_type == BuildingType::FoodProcessing)
         .map(|b| b.effective_capacity())
@@ -171,7 +177,8 @@ fn ai_hire_civilians(game: &mut GameState, nation_id: NationId) {
     if civilian_count < tier2_max && treasury > tier2_threshold {
         // Prefer Forester (cheaper) unless we already have one
         let has_forester = nation
-            .military.civilians
+            .military
+            .civilians
             .iter()
             .any(|c| c.civilian_type == CivilianType::Forester);
         let civ_type = if has_forester {
@@ -223,11 +230,16 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
     let collectable: std::collections::HashSet<crate::hex::HexCoord> = {
         let connected = super::super::turn::connected_provinces(game, nation_id);
         let owned_provinces: Vec<&crate::map::Province> = game
-            .world.provinces
+            .world
+            .provinces
             .iter()
             .filter(|p| p.owner == nation_id)
             .collect();
-        crate::map::infrastructure::collectable_hexes(&game.world.hex_map, &owned_provinces, &connected)
+        crate::map::infrastructure::collectable_hexes(
+            &game.world.hex_map,
+            &owned_provinces,
+            &connected,
+        )
     };
     // Tiles the depot planner intends to connect soon: every hex on the
     // current plan's path, plus the 1-hex radius around the planned
@@ -277,7 +289,8 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
     let softening: f64 = {
         let cfg = &game.game_data.game_config;
         let personality = super::common::get_personality(game, nation_id);
-        let reserve = super::common::PersonalityConfig::for_personality(personality).spending_reserve;
+        let reserve =
+            super::common::PersonalityConfig::for_personality(personality).spending_reserve;
         let treasury = game
             .get_nation(nation_id)
             .map(|n| n.economy.treasury)
@@ -291,10 +304,8 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
     // Weights are integer-truncated so heavy softening can collapse them
     // toward zero, at which point the improvement-level tiebreaker decides.
     let bucket_planned: u32 = (cfg.civilian_connectivity_planned_weight * softening) as u32;
-    let bucket_adjacent: u32 =
-        (cfg.civilian_connectivity_adjacent_weight * softening) as u32;
-    let bucket_unconnected: u32 =
-        (cfg.civilian_connectivity_unconnected_weight * softening) as u32;
+    let bucket_adjacent: u32 = (cfg.civilian_connectivity_adjacent_weight * softening) as u32;
+    let bucket_unconnected: u32 = (cfg.civilian_connectivity_unconnected_weight * softening) as u32;
     // Combined sort key: `bucket << 8 | improvement_level`. Connectivity
     // dominates while the bucket gap is wide; once softening has collapsed
     // the gap toward zero (cash-rich case) the improvement-level term takes
@@ -342,9 +353,7 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
             // searched AND has no visible resource. Hills with visible Wool
             // are deposit-capable terrain but a Prospector has nothing to do
             // there — the Wool is already known.
-            if terrain.can_have_deposits()
-                && !tile.is_prospected()
-                && !tile.has_visible_resource()
+            if terrain.can_have_deposits() && !tile.is_prospected() && !tile.has_visible_resource()
             {
                 unprospected_tiles.push((coord, terrain, tile.assigned_civilian.is_some()));
                 continue;
@@ -380,7 +389,8 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
     // generic `start_work` with no `build_task`, producing a no-op completion.
     let idle_civilians: Vec<(usize, CivilianType)> = match game.get_nation(nation_id) {
         Some(n) => n
-            .military.civilians
+            .military
+            .civilians
             .iter()
             .enumerate()
             .filter(|(_, c)| {
@@ -719,7 +729,11 @@ mod tests {
             CivilianType::Miner,
             "Should hire Miner when Forester already exists"
         );
-        assert_eq!(ai.economy.treasury, Money::dollars(3500), "Miner costs $1,500");
+        assert_eq!(
+            ai.economy.treasury,
+            Money::dollars(3500),
+            "Miner costs $1,500"
+        );
     }
 
     #[test]
@@ -748,8 +762,15 @@ mod tests {
         ai_manage_civilians(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(ai.military.civilians.len(), 1, "Should still have 1 civilian");
-        assert!(ai.military.civilians[0].working, "Civilian should be working");
+        assert_eq!(
+            ai.military.civilians.len(),
+            1,
+            "Should still have 1 civilian"
+        );
+        assert!(
+            ai.military.civilians[0].working,
+            "Civilian should be working"
+        );
         assert_eq!(
             ai.military.civilians[0].position,
             Some(farm_coord),
@@ -786,7 +807,8 @@ mod tests {
         for &c in coords {
             // If the hex_map doesn't have a tile at c yet, set one.
             if game.world.hex_map.get_tile(c).is_none() {
-                let t = crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+                let t =
+                    crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
                 game.world.hex_map.set_tile(c, t);
             } else if let Some(tile) = game.world.hex_map.get_tile_mut(c) {
                 tile.province_id = Some(ProvinceId(2));
@@ -904,8 +926,7 @@ mod tests {
 
         // Cash-tight (treasury == reserve, no surplus): bucket dominates.
         // PersonalityConfig::Aggressive uses spending_reserve = $500.
-        let cash_tight =
-            run_with_treasury(500).expect("cash-tight AI must deploy a civilian");
+        let cash_tight = run_with_treasury(500).expect("cash-tight AI must deploy a civilian");
         assert_eq!(
             cash_tight, near_rail,
             "cash-tight: bucket preference must beat the improvement-level tiebreaker"
@@ -914,8 +935,7 @@ mod tests {
         // Cash-rich (treasury vastly above the $20k softening threshold):
         // bucket gap collapses → tiebreaker on improvement_level wins, and
         // isolated (level 0) beats near_rail (level 1).
-        let cash_rich =
-            run_with_treasury(50_000_000).expect("cash-rich AI must deploy a civilian");
+        let cash_rich = run_with_treasury(50_000_000).expect("cash-rich AI must deploy a civilian");
         assert_eq!(
             cash_rich, isolated,
             "cash-rich softening must let the lower-improvement unconnected tile win"
@@ -1067,7 +1087,10 @@ mod tests {
         ai_train_and_promote_workers(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(ai.economy.labor.trained, 4, "Should have promoted 1 trained worker");
+        assert_eq!(
+            ai.economy.labor.trained, 4,
+            "Should have promoted 1 trained worker"
+        );
         assert_eq!(ai.economy.labor.expert, 1, "Should have 1 expert worker");
     }
 

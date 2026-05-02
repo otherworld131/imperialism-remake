@@ -1,5 +1,5 @@
-use crate::types::{NationId, TurnNumber};
 use crate::events::TreatyType;
+use crate::types::{NationId, TurnNumber};
 use domain::diplomacy as d;
 
 // ── DiplomaticProposal ───────────────────────────────────────────────
@@ -58,9 +58,10 @@ impl From<&d::DiplomaticProposal> for DiplomaticProposal {
             proposal_type: v.proposal_type.into(),
             turn_proposed: v.turn_proposed.into(),
             attacker: v.attacker.map(Into::into),
-            cascade_remaining: v.cascade_remaining.as_ref().map(|list| {
-                list.iter().copied().map(Into::into).collect()
-            }),
+            cascade_remaining: v
+                .cascade_remaining
+                .as_ref()
+                .map(|list| list.iter().copied().map(Into::into).collect()),
         }
     }
 }
@@ -73,9 +74,9 @@ impl From<DiplomaticProposal> for d::DiplomaticProposal {
             proposal_type: v.proposal_type.into(),
             turn_proposed: v.turn_proposed.into(),
             attacker: v.attacker.map(Into::into),
-            cascade_remaining: v.cascade_remaining.map(|list| {
-                list.into_iter().map(|n: NationId| DN(n.0)).collect()
-            }),
+            cascade_remaining: v
+                .cascade_remaining
+                .map(|list| list.into_iter().map(|n: NationId| DN(n.0)).collect()),
         }
     }
 }
@@ -112,14 +113,13 @@ impl From<DiplomaticRelation> for d::DiplomaticRelation {
 impl From<&d::DiplomacyState> for DiplomacyState {
     fn from(v: &d::DiplomacyState) -> Self {
         Self {
-            relations: v.all_relations()
+            relations: v
+                .all_relations()
                 .map(|((a, b), rel)| ((a.0, b.0), rel.into()))
                 .collect(),
             standing: v.standing.iter().map(|(k, val)| (k.0, *val)).collect(),
             pending_proposals: v.pending_proposals.iter().map(Into::into).collect(),
-            pact_defense_requested: v.pact_defense_pairs()
-                .map(|(a, b)| (a.0, b.0))
-                .collect(),
+            pact_defense_requested: v.pact_defense_pairs().map(|(a, b)| (a.0, b.0)).collect(),
         }
     }
 }
@@ -127,19 +127,27 @@ impl From<DiplomacyState> for d::DiplomacyState {
     fn from(v: DiplomacyState) -> Self {
         use domain::types::NationId as DN;
         use std::collections::{BTreeMap, HashMap, HashSet};
-        let relations: BTreeMap<(DN, DN), d::DiplomaticRelation> = v.relations
+        let relations: BTreeMap<(DN, DN), d::DiplomaticRelation> = v
+            .relations
             .into_iter()
             .map(|((a, b), rel)| ((DN(a), DN(b)), rel.into()))
             .collect();
-        let standing: HashMap<DN, i32> = v.standing
+        let standing: HashMap<DN, i32> = v
+            .standing
             .into_iter()
             .map(|(k, val)| (DN(k), val))
             .collect();
         let pending_proposals = v.pending_proposals.into_iter().map(Into::into).collect();
-        let pact_defense_requested: HashSet<(DN, DN)> = v.pact_defense_requested
+        let pact_defense_requested: HashSet<(DN, DN)> = v
+            .pact_defense_requested
             .into_iter()
             .map(|(a, b)| (DN(a), DN(b)))
             .collect();
-        d::DiplomacyState::from_raw(relations, standing, pending_proposals, pact_defense_requested)
+        d::DiplomacyState::from_raw(
+            relations,
+            standing,
+            pending_proposals,
+            pact_defense_requested,
+        )
     }
 }

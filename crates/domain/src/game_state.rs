@@ -100,12 +100,27 @@ pub struct TransientState {
     /// Transient collector for AI-side material consumption events that happen
     /// inside `run_ai_turns` and don't have access to the `TurnReport`. Drained
     /// into `report.stockpile_flows` at end of turn (not saved).
-    pub pending_ai_material_outflows: Vec<(NationId, crate::types::MaterialType, crate::economy::ledger::ResourceOut, u32)>,
+    pub pending_ai_material_outflows: Vec<(
+        NationId,
+        crate::types::MaterialType,
+        crate::economy::ledger::ResourceOut,
+        u32,
+    )>,
     /// Same as above for goods stockpiles.
-    pub pending_ai_goods_outflows: Vec<(NationId, crate::types::GoodsType, crate::economy::ledger::ResourceOut, u32)>,
+    pub pending_ai_goods_outflows: Vec<(
+        NationId,
+        crate::types::GoodsType,
+        crate::economy::ledger::ResourceOut,
+        u32,
+    )>,
     /// Transient collector for AI-side material *inflows* (e.g. AI Steel→Arms
     /// conversion in `ai/naval.rs`). Drained at end of turn (not saved).
-    pub pending_ai_material_inflows: Vec<(NationId, crate::types::MaterialType, crate::economy::ledger::ResourceIn, u32)>,
+    pub pending_ai_material_inflows: Vec<(
+        NationId,
+        crate::types::MaterialType,
+        crate::economy::ledger::ResourceIn,
+        u32,
+    )>,
 }
 
 /// Top-level aggregate root representing the complete state of a game.
@@ -179,12 +194,17 @@ impl GameState {
 
     /// Returns all Great Power nations.
     pub fn great_powers(&self) -> Vec<&Nation> {
-        self.world.nations.iter().filter(|n| n.is_great_power()).collect()
+        self.world
+            .nations
+            .iter()
+            .filter(|n| n.is_great_power())
+            .collect()
     }
 
     /// Returns all Minor Nations.
     pub fn minor_nations(&self) -> Vec<&Nation> {
-        self.world.nations
+        self.world
+            .nations
             .iter()
             .filter(|n| !n.is_great_power())
             .collect()
@@ -341,7 +361,8 @@ impl GameState {
     pub fn find_nation_by_name(&self, partial: &str) -> Option<&Nation> {
         let lower = partial.to_lowercase();
         let matches: Vec<&Nation> = self
-            .world.nations
+            .world
+            .nations
             .iter()
             .filter(|n| n.name.to_lowercase().contains(&lower))
             .collect();
@@ -480,7 +501,14 @@ pub fn new_game_with_seed_and_data_and_config(
     game_data: crate::data::GameData,
     cfg: crate::map::MapGenConfig,
 ) -> GameState {
-    new_game_inner(map_key, difficulty, human_nation_index, personality_seed, cfg, game_data)
+    new_game_inner(
+        map_key,
+        difficulty,
+        human_nation_index,
+        personality_seed,
+        cfg,
+        game_data,
+    )
 }
 
 /// Create a new game with a custom map-generation config.
@@ -612,22 +640,28 @@ fn new_game_inner(
         // On Easy/Introductory, add starting mills and factories
         if matches!(difficulty, Difficulty::Easy | Difficulty::Introductory) {
             nation
-                .economy.buildings
+                .economy
+                .buildings
                 .push(Building::new(BuildingType::LumberMill, 2));
             nation
-                .economy.buildings
+                .economy
+                .buildings
                 .push(Building::new(BuildingType::SteelMill, 2));
             nation
-                .economy.buildings
+                .economy
+                .buildings
                 .push(Building::new(BuildingType::TextileMill, 2));
             nation
-                .economy.buildings
+                .economy
+                .buildings
                 .push(Building::new(BuildingType::FurnitureFactory, 1));
             nation
-                .economy.buildings
+                .economy
+                .buildings
                 .push(Building::new(BuildingType::HardwareFactory, 1));
             nation
-                .economy.buildings
+                .economy
+                .buildings
                 .push(Building::new(BuildingType::ClothingFactory, 1));
         }
 
@@ -751,19 +785,25 @@ fn new_game_inner(
 
         // Starting army: 4 Regulars + 1 Light Artillery at capital
         for j in 0..4u32 {
-            nation.military.army.push(crate::military::units::ArmyUnit::new(
-                UnitId(1_000_000 + i as u32 * 10 + j),
-                crate::military::units::ArmyUnitType::Regulars,
+            nation
+                .military
+                .army
+                .push(crate::military::units::ArmyUnit::new(
+                    UnitId(1_000_000 + i as u32 * 10 + j),
+                    crate::military::units::ArmyUnitType::Regulars,
+                    setup.nation_id,
+                    setup.capital_province,
+                ));
+        }
+        nation
+            .military
+            .army
+            .push(crate::military::units::ArmyUnit::new(
+                UnitId(1_000_000 + i as u32 * 10 + 4),
+                crate::military::units::ArmyUnitType::LightArtillery,
                 setup.nation_id,
                 setup.capital_province,
             ));
-        }
-        nation.military.army.push(crate::military::units::ArmyUnit::new(
-            UnitId(1_000_000 + i as u32 * 10 + 4),
-            crate::military::units::ArmyUnitType::LightArtillery,
-            setup.nation_id,
-            setup.capital_province,
-        ));
 
         // Persistent Militia in every owned province (manual page 36:
         // "local defence forces exist in all countries and in all provinces").
@@ -773,7 +813,8 @@ fn new_game_inner(
         for &pid in &setup.province_ids {
             for _ in 0..default_garrison {
                 nation
-                    .military.army
+                    .military
+                    .army
                     .push(crate::military::combat::spawn_militia_unit(
                         &mut id_counter,
                         setup.nation_id,
@@ -817,26 +858,33 @@ fn new_game_inner(
 
         // Starting army: 4 Regulars + 1 Light Artillery at capital
         for j in 0..4u32 {
-            nation.military.army.push(crate::military::units::ArmyUnit::new(
-                UnitId(1_100_000 + i as u32 * 10 + j),
-                crate::military::units::ArmyUnitType::Regulars,
+            nation
+                .military
+                .army
+                .push(crate::military::units::ArmyUnit::new(
+                    UnitId(1_100_000 + i as u32 * 10 + j),
+                    crate::military::units::ArmyUnitType::Regulars,
+                    setup.nation_id,
+                    setup.capital_province,
+                ));
+        }
+        nation
+            .military
+            .army
+            .push(crate::military::units::ArmyUnit::new(
+                UnitId(1_100_000 + i as u32 * 10 + 4),
+                crate::military::units::ArmyUnitType::LightArtillery,
                 setup.nation_id,
                 setup.capital_province,
             ));
-        }
-        nation.military.army.push(crate::military::units::ArmyUnit::new(
-            UnitId(1_100_000 + i as u32 * 10 + 4),
-            crate::military::units::ArmyUnitType::LightArtillery,
-            setup.nation_id,
-            setup.capital_province,
-        ));
 
         // Persistent Militia in every owned province (minor-nation cap).
         let minor_default_garrison = game_data.game_config.minor_default_garrison as usize;
         for &pid in &setup.province_ids {
             for _ in 0..minor_default_garrison {
                 nation
-                    .military.army
+                    .military
+                    .army
                     .push(crate::military::combat::spawn_militia_unit(
                         &mut id_counter,
                         setup.nation_id,
@@ -846,7 +894,8 @@ fn new_game_inner(
         }
         // A single GarrisonArtillery at the minor nation's capital.
         nation
-            .military.army
+            .military
+            .army
             .push(crate::military::combat::spawn_garrison_artillery_unit(
                 &mut id_counter,
                 setup.nation_id,
@@ -914,19 +963,23 @@ fn new_game_inner(
     // nations alike). Capitals act as implicit depots so the capital province is
     // always harvesting from turn 1 without requiring the player to build one.
     let capital_tiles: Vec<crate::hex::HexCoord> = game_state
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter_map(|n| {
             game_state
-                .world.provinces
+                .world
+                .provinces
                 .iter()
                 .find(|p| p.id == n.capital_province_id)
                 .map(|p| p.capital_tile)
         })
         .collect();
     for cap_tile in capital_tiles {
-        let _ =
-            crate::map::infrastructure::place_depot_unchecked(&mut game_state.world.hex_map, cap_tile);
+        let _ = crate::map::infrastructure::place_depot_unchecked(
+            &mut game_state.world.hex_map,
+            cap_tile,
+        );
         // Persistent "this tile was a country capital" flag. Survives conquest
         // so captured foreign capitals keep acting as implicit depots.
         if let Some(tile) = game_state.world.hex_map.get_tile_mut(cap_tile) {
@@ -956,7 +1009,8 @@ fn new_game_inner(
     // Human-slot nations (no personality yet at this point) are skipped; the
     // observer-mode promotion in batch.rs reassigns them before the first turn.
     let gp_ids_for_targets: Vec<(NationId, crate::ai::AiPersonality)> = game_state
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter_map(|n| n.diplomacy.ai_personality.map(|p| (n.id, p)))
         .filter(|(id, _)| {
@@ -1233,7 +1287,10 @@ mod tests {
             joiner: NationId(1),
             target: NationId(2),
         });
-        assert_eq!(s, "Devron joined war against Smallton (alliance obligation)");
+        assert_eq!(
+            s,
+            "Devron joined war against Smallton (alliance obligation)"
+        );
     }
 
     #[test]
@@ -1310,7 +1367,10 @@ mod tests {
     fn render_history_event_treaty_proposal_accepted_all_variants() {
         let g = render_test_game();
         let cases: &[(TreatyType, &str)] = &[
-            (TreatyType::Alliance, "Devron accepted Smallton's Alliance proposal"),
+            (
+                TreatyType::Alliance,
+                "Devron accepted Smallton's Alliance proposal",
+            ),
             (
                 TreatyType::NonAggressionPact,
                 "Devron accepted Smallton's Non-Aggression Pact proposal",
@@ -1423,14 +1483,28 @@ mod tests {
         let intro_cash = intro
             .get_nation(intro.human_player_nation)
             .unwrap()
-            .economy.treasury;
-        let easy_cash = easy.get_nation(easy.human_player_nation).unwrap().economy.treasury;
+            .economy
+            .treasury;
+        let easy_cash = easy
+            .get_nation(easy.human_player_nation)
+            .unwrap()
+            .economy
+            .treasury;
         let normal_cash = normal
             .get_nation(normal.human_player_nation)
             .unwrap()
-            .economy.treasury;
-        let hard_cash = hard.get_nation(hard.human_player_nation).unwrap().economy.treasury;
-        let noi_cash = noi.get_nation(noi.human_player_nation).unwrap().economy.treasury;
+            .economy
+            .treasury;
+        let hard_cash = hard
+            .get_nation(hard.human_player_nation)
+            .unwrap()
+            .economy
+            .treasury;
+        let noi_cash = noi
+            .get_nation(noi.human_player_nation)
+            .unwrap()
+            .economy
+            .treasury;
 
         assert_eq!(intro_cash, Money::dollars(15000));
         assert_eq!(easy_cash, Money::dollars(12000));
@@ -1950,9 +2024,11 @@ mod tests {
         assert!(gs.is_game_over());
 
         // Record a high score
-        let score = crate::turn::calculate_score(gs.get_nation(NationId(1)).unwrap(), &gs.game_data);
+        let score =
+            crate::turn::calculate_score(gs.get_nation(NationId(1)).unwrap(), &gs.game_data);
         let date_str = format!("{} Q{}", gs.turn.year(), gs.turn.quarter());
-        gs.archive.high_scores
+        gs.archive
+            .high_scores
             .push(("France".to_string(), score.total, date_str));
 
         assert_eq!(gs.archive.high_scores.len(), 1);

@@ -98,7 +98,8 @@ impl TechTree {
                         terrain: eff_class,
                         max_level,
                     } = effect
-                        && eff_class == class && *max_level > max
+                        && eff_class == class
+                        && *max_level > max
                     {
                         max = *max_level;
                     }
@@ -403,7 +404,8 @@ mod tests {
 
     fn load_ron_tree() -> TechTree {
         let ron_content = include_str!("../../../../data/definitions/technologies.ron");
-        let defs: TechDefsFile = ron::from_str(ron_content).expect("technologies.ron must be valid");
+        let defs: TechDefsFile =
+            ron::from_str(ron_content).expect("technologies.ron must be valid");
         let tree = TechTree::from_technologies(
             defs.technologies
                 .into_iter()
@@ -418,7 +420,8 @@ mod tests {
                 })
                 .collect(),
         );
-        tree.validate().expect("embedded tech tree test data should validate");
+        tree.validate()
+            .expect("embedded tech tree test data should validate");
         tree
     }
 
@@ -666,11 +669,7 @@ mod tests {
         let tree = load_ron_tree();
         // No tech → 0 (cannot drill anywhere).
         assert_eq!(
-            tree.effective_max_improvement_level(
-                TerrainType::Desert,
-                Some(ResourceType::Oil),
-                &[]
-            ),
+            tree.effective_max_improvement_level(TerrainType::Desert, Some(ResourceType::Oil), &[]),
             0
         );
         // Oil Drilling (19) → L1.

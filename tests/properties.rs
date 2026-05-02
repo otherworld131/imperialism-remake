@@ -704,7 +704,12 @@ fn combat_damage_never_exceeds_total_health() {
                 NationId(2),
                 ProvinceId(2),
             ),
-            ArmyUnit::new(UnitId(4), ArmyUnitType::Minutemen, NationId(2), ProvinceId(2)),
+            ArmyUnit::new(
+                UnitId(4),
+                ArmyUnitType::Minutemen,
+                NationId(2),
+                ProvinceId(2),
+            ),
         ],
     };
 

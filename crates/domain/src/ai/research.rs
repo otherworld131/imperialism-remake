@@ -122,7 +122,8 @@ pub(crate) fn ai_research_tech(
                         tech_name: tech_name.clone(),
                     };
                     if !game
-                        .archive.history
+                        .archive
+                        .history
                         .iter()
                         .any(|(t, ev)| *t == turn && *ev == entry)
                     {
@@ -259,7 +260,8 @@ pub(crate) fn ai_research_tech(
         };
         // Deduplicate: only push if this exact event doesn't already exist for this turn
         if !game
-            .archive.history
+            .archive
+            .history
             .iter()
             .any(|(t, ev)| *t == turn && *ev == entry)
         {
@@ -317,7 +319,8 @@ pub(crate) fn ai_research_tech(
                     tech_name: cand_name.clone(),
                 };
                 if !game
-                    .archive.history
+                    .archive
+                    .history
                     .iter()
                     .any(|(t, ev)| *t == turn && *ev == entry)
                 {

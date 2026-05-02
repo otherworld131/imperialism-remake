@@ -53,7 +53,7 @@ pub struct DiplomacyScreenData {
     pub standing: i32,
     pub great_power_relations: Vec<(String, u32, String, i32)>, // name, id, status, score
     pub minor_nation_relations: Vec<(String, u32, String, i32)>, // name, id, infra, score
-    pub council_projection: Vec<(String, u32)>,                  // nation, projected votes
+    pub council_projection: Vec<(String, u32)>,                 // nation, projected votes
 }
 
 // ── Typed query enum ─────────────────────────────────────────────
@@ -124,7 +124,8 @@ pub fn get_industry_screen(game: &GameState) -> Result<IndustryScreenData, Appli
     let nation = human_nation(game)?;
 
     let buildings: Vec<(String, u32, bool)> = nation
-        .economy.buildings
+        .economy
+        .buildings
         .iter()
         .map(|b| {
             (
@@ -182,7 +183,8 @@ pub fn get_trade_screen(game: &GameState) -> Result<TradeScreenData, Application
     // Exclude world-market auto-sells (partner=NationId(0)) and manufactured-goods entries
     // (sentinel entries where commodity_label differs from the resource's Debug name).
     let cargo_used: u32 = nation
-        .archives.trade_history
+        .archives
+        .trade_history
         .iter()
         .filter(|th| th.turn.0 <= game.turn.0 && game.turn.0.saturating_sub(th.turn.0) <= 1)
         .filter(|th| th.partner != nation.id)
@@ -208,7 +210,8 @@ pub fn get_trade_screen(game: &GameState) -> Result<TradeScreenData, Application
 
         // Available resources: what the minor nation has in its warehouse.
         let available_resources: Vec<(String, u32, String)> = minor
-            .economy.warehouse
+            .economy
+            .warehouse
             .iter()
             .filter(|(_, qty)| **qty > 0)
             .map(|(resource, qty)| {
@@ -318,7 +321,7 @@ mod tests {
     use domain::economy::buildings::BuildingType;
     use domain::game_state::new_game;
     use domain::types::Difficulty;
-    use domain::types::{NationId, Money, ResourceType, TurnNumber};
+    use domain::types::{Money, NationId, ResourceType, TurnNumber};
 
     // ── Map Screen ──────────────────────────────────────────────────
 
@@ -345,7 +348,10 @@ mod tests {
 
         let human = game.get_nation(game.human_player_nation).unwrap();
         assert_eq!(data.freight_cars, human.military.transport.freight_cars);
-        assert_eq!(data.total_capacity, human.military.transport.total_capacity());
+        assert_eq!(
+            data.total_capacity,
+            human.military.transport.total_capacity()
+        );
     }
 
     #[test]
@@ -468,7 +474,8 @@ mod tests {
 
         // Build a consulate with the first minor nation
         let first_minor_id = game.minor_nations()[0].id;
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .build_consulate(human_id, first_minor_id)
             .unwrap();
 
@@ -490,7 +497,10 @@ mod tests {
 
         // Each Great Power starts with 1 Trader ship
         let nation = game.get_nation(game.human_player_nation).unwrap();
-        assert_eq!(data.cargo_capacity, nation.total_cargo_capacity(&game.game_data));
+        assert_eq!(
+            data.cargo_capacity,
+            nation.total_cargo_capacity(&game.game_data)
+        );
     }
 
     #[test]
@@ -500,10 +510,12 @@ mod tests {
 
         // Build consulates with two minor nations
         let minor_ids: Vec<NationId> = game.minor_nations().iter().map(|n| n.id).collect();
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .build_consulate(human_id, minor_ids[0])
             .unwrap();
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .build_consulate(human_id, minor_ids[1])
             .unwrap();
 
@@ -564,7 +576,10 @@ mod tests {
         });
 
         let data = get_trade_screen(&game).unwrap();
-        let capacity = game.get_nation(human_id).unwrap().total_cargo_capacity(&game.game_data);
+        let capacity = game
+            .get_nation(human_id)
+            .unwrap()
+            .total_cargo_capacity(&game.game_data);
         let expected = (3u32 + 2).min(capacity);
         assert_eq!(data.cargo_used, expected);
     }

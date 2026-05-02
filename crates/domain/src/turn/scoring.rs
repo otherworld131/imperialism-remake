@@ -64,7 +64,8 @@ pub fn calculate_score(nation: &Nation, data: &crate::data::GameData) -> NationS
         return NationScore::default();
     }
     let military_score = nation
-        .military.army
+        .military
+        .army
         .iter()
         .map(|u| u.effective_firepower() as u32)
         .sum::<u32>();

@@ -6,8 +6,8 @@
 //! The query methods live on `NationEconomy` (in `nation.rs`); this module
 //! defines the supporting types.
 
-use crate::economy::trade::Commodity;
 use crate::economy::labor::WorkerType;
+use crate::economy::trade::Commodity;
 use crate::types::*;
 use std::collections::{BTreeMap, HashMap};
 
@@ -68,14 +68,31 @@ pub struct PendingEconomyOrder {
 impl std::fmt::Display for BlockReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BlockReason::InsufficientInventory { commodity, needed, available } => {
-                write!(f, "Need {needed} {commodity} but only {available} available")
+            BlockReason::InsufficientInventory {
+                commodity,
+                needed,
+                available,
+            } => {
+                write!(
+                    f,
+                    "Need {needed} {commodity} but only {available} available"
+                )
             }
-            BlockReason::InsufficientLabor { tier, needed, available } => {
-                write!(f, "Need {needed} {tier:?} workers but only {available} available")
+            BlockReason::InsufficientLabor {
+                tier,
+                needed,
+                available,
+            } => {
+                write!(
+                    f,
+                    "Need {needed} {tier:?} workers but only {available} available"
+                )
             }
             BlockReason::InsufficientFreight { needed, available } => {
-                write!(f, "Need {needed} freight capacity but only {available} available")
+                write!(
+                    f,
+                    "Need {needed} freight capacity but only {available} available"
+                )
             }
             BlockReason::InsufficientTreasury { needed, available } => {
                 write!(f, "Need {needed} but treasury only has {available}")

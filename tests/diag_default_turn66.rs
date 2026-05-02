@@ -41,7 +41,8 @@ fn diag_default_turn66() {
                 n.id,
                 (
                     n.name.clone(),
-                    n.diplomacy.ai_personality
+                    n.diplomacy
+                        .ai_personality
                         .map(|p| format!("{:?}", p))
                         .unwrap_or_else(|| "-".into()),
                 ),
@@ -51,7 +52,8 @@ fn diag_default_turn66() {
 
     println!("=== DIPLOMACY (turn 66 = 1831 Q2) — GP ↔ GP ===");
     let gp_ids: Vec<NationId> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.is_great_power())
         .map(|n| n.id)
@@ -63,7 +65,8 @@ fn diag_default_turn66() {
             }
             let rel = game.world.diplomacy.get_relation(a, b);
             let nap = game
-                .world.diplomacy
+                .world
+                .diplomacy
                 .has_treaty(a, b, TreatyType::NonAggressionPact);
             let ali = game.world.diplomacy.has_treaty(a, b, TreatyType::Alliance);
             let war = rel.is_some_and(|r| r.at_war);
@@ -107,7 +110,8 @@ fn diag_default_turn66() {
                 }
             }
             if game
-                .world.diplomacy
+                .world
+                .diplomacy
                 .has_treaty(gp, mn.id, TreatyType::NonAggressionPact)
             {
                 naps += 1;
@@ -124,7 +128,8 @@ fn diag_default_turn66() {
         let priority: Vec<String> = game
             .get_nation(gp)
             .unwrap()
-            .diplomacy.ai_priority_state
+            .diplomacy
+            .ai_priority_state
             .priority_minor_targets
             .iter()
             .filter_map(|id| game.get_nation(*id).map(|n| n.name.clone()))
@@ -166,7 +171,8 @@ fn diag_default_turn66() {
             }
         }
         let engineer_info: Vec<String> = nation
-            .military.civilians
+            .military
+            .civilians
             .iter()
             .filter(|c| c.civilian_type == domain::economy::civilians::CivilianType::Engineer)
             .map(|c| {
@@ -184,7 +190,8 @@ fn diag_default_turn66() {
             depots,
             nation.province_count(),
             nation
-                .military.civilians
+                .military
+                .civilians
                 .iter()
                 .filter(|c| c.civilian_type == domain::economy::civilians::CivilianType::Engineer)
                 .count(),
@@ -201,13 +208,18 @@ fn diag_default_turn66() {
         let nation = game.get_nation(gp).unwrap();
         let (name, _) = &gp_personality[&gp];
         let foresters: Vec<_> = nation
-            .military.civilians
+            .military
+            .civilians
             .iter()
             .filter(|c| c.civilian_type == domain::economy::civilians::CivilianType::Forester)
             .collect();
         let connected = connected_provinces(&game, gp);
-        let owned: Vec<&domain::map::Province> =
-            game.world.provinces.iter().filter(|p| p.owner == gp).collect();
+        let owned: Vec<&domain::map::Province> = game
+            .world
+            .provinces
+            .iter()
+            .filter(|p| p.owner == gp)
+            .collect();
         let collectable =
             domain::map::infrastructure::collectable_hexes(&game.world.hex_map, &owned, &connected);
         let mut connected_timber = 0;

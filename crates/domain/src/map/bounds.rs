@@ -104,13 +104,24 @@ mod tests {
         let sqrt3 = 3.0_f64.sqrt();
         let world_width = b.width as f64 * sqrt3 * size;
         for r in 0..b.height {
-            let row_coords: Vec<HexCoord> =
-                b.iter_coords().filter(|c| c.r == r).collect();
-            let leftmost = row_coords.iter().map(|c| c.to_pixel(size).0).fold(f64::INFINITY, f64::min);
-            let rightmost = row_coords.iter().map(|c| c.to_pixel(size).0).fold(f64::NEG_INFINITY, f64::max);
+            let row_coords: Vec<HexCoord> = b.iter_coords().filter(|c| c.r == r).collect();
+            let leftmost = row_coords
+                .iter()
+                .map(|c| c.to_pixel(size).0)
+                .fold(f64::INFINITY, f64::min);
+            let rightmost = row_coords
+                .iter()
+                .map(|c| c.to_pixel(size).0)
+                .fold(f64::NEG_INFINITY, f64::max);
             // leftmost is either 0 (even rows) or 0.5*sqrt3 (odd rows)
-            assert!(leftmost >= -1e-9 && leftmost < sqrt3 * size, "row {r}: leftmost {leftmost}");
-            assert!(rightmost <= world_width + 1e-9, "row {r}: rightmost {rightmost} world_width {world_width}");
+            assert!(
+                leftmost >= -1e-9 && leftmost < sqrt3 * size,
+                "row {r}: leftmost {leftmost}"
+            );
+            assert!(
+                rightmost <= world_width + 1e-9,
+                "row {r}: rightmost {rightmost} world_width {world_width}"
+            );
         }
     }
 

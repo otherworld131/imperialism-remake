@@ -190,7 +190,9 @@ pub struct GovernmentMix {
 
 impl GovernmentMix {
     pub fn new() -> Self {
-        Self { weights: Vec::new() }
+        Self {
+            weights: Vec::new(),
+        }
     }
 
     /// Fluent builder — adds (or overwrites) the weight for `form`. A weight
@@ -286,9 +288,22 @@ pub fn government_title(country_name: &str, form: GovernmentForm) -> String {
     use GovernmentForm::*;
     let connector = match form {
         // "Empire of X" — genitive.
-        AbsoluteMonarchy | ConstitutionalMonarchy | Empire | Kingdom | Republic
-        | FederalRepublic | Duchy | Principality | GrandDuchy | CityState | Theocracy
-        | Shogunate | Khanate | Sultanate | Emirate | Dominion => "of",
+        AbsoluteMonarchy
+        | ConstitutionalMonarchy
+        | Empire
+        | Kingdom
+        | Republic
+        | FederalRepublic
+        | Duchy
+        | Principality
+        | GrandDuchy
+        | CityState
+        | Theocracy
+        | Shogunate
+        | Khanate
+        | Sultanate
+        | Emirate
+        | Dominion => "of",
         // "Confederation of the X" reads oddly — use "of".
         Confederation | TribalConfederacy => "of",
         MilitaryJunta => "of",

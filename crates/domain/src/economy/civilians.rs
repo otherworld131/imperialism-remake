@@ -415,7 +415,10 @@ mod tests {
     #[test]
     fn required_tech_returns_configured_names() {
         let cfg = crate::data::GameConfig::default();
-        assert_eq!(CivilianType::Rancher.required_tech(&cfg), Some("Feed Grasses"));
+        assert_eq!(
+            CivilianType::Rancher.required_tech(&cfg),
+            Some("Feed Grasses")
+        );
         assert_eq!(
             CivilianType::Forester.required_tech(&cfg),
             Some("Iron Railroad Bridge")

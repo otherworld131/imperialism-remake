@@ -7,7 +7,15 @@ pub struct TechId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HeadlineCategory {
-    War, Battle, Diplomacy, Growth, Trade, Crisis, Politics, Military, Default,
+    War,
+    Battle,
+    Diplomacy,
+    Growth,
+    Trade,
+    Crisis,
+    Politics,
+    Military,
+    Default,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -22,7 +30,9 @@ pub struct Headline {
     pub nation_ids: Vec<NationId>,
 }
 
-fn is_false(b: &bool) -> bool { !*b }
+fn is_false(b: &bool) -> bool {
+    !*b
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TreatyType {
@@ -48,29 +58,77 @@ pub enum HistoryEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         protectee: Option<NationId>,
     },
-    JoinedWar { joiner: NationId, target: NationId },
-    PeaceMade { a: NationId, b: NationId },
-    PeaceSigned { a: NationId, b: NationId },
-    MutualPeace { a: NationId, b: NationId },
-    ProvinceConquered { conqueror: NationId, loser: NationId, province: ProvinceId },
-    TechnologyResearched { researcher: NationId, tech_name: String },
-    NonAggressionPactSigned { signer: NationId, partner: NationId },
-    AllianceFormed { signer: NationId, partner: NationId },
-    TreatyProposalAccepted { acceptor: NationId, proposer: NationId, treaty_type: TreatyType },
-    FellIntoAnarchy { nation: NationId },
-    RegainedIndependence { minor: NationId, former_overlord: NationId },
-    MinorJoinedEmpire { minor: NationId, overlord: NationId, reason: IncorporationReason },
-    ConsulateBuilt { player: NationId, target: NationId },
-    EmbassyBuilt { player: NationId, target: NationId },
+    JoinedWar {
+        joiner: NationId,
+        target: NationId,
+    },
+    PeaceMade {
+        a: NationId,
+        b: NationId,
+    },
+    PeaceSigned {
+        a: NationId,
+        b: NationId,
+    },
+    MutualPeace {
+        a: NationId,
+        b: NationId,
+    },
+    ProvinceConquered {
+        conqueror: NationId,
+        loser: NationId,
+        province: ProvinceId,
+    },
+    TechnologyResearched {
+        researcher: NationId,
+        tech_name: String,
+    },
+    NonAggressionPactSigned {
+        signer: NationId,
+        partner: NationId,
+    },
+    AllianceFormed {
+        signer: NationId,
+        partner: NationId,
+    },
+    TreatyProposalAccepted {
+        acceptor: NationId,
+        proposer: NationId,
+        treaty_type: TreatyType,
+    },
+    FellIntoAnarchy {
+        nation: NationId,
+    },
+    RegainedIndependence {
+        minor: NationId,
+        former_overlord: NationId,
+    },
+    MinorJoinedEmpire {
+        minor: NationId,
+        overlord: NationId,
+        reason: IncorporationReason,
+    },
+    ConsulateBuilt {
+        player: NationId,
+        target: NationId,
+    },
+    EmbassyBuilt {
+        player: NationId,
+        target: NationId,
+    },
 }
 
 // ── From impls ────────────────────────────────────────────────────
 
 impl From<d::TechId> for TechId {
-    fn from(v: d::TechId) -> Self { Self(v.0) }
+    fn from(v: d::TechId) -> Self {
+        Self(v.0)
+    }
 }
 impl From<TechId> for d::TechId {
-    fn from(v: TechId) -> Self { Self(v.0) }
+    fn from(v: TechId) -> Self {
+        Self(v.0)
+    }
 }
 
 impl From<d::HeadlineCategory> for HeadlineCategory {
@@ -172,90 +230,186 @@ impl From<IncorporationReason> for d::IncorporationReason {
 impl From<&d::HistoryEvent> for HistoryEvent {
     fn from(v: &d::HistoryEvent) -> Self {
         match v {
-            d::HistoryEvent::WarDeclared { attacker, defender, protectee } => Self::WarDeclared {
+            d::HistoryEvent::WarDeclared {
+                attacker,
+                defender,
+                protectee,
+            } => Self::WarDeclared {
                 attacker: (*attacker).into(),
                 defender: (*defender).into(),
                 protectee: protectee.map(Into::into),
             },
-            d::HistoryEvent::JoinedWar { joiner, target } =>
-                Self::JoinedWar { joiner: (*joiner).into(), target: (*target).into() },
-            d::HistoryEvent::PeaceMade { a, b } =>
-                Self::PeaceMade { a: (*a).into(), b: (*b).into() },
-            d::HistoryEvent::PeaceSigned { a, b } =>
-                Self::PeaceSigned { a: (*a).into(), b: (*b).into() },
-            d::HistoryEvent::MutualPeace { a, b } =>
-                Self::MutualPeace { a: (*a).into(), b: (*b).into() },
-            d::HistoryEvent::ProvinceConquered { conqueror, loser, province } =>
-                Self::ProvinceConquered {
-                    conqueror: (*conqueror).into(),
-                    loser: (*loser).into(),
-                    province: (*province).into(),
-                },
-            d::HistoryEvent::TechnologyResearched { researcher, tech_name } =>
-                Self::TechnologyResearched {
-                    researcher: (*researcher).into(),
-                    tech_name: tech_name.clone(),
-                },
-            d::HistoryEvent::NonAggressionPactSigned { signer, partner } =>
-                Self::NonAggressionPactSigned { signer: (*signer).into(), partner: (*partner).into() },
-            d::HistoryEvent::AllianceFormed { signer, partner } =>
-                Self::AllianceFormed { signer: (*signer).into(), partner: (*partner).into() },
-            d::HistoryEvent::TreatyProposalAccepted { acceptor, proposer, treaty_type } =>
-                Self::TreatyProposalAccepted {
-                    acceptor: (*acceptor).into(),
-                    proposer: (*proposer).into(),
-                    treaty_type: (*treaty_type).into(),
-                },
-            d::HistoryEvent::FellIntoAnarchy { nation } =>
-                Self::FellIntoAnarchy { nation: (*nation).into() },
-            d::HistoryEvent::RegainedIndependence { minor, former_overlord } =>
-                Self::RegainedIndependence {
-                    minor: (*minor).into(),
-                    former_overlord: (*former_overlord).into(),
-                },
-            d::HistoryEvent::MinorJoinedEmpire { minor, overlord, reason } =>
-                Self::MinorJoinedEmpire {
-                    minor: (*minor).into(),
-                    overlord: (*overlord).into(),
-                    reason: (*reason).into(),
-                },
-            d::HistoryEvent::ConsulateBuilt { player, target } =>
-                Self::ConsulateBuilt { player: (*player).into(), target: (*target).into() },
-            d::HistoryEvent::EmbassyBuilt { player, target } =>
-                Self::EmbassyBuilt { player: (*player).into(), target: (*target).into() },
+            d::HistoryEvent::JoinedWar { joiner, target } => Self::JoinedWar {
+                joiner: (*joiner).into(),
+                target: (*target).into(),
+            },
+            d::HistoryEvent::PeaceMade { a, b } => Self::PeaceMade {
+                a: (*a).into(),
+                b: (*b).into(),
+            },
+            d::HistoryEvent::PeaceSigned { a, b } => Self::PeaceSigned {
+                a: (*a).into(),
+                b: (*b).into(),
+            },
+            d::HistoryEvent::MutualPeace { a, b } => Self::MutualPeace {
+                a: (*a).into(),
+                b: (*b).into(),
+            },
+            d::HistoryEvent::ProvinceConquered {
+                conqueror,
+                loser,
+                province,
+            } => Self::ProvinceConquered {
+                conqueror: (*conqueror).into(),
+                loser: (*loser).into(),
+                province: (*province).into(),
+            },
+            d::HistoryEvent::TechnologyResearched {
+                researcher,
+                tech_name,
+            } => Self::TechnologyResearched {
+                researcher: (*researcher).into(),
+                tech_name: tech_name.clone(),
+            },
+            d::HistoryEvent::NonAggressionPactSigned { signer, partner } => {
+                Self::NonAggressionPactSigned {
+                    signer: (*signer).into(),
+                    partner: (*partner).into(),
+                }
+            }
+            d::HistoryEvent::AllianceFormed { signer, partner } => Self::AllianceFormed {
+                signer: (*signer).into(),
+                partner: (*partner).into(),
+            },
+            d::HistoryEvent::TreatyProposalAccepted {
+                acceptor,
+                proposer,
+                treaty_type,
+            } => Self::TreatyProposalAccepted {
+                acceptor: (*acceptor).into(),
+                proposer: (*proposer).into(),
+                treaty_type: (*treaty_type).into(),
+            },
+            d::HistoryEvent::FellIntoAnarchy { nation } => Self::FellIntoAnarchy {
+                nation: (*nation).into(),
+            },
+            d::HistoryEvent::RegainedIndependence {
+                minor,
+                former_overlord,
+            } => Self::RegainedIndependence {
+                minor: (*minor).into(),
+                former_overlord: (*former_overlord).into(),
+            },
+            d::HistoryEvent::MinorJoinedEmpire {
+                minor,
+                overlord,
+                reason,
+            } => Self::MinorJoinedEmpire {
+                minor: (*minor).into(),
+                overlord: (*overlord).into(),
+                reason: (*reason).into(),
+            },
+            d::HistoryEvent::ConsulateBuilt { player, target } => Self::ConsulateBuilt {
+                player: (*player).into(),
+                target: (*target).into(),
+            },
+            d::HistoryEvent::EmbassyBuilt { player, target } => Self::EmbassyBuilt {
+                player: (*player).into(),
+                target: (*target).into(),
+            },
         }
     }
 }
 impl From<HistoryEvent> for d::HistoryEvent {
     fn from(v: HistoryEvent) -> Self {
         match v {
-            HistoryEvent::WarDeclared { attacker, defender, protectee } =>
-                Self::WarDeclared { attacker: attacker.into(), defender: defender.into(), protectee: protectee.map(Into::into) },
-            HistoryEvent::JoinedWar { joiner, target } =>
-                Self::JoinedWar { joiner: joiner.into(), target: target.into() },
-            HistoryEvent::PeaceMade { a, b } => Self::PeaceMade { a: a.into(), b: b.into() },
-            HistoryEvent::PeaceSigned { a, b } => Self::PeaceSigned { a: a.into(), b: b.into() },
-            HistoryEvent::MutualPeace { a, b } => Self::MutualPeace { a: a.into(), b: b.into() },
-            HistoryEvent::ProvinceConquered { conqueror, loser, province } =>
-                Self::ProvinceConquered { conqueror: conqueror.into(), loser: loser.into(), province: province.into() },
-            HistoryEvent::TechnologyResearched { researcher, tech_name } =>
-                Self::TechnologyResearched { researcher: researcher.into(), tech_name },
-            HistoryEvent::NonAggressionPactSigned { signer, partner } =>
-                Self::NonAggressionPactSigned { signer: signer.into(), partner: partner.into() },
-            HistoryEvent::AllianceFormed { signer, partner } =>
-                Self::AllianceFormed { signer: signer.into(), partner: partner.into() },
-            HistoryEvent::TreatyProposalAccepted { acceptor, proposer, treaty_type } =>
-                Self::TreatyProposalAccepted { acceptor: acceptor.into(), proposer: proposer.into(), treaty_type: treaty_type.into() },
-            HistoryEvent::FellIntoAnarchy { nation } => Self::FellIntoAnarchy { nation: nation.into() },
-            HistoryEvent::RegainedIndependence { minor, former_overlord } =>
-                Self::RegainedIndependence { minor: minor.into(), former_overlord: former_overlord.into() },
-            HistoryEvent::MinorJoinedEmpire { minor, overlord, reason } =>
-                Self::MinorJoinedEmpire { minor: minor.into(), overlord: overlord.into(), reason: reason.into() },
-            HistoryEvent::ConsulateBuilt { player, target } =>
-                Self::ConsulateBuilt { player: player.into(), target: target.into() },
-            HistoryEvent::EmbassyBuilt { player, target } =>
-                Self::EmbassyBuilt { player: player.into(), target: target.into() },
+            HistoryEvent::WarDeclared {
+                attacker,
+                defender,
+                protectee,
+            } => Self::WarDeclared {
+                attacker: attacker.into(),
+                defender: defender.into(),
+                protectee: protectee.map(Into::into),
+            },
+            HistoryEvent::JoinedWar { joiner, target } => Self::JoinedWar {
+                joiner: joiner.into(),
+                target: target.into(),
+            },
+            HistoryEvent::PeaceMade { a, b } => Self::PeaceMade {
+                a: a.into(),
+                b: b.into(),
+            },
+            HistoryEvent::PeaceSigned { a, b } => Self::PeaceSigned {
+                a: a.into(),
+                b: b.into(),
+            },
+            HistoryEvent::MutualPeace { a, b } => Self::MutualPeace {
+                a: a.into(),
+                b: b.into(),
+            },
+            HistoryEvent::ProvinceConquered {
+                conqueror,
+                loser,
+                province,
+            } => Self::ProvinceConquered {
+                conqueror: conqueror.into(),
+                loser: loser.into(),
+                province: province.into(),
+            },
+            HistoryEvent::TechnologyResearched {
+                researcher,
+                tech_name,
+            } => Self::TechnologyResearched {
+                researcher: researcher.into(),
+                tech_name,
+            },
+            HistoryEvent::NonAggressionPactSigned { signer, partner } => {
+                Self::NonAggressionPactSigned {
+                    signer: signer.into(),
+                    partner: partner.into(),
+                }
+            }
+            HistoryEvent::AllianceFormed { signer, partner } => Self::AllianceFormed {
+                signer: signer.into(),
+                partner: partner.into(),
+            },
+            HistoryEvent::TreatyProposalAccepted {
+                acceptor,
+                proposer,
+                treaty_type,
+            } => Self::TreatyProposalAccepted {
+                acceptor: acceptor.into(),
+                proposer: proposer.into(),
+                treaty_type: treaty_type.into(),
+            },
+            HistoryEvent::FellIntoAnarchy { nation } => Self::FellIntoAnarchy {
+                nation: nation.into(),
+            },
+            HistoryEvent::RegainedIndependence {
+                minor,
+                former_overlord,
+            } => Self::RegainedIndependence {
+                minor: minor.into(),
+                former_overlord: former_overlord.into(),
+            },
+            HistoryEvent::MinorJoinedEmpire {
+                minor,
+                overlord,
+                reason,
+            } => Self::MinorJoinedEmpire {
+                minor: minor.into(),
+                overlord: overlord.into(),
+                reason: reason.into(),
+            },
+            HistoryEvent::ConsulateBuilt { player, target } => Self::ConsulateBuilt {
+                player: player.into(),
+                target: target.into(),
+            },
+            HistoryEvent::EmbassyBuilt { player, target } => Self::EmbassyBuilt {
+                player: player.into(),
+                target: target.into(),
+            },
         }
     }
 }
-

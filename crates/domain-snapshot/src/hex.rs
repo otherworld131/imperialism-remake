@@ -7,8 +7,12 @@ pub struct HexCoord {
 }
 
 impl From<D> for HexCoord {
-    fn from(v: D) -> Self { Self { q: v.q, r: v.r } }
+    fn from(v: D) -> Self {
+        Self { q: v.q, r: v.r }
+    }
 }
 impl From<HexCoord> for D {
-    fn from(v: HexCoord) -> Self { D::new(v.q, v.r) }
+    fn from(v: HexCoord) -> Self {
+        D::new(v.q, v.r)
+    }
 }

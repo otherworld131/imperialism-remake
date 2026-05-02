@@ -73,13 +73,24 @@ impl LogisticsState {
                 .unwrap_or(0);
             let unmet = req.saturating_sub(granted);
             committed += granted;
-            self.per_resource.insert(resource, FreightDemand { requested: req, granted, unmet });
+            self.per_resource.insert(
+                resource,
+                FreightDemand {
+                    requested: req,
+                    granted,
+                    unmet,
+                },
+            );
         }
         // Resources delivered but not in `requested` (shouldn't happen but be safe).
         for &(resource, granted) in delivered {
             self.per_resource.entry(resource).or_insert_with(|| {
                 committed += granted;
-                FreightDemand { requested: granted, granted, unmet: 0 }
+                FreightDemand {
+                    requested: granted,
+                    granted,
+                    unmet: 0,
+                }
             });
         }
         self.freight_committed = committed;
@@ -216,11 +227,18 @@ impl TransportSystem {
             let unallocated: Vec<(ResourceType, u32)> = nonempty
                 .iter()
                 .filter(|(r, _)| {
-                    !self.allocations.iter().any(|(ar, pct)| *ar == *r && *pct > 0)
+                    !self
+                        .allocations
+                        .iter()
+                        .any(|(ar, pct)| *ar == *r && *pct > 0)
                 })
                 .map(|(r, avail)| {
                     // Remaining demand: subtract what was already delivered in pass 1.
-                    let already = result.iter().find(|(dr, _)| *dr == *r).map(|(_, q)| *q).unwrap_or(0);
+                    let already = result
+                        .iter()
+                        .find(|(dr, _)| *dr == *r)
+                        .map(|(_, q)| *q)
+                        .unwrap_or(0);
                     (*r, avail.saturating_sub(already))
                 })
                 .filter(|(_, demand)| *demand > 0)
@@ -230,10 +248,17 @@ impl TransportSystem {
             let second_round: Vec<(ResourceType, u32)> = nonempty
                 .iter()
                 .filter_map(|(r, avail)| {
-                    let already =
-                        result.iter().find(|(dr, _)| *dr == *r).map(|(_, q)| *q).unwrap_or(0);
+                    let already = result
+                        .iter()
+                        .find(|(dr, _)| *dr == *r)
+                        .map(|(_, q)| *q)
+                        .unwrap_or(0);
                     let remaining_demand = avail.saturating_sub(already);
-                    if remaining_demand > 0 { Some((*r, remaining_demand)) } else { None }
+                    if remaining_demand > 0 {
+                        Some((*r, remaining_demand))
+                    } else {
+                        None
+                    }
                 })
                 .filter(|(r, _)| !unallocated.iter().any(|(ur, _)| ur == r))
                 .collect();
@@ -242,8 +267,7 @@ impl TransportSystem {
                 unallocated.into_iter().chain(second_round).collect();
 
             if !all_leftovers.is_empty() {
-                let extra =
-                    Self::distribute_evenly_partial(&all_leftovers, remaining_capacity);
+                let extra = Self::distribute_evenly_partial(&all_leftovers, remaining_capacity);
                 for (r, qty) in extra {
                     if let Some(entry) = result.iter_mut().find(|(dr, _)| *dr == r) {
                         entry.1 += qty;
@@ -341,7 +365,10 @@ pub fn rail_transport_capacity(freight_cars: u32) -> u32 {
 /// Calculate amphibious landing force size.
 /// Force size = total arms_cost used to build all ships in the fleet.
 pub fn amphibious_force_size(ships: &[Ship], data: &crate::data::GameData) -> u32 {
-    ships.iter().map(|s| data.ship_stats(s.ship_type).arms_cost).sum()
+    ships
+        .iter()
+        .map(|s| data.ship_stats(s.ship_type).arms_cost)
+        .sum()
 }
 
 /// Compute a pre-turn demand forecast for a nation's freight allocation panel.
@@ -796,8 +823,10 @@ mod tests {
         let data = crate::data::GameData::default();
         let forecast = compute_demand_forecast(&nation, &data);
         // No workers → no food demand at all.
-        assert!(forecast.is_empty(),
-            "no demand expected when nation has 0 workers and no buildings");
+        assert!(
+            forecast.is_empty(),
+            "no demand expected when nation has 0 workers and no buildings"
+        );
     }
 
     #[test]
@@ -809,10 +838,22 @@ mod tests {
         // Give Fish only (no Grain/Fruit/Livestock).
         nation.add_resource(ResourceType::Fish, 10);
         let forecast = compute_demand_forecast(&nation, &data);
-        let fish_demand = forecast.iter().find(|(r, _)| *r == ResourceType::Fish).map(|(_, q)| *q);
-        let grain_demand = forecast.iter().find(|(r, _)| *r == ResourceType::Grain).map(|(_, q)| *q);
-        assert!(fish_demand.is_some(), "fish demand should appear when only fish is held");
-        assert!(grain_demand.is_none(), "grain demand should not appear when fish is canonical food");
+        let fish_demand = forecast
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Fish)
+            .map(|(_, q)| *q);
+        let grain_demand = forecast
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Grain)
+            .map(|(_, q)| *q);
+        assert!(
+            fish_demand.is_some(),
+            "fish demand should appear when only fish is held"
+        );
+        assert!(
+            grain_demand.is_none(),
+            "grain demand should not appear when fish is canonical food"
+        );
     }
 
     #[test]
@@ -824,10 +865,22 @@ mod tests {
         nation.add_resource(ResourceType::Grain, 5);
         nation.add_resource(ResourceType::Fish, 5);
         let forecast = compute_demand_forecast(&nation, &data);
-        let grain_demand = forecast.iter().find(|(r, _)| *r == ResourceType::Grain).map(|(_, q)| *q);
-        let fish_demand = forecast.iter().find(|(r, _)| *r == ResourceType::Fish).map(|(_, q)| *q);
-        assert!(grain_demand.is_some(), "grain is canonical when both grain and fish held");
-        assert!(fish_demand.is_none(), "fish demand should not appear when grain is canonical");
+        let grain_demand = forecast
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Grain)
+            .map(|(_, q)| *q);
+        let fish_demand = forecast
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Fish)
+            .map(|(_, q)| *q);
+        assert!(
+            grain_demand.is_some(),
+            "grain is canonical when both grain and fish held"
+        );
+        assert!(
+            fish_demand.is_none(),
+            "fish demand should not appear when grain is canonical"
+        );
     }
 
     // ── Regression test: barges have no effect (matching original game) ──

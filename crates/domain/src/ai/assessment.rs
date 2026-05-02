@@ -121,7 +121,10 @@ fn weights_from_lua(cfg: Option<&LuaAiConfig>) -> AssessmentWeights {
 /// Compute a nation's military score (land firepower + naval firepower scaled).
 pub fn nation_military_score(game: &GameState, nation_id: NationId, naval_weight: f64) -> f64 {
     game.get_nation(nation_id)
-        .map(|n| n.total_military_firepower() + n.total_naval_firepower(&game.game_data) as f64 * naval_weight)
+        .map(|n| {
+            n.total_military_firepower()
+                + n.total_naval_firepower(&game.game_data) as f64 * naval_weight
+        })
         .unwrap_or(0.0)
 }
 
@@ -255,7 +258,8 @@ fn compute_momentum(
 /// distinct from the war participants.
 pub fn find_war_start_turn(game: &GameState, a: NationId, b: NationId) -> Option<u32> {
     use crate::events::HistoryEvent;
-    game.archive.history
+    game.archive
+        .history
         .iter()
         .filter(|(_, ev)| match ev {
             HistoryEvent::WarDeclared {
@@ -436,7 +440,8 @@ pub fn evaluate_pact_defense(
 
     // Relationship factor: how much does the protector care about the minor?
     let rel_score = game
-        .world.diplomacy
+        .world
+        .diplomacy
         .get_relation(protector_id, _minor_id)
         .map(|r| r.score)
         .unwrap_or(0);
@@ -598,7 +603,8 @@ pub fn evaluate_peace_proposal(
     #[cfg(feature = "lua")]
     {
         let relationship = game
-            .world.diplomacy
+            .world
+            .diplomacy
             .get_relation(from, to)
             .map(|r| r.score)
             .unwrap_or(0);
@@ -711,7 +717,8 @@ pub fn evaluate_nap_proposal(
     #[cfg(feature = "lua")]
     {
         let relationship = game
-            .world.diplomacy
+            .world
+            .diplomacy
             .get_relation(from, to)
             .map(|r| r.score)
             .unwrap_or(0);
@@ -796,7 +803,8 @@ pub fn evaluate_alliance_proposal(
     #[cfg(feature = "lua")]
     {
         let relationship = game
-            .world.diplomacy
+            .world
+            .diplomacy
             .get_relation(from, to)
             .map(|r| r.score)
             .unwrap_or(0);
@@ -843,7 +851,8 @@ pub fn evaluate_alliance_proposal(
         && nations.iter().any(|&third| {
             third != from
                 && third != to
-                && (game.world.diplomacy.is_at_war(from, third) || game.world.diplomacy.is_at_war(to, third))
+                && (game.world.diplomacy.is_at_war(from, third)
+                    || game.world.diplomacy.is_at_war(to, third))
         });
     if has_common_enemy {
         score += 0.3;

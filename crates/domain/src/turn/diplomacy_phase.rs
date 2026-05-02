@@ -23,7 +23,8 @@ fn diplomacy_reason(
 ) -> String {
     let personality = crate::ai::common::get_personality(game, evaluator);
     let (score, at_war, has_embassy, has_consulate) = game
-        .world.diplomacy
+        .world
+        .diplomacy
         .get_relation(evaluator, counterpart)
         .map(|r| (r.score, r.at_war, r.has_embassy, r.has_consulate))
         .unwrap_or((0, false, false, false));
@@ -79,14 +80,17 @@ pub(super) fn record_broken_alliance_headlines(
             .get_nation(broken.former_ally)
             .map(|n| n.name.clone())
             .unwrap_or_default();
-        report.newspaper_headlines.push(Headline::with_reason(
-            format!(
-                "{} breaks its alliance with {} after making separate peace",
-                peacemaker_name, ally_name
-            ),
-            HeadlineCategory::Diplomacy,
-            separate_peace_reason(game, broken.peacemaker, broken.former_ally, broken.enemy),
-        ).for_nations(&[broken.peacemaker, broken.former_ally]));
+        report.newspaper_headlines.push(
+            Headline::with_reason(
+                format!(
+                    "{} breaks its alliance with {} after making separate peace",
+                    peacemaker_name, ally_name
+                ),
+                HeadlineCategory::Diplomacy,
+                separate_peace_reason(game, broken.peacemaker, broken.former_ally, broken.enemy),
+            )
+            .for_nations(&[broken.peacemaker, broken.former_ally]),
+        );
     }
 }
 
@@ -98,12 +102,17 @@ pub(super) fn record_broken_alliance_headlines(
 /// Also expires stale proposals older than 4 turns.
 pub(super) fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut TurnReport) {
     let proposals: Vec<_> = game
-        .world.diplomacy
+        .world
+        .diplomacy
         .drain_proposals()
         .into_iter()
         .filter(|p| {
-            !game.get_nation(p.from).is_some_and(|n| n.diplomacy.is_in_anarchy)
-                && !game.get_nation(p.to).is_some_and(|n| n.diplomacy.is_in_anarchy)
+            !game
+                .get_nation(p.from)
+                .is_some_and(|n| n.diplomacy.is_in_anarchy)
+                && !game
+                    .get_nation(p.to)
+                    .is_some_and(|n| n.diplomacy.is_in_anarchy)
         })
         .collect();
     if proposals.is_empty() {
@@ -135,7 +144,9 @@ pub(super) fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut Tu
                     treaty_type: TreatyType::PeaceTreaty,
                 }));
             let turn = game.turn;
-            game.archive.history.push((turn, HistoryEvent::MutualPeace { a, b }));
+            game.archive
+                .history
+                .push((turn, HistoryEvent::MutualPeace { a, b }));
         }
     }
 
@@ -212,9 +223,11 @@ pub(super) fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut Tu
                     TreatyType::NonAggressionPact => {
                         game.world.diplomacy.propose_pact(human, target_id).is_ok()
                     }
-                    TreatyType::Alliance => {
-                        game.world.diplomacy.propose_alliance(human, target_id).is_ok()
-                    }
+                    TreatyType::Alliance => game
+                        .world
+                        .diplomacy
+                        .propose_alliance(human, target_id)
+                        .is_ok(),
                     TreatyType::PeaceTreaty => {
                         game.world.diplomacy.queue_peace(human, target_id);
                         true
@@ -229,14 +242,17 @@ pub(super) fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut Tu
                             treaty_type: proposal.proposal_type,
                         },
                     ));
-                    report.newspaper_headlines.push(Headline::with_reason(
-                        format!(
-                            "{} accepts {}'s {} proposal",
-                            to_name, from_name, treaty_label
-                        ),
-                        HeadlineCategory::Diplomacy,
-                        diplomacy_reason(game, target_id, human, treaty_label, true),
-                    ).for_nations(&[target_id, human]));
+                    report.newspaper_headlines.push(
+                        Headline::with_reason(
+                            format!(
+                                "{} accepts {}'s {} proposal",
+                                to_name, from_name, treaty_label
+                            ),
+                            HeadlineCategory::Diplomacy,
+                            diplomacy_reason(game, target_id, human, treaty_label, true),
+                        )
+                        .for_nations(&[target_id, human]),
+                    );
                     let turn = game.turn;
                     game.archive.history.push((
                         turn,
@@ -272,14 +288,17 @@ pub(super) fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut Tu
                         to: target_id,
                         treaty_type: proposal.proposal_type,
                     }));
-                report.newspaper_headlines.push(Headline::with_reason(
-                    format!(
-                        "{} rejects {}'s {} proposal",
-                        to_name, from_name, treaty_label
-                    ),
-                    HeadlineCategory::Diplomacy,
-                    diplomacy_reason(game, target_id, human, treaty_label, false),
-                ).for_nations(&[target_id, human]));
+                report.newspaper_headlines.push(
+                    Headline::with_reason(
+                        format!(
+                            "{} rejects {}'s {} proposal",
+                            to_name, from_name, treaty_label
+                        ),
+                        HeadlineCategory::Diplomacy,
+                        diplomacy_reason(game, target_id, human, treaty_label, false),
+                    )
+                    .for_nations(&[target_id, human]),
+                );
             }
         } else if proposal.to == human {
             // AI→human: keep pending for UI
@@ -342,12 +361,16 @@ pub(super) fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut Tu
 
             if accepted {
                 let applied = match proposal.proposal_type {
-                    TreatyType::NonAggressionPact => {
-                        game.world.diplomacy.propose_pact(from_id, target_id).is_ok()
-                    }
-                    TreatyType::Alliance => {
-                        game.world.diplomacy.propose_alliance(from_id, target_id).is_ok()
-                    }
+                    TreatyType::NonAggressionPact => game
+                        .world
+                        .diplomacy
+                        .propose_pact(from_id, target_id)
+                        .is_ok(),
+                    TreatyType::Alliance => game
+                        .world
+                        .diplomacy
+                        .propose_alliance(from_id, target_id)
+                        .is_ok(),
                     TreatyType::PeaceTreaty => {
                         game.world.diplomacy.queue_peace(from_id, target_id);
                         true
@@ -362,14 +385,17 @@ pub(super) fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut Tu
                             treaty_type: proposal.proposal_type,
                         },
                     ));
-                    report.newspaper_headlines.push(Headline::with_reason(
-                        format!(
-                            "{} accepts {}'s {} proposal",
-                            to_name, from_name, treaty_label
-                        ),
-                        HeadlineCategory::Diplomacy,
-                        diplomacy_reason(game, target_id, from_id, treaty_label, true),
-                    ).for_nations(&[target_id, from_id]));
+                    report.newspaper_headlines.push(
+                        Headline::with_reason(
+                            format!(
+                                "{} accepts {}'s {} proposal",
+                                to_name, from_name, treaty_label
+                            ),
+                            HeadlineCategory::Diplomacy,
+                            diplomacy_reason(game, target_id, from_id, treaty_label, true),
+                        )
+                        .for_nations(&[target_id, from_id]),
+                    );
                     let turn = game.turn;
                     game.archive.history.push((
                         turn,
@@ -405,14 +431,17 @@ pub(super) fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut Tu
                         to: target_id,
                         treaty_type: proposal.proposal_type,
                     }));
-                report.newspaper_headlines.push(Headline::with_reason(
-                    format!(
-                        "{} rejects {}'s {} proposal",
-                        to_name, from_name, treaty_label
-                    ),
-                    HeadlineCategory::Diplomacy,
-                    diplomacy_reason(game, target_id, from_id, treaty_label, false),
-                ).for_nations(&[target_id, from_id]));
+                report.newspaper_headlines.push(
+                    Headline::with_reason(
+                        format!(
+                            "{} rejects {}'s {} proposal",
+                            to_name, from_name, treaty_label
+                        ),
+                        HeadlineCategory::Diplomacy,
+                        diplomacy_reason(game, target_id, from_id, treaty_label, false),
+                    )
+                    .for_nations(&[target_id, from_id]),
+                );
             }
         }
     }

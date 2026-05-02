@@ -618,11 +618,7 @@ fn edge_falloff_factor(
 /// `mix.sea_falloff_radius` have growth chance scaled by a linear factor.
 /// Continents thus taper into ocean naturally, producing organic coastlines
 /// around the world's edge instead of a clean rectangular cut.
-fn generate_land_mass(
-    rng: &mut Rng,
-    bounds: MapBounds,
-    mix: &TerrainMix,
-) -> HashSet<HexCoord> {
+fn generate_land_mass(rng: &mut Rng, bounds: MapBounds, mix: &TerrainMix) -> HashSet<HexCoord> {
     let hard_margin = mix.sea_hard_margin.max(0);
     let falloff_radius = mix.sea_falloff_radius.max(hard_margin + 1);
     let mut land = HashSet::new();

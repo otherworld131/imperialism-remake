@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use ::infrastructure::data_loader::load_embedded_game_data;
 use domain::economy::buildings::{Building, BuildingType};
 use domain::game_state::{GameState, new_game_with_seed_and_data};
 use domain::hex::HexCoord;
@@ -7,7 +8,6 @@ use domain::map::infrastructure;
 use domain::nation::Nation;
 use domain::turn::{calculate_score, process_turn};
 use domain::types::*;
-use ::infrastructure::data_loader::load_embedded_game_data;
 
 // ── Batch mode data structures ───────────────────────────────────
 
@@ -154,7 +154,8 @@ fn take_snapshot(
         }
 
         let mill_buildings: Vec<&Building> = nation
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .filter(|b| {
                 matches!(
@@ -164,7 +165,8 @@ fn take_snapshot(
             })
             .collect();
         let factory_buildings: Vec<&Building> = nation
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .filter(|b| {
                 matches!(
@@ -191,10 +193,11 @@ fn take_snapshot(
             if other.id == nation.id {
                 continue;
             }
-            if game
-                .world.diplomacy
-                .has_treaty(nation.id, other.id, domain::events::TreatyType::Alliance)
-            {
+            if game.world.diplomacy.has_treaty(
+                nation.id,
+                other.id,
+                domain::events::TreatyType::Alliance,
+            ) {
                 alliances += 1;
             }
             if game.world.diplomacy.has_treaty(
@@ -242,12 +245,14 @@ fn take_snapshot(
                 arms: nation.material_amount(domain::types::MaterialType::Arms),
                 steel: nation.material_amount(domain::types::MaterialType::Steel),
                 cash_income_totals: nation
-                    .archives.cash_income_totals
+                    .archives
+                    .cash_income_totals
                     .iter()
                     .map(|(k, v)| (format!("{:?}", k), *v))
                     .collect(),
                 cash_expense_totals: nation
-                    .archives.cash_expense_totals
+                    .archives
+                    .cash_expense_totals
                     .iter()
                     .map(|(k, v)| (format!("{:?}", k), *v))
                     .collect(),
@@ -626,7 +631,8 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
         // Build depot on first capital tile if affordable
         if let Some(&tile_coord) = capital_tiles.first() {
             let has_depot = game
-                .world.hex_map
+                .world
+                .hex_map
                 .get_tile(tile_coord)
                 .is_some_and(|t| t.infrastructure.has_depot);
             let depot_cost = Money::dollars(cfg_snapshot.depot_cost);
@@ -700,7 +706,8 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
                     continue;
                 }
                 let needs_rr = game
-                    .world.hex_map
+                    .world
+                    .hex_map
                     .get_tile(tile_coord)
                     .is_some_and(|t| !t.infrastructure.has_railroad);
                 if needs_rr
@@ -722,7 +729,8 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
             // Build depot on first tile
             if let Some(&tile_coord) = tiles.first() {
                 let has_depot = game
-                    .world.hex_map
+                    .world
+                    .hex_map
                     .get_tile(tile_coord)
                     .is_some_and(|t| t.infrastructure.has_depot);
                 let depot_cost = Money::dollars(cfg_snapshot.depot_cost);
@@ -757,17 +765,20 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
     if let Some(nation) = game.get_nation_mut(player_id) {
         if needs_lumber_mill {
             nation
-                .economy.buildings
+                .economy
+                .buildings
                 .push(Building::new(BuildingType::LumberMill, 2));
         }
         if needs_steel_mill {
             nation
-                .economy.buildings
+                .economy
+                .buildings
                 .push(Building::new(BuildingType::SteelMill, 2));
         }
         if needs_textile_mill {
             nation
-                .economy.buildings
+                .economy
+                .buildings
                 .push(Building::new(BuildingType::TextileMill, 2));
         }
     }
@@ -790,17 +801,20 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
         if let Some(nation) = game.get_nation_mut(player_id) {
             if needs_furniture {
                 nation
-                    .economy.buildings
+                    .economy
+                    .buildings
                     .push(Building::new(BuildingType::FurnitureFactory, 1));
             }
             if needs_hardware {
                 nation
-                    .economy.buildings
+                    .economy
+                    .buildings
                     .push(Building::new(BuildingType::HardwareFactory, 1));
             }
             if needs_clothing {
                 nation
-                    .economy.buildings
+                    .economy
+                    .buildings
                     .push(Building::new(BuildingType::ClothingFactory, 1));
             }
         }
@@ -865,7 +879,9 @@ pub(crate) fn cmd_auto(game: &mut GameState, turns: u32) {
             .map(|gp| (gp.name.clone(), calculate_score(gp, &game.game_data).total))
             .collect();
         for (name, total) in gp_scores {
-            game.archive.high_scores.push((name, total, date_str.clone()));
+            game.archive
+                .high_scores
+                .push((name, total, date_str.clone()));
         }
         game.archive.high_scores.sort_by(|a, b| b.1.cmp(&a.1));
 

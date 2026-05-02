@@ -237,13 +237,23 @@ mod tests {
 
     #[test]
     fn total_workers_counts_all_types() {
-        let pool = LaborPool { untrained: 3, trained: 2, expert: 1, ..LaborPool::new() };
+        let pool = LaborPool {
+            untrained: 3,
+            trained: 2,
+            expert: 1,
+            ..LaborPool::new()
+        };
         assert_eq!(pool.total_workers(), 6);
     }
 
     #[test]
     fn total_labor_units_uses_training_multipliers() {
-        let pool = LaborPool { untrained: 5, trained: 3, expert: 2, ..LaborPool::new() };
+        let pool = LaborPool {
+            untrained: 5,
+            trained: 3,
+            expert: 2,
+            ..LaborPool::new()
+        };
         // 5*1 + 3*2 + 2*4 = 5 + 6 + 8 = 19
         assert_eq!(pool.total_labor_units(), 19);
         assert_eq!(pool.total_workers(), 10);
@@ -251,7 +261,12 @@ mod tests {
 
     #[test]
     fn total_labor_units_with_custom_multipliers() {
-        let pool = LaborPool { untrained: 4, trained: 2, expert: 1, ..LaborPool::new() };
+        let pool = LaborPool {
+            untrained: 4,
+            trained: 2,
+            expert: 1,
+            ..LaborPool::new()
+        };
         // Custom: 4*1 + 2*3 + 1*5 = 4 + 6 + 5 = 15
         assert_eq!(pool.total_labor_units_with(1, 3, 5), 15);
         // Default: 4*1 + 2*2 + 1*4 = 4 + 4 + 4 = 12
@@ -302,7 +317,12 @@ mod tests {
 
     #[test]
     fn train_worker_fails_when_only_trained_and_expert() {
-        let mut pool = LaborPool { untrained: 0, trained: 5, expert: 3, ..LaborPool::new() };
+        let mut pool = LaborPool {
+            untrained: 0,
+            trained: 5,
+            expert: 3,
+            ..LaborPool::new()
+        };
         let result = pool.train_worker();
         assert!(!result);
         assert_eq!(pool.trained, 5); // unchanged
@@ -312,7 +332,12 @@ mod tests {
 
     #[test]
     fn promote_worker_converts_trained_to_expert() {
-        let mut pool = LaborPool { untrained: 0, trained: 3, expert: 1, ..LaborPool::new() };
+        let mut pool = LaborPool {
+            untrained: 0,
+            trained: 3,
+            expert: 1,
+            ..LaborPool::new()
+        };
         let result = pool.promote_worker();
         assert!(result);
         assert_eq!(pool.trained, 2);
@@ -322,7 +347,12 @@ mod tests {
 
     #[test]
     fn promote_worker_fails_when_no_trained() {
-        let mut pool = LaborPool { untrained: 5, trained: 0, expert: 2, ..LaborPool::new() };
+        let mut pool = LaborPool {
+            untrained: 5,
+            trained: 0,
+            expert: 2,
+            ..LaborPool::new()
+        };
         let result = pool.promote_worker();
         assert!(!result);
         assert_eq!(pool.expert, 2); // unchanged
@@ -417,7 +447,10 @@ mod tests {
 
     #[test]
     fn effective_workers_falls_back_to_flat_count_without_tier_meta() {
-        let pool = LaborPool { expert: 4, ..LaborPool::new() };
+        let pool = LaborPool {
+            expert: 4,
+            ..LaborPool::new()
+        };
         assert_eq!(pool.effective_workers(WorkerType::Expert), 4);
     }
 
@@ -439,7 +472,11 @@ mod tests {
         assert_eq!(pool.untrained, 3);
         let s = pool.tier_state(WorkerType::Untrained);
         // Invariant: healthy + sick == flat
-        assert_eq!(s.healthy + s.sick, 3, "healthy + sick must equal flat count");
+        assert_eq!(
+            s.healthy + s.sick,
+            3,
+            "healthy + sick must equal flat count"
+        );
         // Sick clamped to at most flat
         assert!(s.sick <= 3);
     }

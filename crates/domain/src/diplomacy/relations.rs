@@ -1,6 +1,6 @@
+use crate::DomainError;
 use crate::events::TreatyType;
 use crate::types::*;
-use crate::DomainError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A diplomatic proposal awaiting evaluation by the target nation.
@@ -171,7 +171,9 @@ impl DiplomacyState {
     }
 
     /// Iterate over all stored diplomatic relations.
-    pub fn all_relations(&self) -> impl Iterator<Item = ((NationId, NationId), &DiplomaticRelation)> {
+    pub fn all_relations(
+        &self,
+    ) -> impl Iterator<Item = ((NationId, NationId), &DiplomaticRelation)> {
         self.relations.iter().map(|(k, v)| (*k, v))
     }
 
@@ -284,7 +286,9 @@ impl DiplomacyState {
         }
         let rel = self.ensure_relation(from, to);
         if !rel.has_embassy {
-            return Err(DomainError::illegal("Embassy required before proposing a non-aggression pact"));
+            return Err(DomainError::illegal(
+                "Embassy required before proposing a non-aggression pact",
+            ));
         }
         if rel.at_war {
             return Err(DomainError::illegal("Cannot propose pact while at war"));
@@ -293,7 +297,9 @@ impl DiplomacyState {
             return Err(DomainError::illegal("Non-aggression pact already active"));
         }
         if rel.has_treaty(TreatyType::Alliance) {
-            return Err(DomainError::illegal("Alliance already active — NAP is redundant"));
+            return Err(DomainError::illegal(
+                "Alliance already active — NAP is redundant",
+            ));
         }
         rel.add_treaty(TreatyType::NonAggressionPact);
         rel.improve_score(10);
@@ -310,7 +316,9 @@ impl DiplomacyState {
         }
         let rel = self.ensure_relation(from, to);
         if !rel.has_embassy {
-            return Err(DomainError::illegal("Embassy required before proposing an alliance"));
+            return Err(DomainError::illegal(
+                "Embassy required before proposing an alliance",
+            ));
         }
         if rel.at_war {
             return Err(DomainError::illegal("Cannot propose alliance while at war"));
@@ -567,7 +575,9 @@ impl DiplomacyState {
                     .map(|r| r.has_treaty(TreatyType::Alliance))
                     .unwrap_or(false)
                 {
-                    return Err(DomainError::illegal("Alliance already active — NAP is redundant"));
+                    return Err(DomainError::illegal(
+                        "Alliance already active — NAP is redundant",
+                    ));
                 }
             }
             TreatyType::Alliance => {
@@ -576,7 +586,9 @@ impl DiplomacyState {
                 }
                 let rel = self.get_relation(from, to);
                 if !rel.map(|r| r.has_embassy).unwrap_or(false) {
-                    return Err(DomainError::illegal("Embassy required before proposing an alliance"));
+                    return Err(DomainError::illegal(
+                        "Embassy required before proposing an alliance",
+                    ));
                 }
                 if rel
                     .map(|r| r.has_treaty(TreatyType::Alliance))
@@ -823,7 +835,10 @@ mod tests {
         state.build_consulate(NationId(1), NationId(10)).unwrap();
         let result = state.build_consulate(NationId(1), NationId(10));
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "illegal move: Consulate already established");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "illegal move: Consulate already established"
+        );
     }
 
     #[test]
@@ -855,7 +870,10 @@ mod tests {
         state.build_embassy(NationId(1), NationId(10)).unwrap();
         let result = state.build_embassy(NationId(1), NationId(10));
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "illegal move: Embassy already established");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "illegal move: Embassy already established"
+        );
     }
 
     #[test]
@@ -1085,7 +1103,10 @@ mod tests {
 
         let result = state.propose_alliance(NationId(1), NationId(2));
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "illegal move: Alliance already active");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "illegal move: Alliance already active"
+        );
     }
 
     // ── War breaks all treaties ──────────────────────────────────
@@ -1288,7 +1309,12 @@ mod tests {
 
         let result = state.propose_pact(NationId(1), NationId(2));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Alliance already active"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Alliance already active")
+        );
     }
 
     // ── propose_treaty validation ─────────────────────────────────

@@ -4,10 +4,7 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum DomainError {
     /// Attempted to reserve/consume more of a commodity than is available.
-    InsufficientInventory {
-        requested: u32,
-        available: u32,
-    },
+    InsufficientInventory { requested: u32, available: u32 },
     /// Attempted to commit or release a reservation that does not exist.
     ReservationNotFound(crate::types::ReservationId),
     /// An operation was called with an invalid argument (e.g. negative amount).
@@ -25,7 +22,9 @@ pub enum DomainError {
 impl DomainError {
     /// Construct an `IllegalMove` error from any `Display`-able value.
     pub fn illegal(reason: impl std::fmt::Display) -> Self {
-        Self::IllegalMove { reason: reason.to_string() }
+        Self::IllegalMove {
+            reason: reason.to_string(),
+        }
     }
 }
 
@@ -38,7 +37,10 @@ impl From<DomainError> for String {
 impl std::fmt::Display for DomainError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InsufficientInventory { requested, available } => write!(
+            Self::InsufficientInventory {
+                requested,
+                available,
+            } => write!(
                 f,
                 "insufficient inventory: requested {requested}, available {available}"
             ),

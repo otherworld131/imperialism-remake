@@ -1,4 +1,4 @@
-use crate::map::{sea_zones::SeaZoneId, UnitId};
+use crate::map::{UnitId, sea_zones::SeaZoneId};
 use crate::types::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

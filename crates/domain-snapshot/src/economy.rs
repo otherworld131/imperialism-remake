@@ -1,12 +1,18 @@
 use crate::hex::HexCoord;
-use crate::types::{GoodsType, MaterialType, Money, NationId, ReservationId, ResourceType, TurnNumber};
+use crate::types::{
+    GoodsType, MaterialType, Money, NationId, ReservationId, ResourceType, TurnNumber,
+};
 use domain::economy as d;
 use std::collections::{BTreeMap, HashMap};
 
 // ── Labor ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum WorkerType { Untrained, Trained, Expert }
+pub enum WorkerType {
+    Untrained,
+    Trained,
+    Expert,
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TemporaryPenalty {
@@ -95,7 +101,11 @@ pub struct Building {
 // ── Civilians ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum BuildTask { Railroad, Depot, Port }
+pub enum BuildTask {
+    Railroad,
+    Depot,
+    Port,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum CivilianType {
@@ -123,7 +133,11 @@ pub struct Civilian {
 // ── Ledger ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum FlowCategory { Production, Trade, Consumption }
+pub enum FlowCategory {
+    Production,
+    Trade,
+    Consumption,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum CashSource {
@@ -233,7 +247,11 @@ pub struct MarketTick {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum Trend { Rising, Falling, Stable }
+pub enum Trend {
+    Rising,
+    Falling,
+    Stable,
+}
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct MarketState {
@@ -292,10 +310,24 @@ pub struct PlayerBuyOrder {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum BlockReason {
-    InsufficientInventory { commodity: Commodity, needed: u32, available: u32 },
-    InsufficientLabor { tier: WorkerType, needed: u32, available: u32 },
-    InsufficientFreight { needed: u32, available: u32 },
-    InsufficientTreasury { needed: Money, available: Money },
+    InsufficientInventory {
+        commodity: Commodity,
+        needed: u32,
+        available: u32,
+    },
+    InsufficientLabor {
+        tier: WorkerType,
+        needed: u32,
+        available: u32,
+    },
+    InsufficientFreight {
+        needed: u32,
+        available: u32,
+    },
+    InsufficientTreasury {
+        needed: Money,
+        available: Money,
+    },
     MissingPrerequisite(String),
 }
 
@@ -328,12 +360,18 @@ impl From<WorkerType> for d::labor::WorkerType {
 
 impl From<&d::labor::TemporaryPenalty> for TemporaryPenalty {
     fn from(v: &d::labor::TemporaryPenalty) -> Self {
-        Self { fraction: v.fraction, expires: v.expires.into() }
+        Self {
+            fraction: v.fraction,
+            expires: v.expires.into(),
+        }
     }
 }
 impl From<TemporaryPenalty> for d::labor::TemporaryPenalty {
     fn from(v: TemporaryPenalty) -> Self {
-        Self { fraction: v.fraction, expires: v.expires.into() }
+        Self {
+            fraction: v.fraction,
+            expires: v.expires.into(),
+        }
     }
 }
 
@@ -370,7 +408,11 @@ impl From<&d::labor::LaborPool> for LaborPool {
             untrained: v.untrained,
             trained: v.trained,
             expert: v.expert,
-            tier_meta: v.tier_meta.iter().map(|(k, s)| ((*k).into(), s.into())).collect(),
+            tier_meta: v
+                .tier_meta
+                .iter()
+                .map(|(k, s)| ((*k).into(), s.into()))
+                .collect(),
         }
     }
 }
@@ -380,7 +422,11 @@ impl From<LaborPool> for d::labor::LaborPool {
             untrained: v.untrained,
             trained: v.trained,
             expert: v.expert,
-            tier_meta: v.tier_meta.into_iter().map(|(k, s)| (k.into(), s.into())).collect(),
+            tier_meta: v
+                .tier_meta
+                .into_iter()
+                .map(|(k, s)| (k.into(), s.into()))
+                .collect(),
         }
     }
 }
@@ -389,12 +435,20 @@ impl From<LaborPool> for d::labor::LaborPool {
 
 impl From<&d::transport::FreightDemand> for FreightDemand {
     fn from(v: &d::transport::FreightDemand) -> Self {
-        Self { requested: v.requested, granted: v.granted, unmet: v.unmet }
+        Self {
+            requested: v.requested,
+            granted: v.granted,
+            unmet: v.unmet,
+        }
     }
 }
 impl From<FreightDemand> for d::transport::FreightDemand {
     fn from(v: FreightDemand) -> Self {
-        Self { requested: v.requested, granted: v.granted, unmet: v.unmet }
+        Self {
+            requested: v.requested,
+            granted: v.granted,
+            unmet: v.unmet,
+        }
     }
 }
 
@@ -408,7 +462,11 @@ impl From<&d::transport::LogisticsState> for LogisticsState {
             freight_unused: v.freight_unused,
             rail_total: v.rail_total,
             sea_total: v.sea_total,
-            per_resource: v.per_resource.iter().map(|(k, fd)| ((*k).into(), fd.into())).collect(),
+            per_resource: v
+                .per_resource
+                .iter()
+                .map(|(k, fd)| ((*k).into(), fd.into()))
+                .collect(),
         }
     }
 }
@@ -420,7 +478,11 @@ impl From<LogisticsState> for d::transport::LogisticsState {
             freight_unused: v.freight_unused,
             rail_total: v.rail_total,
             sea_total: v.sea_total,
-            per_resource: v.per_resource.into_iter().map(|(k, fd)| (k.into(), fd.into())).collect(),
+            per_resource: v
+                .per_resource
+                .into_iter()
+                .map(|(k, fd)| (k.into(), fd.into()))
+                .collect(),
         }
     }
 }
@@ -431,7 +493,11 @@ impl From<&d::transport::TransportSystem> for TransportSystem {
     fn from(v: &d::transport::TransportSystem) -> Self {
         Self {
             freight_cars: v.freight_cars,
-            allocations: v.allocations.iter().map(|(rt, n)| ((*rt).into(), *n)).collect(),
+            allocations: v
+                .allocations
+                .iter()
+                .map(|(rt, n)| ((*rt).into(), *n))
+                .collect(),
         }
     }
 }
@@ -439,7 +505,11 @@ impl From<TransportSystem> for d::transport::TransportSystem {
     fn from(v: TransportSystem) -> Self {
         d::transport::TransportSystem {
             freight_cars: v.freight_cars,
-            allocations: v.allocations.into_iter().map(|(rt, n)| (rt.into(), n)).collect(),
+            allocations: v
+                .allocations
+                .into_iter()
+                .map(|(rt, n)| (rt.into(), n))
+                .collect(),
         }
     }
 }
@@ -699,12 +769,18 @@ impl From<CashSink> for d::ledger::CashSink {
 
 impl From<&d::ledger::CashEntry> for CashEntry {
     fn from(v: &d::ledger::CashEntry) -> Self {
-        Self { amount: v.amount.into(), partner: v.partner.map(Into::into) }
+        Self {
+            amount: v.amount.into(),
+            partner: v.partner.map(Into::into),
+        }
     }
 }
 impl From<CashEntry> for d::ledger::CashEntry {
     fn from(v: CashEntry) -> Self {
-        Self { amount: v.amount.into(), partner: v.partner.map(Into::into) }
+        Self {
+            amount: v.amount.into(),
+            partner: v.partner.map(Into::into),
+        }
     }
 }
 
@@ -713,10 +789,14 @@ impl From<&d::ledger::CashFlow> for CashFlow {
         Self {
             opening_treasury: v.opening_treasury.into(),
             closing_treasury: v.closing_treasury.into(),
-            income: v.income.iter()
+            income: v
+                .income
+                .iter()
                 .map(|(k, entries)| ((*k).into(), entries.iter().map(Into::into).collect()))
                 .collect(),
-            expense: v.expense.iter()
+            expense: v
+                .expense
+                .iter()
                 .map(|(k, entries)| ((*k).into(), entries.iter().map(Into::into).collect()))
                 .collect(),
         }
@@ -726,10 +806,14 @@ impl From<CashFlow> for d::ledger::CashFlow {
     fn from(v: CashFlow) -> Self {
         let mut cf = d::ledger::CashFlow::new(v.opening_treasury.into());
         cf.closing_treasury = v.closing_treasury.into();
-        cf.income = v.income.into_iter()
+        cf.income = v
+            .income
+            .into_iter()
             .map(|(k, entries)| (k.into(), entries.into_iter().map(Into::into).collect()))
             .collect();
-        cf.expense = v.expense.into_iter()
+        cf.expense = v
+            .expense
+            .into_iter()
             .map(|(k, entries)| (k.into(), entries.into_iter().map(Into::into).collect()))
             .collect();
         cf
@@ -821,23 +905,39 @@ impl From<ResourceOut> for d::ledger::ResourceOut {
 
 impl From<&d::ledger::ResourceInflowEntry> for ResourceInflowEntry {
     fn from(v: &d::ledger::ResourceInflowEntry) -> Self {
-        Self { stockpile: v.stockpile.into(), source: v.source.into(), amount: v.amount }
+        Self {
+            stockpile: v.stockpile.into(),
+            source: v.source.into(),
+            amount: v.amount,
+        }
     }
 }
 impl From<ResourceInflowEntry> for d::ledger::ResourceInflowEntry {
     fn from(v: ResourceInflowEntry) -> Self {
-        Self { stockpile: v.stockpile.into(), source: v.source.into(), amount: v.amount }
+        Self {
+            stockpile: v.stockpile.into(),
+            source: v.source.into(),
+            amount: v.amount,
+        }
     }
 }
 
 impl From<&d::ledger::ResourceOutflowEntry> for ResourceOutflowEntry {
     fn from(v: &d::ledger::ResourceOutflowEntry) -> Self {
-        Self { stockpile: v.stockpile.into(), sink: v.sink.into(), amount: v.amount }
+        Self {
+            stockpile: v.stockpile.into(),
+            sink: v.sink.into(),
+            amount: v.amount,
+        }
     }
 }
 impl From<ResourceOutflowEntry> for d::ledger::ResourceOutflowEntry {
     fn from(v: ResourceOutflowEntry) -> Self {
-        Self { stockpile: v.stockpile.into(), sink: v.sink.into(), amount: v.amount }
+        Self {
+            stockpile: v.stockpile.into(),
+            sink: v.sink.into(),
+            amount: v.amount,
+        }
     }
 }
 
@@ -888,29 +988,62 @@ impl From<MarketTick> for d::market::MarketTick {
 impl From<&d::market::MarketState> for MarketState {
     fn from(v: &d::market::MarketState) -> Self {
         Self {
-            resource_prices: v.resource_prices.iter().map(|(k, p)| ((*k).into(), (*p).into())).collect(),
-            material_prices: v.material_prices.iter().map(|(k, p)| ((*k).into(), (*p).into())).collect(),
-            goods_prices: v.goods_prices.iter().map(|(k, p)| ((*k).into(), (*p).into())).collect(),
-            resource_history: v.resource_history.iter().map(|(k, h)| ((*k).into(), h.iter().map(Into::into).collect())).collect(),
-            material_history: v.material_history.iter().map(|(k, h)| ((*k).into(), h.iter().map(Into::into).collect())).collect(),
-            goods_history: v.goods_history.iter().map(|(k, h)| ((*k).into(), h.iter().map(Into::into).collect())).collect(),
+            resource_prices: v
+                .resource_prices
+                .iter()
+                .map(|(k, p)| ((*k).into(), (*p).into()))
+                .collect(),
+            material_prices: v
+                .material_prices
+                .iter()
+                .map(|(k, p)| ((*k).into(), (*p).into()))
+                .collect(),
+            goods_prices: v
+                .goods_prices
+                .iter()
+                .map(|(k, p)| ((*k).into(), (*p).into()))
+                .collect(),
+            resource_history: v
+                .resource_history
+                .iter()
+                .map(|(k, h)| ((*k).into(), h.iter().map(Into::into).collect()))
+                .collect(),
+            material_history: v
+                .material_history
+                .iter()
+                .map(|(k, h)| ((*k).into(), h.iter().map(Into::into).collect()))
+                .collect(),
+            goods_history: v
+                .goods_history
+                .iter()
+                .map(|(k, h)| ((*k).into(), h.iter().map(Into::into).collect()))
+                .collect(),
         }
     }
 }
 impl From<MarketState> for d::market::MarketState {
     fn from(v: MarketState) -> Self {
         let mut ms = d::market::MarketState::new();
-        for (k, p) in v.resource_prices { ms.resource_prices.insert(k.into(), p.into()); }
-        for (k, p) in v.material_prices { ms.material_prices.insert(k.into(), p.into()); }
-        for (k, p) in v.goods_prices { ms.goods_prices.insert(k.into(), p.into()); }
+        for (k, p) in v.resource_prices {
+            ms.resource_prices.insert(k.into(), p.into());
+        }
+        for (k, p) in v.material_prices {
+            ms.material_prices.insert(k.into(), p.into());
+        }
+        for (k, p) in v.goods_prices {
+            ms.goods_prices.insert(k.into(), p.into());
+        }
         for (k, h) in v.resource_history {
-            ms.resource_history.insert(k.into(), h.into_iter().map(Into::into).collect());
+            ms.resource_history
+                .insert(k.into(), h.into_iter().map(Into::into).collect());
         }
         for (k, h) in v.material_history {
-            ms.material_history.insert(k.into(), h.into_iter().map(Into::into).collect());
+            ms.material_history
+                .insert(k.into(), h.into_iter().map(Into::into).collect());
         }
         for (k, h) in v.goods_history {
-            ms.goods_history.insert(k.into(), h.into_iter().map(Into::into).collect());
+            ms.goods_history
+                .insert(k.into(), h.into_iter().map(Into::into).collect());
         }
         ms
     }
@@ -966,12 +1099,18 @@ impl From<Commodity> for d::trade::Commodity {
 
 impl From<&d::trade::PlayerSellOrder> for PlayerSellOrder {
     fn from(v: &d::trade::PlayerSellOrder) -> Self {
-        Self { commodity: v.commodity.into(), quantity: v.quantity }
+        Self {
+            commodity: v.commodity.into(),
+            quantity: v.quantity,
+        }
     }
 }
 impl From<PlayerSellOrder> for d::trade::PlayerSellOrder {
     fn from(v: PlayerSellOrder) -> Self {
-        Self { commodity: v.commodity.into(), quantity: v.quantity }
+        Self {
+            commodity: v.commodity.into(),
+            quantity: v.quantity,
+        }
     }
 }
 
@@ -1000,12 +1139,20 @@ impl From<&d::observability::BlockReason> for BlockReason {
     fn from(v: &d::observability::BlockReason) -> Self {
         use d::observability::BlockReason as D;
         match v {
-            D::InsufficientInventory { commodity, needed, available } => Self::InsufficientInventory {
+            D::InsufficientInventory {
+                commodity,
+                needed,
+                available,
+            } => Self::InsufficientInventory {
                 commodity: (*commodity).into(),
                 needed: *needed,
                 available: *available,
             },
-            D::InsufficientLabor { tier, needed, available } => Self::InsufficientLabor {
+            D::InsufficientLabor {
+                tier,
+                needed,
+                available,
+            } => Self::InsufficientLabor {
                 tier: (*tier).into(),
                 needed: *needed,
                 available: *available,
@@ -1026,14 +1173,31 @@ impl From<BlockReason> for d::observability::BlockReason {
     fn from(v: BlockReason) -> Self {
         use d::observability::BlockReason as D;
         match v {
-            BlockReason::InsufficientInventory { commodity, needed, available } =>
-                D::InsufficientInventory { commodity: commodity.into(), needed, available },
-            BlockReason::InsufficientLabor { tier, needed, available } =>
-                D::InsufficientLabor { tier: tier.into(), needed, available },
-            BlockReason::InsufficientFreight { needed, available } =>
-                D::InsufficientFreight { needed, available },
-            BlockReason::InsufficientTreasury { needed, available } =>
-                D::InsufficientTreasury { needed: needed.into(), available: available.into() },
+            BlockReason::InsufficientInventory {
+                commodity,
+                needed,
+                available,
+            } => D::InsufficientInventory {
+                commodity: commodity.into(),
+                needed,
+                available,
+            },
+            BlockReason::InsufficientLabor {
+                tier,
+                needed,
+                available,
+            } => D::InsufficientLabor {
+                tier: tier.into(),
+                needed,
+                available,
+            },
+            BlockReason::InsufficientFreight { needed, available } => {
+                D::InsufficientFreight { needed, available }
+            }
+            BlockReason::InsufficientTreasury { needed, available } => D::InsufficientTreasury {
+                needed: needed.into(),
+                available: available.into(),
+            },
             BlockReason::MissingPrerequisite(s) => D::MissingPrerequisite(s),
         }
     }
@@ -1079,11 +1243,26 @@ impl From<&domain::nation::NationEconomy> for NationEconomy {
             labor: (&v.labor).into(),
             logistics: (&v.logistics).into(),
             reserved_treasury: v.snapshot_reserved_treasury().into(),
-            reserved_warehouse: v.snapshot_reserved_warehouse().iter().map(|(k, n)| ((*k).into(), *n)).collect(),
-            reserved_materials: v.snapshot_reserved_materials().iter().map(|(k, n)| ((*k).into(), *n)).collect(),
-            reserved_goods: v.snapshot_reserved_goods().iter().map(|(k, n)| ((*k).into(), *n)).collect(),
-            reservation_ledger: v.snapshot_reservation_ledger().iter()
-                .map(|(k, (c, n))| ((*k).into(), ((*c).into(), *n))).collect(),
+            reserved_warehouse: v
+                .snapshot_reserved_warehouse()
+                .iter()
+                .map(|(k, n)| ((*k).into(), *n))
+                .collect(),
+            reserved_materials: v
+                .snapshot_reserved_materials()
+                .iter()
+                .map(|(k, n)| ((*k).into(), *n))
+                .collect(),
+            reserved_goods: v
+                .snapshot_reserved_goods()
+                .iter()
+                .map(|(k, n)| ((*k).into(), *n))
+                .collect(),
+            reservation_ledger: v
+                .snapshot_reservation_ledger()
+                .iter()
+                .map(|(k, (c, n))| ((*k).into(), ((*c).into(), *n)))
+                .collect(),
             next_reservation_id: v.snapshot_next_reservation_id(),
             reserved_labor: v
                 .snapshot_reserved_labor()
@@ -1097,20 +1276,48 @@ impl From<NationEconomy> for domain::nation::NationEconomy {
     fn from(v: NationEconomy) -> Self {
         let mut ne = domain::nation::NationEconomy::default();
         ne.treasury = v.treasury.into();
-        ne.warehouse = v.warehouse.into_iter().map(|(k, n)| (k.into(), n)).collect();
-        ne.materials = v.materials.into_iter().map(|(k, n)| (k.into(), n)).collect();
+        ne.warehouse = v
+            .warehouse
+            .into_iter()
+            .map(|(k, n)| (k.into(), n))
+            .collect();
+        ne.materials = v
+            .materials
+            .into_iter()
+            .map(|(k, n)| (k.into(), n))
+            .collect();
         ne.goods = v.goods.into_iter().map(|(k, n)| (k.into(), n)).collect();
         ne.buildings = v.buildings.into_iter().map(Into::into).collect();
         ne.labor = v.labor.into();
         ne.logistics = v.logistics.into();
         ne.restore_reservation_state(domain::nation::ReservationStateSnapshot {
             reserved_treasury: v.reserved_treasury.into(),
-            reserved_warehouse: v.reserved_warehouse.into_iter().map(|(k, n)| (k.into(), n)).collect(),
-            reserved_materials: v.reserved_materials.into_iter().map(|(k, n)| (k.into(), n)).collect(),
-            reserved_goods: v.reserved_goods.into_iter().map(|(k, n)| (k.into(), n)).collect(),
-            reservation_ledger: v.reservation_ledger.into_iter().map(|(k, (c, n))| (k.into(), (c.into(), n))).collect(),
+            reserved_warehouse: v
+                .reserved_warehouse
+                .into_iter()
+                .map(|(k, n)| (k.into(), n))
+                .collect(),
+            reserved_materials: v
+                .reserved_materials
+                .into_iter()
+                .map(|(k, n)| (k.into(), n))
+                .collect(),
+            reserved_goods: v
+                .reserved_goods
+                .into_iter()
+                .map(|(k, n)| (k.into(), n))
+                .collect(),
+            reservation_ledger: v
+                .reservation_ledger
+                .into_iter()
+                .map(|(k, (c, n))| (k.into(), (c.into(), n)))
+                .collect(),
             next_reservation_id: v.next_reservation_id,
-            reserved_labor: v.reserved_labor.into_iter().map(|(k, n)| (k.into(), n)).collect(),
+            reserved_labor: v
+                .reserved_labor
+                .into_iter()
+                .map(|(k, n)| (k.into(), n))
+                .collect(),
         });
         ne
     }

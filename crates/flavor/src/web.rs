@@ -22,7 +22,10 @@ fn parse_mix_spec(spec: &str) -> GovernmentMix {
             Some(x) => x,
             None => continue,
         };
-        let needle = name.trim().to_ascii_lowercase().replace(['_', '-', ' '], "");
+        let needle = name
+            .trim()
+            .to_ascii_lowercase()
+            .replace(['_', '-', ' '], "");
         let weight: f32 = weight.trim().parse().unwrap_or(0.0);
         for form in GovernmentForm::ALL {
             let label = form.short_label().to_ascii_lowercase().replace(' ', "");

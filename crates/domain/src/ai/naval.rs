@@ -85,9 +85,24 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
         nation.military.warships.push(ship);
         nation.military.warships_built += 1;
         let out = crate::economy::ledger::ResourceOut::ConstructionConsumed;
-        game.transient.pending_ai_material_outflows.push((nation_id, MaterialType::Fabric, out, fabric_need));
-        game.transient.pending_ai_material_outflows.push((nation_id, MaterialType::Lumber, out, lumber_need));
-        game.transient.pending_ai_material_outflows.push((nation_id, MaterialType::Arms, out, arms_need));
+        game.transient.pending_ai_material_outflows.push((
+            nation_id,
+            MaterialType::Fabric,
+            out,
+            fabric_need,
+        ));
+        game.transient.pending_ai_material_outflows.push((
+            nation_id,
+            MaterialType::Lumber,
+            out,
+            lumber_need,
+        ));
+        game.transient.pending_ai_material_outflows.push((
+            nation_id,
+            MaterialType::Arms,
+            out,
+            arms_need,
+        ));
         return true;
     }
     false
@@ -170,8 +185,12 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
         nation.consume_material(MaterialType::Lumber, 4);
         nation.military.merchant_fleet.push(ship);
         let out = crate::economy::ledger::ResourceOut::ConstructionConsumed;
-        game.transient.pending_ai_material_outflows.push((nation_id, MaterialType::Fabric, out, 2));
-        game.transient.pending_ai_material_outflows.push((nation_id, MaterialType::Lumber, out, 4));
+        game.transient
+            .pending_ai_material_outflows
+            .push((nation_id, MaterialType::Fabric, out, 2));
+        game.transient
+            .pending_ai_material_outflows
+            .push((nation_id, MaterialType::Lumber, out, 4));
     }
 }
 
@@ -189,7 +208,8 @@ fn clear_stale_beachheads(game: &mut GameState, nation_id: NationId, enemies: &[
     let beachhead_targets: Vec<ProvinceId> = game
         .get_nation(nation_id)
         .map(|n| {
-            n.military.warships
+            n.military
+                .warships
                 .iter()
                 .filter_map(|s| match s.operation {
                     Some(crate::military::naval::NavalOperation::Beachhead(pid)) => Some(pid),
@@ -326,7 +346,9 @@ fn advance_beachhead_fleets(game: &mut GameState, nation_id: NationId) {
                         .military
                         .warships
                         .iter()
-                        .filter(|ship| ship.operation == Some(NavalOperation::Beachhead(target_pid)))
+                        .filter(|ship| {
+                            ship.operation == Some(NavalOperation::Beachhead(target_pid))
+                        })
                         .filter_map(|ship| ship.sea_zone)
                         .filter(|zone| !target_zones.contains(zone))
                         .collect()
@@ -352,7 +374,9 @@ fn advance_beachhead_fleets(game: &mut GameState, nation_id: NationId) {
                             .warships
                             .iter()
                             .filter(|ship| ship.sea_zone == Some(from_z))
-                            .all(|ship| ship.operation == Some(NavalOperation::Beachhead(target_pid)))
+                            .all(|ship| {
+                                ship.operation == Some(NavalOperation::Beachhead(target_pid))
+                            })
                     })
                     .unwrap_or(false);
                 if !zone_is_dedicated_to_target {
@@ -414,11 +438,13 @@ pub fn ai_naval_strategy(
 
     // Find enemies we are at war with
     let enemies: Vec<NationId> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.id != nation_id)
         .filter(|n| {
-            game.world.diplomacy
+            game.world
+                .diplomacy
                 .get_relation(nation_id, n.id)
                 .map(|r| r.at_war)
                 .unwrap_or(false)
@@ -540,7 +566,11 @@ pub fn ai_naval_strategy(
             for enemy_prov in game.world.provinces.iter().filter(|p| p.owner == enemy_id) {
                 let is_land_adj = our_province_ids.iter().any(|&our_pid| {
                     game.get_province(our_pid).is_some_and(|our_prov| {
-                        crate::map::provinces_are_adjacent(&game.world.hex_map, our_prov, enemy_prov)
+                        crate::map::provinces_are_adjacent(
+                            &game.world.hex_map,
+                            our_prov,
+                            enemy_prov,
+                        )
                     })
                 });
                 if !is_land_adj {
@@ -577,7 +607,8 @@ pub fn ai_naval_strategy(
 
             // Find ocean-coastal enemy province to target (lake shores are excluded)
             let coastal_target = game
-                .world.provinces
+                .world
+                .provinces
                 .iter()
                 .find(|p| p.owner == enemy_id && p.ocean_coastal);
 
@@ -631,7 +662,6 @@ mod tests {
     use super::*;
     use crate::ai::common::test_helpers::{test_game_with_ai, test_game_with_ai_and_minor};
     use crate::map::UnitId;
-
 
     #[test]
     fn ai_builds_warship_with_arms() {
@@ -817,10 +847,12 @@ mod tests {
         // Give the minor nation 2 warships (more than AI's 0)
         let minor = game.get_nation_mut(NationId(3)).unwrap();
         minor
-            .military.warships
+            .military
+            .warships
             .push(Ship::new(UnitId(50001), ShipType::Frigate, NationId(3), 35));
         minor
-            .military.warships
+            .military
+            .warships
             .push(Ship::new(UnitId(50002), ShipType::Frigate, NationId(3), 35));
 
         // Give AI materials to build a warship (2 fabric + 5 lumber + 2 arms)
@@ -884,8 +916,12 @@ mod tests {
             ));
         }
         for i in 0..3 {
-            ai.military.warships
-                .push(Ship::new(UnitId(9200 + i), ShipType::Frigate, NationId(2), 35));
+            ai.military.warships.push(Ship::new(
+                UnitId(9200 + i),
+                ShipType::Frigate,
+                NationId(2),
+                35,
+            ));
         }
         // Enemy has no warships and a small garrison (garrison_count=3 by default).
 
@@ -946,8 +982,12 @@ mod tests {
             ));
         }
         for i in 0..3 {
-            ai.military.warships
-                .push(Ship::new(UnitId(9600 + i), ShipType::Frigate, NationId(2), 35));
+            ai.military.warships.push(Ship::new(
+                UnitId(9600 + i),
+                ShipType::Frigate,
+                NationId(2),
+                35,
+            ));
         }
         // Enemy stacked with a fat garrison already (20). Attacker army=5,
         // ratio 1.5 → cap = 8; defenders (20) > 8 → too hard.

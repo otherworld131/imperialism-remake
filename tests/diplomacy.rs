@@ -25,13 +25,15 @@ fn diplomatic_lifecycle_consulate_to_incorporation() {
     // Step 3: Propose pact
     game.world.diplomacy.propose_pact(player, mn_id).unwrap();
     assert!(
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .has_treaty(player, mn_id, TreatyType::NonAggressionPact)
     );
 
     // Step 4: Boost relationship to 75+ (send grants)
     for _ in 0..20 {
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .send_grant(player, mn_id, Money::dollars(500));
     }
 
@@ -60,9 +62,13 @@ fn war_alliance_cascade_peace_standing() {
     let ally = gp_ids[3]; // Kem
 
     // Form alliance between defender and ally
-    game.world.diplomacy.propose_alliance(defender, ally).unwrap();
+    game.world
+        .diplomacy
+        .propose_alliance(defender, ally)
+        .unwrap();
     assert!(
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .has_treaty(defender, ally, TreatyType::Alliance)
     );
 
@@ -77,7 +83,8 @@ fn war_alliance_cascade_peace_standing() {
     process_turn(&mut game);
     assert!(game.world.diplomacy.is_at_war(ally, attacker));
     assert!(
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .has_treaty(defender, ally, TreatyType::Alliance)
     );
 
@@ -90,7 +97,8 @@ fn war_alliance_cascade_peace_standing() {
     assert_eq!(broken_alliances[0].enemy, attacker);
     assert!(
         !game
-            .world.diplomacy
+            .world
+            .diplomacy
             .has_treaty(defender, ally, TreatyType::Alliance)
     );
 
@@ -114,20 +122,27 @@ fn separate_peace_alliance_break_reason_appears_in_newspaper() {
     let defender = gp_ids[1];
     let ally = gp_ids[2];
 
-    game.world.diplomacy.propose_alliance(defender, ally).unwrap();
+    game.world
+        .diplomacy
+        .propose_alliance(defender, ally)
+        .unwrap();
     game.world.diplomacy.declare_war(human, defender);
     game.world.diplomacy.declare_war(ally, human);
-    game.world.diplomacy
+    game.world
+        .diplomacy
         .propose_peace(human, defender, game.turn)
         .unwrap();
-    game.world.diplomacy.pending_proposals.push(DiplomaticProposal {
-        from: defender,
-        to: human,
-        proposal_type: TreatyType::PeaceTreaty,
-        turn_proposed: game.turn,
-        attacker: None,
-        cascade_remaining: None,
-    });
+    game.world
+        .diplomacy
+        .pending_proposals
+        .push(DiplomaticProposal {
+            from: defender,
+            to: human,
+            proposal_type: TreatyType::PeaceTreaty,
+            turn_proposed: game.turn,
+            attacker: None,
+            cascade_remaining: None,
+        });
 
     let report = process_turn(&mut game);
     let defender_name = game.get_nation(defender).unwrap().name.clone();
@@ -161,36 +176,48 @@ fn same_turn_coalition_peace_does_not_break_alliance_or_publish_break_reason() {
     let defender = gp_ids[1];
     let ally = gp_ids[2];
 
-    game.world.diplomacy.propose_alliance(defender, ally).unwrap();
+    game.world
+        .diplomacy
+        .propose_alliance(defender, ally)
+        .unwrap();
     game.world.diplomacy.declare_war(human, defender);
     game.world.diplomacy.declare_war(ally, human);
-    game.world.diplomacy
+    game.world
+        .diplomacy
         .propose_peace(human, defender, game.turn)
         .unwrap();
-    game.world.diplomacy.pending_proposals.push(DiplomaticProposal {
-        from: defender,
-        to: human,
-        proposal_type: TreatyType::PeaceTreaty,
-        turn_proposed: game.turn,
-        attacker: None,
-        cascade_remaining: None,
-    });
-    game.world.diplomacy
+    game.world
+        .diplomacy
+        .pending_proposals
+        .push(DiplomaticProposal {
+            from: defender,
+            to: human,
+            proposal_type: TreatyType::PeaceTreaty,
+            turn_proposed: game.turn,
+            attacker: None,
+            cascade_remaining: None,
+        });
+    game.world
+        .diplomacy
         .propose_peace(ally, human, game.turn)
         .unwrap();
-    game.world.diplomacy.pending_proposals.push(DiplomaticProposal {
-        from: human,
-        to: ally,
-        proposal_type: TreatyType::PeaceTreaty,
-        turn_proposed: game.turn,
-        attacker: None,
-        cascade_remaining: None,
-    });
+    game.world
+        .diplomacy
+        .pending_proposals
+        .push(DiplomaticProposal {
+            from: human,
+            to: ally,
+            proposal_type: TreatyType::PeaceTreaty,
+            turn_proposed: game.turn,
+            attacker: None,
+            cascade_remaining: None,
+        });
 
     let report = process_turn(&mut game);
 
     assert!(
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .has_treaty(defender, ally, TreatyType::Alliance),
         "coordinated same-turn coalition peace should not dissolve the alliance"
     );
@@ -216,7 +243,8 @@ fn council_vote_victory_scenario() {
         game.world.diplomacy.build_consulate(player, *mn_id).ok();
         game.world.diplomacy.build_embassy(player, *mn_id).ok();
         for _ in 0..30 {
-            game.world.diplomacy
+            game.world
+                .diplomacy
                 .send_grant(player, *mn_id, Money::dollars(1000));
         }
     }
@@ -248,19 +276,22 @@ fn minor_nation_responds_to_grants_with_higher_relationship() {
     game.world.diplomacy.build_embassy(player, mn_id).unwrap();
 
     let initial_score = game
-        .world.diplomacy
+        .world
+        .diplomacy
         .get_relation(player, mn_id)
         .map(|r| r.score)
         .unwrap_or(0);
 
     // Send grants
     for _ in 0..10 {
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .send_grant(player, mn_id, Money::dollars(500));
     }
 
     let final_score = game
-        .world.diplomacy
+        .world
+        .diplomacy
         .get_relation(player, mn_id)
         .map(|r| r.score)
         .unwrap_or(0);
@@ -288,7 +319,12 @@ fn low_standing_prevents_treaty_proposals() {
     // Alliance proposal should fail due to low standing
     let result = game.world.diplomacy.propose_alliance(proposer, target);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Standing too low to propose treaties"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Standing too low to propose treaties")
+    );
 }
 
 #[test]
@@ -308,7 +344,12 @@ fn low_standing_prevents_pact_proposals() {
     // Pact proposal should fail due to low standing
     let result = game.world.diplomacy.propose_pact(player, mn_id);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Standing too low to propose treaties"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Standing too low to propose treaties")
+    );
 }
 
 // ── Convenience method tests ──────────────────────────────────────
@@ -378,7 +419,10 @@ fn alliance_war_pact_combinations() {
     let mns: Vec<NationId> = game.minor_nations().iter().map(|n| n.id).collect();
 
     // Alliance between GP1 and GP2
-    game.world.diplomacy.propose_alliance(gps[1], gps[2]).unwrap();
+    game.world
+        .diplomacy
+        .propose_alliance(gps[1], gps[2])
+        .unwrap();
 
     // Pact between GP1 and MN1
     game.world.diplomacy.build_consulate(gps[1], mns[0]).ok();
@@ -409,7 +453,10 @@ fn allies_are_not_called_into_minor_nation_wars() {
     let ally = gps[2];
     let minor = mns[0];
 
-    game.world.diplomacy.propose_alliance(attacker, ally).unwrap();
+    game.world
+        .diplomacy
+        .propose_alliance(attacker, ally)
+        .unwrap();
     game.world.diplomacy.declare_war(attacker, minor);
 
     process_turn(&mut game);
@@ -420,7 +467,8 @@ fn allies_are_not_called_into_minor_nation_wars() {
         "Alliance obligations should not trigger against minor nations"
     );
     assert!(
-        game.world.diplomacy
+        game.world
+            .diplomacy
             .has_treaty(attacker, ally, TreatyType::Alliance),
         "The alliance should remain intact when the ally is not called into the minor war"
     );

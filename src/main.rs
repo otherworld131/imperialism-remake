@@ -9,8 +9,8 @@ mod saves;
 
 use clap::Parser;
 
-use application::{calculate_score, process_turn, Difficulty};
 use application::scenarios as app_scenarios;
+use application::{Difficulty, calculate_score, process_turn};
 use infrastructure::data_loader::load_embedded_game_data;
 
 use crate::flavor_bridge::apply_flavor;
@@ -135,7 +135,9 @@ fn main() {
                         .map(|gp| (gp.name.clone(), calculate_score(gp, &game.game_data).total))
                         .collect();
                     for (name, total) in gp_scores {
-                        game.archive.high_scores.push((name, total, date_str.clone()));
+                        game.archive
+                            .high_scores
+                            .push((name, total, date_str.clone()));
                     }
                     game.archive.high_scores.sort_by(|a, b| b.1.cmp(&a.1));
 

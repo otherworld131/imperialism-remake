@@ -156,9 +156,15 @@ pub struct CommandResult {
 
 impl CommandResult {
     pub fn success() -> Self {
-        Self { ok: true, message: None }
+        Self {
+            ok: true,
+            message: None,
+        }
     }
     pub fn error(msg: impl Into<String>) -> Self {
-        Self { ok: false, message: Some(msg.into()) }
+        Self {
+            ok: false,
+            message: Some(msg.into()),
+        }
     }
 }

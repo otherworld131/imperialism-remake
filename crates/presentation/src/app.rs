@@ -1,5 +1,5 @@
+use application::{Difficulty, new_game};
 use bevy::prelude::*;
-use application::{new_game, Difficulty};
 
 use crate::camera;
 use crate::hex_renderer::{self, GameStateResource};

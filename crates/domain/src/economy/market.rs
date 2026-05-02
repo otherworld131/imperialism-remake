@@ -86,25 +86,38 @@ impl MarketState {
         sold: u32,
     ) {
         let unmet_demand = demand.saturating_sub(sold);
-        let tick = MarketTick { turn, price, supply, demand, unmet_demand, sold };
+        let tick = MarketTick {
+            turn,
+            price,
+            supply,
+            demand,
+            unmet_demand,
+            sold,
+        };
 
         match commodity {
             Commodity::Resource(r) => {
                 self.resource_prices.insert(r, price);
                 let buf = self.resource_history.entry(r).or_default();
-                if buf.len() == HISTORY_DEPTH { buf.pop_front(); }
+                if buf.len() == HISTORY_DEPTH {
+                    buf.pop_front();
+                }
                 buf.push_back(tick);
             }
             Commodity::Material(m) => {
                 self.material_prices.insert(m, price);
                 let buf = self.material_history.entry(m).or_default();
-                if buf.len() == HISTORY_DEPTH { buf.pop_front(); }
+                if buf.len() == HISTORY_DEPTH {
+                    buf.pop_front();
+                }
                 buf.push_back(tick);
             }
             Commodity::Goods(g) => {
                 self.goods_prices.insert(g, price);
                 let buf = self.goods_history.entry(g).or_default();
-                if buf.len() == HISTORY_DEPTH { buf.pop_front(); }
+                if buf.len() == HISTORY_DEPTH {
+                    buf.pop_front();
+                }
                 buf.push_back(tick);
             }
         }
@@ -149,13 +162,22 @@ impl MarketState {
         if half == 0 {
             return Trend::Stable;
         }
-        let recent_avg: f64 =
-            slice[..half].iter().map(|t| t.price.as_dollars() as f64).sum::<f64>() / half as f64;
-        let older_avg: f64 =
-            slice[half..].iter().map(|t| t.price.as_dollars() as f64).sum::<f64>()
-                / (window - half) as f64;
+        let recent_avg: f64 = slice[..half]
+            .iter()
+            .map(|t| t.price.as_dollars() as f64)
+            .sum::<f64>()
+            / half as f64;
+        let older_avg: f64 = slice[half..]
+            .iter()
+            .map(|t| t.price.as_dollars() as f64)
+            .sum::<f64>()
+            / (window - half) as f64;
         // 5% threshold to avoid noise
-        let ratio = if older_avg > 0.0 { recent_avg / older_avg } else { 1.0 };
+        let ratio = if older_avg > 0.0 {
+            recent_avg / older_avg
+        } else {
+            1.0
+        };
         if ratio > 1.05 {
             Trend::Rising
         } else if ratio < 0.95 {
@@ -176,8 +198,12 @@ impl MarketState {
         if window < 2 {
             return 0.0;
         }
-        let prices: Vec<f64> =
-            buf.iter().rev().take(window).map(|t| t.price.as_dollars() as f64).collect();
+        let prices: Vec<f64> = buf
+            .iter()
+            .rev()
+            .take(window)
+            .map(|t| t.price.as_dollars() as f64)
+            .collect();
         let mean = prices.iter().sum::<f64>() / prices.len() as f64;
         if mean == 0.0 {
             return 0.0;
@@ -188,17 +214,32 @@ impl MarketState {
 
     /// Iterator over all commodities with at least one recorded price.
     pub fn commodities_with_history(&self) -> impl Iterator<Item = Commodity> + '_ {
-        let resources = self.resource_history.keys().map(|&r| Commodity::Resource(r));
-        let materials = self.material_history.keys().map(|&m| Commodity::Material(m));
+        let resources = self
+            .resource_history
+            .keys()
+            .map(|&r| Commodity::Resource(r));
+        let materials = self
+            .material_history
+            .keys()
+            .map(|&m| Commodity::Material(m));
         let goods = self.goods_history.keys().map(|&g| Commodity::Goods(g));
         resources.chain(materials).chain(goods)
     }
 
     /// Iterator over all commodities with a recorded current price.
     pub fn commodities_with_price(&self) -> impl Iterator<Item = (Commodity, Money)> + '_ {
-        let resources = self.resource_prices.iter().map(|(&r, &p)| (Commodity::Resource(r), p));
-        let materials = self.material_prices.iter().map(|(&m, &p)| (Commodity::Material(m), p));
-        let goods = self.goods_prices.iter().map(|(&g, &p)| (Commodity::Goods(g), p));
+        let resources = self
+            .resource_prices
+            .iter()
+            .map(|(&r, &p)| (Commodity::Resource(r), p));
+        let materials = self
+            .material_prices
+            .iter()
+            .map(|(&m, &p)| (Commodity::Material(m), p));
+        let goods = self
+            .goods_prices
+            .iter()
+            .map(|(&g, &p)| (Commodity::Goods(g), p));
         resources.chain(materials).chain(goods)
     }
 }
@@ -223,11 +264,24 @@ mod tests {
     fn history_capped_at_depth() {
         let mut ms = MarketState::new();
         for i in 1..=(HISTORY_DEPTH + 5) as u32 {
-            ms.record_tick(coal(), TurnNumber::new(i), Money::dollars(i as i64), 1, 1, 1);
+            ms.record_tick(
+                coal(),
+                TurnNumber::new(i),
+                Money::dollars(i as i64),
+                1,
+                1,
+                1,
+            );
         }
-        assert_eq!(ms.resource_history[&ResourceType::Coal].len(), HISTORY_DEPTH);
+        assert_eq!(
+            ms.resource_history[&ResourceType::Coal].len(),
+            HISTORY_DEPTH
+        );
         // Most recent price should be the last one recorded
-        assert_eq!(ms.current_price(coal()), Money::dollars((HISTORY_DEPTH + 5) as i64));
+        assert_eq!(
+            ms.current_price(coal()),
+            Money::dollars((HISTORY_DEPTH + 5) as i64)
+        );
     }
 
     #[test]
@@ -235,7 +289,14 @@ mod tests {
         let mut ms = MarketState::new();
         // Older prices are low, recent prices are high
         for (i, price) in [50, 51, 52, 70, 75, 80].iter().enumerate() {
-            ms.record_tick(coal(), TurnNumber::new(i as u32 + 1), Money::dollars(*price), 1, 1, 1);
+            ms.record_tick(
+                coal(),
+                TurnNumber::new(i as u32 + 1),
+                Money::dollars(*price),
+                1,
+                1,
+                1,
+            );
         }
         assert_eq!(ms.trend(coal(), 6), Trend::Rising);
     }
@@ -244,7 +305,14 @@ mod tests {
     fn trend_falling_when_prices_decrease() {
         let mut ms = MarketState::new();
         for (i, price) in [80, 75, 70, 52, 51, 50].iter().enumerate() {
-            ms.record_tick(coal(), TurnNumber::new(i as u32 + 1), Money::dollars(*price), 1, 1, 1);
+            ms.record_tick(
+                coal(),
+                TurnNumber::new(i as u32 + 1),
+                Money::dollars(*price),
+                1,
+                1,
+                1,
+            );
         }
         assert_eq!(ms.trend(coal(), 6), Trend::Falling);
     }
@@ -277,7 +345,14 @@ mod tests {
     fn volatility_nonzero_with_swings() {
         let mut ms = MarketState::new();
         for (i, price) in [50, 100, 50, 100, 50].iter().enumerate() {
-            ms.record_tick(coal(), TurnNumber::new(i as u32 + 1), Money::dollars(*price), 1, 1, 1);
+            ms.record_tick(
+                coal(),
+                TurnNumber::new(i as u32 + 1),
+                Money::dollars(*price),
+                1,
+                1,
+                1,
+            );
         }
         assert!(ms.volatility(coal(), 5) > 0.3);
     }

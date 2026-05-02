@@ -1,4 +1,4 @@
-use application::{GameState, HexCoord, TerrainType, ProvinceId};
+use application::{GameState, HexCoord, ProvinceId, TerrainType};
 use bevy::prelude::*;
 
 use crate::colors;

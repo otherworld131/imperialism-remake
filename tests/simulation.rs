@@ -20,7 +20,11 @@ fn run_simulation(
         assert_eq!(game.world.nations.len(), 23, "Nation count must stay at 23");
         assert!(!game.world.nations.is_empty());
         // Total provinces should stay at 120 (provinces don't get created/destroyed, just change owners)
-        assert_eq!(game.world.provinces.len(), 120, "Province count must stay at 120");
+        assert_eq!(
+            game.world.provinces.len(),
+            120,
+            "Province count must stay at 120"
+        );
     }
     game
 }
@@ -90,7 +94,8 @@ fn test_100_turn_endurance() {
     // At least one AI nation should have researched at least one technology
     // after 100 turns. The AI researches the cheapest available tech each turn.
     let any_ai_researched = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.is_great_power() && n.id != game.human_player_nation)
         .any(|n| !n.researched_techs.is_empty());
@@ -101,7 +106,8 @@ fn test_100_turn_endurance() {
 
     // AI nations should have built some army units (total across all AI > 0).
     let total_ai_army: usize = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.is_great_power() && n.id != game.human_player_nation)
         .map(|n| n.military.army.len())
@@ -207,7 +213,12 @@ fn test_determinism() {
     }
 
     // Province ownership must match
-    for (prov_a, prov_b) in game_a.world.provinces.iter().zip(game_b.world.provinces.iter()) {
+    for (prov_a, prov_b) in game_a
+        .world
+        .provinces
+        .iter()
+        .zip(game_b.world.provinces.iter())
+    {
         assert_eq!(
             prov_a.owner, prov_b.owner,
             "Province {} ownership should be deterministic",
@@ -230,18 +241,30 @@ fn test_different_map_keys_diverge() {
     // The games should produce different resource totals because the maps
     // are different (different terrain placement, different tile yields).
     let total_resources_a: u32 = game_a
-        .world.nations
+        .world
+        .nations
         .iter()
         .flat_map(|n| n.economy.warehouse.values())
         .sum();
     let total_resources_b: u32 = game_b
-        .world.nations
+        .world
+        .nations
         .iter()
         .flat_map(|n| n.economy.warehouse.values())
         .sum();
 
-    let total_treasury_a: i64 = game_a.world.nations.iter().map(|n| n.economy.treasury.as_dollars()).sum();
-    let total_treasury_b: i64 = game_b.world.nations.iter().map(|n| n.economy.treasury.as_dollars()).sum();
+    let total_treasury_a: i64 = game_a
+        .world
+        .nations
+        .iter()
+        .map(|n| n.economy.treasury.as_dollars())
+        .sum();
+    let total_treasury_b: i64 = game_b
+        .world
+        .nations
+        .iter()
+        .map(|n| n.economy.treasury.as_dollars())
+        .sum();
 
     // At least one of these aggregate metrics should differ between the two map keys.
     let diverged = total_resources_a != total_resources_b || total_treasury_a != total_treasury_b;
@@ -300,7 +323,8 @@ fn test_all_nations_as_player() {
         // The human player nation should correspond to the selected index.
         // Each index selects a different Great Power.
         let great_power_ids: Vec<NationId> = game
-            .world.nations
+            .world
+            .nations
             .iter()
             .filter(|n| n.is_great_power())
             .map(|n| n.id)

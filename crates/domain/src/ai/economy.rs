@@ -233,7 +233,8 @@ pub(super) fn importable_via_trade(
             continue;
         }
         let has_consulate = game
-            .world.diplomacy
+            .world
+            .diplomacy
             .get_relation(nation.id, other.id)
             .is_some_and(|r| r.has_consulate);
         if !has_consulate {
@@ -368,7 +369,8 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
 
     let connected = connected_provinces(game, nation_id);
     let owned_provinces: Vec<&Province> = game
-        .world.provinces
+        .world
+        .provinces
         .iter()
         .filter(|p| p.owner == nation_id)
         .collect();
@@ -402,7 +404,12 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
     }
 
     // ── Check existing commitment first ───────────────────────
-    if let Some(t) = nation.diplomacy.ai_priority_state.committed_infra_target.as_ref() {
+    if let Some(t) = nation
+        .diplomacy
+        .ai_priority_state
+        .committed_infra_target
+        .as_ref()
+    {
         let cand_tile = game.world.hex_map.get_tile(t.candidate);
         let fulfilled = cand_tile.is_some_and(|tile| tile.infrastructure.has_depot);
         let candidate_ownership_ok = owned_hexes.contains(&t.candidate);
@@ -542,8 +549,7 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
                     || (plan.net_score == b.net_score && plan.path_cost < b.path_cost)
                     || (plan.net_score == b.net_score
                         && plan.path_cost == b.path_cost
-                        && (plan.candidate.q, plan.candidate.r)
-                            < (b.candidate.q, b.candidate.r))
+                        && (plan.candidate.q, plan.candidate.r) < (b.candidate.q, b.candidate.r))
             }
         };
         if better {
@@ -562,10 +568,7 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
 /// through the Dijkstra graph) and not yet served by a built port.
 /// Returns `None` when every owned province is either rail-reachable, already
 /// has a port, or has no qualifying coastal tile.
-pub(super) fn find_stranded_port_target(
-    game: &GameState,
-    nation_id: NationId,
-) -> Option<HexCoord> {
+pub(super) fn find_stranded_port_target(game: &GameState, nation_id: NationId) -> Option<HexCoord> {
     use crate::map::infrastructure::collectable_hexes;
     use crate::turn::connected_provinces;
 
@@ -612,8 +615,7 @@ pub(super) fn find_stranded_port_target(
     );
 
     let connected = connected_provinces(game, nation_id);
-    let already_covered =
-        collectable_hexes(&game.world.hex_map, &owned_provinces, &connected);
+    let already_covered = collectable_hexes(&game.world.hex_map, &owned_provinces, &connected);
     let demand = compute_resource_demand(nation, game, cfg);
 
     let mut best_coord: Option<HexCoord> = None;
@@ -1062,7 +1064,8 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
         .unwrap_or_default();
 
     let capital_has_depot = capital_tiles.iter().any(|coord| {
-        game.world.hex_map
+        game.world
+            .hex_map
             .get_tile(*coord)
             .is_some_and(|t| t.infrastructure.has_depot)
     });
@@ -1100,9 +1103,9 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
         .iter()
         .filter(|&&pid| pid != capital_province_id)
         .filter_map(|&pid| {
-            let score = game
-                .get_province(pid)
-                .map(|p| score_province(&game.world.hex_map, p, nation_ref, game, &cfg_for_scoring))?;
+            let score = game.get_province(pid).map(|p| {
+                score_province(&game.world.hex_map, p, nation_ref, game, &cfg_for_scoring)
+            })?;
             if score > 0 { Some((pid, score)) } else { None }
         })
         .collect();
@@ -1117,7 +1120,12 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
     );
 
     for (pid, _score) in &province_scores {
-        if is_province_connected(&game.world.hex_map, capital_tile, *pid, &game.world.provinces) {
+        if is_province_connected(
+            &game.world.hex_map,
+            capital_tile,
+            *pid,
+            &game.world.provinces,
+        ) {
             continue;
         }
 
@@ -1127,7 +1135,8 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
             None => continue,
         };
         let has_depot = game
-            .world.hex_map
+            .world
+            .hex_map
             .get_tile(target_depot_tile)
             .is_some_and(|t| t.infrastructure.has_depot);
 
@@ -1292,15 +1301,18 @@ pub fn ai_manage_resources(
         nation.economy.treasury += revenue;
         total_revenue += revenue;
         // Record in trade history: AI GP auto-sold goods to world market (NationId(0) sentinel)
-        nation.archives.trade_history.push(trade::TradeHistoryEntry {
-            turn: current_turn,
-            partner: NationId(0),
-            resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
-            commodity_label: format!("{goods_type:?}"),
-            quantity: excess,
-            total_cost: revenue,
-            bought: false,
-        });
+        nation
+            .archives
+            .trade_history
+            .push(trade::TradeHistoryEntry {
+                turn: current_turn,
+                partner: NationId(0),
+                resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
+                commodity_label: format!("{goods_type:?}"),
+                quantity: excess,
+                total_cost: revenue,
+                bought: false,
+            });
         game.transient.pending_ai_goods_outflows.push((
             nation_id,
             *goods_type,
@@ -1310,7 +1322,9 @@ pub fn ai_manage_resources(
     }
 
     if total_revenue > Money::ZERO {
-        game.transient.pending_ai_cash_income.push((nation_id, total_revenue));
+        game.transient
+            .pending_ai_cash_income
+            .push((nation_id, total_revenue));
         actions.push(super::AiAction {
             text: format!(
                 "{} sold excess goods for ${}",
@@ -1563,7 +1577,8 @@ fn expand_building(game: &mut GameState, nation_id: NationId, bt: BuildingType, 
 
     let increase = if use_tier {
         nation
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .find(|b| b.building_type == bt)
             .map(|b| b.next_capacity() - b.capacity)
@@ -1683,21 +1698,26 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
                     nation.economy.treasury += revenue;
                     total_revenue += revenue;
                     // Record in trade history: AI GP sold excess resource to world market
-                    nation.archives.trade_history.push(trade::TradeHistoryEntry {
-                        turn: current_turn,
-                        partner: NationId(0), // world-market sentinel
-                        resource,
-                        commodity_label: format!("{resource:?}"),
-                        quantity: excess,
-                        total_cost: revenue,
-                        bought: false,
-                    });
+                    nation
+                        .archives
+                        .trade_history
+                        .push(trade::TradeHistoryEntry {
+                            turn: current_turn,
+                            partner: NationId(0), // world-market sentinel
+                            resource,
+                            commodity_label: format!("{resource:?}"),
+                            quantity: excess,
+                            total_cost: revenue,
+                            bought: false,
+                        });
                 }
             }
         }
     }
     if total_revenue > Money::ZERO {
-        game.transient.pending_ai_cash_income.push((nation_id, total_revenue));
+        game.transient
+            .pending_ai_cash_income
+            .push((nation_id, total_revenue));
     }
 }
 
@@ -1806,7 +1826,10 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         // Give the AI lumber and steel materials
-        *ai.economy.materials.entry(MaterialType::Lumber).or_insert(0) = 3;
+        *ai.economy
+            .materials
+            .entry(MaterialType::Lumber)
+            .or_insert(0) = 3;
         *ai.economy.materials.entry(MaterialType::Steel).or_insert(0) = 3;
 
         run_ai_turns(&mut game);
@@ -1824,13 +1847,20 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         // Give the AI all three mills already so it won't spend materials on them
-        ai.economy.buildings
+        ai.economy
+            .buildings
             .push(Building::new(BuildingType::LumberMill, 2));
-        ai.economy.buildings.push(Building::new(BuildingType::SteelMill, 2));
-        ai.economy.buildings
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 2));
+        ai.economy
+            .buildings
             .push(Building::new(BuildingType::TextileMill, 2));
         // Give materials for factory construction
-        *ai.economy.materials.entry(MaterialType::Lumber).or_insert(0) = 2;
+        *ai.economy
+            .materials
+            .entry(MaterialType::Lumber)
+            .or_insert(0) = 2;
         *ai.economy.materials.entry(MaterialType::Steel).or_insert(0) = 2;
 
         run_ai_turns(&mut game);
@@ -1959,16 +1989,23 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         // Give all buildings so infrastructure doesn't consume materials
-        ai.economy.buildings
+        ai.economy
+            .buildings
             .push(Building::new(BuildingType::LumberMill, 2));
-        ai.economy.buildings.push(Building::new(BuildingType::SteelMill, 2));
-        ai.economy.buildings
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 2));
+        ai.economy
+            .buildings
             .push(Building::new(BuildingType::TextileMill, 2));
-        ai.economy.buildings
+        ai.economy
+            .buildings
             .push(Building::new(BuildingType::FurnitureFactory, 1));
-        ai.economy.buildings
+        ai.economy
+            .buildings
             .push(Building::new(BuildingType::HardwareFactory, 1));
-        ai.economy.buildings
+        ai.economy
+            .buildings
             .push(Building::new(BuildingType::ClothingFactory, 1));
         // Give enough materials for both potential mill expansion and freight cars
         ai.add_material(MaterialType::Lumber, 20);
@@ -2043,7 +2080,8 @@ mod tests {
 
         assert!(
             !game
-                .world.hex_map
+                .world
+                .hex_map
                 .get_tile(cap_tile)
                 .unwrap()
                 .infrastructure
@@ -2055,7 +2093,8 @@ mod tests {
 
         // After one call, should have built a depot on capital
         assert!(
-            game.world.hex_map
+            game.world
+                .hex_map
                 .get_tile(cap_tile)
                 .unwrap()
                 .infrastructure
@@ -2179,7 +2218,8 @@ mod tests {
         // already in warehouse).
         let nation = game.get_nation_mut(nation_id).unwrap();
         nation
-            .economy.buildings
+            .economy
+            .buildings
             .push(Building::new(BuildingType::LumberMill, 2));
         // Clear any starting timber so the deficit is clean.
         nation.economy.warehouse.insert(ResourceType::Timber, 0);
@@ -2198,7 +2238,8 @@ mod tests {
         // game_b has recent buy history for timber.
         let nation_b = game_b.get_nation_mut(NationId(2)).unwrap();
         nation_b
-            .archives.trade_history
+            .archives
+            .trade_history
             .push(crate::economy::trade::TradeHistoryEntry {
                 turn: TurnNumber::new(1),
                 partner: NationId(1),
@@ -2232,7 +2273,8 @@ mod tests {
         prime_timber_deficit(&mut game, NationId(2));
         game.get_nation_mut(NationId(2))
             .unwrap()
-            .archives.trade_history
+            .archives
+            .trade_history
             .push(crate::economy::trade::TradeHistoryEntry {
                 turn: TurnNumber::new(1),
                 partner: NationId(1),
@@ -2262,7 +2304,8 @@ mod tests {
         game.turn = TurnNumber::new(50);
         game.get_nation_mut(NationId(2))
             .unwrap()
-            .archives.trade_history
+            .archives
+            .trade_history
             .push(crate::economy::trade::TradeHistoryEntry {
                 turn: TurnNumber::new(1), // 49 turns stale
                 partner: NationId(1),
@@ -2322,36 +2365,37 @@ mod tests {
         );
         // LumberMill so the planner sees timber demand.
         nation
-            .economy.buildings
+            .economy
+            .buildings
             .push(Building::new(BuildingType::LumberMill, 2));
         nation.economy.treasury = Money::dollars(20_000);
 
         crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "t".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province],
-            nations: vec![nation],
-            human_player_nation: NationId(99), // unused in planner tests
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: crate::diplomacy::DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,}
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "t".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province],
+        nations: vec![nation],
+        human_player_nation: NationId(99), // unused in planner tests
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: crate::diplomacy::DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,}
     }
 
     #[test]
@@ -2378,7 +2422,8 @@ mod tests {
         // Install a commitment to `a`.
         game.get_nation_mut(NationId(1))
             .unwrap()
-            .diplomacy.ai_priority_state
+            .diplomacy
+            .ai_priority_state
             .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
             candidate: a,
             origin_capital: capital,
@@ -2413,7 +2458,8 @@ mod tests {
         }
         game.get_nation_mut(NationId(1))
             .unwrap()
-            .diplomacy.ai_priority_state
+            .diplomacy
+            .ai_priority_state
             .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
             candidate: a,
             origin_capital: capital,
@@ -2443,7 +2489,8 @@ mod tests {
         let off_map = HexCoord::new(15, 15);
         game.get_nation_mut(NationId(1))
             .unwrap()
-            .diplomacy.ai_priority_state
+            .diplomacy
+            .ai_priority_state
             .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
             candidate: off_map,
             origin_capital: capital,
@@ -2515,36 +2562,37 @@ mod tests {
             ProvinceId(1),
         );
         nation
-            .economy.buildings
+            .economy
+            .buildings
             .push(Building::new(BuildingType::LumberMill, 2));
         nation.economy.treasury = Money::dollars(20_000);
 
         let game = crate::test_game_state! {
-            turn: TurnNumber::new(1),
-            difficulty: Difficulty::Normal,
-            map_key: "t".to_string(),
-            hex_map: hex_map,
-            provinces: vec![province],
-            nations: vec![nation],
-            human_player_nation: NationId(99),
-            events: Vec::new(),
-            game_data: GameData::default(),
-            diplomacy: crate::diplomacy::DiplomacyState::new(),
-            pending_attacks: Vec::new(),
-            pending_moves: Vec::new(),
-            pending_landings: Vec::new(),
-            history: Vec::new(),
-            high_scores: Vec::new(),
-            newspaper_archive: Vec::new(),
-            battle_archive: Vec::new(),
-            political_archive: Vec::new(),
-            ai_debug: false,
-            observer_mode: false,
-            last_cash_flow: std::collections::HashMap::new(),
-            last_resource_flow: std::collections::HashMap::new(),
-            pending_ai_cash_spending: Vec::new(),
-            pending_ai_cash_income: Vec::new(),
-            next_unit_id: 6_000_000,};
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "t".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province],
+        nations: vec![nation],
+        human_player_nation: NationId(99),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: crate::diplomacy::DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
 
         let outcome = plan_next_depot(&game, NationId(1));
         let plan = outcome
@@ -2635,7 +2683,8 @@ mod tests {
         // Install commitment to the candidate.
         game.get_nation_mut(NationId(1))
             .unwrap()
-            .diplomacy.ai_priority_state
+            .diplomacy
+            .ai_priority_state
             .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
             candidate,
             origin_capital: capital,
@@ -2679,7 +2728,8 @@ mod tests {
         // Simulate apply_plan_outcome: write the commitment into game state.
         game.get_nation_mut(NationId(1))
             .unwrap()
-            .diplomacy.ai_priority_state
+            .diplomacy
+            .ai_priority_state
             .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
             candidate: plan1.candidate,
             origin_capital: plan1.origin_capital,
@@ -2843,25 +2893,63 @@ mod tests {
             .economy
             .buildings
             .push(Building::new(BuildingType::LumberMill, 4));
-        *game.get_nation_mut(nation_id).unwrap().economy.materials.entry(MaterialType::Lumber).or_insert(0) = 20;
-        *game.get_nation_mut(nation_id).unwrap().economy.materials.entry(MaterialType::Steel).or_insert(0) = 20;
+        *game
+            .get_nation_mut(nation_id)
+            .unwrap()
+            .economy
+            .materials
+            .entry(MaterialType::Lumber)
+            .or_insert(0) = 20;
+        *game
+            .get_nation_mut(nation_id)
+            .unwrap()
+            .economy
+            .materials
+            .entry(MaterialType::Steel)
+            .or_insert(0) = 20;
 
         // Call expand_building twice — second call must be a no-op.
         expand_building(&mut game, nation_id, BuildingType::LumberMill, true);
-        let lumber_after_first = game.get_nation(nation_id).unwrap().material_amount(MaterialType::Lumber);
-        let steel_after_first = game.get_nation(nation_id).unwrap().material_amount(MaterialType::Steel);
+        let lumber_after_first = game
+            .get_nation(nation_id)
+            .unwrap()
+            .material_amount(MaterialType::Lumber);
+        let steel_after_first = game
+            .get_nation(nation_id)
+            .unwrap()
+            .material_amount(MaterialType::Steel);
 
         expand_building(&mut game, nation_id, BuildingType::LumberMill, true);
-        let lumber_after_second = game.get_nation(nation_id).unwrap().material_amount(MaterialType::Lumber);
-        let steel_after_second = game.get_nation(nation_id).unwrap().material_amount(MaterialType::Steel);
+        let lumber_after_second = game
+            .get_nation(nation_id)
+            .unwrap()
+            .material_amount(MaterialType::Lumber);
+        let steel_after_second = game
+            .get_nation(nation_id)
+            .unwrap()
+            .material_amount(MaterialType::Steel);
 
         // Materials must not have been charged a second time.
-        assert_eq!(lumber_after_first, lumber_after_second, "second expand_building call should not charge lumber again");
-        assert_eq!(steel_after_first, steel_after_second, "second expand_building call should not charge steel again");
+        assert_eq!(
+            lumber_after_first, lumber_after_second,
+            "second expand_building call should not charge lumber again"
+        );
+        assert_eq!(
+            steel_after_first, steel_after_second,
+            "second expand_building call should not charge steel again"
+        );
 
         // Exactly one pending expansion in the building.
         let nation = game.get_nation(nation_id).unwrap();
-        let mill = nation.economy.buildings.iter().find(|b| b.building_type == BuildingType::LumberMill).unwrap();
-        assert!(mill.pending_capacity > 0, "building should have one pending expansion");
+        let mill = nation
+            .economy
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::LumberMill)
+            .unwrap();
+        assert!(
+            mill.pending_capacity > 0,
+            "building should have one pending expansion"
+        );
     }
 }

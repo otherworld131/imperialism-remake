@@ -106,11 +106,13 @@ impl NationEconomySnapshot {
             .chain(nation.economy.reserved_inventory().keys())
             .copied()
         {
-            inventory_view.entry(commodity).or_insert_with(|| InventoryView {
-                total: nation.economy.amount(commodity),
-                reserved: nation.economy.reserved(commodity),
-                available: nation.economy.available(commodity),
-            });
+            inventory_view
+                .entry(commodity)
+                .or_insert_with(|| InventoryView {
+                    total: nation.economy.amount(commodity),
+                    reserved: nation.economy.reserved(commodity),
+                    available: nation.economy.available(commodity),
+                });
         }
 
         let buildings: HashMap<BuildingType, u32> = nation
@@ -131,7 +133,8 @@ impl NationEconomySnapshot {
         let market_prices: HashMap<Commodity, Money> =
             state.world.market_state.commodities_with_price().collect();
         let market_trends: HashMap<Commodity, Trend> = state
-            .world.market_state
+            .world
+            .market_state
             .commodities_with_history()
             .map(|c| (c, state.world.market_state.trend(c, 4)))
             .collect();
@@ -167,11 +170,20 @@ impl NationEconomySnapshot {
                 state.game_data.game_config.trained_labor,
                 state.game_data.game_config.expert_labor,
             ),
-            reserved_units: reserved_labor.get(&WorkerType::Untrained).copied().unwrap_or(0)
+            reserved_units: reserved_labor
+                .get(&WorkerType::Untrained)
+                .copied()
+                .unwrap_or(0)
                 * state.game_data.game_config.untrained_labor
-                + reserved_labor.get(&WorkerType::Trained).copied().unwrap_or(0)
+                + reserved_labor
+                    .get(&WorkerType::Trained)
+                    .copied()
+                    .unwrap_or(0)
                     * state.game_data.game_config.trained_labor
-                + reserved_labor.get(&WorkerType::Expert).copied().unwrap_or(0)
+                + reserved_labor
+                    .get(&WorkerType::Expert)
+                    .copied()
+                    .unwrap_or(0)
                     * state.game_data.game_config.expert_labor,
             available_units: nation.economy.available_labor_units_with(
                 state.game_data.game_config.untrained_labor,
@@ -316,8 +328,21 @@ mod tests {
 
     fn minimal_game() -> GameState {
         let coord = HexCoord::new(0, 0);
-        let province = Province::new(ProvinceId(1), "Test".to_string(), NationId(1), coord, vec![coord], 4);
-        let nation = Nation::new(NationId(1), "Test".to_string(), NationColor::Blue, NationType::GreatPower, ProvinceId(1));
+        let province = Province::new(
+            ProvinceId(1),
+            "Test".to_string(),
+            NationId(1),
+            coord,
+            vec![coord],
+            4,
+        );
+        let nation = Nation::new(
+            NationId(1),
+            "Test".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
         crate::test_game_state! {
             turn: crate::types::TurnNumber::new(1),
             difficulty: crate::types::Difficulty::Normal,

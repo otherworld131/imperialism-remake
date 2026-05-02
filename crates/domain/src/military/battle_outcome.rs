@@ -80,17 +80,26 @@ pub struct BattleSite {
 impl BattleSite {
     /// Open ground with no fortification.
     pub fn open() -> Self {
-        Self { terrain: None, fort_level: 0 }
+        Self {
+            terrain: None,
+            fort_level: 0,
+        }
     }
 
     /// Specific terrain with no fortification.
     pub fn terrain(terrain: TerrainType) -> Self {
-        Self { terrain: Some(terrain), fort_level: 0 }
+        Self {
+            terrain: Some(terrain),
+            fort_level: 0,
+        }
     }
 
     /// Open ground with a fort.
     pub fn fort(level: u8) -> Self {
-        Self { terrain: None, fort_level: level }
+        Self {
+            terrain: None,
+            fort_level: level,
+        }
     }
 }
 
@@ -175,15 +184,11 @@ pub fn compute_battle_outcome(params: BattleParams<'_>) -> BattleOutcome {
         "attacker and defender must be different nations"
     );
     debug_assert!(
-        attacker_units
-            .iter()
-            .all(|u| u.owner == attacker_id),
+        attacker_units.iter().all(|u| u.owner == attacker_id),
         "attacker_units contain units not owned by the attacker"
     );
     debug_assert!(
-        defender_units
-            .iter()
-            .all(|u| u.owner == defender_id),
+        defender_units.iter().all(|u| u.owner == defender_id),
         "defender_units contain units not owned by the defender"
     );
 

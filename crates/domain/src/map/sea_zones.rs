@@ -71,7 +71,9 @@ pub fn compute_sea_zones(hex_map: &HexMap) -> Vec<SeaZone> {
 
     for component in components {
         let touches_border = component.iter().any(|&hex| {
-            hex.neighbors().iter().any(|n| hex_map.get_tile(*n).is_none())
+            hex.neighbors()
+                .iter()
+                .any(|n| hex_map.get_tile(*n).is_none())
         });
         if touches_border {
             for h in &component {
@@ -125,7 +127,9 @@ pub fn compute_sea_zones(hex_map: &HexMap) -> Vec<SeaZone> {
         let mut seeds: Vec<(usize, HexCoord)> = Vec::new();
         for row in 0..GRID_ROWS {
             for col in 0..GRID_COLS {
-                let mut cell: Vec<HexCoord> = all_ocean_vec.iter().copied()
+                let mut cell: Vec<HexCoord> = all_ocean_vec
+                    .iter()
+                    .copied()
                     .filter(|h| {
                         q_splits.partition_point(|&s| s <= h.q) == col
                             && r_splits.partition_point(|&s| s <= h.r) == row
@@ -143,7 +147,8 @@ pub fn compute_sea_zones(hex_map: &HexMap) -> Vec<SeaZone> {
         all_ocean_vec.sort_unstable_by_key(|h| (h.q, h.r));
         let mut zone_hexes: HashMap<usize, BTreeSet<HexCoord>> = HashMap::new();
         for &hex in &all_ocean_vec {
-            let nearest = seeds.iter()
+            let nearest = seeds
+                .iter()
                 .min_by_key(|&&(_, seed)| hex_distance(hex, seed))
                 .map(|&(zone_idx, _)| zone_idx)
                 .unwrap_or(0);
@@ -332,10 +337,7 @@ fn compute_zone_adjacency(zones: &mut [SeaZone]) {
     // Build index → actual SeaZoneId mapping before mutably borrowing zones.
     let index_to_id: Vec<SeaZoneId> = zones.iter().map(|z| z.id).collect();
     for (idx, zone) in zones.iter_mut().enumerate() {
-        zone.adjacent_zone_ids = adjacency[idx]
-            .iter()
-            .map(|&i| index_to_id[i])
-            .collect();
+        zone.adjacent_zone_ids = adjacency[idx].iter().map(|&i| index_to_id[i]).collect();
         zone.adjacent_zone_ids.sort();
     }
 }
@@ -403,8 +405,15 @@ mod tests {
         let zones = compute_sea_zones(&map);
         // Expect up to 4×3=12 ocean grid zones, no lakes
         let ocean_zones: Vec<_> = zones.iter().filter(|z| !z.is_lake).collect();
-        assert!(ocean_zones.len() >= 4, "should produce multiple ocean grid zones, got {}", ocean_zones.len());
-        assert!(ocean_zones.len() <= 12, "should produce at most 12 ocean grid zones");
+        assert!(
+            ocean_zones.len() >= 4,
+            "should produce multiple ocean grid zones, got {}",
+            ocean_zones.len()
+        );
+        assert!(
+            ocean_zones.len() <= 12,
+            "should produce at most 12 ocean grid zones"
+        );
         assert!(zones.iter().all(|z| !z.is_lake));
     }
 
@@ -419,7 +428,11 @@ mod tests {
         let zones = compute_sea_zones(&map);
         // All grid zones should be adjacent to at least 1 other zone
         for zone in &zones {
-            assert!(!zone.adjacent_zone_ids.is_empty(), "zone {} should have adjacent zones", zone.id);
+            assert!(
+                !zone.adjacent_zone_ids.is_empty(),
+                "zone {} should have adjacent zones",
+                zone.id
+            );
         }
     }
 }

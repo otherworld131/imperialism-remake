@@ -207,7 +207,10 @@ pub(crate) fn move_warship_group_one_zone(
         .iter()
         .any(|ship| ship.sea_zone == Some(from_z));
     if source_has_leftovers {
-        nation.military.fleet_moves_remaining.insert(from_z, remaining);
+        nation
+            .military
+            .fleet_moves_remaining
+            .insert(from_z, remaining);
     } else {
         nation.military.fleet_moves_remaining.remove(&from_z);
     }
@@ -298,8 +301,10 @@ pub fn compute_blockaded_ports(
             if !acts_as_port {
                 continue;
             }
-            let zones =
-                crate::map::sea_zones::ocean_zones_adjacent_to_hex(&game.world.sea_zones, tile_coord);
+            let zones = crate::map::sea_zones::ocean_zones_adjacent_to_hex(
+                &game.world.sea_zones,
+                tile_coord,
+            );
             if zones.is_empty() {
                 continue;
             }
@@ -307,9 +312,9 @@ pub fn compute_blockaded_ports(
             // ocean approach — i.e. EVERY adjacent zone is hostile-undefended
             // and at least one zone actually has hostile fleet presence. A
             // port touching two zones with one open lane stays connected.
-            let any_hostile_present = zones.iter().any(|zid| {
-                hostile_per_zone.get(zid).copied().unwrap_or(0) > 0
-            });
+            let any_hostile_present = zones
+                .iter()
+                .any(|zid| hostile_per_zone.get(zid).copied().unwrap_or(0) > 0);
             if !any_hostile_present {
                 continue;
             }

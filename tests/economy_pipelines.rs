@@ -49,13 +49,11 @@ fn freight_overflow_limits_delivery_when_capacity_is_low() {
     // Logistics state should reflect the zero freight-car constraint.
     let nation = game.get_nation(human_id).unwrap();
     assert_eq!(
-        nation.economy.logistics.freight_total,
-        0,
+        nation.economy.logistics.freight_total, 0,
         "freight_total should be 0 when no freight cars are built"
     );
     assert_eq!(
-        nation.economy.logistics.freight_committed,
-        0,
+        nation.economy.logistics.freight_committed, 0,
         "no freight committed with zero cars"
     );
 }
@@ -65,7 +63,12 @@ fn freight_overflow_limits_delivery_when_capacity_is_low() {
 fn adding_freight_cars_reduces_overflow() {
     let mut game_no_freight = new_game("test", Difficulty::Normal, 0);
     let human_id = game_no_freight.human_player_nation;
-    game_no_freight.get_nation_mut(human_id).unwrap().military.transport.freight_cars = 0;
+    game_no_freight
+        .get_nation_mut(human_id)
+        .unwrap()
+        .military
+        .transport
+        .freight_cars = 0;
 
     let report_no = process_turn(&mut game_no_freight);
     let overflow_no: u32 = report_no
@@ -77,7 +80,12 @@ fn adding_freight_cars_reduces_overflow() {
 
     let mut game_with_freight = new_game("test", Difficulty::Normal, 0);
     let human_id = game_with_freight.human_player_nation;
-    game_with_freight.get_nation_mut(human_id).unwrap().military.transport.freight_cars = 100;
+    game_with_freight
+        .get_nation_mut(human_id)
+        .unwrap()
+        .military
+        .transport
+        .freight_cars = 100;
 
     let report_with = process_turn(&mut game_with_freight);
     let overflow_with: u32 = report_with
@@ -112,7 +120,11 @@ fn block_reason_for_commodity_reports_insufficient_inventory() {
     assert!(
         matches!(
             reason,
-            Some(BlockReason::InsufficientInventory { needed: 10, available: 3, .. })
+            Some(BlockReason::InsufficientInventory {
+                needed: 10,
+                available: 3,
+                ..
+            })
         ),
         "expected InsufficientInventory(needed=10, available=3), got {reason:?}"
     );
@@ -125,13 +137,18 @@ fn block_reason_for_commodity_returns_none_when_sufficient() {
     let human_id = game.human_player_nation;
     let nation = game.get_nation_mut(human_id).unwrap();
 
-    nation.economy.add(Commodity::Resource(ResourceType::Iron), 20);
+    nation
+        .economy
+        .add(Commodity::Resource(ResourceType::Iron), 20);
 
     let reason = nation
         .economy
         .block_reason_for_commodity(Commodity::Resource(ResourceType::Iron), 10);
 
-    assert!(reason.is_none(), "expected no block reason when inventory is sufficient");
+    assert!(
+        reason.is_none(),
+        "expected no block reason when inventory is sufficient"
+    );
 }
 
 /// block_reason_for_treasury reports InsufficientTreasury correctly.
@@ -142,13 +159,12 @@ fn block_reason_for_treasury_reports_insufficient_funds() {
     let nation = game.get_nation_mut(human_id).unwrap();
 
     nation.economy.treasury = Money::dollars(500);
-    let reason = nation.economy.block_reason_for_treasury(Money::dollars(1000));
+    let reason = nation
+        .economy
+        .block_reason_for_treasury(Money::dollars(1000));
 
     assert!(
-        matches!(
-            reason,
-            Some(BlockReason::InsufficientTreasury { .. })
-        ),
+        matches!(reason, Some(BlockReason::InsufficientTreasury { .. })),
         "expected InsufficientTreasury, got {reason:?}"
     );
 }
@@ -166,7 +182,14 @@ fn block_reason_for_labor_reports_missing_expert_workers() {
     let reason = nation.economy.block_reason_for_labor(WorkerType::Expert, 1);
 
     assert!(
-        matches!(reason, Some(BlockReason::InsufficientLabor { tier: WorkerType::Expert, needed: 1, available: 0 })),
+        matches!(
+            reason,
+            Some(BlockReason::InsufficientLabor {
+                tier: WorkerType::Expert,
+                needed: 1,
+                available: 0
+            })
+        ),
         "expected InsufficientLabor for Expert, got {reason:?}"
     );
 }
@@ -181,7 +204,14 @@ fn market_trend_rising_after_consecutive_price_increases() {
 
     // Record 6 turns of increasing prices (simulating rising demand > supply).
     for (i, price) in [60, 62, 65, 68, 72, 80].iter().enumerate() {
-        ms.record_tick(coal, TurnNumber::new(i as u32 + 1), Money::dollars(*price), 5, 10, 4);
+        ms.record_tick(
+            coal,
+            TurnNumber::new(i as u32 + 1),
+            Money::dollars(*price),
+            5,
+            10,
+            4,
+        );
     }
 
     assert_eq!(
@@ -198,7 +228,14 @@ fn market_trend_falling_after_price_collapse() {
     let timber = Commodity::Resource(ResourceType::Timber);
 
     for (i, price) in [80, 78, 75, 70, 60, 50].iter().enumerate() {
-        ms.record_tick(timber, TurnNumber::new(i as u32 + 1), Money::dollars(*price), 5, 3, 3);
+        ms.record_tick(
+            timber,
+            TurnNumber::new(i as u32 + 1),
+            Money::dollars(*price),
+            5,
+            3,
+            3,
+        );
     }
 
     assert_eq!(
@@ -268,11 +305,22 @@ fn reservation_reduces_available_not_total() {
     let coal = Commodity::Resource(ResourceType::Coal);
     nation.economy.warehouse.insert(ResourceType::Coal, 10);
 
-    let id = nation.economy.reserve(coal, 4).expect("reserve should succeed");
+    let id = nation
+        .economy
+        .reserve(coal, 4)
+        .expect("reserve should succeed");
 
     assert_eq!(nation.economy.amount(coal), 10, "total should stay 10");
-    assert_eq!(nation.economy.reserved(coal), 4, "4 units should be reserved");
-    assert_eq!(nation.economy.available(coal), 6, "6 units should be available");
+    assert_eq!(
+        nation.economy.reserved(coal),
+        4,
+        "4 units should be reserved"
+    );
+    assert_eq!(
+        nation.economy.available(coal),
+        6,
+        "6 units should be available"
+    );
 
     let _ = nation.economy.release(id);
 }
@@ -292,9 +340,21 @@ fn releasing_reservation_restores_availability() {
 
     nation.economy.release(id).expect("release should succeed");
 
-    assert_eq!(nation.economy.amount(lumber), 8, "total unchanged after release");
-    assert_eq!(nation.economy.reserved(lumber), 0, "nothing reserved after release");
-    assert_eq!(nation.economy.available(lumber), 8, "full amount available after release");
+    assert_eq!(
+        nation.economy.amount(lumber),
+        8,
+        "total unchanged after release"
+    );
+    assert_eq!(
+        nation.economy.reserved(lumber),
+        0,
+        "nothing reserved after release"
+    );
+    assert_eq!(
+        nation.economy.available(lumber),
+        8,
+        "full amount available after release"
+    );
 }
 
 /// Committing a reservation deducts from inventory.
@@ -310,8 +370,16 @@ fn committing_reservation_deducts_from_inventory() {
     let id = nation.economy.reserve(steel, 6).unwrap();
     nation.economy.commit(id).expect("commit should succeed");
 
-    assert_eq!(nation.economy.amount(steel), 6, "6 units should remain after commit");
-    assert_eq!(nation.economy.reserved(steel), 0, "no units reserved after commit");
+    assert_eq!(
+        nation.economy.amount(steel),
+        6,
+        "6 units should remain after commit"
+    );
+    assert_eq!(
+        nation.economy.reserved(steel),
+        0,
+        "no units reserved after commit"
+    );
 }
 
 /// Treasury reservation blocks over-spending.
@@ -322,16 +390,25 @@ fn treasury_reservation_prevents_double_spending() {
     let nation = game.get_nation_mut(human_id).unwrap();
 
     nation.economy.treasury = Money::dollars(1000);
-    nation.economy.reserve_treasury(Money::dollars(800)).expect("reserve 800 should succeed");
+    nation
+        .economy
+        .reserve_treasury(Money::dollars(800))
+        .expect("reserve 800 should succeed");
 
     assert_eq!(nation.economy.available_treasury(), Money::dollars(200));
 
     // Trying to reserve more than available should fail.
     let result = nation.economy.reserve_treasury(Money::dollars(500));
-    assert!(result.is_err(), "over-spending the reserved treasury should fail");
+    assert!(
+        result.is_err(),
+        "over-spending the reserved treasury should fail"
+    );
 
     // Release the reservation.
-    nation.economy.release_treasury(Money::dollars(800)).expect("release 800 should succeed");
+    nation
+        .economy
+        .release_treasury(Money::dollars(800))
+        .expect("release 800 should succeed");
     assert_eq!(nation.economy.available_treasury(), Money::dollars(1000));
 }
 
@@ -356,10 +433,16 @@ fn treasury_api_rejects_invalid_amounts() {
     );
 
     // Reserve a valid amount, then try to over-release or over-commit.
-    nation.economy.reserve_treasury(Money::dollars(500)).unwrap();
+    nation
+        .economy
+        .reserve_treasury(Money::dollars(500))
+        .unwrap();
 
     assert!(
-        nation.economy.release_treasury(Money::dollars(600)).is_err(),
+        nation
+            .economy
+            .release_treasury(Money::dollars(600))
+            .is_err(),
         "release_treasury over-release should fail"
     );
     assert!(
@@ -372,7 +455,10 @@ fn treasury_api_rejects_invalid_amounts() {
     assert!(nation.economy.release_treasury(Money::ZERO).is_err());
 
     // Clean up
-    nation.economy.release_treasury(Money::dollars(500)).unwrap();
+    nation
+        .economy
+        .release_treasury(Money::dollars(500))
+        .unwrap();
     let _ = DomainError::InvalidOperation("unused".into()); // ensure variant is accessible
 }
 
@@ -392,7 +478,10 @@ fn snapshot_captures_complete_economy_state() {
         nation.economy.warehouse.insert(ResourceType::Iron, 15);
         nation.economy.materials.insert(MaterialType::Steel, 8);
         nation.economy.treasury = Money::dollars(3000);
-        nation.economy.buildings.push(Building::new(BuildingType::SteelMill, 4));
+        nation
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 4));
         nation.military.transport.freight_cars = 20;
     }
 
@@ -417,7 +506,9 @@ fn snapshot_includes_reserved_inventory_in_total() {
     {
         let nation = game.get_nation_mut(human_id).unwrap();
         nation.economy.warehouse.insert(ResourceType::Coal, 10);
-        let _ = nation.economy.reserve(Commodity::Resource(ResourceType::Coal), 4);
+        let _ = nation
+            .economy
+            .reserve(Commodity::Resource(ResourceType::Coal), 4);
     }
 
     let snap = NationEconomySnapshot::build(&game, human_id);
@@ -444,12 +535,22 @@ fn immigration_occurs_with_food_surplus_and_goods() {
         }
         // Add plenty of food (10× workers to ensure surplus).
         let workers = nation.economy.labor.total_workers().max(1);
-        nation.economy.add(Commodity::Resource(ResourceType::Grain), workers * 10);
-        nation.economy.add(Commodity::Resource(ResourceType::Fruit), workers * 5);
+        nation
+            .economy
+            .add(Commodity::Resource(ResourceType::Grain), workers * 10);
+        nation
+            .economy
+            .add(Commodity::Resource(ResourceType::Fruit), workers * 5);
         // Add immigration goods.
-        nation.economy.add(Commodity::Goods(GoodsType::Furniture), 20);
-        nation.economy.add(Commodity::Goods(GoodsType::Clothing), 20);
-        nation.economy.add(Commodity::Material(MaterialType::CannedFood), 20);
+        nation
+            .economy
+            .add(Commodity::Goods(GoodsType::Furniture), 20);
+        nation
+            .economy
+            .add(Commodity::Goods(GoodsType::Clothing), 20);
+        nation
+            .economy
+            .add(Commodity::Material(MaterialType::CannedFood), 20);
     }
 
     // Record initial worker counts.
@@ -513,8 +614,16 @@ fn immigration_does_not_occur_without_food_surplus() {
 fn set_allocation_clamps_to_100() {
     let mut ts = TransportSystem::new();
     ts.set_allocation(ResourceType::Coal, 150); // should be clamped to 100
-    let pct = ts.allocations.iter().find(|(r, _)| *r == ResourceType::Coal).map(|(_, p)| *p);
-    assert_eq!(pct, Some(100), "allocation should be clamped to 100, got {pct:?}");
+    let pct = ts
+        .allocations
+        .iter()
+        .find(|(r, _)| *r == ResourceType::Coal)
+        .map(|(_, p)| *p);
+    assert_eq!(
+        pct,
+        Some(100),
+        "allocation should be clamped to 100, got {pct:?}"
+    );
 }
 
 /// Wasted capacity from a capped resource is redistributed to other resources.
@@ -530,8 +639,14 @@ fn wasted_capacity_is_redistributed() {
     let available = vec![(ResourceType::Timber, 2), (ResourceType::Coal, 20)];
     let deliveries = ts.calculate_deliveries(&available);
 
-    let timber = deliveries.iter().find(|(r, _)| *r == ResourceType::Timber).map(|(_, q)| *q);
-    let coal = deliveries.iter().find(|(r, _)| *r == ResourceType::Coal).map(|(_, q)| *q);
+    let timber = deliveries
+        .iter()
+        .find(|(r, _)| *r == ResourceType::Timber)
+        .map(|(_, q)| *q);
+    let coal = deliveries
+        .iter()
+        .find(|(r, _)| *r == ResourceType::Coal)
+        .map(|(_, q)| *q);
 
     // Timber gets 2 (capped by availability). Remaining capacity should be used.
     assert_eq!(timber, Some(2), "timber should get up to its 2 available");
@@ -555,7 +670,10 @@ fn unallocated_resources_receive_leftover_capacity() {
     let deliveries = ts.calculate_deliveries(&available);
 
     // Coal should receive some capacity from the unallocated 50%.
-    let coal = deliveries.iter().find(|(r, _)| *r == ResourceType::Coal).map(|(_, q)| *q);
+    let coal = deliveries
+        .iter()
+        .find(|(r, _)| *r == ResourceType::Coal)
+        .map(|(_, q)| *q);
     assert!(
         coal.is_some() && coal.unwrap() > 0,
         "unallocated Coal should receive leftover freight capacity, got coal={coal:?}"
@@ -571,15 +689,31 @@ fn reserved_inventory_reflects_active_reservations() {
     let human_id = game.human_player_nation;
     let nation = game.get_nation_mut(human_id).unwrap();
 
-    nation.economy.add(Commodity::Resource(ResourceType::Iron), 10);
-    nation.economy.add(Commodity::Material(MaterialType::Lumber), 8);
+    nation
+        .economy
+        .add(Commodity::Resource(ResourceType::Iron), 10);
+    nation
+        .economy
+        .add(Commodity::Material(MaterialType::Lumber), 8);
 
-    let id1 = nation.economy.reserve(Commodity::Resource(ResourceType::Iron), 4).unwrap();
-    let id2 = nation.economy.reserve(Commodity::Material(MaterialType::Lumber), 3).unwrap();
+    let id1 = nation
+        .economy
+        .reserve(Commodity::Resource(ResourceType::Iron), 4)
+        .unwrap();
+    let id2 = nation
+        .economy
+        .reserve(Commodity::Material(MaterialType::Lumber), 3)
+        .unwrap();
 
     let reserved = nation.economy.reserved_inventory();
-    assert_eq!(reserved.get(&Commodity::Resource(ResourceType::Iron)), Some(&4));
-    assert_eq!(reserved.get(&Commodity::Material(MaterialType::Lumber)), Some(&3));
+    assert_eq!(
+        reserved.get(&Commodity::Resource(ResourceType::Iron)),
+        Some(&4)
+    );
+    assert_eq!(
+        reserved.get(&Commodity::Material(MaterialType::Lumber)),
+        Some(&3)
+    );
 
     let _ = nation.economy.release(id1);
     let _ = nation.economy.release(id2);
@@ -604,8 +738,15 @@ fn iterative_redistribution_exhausts_capacity() {
         total, 10,
         "all 10 freight-car capacity should be used; got {total}"
     );
-    let timber = deliveries.iter().find(|(r, _)| *r == ResourceType::Timber).map(|(_, q)| *q);
-    assert_eq!(timber, Some(9), "Timber should receive the 9 remaining after Coal gets 1");
+    let timber = deliveries
+        .iter()
+        .find(|(r, _)| *r == ResourceType::Timber)
+        .map(|(_, q)| *q);
+    assert_eq!(
+        timber,
+        Some(9),
+        "Timber should receive the 9 remaining after Coal gets 1"
+    );
 }
 
 /// freight_committed never exceeds freight_total regardless of production mix.
@@ -614,7 +755,11 @@ fn logistics_freight_committed_never_exceeds_total() {
     let mut game = new_game("test", Difficulty::Normal, 0);
     let human_id = game.human_player_nation;
     // Set a small but non-zero freight capacity so remote resources can partially overflow.
-    game.get_nation_mut(human_id).unwrap().military.transport.freight_cars = 3;
+    game.get_nation_mut(human_id)
+        .unwrap()
+        .military
+        .transport
+        .freight_cars = 3;
 
     process_turn(&mut game);
 
@@ -635,12 +780,20 @@ fn reserved_inventory_empty_after_release_all() {
     let human_id = game.human_player_nation;
     let nation = game.get_nation_mut(human_id).unwrap();
 
-    nation.economy.add(Commodity::Resource(ResourceType::Coal), 10);
-    let _ = nation.economy.reserve(Commodity::Resource(ResourceType::Coal), 5).unwrap();
+    nation
+        .economy
+        .add(Commodity::Resource(ResourceType::Coal), 10);
+    let _ = nation
+        .economy
+        .reserve(Commodity::Resource(ResourceType::Coal), 5)
+        .unwrap();
 
     nation.economy.release_all_reservations();
 
     let reserved = nation.economy.reserved_inventory();
-    assert!(reserved.is_empty(), "reserved_inventory should be empty after release_all");
+    assert!(
+        reserved.is_empty(),
+        "reserved_inventory should be empty after release_all"
+    );
     assert_eq!(nation.economy.reserved_treasury_amount(), Money::ZERO);
 }

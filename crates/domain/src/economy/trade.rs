@@ -1065,7 +1065,11 @@ mod tests {
     // ── generate_minor_nation_offers_with_seed ─────────────────
 
     /// Build a minor nation with two tiles (Timber + Cotton) in a map/province.
-    fn make_minor_with_resources() -> (Vec<crate::nation::Nation>, Vec<crate::map::Province>, HexMap) {
+    fn make_minor_with_resources() -> (
+        Vec<crate::nation::Nation>,
+        Vec<crate::map::Province>,
+        HexMap,
+    ) {
         use crate::map::Province;
         let coord_a = HexCoord::new(0, 0);
         let coord_b = HexCoord::new(1, 0);
@@ -1098,7 +1102,8 @@ mod tests {
     fn withhold_chance_zero_never_withholds() {
         let (nations, provinces, hex_map) = make_minor_with_resources();
         let offers_normal = generate_minor_nation_offers(&nations, &provinces, &hex_map);
-        let offers_seeded = generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 0, 42);
+        let offers_seeded =
+            generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 0, 42);
         // withhold_chance=0 must produce identical count as the unseeded version
         assert_eq!(offers_seeded.len(), offers_normal.len());
         assert_eq!(offers_seeded.len(), 2); // Timber + Cotton
@@ -1110,8 +1115,13 @@ mod tests {
         let offers_full = generate_minor_nation_offers(&nations, &provinces, &hex_map);
         assert_eq!(offers_full.len(), 2, "setup: minor must have 2 resources");
         // At 100% chance, exactly one resource should be withheld
-        let offers_withheld = generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 100, 99);
-        assert_eq!(offers_withheld.len(), 1, "100% chance must withhold exactly one of two resources");
+        let offers_withheld =
+            generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 100, 99);
+        assert_eq!(
+            offers_withheld.len(),
+            1,
+            "100% chance must withhold exactly one of two resources"
+        );
     }
 
     #[test]
@@ -1135,15 +1145,22 @@ mod tests {
         assert_eq!(full.len(), 2, "setup: minor must have Timber + Cotton");
         let withheld: Vec<ResourceType> = (1u64..=200)
             .filter_map(|seed| {
-                let offers = generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 100, seed);
+                let offers = generate_minor_nation_offers_with_seed(
+                    &nations, &provinces, &hex_map, 100, seed,
+                );
                 // withheld = resource present in full but absent in offers
-                full.iter().find(|o| !offers.iter().any(|x| x.resource == o.resource)).map(|o| o.resource)
+                full.iter()
+                    .find(|o| !offers.iter().any(|x| x.resource == o.resource))
+                    .map(|o| o.resource)
             })
             .collect();
         let has_timber = withheld.iter().any(|r| *r == ResourceType::Timber);
         let has_cotton = withheld.iter().any(|r| *r == ResourceType::Cotton);
         // With 200 seeds both resources should appear as withheld at some point
-        assert!(has_timber && has_cotton, "different seeds should withhold different resources across 200 seeds");
+        assert!(
+            has_timber && has_cotton,
+            "different seeds should withhold different resources across 200 seeds"
+        );
     }
 
     // ── generate_minor_nation_goods_bids ───────────────────────
@@ -1155,16 +1172,14 @@ mod tests {
             .iter()
             .filter(|n| !n.is_great_power() && !n.diplomacy.is_in_anarchy)
             .count();
-        let bids =
-            generate_minor_nation_goods_bids(&nations, Money::dollars(150), 999);
+        let bids = generate_minor_nation_goods_bids(&nations, Money::dollars(150), 999);
         assert_eq!(bids.len(), minor_count);
     }
 
     #[test]
     fn goods_bids_use_specified_price() {
         let nations = vec![make_minor_nation(1)];
-        let bids =
-            generate_minor_nation_goods_bids(&nations, Money::dollars(200), 1);
+        let bids = generate_minor_nation_goods_bids(&nations, Money::dollars(200), 1);
         for bid in &bids {
             assert_eq!(bid.price_per_unit, Money::dollars(200));
             assert_eq!(bid.quantity, 1);
@@ -1189,8 +1204,15 @@ mod tests {
         let a = generate_minor_nation_goods_bids(&nations, Money::dollars(150), 1);
         let b = generate_minor_nation_goods_bids(&nations, Money::dollars(150), 999999);
         // With enough minor nations, at least some commodities should differ
-        let same = a.iter().zip(b.iter()).filter(|(x, y)| x.commodity == y.commodity).count();
-        assert!(same < a.len(), "Expected at least some commodities to differ with different seeds");
+        let same = a
+            .iter()
+            .zip(b.iter())
+            .filter(|(x, y)| x.commodity == y.commodity)
+            .count();
+        assert!(
+            same < a.len(),
+            "Expected at least some commodities to differ with different seeds"
+        );
     }
 
     #[test]

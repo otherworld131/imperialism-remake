@@ -87,9 +87,15 @@ impl ReservedAction {
 /// should run; the actual work happens in the matching `run_*_phase` entry points.
 pub(super) fn collect_economic_orders(_game: &GameState) -> Vec<EconomicOrder> {
     vec![
-        EconomicOrder { kind: EconomicOrderKind::CollectTileResources },
-        EconomicOrder { kind: EconomicOrderKind::RunProduction },
-        EconomicOrder { kind: EconomicOrderKind::ExecuteTrade },
+        EconomicOrder {
+            kind: EconomicOrderKind::CollectTileResources,
+        },
+        EconomicOrder {
+            kind: EconomicOrderKind::RunProduction,
+        },
+        EconomicOrder {
+            kind: EconomicOrderKind::ExecuteTrade,
+        },
     ]
 }
 
@@ -111,7 +117,10 @@ pub(super) fn validate_and_reserve(
                 EconomicOrderKind::RunProduction => reserve_production_phase(game),
                 EconomicOrderKind::ExecuteTrade => reserve_trade_phase(game),
             };
-            ReservedAction { order, reservations }
+            ReservedAction {
+                order,
+                reservations,
+            }
         })
         .collect()
 }
@@ -131,16 +140,24 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
             continue;
         }
 
-        let resources: Vec<(ResourceType, u32)> =
-            nation.economy.warehouse.iter().map(|(r, q)| (*r, *q)).collect();
-        let starting_materials: HashMap<MaterialType, u32> =
-            nation.economy.materials.iter().map(|(m, q)| (*m, *q)).collect();
+        let resources: Vec<(ResourceType, u32)> = nation
+            .economy
+            .warehouse
+            .iter()
+            .map(|(r, q)| (*r, *q))
+            .collect();
+        let starting_materials: HashMap<MaterialType, u32> = nation
+            .economy
+            .materials
+            .iter()
+            .map(|(m, q)| (*m, *q))
+            .collect();
 
-        let mut remaining_labor = nation.economy.labor.total_labor_units_with(
-            untrained_mult,
-            trained_mult,
-            expert_mult,
-        );
+        let mut remaining_labor =
+            nation
+                .economy
+                .labor
+                .total_labor_units_with(untrained_mult, trained_mult, expert_mult);
         let mut resource_needs: BTreeMap<ResourceType, u32> = BTreeMap::new();
 
         let timber_cap = building_capacity(nation, BuildingType::LumberMill);
@@ -203,7 +220,8 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
                 *materials_inventory.entry(*material).or_insert(0) += *qty;
             }
         }
-        let materials_inventory: Vec<(MaterialType, u32)> = materials_inventory.into_iter().collect();
+        let materials_inventory: Vec<(MaterialType, u32)> =
+            materials_inventory.into_iter().collect();
 
         let furniture_cap = building_capacity(nation, BuildingType::FurnitureFactory);
         let furniture_result = if furniture_cap > 0 {
@@ -296,12 +314,7 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
         }
         let labor_reserved = nation
             .economy
-            .reserve_labor_units_with(
-                labor_used,
-                untrained_mult,
-                trained_mult,
-                expert_mult,
-            )
+            .reserve_labor_units_with(labor_used, untrained_mult, trained_mult, expert_mult)
             .unwrap_or_default();
         if !inventory_summary.is_empty() || !labor_reserved.is_empty() {
             register_pending_order(
@@ -331,14 +344,18 @@ fn reserve_trade_phase(game: &mut GameState) -> Vec<NationReservation> {
     let human_id = game.human_player_nation;
     let blockade_capacity = compute_blockade_capacity(game);
     let gp_ids: Vec<NationId> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.is_great_power() && !n.diplomacy.is_in_anarchy)
         .map(|n| n.id)
         .collect();
 
-    let offers =
-        trade::generate_minor_nation_offers(&game.world.nations, &game.world.provinces, &game.world.hex_map);
+    let offers = trade::generate_minor_nation_offers(
+        &game.world.nations,
+        &game.world.provinces,
+        &game.world.hex_map,
+    );
     let mut all_bids = Vec::new();
     for gp_id in &gp_ids {
         if *gp_id == human_id {
@@ -372,9 +389,7 @@ fn reserve_trade_phase(game: &mut GameState) -> Vec<NationReservation> {
 
     let mut bid_spend: HashMap<NationId, Money> = HashMap::new();
     for bid in &all_bids {
-        let cost = Money::dollars(
-            bid.max_price_per_unit.as_dollars() * i64::from(bid.quantity),
-        );
+        let cost = Money::dollars(bid.max_price_per_unit.as_dollars() * i64::from(bid.quantity));
         *bid_spend.entry(bid.buyer).or_insert(Money::ZERO) += cost;
     }
 
@@ -405,7 +420,12 @@ fn reserve_trade_phase(game: &mut GameState) -> Vec<NationReservation> {
                     }
                 }
                 Commodity::Material(material) => {
-                    let stock = nation_ro.economy.materials.get(&material).copied().unwrap_or(0);
+                    let stock = nation_ro
+                        .economy
+                        .materials
+                        .get(&material)
+                        .copied()
+                        .unwrap_or(0);
                     let qty = stock.min(order.quantity);
                     (qty > 0).then_some((Commodity::Material(material), qty))
                 }
@@ -544,7 +564,8 @@ pub(super) fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
             continue;
         }
         let total_cost: Money = nation
-            .military.army
+            .military
+            .army
             .iter()
             .map(|u| u.maintenance_cost(cents_per_arm))
             .fold(Money::ZERO, |acc, c| acc + c);
@@ -561,7 +582,8 @@ pub(super) fn apply_maintenance(game: &mut GameState, report: &mut TurnReport) {
         // represents debt forgiven mid-turn — we surface it as income in the
         // cash-flow ledger so the reconciliation invariant closes.
         if nation.economy.treasury < BANKRUPTCY_FLOOR {
-            let writeoff = Money::from_cents(BANKRUPTCY_FLOOR.cents() - nation.economy.treasury.cents());
+            let writeoff =
+                Money::from_cents(BANKRUPTCY_FLOOR.cents() - nation.economy.treasury.cents());
             nation.economy.treasury = BANKRUPTCY_FLOOR;
             if writeoff > Money::ZERO {
                 report.bankruptcy_writeoff.push((nation.id, writeoff));
@@ -590,7 +612,8 @@ pub(super) fn compute_blockade_capacity(game: &GameState) -> HashMap<NationId, u
 
     // Only consider active Great Powers (not anarchic, not eliminated)
     let active_gp_ids: Vec<NationId> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.is_great_power() && !n.diplomacy.is_in_anarchy && !n.province_ids.is_empty())
         .map(|n| n.id)
@@ -609,21 +632,24 @@ pub(super) fn compute_blockade_capacity(game: &GameState) -> HashMap<NationId, u
         // Zone-local blockade: enemy warships only threaten ports they can reach.
         // Warships with no zone assigned (sea_zone == None) count globally as a
         // fallback (preserves behaviour when zones haven't been computed yet).
-        let adjacent_zones: std::collections::HashSet<SeaZoneId> = if game.world.sea_zones.is_empty() {
-            std::collections::HashSet::new()
-        } else {
-            nation.province_ids.iter()
-                .filter_map(|&pid| game.get_province(pid))
-                .filter(|p| p.coastal)
-                .flat_map(|prov| {
-                    crate::map::sea_zones::ocean_zones_adjacent_to_province(
-                        &game.world.sea_zones,
-                        prov,
-                        &game.world.hex_map,
-                    )
-                })
-                .collect()
-        };
+        let adjacent_zones: std::collections::HashSet<SeaZoneId> =
+            if game.world.sea_zones.is_empty() {
+                std::collections::HashSet::new()
+            } else {
+                nation
+                    .province_ids
+                    .iter()
+                    .filter_map(|&pid| game.get_province(pid))
+                    .filter(|p| p.coastal)
+                    .flat_map(|prov| {
+                        crate::map::sea_zones::ocean_zones_adjacent_to_province(
+                            &game.world.sea_zones,
+                            prov,
+                            &game.world.hex_map,
+                        )
+                    })
+                    .collect()
+            };
         let zones_computed = !game.world.sea_zones.is_empty();
 
         // Only count warships from active enemy nations, and only if the war
@@ -635,7 +661,8 @@ pub(super) fn compute_blockade_capacity(game: &GameState) -> HashMap<NationId, u
                 continue;
             }
             let hostile = game
-                .world.diplomacy
+                .world
+                .diplomacy
                 .get_relation(nation_id, other_id)
                 .is_some_and(|r| r.hostilities_active_on(game.turn));
             if !hostile {
@@ -679,7 +706,8 @@ pub(super) fn compute_blockade_capacity(game: &GameState) -> HashMap<NationId, u
 /// facing newspaper line.
 pub(super) fn apply_blockade_effects(game: &GameState, report: &mut TurnReport) {
     let gp_ids: Vec<NationId> = game
-        .world.nations
+        .world
+        .nations
         .iter()
         .filter(|n| n.is_great_power())
         .map(|n| n.id)
@@ -704,7 +732,8 @@ pub(super) fn apply_blockade_effects(game: &GameState, report: &mut TurnReport) 
                 continue;
             }
             let hostile = game
-                .world.diplomacy
+                .world
+                .diplomacy
                 .get_relation(nation_id, other_id)
                 .is_some_and(|r| r.hostilities_active_on(game.turn));
             if hostile && let Some(other) = game.get_nation(other_id) {

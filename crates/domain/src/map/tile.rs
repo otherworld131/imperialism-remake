@@ -468,8 +468,14 @@ mod tests {
         // the generator leaves false) but Wool is a surface resource and is
         // already visible. AI undiscovered-tile logic must not flag this.
         let tile = Tile::with_resource(TerrainType::Hills, ResourceType::Wool);
-        assert!(tile.terrain().can_have_deposits(), "Hills can have deposits");
-        assert!(!tile.is_prospected(), "fresh Hills tile is not yet prospected");
+        assert!(
+            tile.terrain().can_have_deposits(),
+            "Hills can have deposits"
+        );
+        assert!(
+            !tile.is_prospected(),
+            "fresh Hills tile is not yet prospected"
+        );
         assert!(
             tile.has_visible_resource(),
             "Wool is a surface resource and is visible from turn 1"
@@ -478,7 +484,10 @@ mod tests {
         let is_undiscovered = tile.terrain().can_have_deposits()
             && !tile.is_prospected()
             && !tile.has_visible_resource();
-        assert!(!is_undiscovered, "Hills + visible Wool must NOT be undiscovered");
+        assert!(
+            !is_undiscovered,
+            "Hills + visible Wool must NOT be undiscovered"
+        );
     }
 
     // ── Assigned civilian ──────────────────────────────────────

@@ -27,7 +27,8 @@ fn observer_mode_run_ai_turns_processes_human_seat() {
     let treasury_before = game
         .get_nation(human_id)
         .expect("human nation exists")
-        .economy.treasury;
+        .economy
+        .treasury;
 
     // Advance a few turns so the AI has chances to act for the human seat.
     for _ in 0..3 {
@@ -38,7 +39,8 @@ fn observer_mode_run_ai_turns_processes_human_seat() {
     let treasury_after = game
         .get_nation(human_id)
         .expect("human nation still exists")
-        .economy.treasury;
+        .economy
+        .treasury;
     // Any change (income, spending, research, hiring) proves the AI is driving the seat.
     assert_ne!(
         treasury_before, treasury_after,

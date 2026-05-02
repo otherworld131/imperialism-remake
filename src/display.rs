@@ -129,7 +129,8 @@ pub(crate) fn nation_color_code(nation: &Nation) -> &str {
 pub(crate) fn max_recruitment_capacity(player: &Nation) -> u32 {
     let province_count = player.province_count() as u32;
     let has_expanded_capitol = player
-        .economy.buildings
+        .economy
+        .buildings
         .iter()
         .any(|b| b.building_type == BuildingType::Capitol && b.capacity > 1);
     let per_province = if has_expanded_capitol { 3 } else { 4 };
@@ -385,7 +386,8 @@ pub(crate) fn print_population(game: &GameState) {
     );
     println!("    Current workers: {} / {}", total, max_recruits);
     let has_expanded_capitol = player
-        .economy.buildings
+        .economy
+        .buildings
         .iter()
         .any(|b| b.building_type == BuildingType::Capitol && b.capacity > 1);
     if has_expanded_capitol {
@@ -447,7 +449,11 @@ pub(crate) fn print_trade(game: &GameState) {
     );
     println!();
 
-    let offers = trade::generate_minor_nation_offers(&game.world.nations, &game.world.provinces, &game.world.hex_map);
+    let offers = trade::generate_minor_nation_offers(
+        &game.world.nations,
+        &game.world.provinces,
+        &game.world.hex_map,
+    );
 
     if offers.is_empty() {
         println!("  No trade offerings available from Minor Nations.");
@@ -472,7 +478,8 @@ pub(crate) fn print_trade(game: &GameState) {
     for (name, (seller_id, nation_offers)) in &by_seller {
         // Check consulate status
         let has_consulate = game
-            .world.diplomacy
+            .world
+            .diplomacy
             .get_relation(game.human_player_nation, *seller_id)
             .is_some_and(|r| r.has_consulate);
         let status = if has_consulate {
@@ -505,7 +512,8 @@ pub(crate) fn print_trade(game: &GameState) {
             println!("    {:<12} {} per turn", target_name, amount);
         }
         let total_subsidy: Money = player
-            .diplomacy.trade_subsidies
+            .diplomacy
+            .trade_subsidies
             .values()
             .copied()
             .fold(Money::ZERO, |acc, v| acc + v);
@@ -518,7 +526,8 @@ pub(crate) fn print_trade(game: &GameState) {
         // Count total quantity being traded (sum of last turn's transactions for this player).
         // Exclude world-market auto-sells (NationId(0)) and manufactured-goods sentinel entries.
         let cargo_used: u32 = player
-            .archives.trade_history
+            .archives
+            .trade_history
             .iter()
             .filter(|th| th.turn == game.turn || th.turn.0 + 1 == game.turn.0)
             .filter(|th| th.partner != player.id)
@@ -670,7 +679,8 @@ pub(crate) fn print_diplomacy(game: &GameState) {
             None => "No relations".to_string(),
         };
         let subsidy_info = player
-            .diplomacy.trade_subsidies
+            .diplomacy
+            .trade_subsidies
             .get(&mn.id)
             .filter(|s| **s != Money::ZERO)
             .map(|s| format!(" [Subsidy: {}/turn]", s))
@@ -775,7 +785,8 @@ pub(crate) fn print_overview(game: &GameState) {
     // Count province types
     let total_provinces = player.province_count();
     let homeland_provinces = game
-        .world.provinces
+        .world
+        .provinces
         .iter()
         .filter(|p| p.owner == player_id)
         .count();
@@ -806,7 +817,8 @@ pub(crate) fn print_overview(game: &GameState) {
 
     // Buildings
     let standard_count = player
-        .economy.buildings
+        .economy
+        .buildings
         .iter()
         .filter(|b| {
             !matches!(
@@ -821,7 +833,8 @@ pub(crate) fn print_overview(game: &GameState) {
         })
         .count();
     let mill_count = player
-        .economy.buildings
+        .economy
+        .buildings
         .iter()
         .filter(|b| {
             matches!(
@@ -831,7 +844,8 @@ pub(crate) fn print_overview(game: &GameState) {
         })
         .count();
     let factory_count = player
-        .economy.buildings
+        .economy
+        .buildings
         .iter()
         .filter(|b| {
             matches!(
@@ -951,7 +965,8 @@ pub(crate) fn print_pending_orders(game: &GameState) {
 
     // Pending attacks
     let player_attacks: Vec<_> = game
-        .transient.pending_attacks
+        .transient
+        .pending_attacks
         .iter()
         .filter(|(nid, _)| *nid == player_id)
         .collect();
@@ -969,7 +984,8 @@ pub(crate) fn print_pending_orders(game: &GameState) {
 
     // Pending unit movements
     let player_moves: Vec<_> = game
-        .transient.pending_moves
+        .transient
+        .pending_moves
         .iter()
         .filter(|(nid, _, _)| *nid == player_id)
         .collect();
@@ -1021,7 +1037,12 @@ pub(crate) fn print_pending_orders(game: &GameState) {
             has_orders = true;
         }
 
-        let working: Vec<_> = player.military.civilians.iter().filter(|c| c.working).collect();
+        let working: Vec<_> = player
+            .military
+            .civilians
+            .iter()
+            .filter(|c| c.working)
+            .collect();
         if !working.is_empty() {
             println!("  WORKING CIVILIANS:");
             for civ in &working {
@@ -1043,7 +1064,8 @@ pub(crate) fn print_pending_orders(game: &GameState) {
 
         // Buildings under expansion
         let expanding: Vec<_> = player
-            .economy.buildings
+            .economy
+            .buildings
             .iter()
             .filter(|b| b.is_expanding())
             .collect();
@@ -1252,7 +1274,8 @@ pub(crate) fn print_turn_report(game: &GameState, report: &TurnReport) {
         }
         // Find the producing province names
         let producing_provinces: Vec<String> = game
-            .world.provinces
+            .world
+            .provinces
             .iter()
             .filter(|p| p.owner == player_id && p.can_produce())
             .map(|p| format!("{} ({:?})", p.name, p.settlement_level))
@@ -1445,7 +1468,8 @@ pub(crate) fn print_turn_report(game: &GameState, report: &TurnReport) {
 
             let fort_str = if battle.fort_level > 0 {
                 if battle.siege_reduced_fort {
-                    let full_bonus = domain::military::fort_defense_bonus(battle.fort_level, game_cfg);
+                    let full_bonus =
+                        domain::military::fort_defense_bonus(battle.fort_level, game_cfg);
                     let reduced_bonus =
                         domain::military::effective_fort_bonus(battle.fort_level, true, game_cfg);
                     format!(
@@ -2131,7 +2155,8 @@ pub(crate) fn print_nation_info(game: &GameState, query: &str) {
 
     // Province count and names
     let owned_provinces: Vec<_> = game
-        .world.provinces
+        .world
+        .provinces
         .iter()
         .filter(|p| p.owner == target_id)
         .collect();
@@ -2280,7 +2305,12 @@ pub(crate) fn print_treasury_ledger(game: &GameState, report: &TurnReport) {
     println!();
     println!("  {}", color_bold("Treasury ledger — all Great Powers"));
 
-    let mut gps: Vec<&Nation> = game.world.nations.iter().filter(|n| n.is_great_power()).collect();
+    let mut gps: Vec<&Nation> = game
+        .world
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power())
+        .collect();
     gps.sort_by_key(|n| n.id.0);
 
     for nation in gps {

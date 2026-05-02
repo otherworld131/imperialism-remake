@@ -1,20 +1,27 @@
 use std::path::PathBuf;
 
-use ::infrastructure::persistence;
-use ::infrastructure::data_loader::load_embedded_game_data;
 use ::infrastructure::PersistenceError;
+use ::infrastructure::data_loader::load_embedded_game_data;
+use ::infrastructure::persistence;
 use domain::game_state::GameState;
 
 #[derive(Debug)]
 pub(crate) enum SaveError {
-    InvalidFilename { reason: String },
-    Io { context: &'static str, source: std::io::Error },
+    InvalidFilename {
+        reason: String,
+    },
+    Io {
+        context: &'static str,
+        source: std::io::Error,
+    },
     Persistence(PersistenceError),
 }
 
 impl SaveError {
     fn invalid(reason: impl Into<String>) -> Self {
-        Self::InvalidFilename { reason: reason.into() }
+        Self::InvalidFilename {
+            reason: reason.into(),
+        }
     }
 
     fn io(context: &'static str, source: std::io::Error) -> Self {
@@ -53,7 +60,9 @@ pub(crate) fn sanitize_save_filename(filename: &str) -> Result<PathBuf, SaveErro
     if let Ok(meta) = std::fs::symlink_metadata(&path)
         && meta.file_type().is_symlink()
     {
-        return Err(SaveError::invalid("Invalid filename: symlinks are not allowed."));
+        return Err(SaveError::invalid(
+            "Invalid filename: symlinks are not allowed.",
+        ));
     }
     let canonical_dir = dir
         .canonicalize()
@@ -78,7 +87,9 @@ pub(crate) fn safe_save_path(filename: &str) -> Result<PathBuf, SaveError> {
     if let Ok(meta) = std::fs::symlink_metadata(&path)
         && meta.file_type().is_symlink()
     {
-        return Err(SaveError::invalid("Invalid filename: symlinks are not allowed."));
+        return Err(SaveError::invalid(
+            "Invalid filename: symlinks are not allowed.",
+        ));
     }
     let canonical_dir = dir
         .canonicalize()
@@ -108,8 +119,7 @@ pub(crate) fn atomic_save_game(game: &GameState, filename: &str) -> Result<(), S
         std::fs::remove_file(&tmp_path).ok();
     }
     persistence::save_game(game, &tmp_path)?;
-    std::fs::rename(&tmp_path, &target)
-        .map_err(|e| SaveError::io("Failed to finalize save", e))?;
+    std::fs::rename(&tmp_path, &target).map_err(|e| SaveError::io("Failed to finalize save", e))?;
     Ok(())
 }
 

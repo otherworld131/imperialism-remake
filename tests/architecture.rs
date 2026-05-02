@@ -318,8 +318,7 @@ fn presentation_does_not_import_domain_directly() {
             "Presentation crate must not reference domain directly. \
              Use application:: re-exports instead. \
              Found '{}' in {}",
-            line,
-            file
+            line, file
         );
     }
 }
@@ -344,7 +343,8 @@ fn find_unwrap_calls(dir: &str) -> Vec<(String, String)> {
                     if trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("#[test]") {
                         in_test_block = true;
                     }
-                    if !in_test_block && trimmed.contains(".unwrap()") && !trimmed.starts_with("//") {
+                    if !in_test_block && trimmed.contains(".unwrap()") && !trimmed.starts_with("//")
+                    {
                         results.push((path.display().to_string(), trimmed.to_string()));
                     }
                 }
@@ -363,8 +363,7 @@ fn presentation_has_no_production_unwraps() {
             "Presentation crate must not use .unwrap() in production code. \
              Use typed errors or let-else instead. \
              Found '{}' in {}",
-            line,
-            file
+            line, file
         );
     }
 }

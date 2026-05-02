@@ -1,21 +1,43 @@
 use domain::types as d;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct NationId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct ProvinceId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct TurnNumber(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct Money(pub i64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct ReservationId(pub u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum ResourceType {
     Timber,
     Coal,
@@ -32,7 +54,9 @@ pub enum ResourceType {
     Fish,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum MaterialType {
     Lumber,
     Steel,
@@ -42,7 +66,9 @@ pub enum MaterialType {
     Arms,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum GoodsType {
     Furniture,
     Hardware,
@@ -79,38 +105,58 @@ pub enum Difficulty {
 // ── From impls ────────────────────────────────────────────────────
 
 impl From<d::NationId> for NationId {
-    fn from(v: d::NationId) -> Self { Self(v.0) }
+    fn from(v: d::NationId) -> Self {
+        Self(v.0)
+    }
 }
 impl From<NationId> for d::NationId {
-    fn from(v: NationId) -> Self { Self(v.0) }
+    fn from(v: NationId) -> Self {
+        Self(v.0)
+    }
 }
 
 impl From<d::ProvinceId> for ProvinceId {
-    fn from(v: d::ProvinceId) -> Self { Self(v.0) }
+    fn from(v: d::ProvinceId) -> Self {
+        Self(v.0)
+    }
 }
 impl From<ProvinceId> for d::ProvinceId {
-    fn from(v: ProvinceId) -> Self { Self(v.0) }
+    fn from(v: ProvinceId) -> Self {
+        Self(v.0)
+    }
 }
 
 impl From<d::TurnNumber> for TurnNumber {
-    fn from(v: d::TurnNumber) -> Self { Self(v.0) }
+    fn from(v: d::TurnNumber) -> Self {
+        Self(v.0)
+    }
 }
 impl From<TurnNumber> for d::TurnNumber {
-    fn from(v: TurnNumber) -> Self { Self::new(v.0) }
+    fn from(v: TurnNumber) -> Self {
+        Self::new(v.0)
+    }
 }
 
 impl From<d::Money> for Money {
-    fn from(v: d::Money) -> Self { Self(v.cents()) }
+    fn from(v: d::Money) -> Self {
+        Self(v.cents())
+    }
 }
 impl From<Money> for d::Money {
-    fn from(v: Money) -> Self { Self::from_cents(v.0) }
+    fn from(v: Money) -> Self {
+        Self::from_cents(v.0)
+    }
 }
 
 impl From<d::ReservationId> for ReservationId {
-    fn from(v: d::ReservationId) -> Self { Self(v.0) }
+    fn from(v: d::ReservationId) -> Self {
+        Self(v.0)
+    }
 }
 impl From<ReservationId> for d::ReservationId {
-    fn from(v: ReservationId) -> Self { Self(v.0) }
+    fn from(v: ReservationId) -> Self {
+        Self(v.0)
+    }
 }
 
 impl From<d::ResourceType> for ResourceType {
