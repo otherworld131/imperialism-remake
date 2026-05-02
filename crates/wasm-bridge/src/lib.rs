@@ -2569,6 +2569,34 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         })
         .collect();
 
+    // Pre-turn demand forecast: delegated to domain so business logic stays in one place.
+    let demand_forecast = domain::economy::compute_demand_forecast(nation, &game.game_data);
+
+    // Build combined deliveries list: union of available resources and demanded resources.
+    // Resources with demand but zero stock are included with available=0 so the UI can
+    // render the demand indicator even when the player has none in warehouse (F-013).
+    let mut deliveries_with_demand = deliveries_json;
+    for (r, _qty) in &demand_forecast {
+        let already_present = available.iter().any(|(ar, _)| ar == r);
+        if !already_present {
+            deliveries_with_demand.push(serde_json::json!({
+                "resource": format!("{:?}", r),
+                "available": 0,
+                "delivered": 0,
+            }));
+        }
+    }
+
+    let demand_json: Vec<serde_json::Value> = demand_forecast
+        .into_iter()
+        .map(|(r, qty)| {
+            serde_json::json!({
+                "resource": format!("{:?}", r),
+                "demand": qty,
+            })
+        })
+        .collect();
+
     serde_json::json!({
         "freight_cars": transport.freight_cars,
         "total_capacity": transport.total_capacity(),
@@ -2586,8 +2614,9 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         "available_lumber": available_lumber,
         "available_steel": available_steel,
         "available_labor": available_labor,
-        "deliveries": deliveries_json,
+        "deliveries": deliveries_with_demand,
         "rail_only_deliveries": rail_only_deliveries_json,
+        "demand": demand_json,
     })
     .to_string()
 }

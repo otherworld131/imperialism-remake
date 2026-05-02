@@ -24,4 +24,4 @@ pub use trade::{
 };
 pub use market::{MarketState, MarketTick, Trend};
 pub use observability::BlockReason;
-pub use transport::{FreightDemand, LogisticsState, TransportSystem};
+pub use transport::{FreightDemand, LogisticsState, TransportSystem, compute_demand_forecast};

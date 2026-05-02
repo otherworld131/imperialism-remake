@@ -8,10 +8,13 @@ interface Props {
 }
 
 export default function TransportPanel({ transport, onBuildCar, onSetAllocation }: Props) {
-  const { freight_cars, total_capacity, military_transport_capacity, allocations, build_cost, can_build, deliveries } = transport;
+  const { freight_cars, total_capacity, remote_delivery_capacity, military_transport_capacity, allocations, build_cost, can_build, deliveries, demand = [] } = transport;
 
   const allocationMap: Record<string, number> = {};
   for (const a of allocations) allocationMap[a.resource] = a.percentage;
+
+  const demandMap: Record<string, number> = {};
+  for (const d of demand) demandMap[d.resource] = d.demand;
 
   const totalPct = Object.values(allocationMap).reduce((s, v) => s + v, 0);
 
@@ -47,10 +50,21 @@ export default function TransportPanel({ transport, onBuildCar, onSetAllocation 
         )}
         {deliveries.map(d => {
           const pct = allocationMap[d.resource] ?? 0;
+          const demandQty = demandMap[d.resource] ?? 0;
+          // When no allocations are set the domain distributes evenly; mirror that fallback
+          // so we don't show false red for all resources when pct=0 for everything.
+          const anyAllocSet = Object.values(allocationMap).some(p => p > 0);
+          const cap = remote_delivery_capacity ?? total_capacity;
+          const projected = anyAllocSet
+            ? Math.min(d.available, Math.floor(pct * cap / 100))
+            : Math.min(d.available, Math.floor(cap / Math.max(1, deliveries.length)));
+          const belowDemand = demandQty > 0 && projected < demandQty;
           return (
             <div key={d.resource} style={{
               display: 'flex', alignItems: 'center', gap: 4, marginBottom: 3,
-              background: 'rgba(255,255,255,0.03)', borderRadius: 3, padding: '3px 4px',
+              background: belowDemand ? 'rgba(220,50,50,0.10)' : 'rgba(255,255,255,0.03)',
+              borderRadius: 3, padding: '3px 4px',
+              border: belowDemand ? '1px solid rgba(220,50,50,0.4)' : '1px solid transparent',
             }}>
               <span style={{ flex: 1, fontSize: 'var(--ui-font-size, 14px)' }}>{resourceLabel(d.resource)}</span>
               <button
@@ -62,9 +76,15 @@ export default function TransportPanel({ transport, onBuildCar, onSetAllocation 
                 onClick={() => onSetAllocation(d.resource, Math.min(100, pct + 10))}
                 style={smallBtn}
               >+</button>
-              <span style={{ fontSize: 10, color: '#999', width: 36, textAlign: 'right' }}>
+              <span style={{ fontSize: 10, width: 36, textAlign: 'right',
+                color: belowDemand ? '#e44' : '#999' }}>
                 {d.delivered}/{d.available}
               </span>
+              {belowDemand && (
+                <span style={{ fontSize: 9, color: '#e44', marginLeft: 2 }} title={`Demand: ${demandQty}`}>
+                  ▼{demandQty}
+                </span>
+              )}
             </div>
           );
         })}

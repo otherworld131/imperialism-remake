@@ -803,9 +803,15 @@ export interface TransportDelivery {
   delivered: number;
 }
 
+export interface TransportDemand {
+  resource: string;
+  demand: number;
+}
+
 export interface TransportData {
   freight_cars: number;
   total_capacity: number;
+  remote_delivery_capacity: number;
   military_transport_capacity: number;
   allocations: TransportAllocation[];
   build_cost: { labor: number; lumber: number; steel: number };
@@ -814,6 +820,7 @@ export interface TransportData {
   available_steel: number;
   available_labor: number;
   deliveries: TransportDelivery[];
+  demand: TransportDemand[];
 }
 
 export async function getTransportData(gameJson: string, nationId: number): Promise<TransportData | null> {

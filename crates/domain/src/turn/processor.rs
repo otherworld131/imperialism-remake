@@ -1147,9 +1147,10 @@ pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
 /// total warehouse. Resources already in the warehouse from prior turns are unaffected.
 ///
 /// For each nation:
-/// - If freight cars == 0: only resources from the capital province tiles are delivered.
-///   Resources from non-capital provinces are "left in the field" and subtracted.
-/// - If freight cars > 0: total resources delivered this turn are capped at freight car capacity.
+/// - Capital province tiles deliver for free (fidelity, Card #412).
+/// - All other provinces (including adjacent ones) draw from the freight pool.
+/// - If freight cars == 0: only capital province tile resources are delivered.
+/// - If freight cars > 0: total resources from non-capital tiles are capped at freight capacity.
 ///   Excess resources are removed from warehouse.
 /// - Resources lost are tracked in `report.transport_overflow`.
 fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
@@ -1182,18 +1183,6 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
             .map(|p| p.tiles.iter().copied().collect())
             .unwrap_or_default();
 
-        // Also include tiles from adjacent provinces (they deliver without transport)
-        let adjacent_tiles: std::collections::HashSet<crate::hex::HexCoord> = {
-            let cap_neighbors: std::collections::HashSet<crate::hex::HexCoord> =
-                capital_tiles.iter().flat_map(|t| t.neighbors()).collect();
-            game.world.provinces
-                .iter()
-                .filter(|p| p.owner == nation_id && p.id != capital_province_id)
-                .filter(|p| p.tiles.iter().any(|t| cap_neighbors.contains(t)))
-                .flat_map(|p| p.tiles.iter().copied())
-                .collect()
-        };
-
         // Count total production this turn
         let mut total_produced: u32 = 0;
         let mut produced_this_turn: Vec<(ResourceType, u32)> = Vec::new();
@@ -1209,13 +1198,23 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
         }
 
         if total_produced == 0 {
+            // No production this turn, but still record capacity so freight_unused
+            // is non-zero and military rail-move checks later in the turn work correctly.
+            if let Some(n) = game.world.nations.iter_mut().find(|n| n.id == nation_id) {
+                n.economy.logistics.update(rail_capacity, sea_capacity, &[], &[]);
+            }
             continue;
         }
 
-        // Capital province + adjacent province resources are delivered for free.
-        // Only resources from distant provinces require freight cars.
-        let local_tile_count = (capital_tiles.len() + adjacent_tiles.len()) as u32;
-        let local_delivery = local_tile_count.min(total_produced);
+        // Only capital province tiles deliver for free (Card #412 — fidelity option).
+        // Use actual tile yields (via calculate_yield) so development level is respected.
+        let capital_yield: u32 = capital_tiles
+            .iter()
+            .filter_map(|&coord| game.world.hex_map.get_tile(coord))
+            .filter_map(|t: &crate::map::Tile| t.calculate_yield())
+            .map(|ra| ra.quantity)
+            .sum();
+        let local_delivery = capital_yield.min(total_produced);
         let remote_delivery = total_produced - local_delivery;
 
         // Remote resources are capped by freight car capacity
@@ -2566,6 +2565,9 @@ fn resolve_military_movement(
     report: &mut TurnReport,
 ) -> HashSet<crate::map::UnitId> {
     let mut moved_unit_ids: HashSet<crate::map::UnitId> = HashSet::new();
+    // Per-nation rail freight consumed by military moves this turn (separate from
+    // resource-delivery freight_committed so the two don't interfere in the rail gate).
+    let mut rail_committed_military: HashMap<NationId, u32> = HashMap::new();
     let moves: Vec<(NationId, crate::map::UnitId, ProvinceId)> =
         game.transient.pending_moves.drain(..).collect();
 
@@ -2586,22 +2588,97 @@ fn resolve_military_movement(
             .unwrap_or_else(|| "Unknown".to_string());
 
         if dest_owner == nation_id {
-            // Friendly province: move the unit (only if it can move — militia
-            // and garrison artillery are locked to their home province).
-            if let Some(nation) = game.get_nation_mut(nation_id)
-                && let Some(unit) = nation.military.army.iter_mut().find(|u| u.id == unit_id)
-            {
-                if !unit.unit_type.can_move() {
-                    // Silently drop the move — militia cannot leave home.
+            // Friendly province: check if unit can move and whether the freight
+            // budget allows a rail-strategic (non-adjacent) redeployment.
+
+            // Extract unit data before any mutable borrows.
+            let unit_data = game
+                .world
+                .nations
+                .iter()
+                .find(|n| n.id == nation_id)
+                .and_then(|n| n.military.army.iter().find(|u| u.id == unit_id))
+                .map(|u| {
+                    (
+                        u.position,
+                        !u.unit_type.can_move(),
+                        crate::economy::transport::unit_transport_size(u),
+                        format!("{:?}", u.unit_type),
+                    )
+                });
+            let Some((src_pos, cannot_move, transport_size, unit_type)) = unit_data else {
+                continue;
+            };
+
+            if cannot_move {
+                // Militia and garrison artillery cannot leave their home province.
+                continue;
+            }
+
+            // Non-adjacent moves use the rail network: 5 freight cars per armament
+            // point (manual p. 47).  Adjacent moves are free marches.
+            let is_non_adjacent = {
+                let src = game.world.provinces.iter().find(|p| p.id == src_pos);
+                let dst = game.world.provinces.iter().find(|p| p.id == dest_province_id);
+                match (src, dst) {
+                    (Some(s), Some(d)) => {
+                        !crate::map::provinces_are_adjacent(&game.world.hex_map, s, d)
+                    }
+                    _ => false,
+                }
+            };
+
+            if is_non_adjacent {
+                let rail_cost = 5 * transport_size;
+                // Rail moves consume freight CARS only — not merchant-marine capacity.
+                // Available rail = rail_total
+                //   - resource-delivery portion of freight_committed (committed beyond sea_total)
+                //   - rail already used by earlier military moves this turn (tracked separately)
+                let mil_rail_used = rail_committed_military.get(&nation_id).copied().unwrap_or(0);
+                let rail_available = game
+                    .world
+                    .nations
+                    .iter()
+                    .find(|n| n.id == nation_id)
+                    .map(|n| {
+                        let resource_rail = n
+                            .economy
+                            .logistics
+                            .freight_committed
+                            .saturating_sub(n.economy.logistics.sea_total);
+                        n.economy
+                            .logistics
+                            .rail_total
+                            .saturating_sub(resource_rail + mil_rail_used)
+                    })
+                    .unwrap_or(0);
+                if rail_cost > rail_available {
+                    report.unit_movements.push((
+                        nation_id,
+                        format!(
+                            "{} rail move to {} blocked — need {} freight cars, {} available",
+                            unit_type, dest_name, rail_cost, rail_available
+                        ),
+                    ));
                     continue;
                 }
-                let unit_type = format!("{:?}", unit.unit_type);
-                unit.position = dest_province_id;
-                moved_unit_ids.insert(unit_id);
-                report
-                    .unit_movements
-                    .push((nation_id, format!("{} moved to {}", unit_type, dest_name)));
             }
+
+            // Perform the move. Military rail costs are accumulated in
+            // rail_committed_military and flushed to logistics after the loop.
+            if let Some(nation) = game.get_nation_mut(nation_id) {
+                if let Some(unit) = nation.military.army.iter_mut().find(|u| u.id == unit_id) {
+                    unit.position = dest_province_id;
+                }
+            }
+            if is_non_adjacent {
+                let rail_cost = 5 * transport_size;
+                *rail_committed_military.entry(nation_id).or_insert(0) += rail_cost;
+            }
+            moved_unit_ids.insert(unit_id);
+            report
+                .unit_movements
+                .push((nation_id, format!("{} moved to {}", unit_type, dest_name)));
         } else {
             // Check if at war with the destination owner, or if target is anarchic
             let at_war = game
@@ -2630,6 +2707,16 @@ fn resolve_military_movement(
                 }
             }
             // Otherwise ignore the invalid move
+        }
+    }
+
+    // Flush military rail costs into logistics so freight_committed and freight_unused
+    // reflect the full turn usage (resources + military moves) for display purposes.
+    for (nation_id, mil_cost) in rail_committed_military {
+        if let Some(nation) = game.get_nation_mut(nation_id) {
+            nation.economy.logistics.freight_committed += mil_cost;
+            nation.economy.logistics.freight_unused =
+                nation.economy.logistics.freight_unused.saturating_sub(mil_cost);
         }
     }
 
@@ -11481,6 +11568,201 @@ mod tests {
             militia_in_battle,
             "militia from garrison_count must join combat"
         );
+    }
+
+    // ── Rail freight capacity for non-adjacent moves (Card #13) ────────
+
+    #[test]
+    fn non_adjacent_move_blocked_without_freight() {
+        // A unit moving to a non-adjacent province requires 5 freight cars per
+        // armament point (manual p. 47). With zero freight cars the move must
+        // be blocked.
+        use crate::map::{HexMap, UnitId};
+        use crate::military::units::{ArmyUnit, ArmyUnitType};
+
+        let cap = HexCoord::new(0, 0);
+        let far = HexCoord::new(5, 5); // not adjacent to cap
+
+        let mut hex_map = HexMap::new(10, 10);
+        let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        cap_tile.is_country_capital = true;
+        cap_tile.infrastructure.has_depot = true;
+        hex_map.set_tile(cap, cap_tile);
+        hex_map.set_tile(far, Tile::with_province(TerrainType::Grassland, ProvinceId(2)));
+
+        let p1 = Province::new(ProvinceId(1), "Cap".to_string(), NationId(1), cap, vec![cap], 4);
+        let p2 = Province::new(ProvinceId(2), "Far".to_string(), NationId(1), far, vec![far], 4);
+
+        let mut nation = Nation::new(
+            NationId(1), "Test".to_string(), NationColor::Blue,
+            NationType::GreatPower, ProvinceId(1),
+        );
+        nation.add_province(ProvinceId(2));
+        nation.economy.treasury = Money::dollars(1000);
+        // Zero freight cars — rail moves must be blocked.
+        let unit = ArmyUnit::new(UnitId(1), ArmyUnitType::Regulars, NationId(1), ProvinceId(1));
+        let unit_id = unit.id;
+        nation.military.army.push(unit);
+
+        let mut game = crate::test_game_state! {
+            turn: TurnNumber::new(1), difficulty: Difficulty::Normal,
+            map_key: "test".to_string(), hex_map: hex_map,
+            provinces: vec![p1, p2], nations: vec![nation],
+            human_player_nation: NationId(1), events: Vec::new(),
+            game_data: crate::data::test_game_data(),
+            diplomacy: DiplomacyState::new(), pending_attacks: Vec::new(),
+            pending_moves: Vec::new(), pending_landings: Vec::new(),
+            history: Vec::new(), high_scores: Vec::new(),
+            newspaper_archive: Vec::new(), battle_archive: Vec::new(),
+            political_archive: Vec::new(), ai_debug: false, observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(), pending_ai_cash_income: Vec::new(),
+            next_unit_id: 6_000_000,
+        };
+
+        game.transient.pending_moves.push((NationId(1), unit_id, ProvinceId(2)));
+        process_turn(&mut game);
+
+        let pos = game.get_nation(NationId(1)).unwrap()
+            .military.army.iter().find(|u| u.id == unit_id).unwrap().position;
+        assert_eq!(pos, ProvinceId(1), "rail move must be blocked with zero freight cars");
+    }
+
+    #[test]
+    fn non_adjacent_move_succeeds_with_sufficient_freight() {
+        // With enough freight cars (≥ 5 × armament_points), a non-adjacent
+        // move is allowed and freight_unused decreases by 5 × armament_points.
+        use crate::map::{HexMap, UnitId};
+        use crate::military::units::{ArmyUnit, ArmyUnitType};
+
+        let cap = HexCoord::new(0, 0);
+        let far = HexCoord::new(5, 5);
+
+        let mut hex_map = HexMap::new(10, 10);
+        let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        cap_tile.is_country_capital = true;
+        cap_tile.infrastructure.has_depot = true;
+        hex_map.set_tile(cap, cap_tile);
+        hex_map.set_tile(far, Tile::with_province(TerrainType::Grassland, ProvinceId(2)));
+
+        let p1 = Province::new(ProvinceId(1), "Cap".to_string(), NationId(1), cap, vec![cap], 4);
+        let p2 = Province::new(ProvinceId(2), "Far".to_string(), NationId(1), far, vec![far], 4);
+
+        let mut nation = Nation::new(
+            NationId(1), "Test".to_string(), NationColor::Blue,
+            NationType::GreatPower, ProvinceId(1),
+        );
+        nation.add_province(ProvinceId(2));
+        nation.economy.treasury = Money::dollars(1000);
+        // 10 freight cars: enough for 2 Regulars (5 cars each, arms=1).
+        nation.military.transport.build_freight_cars(10);
+        let unit = ArmyUnit::new(UnitId(1), ArmyUnitType::Regulars, NationId(1), ProvinceId(1));
+        let unit_id = unit.id;
+        nation.military.army.push(unit);
+
+        let mut game = crate::test_game_state! {
+            turn: TurnNumber::new(1), difficulty: Difficulty::Normal,
+            map_key: "test".to_string(), hex_map: hex_map,
+            provinces: vec![p1, p2], nations: vec![nation],
+            human_player_nation: NationId(1), events: Vec::new(),
+            game_data: crate::data::test_game_data(),
+            diplomacy: DiplomacyState::new(), pending_attacks: Vec::new(),
+            pending_moves: Vec::new(), pending_landings: Vec::new(),
+            history: Vec::new(), high_scores: Vec::new(),
+            newspaper_archive: Vec::new(), battle_archive: Vec::new(),
+            political_archive: Vec::new(), ai_debug: false, observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(), pending_ai_cash_income: Vec::new(),
+            next_unit_id: 6_000_000,
+        };
+
+        game.transient.pending_moves.push((NationId(1), unit_id, ProvinceId(2)));
+        process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        let pos = nation.military.army.iter().find(|u| u.id == unit_id).unwrap().position;
+        assert_eq!(pos, ProvinceId(2), "rail move must succeed with sufficient freight");
+        // Regulars have arms_required = 1, so cost = 5 freight cars.
+        // freight_committed should have increased by 5 (all capacity was also used
+        // by resources or just by the military move).
+        assert!(
+            nation.economy.logistics.freight_committed >= 5,
+            "freight_committed must reflect the rail move cost"
+        );
+    }
+
+    #[test]
+    fn multiple_rail_moves_respect_rail_only_capacity() {
+        // Two units attempt non-adjacent moves. Total cost = 10 freight cars.
+        // Nation has exactly 5 rail cars + 10 sea capacity.
+        // The sea capacity must NOT substitute for rail — second move must be blocked.
+        use crate::map::{HexMap, UnitId};
+        use crate::military::units::{ArmyUnit, ArmyUnitType};
+
+        let cap = HexCoord::new(0, 0);
+        let far1 = HexCoord::new(5, 0);
+        let far2 = HexCoord::new(0, 5);
+
+        let mut hex_map = HexMap::new(10, 10);
+        let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        cap_tile.is_country_capital = true;
+        cap_tile.infrastructure.has_depot = true;
+        hex_map.set_tile(cap, cap_tile);
+        hex_map.set_tile(far1, Tile::with_province(TerrainType::Grassland, ProvinceId(2)));
+        hex_map.set_tile(far2, Tile::with_province(TerrainType::Grassland, ProvinceId(3)));
+
+        let p1 = Province::new(ProvinceId(1), "Cap".to_string(), NationId(1), cap, vec![cap], 4);
+        let p2 = Province::new(ProvinceId(2), "Far1".to_string(), NationId(1), far1, vec![far1], 4);
+        let p3 = Province::new(ProvinceId(3), "Far2".to_string(), NationId(1), far2, vec![far2], 4);
+
+        let mut nation = Nation::new(
+            NationId(1), "Test".to_string(), NationColor::Blue,
+            NationType::GreatPower, ProvinceId(1),
+        );
+        nation.add_province(ProvinceId(2));
+        nation.add_province(ProvinceId(3));
+        nation.economy.treasury = Money::dollars(1000);
+        // Only 5 freight cars (enough for 1 Regulars move at cost=5, not 2).
+        nation.military.transport.build_freight_cars(5);
+        let unit1 = ArmyUnit::new(UnitId(1), ArmyUnitType::Regulars, NationId(1), ProvinceId(1));
+        let unit2 = ArmyUnit::new(UnitId(2), ArmyUnitType::Regulars, NationId(1), ProvinceId(1));
+        let uid1 = unit1.id;
+        let uid2 = unit2.id;
+        nation.military.army.push(unit1);
+        nation.military.army.push(unit2);
+
+        let mut game = crate::test_game_state! {
+            turn: TurnNumber::new(1), difficulty: Difficulty::Normal,
+            map_key: "test".to_string(), hex_map: hex_map,
+            provinces: vec![p1, p2, p3], nations: vec![nation],
+            human_player_nation: NationId(1), events: Vec::new(),
+            game_data: crate::data::test_game_data(),
+            diplomacy: DiplomacyState::new(), pending_attacks: Vec::new(),
+            pending_moves: Vec::new(), pending_landings: Vec::new(),
+            history: Vec::new(), high_scores: Vec::new(),
+            newspaper_archive: Vec::new(), battle_archive: Vec::new(),
+            political_archive: Vec::new(), ai_debug: false, observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(), pending_ai_cash_income: Vec::new(),
+            next_unit_id: 6_000_000,
+        };
+
+        game.transient.pending_moves.push((NationId(1), uid1, ProvinceId(2)));
+        game.transient.pending_moves.push((NationId(1), uid2, ProvinceId(3)));
+        process_turn(&mut game);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        let pos1 = nation.military.army.iter().find(|u| u.id == uid1).unwrap().position;
+        let pos2 = nation.military.army.iter().find(|u| u.id == uid2).unwrap().position;
+        // Exactly one move should succeed, one should be blocked.
+        let moved = [pos1 != ProvinceId(1), pos2 != ProvinceId(1)];
+        assert_eq!(moved.iter().filter(|&&m| m).count(), 1,
+            "exactly one of the two moves should succeed with 5 freight cars");
+        assert_eq!(nation.economy.logistics.freight_committed, 5,
+            "freight_committed should reflect exactly one rail move");
     }
 
     #[test]

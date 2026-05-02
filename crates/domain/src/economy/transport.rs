@@ -344,6 +344,65 @@ pub fn amphibious_force_size(ships: &[Ship], data: &crate::data::GameData) -> u3
     ships.iter().map(|s| data.ship_stats(s.ship_type).arms_cost).sum()
 }
 
+/// Compute a pre-turn demand forecast for a nation's freight allocation panel.
+///
+/// Returns a list of `(ResourceType, demand_qty)` representing the expected
+/// consumption of each resource next turn, based on:
+/// - Food: `total_workers × food_per_worker` split across held food resources
+///   (Grain/Fruit/Livestock), or defaulting to Grain if none are held.
+/// - Mill inputs: raw-resource consumption at full building capacity.
+pub fn compute_demand_forecast(
+    nation: &crate::nation::Nation,
+    game_data: &crate::data::GameData,
+) -> Vec<(ResourceType, u32)> {
+    use crate::economy::buildings::BuildingType;
+    let mut demand: BTreeMap<ResourceType, u32> = BTreeMap::new();
+
+    // Food demand: workers × food_per_worker shown on one canonical food resource.
+    // Priority matches actual consumption order: Grain → Fruit → Livestock → Fish.
+    // Using the first held type so the UI shows a single clear demand signal.
+    let total_workers = nation.economy.labor.total_workers();
+    let food_per_worker = game_data.game_config.food_per_worker;
+    if total_workers > 0 && food_per_worker > 0 {
+        let food_demand = total_workers.saturating_mul(food_per_worker);
+        let food_types = [
+            ResourceType::Grain,
+            ResourceType::Fruit,
+            ResourceType::Livestock,
+            ResourceType::Fish,
+        ];
+        let canonical = food_types
+            .iter()
+            .copied()
+            .find(|&r| nation.resource_amount(r) > 0)
+            .unwrap_or(ResourceType::Grain);
+        *demand.entry(canonical).or_insert(0) += food_demand;
+    }
+
+    // Mill demand: raw-resource consumption at full building capacity.
+    for building in &nation.economy.buildings {
+        let cap = building.effective_capacity();
+        if cap == 0 {
+            continue;
+        }
+        match building.building_type {
+            BuildingType::LumberMill => {
+                *demand.entry(ResourceType::Timber).or_insert(0) += cap.saturating_mul(2);
+            }
+            BuildingType::SteelMill => {
+                *demand.entry(ResourceType::Coal).or_insert(0) += cap;
+                *demand.entry(ResourceType::Iron).or_insert(0) += cap;
+            }
+            BuildingType::TextileMill | BuildingType::AdvancedTextileMill => {
+                *demand.entry(ResourceType::Cotton).or_insert(0) += cap.saturating_mul(2);
+            }
+            _ => {}
+        }
+    }
+
+    demand.into_iter().collect()
+}
+
 /// Calculate the transport size of an army unit (= arms required to build it).
 pub fn army_transport_size(unit: &ArmyUnit) -> u32 {
     unit.unit_type.stats().arms_required
@@ -705,6 +764,59 @@ mod tests {
 
         let unit = ArmyUnit::new(UnitId(1), ArmyUnitType::Guards, NationId(1), ProvinceId(1));
         assert_eq!(unit_transport_size(&unit), 3);
+    }
+
+    // ── compute_demand_forecast tests ──
+
+    fn make_test_nation() -> crate::nation::Nation {
+        use crate::nation::NationColor;
+        crate::nation::Nation::new(
+            NationId(1),
+            "Test".to_string(),
+            NationColor::Blue,
+            crate::types::NationType::GreatPower,
+            ProvinceId(1),
+        )
+    }
+
+    #[test]
+    fn demand_forecast_no_workers_no_food_demand() {
+        let nation = make_test_nation();
+        let data = crate::data::GameData::default();
+        let forecast = compute_demand_forecast(&nation, &data);
+        // No workers → no food demand at all.
+        assert!(forecast.is_empty(),
+            "no demand expected when nation has 0 workers and no buildings");
+    }
+
+    #[test]
+    fn demand_forecast_uses_fish_when_only_fish_held() {
+        let mut nation = make_test_nation();
+        let data = crate::data::GameData::default();
+        // Add a worker so food demand is nonzero.
+        nation.economy.labor.untrained = 1;
+        // Give Fish only (no Grain/Fruit/Livestock).
+        nation.add_resource(ResourceType::Fish, 10);
+        let forecast = compute_demand_forecast(&nation, &data);
+        let fish_demand = forecast.iter().find(|(r, _)| *r == ResourceType::Fish).map(|(_, q)| *q);
+        let grain_demand = forecast.iter().find(|(r, _)| *r == ResourceType::Grain).map(|(_, q)| *q);
+        assert!(fish_demand.is_some(), "fish demand should appear when only fish is held");
+        assert!(grain_demand.is_none(), "grain demand should not appear when fish is canonical food");
+    }
+
+    #[test]
+    fn demand_forecast_grain_takes_priority_over_fish() {
+        let mut nation = make_test_nation();
+        let data = crate::data::GameData::default();
+        nation.economy.labor.untrained = 1;
+        // Grain takes priority over Fish.
+        nation.add_resource(ResourceType::Grain, 5);
+        nation.add_resource(ResourceType::Fish, 5);
+        let forecast = compute_demand_forecast(&nation, &data);
+        let grain_demand = forecast.iter().find(|(r, _)| *r == ResourceType::Grain).map(|(_, q)| *q);
+        let fish_demand = forecast.iter().find(|(r, _)| *r == ResourceType::Fish).map(|(_, q)| *q);
+        assert!(grain_demand.is_some(), "grain is canonical when both grain and fish held");
+        assert!(fish_demand.is_none(), "fish demand should not appear when grain is canonical");
     }
 
     // ── Regression test: barges have no effect (matching original game) ──
