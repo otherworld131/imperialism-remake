@@ -1347,6 +1347,34 @@ pub fn wasm_get_units_in_province(game_json: &str, province_id: u32) -> String {
         for unit in &nation.military.army {
             if unit.position == pid {
                 let stats = unit.unit_type.stats();
+                // Upgrade affordances (Card #417): non-null only when an
+                // upgrade target exists AND the owning nation has the
+                // required tech. Cost = production-cost difference.
+                let (upgrade_to_name, upgrade_cost_dollars, upgrade_arms_delta) =
+                    match unit.unit_type.upgrade_to() {
+                        Some(to) => {
+                            let tech_met = match to.required_tech() {
+                                Some(tech) => nation_has_tech(nation, tech, &game.game_data),
+                                None => true,
+                            };
+                            if tech_met {
+                                let cost =
+                                    domain::military::units::upgrade_cost(unit.unit_type, to);
+                                let arms_delta = to
+                                    .stats()
+                                    .arms_required
+                                    .saturating_sub(stats.arms_required);
+                                (
+                                    Some(format!("{:?}", to)),
+                                    Some(cost.as_dollars()),
+                                    Some(arms_delta),
+                                )
+                            } else {
+                                (None, None, None)
+                            }
+                        }
+                        None => (None, None, None),
+                    };
                 units.push(serde_json::json!({
                     "id": unit.id.0,
                     "unit_type": format!("{:?}", unit.unit_type),
@@ -1359,6 +1387,9 @@ pub fn wasm_get_units_in_province(game_json: &str, province_id: u32) -> String {
                     "effective_firepower": unit.effective_firepower(),
                     "movement": stats.movement,
                     "movement_remaining": unit.movement_remaining,
+                    "upgrade_to": upgrade_to_name,
+                    "upgrade_cost": upgrade_cost_dollars,
+                    "upgrade_arms_delta": upgrade_arms_delta,
                 }));
             }
         }
@@ -2233,6 +2264,104 @@ pub fn wasm_recruit_army_unit(game_json: &str, nation_id: u32, unit_type_str: &s
     }
 
     serialize_game(&game)
+}
+
+// ── Command: Upgrade Unit (Card #417) ────────────────────────────────
+
+/// Upgrade a single player-owned unit to its next-era variant. Returns
+/// the serialized game on success or `{"error": "..."}` on failure.
+///
+/// Cost = production-cost difference, paid from the treasury. Any extra
+/// `arms_required` is consumed from the Arms stockpile. Health and medals
+/// are preserved.
+#[wasm_bindgen]
+pub fn wasm_upgrade_unit(game_json: &str, nation_id: u32, unit_id: u32) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let uid = domain::map::UnitId(unit_id);
+    match domain::military::units::upgrade_player_unit(&mut game, nid, uid) {
+        Ok(_) => serialize_game(&game),
+        Err(e) => format!("{{\"error\":\"{}\"}}", e),
+    }
+}
+
+/// Bulk-upgrade player units. Returns `{"upgraded": N, "failed": [...], "game": <state>}`.
+/// Each id is processed in order; the first failure is reported but the
+/// rest are still attempted (so a single under-funded upgrade doesn't
+/// silently abort the batch). The serialized game state reflects every
+/// successful upgrade.
+#[wasm_bindgen]
+pub fn wasm_upgrade_units(game_json: &str, nation_id: u32, unit_ids_json: &str) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let ids: Vec<u32> = match serde_json::from_str(unit_ids_json) {
+        Ok(v) => v,
+        Err(e) => return format!("{{\"error\":\"bad unit_ids JSON: {}\"}}", e),
+    };
+    let nid = NationId(nation_id);
+    let mut upgraded = 0usize;
+    let mut failures: Vec<serde_json::Value> = Vec::new();
+    for id in ids {
+        let uid = domain::map::UnitId(id);
+        match domain::military::units::upgrade_player_unit(&mut game, nid, uid) {
+            Ok(_) => upgraded += 1,
+            Err(e) => failures.push(serde_json::json!({ "unit_id": id, "error": e.to_string() })),
+        }
+    }
+    let game_json = serialize_game(&game);
+    let game_value: serde_json::Value =
+        serde_json::from_str(&game_json).unwrap_or(serde_json::Value::Null);
+    serde_json::json!({
+        "upgraded": upgraded,
+        "failed": failures,
+        "game": game_value,
+    })
+    .to_string()
+}
+
+/// Inspect a unit's upgrade prospects: { upgrade_to: "...", cost, arms_delta, tech_met }.
+/// Returns `{ "upgrade_to": null }` for end-of-line variants.
+#[wasm_bindgen]
+pub fn wasm_get_upgrade_info(game_json: &str, nation_id: u32, unit_id: u32) -> String {
+    let game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let nation = match game.get_nation(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
+    let unit = match nation.military.army.iter().find(|u| u.id.0 == unit_id) {
+        Some(u) => u,
+        None => return "{\"error\":\"unit not found\"}".to_string(),
+    };
+    let from = unit.unit_type;
+    let to = match from.upgrade_to() {
+        Some(t) => t,
+        None => return "{\"upgrade_to\":null}".to_string(),
+    };
+    let cost = domain::military::units::upgrade_cost(from, to);
+    let arms_delta = to
+        .stats()
+        .arms_required
+        .saturating_sub(from.stats().arms_required);
+    let tech_met = match to.required_tech() {
+        Some(tech) => nation_has_tech(nation, tech, &game.game_data),
+        None => true,
+    };
+    serde_json::json!({
+        "upgrade_to": format!("{:?}", to),
+        "cost": cost.as_dollars(),
+        "arms_delta": arms_delta,
+        "tech_met": tech_met,
+    })
+    .to_string()
 }
 
 // ── Command: Hire Civilian ───────────────────────────────────────────

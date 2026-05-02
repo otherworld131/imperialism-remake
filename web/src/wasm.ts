@@ -355,6 +355,12 @@ export interface ArmyUnitDetail {
   effective_firepower: number;
   movement: number;
   movement_remaining: number;
+  /** Next-era variant the owner can upgrade to (tech-met), or null. */
+  upgrade_to: string | null;
+  /** Production-cost difference in dollars; null when upgrade_to is null. */
+  upgrade_cost: number | null;
+  /** Extra Arms required beyond the current variant; null when upgrade_to is null. */
+  upgrade_arms_delta: number | null;
 }
 
 export interface ProvinceUnits {
@@ -780,6 +786,46 @@ export async function engineerBuild(gameJson: string, civilianId: number, kind: 
 
 export async function recruitArmyUnit(gameJson: string, nationId: number, unitType: string): Promise<CommandResult> {
   return runCmd('wasm_recruit_army_unit', gameJson, nationId, unitType);
+}
+
+// ── Unit upgrades (Card #417) ────────────────────────────────────────
+
+export async function upgradeUnit(gameJson: string, nationId: number, unitId: number): Promise<CommandResult> {
+  return runCmd('wasm_upgrade_unit', gameJson, nationId, unitId);
+}
+
+export interface BulkUpgradeFailure {
+  unit_id: number;
+  error: string;
+}
+
+export interface BulkUpgradeResult {
+  upgraded: number;
+  failed: BulkUpgradeFailure[];
+  game: any;
+}
+
+/**
+ * Upgrade many units in a single call. Each id is processed in order;
+ * a failure on one id does not abort the rest. Returns the per-unit
+ * outcomes plus the final game state — caller passes that state on to
+ * the renderer.
+ */
+export async function upgradeUnits(gameJson: string, nationId: number, unitIds: number[]): Promise<BulkUpgradeResult> {
+  const raw = await call<string>('wasm_upgrade_units', gameJson, nationId, JSON.stringify(unitIds));
+  return JSON.parse(raw) as BulkUpgradeResult;
+}
+
+export interface UpgradeInfo {
+  upgrade_to: string | null;
+  cost?: number;
+  arms_delta?: number;
+  tech_met?: boolean;
+}
+
+export async function getUpgradeInfo(gameJson: string, nationId: number, unitId: number): Promise<UpgradeInfo> {
+  const raw = await call<string>('wasm_get_upgrade_info', gameJson, nationId, unitId);
+  return JSON.parse(raw) as UpgradeInfo;
 }
 
 export async function hireCivilian(gameJson: string, nationId: number, civilianType: string): Promise<CommandResult> {

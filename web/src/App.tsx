@@ -8,6 +8,7 @@ import {
   queueUnitMove, cancelUnitMove, disbandUnit, deployCivilian, recallCivilian, engineerBuild,
   type EngineerBuildKind,
   recruitArmyUnit, hireCivilian, buildShip,
+  upgradeUnit, upgradeUnits,
   // New screen queries
   getTransportData, buildFreightCar, setTransportAllocation,
   getIndustryData, expandBuilding,
@@ -944,6 +945,39 @@ function App() {
     });
   }, [gameJson, playerNationId, applyGameJson, selectedTile, showError, runMutation]);
 
+  // Card #417: upgrade a single unit to its next-era variant.
+  const handleUpgradeUnit = useCallback(async (unitId: number) => {
+    if (isObserver) return;
+    await runMutation(async () => {
+      const cmd = await upgradeUnit(gameJson, playerNationId, unitId);
+      if (cmd.ok && cmd.gameJson && (await applyGameJson(cmd.gameJson))) {
+        if (selectedTile?.province_id != null) {
+          setProvinceUnits(await getUnitsInProvince(cmd.gameJson, selectedTile.province_id));
+        }
+      } else if (cmd.error) {
+        showError(`Upgrade failed: ${cmd.error}`);
+      }
+    });
+  }, [isObserver, gameJson, playerNationId, applyGameJson, selectedTile, showError, runMutation]);
+
+  // Card #417: bulk-upgrade every selected unit that has an unlocked target.
+  // Failures on individual ids don't abort the batch; we surface the count.
+  const handleUpgradeSelected = useCallback(async () => {
+    if (isObserver || selectedUnitIds.length === 0) return;
+    await runMutation(async () => {
+      const result = await upgradeUnits(gameJson, playerNationId, selectedUnitIds);
+      const newJson = JSON.stringify(result.game);
+      if (await applyGameJson(newJson)) {
+        if (selectedTile?.province_id != null) {
+          setProvinceUnits(await getUnitsInProvince(newJson, selectedTile.province_id));
+        }
+        if (result.failed.length > 0) {
+          showError(`Upgraded ${result.upgraded} — ${result.failed.length} failed (${result.failed[0].error})`);
+        }
+      }
+    });
+  }, [isObserver, gameJson, playerNationId, selectedUnitIds, applyGameJson, selectedTile, showError, runMutation]);
+
   const handleDeployCivilian = useCallback((civ: CivilianDetail) => {
     if (isObserver) return;
     setDeployingCivilian(civ);
@@ -1642,6 +1676,8 @@ function App() {
                     onCancelSelectedMoves={handleCancelSelectedMoves}
                     onDismissSelected={handleDismissSelected}
                     onRecruit={handleRecruit}
+                    onUpgradeUnit={handleUpgradeUnit}
+                    onUpgradeSelected={handleUpgradeSelected}
                   />
                 </div>
               )}

@@ -871,6 +871,100 @@ impl ArmyUnit {
     }
 }
 
+/// Cost to upgrade a unit from `from` to `to`, per the original-game manual:
+/// the production-cost difference (clamped to zero — upgrading "downhill"
+/// is free rather than a refund).
+///
+/// Resource arithmetic (additional Arms required for the bigger unit) is
+/// handled separately in [`upgrade_player_unit`] — this function only
+/// returns the dollar delta.
+pub fn upgrade_cost(from: ArmyUnitType, to: ArmyUnitType) -> Money {
+    let from_cost = from.stats().cost;
+    let to_cost = to.stats().cost;
+    if to_cost > from_cost {
+        Money::from_cents(to_cost.cents() - from_cost.cents())
+    } else {
+        Money::ZERO
+    }
+}
+
+/// Upgrade a single player-owned army unit in place, preserving health and
+/// medals.
+///
+/// Validation order:
+/// 1. Unit exists in the nation's army.
+/// 2. Unit type has an `upgrade_to()` target.
+/// 3. The target's `required_tech` is researched (when any).
+/// 4. Treasury covers `upgrade_cost(from, to)`.
+/// 5. Arms stockpile covers any positive delta in `arms_required`.
+///
+/// On success, deducts the cost + extra arms and mutates the unit type.
+/// `movement_remaining` is reset to the target type's stat so the upgraded
+/// unit can still act this turn at its new movement rate.
+///
+/// Caller (the wasm bridge or the CLI) is responsible for sending events
+/// or UI feedback.
+pub fn upgrade_player_unit(
+    game: &mut crate::game_state::GameState,
+    nation_id: NationId,
+    unit_id: UnitId,
+) -> Result<(ArmyUnitType, ArmyUnitType, Money), DomainError> {
+    use crate::types::MaterialType;
+
+    let nation = game
+        .get_nation(nation_id)
+        .ok_or(DomainError::NationNotFound(nation_id))?;
+    let pos = nation
+        .military
+        .army
+        .iter()
+        .position(|u| u.id == unit_id)
+        .ok_or_else(|| DomainError::illegal("unit not found"))?;
+    let from_type = nation.military.army[pos].unit_type;
+    let to_type = from_type
+        .upgrade_to()
+        .ok_or_else(|| DomainError::illegal("no upgrade path for this unit"))?;
+
+    // Tech gate.
+    if let Some(req_tech) = to_type.required_tech() {
+        let has_tech = nation.researched_techs.iter().any(|tid| {
+            game.game_data
+                .tech_tree
+                .get(*tid)
+                .map(|t| t.name == req_tech)
+                .unwrap_or(false)
+        });
+        if !has_tech {
+            return Err(DomainError::illegal("upgrade target tech not researched"));
+        }
+    }
+
+    // Cost gates.
+    let cost = upgrade_cost(from_type, to_type);
+    if nation.economy.treasury < cost {
+        return Err(DomainError::illegal("insufficient treasury for upgrade"));
+    }
+    let arms_delta = to_type
+        .stats()
+        .arms_required
+        .saturating_sub(from_type.stats().arms_required);
+    if arms_delta > 0 && nation.material_amount(MaterialType::Arms) < arms_delta {
+        return Err(DomainError::illegal("insufficient arms for upgrade"));
+    }
+
+    let nation = game
+        .get_nation_mut(nation_id)
+        .ok_or(DomainError::NationNotFound(nation_id))?;
+    nation.economy.treasury -= cost;
+    if arms_delta > 0 {
+        nation.consume_material(MaterialType::Arms, arms_delta);
+    }
+    let unit = &mut nation.military.army[pos];
+    unit.unit_type = to_type;
+    unit.movement_remaining = to_type.stats().movement;
+    Ok((from_type, to_type, cost))
+}
+
 /// Disband (dismiss) a player's army unit.
 ///
 /// Errors if the unit isn't found, or if it is a Garrison unit (Minutemen /
@@ -1186,6 +1280,31 @@ mod tests {
     }
 
     // ── Obsoletion helpers (Card #420) ──────────────────────────
+
+    // ── Upgrade cost (Card #417) ───────────────────────────────
+
+    #[test]
+    fn upgrade_cost_is_production_difference() {
+        // Regulars cost $100, RifleInfantry $200 — delta $100.
+        assert_eq!(
+            upgrade_cost(ArmyUnitType::Regulars, ArmyUnitType::RifleInfantry),
+            Money::dollars(100)
+        );
+        // Heavy cavalry: Cuirassiers $200 -> Armour $500 — delta $300.
+        assert_eq!(
+            upgrade_cost(ArmyUnitType::Cuirassiers, ArmyUnitType::Armour),
+            Money::dollars(300)
+        );
+    }
+
+    #[test]
+    fn upgrade_cost_clamps_to_zero_when_target_is_cheaper() {
+        // Same-cost or cheaper upgrade is free, never a refund.
+        assert_eq!(
+            upgrade_cost(ArmyUnitType::Regulars, ArmyUnitType::Regulars),
+            Money::ZERO
+        );
+    }
 
     #[test]
     fn era1_units_obsoleted_when_era2_tech_researched() {

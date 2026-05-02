@@ -24,6 +24,8 @@ interface Props {
   onCancelSelectedMoves: () => void;
   onDismissSelected: () => void;
   onRecruit: (unitType: string) => void;
+  onUpgradeUnit: (unitId: number) => void;
+  onUpgradeSelected: () => void;
 }
 
 export default function UnitPanel({
@@ -31,6 +33,7 @@ export default function UnitPanel({
   isPlayerCapital, isPlayerProvince,
   selectedUnitIds, onToggleUnit, onSelectAll,
   onCancelMove, onCancelSelectedMoves, onDismissSelected, onRecruit,
+  onUpgradeUnit, onUpgradeSelected,
 }: Props) {
   const { army_units, garrison_count, province_name } = provinceUnits;
 
@@ -39,6 +42,10 @@ export default function UnitPanel({
   const selectedWithPendingMove = selectedUnitIds.filter(
     id => pendingMoves.some(m => m.unit_id === id)
   ).length;
+  // Card #417: which selected units actually have an unlocked upgrade target.
+  const selectedUpgradable = army_units.filter(
+    u => selectedUnitIds.includes(u.id) && u.upgrade_to,
+  );
 
   return (
     <div style={{ fontSize: 13 }}>
@@ -60,6 +67,11 @@ export default function UnitPanel({
               {isPlayerProvince && hasSelection && selectedWithPendingMove > 0 && (
                 <button onClick={onCancelSelectedMoves} style={btnStyle('#a33')}>
                   Cancel Moves
+                </button>
+              )}
+              {isPlayerProvince && selectedUpgradable.length > 0 && (
+                <button onClick={onUpgradeSelected} style={btnStyle('#48a')}>
+                  Upgrade {selectedUpgradable.length}
                 </button>
               )}
               {isPlayerProvince && hasSelection && (
@@ -135,6 +147,20 @@ export default function UnitPanel({
                     </span>
                     <button onClick={(e) => { e.stopPropagation(); onCancelMove(unit.id); }} style={{ ...btnStyle('#a33'), marginLeft: 8 }}>
                       Cancel
+                    </button>
+                  </div>
+                )}
+                {/* Card #417: per-unit Upgrade button when an unlocked target exists. */}
+                {isPlayerProvince && unit.upgrade_to && (
+                  <div style={{ marginTop: 3, fontSize: 11, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ color: '#7af' }}>
+                      {'\u21e7'} {unit.upgrade_to.replace(/([A-Z])/g, ' $1').trim()}
+                      <span style={{ color: '#888', marginLeft: 4 }}>
+                        ${unit.upgrade_cost ?? 0}{unit.upgrade_arms_delta ? ` + ${unit.upgrade_arms_delta}A` : ''}
+                      </span>
+                    </span>
+                    <button onClick={(e) => { e.stopPropagation(); onUpgradeUnit(unit.id); }} style={btnStyle('#48a')}>
+                      Upgrade
                     </button>
                   </div>
                 )}
