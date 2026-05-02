@@ -165,14 +165,14 @@ impl std::str::FromStr for ArmyUnitType {
 /// Stats for a unit type. Fields mirror the original Imperialism manual:
 ///
 /// - `firepower` (FPN) — base attack vs infantry/garrison.
-/// - `firepower_mounted` (FPM) — bonus attack vs cavalry / when charging.
-///   Currently unused by combat resolution (file: Trello "wire up FPM").
-/// - `defense` (DEF) — base defensive value.
-///   Currently unused by combat resolution (file: Trello "wire up DEF & terrain bonus").
-/// - `defense_terrain_bonus` — extra DEF when defending in favorable terrain
-///   (forest/hills/fort). Original game bracketed this as e.g. `5(6)`; the
-///   bonus is the bracketed delta.
-///   Currently unused by combat resolution.
+/// - `firepower_mounted` (FPM) — attack value used instead of FPN when a cavalry unit
+///   charges at melee range (range == 1). Wired in `attacker_total_firepower` via
+///   `effective_firepower_charging()`.
+/// - `defense` (DEF) — multiplies each unit's FPN contribution to defender total firepower
+///   (`fp * def * (1 + terrain)`). Wired in `defender_total_firepower`.
+/// - `defense_terrain_bonus` — extra multiplier term added on top of the global terrain bonus
+///   when defending in qualifying terrain (Forest, Hills, Mountains, Swamp) or any fort.
+///   Wired in `defender_total_firepower`.
 /// - `range` — attack range in hexes.
 /// - `movement` — base movement points per turn.
 /// - `arms_required` — Arms unit consumed at recruitment (and per upgrade diff).

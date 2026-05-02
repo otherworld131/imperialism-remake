@@ -1776,6 +1776,11 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
 
     let arms_available = nation.material_amount(MaterialType::Arms);
     let treasury = nation.economy.treasury;
+    let horses_available = nation.resource_amount(domain::types::ResourceType::Horses);
+    let oil_available = nation.resource_amount(domain::types::ResourceType::Oil);
+    let untrained_labor = nation.economy.labor.untrained;
+    let trained_labor = nation.economy.labor.trained;
+    let expert_labor = nation.economy.labor.expert;
 
     // All buildable army units, ordered by category and era so the recruit
     // panel groups roles together.
@@ -1794,6 +1799,7 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
         ArmyUnitType::MachineGunners,
         // Light cavalry
         ArmyUnitType::Hussars,
+        ArmyUnitType::Scouts,
         ArmyUnitType::Carbineers,
         ArmyUnitType::Mechanised,
         // Heavy cavalry
@@ -1801,6 +1807,7 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
         ArmyUnitType::Armour,
         // Light artillery
         ArmyUnitType::LightArtillery,
+        ArmyUnitType::HorseArtillery,
         ArmyUnitType::FieldArtillery,
         ArmyUnitType::MobileArtillery,
         // Heavy artillery
@@ -1812,6 +1819,7 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
         // Engineer
         ArmyUnitType::Sapper,
         ArmyUnitType::CombatEngineer,
+        ArmyUnitType::Commandos,
         ArmyUnitType::Saboteur,
     ];
 
@@ -1831,14 +1839,25 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
         })
         .map(|t| {
             let stats = t.stats();
-            let can_afford = treasury >= stats.cost && arms_available >= stats.arms_required;
+            let labor_available = match stats.recruit_tier {
+                domain::economy::labor::WorkerType::Untrained => untrained_labor,
+                domain::economy::labor::WorkerType::Trained => trained_labor,
+                domain::economy::labor::WorkerType::Expert => expert_labor,
+            };
             let reason = if treasury < stats.cost {
                 Some("Insufficient funds".to_string())
             } else if arms_available < stats.arms_required {
                 Some("Not enough arms".to_string())
+            } else if stats.requires_horse && horses_available < 1 {
+                Some("Not enough horses".to_string())
+            } else if stats.fuel_required > 0 && oil_available < stats.fuel_required {
+                Some("Not enough fuel".to_string())
+            } else if labor_available < 1 {
+                Some(format!("Not enough {:?} workers", stats.recruit_tier))
             } else {
                 None
             };
+            let can_afford = reason.is_none();
 
             serde_json::json!({
                 "type": format!("{:?}", t),
@@ -2426,25 +2445,7 @@ pub fn wasm_recruit_army_unit(game_json: &str, nation_id: u32, unit_type_str: &s
             Some(n) => n,
             None => return "{\"error\":\"nation not found\"}".to_string(),
         };
-        nation.economy.treasury -= stats.cost;
-        nation.consume_material(MaterialType::Arms, stats.arms_required);
-        if stats.requires_horse {
-            nation.remove_resource(domain::types::ResourceType::Horses, 1);
-        }
-        if stats.fuel_required > 0 {
-            nation.remove_resource(domain::types::ResourceType::Oil, stats.fuel_required);
-        }
-        match stats.recruit_tier {
-            domain::economy::labor::WorkerType::Untrained => {
-                nation.economy.labor.untrained = nation.economy.labor.untrained.saturating_sub(1);
-            }
-            domain::economy::labor::WorkerType::Trained => {
-                nation.economy.labor.trained = nation.economy.labor.trained.saturating_sub(1);
-            }
-            domain::economy::labor::WorkerType::Expert => {
-                nation.economy.labor.expert = nation.economy.labor.expert.saturating_sub(1);
-            }
-        }
+        nation.deduct_recruit_resources(unit_type);
         nation.capital_province_id
     };
     let uid = game.alloc_unit_id();
@@ -4520,9 +4521,6 @@ pub fn wasm_accept_proposal(game_json: &str, nation_id: u32, proposal_index: u32
         TreatyType::WarDeclaration => {
             // War-declaration modal is notification-only. The war is already
             // in effect; accepting just dismisses the alert.
-        }
-        _ => {
-            return "{\"error\":\"unsupported proposal type\"}".to_string();
         }
     }
 

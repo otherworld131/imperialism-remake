@@ -8,7 +8,7 @@ use crate::economy::trade::Commodity;
 use crate::economy::transport::{LogisticsState, TransportSystem};
 use crate::events::TechId;
 use crate::military::ships::Ship;
-use crate::military::units::ArmyUnit;
+use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::types::*;
 use std::collections::{BTreeMap, HashMap};
 
@@ -152,21 +152,27 @@ impl NationEconomy {
     pub fn consume(&mut self, key: Commodity, qty: u32) -> bool {
         match key {
             Commodity::Resource(r) => {
-                if let Some(cur) = self.warehouse.get_mut(&r) && *cur >= qty {
+                if let Some(cur) = self.warehouse.get_mut(&r)
+                    && *cur >= qty
+                {
                     *cur -= qty;
                     return true;
                 }
                 false
             }
             Commodity::Material(m) => {
-                if let Some(cur) = self.materials.get_mut(&m) && *cur >= qty {
+                if let Some(cur) = self.materials.get_mut(&m)
+                    && *cur >= qty
+                {
                     *cur -= qty;
                     return true;
                 }
                 false
             }
             Commodity::Goods(g) => {
-                if let Some(cur) = self.goods.get_mut(&g) && *cur >= qty {
+                if let Some(cur) = self.goods.get_mut(&g)
+                    && *cur >= qty
+                {
                     *cur -= qty;
                     return true;
                 }
@@ -268,12 +274,18 @@ impl NationEconomy {
         match key {
             Commodity::Resource(r) => {
                 let e = self.reserved_warehouse.entry(r).or_insert(0);
-                debug_assert!(*e >= qty, "reservation counter underflow for Resource({r:?})");
+                debug_assert!(
+                    *e >= qty,
+                    "reservation counter underflow for Resource({r:?})"
+                );
                 *e = e.saturating_sub(qty);
             }
             Commodity::Material(m) => {
                 let e = self.reserved_materials.entry(m).or_insert(0);
-                debug_assert!(*e >= qty, "reservation counter underflow for Material({m:?})");
+                debug_assert!(
+                    *e >= qty,
+                    "reservation counter underflow for Material({m:?})"
+                );
                 *e = e.saturating_sub(qty);
             }
             Commodity::Goods(g) => {
@@ -297,12 +309,18 @@ impl NationEconomy {
         match key {
             Commodity::Resource(r) => {
                 let e = self.reserved_warehouse.entry(r).or_insert(0);
-                debug_assert!(*e >= qty, "reservation counter underflow for Resource({r:?})");
+                debug_assert!(
+                    *e >= qty,
+                    "reservation counter underflow for Resource({r:?})"
+                );
                 *e = e.saturating_sub(qty);
             }
             Commodity::Material(m) => {
                 let e = self.reserved_materials.entry(m).or_insert(0);
-                debug_assert!(*e >= qty, "reservation counter underflow for Material({m:?})");
+                debug_assert!(
+                    *e >= qty,
+                    "reservation counter underflow for Material({m:?})"
+                );
                 *e = e.saturating_sub(qty);
             }
             Commodity::Goods(g) => {
@@ -316,13 +334,27 @@ impl NationEconomy {
 
     // ── Snapshot access (used by domain-snapshot for save/load) ─────────
 
-    pub fn snapshot_reserved_treasury(&self) -> Money { self.reserved_treasury }
-    pub fn snapshot_reserved_warehouse(&self) -> &BTreeMap<ResourceType, u32> { &self.reserved_warehouse }
-    pub fn snapshot_reserved_materials(&self) -> &BTreeMap<MaterialType, u32> { &self.reserved_materials }
-    pub fn snapshot_reserved_goods(&self) -> &BTreeMap<GoodsType, u32> { &self.reserved_goods }
-    pub fn snapshot_reservation_ledger(&self) -> &BTreeMap<ReservationId, (Commodity, u32)> { &self.reservation_ledger }
-    pub fn snapshot_next_reservation_id(&self) -> u64 { self.next_reservation_id }
-    pub fn snapshot_reserved_labor(&self) -> &HashMap<WorkerType, u32> { &self.reserved_labor }
+    pub fn snapshot_reserved_treasury(&self) -> Money {
+        self.reserved_treasury
+    }
+    pub fn snapshot_reserved_warehouse(&self) -> &BTreeMap<ResourceType, u32> {
+        &self.reserved_warehouse
+    }
+    pub fn snapshot_reserved_materials(&self) -> &BTreeMap<MaterialType, u32> {
+        &self.reserved_materials
+    }
+    pub fn snapshot_reserved_goods(&self) -> &BTreeMap<GoodsType, u32> {
+        &self.reserved_goods
+    }
+    pub fn snapshot_reservation_ledger(&self) -> &BTreeMap<ReservationId, (Commodity, u32)> {
+        &self.reservation_ledger
+    }
+    pub fn snapshot_next_reservation_id(&self) -> u64 {
+        self.next_reservation_id
+    }
+    pub fn snapshot_reserved_labor(&self) -> &HashMap<WorkerType, u32> {
+        &self.reserved_labor
+    }
 
     pub fn restore_reservation_state(&mut self, state: ReservationStateSnapshot) {
         self.reserved_treasury = state.reserved_treasury;
@@ -455,21 +487,30 @@ impl NationEconomy {
         let mut out = std::collections::HashMap::new();
         out.insert(
             WorkerType::Untrained,
-            self.labor
-                .untrained
-                .saturating_sub(self.reserved_labor.get(&WorkerType::Untrained).copied().unwrap_or(0)),
+            self.labor.untrained.saturating_sub(
+                self.reserved_labor
+                    .get(&WorkerType::Untrained)
+                    .copied()
+                    .unwrap_or(0),
+            ),
         );
         out.insert(
             WorkerType::Trained,
-            self.labor
-                .trained
-                .saturating_sub(self.reserved_labor.get(&WorkerType::Trained).copied().unwrap_or(0)),
+            self.labor.trained.saturating_sub(
+                self.reserved_labor
+                    .get(&WorkerType::Trained)
+                    .copied()
+                    .unwrap_or(0),
+            ),
         );
         out.insert(
             WorkerType::Expert,
-            self.labor
-                .expert
-                .saturating_sub(self.reserved_labor.get(&WorkerType::Expert).copied().unwrap_or(0)),
+            self.labor.expert.saturating_sub(
+                self.reserved_labor
+                    .get(&WorkerType::Expert)
+                    .copied()
+                    .unwrap_or(0),
+            ),
         );
         out
     }
@@ -488,11 +529,7 @@ impl NationEconomy {
     }
 
     /// Reserve an exact number of workers of a single tier.
-    pub fn reserve_labor(
-        &mut self,
-        tier: WorkerType,
-        qty: u32,
-    ) -> Result<(), crate::DomainError> {
+    pub fn reserve_labor(&mut self, tier: WorkerType, qty: u32) -> Result<(), crate::DomainError> {
         if qty == 0 {
             return Ok(());
         }
@@ -504,11 +541,7 @@ impl NationEconomy {
     }
 
     /// Release a labor reservation for a single tier.
-    pub fn release_labor(
-        &mut self,
-        tier: WorkerType,
-        qty: u32,
-    ) -> Result<(), crate::DomainError> {
+    pub fn release_labor(&mut self, tier: WorkerType, qty: u32) -> Result<(), crate::DomainError> {
         if qty == 0 {
             return Ok(());
         }
@@ -539,7 +572,8 @@ impl NationEconomy {
         if required_units == 0 {
             return Ok(HashMap::new());
         }
-        let available_units = self.available_labor_units_with(untrained_mult, trained_mult, expert_mult);
+        let available_units =
+            self.available_labor_units_with(untrained_mult, trained_mult, expert_mult);
         if available_units < required_units {
             return Err(crate::DomainError::illegal(format!(
                 "Need {required_units} labor units but only {available_units} available"
@@ -570,7 +604,10 @@ impl NationEconomy {
             }
         }
 
-        debug_assert_eq!(remaining_units, 0, "labor reservation should fully cover required units");
+        debug_assert_eq!(
+            remaining_units, 0,
+            "labor reservation should fully cover required units"
+        );
         Ok(plan)
     }
 
@@ -578,7 +615,11 @@ impl NationEconomy {
     pub fn block_reason_for_commodity(&self, key: Commodity, qty: u32) -> Option<BlockReason> {
         let avail = self.available(key);
         if avail < qty {
-            Some(BlockReason::InsufficientInventory { commodity: key, needed: qty, available: avail })
+            Some(BlockReason::InsufficientInventory {
+                commodity: key,
+                needed: qty,
+                available: avail,
+            })
         } else {
             None
         }
@@ -588,7 +629,10 @@ impl NationEconomy {
     pub fn block_reason_for_treasury(&self, amount: Money) -> Option<BlockReason> {
         let avail = self.available_treasury();
         if avail < amount {
-            Some(BlockReason::InsufficientTreasury { needed: amount, available: avail })
+            Some(BlockReason::InsufficientTreasury {
+                needed: amount,
+                available: avail,
+            })
         } else {
             None
         }
@@ -597,21 +641,31 @@ impl NationEconomy {
     /// Why a labor request of `qty` workers of `tier` would fail, or `None` if feasible.
     pub fn block_reason_for_labor(&self, tier: WorkerType, qty: u32) -> Option<BlockReason> {
         let available = match tier {
-            WorkerType::Untrained => self
-                .labor
-                .untrained
-                .saturating_sub(self.reserved_labor.get(&WorkerType::Untrained).copied().unwrap_or(0)),
-            WorkerType::Trained => self
-                .labor
-                .trained
-                .saturating_sub(self.reserved_labor.get(&WorkerType::Trained).copied().unwrap_or(0)),
-            WorkerType::Expert => self
-                .labor
-                .expert
-                .saturating_sub(self.reserved_labor.get(&WorkerType::Expert).copied().unwrap_or(0)),
+            WorkerType::Untrained => self.labor.untrained.saturating_sub(
+                self.reserved_labor
+                    .get(&WorkerType::Untrained)
+                    .copied()
+                    .unwrap_or(0),
+            ),
+            WorkerType::Trained => self.labor.trained.saturating_sub(
+                self.reserved_labor
+                    .get(&WorkerType::Trained)
+                    .copied()
+                    .unwrap_or(0),
+            ),
+            WorkerType::Expert => self.labor.expert.saturating_sub(
+                self.reserved_labor
+                    .get(&WorkerType::Expert)
+                    .copied()
+                    .unwrap_or(0),
+            ),
         };
         if available < qty {
-            Some(BlockReason::InsufficientLabor { tier, needed: qty, available })
+            Some(BlockReason::InsufficientLabor {
+                tier,
+                needed: qty,
+                available,
+            })
         } else {
             None
         }
@@ -662,7 +716,6 @@ pub struct NationMilitary {
     /// Reset at the start of each turn's resolution phase.
     pub fleet_moves_remaining: std::collections::HashMap<crate::map::sea_zones::SeaZoneId, u32>,
 }
-
 
 /// Diplomatic and political state.
 ///
@@ -873,6 +926,53 @@ impl Nation {
         *self.economy.goods.entry(goods).or_insert(0) += amount;
     }
 
+    /// Returns true if the nation has enough treasury, arms, horses, oil, and
+    /// labor to recruit the given unit type. Does NOT check tech prerequisites.
+    pub fn can_recruit_unit(&self, unit_type: ArmyUnitType) -> bool {
+        let stats = unit_type.stats();
+        let labor_ok = {
+            let available = match stats.recruit_tier {
+                WorkerType::Untrained => self.economy.labor.untrained,
+                WorkerType::Trained => self.economy.labor.trained,
+                WorkerType::Expert => self.economy.labor.expert,
+            };
+            available >= 1
+        };
+        self.economy.treasury >= stats.cost
+            && self.material_amount(MaterialType::Arms) >= stats.arms_required
+            && (!stats.requires_horse || self.resource_amount(ResourceType::Horses) >= 1)
+            && (stats.fuel_required == 0
+                || self.resource_amount(ResourceType::Oil) >= stats.fuel_required)
+            && labor_ok
+    }
+
+    /// Deducts all resources consumed by recruiting the given unit type:
+    /// treasury, arms, horses (if required), oil (if required), and one
+    /// labor unit of the appropriate tier. Caller must verify `can_recruit_unit`
+    /// first; deductions saturate rather than panic.
+    pub fn deduct_recruit_resources(&mut self, unit_type: ArmyUnitType) {
+        let stats = unit_type.stats();
+        self.economy.treasury -= stats.cost;
+        self.consume_material(MaterialType::Arms, stats.arms_required);
+        if stats.requires_horse {
+            self.remove_resource(ResourceType::Horses, 1);
+        }
+        if stats.fuel_required > 0 {
+            self.remove_resource(ResourceType::Oil, stats.fuel_required);
+        }
+        match stats.recruit_tier {
+            WorkerType::Untrained => {
+                self.economy.labor.untrained = self.economy.labor.untrained.saturating_sub(1);
+            }
+            WorkerType::Trained => {
+                self.economy.labor.trained = self.economy.labor.trained.saturating_sub(1);
+            }
+            WorkerType::Expert => {
+                self.economy.labor.expert = self.economy.labor.expert.saturating_sub(1);
+            }
+        }
+    }
+
     /// Whether this nation is a Great Power.
     pub fn is_great_power(&self) -> bool {
         self.nation_type == NationType::GreatPower
@@ -901,7 +1001,8 @@ impl Nation {
 
     /// Returns all army units stationed in a given province.
     pub fn units_in_province(&self, province: ProvinceId) -> Vec<&ArmyUnit> {
-        self.military.army
+        self.military
+            .army
             .iter()
             .filter(|u| u.position == province)
             .collect()
@@ -921,14 +1022,22 @@ impl Nation {
     /// garrison (Militia + GarrisonArtillery). Used where full defensive
     /// strength matters.
     pub fn total_firepower_including_garrison(&self) -> f64 {
-        self.military.army.iter().map(|u| u.effective_firepower()).sum()
+        self.military
+            .army
+            .iter()
+            .map(|u| u.effective_firepower())
+            .sum()
     }
 
     /// Number of **field army** units (excludes stationary garrison units:
     /// Militia and GarrisonArtillery). Use this wherever the semantic is
     /// "units available to attack / move", not "raw entries in nation.military.army".
     pub fn field_army_count(&self) -> usize {
-        self.military.army.iter().filter(|u| u.unit_type.can_move()).count()
+        self.military
+            .army
+            .iter()
+            .filter(|u| u.unit_type.can_move())
+            .count()
     }
 
     /// Iterator over field army units (movable — excludes garrison).
@@ -938,7 +1047,8 @@ impl Nation {
 
     /// Count of Militia units stationed at a given province.
     pub fn militia_at(&self, province: ProvinceId) -> usize {
-        self.military.army
+        self.military
+            .army
             .iter()
             .filter(|u| {
                 u.position == province
@@ -957,7 +1067,8 @@ impl Nation {
 
     /// Total cargo capacity of all merchant ships in the fleet.
     pub fn total_cargo_capacity(&self, data: &crate::data::GameData) -> u32 {
-        self.military.merchant_fleet
+        self.military
+            .merchant_fleet
             .iter()
             .map(|s| data.ship_stats(s.ship_type).cargo)
             .sum()
@@ -970,7 +1081,8 @@ impl Nation {
 
     /// Sum of firepower for all warships in the fleet.
     pub fn total_naval_firepower(&self, data: &crate::data::GameData) -> u32 {
-        self.military.warships
+        self.military
+            .warships
             .iter()
             .map(|s| data.ship_stats(s.ship_type).firepower)
             .sum()
@@ -1502,8 +1614,14 @@ mod tests {
     #[test]
     fn economy_amount_returns_zero_when_empty() {
         let n = sample_great_power();
-        assert_eq!(n.economy.amount(Commodity::Resource(ResourceType::Timber)), 0);
-        assert_eq!(n.economy.amount(Commodity::Material(MaterialType::Lumber)), 0);
+        assert_eq!(
+            n.economy.amount(Commodity::Resource(ResourceType::Timber)),
+            0
+        );
+        assert_eq!(
+            n.economy.amount(Commodity::Material(MaterialType::Lumber)),
+            0
+        );
         assert_eq!(n.economy.amount(Commodity::Goods(GoodsType::Furniture)), 0);
     }
 
@@ -1513,8 +1631,14 @@ mod tests {
         n.economy.add(Commodity::Resource(ResourceType::Coal), 10);
         n.economy.add(Commodity::Material(MaterialType::Steel), 5);
         n.economy.add(Commodity::Goods(GoodsType::Clothing), 3);
-        assert_eq!(n.economy.amount(Commodity::Resource(ResourceType::Coal)), 10);
-        assert_eq!(n.economy.amount(Commodity::Material(MaterialType::Steel)), 5);
+        assert_eq!(
+            n.economy.amount(Commodity::Resource(ResourceType::Coal)),
+            10
+        );
+        assert_eq!(
+            n.economy.amount(Commodity::Material(MaterialType::Steel)),
+            5
+        );
         assert_eq!(n.economy.amount(Commodity::Goods(GoodsType::Clothing)), 3);
     }
 
@@ -1522,7 +1646,10 @@ mod tests {
     fn economy_consume_returns_true_when_sufficient() {
         let mut n = sample_great_power();
         n.economy.add(Commodity::Resource(ResourceType::Iron), 8);
-        assert!(n.economy.consume(Commodity::Resource(ResourceType::Iron), 5));
+        assert!(
+            n.economy
+                .consume(Commodity::Resource(ResourceType::Iron), 5)
+        );
         assert_eq!(n.economy.amount(Commodity::Resource(ResourceType::Iron)), 3);
     }
 
@@ -1530,7 +1657,10 @@ mod tests {
     fn economy_consume_returns_false_when_insufficient() {
         let mut n = sample_great_power();
         n.economy.add(Commodity::Material(MaterialType::Arms), 2);
-        assert!(!n.economy.consume(Commodity::Material(MaterialType::Arms), 5));
+        assert!(
+            !n.economy
+                .consume(Commodity::Material(MaterialType::Arms), 5)
+        );
         assert_eq!(n.economy.amount(Commodity::Material(MaterialType::Arms)), 2);
     }
 
@@ -1553,10 +1683,24 @@ mod tests {
     fn reserve_reduces_available_not_total() {
         let mut n = sample_great_power();
         n.economy.add(Commodity::Resource(ResourceType::Timber), 10);
-        let id = n.economy.reserve(Commodity::Resource(ResourceType::Timber), 4).unwrap();
-        assert_eq!(n.economy.amount(Commodity::Resource(ResourceType::Timber)), 10);
-        assert_eq!(n.economy.reserved(Commodity::Resource(ResourceType::Timber)), 4);
-        assert_eq!(n.economy.available(Commodity::Resource(ResourceType::Timber)), 6);
+        let id = n
+            .economy
+            .reserve(Commodity::Resource(ResourceType::Timber), 4)
+            .unwrap();
+        assert_eq!(
+            n.economy.amount(Commodity::Resource(ResourceType::Timber)),
+            10
+        );
+        assert_eq!(
+            n.economy
+                .reserved(Commodity::Resource(ResourceType::Timber)),
+            4
+        );
+        assert_eq!(
+            n.economy
+                .available(Commodity::Resource(ResourceType::Timber)),
+            6
+        );
         let _ = n.economy.release(id);
     }
 
@@ -1564,19 +1708,33 @@ mod tests {
     fn reserve_fails_when_insufficient_available() {
         let mut n = sample_great_power();
         n.economy.add(Commodity::Material(MaterialType::Lumber), 3);
-        let result = n.economy.reserve(Commodity::Material(MaterialType::Lumber), 5);
-        assert!(matches!(result, Err(crate::DomainError::InsufficientInventory { .. })));
-        assert_eq!(n.economy.amount(Commodity::Material(MaterialType::Lumber)), 3);
+        let result = n
+            .economy
+            .reserve(Commodity::Material(MaterialType::Lumber), 5);
+        assert!(matches!(
+            result,
+            Err(crate::DomainError::InsufficientInventory { .. })
+        ));
+        assert_eq!(
+            n.economy.amount(Commodity::Material(MaterialType::Lumber)),
+            3
+        );
     }
 
     #[test]
     fn commit_deducts_from_total_and_clears_reservation() {
         let mut n = sample_great_power();
         n.economy.add(Commodity::Goods(GoodsType::Furniture), 6);
-        let id = n.economy.reserve(Commodity::Goods(GoodsType::Furniture), 2).unwrap();
+        let id = n
+            .economy
+            .reserve(Commodity::Goods(GoodsType::Furniture), 2)
+            .unwrap();
         n.economy.commit(id).unwrap();
         assert_eq!(n.economy.amount(Commodity::Goods(GoodsType::Furniture)), 4);
-        assert_eq!(n.economy.reserved(Commodity::Goods(GoodsType::Furniture)), 0);
+        assert_eq!(
+            n.economy.reserved(Commodity::Goods(GoodsType::Furniture)),
+            0
+        );
         assert!(n.economy.reservation_ledger.is_empty());
     }
 
@@ -1584,10 +1742,16 @@ mod tests {
     fn release_restores_available_without_consuming() {
         let mut n = sample_great_power();
         n.economy.add(Commodity::Resource(ResourceType::Gold), 5);
-        let id = n.economy.reserve(Commodity::Resource(ResourceType::Gold), 3).unwrap();
+        let id = n
+            .economy
+            .reserve(Commodity::Resource(ResourceType::Gold), 3)
+            .unwrap();
         n.economy.release(id).unwrap();
         assert_eq!(n.economy.amount(Commodity::Resource(ResourceType::Gold)), 5);
-        assert_eq!(n.economy.reserved(Commodity::Resource(ResourceType::Gold)), 0);
+        assert_eq!(
+            n.economy.reserved(Commodity::Resource(ResourceType::Gold)),
+            0
+        );
     }
 
     #[test]
@@ -1595,7 +1759,10 @@ mod tests {
         let mut n = sample_great_power();
         let fake_id = ReservationId(9999);
         let result = n.economy.release(fake_id);
-        assert!(matches!(result, Err(crate::DomainError::ReservationNotFound(_))));
+        assert!(matches!(
+            result,
+            Err(crate::DomainError::ReservationNotFound(_))
+        ));
     }
 
     #[test]
@@ -1603,21 +1770,41 @@ mod tests {
         let mut n = sample_great_power();
         n.economy.add(Commodity::Resource(ResourceType::Coal), 10);
         n.economy.add(Commodity::Material(MaterialType::Steel), 8);
-        n.economy.reserve(Commodity::Resource(ResourceType::Coal), 5).unwrap();
-        n.economy.reserve(Commodity::Material(MaterialType::Steel), 3).unwrap();
+        n.economy
+            .reserve(Commodity::Resource(ResourceType::Coal), 5)
+            .unwrap();
+        n.economy
+            .reserve(Commodity::Material(MaterialType::Steel), 3)
+            .unwrap();
         n.economy.release_all_reservations();
         assert!(n.economy.reservation_ledger.is_empty());
-        assert_eq!(n.economy.available(Commodity::Resource(ResourceType::Coal)), 10);
-        assert_eq!(n.economy.available(Commodity::Material(MaterialType::Steel)), 8);
+        assert_eq!(
+            n.economy.available(Commodity::Resource(ResourceType::Coal)),
+            10
+        );
+        assert_eq!(
+            n.economy
+                .available(Commodity::Material(MaterialType::Steel)),
+            8
+        );
     }
 
     #[test]
     fn reservation_ledger_tracks_quantity() {
         let mut n = sample_great_power();
         n.economy.add(Commodity::Resource(ResourceType::Iron), 12);
-        let id = n.economy.reserve(Commodity::Resource(ResourceType::Iron), 4).unwrap();
-        assert_eq!(n.economy.reservation_ledger.get(&id).map(|(_, q)| *q), Some(4));
-        assert_eq!(n.economy.reserved(Commodity::Resource(ResourceType::Iron)), 4);
+        let id = n
+            .economy
+            .reserve(Commodity::Resource(ResourceType::Iron), 4)
+            .unwrap();
+        assert_eq!(
+            n.economy.reservation_ledger.get(&id).map(|(_, q)| *q),
+            Some(4)
+        );
+        assert_eq!(
+            n.economy.reserved(Commodity::Resource(ResourceType::Iron)),
+            4
+        );
         let _ = n.economy.release(id);
     }
 
@@ -1625,8 +1812,13 @@ mod tests {
     fn reserved_leq_total_invariant() {
         let mut n = sample_great_power();
         n.economy.add(Commodity::Resource(ResourceType::Wool), 7);
-        n.economy.reserve(Commodity::Resource(ResourceType::Wool), 4).unwrap();
-        assert!(n.economy.reserved(Commodity::Resource(ResourceType::Wool)) <= n.economy.amount(Commodity::Resource(ResourceType::Wool)));
+        n.economy
+            .reserve(Commodity::Resource(ResourceType::Wool), 4)
+            .unwrap();
+        assert!(
+            n.economy.reserved(Commodity::Resource(ResourceType::Wool))
+                <= n.economy.amount(Commodity::Resource(ResourceType::Wool))
+        );
     }
 
     #[test]
@@ -1634,7 +1826,10 @@ mod tests {
         // F-009 regression: commit must fail if stock was depleted after reservation.
         let mut n = sample_great_power();
         n.economy.add(Commodity::Material(MaterialType::Lumber), 10);
-        let id = n.economy.reserve(Commodity::Material(MaterialType::Lumber), 8).unwrap();
+        let id = n
+            .economy
+            .reserve(Commodity::Material(MaterialType::Lumber), 8)
+            .unwrap();
 
         // External depletion via legacy mutator bypasses reservation invariants.
         n.consume_material(MaterialType::Lumber, 5);
@@ -1642,7 +1837,10 @@ mod tests {
         // Inventory is now 5, but we reserved 8 — commit must fail.
         let result = n.economy.commit(id);
         assert!(
-            matches!(result, Err(crate::DomainError::InsufficientInventory { .. })),
+            matches!(
+                result,
+                Err(crate::DomainError::InsufficientInventory { .. })
+            ),
             "expected InsufficientInventory, got {:?}",
             result
         );

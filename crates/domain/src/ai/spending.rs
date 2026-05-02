@@ -1383,13 +1383,13 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
 
         let cost = unit_type.stats().cost;
 
-        let can_afford = nation.economy.treasury >= cost;
+        let can_afford = nation.can_recruit_unit(unit_type);
         (capital, nation_name, unit_type, cost, can_afford)
     };
     if can_afford {
         let unit_id = game.alloc_unit_id();
         if let Some(nation) = game.get_nation_mut(nation_id) {
-            nation.economy.treasury -= cost;
+            nation.deduct_recruit_resources(unit_type);
             let unit = ArmyUnit::new(unit_id, unit_type, nation_id, capital);
             nation.military.army.push(unit);
             actions.push(super::AiAction {
