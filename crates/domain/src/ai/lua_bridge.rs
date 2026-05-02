@@ -607,7 +607,25 @@ pub fn load_unit_stats(
                 return None;
             }
         };
-        let era_n: u8 = row.get::<u8>("era").unwrap_or(1);
+        // F-007 (round-2): every numeric/boolean field is required so a
+        // typo in `units.lua` doesn't silently turn into zero values that
+        // would corrupt combat math. `prerequisite_tech` stays optional
+        // because units without a tech gate omit the field entirely.
+        macro_rules! require {
+            ($field:expr, $ty:ty) => {
+                match row.get::<$ty>($field) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!(
+                            "[units.lua] '{}' missing/invalid `{}` ({}), refusing partial load",
+                            name, $field, e
+                        );
+                        return None;
+                    }
+                }
+            };
+        }
+        let era_n: u8 = require!("era", u8);
         let era = match era_n {
             1 => Era::One,
             2 => Era::Two,
@@ -620,17 +638,17 @@ pub fn load_unit_stats(
                 return None;
             }
         };
-        let cost_dollars: i64 = row.get("cost").unwrap_or(0);
-        let maint_dollars: i64 = row.get("maintenance_per_turn").unwrap_or(0);
+        let cost_dollars: i64 = require!("cost", i64);
+        let maint_dollars: i64 = require!("maintenance_per_turn", i64);
         let stats = UnitStats {
-            firepower: row.get("firepower").unwrap_or(0),
-            firepower_mounted: row.get("firepower_mounted").unwrap_or(0),
-            defense: row.get("defense").unwrap_or(0),
-            defense_terrain_bonus: row.get("defense_terrain_bonus").unwrap_or(0),
-            range: row.get("range").unwrap_or(0),
-            movement: row.get("movement").unwrap_or(0),
-            arms_required: row.get("arms_required").unwrap_or(0),
-            requires_horse: row.get("requires_horse").unwrap_or(false),
+            firepower: require!("firepower", u32),
+            firepower_mounted: require!("firepower_mounted", u32),
+            defense: require!("defense", u32),
+            defense_terrain_bonus: require!("defense_terrain_bonus", u32),
+            range: require!("range", u32),
+            movement: require!("movement", u32),
+            arms_required: require!("arms_required", u32),
+            requires_horse: require!("requires_horse", bool),
             category,
             cost: Money::dollars(cost_dollars),
             maintenance_per_turn: Money::dollars(maint_dollars),

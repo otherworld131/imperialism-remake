@@ -964,16 +964,36 @@ mod tests {
         assert_eq!(data.ship_stats.len(), 13);
     }
 
-    /// F-001 follow-up: assert the Lua-loaded unit map (the runtime source
-    /// of truth) agrees with the hardcoded `stats_baseline()` table for every
-    /// variant on the fields combat actually consumes today (FPN/cost/arms/
-    /// defense/range/movement). If a future drift introduces a manual-vs-
-    /// Lua mismatch this test catches it before it ships.
+    /// F-001 follow-up (with F-008 fix): drive the Lua loader directly
+    /// (instead of going through `GameData::default()` which falls back to
+    /// `default_unit_stats()` if Lua fails) so this test can never silently
+    /// pass under the hardcoded fallback. Asserts the loaded map covers
+    /// every hardcoded variant and agrees on every combat-relevant field.
     #[cfg(feature = "lua")]
     #[test]
     fn lua_baseline_unit_stats_match() {
-        let data = GameData::default();
-        for (unit_type, lua_stats) in &data.unit_stats {
+        let engine = crate::scripting::LuaEngine::new()
+            .expect("Lua engine must initialise");
+        crate::ai::lua_bridge::load_scripts(&engine)
+            .expect("scripts/config/*.lua must execute cleanly");
+        let lua_map = crate::ai::lua_bridge::load_unit_stats(&engine)
+            .expect("scripts/config/units.lua must load all unit variants");
+        // Coverage check: Lua must define exactly the same set of variants
+        // as the hardcoded baseline.
+        let baseline_map = default_unit_stats();
+        assert_eq!(
+            lua_map.len(),
+            baseline_map.len(),
+            "Lua unit map size must match baseline"
+        );
+        for unit_type in baseline_map.keys() {
+            assert!(
+                lua_map.contains_key(unit_type),
+                "Lua missing variant {:?}",
+                unit_type
+            );
+        }
+        for (unit_type, lua_stats) in &lua_map {
             let baseline = unit_type.stats_baseline();
             assert_eq!(
                 lua_stats.firepower, baseline.firepower,

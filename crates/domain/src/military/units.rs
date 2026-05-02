@@ -168,6 +168,16 @@ pub struct ArmyUnit {
 /// is the fallback for tests that bypass GameData and for the brief
 /// window during snapshot restore before GameData rehydrates.
 ///
+/// **Single-canonical-map invariant** (F-009 from the round-2 review):
+/// every install must produce equivalent stat values for the same key,
+/// because the registry is shared across all `GameData` instances in the
+/// process. The codebase satisfies this today because `units.lua` is the
+/// only authoritative source and is loaded identically by every init path.
+/// If we ever support multiple coexisting unit-stat datasets (mods, scenario
+/// overrides, A/B testing), this needs to become per-`GameData` lookup
+/// (`GameData::unit_stats(t)` already exists as the field; just route
+/// `ArmyUnitType::stats()` through a passed-in `&GameData`).
+///
 /// Resolves F-002 from the round-1 review: making Lua actually authoritative
 /// at runtime instead of leaving `data.unit_stats` shelf-bound.
 static UNIT_STATS_REGISTRY: std::sync::OnceLock<
