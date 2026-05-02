@@ -539,10 +539,15 @@ pub fn load_scripts(engine: &LuaEngine) -> Result<(), String> {
 /// Load land-unit stats from the Lua `units` global table populated by
 /// `scripts/config/units.lua`.
 ///
-/// Returns `None` if the table is absent or contains no rows; callers fall
-/// back to `default_unit_stats()` (which mirrors the same numbers in Rust).
-/// Per-row parse failures are logged and skipped — a typo on one unit must
-/// not silently disable the rest.
+/// Strict (fail-fast) loader: returns `None` if the table is absent, if
+/// any row is malformed, if any required field is missing/invalid, if a
+/// row references an unknown unit name, or if the resulting map doesn't
+/// cover every variant of [`crate::military::units::ArmyUnitType`].
+/// Callers fall back to `default_unit_stats()` (the same numbers in Rust)
+/// rather than running with a partial table.
+///
+/// `prerequisite_tech` is the only optional field — units without a tech
+/// gate omit it entirely.
 pub fn load_unit_stats(
     engine: &LuaEngine,
 ) -> Option<
