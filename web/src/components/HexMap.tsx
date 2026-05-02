@@ -2147,11 +2147,13 @@ export default function HexMap({
           ctx.strokeRect(px - ds + HEX_SIZE * 0.3, py - ds, ds * 2, ds * 2);
         }
         if (tile.has_port) {
+          const ax = px - HEX_SIZE * 0.3;
           ctx.lineWidth = 1;
           ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-          ctx.strokeText('\u2693', px - HEX_SIZE * 0.3, py);
-          ctx.fillStyle = 'rgba(70,130,200,0.9)';
-          ctx.fillText('\u2693', px - HEX_SIZE * 0.3, py);
+          ctx.strokeText('\u2693', ax, py);
+          // Red anchor when blockaded (card #408), blue otherwise.
+          ctx.fillStyle = tile.port_blockaded ? 'rgba(200,40,40,0.95)' : 'rgba(70,130,200,0.9)';
+          ctx.fillText('\u2693', ax, py);
         }
         if (tile.has_fort) {
           const fl = tile.fort_level || 1;

@@ -18,6 +18,7 @@ export interface TileData {
   owner: string; owner_color: string; province: string;
   province_id: number | null;
   has_railroad: boolean; has_depot: boolean; has_port: boolean;
+  port_blockaded: boolean;
   has_fort: boolean; fort_level: number;
   map_width: number;
   map_height: number;

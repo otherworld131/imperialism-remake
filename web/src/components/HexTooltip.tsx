@@ -82,7 +82,11 @@ export default function HexTooltip({
           )}
           {tile.is_capital && <div>{'\u2605'} Capital</div>}
           {tile.has_railroad && <div>Railroad</div>}
-          {tile.has_port && <div>Port</div>}
+          {tile.has_port && (
+            <div style={tile.port_blockaded ? { color: '#e66' } : undefined}>
+              Port{tile.port_blockaded ? ' (blockaded)' : ''}
+            </div>
+          )}
           {tile.has_depot && <div>Depot</div>}
           {tile.has_fort && <div>Fort L{tile.fort_level}</div>}
           {tile.civilian_on_tile && (
