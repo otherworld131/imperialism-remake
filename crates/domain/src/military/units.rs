@@ -79,6 +79,42 @@ pub enum ArmyUnitType {
     GarrisonArtillery,
 }
 
+impl std::fmt::Display for ArmyUnitType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Minutemen => "Minutemen",
+            Self::Militia => "Militia",
+            Self::Conscript => "Conscript",
+            Self::Skirmishers => "Skirmishers",
+            Self::Sharpshooters => "Sharpshooters",
+            Self::Rangers => "Rangers",
+            Self::Regulars => "Regulars",
+            Self::RifleInfantry => "Rifle Infantry",
+            Self::Infantry => "Infantry",
+            Self::Grenadiers => "Grenadiers",
+            Self::Guards => "Guards",
+            Self::MachineGunners => "Machine Gunners",
+            Self::Hussars => "Hussars",
+            Self::Carbineers => "Carbineers",
+            Self::Mechanised => "Mechanised",
+            Self::Cuirassiers => "Cuirassiers",
+            Self::Armour => "Armour",
+            Self::LightArtillery => "Light Artillery",
+            Self::FieldArtillery => "Field Artillery",
+            Self::MobileArtillery => "Mobile Artillery",
+            Self::Artillery => "Artillery",
+            Self::SiegeArtillery => "Siege Artillery",
+            Self::RailroadGuns => "Railroad Guns",
+            Self::Sapper => "Sapper",
+            Self::CombatEngineer => "Combat Engineer",
+            Self::Saboteur => "Saboteur",
+            Self::General => "General",
+            Self::GarrisonArtillery => "Garrison Artillery",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 impl std::str::FromStr for ArmyUnitType {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {

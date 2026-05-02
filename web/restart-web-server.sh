@@ -9,6 +9,7 @@ WASM_DIR="$REPO_ROOT/crates/wasm-bridge"
 WASM_STAMP="$WASM_DIR/pkg/wasm_bridge_bg.wasm"
 WASM_MODE_STAMP="$WASM_DIR/pkg/.restart-web-server-build-mode"
 NPM_INSTALL_STAMP="$WEB_DIR/node_modules/.install-stamp"
+STATUS_FILE="$WEB_DIR/public/dev-server-status.json"
 FORCE_REBUILD=0
 WASM_BUILD_MODE="dev-no-opt"
 DEV_SERVER_PORT=43173
@@ -76,10 +77,44 @@ needs_npm_install() {
   return 1
 }
 
+write_status() {
+  local phase="$1"
+  local detail="$2"
+
+  mkdir -p "$(dirname "$STATUS_FILE")"
+  cat > "$STATUS_FILE" <<EOF
+{
+  "phase": "$phase",
+  "detail": "$detail",
+  "mode": "$WASM_BUILD_MODE",
+  "updatedAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+}
+EOF
+}
+
+wait_for_dev_server() {
+  local attempts=60
+  local url="http://localhost:$DEV_SERVER_PORT/dev-server-status.json"
+
+  while (( attempts > 0 )); do
+    if curl --silent --fail "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+    attempts=$((attempts - 1))
+  done
+
+  return 1
+}
+
+trap 'write_status "failed" "Restart failed"' ERR
+
+write_status "restarting" "Stopping current dev server"
 echo ">> Killing dev server..."
 lsof -ti :"$DEV_SERVER_PORT" | xargs kill 2>/dev/null || true
 
 if needs_npm_install; then
+  write_status "installing-deps" "Installing web dependencies"
   echo ">> Installing web dependencies..."
   (
     cd "$WEB_DIR"
@@ -89,6 +124,7 @@ if needs_npm_install; then
 fi
 
 if needs_wasm_rebuild || [[ "$REPO_ROOT/Cargo.lock" -nt "$WASM_STAMP" ]] || [[ "$REPO_ROOT/Cargo.toml" -nt "$WASM_STAMP" ]]; then
+  write_status "building-wasm" "Compiling WASM bundle"
   echo ">> Building WASM ($WASM_BUILD_MODE)..."
   if [[ "$WASM_BUILD_MODE" == "opt" ]]; then
     (cd "$WASM_DIR" && wasm-pack build --target web)
@@ -97,10 +133,20 @@ if needs_wasm_rebuild || [[ "$REPO_ROOT/Cargo.lock" -nt "$WASM_STAMP" ]] || [[ "
   fi
   printf '%s\n' "$WASM_BUILD_MODE" > "$WASM_MODE_STAMP"
 else
+  write_status "wasm-ready" "WASM bundle already up to date"
   echo ">> WASM build is up to date for mode '$WASM_BUILD_MODE'; skipping rebuild."
 fi
 
+write_status "starting-dev-server" "Booting Vite dev server"
 echo ">> Starting dev server..."
 (cd "$WEB_DIR" && npm run dev -- --port "$DEV_SERVER_PORT" &)
+
+if wait_for_dev_server; then
+  write_status "ready" "Ready"
+else
+  write_status "failed" "Timed out waiting for dev server"
+  echo ">> Timed out waiting for dev server on http://localhost:$DEV_SERVER_PORT" >&2
+  exit 1
+fi
 
 echo ">> Done. Dev server starting on http://localhost:$DEV_SERVER_PORT"

@@ -445,10 +445,13 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // under-strength province militia tick back toward default.
     regenerate_garrisons(game);
 
-    // 8. Report available techs
+    // 8. Apply any pending human tech research queued from the Tech screen.
+    resolve_human_tech_research(game, &mut report);
+
+    // 8b. Report available techs
     report_available_techs(game, &mut report);
 
-    // 8b. Resolve technology for AI nations (generate TechnologyResearched events)
+    // 8c. Resolve technology for AI nations (generate TechnologyResearched events)
     resolve_technology(game, &mut report);
 
     // 9. Council of Governors vote (at decade boundaries)
@@ -4903,6 +4906,69 @@ fn resolve_naval_combat(game: &mut GameState, report: &mut TurnReport) {
 
         report.naval_battles.push(result);
     }
+}
+
+/// Apply any tech research the human player queued from the Tech screen.
+/// Validates that the tech is still available (year window, prerequisites, treasury)
+/// and deducts the cost, then clears the queue regardless of outcome.
+fn resolve_human_tech_research(game: &mut GameState, report: &mut TurnReport) {
+    let human_id = game.human_player_nation;
+    let pending = match game.get_nation(human_id) {
+        Some(n) => n.pending_tech_research,
+        None => return,
+    };
+    let tech_id = match pending {
+        Some(id) => id,
+        None => return,
+    };
+    // Clear the pending order regardless of whether it succeeds.
+    if let Some(n) = game.get_nation_mut(human_id) {
+        n.pending_tech_research = None;
+    }
+
+    let year = game.turn.year();
+    let (tech_cost, tech_name) = {
+        let nation = match game.get_nation(human_id) {
+            Some(n) => n,
+            None => return,
+        };
+        // Verify still available (year window + prerequisites + not already researched).
+        let available = game
+            .game_data
+            .tech_tree
+            .available_techs(&nation.researched_techs, year);
+        match available.iter().find(|t| t.id == tech_id) {
+            Some(t) => (t.cost, t.name.clone()),
+            None => return, // expired or already researched — silently drop
+        }
+    };
+
+    let nation = match game.get_nation_mut(human_id) {
+        Some(n) => n,
+        None => return,
+    };
+    if nation.economy.treasury.checked_sub(tech_cost).is_none() {
+        // Notify the player via a headline so the failed queue is visible.
+        report.newspaper_headlines.push(
+            Headline::new(
+                format!(
+                    "Research of {} cancelled: insufficient funds (${} required).",
+                    tech_name,
+                    tech_cost.as_dollars()
+                ),
+                HeadlineCategory::Military,
+            )
+            .for_nation(human_id),
+        );
+        return;
+    }
+    nation.economy.treasury -= tech_cost;
+    nation.research_tech_in_year(tech_id, year);
+
+    report.events.push(DomainEvent::TechnologyResearched(TechnologyResearched {
+        nation: human_id,
+        tech: tech_id,
+    }));
 }
 
 /// Report which technologies are available for research by the human player.
@@ -14483,5 +14549,87 @@ mod tests {
             nation.military.total_arms_built, 6,
             "militia and generals must not count toward total_arms_built"
         );
+    }
+
+    // ── resolve_human_tech_research tests ────────────────────────────────────
+
+    #[test]
+    fn queued_tech_researched_at_end_of_turn() {
+        let mut game = test_game_state();
+        // Turn 1 = 1815 Q1; "High Pressure Steam Engine" (id=1) is free and available.
+        let tech_id = crate::events::TechId(1);
+        game.get_nation_mut(NationId(1)).unwrap().pending_tech_research = Some(tech_id);
+
+        let mut report = TurnReport::empty();
+        resolve_human_tech_research(&mut game, &mut report);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert!(nation.has_researched(tech_id), "tech should be researched after turn");
+        assert_eq!(nation.pending_tech_research, None, "pending queue should be cleared");
+        assert!(!nation.researched_tech_years.is_empty(), "year should be recorded");
+        assert_eq!(nation.researched_tech_years[0], 1815, "year should match turn 1 year");
+        assert!(
+            report.events.iter().any(|e| matches!(e, DomainEvent::TechnologyResearched(_))),
+            "TechnologyResearched event should be emitted"
+        );
+    }
+
+    #[test]
+    fn queued_tech_fails_insufficient_funds_emits_headline() {
+        let mut game = test_game_state();
+        // Cotton Gin (id=3) costs $1000. Set treasury to $500.
+        // Cotton Gin is available from 1816, so advance turn to 5 (1816 Q1).
+        game.turn = TurnNumber::new(5);
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.economy.treasury = Money::dollars(500);
+        let tech_id = crate::events::TechId(3); // Cotton Gin, $1000
+        nation.pending_tech_research = Some(tech_id);
+
+        let mut report = TurnReport::empty();
+        resolve_human_tech_research(&mut game, &mut report);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert!(!nation.has_researched(tech_id), "tech should NOT be researched on funds failure");
+        assert_eq!(nation.pending_tech_research, None, "pending queue cleared even on failure");
+        assert_eq!(nation.economy.treasury, Money::dollars(500), "treasury unchanged");
+        assert!(
+            !report.newspaper_headlines.is_empty(),
+            "a failure headline should be emitted"
+        );
+    }
+
+    #[test]
+    fn queued_tech_silently_dropped_when_expired() {
+        let mut game = test_game_state();
+        // Cotton Gin (id=3) expires after 1820. Advance to turn 25 = 1821 Q1.
+        game.turn = TurnNumber::new(25);
+        let tech_id = crate::events::TechId(3);
+        game.get_nation_mut(NationId(1)).unwrap().pending_tech_research = Some(tech_id);
+
+        let mut report = TurnReport::empty();
+        resolve_human_tech_research(&mut game, &mut report);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert!(!nation.has_researched(tech_id), "expired tech should not be researched");
+        assert_eq!(nation.pending_tech_research, None, "queue should be cleared");
+        // No headline for expired tech — it was silently dropped
+        assert!(report.newspaper_headlines.is_empty(), "no headline for expired tech");
+    }
+
+    #[test]
+    fn queued_tech_cancel_leaves_no_pending() {
+        let mut game = test_game_state();
+        let tech_id = crate::events::TechId(1);
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.pending_tech_research = Some(tech_id);
+        // Cancel by clearing directly (as wasm_cancel_tech_research does)
+        nation.pending_tech_research = None;
+
+        let mut report = TurnReport::empty();
+        resolve_human_tech_research(&mut game, &mut report);
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert!(!nation.has_researched(tech_id), "cancelled tech should not be researched");
+        assert!(report.events.is_empty(), "no events for cancelled tech");
     }
 }

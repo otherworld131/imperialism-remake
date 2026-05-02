@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   initWasm, processTurn, processTurns, setHumanPlayer,
   newGame, newScenarioGame, newObserverGame, newObserverScenarioGame,
-  getMapData, getNavyMarkers, getSeaZones, getAvailableTechs, researchTech,
+  getMapData, getNavyMarkers, getSeaZones,
   getDiplomacyOverlay, getMilitaryOverlay,
   getUnitsInProvince, getCivilians, getShips, getValidMoveTargets, getBuildableUnits,
   queueUnitMove, cancelUnitMove, disbandUnit, deployCivilian, recallCivilian, engineerBuild,
@@ -23,6 +23,7 @@ import {
   getBattleArchive,
   getLedgerData,
   getAllGPLedgerData,
+  getTechScreenData, queueTechResearch, cancelTechResearch,
   parseGameJson,
 } from './wasm';
 import type {
@@ -32,6 +33,7 @@ import type {
   TransportData, IndustryData, TradeData, DiplomacyScreenData, ProposalData,
   ArchivedNewspaper, PoliticalSnapshot, LedgerData, GPLedgerEntry,
   LandBattleData, NavalBattleData, ArchivedBattleTurn,
+  TechScreenData,
 } from './wasm';
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -46,21 +48,22 @@ const CATEGORY_COLORS: Record<string, string> = {
   default:   '#e0d8c0',
 };
 
-type ScreenTab = 'map' | 'transport' | 'industry' | 'diplomacy' | 'trade' | 'ledger' | 'newspaper' | 'battle' | 'legend';
+type ScreenTab = 'map' | 'transport' | 'industry' | 'diplomacy' | 'trade' | 'tech' | 'ledger' | 'newspaper' | 'battle' | 'legend';
 const SCREEN_TABS: { key: ScreenTab; label: string; hotkey: string }[] = [
   { key: 'map', label: 'Map', hotkey: 'F1' },
   { key: 'transport', label: 'Transport', hotkey: 'F2' },
   { key: 'industry', label: 'Industry', hotkey: 'F3' },
   { key: 'diplomacy', label: 'Diplomacy', hotkey: 'F4' },
   { key: 'trade', label: 'Trade', hotkey: 'F5' },
-  { key: 'ledger', label: 'Ledger', hotkey: 'F6' },
-  { key: 'newspaper', label: 'News', hotkey: 'F7' },
-  { key: 'battle', label: 'Battles', hotkey: 'F8' },
-  { key: 'legend', label: 'Legend', hotkey: 'F9' },
+  { key: 'tech', label: 'Tech', hotkey: 'F6' },
+  { key: 'ledger', label: 'Ledger', hotkey: 'F7' },
+  { key: 'newspaper', label: 'News', hotkey: 'F8' },
+  { key: 'battle', label: 'Battles', hotkey: 'F9' },
+  { key: 'legend', label: 'Legend', hotkey: 'F10' },
 ];
 
 function isFullScreen(screen: ScreenTab): boolean {
-  return ['ledger', 'trade', 'newspaper', 'battle', 'legend'].includes(screen);
+  return ['ledger', 'trade', 'tech', 'newspaper', 'battle', 'legend'].includes(screen);
 }
 
 
@@ -80,6 +83,7 @@ import BattleScreen from './components/BattleScreen';
 import LegendScreen from './components/LegendScreen';
 import ProposalModal from './components/ProposalModal';
 import BusyOverlay from './components/BusyOverlay';
+import TechScreen from './components/TechScreen';
 import Flag from './components/Flag';
 import { resourceLabel } from './resourceEmoji';
 
@@ -132,8 +136,7 @@ function App() {
   const [gameState, setGameState] = useState<any>(null);
   const [selectedTile, setSelectedTile] = useState<TileData | null>(null);
   const [headlines, setHeadlines] = useState<Headline[]>([]);
-  const [techs, setTechs] = useState<any[]>([]);
-  const [showTech, setShowTech] = useState(false);
+  const [techScreenData, setTechScreenData] = useState<TechScreenData | null>(null);
   const [activeScreen, setActiveScreen] = useState<ScreenTab>('map');
   const [gameStarted, setGameStarted] = useState(false);
   const [showHiddenResources, setShowHiddenResources] = useState(false);
@@ -317,15 +320,14 @@ function App() {
     // Fetch everything in parallel, then commit atomically if we're still the latest call.
     const nid = state.human_player_nation;
     const [
-      mapData, navyData, seaZonesData, techsData,
+      mapData, navyData, seaZonesData,
       civiliansData, shipsRes, buildableData,
       transportRes, industryRes, tradeRes,
-      diploRes, ledgerRes, gpLedgerRes,
+      diploRes, ledgerRes, gpLedgerRes, techRes,
     ] = await Promise.all([
       getMapData(json, disableFogOfWar),
       getNavyMarkers(json, disableFogOfWar),
       getSeaZones(json),
-      getAvailableTechs(json),
       getCivilians(json, nid),
       getShips(json, nid),
       getBuildableUnits(json, nid),
@@ -335,6 +337,7 @@ function App() {
       getDiplomacyScreenData(json, nid),
       getLedgerData(json, nid),
       getAllGPLedgerData(json),
+      getTechScreenData(json),
     ]);
     if (!isCurrent()) return false;
     setGameJson(json);
@@ -342,7 +345,6 @@ function App() {
     setTiles(mapData);
     setNavyMarkers(navyData);
     setSeaZones(seaZonesData);
-    setTechs(techsData);
     setCivilians(civiliansData);
     setShipsData(shipsRes);
     setBuildable(buildableData);
@@ -350,6 +352,7 @@ function App() {
     setIndustryData(industryRes);
     setTradeData(tradeRes);
     setDiplomacyScreenData(diploRes);
+    setTechScreenData(techRes);
     setLedgerData(ledgerRes);
     // Rotate the previous-ledger snapshot only when the turn number has
     // actually advanced since the last captured snapshot. This keeps the
@@ -636,7 +639,7 @@ function App() {
         e.preventDefault();
         if (activeScreen === 'newspaper') {
           dismissNewspaper();
-        } else if (!showTech && !showProposals) {
+        } else if (!showProposals) {
           handleEndTurn();
         }
       }
@@ -645,7 +648,6 @@ function App() {
         else if (isDeployMode) { setIsDeployMode(false); setDeployingCivilian(null); setDeployableTiles(new Set()); }
         else if (showProposals) setShowProposals(false);
         else if (activeScreen === 'newspaper') dismissNewspaper();
-        else if (showTech) setShowTech(false);
         else if (isFullScreen(activeScreen)) setActiveScreen('map');
       }
       if (e.code === 'F1') { e.preventDefault(); setActiveScreen('map'); }
@@ -653,14 +655,15 @@ function App() {
       if (e.code === 'F3') { e.preventDefault(); setActiveScreen('industry'); }
       if (e.code === 'F4') { e.preventDefault(); setActiveScreen('diplomacy'); }
       if (e.code === 'F5') { e.preventDefault(); setActiveScreen('trade'); }
-      if (e.code === 'F6') { e.preventDefault(); setActiveScreen('ledger'); }
-      if (e.code === 'F7') { e.preventDefault(); setActiveScreen('newspaper'); }
-      if (e.code === 'F8') { e.preventDefault(); setActiveScreen('battle'); }
-      if (e.code === 'F9') { e.preventDefault(); setActiveScreen('legend'); }
+      if (e.code === 'F6') { e.preventDefault(); setActiveScreen('tech'); }
+      if (e.code === 'F7') { e.preventDefault(); setActiveScreen('ledger'); }
+      if (e.code === 'F8') { e.preventDefault(); setActiveScreen('newspaper'); }
+      if (e.code === 'F9') { e.preventDefault(); setActiveScreen('battle'); }
+      if (e.code === 'F10') { e.preventDefault(); setActiveScreen('legend'); }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeScreen, showTech, showProposals, handleEndTurn, dismissNewspaper, selectedUnitIds, isDeployMode]);
+  }, [activeScreen, showProposals, handleEndTurn, dismissNewspaper, selectedUnitIds, isDeployMode]);
 
   // Fetch overlay data when map mode, active screen, or selected nation changes
   useEffect(() => {
@@ -1231,18 +1234,23 @@ function App() {
     return null;
   }, [mapMode, selectedNation, isObserver, getDiploInfoForTile, getMilitaryInfoForTile]);
 
-  const handleResearch = async (techName: string) => {
+  const handleQueueTech = useCallback(async (techName: string) => {
     await runMutation(async () => {
       if (isObserver) return;
-      const result = await researchTech(gameJson, techName);
-      try {
-        const parsed = parseGameJson(result);
-        if (parsed.error) { alert(parsed.error); return; }
-      } catch { /* applyGameJson will handle parse errors */ }
-      if (!(await applyGameJson(result))) return;
-      setShowTech(false);
+      const cmd = await queueTechResearch(gameJson, techName);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Queue tech failed: ${cmd.error}`);
     });
-  };
+  }, [gameJson, applyGameJson, showError, runMutation, isObserver]);
+
+  const handleCancelTech = useCallback(async () => {
+    await runMutation(async () => {
+      if (isObserver) return;
+      const cmd = await cancelTechResearch(gameJson);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Cancel tech failed: ${cmd.error}`);
+    });
+  }, [gameJson, applyGameJson, showError, runMutation, isObserver]);
 
   if (loading) return <div style={styles.loading}>Loading Imperialism...</div>;
   if (wasmError) return (
@@ -1315,7 +1323,6 @@ function App() {
             ))}
           </select>
         )}
-        {!isObserver && <button onClick={() => setShowTech(!showTech)} style={styles.btn}>Tech</button>}
         <button onClick={() => setActiveScreen('newspaper')} style={styles.btn}>History</button>
         {isObserver && (
           <>
@@ -1411,6 +1418,16 @@ function App() {
         </div>
 
         {/* Full-screen views */}
+        {activeScreen === 'tech' && techScreenData && (
+          <TechScreen
+            data={techScreenData}
+            year={year}
+            isObserver={isObserver}
+            onQueue={handleQueueTech}
+            onCancel={handleCancelTech}
+            onClose={() => setActiveScreen('map')}
+          />
+        )}
         {activeScreen === 'ledger' && (
           <LedgerPanel entries={gpLedgerData} previousEntries={prevGpLedgerData} nations={gameState?.nations || []} onClose={() => setActiveScreen('map')} />
         )}
@@ -1853,24 +1870,6 @@ function App() {
         </div>
       )}
 
-      {/* Tech panel */}
-      {showTech && (
-        <div style={styles.modal} onClick={() => setShowTech(false)}>
-          <div style={styles.modalContent} onClick={e => e.stopPropagation()}>
-            <h2>Available Technologies</h2>
-            {techs.length === 0 ? <p>No technologies available this year.</p> :
-              techs.map((t, i) => (
-                <div key={i} style={styles.techItem}>
-                  <span>{t.name} (${t.cost})</span>
-                  <button onClick={() => handleResearch(t.name)} style={styles.btn}>Research</button>
-                </div>
-              ))
-            }
-            <button onClick={() => setShowTech(false)} style={styles.btn}>Close</button>
-          </div>
-        </div>
-      )}
-
       {/* Proposal Modal — appears after newspaper when there are pending proposals */}
       {showProposals && proposalData && proposalData.proposals.length > 0 && (
         <ProposalModal
@@ -1925,7 +1924,6 @@ const styles: Record<string, React.CSSProperties> = {
   modal: { position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 100 },
   modalContent: { background: '#1a1a2e', border: '2px solid #daa520', padding: 24, maxWidth: 500, maxHeight: '80vh', overflowY: 'auto' as const },
   headline: { margin: '6px 0', fontSize: 'var(--ui-font-size, 14px)' },
-  techItem: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' },
 };
 
 export default App;

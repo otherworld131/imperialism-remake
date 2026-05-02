@@ -724,6 +724,11 @@ pub struct Nation {
     pub economy: NationEconomy,
     /// Technologies that have been researched by this nation.
     pub researched_techs: Vec<TechId>,
+    /// Year each tech was researched: parallel to `researched_techs`.
+    pub researched_tech_years: Vec<u32>,
+    /// Technology queued for research at the next end-of-turn.
+    /// Set by the human player via the Tech screen; applied by the turn processor.
+    pub pending_tech_research: Option<TechId>,
     /// Military forces, civilian improvers, and transport.
     pub military: NationMilitary,
     /// Diplomatic and political state.
@@ -781,6 +786,8 @@ impl Nation {
             capital_province_id,
             economy: NationEconomy::new(),
             researched_techs: Vec::new(),
+            researched_tech_years: Vec::new(),
+            pending_tech_research: None,
             military: NationMilitary::default(),
             diplomacy: NationDiplomacy::default(),
             archives: NationArchives::default(),
@@ -974,10 +981,16 @@ impl Nation {
         self.military.warships.len()
     }
 
-    /// Add a technology to this nation's researched list.
+    /// Add a technology to this nation's researched list, recording the year.
     pub fn research_tech(&mut self, tech: TechId) {
+        self.research_tech_in_year(tech, 0);
+    }
+
+    /// Add a technology to this nation's researched list with the given game year.
+    pub fn research_tech_in_year(&mut self, tech: TechId, year: u32) {
         if !self.researched_techs.contains(&tech) {
             self.researched_techs.push(tech);
+            self.researched_tech_years.push(year);
         }
     }
 

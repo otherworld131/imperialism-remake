@@ -109,6 +109,10 @@ pub struct Nation {
     pub economy: NationEconomy,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub researched_techs: Vec<TechId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub researched_tech_years: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_tech_research: Option<TechId>,
     #[serde(default)]
     pub military: NationMilitary,
     #[serde(default)]
@@ -378,6 +382,8 @@ impl From<&dn::Nation> for Nation {
             capital_province_id: v.capital_province_id.into(),
             economy: (&v.economy).into(),
             researched_techs: v.researched_techs.iter().copied().map(Into::into).collect(),
+            researched_tech_years: v.researched_tech_years.clone(),
+            pending_tech_research: v.pending_tech_research.map(|t| TechId(t.0)),
             military: (&v.military).into(),
             diplomacy: (&v.diplomacy).into(),
             archives: (&v.archives).into(),
@@ -399,6 +405,8 @@ impl From<Nation> for dn::Nation {
         n.researched_techs = v.researched_techs.into_iter()
             .map(|t: TechId| domain::events::TechId(t.0))
             .collect();
+        n.researched_tech_years = v.researched_tech_years;
+        n.pending_tech_research = v.pending_tech_research.map(|t| domain::events::TechId(t.0));
         n.military = v.military.into();
         n.diplomacy = v.diplomacy.into();
         n.archives = v.archives.into();

@@ -582,12 +582,55 @@ export async function getSeaZones(gameJson: string): Promise<SeaZone[]> {
   return JSON.parse(await call<string>('wasm_get_sea_zones', gameJson));
 }
 
-export async function getAvailableTechs(gameJson: string): Promise<any[]> {
-  return JSON.parse(await call<string>('wasm_get_available_techs', gameJson));
+export interface TechEntry {
+  id: number;
+  name: string;
+  cost: number;
+  earliest_year?: number;
+  latest_year?: number;
+  description?: string;
 }
 
-export async function researchTech(gameJson: string, techName: string): Promise<string> {
-  return call<string>('wasm_research_tech', gameJson, techName);
+export interface ResearchedTechEntry {
+  id: number;
+  name: string;
+  year: number;
+  description?: string;
+}
+
+export interface TechScreenData {
+  available: TechEntry[];
+  researched: ResearchedTechEntry[];
+  pending: TechEntry | null;
+  treasury: number;
+}
+
+export async function getTechScreenData(gameJson: string): Promise<TechScreenData | null> {
+  const data = JSON.parse(await call<string>('wasm_get_tech_screen_data', gameJson));
+  if (data && typeof data === 'object' && 'error' in data) return null;
+  return data as TechScreenData;
+}
+
+export async function queueTechResearch(gameJson: string, techName: string): Promise<{ ok: boolean; gameJson?: string; error?: string }> {
+  const result = await call<string>('wasm_queue_tech_research', gameJson, techName);
+  try {
+    const parsed = JSON.parse(result);
+    if (parsed.error) return { ok: false, error: parsed.error };
+    return { ok: true, gameJson: result };
+  } catch {
+    return { ok: true, gameJson: result };
+  }
+}
+
+export async function cancelTechResearch(gameJson: string): Promise<{ ok: boolean; gameJson?: string; error?: string }> {
+  const result = await call<string>('wasm_cancel_tech_research', gameJson);
+  try {
+    const parsed = JSON.parse(result);
+    if (parsed.error) return { ok: false, error: parsed.error };
+    return { ok: true, gameJson: result };
+  } catch {
+    return { ok: true, gameJson: result };
+  }
 }
 
 export async function getScenarios(): Promise<any[]> {

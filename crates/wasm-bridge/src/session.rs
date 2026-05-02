@@ -375,12 +375,13 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
                 Some(t) => {
                     let cost = t.cost;
                     let tid = t.id;
+                    let current_year = game.turn.year();
                     let nation = game.get_nation_mut(nid).unwrap();
                     if nation.economy.treasury.checked_sub(cost).is_none() {
                         return CommandResult::error("insufficient funds");
                     }
                     nation.economy.treasury -= cost;
-                    nation.research_tech(tid);
+                    nation.research_tech_in_year(tid, current_year);
                     CommandResult::success()
                 }
             }
