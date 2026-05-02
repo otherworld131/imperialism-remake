@@ -40,18 +40,20 @@ export default function TechScreen({ data, year, isObserver, onQueue, onCancel, 
       <div style={styles.tableWrap}>
         <table style={styles.table}>
           <colgroup>
+            <col style={{ width: '22%', minWidth: 180 }} />
             <col style={{ width: '100%' }} />
             <col style={{ width: 'auto', whiteSpace: 'nowrap' as const }} />
           </colgroup>
           <thead>
             <tr>
               <th style={styles.th}>Technology</th>
+              <th style={styles.th}>Effect</th>
               <th style={{ ...styles.th, textAlign: 'right' }}>Purchase / Status</th>
             </tr>
           </thead>
           <tbody>
             {available.length === 0 && researched.length === 0 && (
-              <tr><td colSpan={2} style={styles.empty}>No technologies available this year.</td></tr>
+              <tr><td colSpan={3} style={styles.empty}>No technologies available this year.</td></tr>
             )}
 
             {available.map(tech => {
@@ -62,8 +64,8 @@ export default function TechScreen({ data, year, isObserver, onQueue, onCancel, 
                   <tr key={tech.id} style={styles.rowResearched}>
                     <td style={styles.techCell}>
                       <span style={styles.techNameDim}>{tech.name}</span>
-                      {tech.description && <div style={styles.desc}>{tech.description}</div>}
                     </td>
+                    <td style={styles.descCell}>{tech.description}</td>
                     <td style={styles.actionCell}>
                       <button disabled style={styles.purchasedBtn}>
                         ✓ {entry.year > 0 ? entry.year : 'Researched'}
@@ -77,14 +79,12 @@ export default function TechScreen({ data, year, isObserver, onQueue, onCancel, 
               return (
                 <tr key={tech.id} style={isQueued ? styles.rowQueued : styles.rowAvailable}>
                   <td style={styles.techCell}>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                      <span style={styles.techName}>{tech.name}</span>
-                      {tech.latest_year && tech.latest_year < 9999 && (
-                        <span style={styles.yearRange}>{tech.earliest_year}–{tech.latest_year}</span>
-                      )}
-                    </div>
-                    {tech.description && <div style={styles.desc}>{tech.description}</div>}
+                    <span style={styles.techName}>{tech.name}</span>
+                    {tech.latest_year && tech.latest_year < 9999 && (
+                      <span style={styles.yearRange}> {tech.earliest_year}–{tech.latest_year}</span>
+                    )}
                   </td>
+                  <td style={styles.descCell}>{tech.description}</td>
                   <td style={styles.actionCell}>
                     {isQueued ? (
                       <span style={styles.queuedLabel}>Queued ✓</span>
@@ -113,8 +113,8 @@ export default function TechScreen({ data, year, isObserver, onQueue, onCancel, 
               <tr key={tech.id} style={styles.rowResearched}>
                 <td style={styles.techCell}>
                   <span style={styles.techNameDim}>{tech.name}</span>
-                  {tech.description && <div style={styles.desc}>{tech.description}</div>}
                 </td>
+                <td style={styles.descCell}>{tech.description}</td>
                 <td style={styles.actionCell}>
                   <button disabled style={styles.purchasedBtn}>
                     ✓ {tech.year > 0 ? tech.year : 'Researched'}
@@ -223,7 +223,14 @@ const styles: Record<string, React.CSSProperties> = {
     opacity: 0.55,
   },
   techCell: {
-    padding: '8px 8px 8px 0',
+    padding: '8px 16px 8px 0',
+    whiteSpace: 'nowrap',
+  },
+  descCell: {
+    padding: '8px 16px 8px 0',
+    fontSize: 12,
+    color: '#8a9aaa',
+    fontStyle: 'italic',
   },
   techName: {
     fontSize: 'var(--ui-font-size, 14px)',
@@ -231,12 +238,6 @@ const styles: Record<string, React.CSSProperties> = {
   techNameDim: {
     fontSize: 'var(--ui-font-size, 14px)',
     color: '#9a9a9a',
-  },
-  desc: {
-    fontSize: 11,
-    color: '#7a8a9a',
-    marginTop: 2,
-    fontStyle: 'italic',
   },
   yearRange: {
     fontSize: 11,
