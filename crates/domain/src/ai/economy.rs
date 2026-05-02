@@ -379,10 +379,12 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
         .flat_map(|p| p.tiles.iter().copied())
         .collect();
 
-    // Seeds: every owned country-capital tile. These are the only valid
-    // anchors for a new railway under card #132. Include the home capital
-    // defensively even if its tile's `is_country_capital` flag is somehow
-    // unset (map-gen edge case).
+    // Seeds: every owned country-capital tile, plus every owned tile with a
+    // built port. Ports are sea-accessible rail-network entry points — once
+    // a port exists in an isolated province, rail can be extended from it
+    // to further provinces behind a tech-blocked terrain barrier. Include
+    // the home capital defensively even if its `is_country_capital` flag is
+    // somehow unset (map-gen edge case).
     let capital_tile = match game.get_province(nation.capital_province_id) {
         Some(p) => p.capital_tile,
         None => return PlanOutcome::Fresh(None),
@@ -393,7 +395,7 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
             continue;
         }
         if let Some(tile) = game.world.hex_map.get_tile(h)
-            && tile.is_country_capital
+            && (tile.is_country_capital || tile.infrastructure.has_port)
         {
             capital_seeds.push(h);
         }
@@ -415,7 +417,8 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
         let origin_is_home_capital = t.origin_capital == capital_tile;
         let origin_ok = owned_hexes.contains(&t.origin_capital)
             && (origin_is_home_capital
-                || origin_tile.is_some_and(|tile| tile.is_country_capital));
+                || origin_tile
+                    .is_some_and(|tile| tile.is_country_capital || tile.infrastructure.has_port));
 
         if !fulfilled && candidate_ownership_ok && origin_ok {
             // Single-source Dijkstra from the committed origin capital to
@@ -581,7 +584,7 @@ pub(super) fn find_stranded_port_target(
         .flat_map(|p| p.tiles.iter().copied())
         .collect();
 
-    // Capital seeds — same construction as plan_next_depot.
+    // Capital seeds — mirrors plan_next_depot: country capitals + built ports.
     let capital_tile = game.get_province(nation.capital_province_id)?.capital_tile;
     let mut capital_seeds: HashSet<HexCoord> = std::iter::once(capital_tile).collect();
     for &h in &owned_hexes {
@@ -592,7 +595,7 @@ pub(super) fn find_stranded_port_target(
             .world
             .hex_map
             .get_tile(h)
-            .is_some_and(|t| t.is_country_capital)
+            .is_some_and(|t| t.is_country_capital || t.infrastructure.has_port)
         {
             capital_seeds.insert(h);
         }
