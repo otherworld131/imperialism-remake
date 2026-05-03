@@ -2463,32 +2463,60 @@ export default function HexMap({
         }
       }
 
-      ctx.setLineDash([4, 3]);
-      ctx.lineWidth = 1.5;
+      ctx.setLineDash([]);
+      ctx.lineWidth = 5;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
       for (const move of pendingMoves) {
         const from = capitalPositions.get(move.source_province_id);
         const to = capitalPositions.get(move.dest_province_id);
         if (!from || !to) continue;
 
-        ctx.strokeStyle = 'rgba(255, 200, 0, 0.8)';
+        const angle = Math.atan2(to[1] - from[1], to[0] - from[0]);
+        const arrowLen = 18;
+        const arrowAngle = 0.45;
+
+        // Pull the shaft endpoint back so the line meets the arrowhead cleanly
+        const shaftEndX = to[0] - Math.cos(angle) * arrowLen * 0.55;
+        const shaftEndY = to[1] - Math.sin(angle) * arrowLen * 0.55;
+
+        // Dark outline for contrast
+        ctx.strokeStyle = 'rgba(0, 40, 0, 0.9)';
+        ctx.lineWidth = 8;
         ctx.beginPath();
         ctx.moveTo(from[0], from[1]);
-        ctx.lineTo(to[0], to[1]);
+        ctx.lineTo(shaftEndX, shaftEndY);
         ctx.stroke();
 
-        // Arrowhead
-        const angle = Math.atan2(to[1] - from[1], to[0] - from[0]);
-        const arrowLen = 5;
-        ctx.setLineDash([]);
+        // Bright green shaft
+        ctx.strokeStyle = 'rgba(72, 220, 90, 0.95)';
+        ctx.lineWidth = 5;
         ctx.beginPath();
-        ctx.moveTo(to[0], to[1]);
-        ctx.lineTo(to[0] - arrowLen * Math.cos(angle - 0.4), to[1] - arrowLen * Math.sin(angle - 0.4));
-        ctx.moveTo(to[0], to[1]);
-        ctx.lineTo(to[0] - arrowLen * Math.cos(angle + 0.4), to[1] - arrowLen * Math.sin(angle + 0.4));
+        ctx.moveTo(from[0], from[1]);
+        ctx.lineTo(shaftEndX, shaftEndY);
         ctx.stroke();
-        ctx.setLineDash([4, 3]);
+
+        // Filled arrowhead
+        const tipX = to[0];
+        const tipY = to[1];
+        const leftX = tipX - arrowLen * Math.cos(angle - arrowAngle);
+        const leftY = tipY - arrowLen * Math.sin(angle - arrowAngle);
+        const rightX = tipX - arrowLen * Math.cos(angle + arrowAngle);
+        const rightY = tipY - arrowLen * Math.sin(angle + arrowAngle);
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(leftX, leftY);
+        ctx.lineTo(rightX, rightY);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(72, 220, 90, 0.95)';
+        ctx.strokeStyle = 'rgba(0, 40, 0, 0.9)';
+        ctx.lineWidth = 1.5;
+        ctx.fill();
+        ctx.stroke();
       }
-      ctx.setLineDash([]);
+      ctx.lineWidth = 1;
+      ctx.lineCap = 'butt';
+      ctx.lineJoin = 'miter';
     }
 
     } // end wrap-copies loop

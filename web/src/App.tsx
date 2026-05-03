@@ -861,7 +861,7 @@ function App() {
     return playerMoves.flatMap((m: any) => {
       const unitId = typeof m[1] === 'number' ? m[1] : m[1]?.[0] ?? 0;
       const destId = typeof m[2] === 'number' ? m[2] : m[2]?.[0] ?? 0;
-      const unit = playerNation?.army?.find((u: any) => {
+      const unit = playerNation?.military?.army?.find((u: any) => {
         const uid = typeof u.id === 'number' ? u.id : u.id?.[0] ?? -1;
         return uid === unitId;
       });
@@ -1425,49 +1425,53 @@ function App() {
       {/* Main area */}
       <div style={styles.mainArea} className="main-area-responsive">
         {/* Map — always mounted, hidden behind full-screen views to preserve zoom/pan */}
-        <div style={{ ...styles.mapContainer, display: isFullScreen(activeScreen) ? 'none' : undefined }}>
-          <HexMap
-            tiles={tiles}
-            mapMode={mapMode}
-            diplomacyOverlay={diplomacyOverlay}
-            militaryOverlay={militaryOverlay}
-            onMapModeChange={setMapMode}
-            onTileClick={handleTileClick}
-            showHiddenResources={showHiddenResources}
-            showAiCivilians={showAiCivilians}
-            showResources={showResources}
-            showTransportNetwork={showTransportNetwork}
-            showArmies={showArmies}
+        <div style={{ ...styles.mapContainer, display: isFullScreen(activeScreen) ? 'none' : undefined, flexDirection: 'column' }}>
+          <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+            <HexMap
+              tiles={tiles}
+              mapMode={mapMode}
+              diplomacyOverlay={diplomacyOverlay}
+              militaryOverlay={militaryOverlay}
+              onMapModeChange={setMapMode}
+              onTileClick={handleTileClick}
+              showHiddenResources={showHiddenResources}
+              showAiCivilians={showAiCivilians}
+              showResources={showResources}
+              showTransportNetwork={showTransportNetwork}
+              showArmies={showArmies}
 
-            pendingMoves={pendingMoveArrows}
-            validMoveTargets={validMoveTargets}
-            isMovementMode={isMovementMode}
-            isDeployMode={isDeployMode}
-            deployableTiles={deployableTiles}
-            disableFogOfWar={disableFogOfWar}
-            organicBorders={organicBorders}
-            hideHexGrid={hideHexGrid}
-            scale={mapScale}
-            offset={mapOffset}
-            onScaleChange={setMapScale}
-            onOffsetChange={setMapOffset}
-            navyMarkers={navyMarkers}
-            seaZones={seaZones}
-            selectedNavyKey={selectedNavyKey}
-            onNavyMarkerClick={handleNavyMarkerClick}
-            onNavyMarkerHover={handleNavyMarkerHover}
-            onTileHover={activeScreen === 'diplomacy' ? setHoveredDiploTile : undefined}
-            renderTooltipModeExtras={renderTooltipModeExtras}
-            governmentTitleByNationId={governmentTitleByNationId}
-            selectedTileKey={selectedTile ? `${selectedTile.q},${selectedTile.r}` : null}
-            lockZoom={activeScreen === 'diplomacy'}
-            showDiplomacyMarkers={mapMode === 'diplomatic'}
-            isDiplomacyTargetMode={activeScreen === 'diplomacy' && queuedDiplomacyAction != null}
-          />
+              pendingMoves={pendingMoveArrows}
+              validMoveTargets={validMoveTargets}
+              isMovementMode={isMovementMode}
+              isDeployMode={isDeployMode}
+              deployableTiles={deployableTiles}
+              disableFogOfWar={disableFogOfWar}
+              organicBorders={organicBorders}
+              hideHexGrid={hideHexGrid}
+              scale={mapScale}
+              offset={mapOffset}
+              onScaleChange={setMapScale}
+              onOffsetChange={setMapOffset}
+              navyMarkers={navyMarkers}
+              seaZones={seaZones}
+              selectedNavyKey={selectedNavyKey}
+              onNavyMarkerClick={handleNavyMarkerClick}
+              onNavyMarkerHover={handleNavyMarkerHover}
+              onTileHover={activeScreen === 'diplomacy' ? setHoveredDiploTile : undefined}
+              renderTooltipModeExtras={renderTooltipModeExtras}
+              governmentTitleByNationId={governmentTitleByNationId}
+              selectedTileKey={selectedTile ? `${selectedTile.q},${selectedTile.r}` : null}
+              lockZoom={activeScreen === 'diplomacy'}
+              showDiplomacyMarkers={mapMode === 'diplomatic'}
+              isDiplomacyTargetMode={activeScreen === 'diplomacy' && queuedDiplomacyAction != null}
+            />
+          </div>
           {activeScreen === 'diplomacy' && diplomacyScreenData && (
             <DiplomacyBottomBar
               diplomacy={diplomacyScreenData}
               hoveredNationId={hoveredDiploTile?.nation_id ?? null}
+              selectedNationId={selectedTile?.nation_id ?? null}
+              playerNationId={playerNationId}
               playerStanding={diplomacyScreenData.player_standing}
               queuedAction={queuedDiplomacyAction}
               onQueue={setQueuedDiplomacyAction}
@@ -1944,7 +1948,7 @@ const styles: Record<string, React.CSSProperties> = {
   hotkey: { fontSize: 10, color: '#555', display: 'block', marginTop: 2 },
   hotkeyActive: { fontSize: 10, color: '#8a7530', display: 'block', marginTop: 2 },
   mainArea: { display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 },
-  mapContainer: { flex: 1, background: '#0a0a1a', minHeight: 0, position: 'relative' as const },
+  mapContainer: { flex: 1, background: '#0a0a1a', minHeight: 0, position: 'relative' as const, display: 'flex' as const },
   sidePanel: { width: 260, padding: 12, background: '#161625', borderLeft: '2px solid #3a3520', overflowY: 'auto' as const, flexShrink: 0 },
   panelTitle: { margin: '12px 0 6px', color: '#daa520', borderBottom: '1px solid #3a3520', paddingBottom: 4 },
   tileInfo: { fontSize: 'var(--ui-font-size, 14px)' },
