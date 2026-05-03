@@ -28,7 +28,7 @@ import {
 } from './wasm';
 import type {
   TileData, NavyMarker, SeaZone, Headline, MapMode, DiplomacyOverlay, DiplomacyOverlayRelation, MilitaryOverlayEntry,
-  ArmyUnitDetail, ProvinceUnits, CiviliansData, CivilianDetail, ShipsData,
+  ProvinceUnits, CiviliansData, CivilianDetail, ShipsData,
   ValidMoveTargets, BuildableUnits, PendingMove,
   TransportData, IndustryData, TradeData, DiplomacyScreenData, ProposalData,
   ArchivedNewspaper, PoliticalSnapshot, LedgerData, GPLedgerEntry,
@@ -36,17 +36,6 @@ import type {
   TechScreenData,
 } from './wasm';
 
-const CATEGORY_COLORS: Record<string, string> = {
-  war:       '#e63946',
-  battle:    '#e76f51',
-  diplomacy: '#457b9d',
-  growth:    '#2a9d8f',
-  trade:     '#daa520',
-  crisis:    '#9d0208',
-  politics:  '#b380e6',
-  military:  '#8a9aaf',
-  default:   '#e0d8c0',
-};
 
 type ScreenTab = 'map' | 'transport' | 'industry' | 'diplomacy' | 'trade' | 'tech' | 'ledger' | 'newspaper' | 'battle' | 'legend';
 const SCREEN_TABS: { key: ScreenTab; label: string; hotkey: string }[] = [
@@ -63,7 +52,7 @@ const SCREEN_TABS: { key: ScreenTab; label: string; hotkey: string }[] = [
 ];
 
 function isFullScreen(screen: ScreenTab): boolean {
-  return ['ledger', 'trade', 'tech', 'newspaper', 'battle', 'legend'].includes(screen);
+  return ['ledger', 'trade', 'tech', 'newspaper', 'battle', 'legend', 'industry'].includes(screen);
 }
 
 
@@ -304,7 +293,7 @@ function App() {
   const [industryData, setIndustryData] = useState<IndustryData | null>(null);
   const [tradeData, setTradeData] = useState<TradeData | null>(null);
   const [diplomacyScreenData, setDiplomacyScreenData] = useState<DiplomacyScreenData | null>(null);
-  const [ledgerData, setLedgerData] = useState<LedgerData | null>(null);
+  const [_ledgerData, setLedgerData] = useState<LedgerData | null>(null);
   const [gpLedgerData, setGpLedgerData] = useState<GPLedgerEntry[]>([]);
   // Previous-turn snapshot of the ledger data, kept so the UI can render
   // turn-over-turn deltas on every stat column. Rotated only when the turn
@@ -1571,6 +1560,23 @@ function App() {
         </div>
 
         {/* Full-screen views */}
+        {activeScreen === 'industry' && (
+          <div style={{ flex: 1, overflowY: 'auto', background: '#161625', padding: 16 }}>
+            {industryData ? (
+              <IndustryPanel
+                industry={industryData}
+                buildable={buildable}
+                onExpand={handleExpandBuilding}
+                onRecruit={handleRecruit}
+                onBuildShip={handleBuildShip}
+                onHire={handleHireCivilian}
+                onBuildFreightCar={handleBuildFreightCar}
+              />
+            ) : (
+              <p style={styles.hint}>Loading industry data...</p>
+            )}
+          </div>
+        )}
         {activeScreen === 'tech' && techScreenData && (
           <TechScreen
             data={techScreenData}
@@ -1843,11 +1849,7 @@ function App() {
                 <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 6 }}>
                   <UnitPanel
                     provinceUnits={provinceUnits}
-                    buildableArmy={buildable?.army || []}
-                    treasury={buildable?.treasury || 0}
-                    arms={buildable?.arms || 0}
                     pendingMoves={pendingMovesDisplay}
-                    isPlayerCapital={isPlayerCapital}
                     isPlayerProvince={isPlayerProvince}
                     selectedUnitIds={selectedUnitIds}
                     onToggleUnit={handleToggleUnit}
@@ -1855,7 +1857,6 @@ function App() {
                     onCancelMove={handleCancelMove}
                     onCancelSelectedMoves={handleCancelSelectedMoves}
                     onDismissSelected={handleDismissSelected}
-                    onRecruit={handleRecruit}
                     onUpgradeUnit={handleUpgradeUnit}
                     onUpgradeSelected={handleUpgradeSelected}
                   />
@@ -1867,11 +1868,8 @@ function App() {
                 <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 6 }}>
                   <CivilianPanel
                     civilians={civilians}
-                    buildableCivilians={buildable?.civilians || []}
-                    treasury={buildable?.treasury || 0}
                     onDeploy={handleDeployCivilian}
                     onRecall={handleRecallCivilian}
-                    onHire={handleHireCivilian}
                     onEngineerBuild={handleEngineerBuild}
                   />
                 </div>
@@ -1882,8 +1880,6 @@ function App() {
                 <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 6 }}>
                   <NavalPanel
                     ships={shipsData}
-                    buildableShips={buildable?.ships || []}
-                    onBuildShip={handleBuildShip}
                   />
                 </div>
               )}
@@ -1977,16 +1973,6 @@ function App() {
               />
             ) : (
               <p style={styles.hint}>Loading transport data...</p>
-            )
-          )}
-          {activeScreen === 'industry' && (
-            industryData ? (
-              <IndustryPanel
-                industry={industryData}
-                onExpand={handleExpandBuilding}
-              />
-            ) : (
-              <p style={styles.hint}>Loading industry data...</p>
             )
           )}
           {/* Diplomacy sidebar replaced by DiplomacyBottomBar inside mapContainer */}

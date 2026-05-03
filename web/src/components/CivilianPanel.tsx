@@ -1,4 +1,4 @@
-import type { CiviliansData, CivilianDetail, BuildableUnit, EngineerBuildKind } from '../wasm';
+import type { CiviliansData, CivilianDetail, EngineerBuildKind } from '../wasm';
 import { resourceLabel } from '../resourceEmoji';
 
 const CIVILIAN_EMOJI: Record<string, string> = {
@@ -13,17 +13,14 @@ const CIVILIAN_EMOJI: Record<string, string> = {
 
 interface Props {
   civilians: CiviliansData;
-  buildableCivilians: BuildableUnit[];
-  treasury: number;
   onDeploy: (civilian: CivilianDetail) => void;
   onRecall: (civilianId: number) => void;
-  onHire: (civilianType: string) => void;
   onEngineerBuild: (civilianId: number, kind: EngineerBuildKind) => void;
 }
 
 export default function CivilianPanel({
-  civilians, buildableCivilians, treasury,
-  onDeploy, onRecall, onHire, onEngineerBuild,
+  civilians,
+  onDeploy, onRecall, onEngineerBuild,
 }: Props) {
   const { deployed, undeployed } = civilians;
 
@@ -121,37 +118,6 @@ export default function CivilianPanel({
         <div style={{ color: '#888', fontStyle: 'italic', marginBottom: 8 }}>No civilians</div>
       )}
 
-      {/* Hire section */}
-      <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8 }}>
-        <div style={{ fontWeight: 'bold', marginBottom: 4, color: '#ccc' }}>Hire Civilian</div>
-        <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#888', marginBottom: 4 }}>
-          Treasury: ${treasury.toLocaleString()}
-        </div>
-        {buildableCivilians.map(b => {
-          const canBuild = b.can_afford && b.tech_met;
-          return (
-            <div key={b.type} style={{
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              padding: '2px 0', opacity: canBuild ? 1 : 0.45,
-            }}>
-              <span style={{ fontSize: 'var(--ui-font-size, 14px)' }}>
-                {CIVILIAN_EMOJI[b.type] || ''} {b.type}
-                <span style={{ color: '#888', fontSize: 10, marginLeft: 4 }}>${b.cost}</span>
-              </span>
-              {canBuild ? (
-                <button
-                  onClick={() => onHire(b.type)}
-                  style={{ background: '#2a6', color: '#fff', border: 'none', borderRadius: 3, padding: '1px 6px', fontSize: 10, cursor: 'pointer' }}
-                >
-                  Hire
-                </button>
-              ) : (
-                <span style={{ fontSize: 10, color: '#a66' }}>{b.reason || 'Unavailable'}</span>
-              )}
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }

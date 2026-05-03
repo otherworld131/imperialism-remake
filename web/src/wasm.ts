@@ -968,6 +968,7 @@ export interface ProductionForecast {
 
 export interface IndustryData {
   buildings: BuildingInfo[];
+  freight_car_cost: number;
   warehouse: {
     resources: Record<string, number>;
     materials: Record<string, number>;

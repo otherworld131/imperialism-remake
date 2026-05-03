@@ -2157,8 +2157,15 @@ pub fn wasm_deploy_civilian(game_json: &str, civilian_id: u32, hex_q: i32, hex_r
     civ.deploy(coord);
     // Engineers are deployed without an auto-start; the player issues a build
     // order via wasm_engineer_build once the engineer is on the right hex.
+    // Prospectors reveal in 1 turn (deploy → end turn → reveal).
     if civ.civilian_type != domain::economy::CivilianType::Engineer {
-        let turns = if improvement_level == 0 { 3 } else { 5 };
+        let turns = if civ.civilian_type == domain::economy::CivilianType::Prospector {
+            1
+        } else if improvement_level == 0 {
+            3
+        } else {
+            5
+        };
         civ.start_work(turns);
     }
 
@@ -3236,8 +3243,11 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
         labor_units,
     );
 
+    let freight_car_cost = game.game_data.game_config.freight_car_cost;
+
     serde_json::json!({
         "buildings": buildings_json,
+        "freight_car_cost": freight_car_cost,
         "warehouse": {
             "resources": resources_json,
             "materials": materials_json,

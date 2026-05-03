@@ -431,7 +431,7 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
                     return;
                 };
                 nation.military.civilians[civ_idx].deploy(coord);
-                nation.military.civilians[civ_idx].start_work(2);
+                nation.military.civilians[civ_idx].start_work(1);
                 if let Some(tile) = game.world.hex_map.get_tile_mut(coord) {
                     tile.assigned_civilian = Some(civilian_id);
                 }

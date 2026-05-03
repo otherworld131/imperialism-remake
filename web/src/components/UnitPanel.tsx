@@ -1,4 +1,4 @@
-import type { ArmyUnitDetail, ProvinceUnits, BuildableUnit, PendingMove } from '../wasm';
+import type { ProvinceUnits, PendingMove } from '../wasm';
 import { HealthBar } from './UnitRow';
 
 const CATEGORY_ICONS: Record<string, string> = {
@@ -11,11 +11,7 @@ const CATEGORY_ICONS: Record<string, string> = {
 
 interface Props {
   provinceUnits: ProvinceUnits;
-  buildableArmy: BuildableUnit[];
-  treasury: number;
-  arms: number;
   pendingMoves: PendingMove[];
-  isPlayerCapital: boolean;
   isPlayerProvince: boolean;
   selectedUnitIds: number[];
   onToggleUnit: (unitId: number) => void;
@@ -23,16 +19,15 @@ interface Props {
   onCancelMove: (unitId: number) => void;
   onCancelSelectedMoves: () => void;
   onDismissSelected: () => void;
-  onRecruit: (unitType: string) => void;
   onUpgradeUnit: (unitId: number) => void;
   onUpgradeSelected: () => void;
 }
 
 export default function UnitPanel({
-  provinceUnits, buildableArmy, treasury, arms, pendingMoves,
-  isPlayerCapital, isPlayerProvince,
+  provinceUnits, pendingMoves,
+  isPlayerProvince,
   selectedUnitIds, onToggleUnit, onSelectAll,
-  onCancelMove, onCancelSelectedMoves, onDismissSelected, onRecruit,
+  onCancelMove, onCancelSelectedMoves, onDismissSelected,
   onUpgradeUnit, onUpgradeSelected,
 }: Props) {
   const { army_units, garrison_count, province_name } = provinceUnits;
@@ -174,41 +169,6 @@ export default function UnitPanel({
         <div style={{ color: '#888', fontStyle: 'italic' }}>No units in province</div>
       )}
 
-      {/* Recruitment section — only at player's country capital */}
-      {isPlayerCapital && (
-        <div style={{ marginTop: 10, borderTop: '1px solid #3a3520', paddingTop: 8 }}>
-          <div style={{ fontWeight: 'bold', marginBottom: 4, color: '#ccc' }}>Recruit Army Unit</div>
-          <div style={{ fontSize: 11, color: '#888', marginBottom: 6 }}>
-            Treasury: ${treasury.toLocaleString()} | Arms: {arms}
-          </div>
-          {buildableArmy.map(b => {
-            const canBuild = b.can_afford && b.tech_met;
-            return (
-              <div key={b.type} style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                padding: '2px 0',
-                opacity: canBuild ? 1 : 0.45,
-              }}>
-                <span style={{ fontSize: 12 }}>
-                  {b.type.replace(/([A-Z])/g, ' $1').trim()}
-                  <span style={{ color: '#888', fontSize: 10, marginLeft: 4 }}>
-                    ${b.cost} + {b.arms_required}A
-                  </span>
-                </span>
-                {canBuild ? (
-                  <button onClick={() => onRecruit(b.type)} style={btnStyle('#2a6')}>
-                    Recruit
-                  </button>
-                ) : (
-                  <span style={{ fontSize: 10, color: '#a66' }}>
-                    {b.reason || 'Unavailable'}
-                  </span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }

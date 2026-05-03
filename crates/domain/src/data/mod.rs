@@ -522,6 +522,8 @@ impl GameData {
         let mut game_config = GameConfig::default();
         #[allow(unused_mut)]
         let mut unit_stats = unit_stats;
+        #[allow(unused_mut)]
+        let mut ship_stats = ship_stats;
 
         #[cfg(feature = "lua")]
         let lua_engine = {
@@ -537,6 +539,14 @@ impl GameData {
                     eprintln!(
                         "[GameData] WARNING: scripts/config/units.lua failed to load. \
                          Using hardcoded unit stats fallback."
+                    );
+                }
+                if let Some(loaded) = crate::ai::lua_bridge::load_ship_stats(e) {
+                    ship_stats = loaded;
+                } else {
+                    eprintln!(
+                        "[GameData] WARNING: scripts/config/ships.lua failed to load. \
+                         Using hardcoded ship stats fallback."
                     );
                 }
             }
@@ -572,6 +582,8 @@ impl Default for GameData {
 
         #[allow(unused_mut)]
         let mut unit_stats = default_unit_stats();
+        #[allow(unused_mut)]
+        let mut ship_stats = default_ship_stats();
 
         #[cfg(feature = "lua")]
         let lua_engine = {
@@ -596,6 +608,14 @@ impl Default for GameData {
                          Using hardcoded unit stats fallback."
                     );
                 }
+                if let Some(loaded) = crate::ai::lua_bridge::load_ship_stats(e) {
+                    ship_stats = loaded;
+                } else {
+                    eprintln!(
+                        "[GameData] WARNING: scripts/config/ships.lua failed to load. \
+                         Using hardcoded ship stats fallback."
+                    );
+                }
             }
             engine
         };
@@ -606,7 +626,7 @@ impl Default for GameData {
         GameData {
             tech_tree,
             unit_stats,
-            ship_stats: default_ship_stats(),
+            ship_stats,
             #[cfg(feature = "lua")]
             lua_engine,
             game_config,
@@ -675,14 +695,14 @@ pub fn default_unit_stats() -> HashMap<ArmyUnitType, UnitStats> {
         .collect()
 }
 
-/// Built-in ship stats baseline — used only by `GameData::default()` as a
-/// snapshot-restore placeholder. Production builds replace this via
-/// `infrastructure::data_loader::load_*` which parses `data/definitions/ships.ron`.
-/// Keep these values aligned with `data/definitions/ships.ron`.
+/// Built-in ship stats baseline — fallback when Lua is unavailable.
+/// Production builds always override this via `scripts/config/ships.lua`
+/// loaded inside `GameData::from_parts()` and `GameData::default()`.
 pub fn default_ship_stats() -> HashMap<ShipType, ShipStats> {
     use ShipType::*;
     let merchant = ShipCategory::Merchant;
     let warship = ShipCategory::Warship;
+    #[allow(clippy::too_many_arguments)]
     let s = |firepower,
              range,
              armor,
@@ -695,6 +715,7 @@ pub fn default_ship_stats() -> HashMap<ShipType, ShipStats> {
              arms_cost,
              steel_cost,
              coal_cost,
+             era,
              prerequisite_tech: Option<&str>| ShipStats {
         firepower,
         range,
@@ -708,181 +729,24 @@ pub fn default_ship_stats() -> HashMap<ShipType, ShipStats> {
         arms_cost,
         steel_cost,
         coal_cost,
+        era,
         prerequisite_tech: prerequisite_tech.map(String::from),
     };
+    // Columns: fp rng arm hull spd cargo cat  fab lum arm stl coal era prereq
     [
-        (Trader, s(0, 0, 0, 25, 0, 2, merchant, 2, 4, 0, 0, 0, None)),
-        (
-            Indiaman,
-            s(0, 0, 5, 40, 0, 4, merchant, 3, 7, 0, 0, 0, None),
-        ),
-        (
-            Clipper,
-            s(
-                0,
-                0,
-                0,
-                25,
-                0,
-                4,
-                merchant,
-                2,
-                6,
-                0,
-                0,
-                0,
-                Some("Streamlined Hulls"),
-            ),
-        ),
-        (
-            Paddlewheeler,
-            s(
-                0,
-                0,
-                5,
-                35,
-                0,
-                8,
-                merchant,
-                0,
-                6,
-                0,
-                2,
-                10,
-                Some("Paddlewheels"),
-            ),
-        ),
-        (
-            Freighter,
-            s(
-                0,
-                0,
-                10,
-                50,
-                0,
-                12,
-                merchant,
-                0,
-                8,
-                0,
-                4,
-                15,
-                Some("Marine Engineering"),
-            ),
-        ),
-        (Frigate, s(3, 5, 10, 35, 2, 0, warship, 2, 5, 2, 0, 0, None)),
-        (
-            ShipOfTheLine,
-            s(6, 6, 20, 65, 2, 0, warship, 3, 8, 5, 0, 0, None),
-        ),
-        (
-            Raider,
-            s(
-                3,
-                7,
-                20,
-                30,
-                3,
-                0,
-                warship,
-                0,
-                6,
-                3,
-                0,
-                10,
-                Some("Paddlewheels"),
-            ),
-        ),
-        (
-            Ironclad,
-            s(
-                8,
-                7,
-                30,
-                50,
-                3,
-                0,
-                warship,
-                0,
-                6,
-                4,
-                3,
-                12,
-                Some("Advanced Iron Working"),
-            ),
-        ),
-        (
-            AdvancedIronclad,
-            s(
-                10,
-                8,
-                40,
-                60,
-                3,
-                0,
-                warship,
-                0,
-                6,
-                5,
-                4,
-                15,
-                Some("Steel Armour Plate"),
-            ),
-        ),
-        (
-            ArmouredCruiser,
-            s(
-                8,
-                9,
-                35,
-                55,
-                3,
-                0,
-                warship,
-                0,
-                7,
-                4,
-                5,
-                15,
-                Some("Marine Engineering"),
-            ),
-        ),
-        (
-            Dreadnought,
-            s(
-                15,
-                10,
-                50,
-                80,
-                3,
-                0,
-                warship,
-                0,
-                10,
-                8,
-                8,
-                20,
-                Some("Improved Range-Finding"),
-            ),
-        ),
-        (
-            Battlecruiser,
-            s(
-                12,
-                10,
-                40,
-                65,
-                4,
-                0,
-                warship,
-                0,
-                8,
-                6,
-                6,
-                18,
-                Some("Improved Range-Finding"),
-            ),
-        ),
+        (Trader,        s(0, 0,  0, 25, 0,  2, merchant, 2, 4, 0, 0,  0, 1, None)),
+        (Indiaman,      s(0, 0,  5, 40, 0,  4, merchant, 3, 7, 0, 0,  0, 1, None)),
+        (Clipper,       s(0, 0,  0, 25, 0,  4, merchant, 2, 6, 0, 0,  0, 2, Some("Streamlined Hulls"))),
+        (Paddlewheeler, s(0, 0,  5, 35, 0,  8, merchant, 0, 6, 0, 2, 10, 2, Some("Paddlewheels"))),
+        (Freighter,     s(0, 0, 10, 50, 0, 12, merchant, 0, 8, 0, 4, 15, 3, Some("Marine Engineering"))),
+        (Frigate,       s(3, 5, 10, 35, 2,  0, warship,  2, 5, 2, 0,  0, 1, None)),
+        (ShipOfTheLine, s(6, 6, 20, 65, 2,  0, warship,  3, 8, 5, 0,  0, 1, None)),
+        (Raider,        s(3, 7, 20, 30, 3,  0, warship,  0, 6, 3, 0, 10, 2, Some("Paddlewheels"))),
+        (Ironclad,      s(8, 7, 30, 50, 3,  0, warship,  0, 6, 4, 3, 12, 2, Some("Advanced Iron Working"))),
+        (AdvancedIronclad,  s(10, 8, 40, 60, 3, 0, warship, 0, 6, 5, 4, 15, 3, Some("Steel Armour Plate"))),
+        (ArmouredCruiser,   s( 8, 9, 35, 55, 3, 0, warship, 0, 7, 4, 5, 15, 3, Some("Marine Engineering"))),
+        (Dreadnought,       s(15,10, 50, 80, 3, 0, warship, 0,10, 8, 8, 20, 4, Some("Improved Range-Finding"))),
+        (Battlecruiser,     s(12,10, 40, 65, 4, 0, warship, 0, 8, 6, 6, 18, 4, Some("Improved Range-Finding"))),
     ]
     .into_iter()
     .collect()

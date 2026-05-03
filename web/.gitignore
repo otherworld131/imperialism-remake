@@ -12,6 +12,8 @@ dist
 dist-ssr
 *.local
 
+public/dev-server-status.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -16,6 +16,7 @@ use super::common::AiPersonality;
 const GAME_CONFIG_LUA: &str = include_str!("../../../../scripts/config/game.lua");
 const TECH_TREE_LUA: &str = include_str!("../../../../scripts/config/tech_tree.lua");
 const UNITS_LUA: &str = include_str!("../../../../scripts/config/units.lua");
+const SHIPS_LUA: &str = include_str!("../../../../scripts/config/ships.lua");
 const BALANCED_LUA: &str = include_str!("../../../../scripts/ai/balanced.lua");
 const AGGRESSIVE_LUA: &str = include_str!("../../../../scripts/ai/aggressive.lua");
 const DIPLOMATIC_LUA: &str = include_str!("../../../../scripts/ai/diplomatic.lua");
@@ -529,6 +530,7 @@ pub fn load_scripts(engine: &LuaEngine) -> Result<(), String> {
     engine.exec(GAME_CONFIG_LUA)?;
     engine.exec(TECH_TREE_LUA)?;
     engine.exec(UNITS_LUA)?;
+    engine.exec(SHIPS_LUA)?;
     engine.exec(BALANCED_LUA)?;
     engine.exec(AGGRESSIVE_LUA)?;
     engine.exec(DIPLOMATIC_LUA)?;
@@ -689,6 +691,98 @@ pub fn load_unit_stats(
             "[units.lua] missing {} unit type(s): {:?} — refusing partial load",
             missing.len(),
             missing
+        );
+        return None;
+    }
+    Some(map)
+}
+
+/// Load ship stats from the Lua `ships` global table populated by
+/// `scripts/config/ships.lua`.
+///
+/// Returns `None` on any parse error so callers can fall back to
+/// `default_ship_stats()`. Requires full coverage of all [`ShipType`] variants.
+pub fn load_ship_stats(
+    engine: &LuaEngine,
+) -> Option<std::collections::HashMap<crate::military::ships::ShipType, crate::military::ships::ShipStats>> {
+    use crate::military::ships::{ShipCategory, ShipStats, ShipType};
+    use std::collections::HashMap;
+
+    let lua = engine.lua();
+    let table: mlua::Table = lua.globals().get("ships").ok()?;
+
+    macro_rules! require_ship {
+        ($row:expr, $name:expr, $field:expr, $ty:ty) => {
+            match $row.get::<$ty>($field) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!(
+                        "[ships.lua] '{}' missing/invalid `{}` ({}), refusing partial load",
+                        $name, $field, e
+                    );
+                    return None;
+                }
+            }
+        };
+    }
+
+    let mut map: HashMap<ShipType, ShipStats> = HashMap::new();
+    for row_res in table.sequence_values::<mlua::Table>() {
+        let row = match row_res {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[ships.lua] malformed row, refusing partial load: {}", e);
+                return None;
+            }
+        };
+        let name: String = match row.get("name") {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!("[ships.lua] row missing `name`, refusing partial load");
+                return None;
+            }
+        };
+        let ship_type: ShipType = match name.parse() {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[ships.lua] unknown ship '{}': {}, refusing partial load", name, e);
+                return None;
+            }
+        };
+        let category_str: String = require_ship!(row, name, "category", String);
+        let category = match category_str.as_str() {
+            "Merchant" => ShipCategory::Merchant,
+            "Warship" => ShipCategory::Warship,
+            other => {
+                eprintln!("[ships.lua] '{}' has unknown category '{}', refusing partial load", name, other);
+                return None;
+            }
+        };
+        let stats = ShipStats {
+            firepower:   require_ship!(row, name, "firepower",   u32),
+            range:       require_ship!(row, name, "range",       u32),
+            armor:       require_ship!(row, name, "armor",       u32),
+            hull:        require_ship!(row, name, "hull",        u32),
+            speed:       require_ship!(row, name, "speed",       u32),
+            cargo:       require_ship!(row, name, "cargo",       u32),
+            fabric_cost: require_ship!(row, name, "fabric_cost", u32),
+            lumber_cost: require_ship!(row, name, "lumber_cost", u32),
+            arms_cost:   require_ship!(row, name, "arms_cost",   u32),
+            steel_cost:  require_ship!(row, name, "steel_cost",  u32),
+            coal_cost:   require_ship!(row, name, "coal_cost",   u32),
+            era:         require_ship!(row, name, "era",         u8),
+            category,
+            prerequisite_tech: row.get::<String>("prerequisite_tech").ok(),
+        };
+        map.insert(ship_type, stats);
+    }
+
+    let expected = crate::data::default_ship_stats();
+    let missing: Vec<_> = expected.keys().filter(|k| !map.contains_key(k)).collect();
+    if !missing.is_empty() {
+        eprintln!(
+            "[ships.lua] missing {} ship type(s): {:?} — refusing partial load",
+            missing.len(), missing
         );
         return None;
     }

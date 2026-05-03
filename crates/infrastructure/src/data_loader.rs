@@ -3,17 +3,18 @@
 //! Contains RON definition structs and conversion logic (moved from domain).
 //! Reads RON files from disk and passes pre-parsed domain types to
 //! `GameData::from_parts()`. Domain never touches ron or the filesystem.
+//!
+//! Ship and army unit stats are loaded from Lua scripts inside `GameData::from_parts`.
+//! Only tech tree data is parsed from RON here.
 
 use domain::data::GameData;
 use domain::economy::buildings::BuildingType;
 use domain::economy::civilians::CivilianType;
 use domain::events::TechId;
-use domain::military::ships::{ShipCategory, ShipStats, ShipType};
 use domain::military::units::ArmyUnitType;
 use domain::tech::tree::{TechEffect, TechTree, Technology};
 use domain::types::Money;
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::path::Path;
 
 // ── RON definition structs ───────────────────────────────────────────────
@@ -46,29 +47,6 @@ enum TechEffectDef {
     LuaScript(String),
 }
 
-#[derive(Debug, Deserialize)]
-struct ShipDefsFile {
-    ships: Vec<ShipDef>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ShipDef {
-    name: String,
-    category: String,
-    firepower: u32,
-    range: u32,
-    armor: u32,
-    hull: u32,
-    speed: u32,
-    cargo: u32,
-    fabric_cost: u32,
-    lumber_cost: u32,
-    arms_cost: u32,
-    steel_cost: u32,
-    coal_cost: u32,
-    prerequisite_tech: Option<String>,
-}
-
 // ── RON parsers ──────────────────────────────────────────────────────────
 
 fn load_tech_tree(ron_str: &str) -> Result<TechTree, String> {
@@ -92,58 +70,6 @@ fn load_tech_tree(ron_str: &str) -> Result<TechTree, String> {
     let tree = TechTree::from_technologies(technologies);
     tree.validate()?;
     Ok(tree)
-}
-
-fn load_ship_stats(ron_str: &str) -> Result<HashMap<ShipType, ShipStats>, String> {
-    let defs: ShipDefsFile =
-        ron::from_str(ron_str).map_err(|e| format!("Failed to parse ships RON: {}", e))?;
-
-    let mut map = HashMap::new();
-    for def in defs.ships {
-        if def.hull == 0 {
-            return Err(format!("Ship '{}' has zero hull", def.name));
-        }
-        let ship_type = match def.name.as_str() {
-            "Trader" => ShipType::Trader,
-            "Indiaman" => ShipType::Indiaman,
-            "Clipper" => ShipType::Clipper,
-            "Paddlewheeler" => ShipType::Paddlewheeler,
-            "Freighter" => ShipType::Freighter,
-            "Frigate" => ShipType::Frigate,
-            "Ship-of-the-Line" => ShipType::ShipOfTheLine,
-            "Raider" => ShipType::Raider,
-            "Ironclad" => ShipType::Ironclad,
-            "Advanced Ironclad" => ShipType::AdvancedIronclad,
-            "Armoured Cruiser" => ShipType::ArmouredCruiser,
-            "Dreadnought" => ShipType::Dreadnought,
-            "Battlecruiser" => ShipType::Battlecruiser,
-            other => return Err(format!("Unknown ship type: {}", other)),
-        };
-        let category = match def.category.as_str() {
-            "Merchant" => ShipCategory::Merchant,
-            "Warship" => ShipCategory::Warship,
-            other => return Err(format!("Unknown ship category: {}", other)),
-        };
-        map.insert(
-            ship_type,
-            ShipStats {
-                firepower: def.firepower,
-                range: def.range,
-                armor: def.armor,
-                hull: def.hull,
-                speed: def.speed,
-                cargo: def.cargo,
-                category,
-                fabric_cost: def.fabric_cost,
-                lumber_cost: def.lumber_cost,
-                arms_cost: def.arms_cost,
-                steel_cost: def.steel_cost,
-                coal_cost: def.coal_cost,
-                prerequisite_tech: def.prerequisite_tech,
-            },
-        );
-    }
-    Ok(map)
 }
 
 fn convert_tech_effect(def: TechEffectDef) -> TechEffect {
@@ -179,21 +105,14 @@ fn convert_tech_effect(def: TechEffectDef) -> TechEffect {
 
 // ── Public API ───────────────────────────────────────────────────────────
 
-fn parse_game_data_sources(tech_str: &str, ship_str: Option<&str>) -> GameData {
+fn parse_game_data_sources(tech_str: &str) -> GameData {
     let tech_tree =
         load_tech_tree(tech_str).unwrap_or_else(|e| panic!("Failed to load tech tree: {}", e));
 
-    // Land-unit stats are loaded from scripts/config/units.lua inside
-    // GameData::from_parts; this hardcoded fallback is only used if Lua
-    // isn't available.
+    // Unit and ship stats are loaded from Lua scripts inside GameData::from_parts.
+    // These defaults are only used if Lua is unavailable.
     let unit_stats = domain::data::default_unit_stats();
-
-    let ship_stats = match ship_str {
-        Some(s) => {
-            load_ship_stats(s).unwrap_or_else(|e| panic!("Failed to load ship stats: {}", e))
-        }
-        None => domain::data::default_ship_stats(),
-    };
+    let ship_stats = domain::data::default_ship_stats();
 
     GameData::from_parts(tech_tree, unit_stats, ship_stats)
 }
@@ -201,20 +120,15 @@ fn parse_game_data_sources(tech_str: &str, ship_str: Option<&str>) -> GameData {
 /// Load game data from RON files in the given data directory.
 ///
 /// `technologies.ron` is required: panics if the file is missing or unreadable.
-/// `ships.ron` falls back to hardcoded defaults if absent. Land-unit stats
-/// always come from `scripts/config/units.lua` via `GameData::from_parts`.
+/// Unit and ship stats come from Lua scripts via `GameData::from_parts`.
 pub fn load_game_data(data_dir: &Path) -> GameData {
     let tech_str = read_required(data_dir, "definitions/technologies.ron");
-    let ship_str = try_read(data_dir, "definitions/ships.ron");
-    parse_game_data_sources(&tech_str, ship_str.as_deref())
+    parse_game_data_sources(&tech_str)
 }
 
 /// Load game data from the repo's checked-in RON definitions embedded at compile time.
 pub fn load_embedded_game_data() -> GameData {
-    parse_game_data_sources(
-        include_str!("../../../data/definitions/technologies.ron"),
-        Some(include_str!("../../../data/definitions/ships.ron")),
-    )
+    parse_game_data_sources(include_str!("../../../data/definitions/technologies.ron"))
 }
 
 fn read_required(base: &Path, relative: &str) -> String {
@@ -228,10 +142,6 @@ fn read_required(base: &Path, relative: &str) -> String {
     })
 }
 
-fn try_read(base: &Path, relative: &str) -> Option<String> {
-    let path = base.join(relative);
-    std::fs::read_to_string(path).ok()
-}
 
 #[cfg(test)]
 mod tests {
@@ -298,44 +208,4 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn load_ship_stats_rejects_zero_hull() {
-        let ron = r#"(ships: [(name: "Frigate", category: "Warship", firepower: 3, range: 2, armor: 2, hull: 0, speed: 3, cargo: 0, fabric_cost: 2, lumber_cost: 5, arms_cost: 3, steel_cost: 0, coal_cost: 0, prerequisite_tech: None)])"#;
-        let result = load_ship_stats(ron);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("zero hull"));
-    }
-
-    #[test]
-    fn ron_ship_stats_define_all_thirteen_types() {
-        let ron_content = std::fs::read_to_string("../../data/definitions/ships.ron").unwrap();
-        let from_ron = load_ship_stats(&ron_content).unwrap();
-        assert_eq!(from_ron.len(), 13);
-        for ship_type in [
-            ShipType::Trader,
-            ShipType::Indiaman,
-            ShipType::Clipper,
-            ShipType::Paddlewheeler,
-            ShipType::Freighter,
-            ShipType::Frigate,
-            ShipType::ShipOfTheLine,
-            ShipType::Raider,
-            ShipType::Ironclad,
-            ShipType::AdvancedIronclad,
-            ShipType::ArmouredCruiser,
-            ShipType::Dreadnought,
-            ShipType::Battlecruiser,
-        ] {
-            let stats = from_ron
-                .get(&ship_type)
-                .unwrap_or_else(|| panic!("ships.ron must define {:?}", ship_type));
-            assert!(stats.hull > 0, "{:?} must have positive hull", ship_type);
-            assert_eq!(
-                ship_type.category(),
-                stats.category,
-                "category mismatch for {:?}",
-                ship_type
-            );
-        }
-    }
 }

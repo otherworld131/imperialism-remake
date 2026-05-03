@@ -67,6 +67,7 @@ needs_wasm_rebuild() {
     "$REPO_ROOT/crates/infrastructure/src" \
     "$REPO_ROOT/crates/wasm-bridge/src" \
     "$REPO_ROOT/data" \
+    "$REPO_ROOT/scripts" \
     -type f -newer "$WASM_STAMP" -print -quit | grep -q .
 }
 

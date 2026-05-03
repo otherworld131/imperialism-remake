@@ -42,6 +42,9 @@ pub struct ShipStats {
     pub steel_cost: u32,
     pub coal_cost: u32,
     pub prerequisite_tech: Option<String>,
+    /// Historical era bucket (1–4). Used by the AI to prefer newer ships
+    /// when tech allows, and by the UI for grouping.
+    pub era: u8,
 }
 
 #[derive(Debug, Clone)]
