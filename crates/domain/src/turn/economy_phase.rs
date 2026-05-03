@@ -153,22 +153,39 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
             .map(|(m, q)| (*m, *q))
             .collect();
 
-        let mut remaining_labor =
+        let total_labor =
             nation
                 .economy
                 .labor
                 .total_labor_units_with(untrained_mult, trained_mult, expert_mult);
-        let mut resource_needs: BTreeMap<ResourceType, u32> = BTreeMap::new();
 
         let timber_cap = building_capacity(nation, BuildingType::LumberMill);
+        let steel_cap = building_capacity(nation, BuildingType::SteelMill);
+        let textile_cap = building_capacity(nation, BuildingType::TextileMill);
+        let furniture_cap = building_capacity(nation, BuildingType::FurnitureFactory);
+        let hardware_cap = building_capacity(nation, BuildingType::HardwareFactory);
+        let clothing_cap = building_capacity(nation, BuildingType::ClothingFactory);
+
+        let targets = nation.economy.chain_targets.clone();
+
+        // Distribute labor proportionally across active steps using labor weights.
+        let labor_budgets = allocate_labor(
+            total_labor,
+            &targets,
+            timber_cap, steel_cap, textile_cap, furniture_cap, hardware_cap, clothing_cap,
+        );
+
+        // Apply feed% to resources before passing to mill production functions.
+        let fed_resources = apply_feed_to_resources(&resources, &targets);
+        let mut resource_needs: BTreeMap<ResourceType, u32> = BTreeMap::new();
+
         let timber_result = if timber_cap > 0 {
             let result = calculate_mill_production(
                 ProductionChain::Timber,
-                &resources,
+                &fed_resources,
                 timber_cap,
-                remaining_labor,
+                labor_budgets.timber_mill,
             );
-            remaining_labor -= result.labor_used;
             for (resource, qty) in &result.resources_consumed {
                 *resource_needs.entry(*resource).or_insert(0) += *qty;
             }
@@ -177,15 +194,13 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
             None
         };
 
-        let steel_cap = building_capacity(nation, BuildingType::SteelMill);
         let metal_result = if steel_cap > 0 {
             let result = calculate_mill_production(
                 ProductionChain::Metal,
-                &resources,
+                &fed_resources,
                 steel_cap,
-                remaining_labor,
+                labor_budgets.metal_mill,
             );
-            remaining_labor -= result.labor_used;
             for (resource, qty) in &result.resources_consumed {
                 *resource_needs.entry(*resource).or_insert(0) += *qty;
             }
@@ -194,15 +209,13 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
             None
         };
 
-        let textile_cap = building_capacity(nation, BuildingType::TextileMill);
         let textile_result = if textile_cap > 0 {
             let result = calculate_mill_production(
                 ProductionChain::Textile,
-                &resources,
+                &fed_resources,
                 textile_cap,
-                remaining_labor,
+                labor_budgets.textile_mill,
             );
-            remaining_labor -= result.labor_used;
             for (resource, qty) in &result.resources_consumed {
                 *resource_needs.entry(*resource).or_insert(0) += *qty;
             }
@@ -211,6 +224,7 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
             None
         };
 
+        // Combine warehouse materials + this turn's mill output for factory inputs.
         let mut materials_inventory = starting_materials.clone();
         for result in [&timber_result, &metal_result, &textile_result]
             .into_iter()
@@ -220,45 +234,40 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
                 *materials_inventory.entry(*material).or_insert(0) += *qty;
             }
         }
-        let materials_inventory: Vec<(MaterialType, u32)> =
-            materials_inventory.into_iter().collect();
 
-        let furniture_cap = building_capacity(nation, BuildingType::FurnitureFactory);
+        // Apply feed% to materials (warehouse + mill output combined).
+        let fed_materials = apply_feed_to_materials(
+            &materials_inventory.iter().map(|(k, v)| (*k, *v)).collect::<Vec<_>>(),
+            &targets,
+        );
+
         let furniture_result = if furniture_cap > 0 {
-            let result = calculate_factory_production(
+            Some(calculate_factory_production(
                 ProductionChain::Timber,
-                &materials_inventory,
+                &fed_materials,
                 furniture_cap,
-                remaining_labor,
-            );
-            remaining_labor -= result.labor_used;
-            Some(result)
+                labor_budgets.lumber_factory,
+            ))
         } else {
             None
         };
-        let hardware_cap = building_capacity(nation, BuildingType::HardwareFactory);
         let hardware_result = if hardware_cap > 0 {
-            let result = calculate_factory_production(
+            Some(calculate_factory_production(
                 ProductionChain::Metal,
-                &materials_inventory,
+                &fed_materials,
                 hardware_cap,
-                remaining_labor,
-            );
-            remaining_labor -= result.labor_used;
-            Some(result)
+                labor_budgets.steel_factory,
+            ))
         } else {
             None
         };
-        let clothing_cap = building_capacity(nation, BuildingType::ClothingFactory);
         let clothing_result = if clothing_cap > 0 {
-            let result = calculate_factory_production(
+            Some(calculate_factory_production(
                 ProductionChain::Textile,
-                &materials_inventory,
+                &fed_materials,
                 clothing_cap,
-                remaining_labor,
-            );
-            remaining_labor -= result.labor_used;
-            Some(result)
+                labor_budgets.garment_factory,
+            ))
         } else {
             None
         };
@@ -494,6 +503,105 @@ fn building_capacity(nation: &crate::nation::Nation, building_type: BuildingType
         .find(|b| b.building_type == building_type)
         .map(|b| b.effective_capacity())
         .unwrap_or(0)
+}
+
+pub struct LaborBudgets {
+    pub timber_mill: u32,
+    pub metal_mill: u32,
+    pub textile_mill: u32,
+    pub lumber_factory: u32,
+    pub steel_factory: u32,
+    pub garment_factory: u32,
+}
+
+/// Distribute total labor proportionally across production steps using the
+/// player-set labor weights. Uses the Hamilton (largest-remainder) method so
+/// the sum of all budgets equals `total_labor` exactly — no systematic drift.
+/// Steps with zero capacity always get zero budget.
+pub fn allocate_labor(
+    total_labor: u32,
+    targets: &crate::nation::ChainAllocationTargets,
+    timber_cap: u32, metal_cap: u32, textile_cap: u32,
+    furniture_cap: u32, hardware_cap: u32, clothing_cap: u32,
+) -> LaborBudgets {
+    let entries: [(u32, u32); 6] = [
+        (timber_cap,    targets.timber_mill_labor as u32),
+        (metal_cap,     targets.metal_mill_labor as u32),
+        (textile_cap,   targets.textile_mill_labor as u32),
+        (furniture_cap, targets.lumber_factory_labor as u32),
+        (hardware_cap,  targets.steel_factory_labor as u32),
+        (clothing_cap,  targets.garment_factory_labor as u32),
+    ];
+    let total_weight: u32 = entries.iter()
+        .filter(|(cap, _)| *cap > 0)
+        .map(|(_, w)| *w)
+        .sum();
+    if total_weight == 0 || total_labor == 0 {
+        return LaborBudgets {
+            timber_mill: 0, metal_mill: 0, textile_mill: 0,
+            lumber_factory: 0, steel_factory: 0, garment_factory: 0,
+        };
+    }
+    // Hamilton method: floor each quota, then give leftover units to steps
+    // with the largest fractional remainders, so sum == total_labor exactly.
+    let mut floors = [0u32; 6];
+    let mut remainders = [0u32; 6];
+    let mut sum = 0u32;
+    for (i, (cap, w)) in entries.iter().enumerate() {
+        if *cap > 0 {
+            floors[i] = total_labor * w / total_weight;
+            remainders[i] = (total_labor * w) % total_weight;
+            sum += floors[i];
+        }
+    }
+    let leftover = total_labor.saturating_sub(sum);
+    if leftover > 0 {
+        let mut order: Vec<usize> = (0..6).filter(|&i| entries[i].0 > 0).collect();
+        order.sort_by(|&a, &b| remainders[b].cmp(&remainders[a]));
+        for &idx in order.iter().take(leftover as usize) {
+            floors[idx] += 1;
+        }
+    }
+    LaborBudgets {
+        timber_mill:     floors[0],
+        metal_mill:      floors[1],
+        textile_mill:    floors[2],
+        lumber_factory:  floors[3],
+        steel_factory:   floors[4],
+        garment_factory: floors[5],
+    }
+}
+
+/// Apply resource feed percentages: cap each resource to `pct%` of available.
+pub fn apply_feed_to_resources(
+    resources: &[(ResourceType, u32)],
+    targets: &crate::nation::ChainAllocationTargets,
+) -> Vec<(ResourceType, u32)> {
+    resources.iter().map(|(r, qty)| {
+        let pct = match r {
+            ResourceType::Timber => targets.timber_mill_feed as u32,
+            ResourceType::Coal | ResourceType::Iron => targets.metal_mill_feed as u32,
+            ResourceType::Cotton | ResourceType::Wool => targets.textile_mill_feed as u32,
+            _ => 100,
+        };
+        (*r, qty * pct / 100)
+    }).collect()
+}
+
+/// Apply material feed percentages: cap each material to `pct%` of available.
+pub fn apply_feed_to_materials(
+    materials: &[(MaterialType, u32)],
+    targets: &crate::nation::ChainAllocationTargets,
+) -> Vec<(MaterialType, u32)> {
+    materials.iter().map(|(m, qty)| {
+        let pct = match m {
+            MaterialType::Lumber => targets.lumber_factory_feed as u32,
+            MaterialType::Steel  => targets.steel_factory_feed as u32,
+            MaterialType::Fabric => targets.garment_factory_feed as u32,
+            _ => 100,
+        };
+        (*m, qty * pct / 100)
+    }).collect()
 }
 
 fn reserve_inventory(
@@ -801,5 +909,96 @@ pub(super) fn apply_warehouse_caps(game: &mut GameState) {
                 *amount = goods_cap;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nation::ChainAllocationTargets;
+
+    fn targets_all(v: u8) -> ChainAllocationTargets {
+        ChainAllocationTargets {
+            timber_mill_labor: v, lumber_factory_labor: v,
+            metal_mill_labor: v, steel_factory_labor: v,
+            textile_mill_labor: v, garment_factory_labor: v,
+            timber_mill_feed: v, lumber_factory_feed: v,
+            metal_mill_feed: v, steel_factory_feed: v,
+            textile_mill_feed: v, garment_factory_feed: v,
+        }
+    }
+
+    #[test]
+    fn allocate_labor_proportional() {
+        let mut t = targets_all(100);
+        // Only timber and metal steps active (timber weight 75, metal weight 25)
+        t.timber_mill_labor = 75;
+        t.metal_mill_labor = 25;
+        t.textile_mill_labor = 0;
+        let budgets = allocate_labor(100, &t, 1, 1, 0, 0, 0, 0);
+        assert_eq!(budgets.timber_mill, 75);
+        assert_eq!(budgets.metal_mill, 25);
+        assert_eq!(budgets.textile_mill, 0);
+    }
+
+    #[test]
+    fn allocate_labor_zero_weight() {
+        let t = targets_all(0);
+        let budgets = allocate_labor(100, &t, 1, 1, 1, 1, 1, 1);
+        assert_eq!(budgets.timber_mill, 0);
+        assert_eq!(budgets.metal_mill, 0);
+        assert_eq!(budgets.textile_mill, 0);
+        assert_eq!(budgets.lumber_factory, 0);
+        assert_eq!(budgets.steel_factory, 0);
+        assert_eq!(budgets.garment_factory, 0);
+    }
+
+    #[test]
+    fn allocate_labor_zero_cap_gets_zero() {
+        let t = targets_all(100);
+        // cap=0 for timber_mill means it gets no labor regardless of weight
+        let budgets = allocate_labor(100, &t, 0, 1, 0, 0, 0, 0);
+        assert_eq!(budgets.timber_mill, 0);
+        assert_eq!(budgets.metal_mill, 100);
+    }
+
+    #[test]
+    fn apply_feed_zero_pct_yields_zero() {
+        let mut t = targets_all(100);
+        t.timber_mill_feed = 0;
+        let resources = vec![(ResourceType::Timber, 200u32)];
+        let fed = apply_feed_to_resources(&resources, &t);
+        assert_eq!(fed[0].1, 0);
+    }
+
+    #[test]
+    fn apply_feed_full_pct_is_passthrough() {
+        let t = targets_all(100);
+        let resources = vec![
+            (ResourceType::Timber, 300u32),
+            (ResourceType::Coal, 150u32),
+        ];
+        let fed = apply_feed_to_resources(&resources, &t);
+        assert_eq!(fed[0].1, 300);
+        assert_eq!(fed[1].1, 150);
+    }
+
+    #[test]
+    fn apply_material_feed_partial() {
+        let mut t = targets_all(100);
+        t.lumber_factory_feed = 50;
+        let materials = vec![(MaterialType::Lumber, 200u32)];
+        let fed = apply_feed_to_materials(&materials, &t);
+        assert_eq!(fed[0].1, 100);
+    }
+
+    #[test]
+    fn allocate_labor_does_not_exceed_total() {
+        let t = targets_all(100);
+        let total = 97u32; // non-round to expose truncation
+        let budgets = allocate_labor(total, &t, 1, 1, 1, 1, 1, 1);
+        let sum = budgets.timber_mill + budgets.metal_mill + budgets.textile_mill
+            + budgets.lumber_factory + budgets.steel_factory + budgets.garment_factory;
+        assert_eq!(sum, total, "Hamilton method must conserve exactly: allocated {sum} != total {total}");
     }
 }

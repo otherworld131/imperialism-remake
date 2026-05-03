@@ -1205,6 +1205,88 @@ impl From<BlockReason> for d::observability::BlockReason {
 
 // ── Nation-level fields (used from nation.rs) ─────────────────────
 
+/// Snapshot of player-controlled production chain allocation targets.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ChainAllocationTargets {
+    #[serde(default = "default_100")]
+    pub timber_mill_labor: u8,
+    #[serde(default = "default_100")]
+    pub lumber_factory_labor: u8,
+    #[serde(default = "default_100")]
+    pub metal_mill_labor: u8,
+    #[serde(default = "default_100")]
+    pub steel_factory_labor: u8,
+    #[serde(default = "default_100")]
+    pub textile_mill_labor: u8,
+    #[serde(default = "default_100")]
+    pub garment_factory_labor: u8,
+    #[serde(default = "default_100")]
+    pub timber_mill_feed: u8,
+    #[serde(default = "default_100")]
+    pub lumber_factory_feed: u8,
+    #[serde(default = "default_100")]
+    pub metal_mill_feed: u8,
+    #[serde(default = "default_100")]
+    pub steel_factory_feed: u8,
+    #[serde(default = "default_100")]
+    pub textile_mill_feed: u8,
+    #[serde(default = "default_100")]
+    pub garment_factory_feed: u8,
+}
+
+fn default_100() -> u8 { 100 }
+
+impl Default for ChainAllocationTargets {
+    fn default() -> Self {
+        Self {
+            timber_mill_labor: 100, lumber_factory_labor: 100,
+            metal_mill_labor: 100, steel_factory_labor: 100,
+            textile_mill_labor: 100, garment_factory_labor: 100,
+            timber_mill_feed: 100, lumber_factory_feed: 100,
+            metal_mill_feed: 100, steel_factory_feed: 100,
+            textile_mill_feed: 100, garment_factory_feed: 100,
+        }
+    }
+}
+
+impl From<&domain::nation::ChainAllocationTargets> for ChainAllocationTargets {
+    fn from(v: &domain::nation::ChainAllocationTargets) -> Self {
+        Self {
+            timber_mill_labor: v.timber_mill_labor,
+            lumber_factory_labor: v.lumber_factory_labor,
+            metal_mill_labor: v.metal_mill_labor,
+            steel_factory_labor: v.steel_factory_labor,
+            textile_mill_labor: v.textile_mill_labor,
+            garment_factory_labor: v.garment_factory_labor,
+            timber_mill_feed: v.timber_mill_feed,
+            lumber_factory_feed: v.lumber_factory_feed,
+            metal_mill_feed: v.metal_mill_feed,
+            steel_factory_feed: v.steel_factory_feed,
+            textile_mill_feed: v.textile_mill_feed,
+            garment_factory_feed: v.garment_factory_feed,
+        }
+    }
+}
+
+impl From<ChainAllocationTargets> for domain::nation::ChainAllocationTargets {
+    fn from(v: ChainAllocationTargets) -> Self {
+        Self {
+            timber_mill_labor: v.timber_mill_labor,
+            lumber_factory_labor: v.lumber_factory_labor,
+            metal_mill_labor: v.metal_mill_labor,
+            steel_factory_labor: v.steel_factory_labor,
+            textile_mill_labor: v.textile_mill_labor,
+            garment_factory_labor: v.garment_factory_labor,
+            timber_mill_feed: v.timber_mill_feed,
+            lumber_factory_feed: v.lumber_factory_feed,
+            metal_mill_feed: v.metal_mill_feed,
+            steel_factory_feed: v.steel_factory_feed,
+            textile_mill_feed: v.textile_mill_feed,
+            garment_factory_feed: v.garment_factory_feed,
+        }
+    }
+}
+
 /// Snapshot of a nation's full economy for use by `nation.rs`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NationEconomy {
@@ -1216,6 +1298,8 @@ pub struct NationEconomy {
     pub labor: LaborPool,
     #[serde(default)]
     pub logistics: LogisticsState,
+    #[serde(default)]
+    pub chain_targets: ChainAllocationTargets,
     #[serde(default)]
     pub reserved_treasury: Money,
     #[serde(default)]
@@ -1242,6 +1326,7 @@ impl From<&domain::nation::NationEconomy> for NationEconomy {
             buildings: v.buildings.iter().map(Into::into).collect(),
             labor: (&v.labor).into(),
             logistics: (&v.logistics).into(),
+            chain_targets: (&v.chain_targets).into(),
             reserved_treasury: v.snapshot_reserved_treasury().into(),
             reserved_warehouse: v
                 .snapshot_reserved_warehouse()
@@ -1290,6 +1375,7 @@ impl From<NationEconomy> for domain::nation::NationEconomy {
         ne.buildings = v.buildings.into_iter().map(Into::into).collect();
         ne.labor = v.labor.into();
         ne.logistics = v.logistics.into();
+        ne.chain_targets = v.chain_targets.into();
         ne.restore_reservation_state(domain::nation::ReservationStateSnapshot {
             reserved_treasury: v.reserved_treasury.into(),
             reserved_warehouse: v
@@ -1320,5 +1406,28 @@ impl From<NationEconomy> for domain::nation::NationEconomy {
                 .collect(),
         });
         ne
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chain_targets_defaults_to_100_when_missing() {
+        let json = r#"{"treasury":0,"warehouse":{},"materials":{},"goods":{},"buildings":[],"labor":{"untrained":0,"trained":0,"expert":0}}"#;
+        let economy: NationEconomy = serde_json::from_str(json).unwrap();
+        assert_eq!(economy.chain_targets.timber_mill_labor, 100);
+        assert_eq!(economy.chain_targets.metal_mill_feed, 100);
+        assert_eq!(economy.chain_targets.garment_factory_feed, 100);
+    }
+
+    #[test]
+    fn chain_targets_partial_fields_use_defaults() {
+        let json = r#"{"treasury":0,"warehouse":{},"materials":{},"goods":{},"buildings":[],"labor":{"untrained":0,"trained":0,"expert":0},"chain_targets":{"timber_mill_labor":50}}"#;
+        let economy: NationEconomy = serde_json::from_str(json).unwrap();
+        assert_eq!(economy.chain_targets.timber_mill_labor, 50);
+        assert_eq!(economy.chain_targets.metal_mill_labor, 100);
+        assert_eq!(economy.chain_targets.timber_mill_feed, 100);
     }
 }

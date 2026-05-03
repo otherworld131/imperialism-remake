@@ -1756,77 +1756,72 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
             .map(|(r, q)| (*r, *q))
             .collect();
 
-        // Labor is a shared pool across all production this turn
-        let mut remaining_labor =
+        let total_labor =
             nation
                 .economy
                 .labor
                 .total_labor_units_with(untrained_mult, trained_mult, expert_mult);
 
-        // ── Mills: resources → materials (consume labor first) ──
-
-        // Timber chain: LumberMill
-        let lumber_mill_cap = nation
-            .economy
-            .buildings
-            .iter()
+        // Building capacities
+        let lumber_mill_cap = nation.economy.buildings.iter()
             .find(|b| b.building_type == BuildingType::LumberMill)
-            .map(|b| b.effective_capacity())
-            .unwrap_or(0);
+            .map(|b| b.effective_capacity()).unwrap_or(0);
+        let steel_mill_cap = nation.economy.buildings.iter()
+            .find(|b| b.building_type == BuildingType::SteelMill)
+            .map(|b| b.effective_capacity()).unwrap_or(0);
+        let textile_mill_cap = nation.economy.buildings.iter()
+            .find(|b| b.building_type == BuildingType::TextileMill)
+            .map(|b| b.effective_capacity()).unwrap_or(0);
+        let furniture_cap = nation.economy.buildings.iter()
+            .find(|b| b.building_type == BuildingType::FurnitureFactory)
+            .map(|b| b.effective_capacity()).unwrap_or(0);
+        let hardware_cap = nation.economy.buildings.iter()
+            .find(|b| b.building_type == BuildingType::HardwareFactory)
+            .map(|b| b.effective_capacity()).unwrap_or(0);
+        let clothing_cap = nation.economy.buildings.iter()
+            .find(|b| b.building_type == BuildingType::ClothingFactory)
+            .map(|b| b.effective_capacity()).unwrap_or(0);
+
+        // Honor chain_targets: proportional labor allocation + feed percentages
+        let targets = nation.economy.chain_targets.clone();
+        let labor = super::economy_phase::allocate_labor(
+            total_labor, &targets,
+            lumber_mill_cap, steel_mill_cap, textile_mill_cap,
+            furniture_cap, hardware_cap, clothing_cap,
+        );
+        let fed_resources = super::economy_phase::apply_feed_to_resources(&resources, &targets);
+
+        // ── Mills: resources → materials ──
 
         let timber_result = if lumber_mill_cap > 0 {
-            let result = calculate_mill_production(
+            Some(calculate_mill_production(
                 ProductionChain::Timber,
-                &resources,
+                &fed_resources,
                 lumber_mill_cap,
-                remaining_labor,
-            );
-            remaining_labor -= result.labor_used;
-            Some(result)
+                labor.timber_mill,
+            ))
         } else {
             None
         };
-
-        // Metal chain: SteelMill
-        let steel_mill_cap = nation
-            .economy
-            .buildings
-            .iter()
-            .find(|b| b.building_type == BuildingType::SteelMill)
-            .map(|b| b.effective_capacity())
-            .unwrap_or(0);
 
         let metal_result = if steel_mill_cap > 0 {
-            let result = calculate_mill_production(
+            Some(calculate_mill_production(
                 ProductionChain::Metal,
-                &resources,
+                &fed_resources,
                 steel_mill_cap,
-                remaining_labor,
-            );
-            remaining_labor -= result.labor_used;
-            Some(result)
+                labor.metal_mill,
+            ))
         } else {
             None
         };
 
-        // Textile chain: TextileMill
-        let textile_mill_cap = nation
-            .economy
-            .buildings
-            .iter()
-            .find(|b| b.building_type == BuildingType::TextileMill)
-            .map(|b| b.effective_capacity())
-            .unwrap_or(0);
-
         let textile_result = if textile_mill_cap > 0 {
-            let result = calculate_mill_production(
+            Some(calculate_mill_production(
                 ProductionChain::Textile,
-                &resources,
+                &fed_resources,
                 textile_mill_cap,
-                remaining_labor,
-            );
-            remaining_labor -= result.labor_used;
-            Some(result)
+                labor.textile_mill,
+            ))
         } else {
             None
         };
@@ -1871,76 +1866,44 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
 
         // ── Factories: materials → goods ──
 
-        // Build the current materials inventory for factory input
-        let materials_inventory: Vec<(MaterialType, u32)> = nation
+        // Combined materials: warehouse stock + this turn's mill output
+        let combined_materials: Vec<(MaterialType, u32)> = nation
             .economy
             .materials
             .iter()
             .map(|(m, q)| (*m, *q))
             .collect();
-
-        // Furniture: LumberMill output → FurnitureFactory
-        let furniture_cap = nation
-            .economy
-            .buildings
-            .iter()
-            .find(|b| b.building_type == BuildingType::FurnitureFactory)
-            .map(|b| b.effective_capacity())
-            .unwrap_or(0);
+        let fed_materials = super::economy_phase::apply_feed_to_materials(&combined_materials, &targets);
 
         let furniture_result = if furniture_cap > 0 {
-            let result = calculate_factory_production(
+            Some(calculate_factory_production(
                 ProductionChain::Timber,
-                &materials_inventory,
+                &fed_materials,
                 furniture_cap,
-                remaining_labor,
-            );
-            remaining_labor -= result.labor_used;
-            Some(result)
+                labor.lumber_factory,
+            ))
         } else {
             None
         };
-
-        // Hardware: SteelMill output → HardwareFactory
-        let hardware_cap = nation
-            .economy
-            .buildings
-            .iter()
-            .find(|b| b.building_type == BuildingType::HardwareFactory)
-            .map(|b| b.effective_capacity())
-            .unwrap_or(0);
 
         let hardware_result = if hardware_cap > 0 {
-            let result = calculate_factory_production(
+            Some(calculate_factory_production(
                 ProductionChain::Metal,
-                &materials_inventory,
+                &fed_materials,
                 hardware_cap,
-                remaining_labor,
-            );
-            remaining_labor -= result.labor_used;
-            Some(result)
+                labor.steel_factory,
+            ))
         } else {
             None
         };
 
-        // Clothing: TextileMill output → ClothingFactory
-        let clothing_cap = nation
-            .economy
-            .buildings
-            .iter()
-            .find(|b| b.building_type == BuildingType::ClothingFactory)
-            .map(|b| b.effective_capacity())
-            .unwrap_or(0);
-
         let clothing_result = if clothing_cap > 0 {
-            let result = calculate_factory_production(
+            Some(calculate_factory_production(
                 ProductionChain::Textile,
-                &materials_inventory,
+                &fed_materials,
                 clothing_cap,
-                remaining_labor,
-            );
-            remaining_labor -= result.labor_used;
-            Some(result)
+                labor.garment_factory,
+            ))
         } else {
             None
         };

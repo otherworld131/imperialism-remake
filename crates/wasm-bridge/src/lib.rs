@@ -3159,18 +3159,12 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
     let labor_units = labor.total_labor_units();
     let targets = &nation.economy.chain_targets;
 
-    // Compute labor budgets under current targets (proportional allocation).
-    let step_caps = [lumber_mill_cap, steel_mill_cap, textile_mill_cap, furniture_cap, hardware_cap, clothing_cap];
-    let step_weights = [
-        targets.timber_mill_labor as u32, targets.metal_mill_labor as u32, targets.textile_mill_labor as u32,
-        targets.lumber_factory_labor as u32, targets.steel_factory_labor as u32, targets.garment_factory_labor as u32,
-    ];
-    let total_weight: u32 = step_caps.iter().zip(step_weights.iter())
-        .filter(|(cap, _)| **cap > 0).map(|(_, w)| *w).sum();
-    let labor_budget = |idx: usize| -> u32 {
-        if step_caps[idx] == 0 || total_weight == 0 { 0 }
-        else { labor_units * step_weights[idx] / total_weight }
-    };
+    // Compute labor budgets using the same Hamilton allocator as process_turn.
+    let labor_budgets = domain::turn::economy_phase::allocate_labor(
+        labor_units, targets,
+        lumber_mill_cap, steel_mill_cap, textile_mill_cap,
+        furniture_cap, hardware_cap, clothing_cap,
+    );
 
     // Resources fed to each mill (apply feed% to warehouse).
     let all_res: Vec<(ResourceType, u32)> = [
@@ -3193,9 +3187,9 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
     // Unlimited labor (resource-bound max) and all-labor-to-one-step (labor-bound max).
     let unlimited_labor = labor_units * 2 + 1;
 
-    let timber_mill = calculate_mill_production(ProductionChain::Timber, &fed_res, lumber_mill_cap, labor_budget(0));
-    let metal_mill  = calculate_mill_production(ProductionChain::Metal,  &fed_res, steel_mill_cap, labor_budget(1));
-    let textile_mill= calculate_mill_production(ProductionChain::Textile,&fed_res, textile_mill_cap, labor_budget(2));
+    let timber_mill = calculate_mill_production(ProductionChain::Timber, &fed_res, lumber_mill_cap, labor_budgets.timber_mill);
+    let metal_mill  = calculate_mill_production(ProductionChain::Metal,  &fed_res, steel_mill_cap,  labor_budgets.metal_mill);
+    let textile_mill= calculate_mill_production(ProductionChain::Textile,&fed_res, textile_mill_cap,labor_budgets.textile_mill);
 
     // Resource-bound max (unlimited labor, 100% feed): shows capacity/resource ceiling.
     let timber_res_max   = calculate_mill_production(ProductionChain::Timber, &max_res, lumber_mill_cap, unlimited_labor);
@@ -3207,20 +3201,34 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
     let textile_labor_max = calculate_mill_production(ProductionChain::Textile,&max_res, textile_mill_cap,labor_units);
 
     // Feed saturation: min feed% at which building capacity becomes the binding constraint.
+    // Suppressed (100) when labor is already the binding constraint — in that case the tick
+    // would be misleading because capacity is not reachable regardless of feed%.
     let timber_mill_feed_sat = {
-        let r = nation.resource_amount(ResourceType::Timber);
-        if r == 0 || lumber_mill_cap == 0 { 100u8 }
-        else { ((lumber_mill_cap * 200 + r - 1) / r).min(100) as u8 }
+        let res = timber_res_max.materials_produced.first().map(|x| x.1).unwrap_or(0);
+        let lab = timber_labor_max.materials_produced.first().map(|x| x.1).unwrap_or(0);
+        if lab < res { 100u8 } else {
+            let r = nation.resource_amount(ResourceType::Timber);
+            if r == 0 || lumber_mill_cap == 0 { 100u8 }
+            else { ((lumber_mill_cap * 200 + r - 1) / r).min(100) as u8 }
+        }
     };
     let metal_mill_feed_sat = {
-        let r = nation.resource_amount(ResourceType::Coal).min(nation.resource_amount(ResourceType::Iron));
-        if r == 0 || steel_mill_cap == 0 { 100u8 }
-        else { ((steel_mill_cap * 100 + r - 1) / r).min(100) as u8 }
+        let res = metal_res_max.materials_produced.first().map(|x| x.1).unwrap_or(0);
+        let lab = metal_labor_max.materials_produced.first().map(|x| x.1).unwrap_or(0);
+        if lab < res { 100u8 } else {
+            let r = nation.resource_amount(ResourceType::Coal).min(nation.resource_amount(ResourceType::Iron));
+            if r == 0 || steel_mill_cap == 0 { 100u8 }
+            else { ((steel_mill_cap * 100 + r - 1) / r).min(100) as u8 }
+        }
     };
     let textile_mill_feed_sat = {
-        let r = nation.resource_amount(ResourceType::Cotton) + nation.resource_amount(ResourceType::Wool);
-        if r == 0 || textile_mill_cap == 0 { 100u8 }
-        else { ((textile_mill_cap * 200 + r - 1) / r).min(100) as u8 }
+        let res = textile_res_max.materials_produced.first().map(|x| x.1).unwrap_or(0);
+        let lab = textile_labor_max.materials_produced.first().map(|x| x.1).unwrap_or(0);
+        if lab < res { 100u8 } else {
+            let r = nation.resource_amount(ResourceType::Cotton) + nation.resource_amount(ResourceType::Wool);
+            if r == 0 || textile_mill_cap == 0 { 100u8 }
+            else { ((textile_mill_cap * 200 + r - 1) / r).min(100) as u8 }
+        }
     };
 
     // Combine warehouse materials + this turn's mill output for factory inputs.
@@ -3237,9 +3245,9 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
         (MaterialType::Fabric, mat_fabric * targets.garment_factory_feed as u32 / 100),
     ].to_vec();
 
-    let furniture_prod = calculate_factory_production(ProductionChain::Timber, &fed_mats, furniture_cap, labor_budget(3));
-    let hardware_prod  = calculate_factory_production(ProductionChain::Metal,  &fed_mats, hardware_cap,  labor_budget(4));
-    let clothing_prod  = calculate_factory_production(ProductionChain::Textile,&fed_mats, clothing_cap,  labor_budget(5));
+    let furniture_prod = calculate_factory_production(ProductionChain::Timber, &fed_mats, furniture_cap, labor_budgets.lumber_factory);
+    let hardware_prod  = calculate_factory_production(ProductionChain::Metal,  &fed_mats, hardware_cap,  labor_budgets.steel_factory);
+    let clothing_prod  = calculate_factory_production(ProductionChain::Textile,&fed_mats, clothing_cap,  labor_budgets.garment_factory);
 
     // Max materials for factory max: warehouse + max mill output at 100% feed.
     let max_mat_lumber = nation.material_amount(MaterialType::Lumber)
@@ -3262,19 +3270,31 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
     let clothing_labor_max  = calculate_factory_production(ProductionChain::Textile,&max_mats, clothing_cap,  labor_units);
 
     let lumber_factory_feed_sat = {
-        let m = max_mat_lumber;
-        if m == 0 || furniture_cap == 0 { 100u8 }
-        else { ((furniture_cap * 200 + m - 1) / m).min(100) as u8 }
+        let res = furniture_res_max.goods_produced.first().map(|x| x.1).unwrap_or(0);
+        let lab = furniture_labor_max.goods_produced.first().map(|x| x.1).unwrap_or(0);
+        if lab < res { 100u8 } else {
+            let m = max_mat_lumber;
+            if m == 0 || furniture_cap == 0 { 100u8 }
+            else { ((furniture_cap * 200 + m - 1) / m).min(100) as u8 }
+        }
     };
     let steel_factory_feed_sat = {
-        let m = max_mat_steel;
-        if m == 0 || hardware_cap == 0 { 100u8 }
-        else { ((hardware_cap * 200 + m - 1) / m).min(100) as u8 }
+        let res = hardware_res_max.goods_produced.first().map(|x| x.1).unwrap_or(0);
+        let lab = hardware_labor_max.goods_produced.first().map(|x| x.1).unwrap_or(0);
+        if lab < res { 100u8 } else {
+            let m = max_mat_steel;
+            if m == 0 || hardware_cap == 0 { 100u8 }
+            else { ((hardware_cap * 200 + m - 1) / m).min(100) as u8 }
+        }
     };
     let garment_factory_feed_sat = {
-        let m = max_mat_fabric;
-        if m == 0 || clothing_cap == 0 { 100u8 }
-        else { ((clothing_cap * 200 + m - 1) / m).min(100) as u8 }
+        let res = clothing_res_max.goods_produced.first().map(|x| x.1).unwrap_or(0);
+        let lab = clothing_labor_max.goods_produced.first().map(|x| x.1).unwrap_or(0);
+        if lab < res { 100u8 } else {
+            let m = max_mat_fabric;
+            if m == 0 || clothing_cap == 0 { 100u8 }
+            else { ((clothing_cap * 200 + m - 1) / m).min(100) as u8 }
+        }
     };
 
     let freight_car_cost = game.game_data.game_config.freight_car_cost;
@@ -3364,7 +3384,7 @@ pub fn wasm_set_chain_labor(
     nation_id: u32,
     chain: &str,
     step: &str,
-    share: u8,
+    share: u32,
 ) -> String {
     let mut game = match deserialize_game(game_json) {
         Ok(g) => g,
@@ -3375,7 +3395,7 @@ pub fn wasm_set_chain_labor(
         Some(n) => n,
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
-    let share = share.min(100);
+    let share = share.min(100) as u8;
     match (chain, step) {
         ("timber",  "mill")    => nation.economy.chain_targets.timber_mill_labor    = share,
         ("timber",  "factory") => nation.economy.chain_targets.lumber_factory_labor = share,
@@ -3395,7 +3415,7 @@ pub fn wasm_set_chain_feed(
     nation_id: u32,
     chain: &str,
     step: &str,
-    pct: u8,
+    pct: u32,
 ) -> String {
     let mut game = match deserialize_game(game_json) {
         Ok(g) => g,
@@ -3406,7 +3426,7 @@ pub fn wasm_set_chain_feed(
         Some(n) => n,
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
-    let pct = pct.min(100);
+    let pct = pct.min(100) as u8;
     match (chain, step) {
         ("timber",  "mill")    => nation.economy.chain_targets.timber_mill_feed    = pct,
         ("timber",  "factory") => nation.economy.chain_targets.lumber_factory_feed = pct,
@@ -7164,5 +7184,155 @@ mod tests {
             rejected.world.diplomacy.is_at_war(attacker2, human2),
             "war remains in effect after rejection"
         );
+    }
+
+    // ── Chain allocation tests ────────────────────────────────────
+
+    #[test]
+    fn setter_does_not_affect_current_inventory() {
+        let game = new_game("default", Difficulty::Normal, 0);
+        let nation_id = game.human_player_nation.0;
+        let game_json = serialize_game(&game);
+
+        let original: domain_snapshot::game_state::GameState =
+            serde_json::from_str(&game_json).unwrap();
+        let original_warehouse = original.world.nations[0].economy.warehouse.clone();
+
+        let modified_json = wasm_set_chain_labor(&game_json, nation_id, "timber", "mill", 0);
+        assert!(!modified_json.contains("\"error\""));
+
+        let modified: domain_snapshot::game_state::GameState =
+            serde_json::from_str(&modified_json).unwrap();
+        assert_eq!(
+            modified.world.nations[0].economy.chain_targets.timber_mill_labor, 0,
+            "chain_targets updated immediately"
+        );
+        assert_eq!(
+            modified.world.nations[0].economy.warehouse, original_warehouse,
+            "warehouse unchanged before end-turn"
+        );
+    }
+
+    #[test]
+    fn set_chain_labor_invalid_chain_returns_error() {
+        let game_json = make_game_json();
+        let result = wasm_set_chain_labor(&game_json, 0, "gold", "mill", 50);
+        assert!(result.contains("\"error\""));
+    }
+
+    #[test]
+    fn set_chain_feed_clamps_to_100() {
+        let game = new_game("default", Difficulty::Normal, 0);
+        let nation_id = game.human_player_nation.0;
+        let game_json = serialize_game(&game);
+        let result_json = wasm_set_chain_feed(&game_json, nation_id, "timber", "mill", 200);
+        assert!(!result_json.contains("\"error\""));
+        let snap: domain_snapshot::game_state::GameState =
+            serde_json::from_str(&result_json).unwrap();
+        assert_eq!(snap.world.nations[0].economy.chain_targets.timber_mill_feed, 100);
+    }
+
+    #[test]
+    fn chain_targets_honored_on_process_turn() {
+        use domain::economy::buildings::Building;
+
+        let mut base_game = new_game("default", Difficulty::Normal, 0);
+        let nation_id = base_game.human_player_nation;
+
+        // Ensure lumber mill with capacity ≥ 4, timber resources, and labor
+        {
+            let nation = base_game.get_nation_mut(nation_id).unwrap();
+            match nation.economy.buildings.iter_mut().find(|b| b.building_type == BuildingType::LumberMill) {
+                Some(b) => {
+                    b.capacity = b.capacity.max(4);
+                    b.pending_capacity = 0;
+                    b.turns_until_upgrade = 0;
+                }
+                None => {
+                    nation.economy.buildings.push(Building::new(BuildingType::LumberMill, 4));
+                }
+            }
+            *nation.economy.warehouse.entry(ResourceType::Timber).or_insert(0) = 200;
+            // Ensure enough labor for production
+            nation.economy.labor.untrained = nation.economy.labor.untrained.max(20);
+        }
+
+        // Clear any pre-existing lumber so the delta is visible
+        {
+            let nation = base_game.get_nation_mut(nation_id).unwrap();
+            nation.economy.materials.remove(&MaterialType::Lumber);
+        }
+
+        let base_json = serialize_game(&base_game);
+
+        // Run one turn with default targets (timber_mill_labor=100)
+        let default_turn_json = wasm_process_turn(&base_json);
+        let default_val: serde_json::Value = serde_json::from_str(&default_turn_json).unwrap();
+        let lumber_default = default_val["game"]["world"]["nations"][0]["economy"]["materials"]
+            .as_object()
+            .and_then(|m| m.get("Lumber"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        // Set timber_mill_labor=0, then run a turn
+        let zero_json = wasm_set_chain_labor(&base_json, nation_id.0, "timber", "mill", 0);
+        let zero_turn_json = wasm_process_turn(&zero_json);
+        let zero_val: serde_json::Value = serde_json::from_str(&zero_turn_json).unwrap();
+        let lumber_zero = zero_val["game"]["world"]["nations"][0]["economy"]["materials"]
+            .as_object()
+            .and_then(|m| m.get("Lumber"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        assert!(lumber_default > 0, "baseline produced no lumber — test setup invalid");
+        assert!(
+            lumber_zero < lumber_default,
+            "chain_targets not honored by process_turn: labor=0 got {lumber_zero}, default got {lumber_default}"
+        );
+    }
+
+    #[test]
+    fn feed_target_zero_suppresses_production_on_next_turn() {
+        use domain::economy::buildings::Building;
+
+        let mut base_game = new_game("default", Difficulty::Normal, 0);
+        let nation_id = base_game.human_player_nation;
+
+        // Ensure lumber mill, timber, and labor
+        {
+            let nation = base_game.get_nation_mut(nation_id).unwrap();
+            match nation.economy.buildings.iter_mut().find(|b| b.building_type == BuildingType::LumberMill) {
+                Some(b) => {
+                    b.capacity = b.capacity.max(4);
+                    b.pending_capacity = 0;
+                    b.turns_until_upgrade = 0;
+                }
+                None => {
+                    nation.economy.buildings.push(Building::new(BuildingType::LumberMill, 4));
+                }
+            }
+            *nation.economy.warehouse.entry(ResourceType::Timber).or_insert(0) = 200;
+            nation.economy.labor.untrained = nation.economy.labor.untrained.max(20);
+            nation.economy.materials.remove(&MaterialType::Lumber);
+        }
+
+        let base_json = serialize_game(&base_game);
+
+        // Baseline: default feed (100%)
+        let default_turn_json = wasm_process_turn(&base_json);
+        let default_val: serde_json::Value = serde_json::from_str(&default_turn_json).unwrap();
+        let lumber_default = default_val["game"]["world"]["nations"][0]["economy"]["materials"]
+            .as_object().and_then(|m| m.get("Lumber")).and_then(|v| v.as_u64()).unwrap_or(0);
+
+        // Set timber_mill_feed=0, run turn
+        let zero_json = wasm_set_chain_feed(&base_json, nation_id.0, "timber", "mill", 0);
+        let zero_turn_json = wasm_process_turn(&zero_json);
+        let zero_val: serde_json::Value = serde_json::from_str(&zero_turn_json).unwrap();
+        let lumber_zero_feed = zero_val["game"]["world"]["nations"][0]["economy"]["materials"]
+            .as_object().and_then(|m| m.get("Lumber")).and_then(|v| v.as_u64()).unwrap_or(0);
+
+        assert!(lumber_default > 0, "baseline produced no lumber — test setup invalid");
+        assert_eq!(lumber_zero_feed, 0,
+            "feed=0 should suppress all timber mill output, got {lumber_zero_feed}");
     }
 }

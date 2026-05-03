@@ -9,6 +9,8 @@ interface Props {
   onBuildShip: (shipType: string) => void;
   onHire: (civilianType: string) => void;
   onBuildFreightCar: () => void;
+  onSetChainLabor: (chain: string, step: string, share: number) => void;
+  onSetChainFeed: (chain: string, step: string, pct: number) => void;
 }
 
 const RESOURCE_EMOJI: Record<string, string> = {
@@ -23,21 +25,24 @@ const RESOURCE_EMOJI: Record<string, string> = {
 const CHAIN_CONFIG = [
   {
     key: 'timber_chain' as const,
+    chain: 'timber',
     name: 'Timber', emoji: '🪵',
-    mill: { label: 'Timber → Lumber' },
-    factory: { label: 'Lumber → Furniture' },
+    mill: { label: 'Timber → Lumber', feedEmoji: '🪵', laborKey: 'timber_mill_labor' as const, feedKey: 'timber_mill_feed' as const },
+    factory: { label: 'Lumber → Furniture', feedEmoji: '🪵', laborKey: 'lumber_factory_labor' as const, feedKey: 'lumber_factory_feed' as const },
   },
   {
     key: 'metal_chain' as const,
+    chain: 'metal',
     name: 'Metal', emoji: '⚙️',
-    mill: { label: 'Coal+Iron → Steel' },
-    factory: { label: 'Steel → Hardware' },
+    mill: { label: 'Coal+Iron → Steel', feedEmoji: '🪨+🔩', laborKey: 'metal_mill_labor' as const, feedKey: 'metal_mill_feed' as const },
+    factory: { label: 'Steel → Hardware', feedEmoji: '⚙️', laborKey: 'steel_factory_labor' as const, feedKey: 'steel_factory_feed' as const },
   },
   {
     key: 'textile_chain' as const,
+    chain: 'textile',
     name: 'Textile', emoji: '🧵',
-    mill: { label: 'Cotton/Wool → Fabric' },
-    factory: { label: 'Fabric → Clothing' },
+    mill: { label: 'Cotton/Wool → Fabric', feedEmoji: '🌸/🐑', laborKey: 'textile_mill_labor' as const, feedKey: 'textile_mill_feed' as const },
+    factory: { label: 'Fabric → Clothing', feedEmoji: '🧵', laborKey: 'garment_factory_labor' as const, feedKey: 'garment_factory_feed' as const },
   },
 ];
 
@@ -57,8 +62,9 @@ const CIV_EMOJI: Record<string, string> = {
 export default function IndustryPanel({
   industry, buildable,
   onExpand, onRecruit, onBuildShip, onHire, onBuildFreightCar,
+  onSetChainLabor, onSetChainFeed,
 }: Props) {
-  const { buildings, warehouse, labor, production_forecast, can_expand } = industry;
+  const { buildings, warehouse, labor, production_forecast, chain_targets, can_expand } = industry;
   const treasury = buildable?.treasury ?? 0;
   const arms = buildable?.arms ?? 0;
   const totalLabor = labor.total_labor_units;
@@ -77,24 +83,38 @@ export default function IndustryPanel({
         {/* Column 1: Production Chains + Labor */}
         <div>
           <Section label="Production Chains" emoji="🏭">
-            {CHAIN_CONFIG.map(chain => {
-              const forecast = production_forecast[chain.key];
+            {CHAIN_CONFIG.map(cfg => {
+              const forecast = production_forecast[cfg.key];
               return (
-                <div key={chain.key} style={{ marginBottom: 8 }}>
-                  <div style={{ fontWeight: 'bold', color: '#daa520', marginBottom: 3 }}>
-                    {chain.emoji} {chain.name}
+                <div key={cfg.key} style={{ marginBottom: 10 }}>
+                  <div style={{ fontWeight: 'bold', color: '#daa520', marginBottom: 4 }}>
+                    {cfg.emoji} {cfg.name}
                   </div>
                   <ChainStepRow
-                    label={chain.mill.label}
-                    labor={forecast.mill_labor}
-                    totalLabor={totalLabor}
+                    label={cfg.mill.label}
+                    feedEmoji={cfg.mill.feedEmoji}
                     output={forecast.mill_output}
+                    maxOutput={forecast.mill_max_output}
+                    resourceMax={forecast.mill_resource_max}
+                    laborMax={forecast.mill_labor_max}
+                    feedSaturationPct={forecast.mill_feed_saturation_pct}
+                    laborValue={chain_targets[cfg.mill.laborKey]}
+                    feedValue={chain_targets[cfg.mill.feedKey]}
+                    onLaborChange={v => onSetChainLabor(cfg.chain, 'mill', v)}
+                    onFeedChange={v => onSetChainFeed(cfg.chain, 'mill', v)}
                   />
                   <ChainStepRow
-                    label={chain.factory.label}
-                    labor={forecast.factory_labor}
-                    totalLabor={totalLabor}
+                    label={cfg.factory.label}
+                    feedEmoji={cfg.factory.feedEmoji}
                     output={forecast.factory_output}
+                    maxOutput={forecast.factory_max_output}
+                    resourceMax={forecast.factory_resource_max}
+                    laborMax={forecast.factory_labor_max}
+                    feedSaturationPct={forecast.factory_feed_saturation_pct}
+                    laborValue={chain_targets[cfg.factory.laborKey]}
+                    feedValue={chain_targets[cfg.factory.feedKey]}
+                    onLaborChange={v => onSetChainLabor(cfg.chain, 'factory', v)}
+                    onFeedChange={v => onSetChainFeed(cfg.chain, 'factory', v)}
                   />
                 </div>
               );
@@ -235,21 +255,99 @@ function Section({ label, emoji, children }: { label: string; emoji: string; chi
   );
 }
 
-function ChainStepRow({ label, labor, totalLabor, output }: {
-  label: string; labor: number; totalLabor: number; output: number;
+function ChainStepRow({
+  label, feedEmoji, output, maxOutput, resourceMax, laborMax, feedSaturationPct,
+  laborValue, feedValue,
+  onLaborChange, onFeedChange,
+}: {
+  label: string;
+  feedEmoji: string;
+  output: number;
+  maxOutput: number;
+  resourceMax: number;
+  laborMax: number;
+  feedSaturationPct: number;
+  laborValue: number;
+  feedValue: number;
+  onLaborChange: (v: number) => void;
+  onFeedChange: (v: number) => void;
 }) {
-  const pct = totalLabor > 0 ? Math.min((labor / totalLabor) * 100, 100) : 0;
+  const [pendingLabor, setPendingLabor] = useState<number | null>(null);
+  const [pendingFeed, setPendingFeed] = useState<number | null>(null);
+
+  const commitLabor = useCallback(() => {
+    if (pendingLabor !== null) { onLaborChange(pendingLabor); setPendingLabor(null); }
+  }, [pendingLabor, onLaborChange]);
+
+  const commitFeed = useCallback(() => {
+    if (pendingFeed !== null) { onFeedChange(pendingFeed); setPendingFeed(null); }
+  }, [pendingFeed, onFeedChange]);
+
+  const displayLabor = pendingLabor ?? laborValue;
+  const displayFeed = pendingFeed ?? feedValue;
+
+  const bindingLabel = resourceMax <= laborMax ? 'res' : 'labor';
+
   return (
-    <div style={{ marginBottom: 5 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#bbb' }}>
+    <div style={{ marginBottom: 8, paddingLeft: 4 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#bbb', marginBottom: 3 }}>
         <span>{label}</span>
-        <span style={{ color: '#e0d8c0', flexShrink: 0, marginLeft: 4 }}>{output}</span>
+        <span style={{ color: output > 0 ? '#daa520' : '#666', flexShrink: 0, marginLeft: 4 }}>
+          {output}{maxOutput > 0 ? `/${maxOutput}` : ''}
+          {maxOutput > 0 && (
+            <span style={{ fontSize: 9, color: '#666', marginLeft: 3 }}>
+              ({bindingLabel}: {Math.min(resourceMax, laborMax)})
+            </span>
+          )}
+        </span>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-        <div style={{ flex: 1, height: 4, background: '#2a2a2a', borderRadius: 2 }}>
-          <div style={{ width: `${pct}%`, height: '100%', background: '#daa520', borderRadius: 2 }} />
+      {/* Labor slider */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+        <span style={{ fontSize: 9, color: '#888', width: 22, flexShrink: 0 }}>👷</span>
+        <input
+          type="range" min={0} max={100} step={5}
+          value={displayLabor}
+          onChange={e => setPendingLabor(Number(e.target.value))}
+          onMouseUp={commitLabor}
+          onTouchEnd={commitLabor}
+          style={{ flex: 1, accentColor: '#daa520', height: 4, cursor: 'pointer' }}
+        />
+        <span style={{ fontSize: 9, color: '#aaa', width: 26, textAlign: 'right', flexShrink: 0 }}>
+          {displayLabor}%
+        </span>
+      </div>
+      {/* Feed slider with saturation tick */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span style={{ fontSize: 9, color: '#888', width: 22, flexShrink: 0 }}>{feedEmoji}</span>
+        <div style={{ flex: 1, position: 'relative' }}>
+          <input
+            type="range" min={0} max={100} step={5}
+            value={displayFeed}
+            onChange={e => setPendingFeed(Number(e.target.value))}
+            onMouseUp={commitFeed}
+            onTouchEnd={commitFeed}
+            style={{ width: '100%', accentColor: '#4a8fd4', height: 4, cursor: 'pointer' }}
+          />
+          {feedSaturationPct < 100 && (
+            <div
+              title={`Saturation at ${feedSaturationPct}% — adding more feed beyond this point won't increase output`}
+              style={{
+                position: 'absolute',
+                left: `${feedSaturationPct}%`,
+                top: '50%',
+                transform: 'translate(-50%, -50%)',
+                width: 2,
+                height: 10,
+                background: '#4a8fd4',
+                opacity: 0.6,
+                pointerEvents: 'none',
+              }}
+            />
+          )}
         </div>
-        <span style={{ fontSize: 9, color: '#666', whiteSpace: 'nowrap' }}>👷 {labor}</span>
+        <span style={{ fontSize: 9, color: '#aaa', width: 26, textAlign: 'right', flexShrink: 0 }}>
+          {displayFeed}%
+        </span>
       </div>
     </div>
   );

@@ -71,6 +71,50 @@ pub struct ReservationStateSnapshot {
     pub reserved_labor: HashMap<WorkerType, u32>,
 }
 
+/// Player-controlled allocation targets for each production chain step.
+///
+/// `*_labor`: relative weight (0–100) for labor distribution across steps; normalized
+/// proportionally to total labor available. Default 100 for all steps (equal share).
+///
+/// `*_feed`: percentage (0–100) of available input resources/materials to feed into
+/// each step. Default 100 (consume all available). Unconsumed inputs stay in warehouse.
+///
+/// All nations use stored targets. AI nations carry defaults (all 100) from `NationEconomy::new()`.
+#[derive(Debug, Clone)]
+pub struct ChainAllocationTargets {
+    pub timber_mill_labor: u8,
+    pub lumber_factory_labor: u8,
+    pub metal_mill_labor: u8,
+    pub steel_factory_labor: u8,
+    pub textile_mill_labor: u8,
+    pub garment_factory_labor: u8,
+    pub timber_mill_feed: u8,
+    pub lumber_factory_feed: u8,
+    pub metal_mill_feed: u8,
+    pub steel_factory_feed: u8,
+    pub textile_mill_feed: u8,
+    pub garment_factory_feed: u8,
+}
+
+impl Default for ChainAllocationTargets {
+    fn default() -> Self {
+        Self {
+            timber_mill_labor: 100,
+            lumber_factory_labor: 100,
+            metal_mill_labor: 100,
+            steel_factory_labor: 100,
+            textile_mill_labor: 100,
+            garment_factory_labor: 100,
+            timber_mill_feed: 100,
+            lumber_factory_feed: 100,
+            metal_mill_feed: 100,
+            steel_factory_feed: 100,
+            textile_mill_feed: 100,
+            garment_factory_feed: 100,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NationEconomy {
     pub treasury: Money,
@@ -89,6 +133,9 @@ pub struct NationEconomy {
     /// Freight usage snapshot from the most recently processed turn.
     /// Updated by the turn processor after `calculate_deliveries` completes.
     pub logistics: LogisticsState,
+
+    /// Player-controlled production chain allocation targets.
+    pub chain_targets: ChainAllocationTargets,
 
     // ── Reservation accounting (Trello #162 / #169) ──────────────────
     /// Reserved treasury amount (sum of active treasury reservations).
@@ -117,6 +164,7 @@ impl NationEconomy {
             buildings: Vec::new(),
             labor: LaborPool::new(),
             logistics: LogisticsState::new(),
+            chain_targets: ChainAllocationTargets::default(),
             reserved_treasury: Money::ZERO,
             reserved_warehouse: BTreeMap::new(),
             reserved_materials: BTreeMap::new(),

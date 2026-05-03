@@ -1025,11 +1025,15 @@ export async function expandBuilding(gameJson: string, nationId: number, buildin
 }
 
 export async function setChainLabor(gameJson: string, nationId: number, chain: string, step: string, share: number): Promise<CommandResult> {
-  return runCmd('wasm_set_chain_labor', gameJson, nationId, chain, step, share);
+  if (!Number.isFinite(share)) return { ok: false, error: 'invalid share value' };
+  const safeShare = Math.max(0, Math.min(100, Math.round(share)));
+  return runCmd('wasm_set_chain_labor', gameJson, nationId, chain, step, safeShare);
 }
 
 export async function setChainFeed(gameJson: string, nationId: number, chain: string, step: string, pct: number): Promise<CommandResult> {
-  return runCmd('wasm_set_chain_feed', gameJson, nationId, chain, step, pct);
+  if (!Number.isFinite(pct)) return { ok: false, error: 'invalid pct value' };
+  const safePct = Math.max(0, Math.min(100, Math.round(pct)));
+  return runCmd('wasm_set_chain_feed', gameJson, nationId, chain, step, safePct);
 }
 
 // ── Trade types & functions ─────────────────────────────────────────
