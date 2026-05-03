@@ -739,6 +739,7 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
                 "is_anarchic": nation_anarchy_lookup.get(&owner_nid).copied().unwrap_or(false),
                 "visual_group": visual_group,
                 "visible": is_visible,
+                "is_prospected": tile.is_prospected(),
             })
         })
         .collect();
@@ -1890,6 +1891,7 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
     let cfg = &game.game_data.game_config;
     let civilians: Vec<serde_json::Value> = all_civilian_types
         .iter()
+        .filter(|ct| ct.is_unlocked(&nation.researched_techs, &game.game_data, cfg))
         .map(|ct| {
             let cost = ct.creation_cost(cfg);
             let can_afford = treasury >= cost;
@@ -3140,108 +3142,140 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
         .collect::<serde_json::Map<String, serde_json::Value>>()
         .into();
 
-    // Production forecasts
+    // Building capacities for production forecast
+    let lumber_mill_cap = nation.economy.buildings.iter()
+        .find(|b| b.building_type == BuildingType::LumberMill).map(|b| b.capacity).unwrap_or(0);
+    let steel_mill_cap = nation.economy.buildings.iter()
+        .find(|b| b.building_type == BuildingType::SteelMill).map(|b| b.capacity).unwrap_or(0);
+    let textile_mill_cap = nation.economy.buildings.iter()
+        .find(|b| b.building_type == BuildingType::TextileMill).map(|b| b.capacity).unwrap_or(0);
+    let furniture_cap = nation.economy.buildings.iter()
+        .find(|b| b.building_type == BuildingType::FurnitureFactory).map(|b| b.capacity).unwrap_or(0);
+    let hardware_cap = nation.economy.buildings.iter()
+        .find(|b| b.building_type == BuildingType::HardwareFactory).map(|b| b.capacity).unwrap_or(0);
+    let clothing_cap = nation.economy.buildings.iter()
+        .find(|b| b.building_type == BuildingType::ClothingFactory).map(|b| b.capacity).unwrap_or(0);
+
     let labor_units = labor.total_labor_units();
+    let targets = &nation.economy.chain_targets;
 
-    // Build resource slices for production functions
+    // Compute labor budgets under current targets (proportional allocation).
+    let step_caps = [lumber_mill_cap, steel_mill_cap, textile_mill_cap, furniture_cap, hardware_cap, clothing_cap];
+    let step_weights = [
+        targets.timber_mill_labor as u32, targets.metal_mill_labor as u32, targets.textile_mill_labor as u32,
+        targets.lumber_factory_labor as u32, targets.steel_factory_labor as u32, targets.garment_factory_labor as u32,
+    ];
+    let total_weight: u32 = step_caps.iter().zip(step_weights.iter())
+        .filter(|(cap, _)| **cap > 0).map(|(_, w)| *w).sum();
+    let labor_budget = |idx: usize| -> u32 {
+        if step_caps[idx] == 0 || total_weight == 0 { 0 }
+        else { labor_units * step_weights[idx] / total_weight }
+    };
+
+    // Resources fed to each mill (apply feed% to warehouse).
     let all_res: Vec<(ResourceType, u32)> = [
-        ResourceType::Timber,
-        ResourceType::Coal,
-        ResourceType::Iron,
-        ResourceType::Cotton,
-        ResourceType::Wool,
-    ]
-    .iter()
-    .map(|&r| (r, nation.resource_amount(r)))
-    .collect();
+        ResourceType::Timber, ResourceType::Coal, ResourceType::Iron,
+        ResourceType::Cotton, ResourceType::Wool,
+    ].iter().map(|&r| (r, nation.resource_amount(r))).collect();
 
-    let lumber_mill_cap = nation
-        .economy
-        .buildings
-        .iter()
-        .find(|b| b.building_type == BuildingType::LumberMill)
-        .map(|b| b.capacity)
-        .unwrap_or(0);
-    let steel_mill_cap = nation
-        .economy
-        .buildings
-        .iter()
-        .find(|b| b.building_type == BuildingType::SteelMill)
-        .map(|b| b.capacity)
-        .unwrap_or(0);
-    let textile_mill_cap = nation
-        .economy
-        .buildings
-        .iter()
-        .find(|b| b.building_type == BuildingType::TextileMill)
-        .map(|b| b.capacity)
-        .unwrap_or(0);
+    let fed_res: Vec<(ResourceType, u32)> = all_res.iter().map(|(r, qty)| {
+        let pct = match r {
+            ResourceType::Timber => targets.timber_mill_feed as u32,
+            ResourceType::Coal | ResourceType::Iron => targets.metal_mill_feed as u32,
+            ResourceType::Cotton | ResourceType::Wool => targets.textile_mill_feed as u32,
+            _ => 100,
+        };
+        (*r, qty * pct / 100)
+    }).collect();
 
-    let timber_mill = calculate_mill_production(
-        ProductionChain::Timber,
-        &all_res,
-        lumber_mill_cap,
-        labor_units,
-    );
-    let metal_mill = calculate_mill_production(
-        ProductionChain::Metal,
-        &all_res,
-        steel_mill_cap,
-        labor_units,
-    );
-    let textile_mill = calculate_mill_production(
-        ProductionChain::Textile,
-        &all_res,
-        textile_mill_cap,
-        labor_units,
-    );
+    // Max-feed resources (100% feed, for computing max outputs).
+    let max_res = all_res.clone();
+    // Unlimited labor (resource-bound max) and all-labor-to-one-step (labor-bound max).
+    let unlimited_labor = labor_units * 2 + 1;
 
-    // Build material slices for factory functions
-    let all_mats: Vec<(MaterialType, u32)> = [
-        MaterialType::Lumber,
-        MaterialType::Steel,
-        MaterialType::Fabric,
-    ]
-    .iter()
-    .map(|&m| (m, nation.material_amount(m)))
-    .collect();
+    let timber_mill = calculate_mill_production(ProductionChain::Timber, &fed_res, lumber_mill_cap, labor_budget(0));
+    let metal_mill  = calculate_mill_production(ProductionChain::Metal,  &fed_res, steel_mill_cap, labor_budget(1));
+    let textile_mill= calculate_mill_production(ProductionChain::Textile,&fed_res, textile_mill_cap, labor_budget(2));
 
-    let furniture_cap = nation
-        .economy
-        .buildings
-        .iter()
-        .find(|b| b.building_type == BuildingType::FurnitureFactory)
-        .map(|b| b.capacity)
-        .unwrap_or(0);
-    let hardware_cap = nation
-        .economy
-        .buildings
-        .iter()
-        .find(|b| b.building_type == BuildingType::HardwareFactory)
-        .map(|b| b.capacity)
-        .unwrap_or(0);
-    let clothing_cap = nation
-        .economy
-        .buildings
-        .iter()
-        .find(|b| b.building_type == BuildingType::ClothingFactory)
-        .map(|b| b.capacity)
-        .unwrap_or(0);
+    // Resource-bound max (unlimited labor, 100% feed): shows capacity/resource ceiling.
+    let timber_res_max   = calculate_mill_production(ProductionChain::Timber, &max_res, lumber_mill_cap, unlimited_labor);
+    let metal_res_max    = calculate_mill_production(ProductionChain::Metal,  &max_res, steel_mill_cap,  unlimited_labor);
+    let textile_res_max  = calculate_mill_production(ProductionChain::Textile,&max_res, textile_mill_cap,unlimited_labor);
+    // Labor-bound max (all available labor to this step, 100% feed): shows labor ceiling.
+    let timber_labor_max  = calculate_mill_production(ProductionChain::Timber, &max_res, lumber_mill_cap, labor_units);
+    let metal_labor_max   = calculate_mill_production(ProductionChain::Metal,  &max_res, steel_mill_cap,  labor_units);
+    let textile_labor_max = calculate_mill_production(ProductionChain::Textile,&max_res, textile_mill_cap,labor_units);
 
-    let furniture_prod = calculate_factory_production(
-        ProductionChain::Timber,
-        &all_mats,
-        furniture_cap,
-        labor_units,
-    );
-    let hardware_prod =
-        calculate_factory_production(ProductionChain::Metal, &all_mats, hardware_cap, labor_units);
-    let clothing_prod = calculate_factory_production(
-        ProductionChain::Textile,
-        &all_mats,
-        clothing_cap,
-        labor_units,
-    );
+    // Feed saturation: min feed% at which building capacity becomes the binding constraint.
+    let timber_mill_feed_sat = {
+        let r = nation.resource_amount(ResourceType::Timber);
+        if r == 0 || lumber_mill_cap == 0 { 100u8 }
+        else { ((lumber_mill_cap * 200 + r - 1) / r).min(100) as u8 }
+    };
+    let metal_mill_feed_sat = {
+        let r = nation.resource_amount(ResourceType::Coal).min(nation.resource_amount(ResourceType::Iron));
+        if r == 0 || steel_mill_cap == 0 { 100u8 }
+        else { ((steel_mill_cap * 100 + r - 1) / r).min(100) as u8 }
+    };
+    let textile_mill_feed_sat = {
+        let r = nation.resource_amount(ResourceType::Cotton) + nation.resource_amount(ResourceType::Wool);
+        if r == 0 || textile_mill_cap == 0 { 100u8 }
+        else { ((textile_mill_cap * 200 + r - 1) / r).min(100) as u8 }
+    };
+
+    // Combine warehouse materials + this turn's mill output for factory inputs.
+    let mat_lumber = nation.material_amount(MaterialType::Lumber)
+        + timber_mill.materials_produced.first().map(|x| x.1).unwrap_or(0);
+    let mat_steel  = nation.material_amount(MaterialType::Steel)
+        + metal_mill.materials_produced.first().map(|x| x.1).unwrap_or(0);
+    let mat_fabric = nation.material_amount(MaterialType::Fabric)
+        + textile_mill.materials_produced.first().map(|x| x.1).unwrap_or(0);
+
+    let fed_mats: Vec<(MaterialType, u32)> = [
+        (MaterialType::Lumber, mat_lumber * targets.lumber_factory_feed as u32 / 100),
+        (MaterialType::Steel,  mat_steel  * targets.steel_factory_feed as u32  / 100),
+        (MaterialType::Fabric, mat_fabric * targets.garment_factory_feed as u32 / 100),
+    ].to_vec();
+
+    let furniture_prod = calculate_factory_production(ProductionChain::Timber, &fed_mats, furniture_cap, labor_budget(3));
+    let hardware_prod  = calculate_factory_production(ProductionChain::Metal,  &fed_mats, hardware_cap,  labor_budget(4));
+    let clothing_prod  = calculate_factory_production(ProductionChain::Textile,&fed_mats, clothing_cap,  labor_budget(5));
+
+    // Max materials for factory max: warehouse + max mill output at 100% feed.
+    let max_mat_lumber = nation.material_amount(MaterialType::Lumber)
+        + timber_res_max.materials_produced.first().map(|x| x.1).unwrap_or(0);
+    let max_mat_steel  = nation.material_amount(MaterialType::Steel)
+        + metal_res_max.materials_produced.first().map(|x| x.1).unwrap_or(0);
+    let max_mat_fabric = nation.material_amount(MaterialType::Fabric)
+        + textile_res_max.materials_produced.first().map(|x| x.1).unwrap_or(0);
+    let max_mats: Vec<(MaterialType, u32)> = [
+        (MaterialType::Lumber, max_mat_lumber),
+        (MaterialType::Steel,  max_mat_steel),
+        (MaterialType::Fabric, max_mat_fabric),
+    ].to_vec();
+
+    let furniture_res_max   = calculate_factory_production(ProductionChain::Timber, &max_mats, furniture_cap, unlimited_labor);
+    let hardware_res_max    = calculate_factory_production(ProductionChain::Metal,  &max_mats, hardware_cap,  unlimited_labor);
+    let clothing_res_max    = calculate_factory_production(ProductionChain::Textile,&max_mats, clothing_cap,  unlimited_labor);
+    let furniture_labor_max = calculate_factory_production(ProductionChain::Timber, &max_mats, furniture_cap, labor_units);
+    let hardware_labor_max  = calculate_factory_production(ProductionChain::Metal,  &max_mats, hardware_cap,  labor_units);
+    let clothing_labor_max  = calculate_factory_production(ProductionChain::Textile,&max_mats, clothing_cap,  labor_units);
+
+    let lumber_factory_feed_sat = {
+        let m = max_mat_lumber;
+        if m == 0 || furniture_cap == 0 { 100u8 }
+        else { ((furniture_cap * 200 + m - 1) / m).min(100) as u8 }
+    };
+    let steel_factory_feed_sat = {
+        let m = max_mat_steel;
+        if m == 0 || hardware_cap == 0 { 100u8 }
+        else { ((hardware_cap * 200 + m - 1) / m).min(100) as u8 }
+    };
+    let garment_factory_feed_sat = {
+        let m = max_mat_fabric;
+        if m == 0 || clothing_cap == 0 { 100u8 }
+        else { ((clothing_cap * 200 + m - 1) / m).min(100) as u8 }
+    };
 
     let freight_car_cost = game.game_data.game_config.freight_car_cost;
 
@@ -3260,29 +3294,129 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
             "total_workers": labor.total_workers(),
             "total_labor_units": labor.total_labor_units(),
         },
+        "chain_targets": {
+            "timber_mill_labor": targets.timber_mill_labor,
+            "lumber_factory_labor": targets.lumber_factory_labor,
+            "metal_mill_labor": targets.metal_mill_labor,
+            "steel_factory_labor": targets.steel_factory_labor,
+            "textile_mill_labor": targets.textile_mill_labor,
+            "garment_factory_labor": targets.garment_factory_labor,
+            "timber_mill_feed": targets.timber_mill_feed,
+            "lumber_factory_feed": targets.lumber_factory_feed,
+            "metal_mill_feed": targets.metal_mill_feed,
+            "steel_factory_feed": targets.steel_factory_feed,
+            "textile_mill_feed": targets.textile_mill_feed,
+            "garment_factory_feed": targets.garment_factory_feed,
+        },
         "production_forecast": {
             "timber_chain": {
                 "mill_output": timber_mill.materials_produced.first().map(|x| x.1).unwrap_or(0),
                 "factory_output": furniture_prod.goods_produced.first().map(|x| x.1).unwrap_or(0),
                 "mill_labor": timber_mill.labor_used,
                 "factory_labor": furniture_prod.labor_used,
+                "mill_resource_max": timber_res_max.materials_produced.first().map(|x| x.1).unwrap_or(0),
+                "mill_labor_max": timber_labor_max.materials_produced.first().map(|x| x.1).unwrap_or(0),
+                "mill_max_output": timber_res_max.materials_produced.first().map(|x| x.1).unwrap_or(0).min(timber_labor_max.materials_produced.first().map(|x| x.1).unwrap_or(0)),
+                "factory_resource_max": furniture_res_max.goods_produced.first().map(|x| x.1).unwrap_or(0),
+                "factory_labor_max": furniture_labor_max.goods_produced.first().map(|x| x.1).unwrap_or(0),
+                "factory_max_output": furniture_res_max.goods_produced.first().map(|x| x.1).unwrap_or(0).min(furniture_labor_max.goods_produced.first().map(|x| x.1).unwrap_or(0)),
+                "mill_feed_saturation_pct": timber_mill_feed_sat,
+                "factory_feed_saturation_pct": lumber_factory_feed_sat,
             },
             "metal_chain": {
                 "mill_output": metal_mill.materials_produced.first().map(|x| x.1).unwrap_or(0),
                 "factory_output": hardware_prod.goods_produced.first().map(|x| x.1).unwrap_or(0),
                 "mill_labor": metal_mill.labor_used,
                 "factory_labor": hardware_prod.labor_used,
+                "mill_resource_max": metal_res_max.materials_produced.first().map(|x| x.1).unwrap_or(0),
+                "mill_labor_max": metal_labor_max.materials_produced.first().map(|x| x.1).unwrap_or(0),
+                "mill_max_output": metal_res_max.materials_produced.first().map(|x| x.1).unwrap_or(0).min(metal_labor_max.materials_produced.first().map(|x| x.1).unwrap_or(0)),
+                "factory_resource_max": hardware_res_max.goods_produced.first().map(|x| x.1).unwrap_or(0),
+                "factory_labor_max": hardware_labor_max.goods_produced.first().map(|x| x.1).unwrap_or(0),
+                "factory_max_output": hardware_res_max.goods_produced.first().map(|x| x.1).unwrap_or(0).min(hardware_labor_max.goods_produced.first().map(|x| x.1).unwrap_or(0)),
+                "mill_feed_saturation_pct": metal_mill_feed_sat,
+                "factory_feed_saturation_pct": steel_factory_feed_sat,
             },
             "textile_chain": {
                 "mill_output": textile_mill.materials_produced.first().map(|x| x.1).unwrap_or(0),
                 "factory_output": clothing_prod.goods_produced.first().map(|x| x.1).unwrap_or(0),
                 "mill_labor": textile_mill.labor_used,
                 "factory_labor": clothing_prod.labor_used,
+                "mill_resource_max": textile_res_max.materials_produced.first().map(|x| x.1).unwrap_or(0),
+                "mill_labor_max": textile_labor_max.materials_produced.first().map(|x| x.1).unwrap_or(0),
+                "mill_max_output": textile_res_max.materials_produced.first().map(|x| x.1).unwrap_or(0).min(textile_labor_max.materials_produced.first().map(|x| x.1).unwrap_or(0)),
+                "factory_resource_max": clothing_res_max.goods_produced.first().map(|x| x.1).unwrap_or(0),
+                "factory_labor_max": clothing_labor_max.goods_produced.first().map(|x| x.1).unwrap_or(0),
+                "factory_max_output": clothing_res_max.goods_produced.first().map(|x| x.1).unwrap_or(0).min(clothing_labor_max.goods_produced.first().map(|x| x.1).unwrap_or(0)),
+                "mill_feed_saturation_pct": textile_mill_feed_sat,
+                "factory_feed_saturation_pct": garment_factory_feed_sat,
             },
         },
         "can_expand": can_expand,
     })
     .to_string()
+}
+
+/// Set the labor weight (0–100) for a production chain step.
+#[wasm_bindgen]
+pub fn wasm_set_chain_labor(
+    game_json: &str,
+    nation_id: u32,
+    chain: &str,
+    step: &str,
+    share: u8,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let nation = match game.get_nation_mut(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
+    let share = share.min(100);
+    match (chain, step) {
+        ("timber",  "mill")    => nation.economy.chain_targets.timber_mill_labor    = share,
+        ("timber",  "factory") => nation.economy.chain_targets.lumber_factory_labor = share,
+        ("metal",   "mill")    => nation.economy.chain_targets.metal_mill_labor     = share,
+        ("metal",   "factory") => nation.economy.chain_targets.steel_factory_labor  = share,
+        ("textile", "mill")    => nation.economy.chain_targets.textile_mill_labor   = share,
+        ("textile", "factory") => nation.economy.chain_targets.garment_factory_labor= share,
+        _ => return "{\"error\":\"unknown chain/step\"}".to_string(),
+    }
+    serialize_game(&game)
+}
+
+/// Set the resource/material feed percentage (0–100) for a production chain step.
+#[wasm_bindgen]
+pub fn wasm_set_chain_feed(
+    game_json: &str,
+    nation_id: u32,
+    chain: &str,
+    step: &str,
+    pct: u8,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let nation = match game.get_nation_mut(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
+    let pct = pct.min(100);
+    match (chain, step) {
+        ("timber",  "mill")    => nation.economy.chain_targets.timber_mill_feed    = pct,
+        ("timber",  "factory") => nation.economy.chain_targets.lumber_factory_feed = pct,
+        ("metal",   "mill")    => nation.economy.chain_targets.metal_mill_feed     = pct,
+        ("metal",   "factory") => nation.economy.chain_targets.steel_factory_feed  = pct,
+        ("textile", "mill")    => nation.economy.chain_targets.textile_mill_feed   = pct,
+        ("textile", "factory") => nation.economy.chain_targets.garment_factory_feed= pct,
+        _ => return "{\"error\":\"unknown chain/step\"}".to_string(),
+    }
+    serialize_game(&game)
 }
 
 /// Expand a building to its next capacity tier.
@@ -5835,6 +5969,60 @@ mod tests {
         let civilians = parsed["civilians"].as_array().unwrap();
         for civ in civilians {
             assert!(civ["tech_met"].as_bool().is_some());
+        }
+    }
+
+    #[test]
+    fn buildable_civilians_exclude_tech_locked_types() {
+        // On a fresh game with no techs, Rancher/Forester/Driller require specific techs
+        // and must NOT appear in the buildable civilians list.
+        let json = make_game_json();
+        let game = game_from_json(&json).unwrap();
+        let player_id = game.human_player_nation;
+        let nation = game.world.nations.iter().find(|n| n.id == player_id).unwrap();
+        assert!(
+            nation.researched_techs.is_empty(),
+            "precondition: fresh game must have no researched techs"
+        );
+        let result = wasm_get_buildable_units(&json, player_id.0);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let civilians = parsed["civilians"].as_array().unwrap();
+        let names: Vec<&str> = civilians
+            .iter()
+            .filter_map(|c| c["type"].as_str())
+            .collect();
+        let cfg = &game.game_data.game_config;
+        let tech_gated = [
+            ("Rancher", &cfg.civilian_rancher_tech),
+            ("Forester", &cfg.civilian_forester_tech),
+            ("Driller", &cfg.civilian_driller_tech),
+        ];
+        for (civ_name, tech_opt) in &tech_gated {
+            if tech_opt.is_some() {
+                // If a tech is configured, this civilian must not appear for a player with no techs
+                assert!(
+                    !names.contains(civ_name),
+                    "{civ_name} should not appear — player has no techs yet"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn map_tile_json_includes_is_prospected() {
+        let json = make_game_json();
+        let result = wasm_get_map_data(&json, false);
+        let tiles: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let tile_arr = tiles.as_array().expect("map data should be an array");
+        assert!(!tile_arr.is_empty(), "map should have tiles");
+        // Every tile must expose the is_prospected field
+        for tile in tile_arr {
+            assert!(
+                tile.get("is_prospected").is_some(),
+                "tile at ({},{}) missing is_prospected",
+                tile["q"],
+                tile["r"]
+            );
         }
     }
 

@@ -1,26 +1,26 @@
-import type { CiviliansData, CivilianDetail, EngineerBuildKind } from '../wasm';
+import type { CiviliansData, CivilianDetail } from '../wasm';
 import { resourceLabel } from '../resourceEmoji';
 
 const CIVILIAN_EMOJI: Record<string, string> = {
   Farmer: '\u{1F33E}',
-  Miner: '\u26CF\uFE0F',
+  Miner: '⛏️',
   Engineer: '\u{1F527}',
   Forester: '\u{1FAA3}',
   Rancher: '\u{1F920}',
-  Driller: '\u{1F6E2}\uFE0F',
+  Driller: '\u{1F6E2}️',
   Prospector: '\u{1F50D}',
 };
 
 interface Props {
   civilians: CiviliansData;
-  onDeploy: (civilian: CivilianDetail) => void;
-  onRecall: (civilianId: number) => void;
-  onEngineerBuild: (civilianId: number, kind: EngineerBuildKind) => void;
+  selectedCivilianId?: number | null;
+  onSelectCivilian: (civilian: CivilianDetail) => void;
 }
 
 export default function CivilianPanel({
   civilians,
-  onDeploy, onRecall, onEngineerBuild,
+  selectedCivilianId,
+  onSelectCivilian,
 }: Props) {
   const { deployed, undeployed } = civilians;
 
@@ -35,17 +35,22 @@ export default function CivilianPanel({
             Undeployed ({undeployed.length})
           </div>
           {undeployed.map(civ => (
-            <div key={civ.id} style={{
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              padding: '2px 4px', background: 'rgba(255,255,255,0.05)', borderRadius: 3, marginBottom: 2,
-            }}>
+            <div
+              key={civ.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => onSelectCivilian(civ)}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectCivilian(civ); } }}
+              style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '4px 6px', background: 'rgba(46,204,64,0.08)', borderRadius: 3, marginBottom: 2,
+                cursor: 'pointer', border: '1px solid transparent',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(46,204,64,0.18)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'rgba(46,204,64,0.08)')}
+            >
               <span>{CIVILIAN_EMOJI[civ.type] || ''} {civ.type}</span>
-              <button
-                onClick={() => onDeploy(civ)}
-                style={{ background: '#2a6', color: '#fff', border: 'none', borderRadius: 3, padding: '1px 6px', fontSize: 10, cursor: 'pointer' }}
-              >
-                Deploy
-              </button>
+              <span style={{ fontSize: 10, color: '#8c8' }}>Click to deploy</span>
             </div>
           ))}
         </div>
@@ -57,60 +62,63 @@ export default function CivilianPanel({
           <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#888', marginBottom: 3 }}>
             Deployed ({deployed.length})
           </div>
-          {deployed.map(civ => (
-            <div key={civ.id} style={{
-              background: 'rgba(255,255,255,0.05)', borderRadius: 4, padding: '4px 6px', marginBottom: 3,
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>
-                  {CIVILIAN_EMOJI[civ.type] || ''} {civ.type}
-                  {civ.position && (
-                    <span style={{ fontSize: 10, color: '#888', marginLeft: 4 }}>
-                      ({civ.position.q},{civ.position.r})
-                    </span>
+          {deployed.map(civ => {
+            const isSelected = selectedCivilianId === civ.id;
+            return (
+              <div
+                key={civ.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => onSelectCivilian(civ)}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectCivilian(civ); } }}
+                style={{
+                  background: isSelected ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.05)',
+                  borderRadius: 4, padding: '4px 6px', marginBottom: 3,
+                  cursor: 'pointer',
+                  border: isSelected ? '1px solid rgba(255,255,255,0.25)' : '1px solid transparent',
+                }}
+                onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'rgba(255,255,255,0.09)'; }}
+                onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>
+                    {CIVILIAN_EMOJI[civ.type] || ''} {civ.type}
+                    {civ.position && (
+                      <span style={{ fontSize: 10, color: '#888', marginLeft: 4 }}>
+                        ({civ.position.q},{civ.position.r})
+                      </span>
+                    )}
+                  </span>
+                  {isSelected && (
+                    <span style={{ fontSize: 10, color: '#aaa' }}>selected ▶ map</span>
                   )}
-                </span>
-                <button
-                  onClick={() => onRecall(civ.id)}
-                  style={{ background: '#a63', color: '#fff', border: 'none', borderRadius: 3, padding: '1px 6px', fontSize: 10, cursor: 'pointer' }}
-                >
-                  Recall
-                </button>
-              </div>
-              {civ.working && civ.turns_remaining > 0 && (
-                <div style={{ marginTop: 2 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <ProgressBar turns={civ.turns_remaining} maxTurns={5} />
-                    <span style={{ fontSize: 10, color: '#888' }}>
-                      {civ.turns_remaining} turn{civ.turns_remaining !== 1 ? 's' : ''}
-                    </span>
-                  </div>
-                  {civ.tile_resource && (
-                    <div style={{ fontSize: 10, color: '#999' }}>
-                      Improving {resourceLabel(civ.tile_resource)}
+                </div>
+                {civ.working && civ.turns_remaining > 0 && (
+                  <div style={{ marginTop: 2 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <ProgressBar turns={civ.turns_remaining} maxTurns={5} />
+                      <span style={{ fontSize: 10, color: '#888' }}>
+                        {civ.turns_remaining} turn{civ.turns_remaining !== 1 ? 's' : ''}
+                      </span>
                     </div>
-                  )}
-                </div>
-              )}
-              {!civ.working && (
-                <div style={{ fontSize: 10, color: '#999', fontStyle: 'italic' }}>Idle</div>
-              )}
-              {/* Engineer-specific build actions (shown when idle) */}
-              {civ.type === 'Engineer' && !civ.working && (
-                <div style={{ marginTop: 4, display: 'flex', gap: 4 }}>
-                  <EngineerBuildButton label="Railroad" onClick={() => onEngineerBuild(civ.id, 'railroad')} />
-                  <EngineerBuildButton label="Depot" onClick={() => onEngineerBuild(civ.id, 'depot')} />
-                  <EngineerBuildButton label="Port" onClick={() => onEngineerBuild(civ.id, 'port')} />
-                </div>
-              )}
-              {/* Current engineer build task label */}
-              {civ.type === 'Engineer' && civ.working && civ.build_task && (
-                <div style={{ fontSize: 10, color: '#8c8', fontStyle: 'italic' }}>
-                  Building {civ.build_task}
-                </div>
-              )}
-            </div>
-          ))}
+                    {civ.tile_resource && (
+                      <div style={{ fontSize: 10, color: '#999' }}>
+                        Improving {resourceLabel(civ.tile_resource)}
+                      </div>
+                    )}
+                    {civ.type === 'Engineer' && civ.build_task && (
+                      <div style={{ fontSize: 10, color: '#8c8', fontStyle: 'italic' }}>
+                        Building {civ.build_task}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {!civ.working && (
+                  <div style={{ fontSize: 10, color: '#999', fontStyle: 'italic' }}>Idle</div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -129,24 +137,5 @@ function ProgressBar({ turns, maxTurns }: { turns: number; maxTurns: number }) {
     <div style={{ width: 50, height: 5, background: 'rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
       <div style={{ width: `${pct}%`, height: '100%', background: '#4a8' }} />
     </div>
-  );
-}
-
-function EngineerBuildButton({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        background: '#364',
-        color: '#fff',
-        border: 'none',
-        borderRadius: 3,
-        padding: '1px 6px',
-        fontSize: 10,
-        cursor: 'pointer',
-      }}
-    >
-      {label}
-    </button>
   );
 }

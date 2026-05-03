@@ -38,6 +38,7 @@ export interface TileData {
   is_anarchic: boolean;
   visual_group: string | null;
   visible: boolean;
+  is_prospected: boolean;
 }
 
 export interface NavyMarker {
@@ -964,6 +965,29 @@ export interface ProductionForecast {
   factory_output: number;
   mill_labor: number;
   factory_labor: number;
+  mill_resource_max: number;
+  mill_labor_max: number;
+  mill_max_output: number;
+  factory_resource_max: number;
+  factory_labor_max: number;
+  factory_max_output: number;
+  mill_feed_saturation_pct: number;
+  factory_feed_saturation_pct: number;
+}
+
+export interface ChainAllocationTargets {
+  timber_mill_labor: number;
+  lumber_factory_labor: number;
+  metal_mill_labor: number;
+  steel_factory_labor: number;
+  textile_mill_labor: number;
+  garment_factory_labor: number;
+  timber_mill_feed: number;
+  lumber_factory_feed: number;
+  metal_mill_feed: number;
+  steel_factory_feed: number;
+  textile_mill_feed: number;
+  garment_factory_feed: number;
 }
 
 export interface IndustryData {
@@ -981,6 +1005,7 @@ export interface IndustryData {
     total_workers: number;
     total_labor_units: number;
   };
+  chain_targets: ChainAllocationTargets;
   production_forecast: {
     timber_chain: ProductionForecast;
     metal_chain: ProductionForecast;
@@ -997,6 +1022,14 @@ export async function getIndustryData(gameJson: string, nationId: number): Promi
 
 export async function expandBuilding(gameJson: string, nationId: number, buildingType: string): Promise<CommandResult> {
   return runCmd('wasm_expand_building', gameJson, nationId, buildingType);
+}
+
+export async function setChainLabor(gameJson: string, nationId: number, chain: string, step: string, share: number): Promise<CommandResult> {
+  return runCmd('wasm_set_chain_labor', gameJson, nationId, chain, step, share);
+}
+
+export async function setChainFeed(gameJson: string, nationId: number, chain: string, step: string, pct: number): Promise<CommandResult> {
+  return runCmd('wasm_set_chain_feed', gameJson, nationId, chain, step, pct);
 }
 
 // ── Trade types & functions ─────────────────────────────────────────

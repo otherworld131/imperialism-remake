@@ -297,6 +297,8 @@ interface Props {
   isMovementMode?: boolean;
   isDeployMode?: boolean;
   deployableTiles?: Set<string>;
+  /** Tiles where prospector has already searched — shown as red X during prospector deploy mode. */
+  prospectedTiles?: Set<string>;
   disableFogOfWar?: boolean;
   organicBorders?: boolean;
   hideHexGrid?: boolean;
@@ -358,7 +360,7 @@ export default function HexMap({
   onMapModeChange, onTileClick, onTileHover, showHiddenResources = false, showAiCivilians = false,
   showResources = true, showTransportNetwork = true, showArmies = true,
   pendingMoves = [], validMoveTargets, isMovementMode = false,
-  isDeployMode = false, deployableTiles, disableFogOfWar = false,
+  isDeployMode = false, deployableTiles, prospectedTiles, disableFogOfWar = false,
   organicBorders = true,
   hideHexGrid = false,
   scale: scaleProp, offset: offsetProp, onScaleChange, onOffsetChange,
@@ -2459,6 +2461,28 @@ export default function HexMap({
       }
     }
 
+    // ── Pass 9c: Already-prospected tile markers (red X) ─────
+    if (isDeployMode && prospectedTiles && prospectedTiles.size > 0) {
+      ctx.strokeStyle = 'rgba(220, 50, 50, 0.85)';
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      for (const tile of visibleTiles) {
+        const key = `${tile.q},${tile.r}`;
+        if (!prospectedTiles.has(key)) continue;
+
+        const [px, py] = hexToPixel(tile.q, tile.r);
+        const r = HEX_SIZE * 0.35;
+        ctx.beginPath();
+        ctx.moveTo(px - r, py - r);
+        ctx.lineTo(px + r, py + r);
+        ctx.moveTo(px + r, py - r);
+        ctx.lineTo(px - r, py + r);
+        ctx.stroke();
+      }
+      ctx.lineWidth = 1;
+      ctx.lineCap = 'butt';
+    }
+
     // ── Pass 10: Movement arrows for pending moves ────────────
     if (pendingMoves.length > 0) {
       // Build province_id → capital tile pixel position lookup
@@ -2530,7 +2554,7 @@ export default function HexMap({
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     endRender();
   }, [tiles, tilePositions, showPoliticalColors, showHiddenResources, showAiCivilians, showResources, showTransportNetwork, showArmies, mapMode, nationFillMap,
-      isMovementMode, validMoveTargets, isDeployMode, deployableTiles, pendingMoves, nationLabels, disableFogOfWar,
+      isMovementMode, validMoveTargets, isDeployMode, deployableTiles, prospectedTiles, pendingMoves, nationLabels, disableFogOfWar,
       navyMarkers, seaZones, selectedNavyKey, mapGeometry, tileMap, diplomacyOverlay,
       hideHexGrid, highlightedNationId, classifiedEdges, maxArmyFP, mapDims,
       selectedTileKey, blinkOn, showDiplomacyMarkers, provinceLabels, staticLayer]);
