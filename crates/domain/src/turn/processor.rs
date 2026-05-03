@@ -423,6 +423,12 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 5b. Immigration: auto-recruit workers if nation has surplus food and materials
     resolve_immigration(game, &mut report);
 
+    // 5c. Pending civilian hires: process queued hiring orders
+    process_pending_civilian_hires(game);
+
+    // 5d. Pending worker training: Untrained→Trained and Trained→Expert
+    process_pending_worker_training(game);
+
     // 6. Maintenance costs (placeholder)
     apply_maintenance(game, &mut report);
 
@@ -1731,6 +1737,109 @@ fn convert_monetary_resources(game: &mut GameState, report: &mut TurnReport) {
 /// Labor is a shared pool: workers provide labor based on training level (untrained=1,
 /// trained=2, expert=4). Each unit of production costs labor_per_production (default 2).
 /// Mills consume labor first, then remaining labor feeds factories.
+/// Process end-of-turn civilian hiring queue: deduct cash and expert workers, add civilians.
+fn process_pending_civilian_hires(game: &mut GameState) {
+    let cfg = game.game_data.game_config.clone();
+    let civilian_costs_expert = cfg.civilian_costs_expert;
+    let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
+
+    for nation_id in nation_ids {
+        let pending: Vec<(CivilianType, u32)> = {
+            let Some(nation) = game.get_nation_mut(nation_id) else { continue };
+            if nation.diplomacy.is_in_anarchy { continue; }
+            nation.economy.pending_civilian_hires.drain().collect()
+        };
+        if pending.is_empty() { continue; }
+
+        for (civ_type, count) in pending {
+            let cost_per = civ_type.creation_cost(&cfg);
+            let actual = {
+                let Some(nation) = game.get_nation(nation_id) else { break };
+                let max_by_cash = if cost_per > Money::ZERO {
+                    (nation.economy.treasury.as_dollars() / cost_per.as_dollars())
+                        .clamp(0, u32::MAX as i64) as u32
+                } else {
+                    count
+                };
+                let max_by_experts = if civilian_costs_expert { nation.economy.labor.expert } else { count };
+                count.min(max_by_cash).min(max_by_experts)
+            };
+            if actual == 0 { continue; }
+
+            let total_cost = Money::dollars(cost_per.as_dollars() * i64::from(actual));
+            {
+                let Some(nation) = game.get_nation_mut(nation_id) else { break };
+                nation.economy.treasury -= total_cost;
+                if civilian_costs_expert {
+                    nation.economy.labor.expert = nation.economy.labor.expert.saturating_sub(actual);
+                }
+            }
+            for _ in 0..actual {
+                let cid = game.alloc_unit_id();
+                let new_civ = crate::economy::civilians::Civilian::new(cid, civ_type, nation_id);
+                if let Some(nation) = game.get_nation_mut(nation_id) {
+                    nation.military.civilians.push(new_civ);
+                }
+            }
+        }
+    }
+}
+
+/// Process end-of-turn worker training queue: Untrained→Trained and Trained→Expert.
+/// Cost: Paper material + labor (read from GameConfig).
+fn process_pending_worker_training(game: &mut GameState) {
+    let cfg = game.game_data.game_config.clone();
+    let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
+
+    for nation_id in nation_ids {
+        let (req_trained, req_expert) = {
+            let Some(nation) = game.get_nation_mut(nation_id) else { continue };
+            if nation.diplomacy.is_in_anarchy { continue; }
+            let t = (nation.economy.pending_train_to_trained, nation.economy.pending_train_to_expert);
+            nation.economy.pending_train_to_trained = 0;
+            nation.economy.pending_train_to_expert = 0;
+            t
+        };
+        if req_trained == 0 && req_expert == 0 { continue; }
+
+        let Some(nation) = game.get_nation_mut(nation_id) else { continue };
+        let avail_paper = nation.material_amount(MaterialType::Paper);
+        let avail_labor = nation.economy.labor.total_labor_units();
+
+        let pp_t = cfg.train_to_trained_paper_cost;
+        let lp_t = cfg.train_to_trained_labor_cost;
+        let pp_e = cfg.train_to_expert_paper_cost;
+        let lp_e = cfg.train_to_expert_labor_cost;
+
+        let max_train = req_trained
+            .min(if pp_t > 0 { avail_paper / pp_t } else { req_trained })
+            .min(if lp_t > 0 { avail_labor / lp_t } else { req_trained })
+            .min(nation.economy.labor.untrained);
+
+        let rem_paper = avail_paper.saturating_sub(max_train * pp_t);
+        let rem_labor = avail_labor.saturating_sub(max_train * lp_t);
+        let max_expert = req_expert
+            .min(if pp_e > 0 { rem_paper / pp_e } else { req_expert })
+            .min(if lp_e > 0 { rem_labor / lp_e } else { req_expert })
+            .min(nation.economy.labor.trained);
+
+        if max_train > 0 {
+            if let Some(v) = nation.economy.materials.get_mut(&MaterialType::Paper) {
+                *v = v.saturating_sub(max_train * pp_t);
+            }
+            nation.economy.labor.untrained = nation.economy.labor.untrained.saturating_sub(max_train);
+            nation.economy.labor.trained += max_train;
+        }
+        if max_expert > 0 {
+            if let Some(v) = nation.economy.materials.get_mut(&MaterialType::Paper) {
+                *v = v.saturating_sub(max_expert * pp_e);
+            }
+            nation.economy.labor.trained = nation.economy.labor.trained.saturating_sub(max_expert);
+            nation.economy.labor.expert += max_expert;
+        }
+    }
+}
+
 pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
     let cfg = &game.game_data.game_config;
     let untrained_mult = cfg.untrained_labor;

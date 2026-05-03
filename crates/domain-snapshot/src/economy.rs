@@ -1205,84 +1205,61 @@ impl From<BlockReason> for d::observability::BlockReason {
 
 // ── Nation-level fields (used from nation.rs) ─────────────────────
 
-/// Snapshot of player-controlled production chain allocation targets.
+/// Snapshot of player-controlled production chain output targets.
+/// Each field is a target output quantity (u32::MAX = unlimited).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ChainAllocationTargets {
-    #[serde(default = "default_100")]
-    pub timber_mill_labor: u8,
-    #[serde(default = "default_100")]
-    pub lumber_factory_labor: u8,
-    #[serde(default = "default_100")]
-    pub metal_mill_labor: u8,
-    #[serde(default = "default_100")]
-    pub steel_factory_labor: u8,
-    #[serde(default = "default_100")]
-    pub textile_mill_labor: u8,
-    #[serde(default = "default_100")]
-    pub garment_factory_labor: u8,
-    #[serde(default = "default_100")]
-    pub timber_mill_feed: u8,
-    #[serde(default = "default_100")]
-    pub lumber_factory_feed: u8,
-    #[serde(default = "default_100")]
-    pub metal_mill_feed: u8,
-    #[serde(default = "default_100")]
-    pub steel_factory_feed: u8,
-    #[serde(default = "default_100")]
-    pub textile_mill_feed: u8,
-    #[serde(default = "default_100")]
-    pub garment_factory_feed: u8,
+pub struct ChainOutputTargets {
+    #[serde(default = "default_unlimited")]
+    pub timber_mill: u32,
+    #[serde(default = "default_unlimited")]
+    pub metal_mill: u32,
+    #[serde(default = "default_unlimited")]
+    pub textile_mill: u32,
+    #[serde(default = "default_unlimited")]
+    pub lumber_factory: u32,
+    #[serde(default = "default_unlimited")]
+    pub steel_factory: u32,
+    #[serde(default = "default_unlimited")]
+    pub garment_factory: u32,
 }
 
-fn default_100() -> u8 { 100 }
+fn default_unlimited() -> u32 { u32::MAX }
 
-impl Default for ChainAllocationTargets {
+impl Default for ChainOutputTargets {
     fn default() -> Self {
         Self {
-            timber_mill_labor: 100, lumber_factory_labor: 100,
-            metal_mill_labor: 100, steel_factory_labor: 100,
-            textile_mill_labor: 100, garment_factory_labor: 100,
-            timber_mill_feed: 100, lumber_factory_feed: 100,
-            metal_mill_feed: 100, steel_factory_feed: 100,
-            textile_mill_feed: 100, garment_factory_feed: 100,
+            timber_mill: u32::MAX,
+            metal_mill: u32::MAX,
+            textile_mill: u32::MAX,
+            lumber_factory: u32::MAX,
+            steel_factory: u32::MAX,
+            garment_factory: u32::MAX,
         }
     }
 }
 
-impl From<&domain::nation::ChainAllocationTargets> for ChainAllocationTargets {
-    fn from(v: &domain::nation::ChainAllocationTargets) -> Self {
+impl From<&domain::nation::ChainOutputTargets> for ChainOutputTargets {
+    fn from(v: &domain::nation::ChainOutputTargets) -> Self {
         Self {
-            timber_mill_labor: v.timber_mill_labor,
-            lumber_factory_labor: v.lumber_factory_labor,
-            metal_mill_labor: v.metal_mill_labor,
-            steel_factory_labor: v.steel_factory_labor,
-            textile_mill_labor: v.textile_mill_labor,
-            garment_factory_labor: v.garment_factory_labor,
-            timber_mill_feed: v.timber_mill_feed,
-            lumber_factory_feed: v.lumber_factory_feed,
-            metal_mill_feed: v.metal_mill_feed,
-            steel_factory_feed: v.steel_factory_feed,
-            textile_mill_feed: v.textile_mill_feed,
-            garment_factory_feed: v.garment_factory_feed,
+            timber_mill: v.timber_mill,
+            metal_mill: v.metal_mill,
+            textile_mill: v.textile_mill,
+            lumber_factory: v.lumber_factory,
+            steel_factory: v.steel_factory,
+            garment_factory: v.garment_factory,
         }
     }
 }
 
-impl From<ChainAllocationTargets> for domain::nation::ChainAllocationTargets {
-    fn from(v: ChainAllocationTargets) -> Self {
+impl From<ChainOutputTargets> for domain::nation::ChainOutputTargets {
+    fn from(v: ChainOutputTargets) -> Self {
         Self {
-            timber_mill_labor: v.timber_mill_labor,
-            lumber_factory_labor: v.lumber_factory_labor,
-            metal_mill_labor: v.metal_mill_labor,
-            steel_factory_labor: v.steel_factory_labor,
-            textile_mill_labor: v.textile_mill_labor,
-            garment_factory_labor: v.garment_factory_labor,
-            timber_mill_feed: v.timber_mill_feed,
-            lumber_factory_feed: v.lumber_factory_feed,
-            metal_mill_feed: v.metal_mill_feed,
-            steel_factory_feed: v.steel_factory_feed,
-            textile_mill_feed: v.textile_mill_feed,
-            garment_factory_feed: v.garment_factory_feed,
+            timber_mill: v.timber_mill,
+            metal_mill: v.metal_mill,
+            textile_mill: v.textile_mill,
+            lumber_factory: v.lumber_factory,
+            steel_factory: v.steel_factory,
+            garment_factory: v.garment_factory,
         }
     }
 }
@@ -1299,7 +1276,13 @@ pub struct NationEconomy {
     #[serde(default)]
     pub logistics: LogisticsState,
     #[serde(default)]
-    pub chain_targets: ChainAllocationTargets,
+    pub chain_targets: ChainOutputTargets,
+    #[serde(default)]
+    pub pending_civilian_hires: HashMap<CivilianType, u32>,
+    #[serde(default)]
+    pub pending_train_to_trained: u32,
+    #[serde(default)]
+    pub pending_train_to_expert: u32,
     #[serde(default)]
     pub reserved_treasury: Money,
     #[serde(default)]
@@ -1327,6 +1310,13 @@ impl From<&domain::nation::NationEconomy> for NationEconomy {
             labor: (&v.labor).into(),
             logistics: (&v.logistics).into(),
             chain_targets: (&v.chain_targets).into(),
+            pending_civilian_hires: v
+                .pending_civilian_hires
+                .iter()
+                .map(|(k, n)| ((*k).into(), *n))
+                .collect(),
+            pending_train_to_trained: v.pending_train_to_trained,
+            pending_train_to_expert: v.pending_train_to_expert,
             reserved_treasury: v.snapshot_reserved_treasury().into(),
             reserved_warehouse: v
                 .snapshot_reserved_warehouse()
@@ -1376,6 +1366,13 @@ impl From<NationEconomy> for domain::nation::NationEconomy {
         ne.labor = v.labor.into();
         ne.logistics = v.logistics.into();
         ne.chain_targets = v.chain_targets.into();
+        ne.pending_civilian_hires = v
+            .pending_civilian_hires
+            .into_iter()
+            .map(|(k, n)| (k.into(), n))
+            .collect();
+        ne.pending_train_to_trained = v.pending_train_to_trained;
+        ne.pending_train_to_expert = v.pending_train_to_expert;
         ne.restore_reservation_state(domain::nation::ReservationStateSnapshot {
             reserved_treasury: v.reserved_treasury.into(),
             reserved_warehouse: v
@@ -1414,20 +1411,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chain_targets_defaults_to_100_when_missing() {
+    fn chain_targets_defaults_to_unlimited_when_missing() {
         let json = r#"{"treasury":0,"warehouse":{},"materials":{},"goods":{},"buildings":[],"labor":{"untrained":0,"trained":0,"expert":0}}"#;
         let economy: NationEconomy = serde_json::from_str(json).unwrap();
-        assert_eq!(economy.chain_targets.timber_mill_labor, 100);
-        assert_eq!(economy.chain_targets.metal_mill_feed, 100);
-        assert_eq!(economy.chain_targets.garment_factory_feed, 100);
+        assert_eq!(economy.chain_targets.timber_mill, u32::MAX);
+        assert_eq!(economy.chain_targets.metal_mill, u32::MAX);
+        assert_eq!(economy.chain_targets.garment_factory, u32::MAX);
     }
 
     #[test]
     fn chain_targets_partial_fields_use_defaults() {
-        let json = r#"{"treasury":0,"warehouse":{},"materials":{},"goods":{},"buildings":[],"labor":{"untrained":0,"trained":0,"expert":0},"chain_targets":{"timber_mill_labor":50}}"#;
+        let json = r#"{"treasury":0,"warehouse":{},"materials":{},"goods":{},"buildings":[],"labor":{"untrained":0,"trained":0,"expert":0},"chain_targets":{"timber_mill":30}}"#;
         let economy: NationEconomy = serde_json::from_str(json).unwrap();
-        assert_eq!(economy.chain_targets.timber_mill_labor, 50);
-        assert_eq!(economy.chain_targets.metal_mill_labor, 100);
-        assert_eq!(economy.chain_targets.timber_mill_feed, 100);
+        assert_eq!(economy.chain_targets.timber_mill, 30);
+        assert_eq!(economy.chain_targets.metal_mill, u32::MAX);
+        assert_eq!(economy.chain_targets.garment_factory, u32::MAX);
     }
 }

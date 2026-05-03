@@ -428,6 +428,8 @@ export interface BuildableUnit {
   can_afford: boolean;
   tech_met: boolean;
   reason?: string | null;
+  max_count?: number;
+  expert_required?: boolean;
 }
 
 export interface BuildableUnits {
@@ -892,8 +894,8 @@ export async function getUpgradeInfo(gameJson: string, nationId: number, unitId:
   return JSON.parse(raw) as UpgradeInfo;
 }
 
-export async function hireCivilian(gameJson: string, nationId: number, civilianType: string): Promise<CommandResult> {
-  return runCmd('wasm_hire_civilian', gameJson, nationId, civilianType);
+export async function setPendingCivilianHire(gameJson: string, nationId: number, civilianType: string, count: number): Promise<CommandResult> {
+  return runCmd('wasm_set_pending_civilian_hire', gameJson, nationId, civilianType, count);
 }
 
 export async function buildShip(gameJson: string, nationId: number, shipType: string): Promise<CommandResult> {
@@ -960,34 +962,45 @@ export interface BuildingInfo {
   expansion_cost: { lumber: number; steel: number };
 }
 
-export interface ProductionForecast {
+/** u32::MAX sentinel means "unlimited" — slider at maximum position */
+export const CHAIN_TARGET_UNLIMITED = 4294967295;
+
+export interface ChainForecast {
+  mill_target: number;
+  mill_cap: number;
   mill_output: number;
-  factory_output: number;
   mill_labor: number;
-  factory_labor: number;
-  mill_resource_max: number;
-  mill_labor_max: number;
   mill_max_output: number;
-  factory_resource_max: number;
-  factory_labor_max: number;
+  // committed resource inputs (capped by target)
+  mill_committed_timber?: number;
+  mill_committed_coal?: number;
+  mill_committed_iron?: number;
+  mill_committed_cotton?: number;
+  mill_committed_wool?: number;
+  factory_target: number;
+  factory_cap: number;
+  factory_output: number;
+  factory_labor: number;
   factory_max_output: number;
-  mill_feed_saturation_pct: number;
-  factory_feed_saturation_pct: number;
+  factory_committed_lumber?: number;
+  factory_committed_steel?: number;
+  factory_committed_fabric?: number;
 }
 
-export interface ChainAllocationTargets {
-  timber_mill_labor: number;
-  lumber_factory_labor: number;
-  metal_mill_labor: number;
-  steel_factory_labor: number;
-  textile_mill_labor: number;
-  garment_factory_labor: number;
-  timber_mill_feed: number;
-  lumber_factory_feed: number;
-  metal_mill_feed: number;
-  steel_factory_feed: number;
-  textile_mill_feed: number;
-  garment_factory_feed: number;
+export interface ChainOutputTargets {
+  timber_mill: number;
+  metal_mill: number;
+  textile_mill: number;
+  lumber_factory: number;
+  steel_factory: number;
+  garment_factory: number;
+}
+
+export interface TrainingCosts {
+  to_trained_paper: number;
+  to_trained_labor: number;
+  to_expert_paper: number;
+  to_expert_labor: number;
 }
 
 export interface IndustryData {
@@ -1005,13 +1018,16 @@ export interface IndustryData {
     total_workers: number;
     total_labor_units: number;
   };
-  chain_targets: ChainAllocationTargets;
+  chain_targets: ChainOutputTargets;
   production_forecast: {
-    timber_chain: ProductionForecast;
-    metal_chain: ProductionForecast;
-    textile_chain: ProductionForecast;
+    timber_chain: ChainForecast;
+    metal_chain: ChainForecast;
+    textile_chain: ChainForecast;
   };
   can_expand: Record<string, boolean>;
+  pending_civilian_hires: Record<string, number>;
+  pending_training: { to_trained: number; to_expert: number };
+  training_costs: TrainingCosts;
 }
 
 export async function getIndustryData(gameJson: string, nationId: number): Promise<IndustryData | null> {
@@ -1024,16 +1040,13 @@ export async function expandBuilding(gameJson: string, nationId: number, buildin
   return runCmd('wasm_expand_building', gameJson, nationId, buildingType);
 }
 
-export async function setChainLabor(gameJson: string, nationId: number, chain: string, step: string, share: number): Promise<CommandResult> {
-  if (!Number.isFinite(share)) return { ok: false, error: 'invalid share value' };
-  const safeShare = Math.max(0, Math.min(100, Math.round(share)));
-  return runCmd('wasm_set_chain_labor', gameJson, nationId, chain, step, safeShare);
+export async function setChainTarget(gameJson: string, nationId: number, chain: string, step: string, target: number): Promise<CommandResult> {
+  const safeTarget = Math.max(0, Math.round(target));
+  return runCmd('wasm_set_chain_target', gameJson, nationId, chain, step, safeTarget);
 }
 
-export async function setChainFeed(gameJson: string, nationId: number, chain: string, step: string, pct: number): Promise<CommandResult> {
-  if (!Number.isFinite(pct)) return { ok: false, error: 'invalid pct value' };
-  const safePct = Math.max(0, Math.min(100, Math.round(pct)));
-  return runCmd('wasm_set_chain_feed', gameJson, nationId, chain, step, safePct);
+export async function setPendingTraining(gameJson: string, nationId: number, toTrained: number, toExpert: number): Promise<CommandResult> {
+  return runCmd('wasm_set_pending_training', gameJson, nationId, Math.max(0, Math.round(toTrained)), Math.max(0, Math.round(toExpert)));
 }
 
 // ── Trade types & functions ─────────────────────────────────────────

@@ -17,6 +17,12 @@ game_config = {
     -- Building a civilian unit permanently removes one expert worker
     civilian_costs_expert = true,
 
+    -- Worker training costs (paper material + labor per worker trained)
+    train_to_trained_paper_cost = 1,  -- paper per Untrained->Trained promotion
+    train_to_trained_labor_cost = 4,  -- labor per Untrained->Trained promotion
+    train_to_expert_paper_cost  = 2,  -- paper per Trained->Expert promotion
+    train_to_expert_labor_cost  = 8,  -- labor per Trained->Expert promotion
+
     -- Production ratios (resource -> material -> good)
     resources_per_material = 2,    -- 2 timber -> 1 lumber, 2 cotton/wool -> 1 fabric
     materials_per_good = 2,        -- 2 lumber -> 1 furniture, 2 steel -> 1 hardware

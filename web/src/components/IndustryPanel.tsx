@@ -1,5 +1,6 @@
-import { useState, useCallback, useRef } from 'react';
-import type { IndustryData, BuildableUnits } from '../wasm';
+import { useState, useCallback } from 'react';
+import type { IndustryData, BuildableUnits, ChainForecast } from '../wasm';
+import { CHAIN_TARGET_UNLIMITED } from '../wasm';
 
 interface Props {
   industry: IndustryData;
@@ -7,10 +8,10 @@ interface Props {
   onExpand: (buildingType: string) => void;
   onRecruit: (unitType: string) => void;
   onBuildShip: (shipType: string) => void;
-  onHire: (civilianType: string) => void;
+  onSetPendingCivilianHire: (civilianType: string, count: number) => void;
   onBuildFreightCar: () => void;
-  onSetChainLabor: (chain: string, step: string, share: number) => void;
-  onSetChainFeed: (chain: string, step: string, pct: number) => void;
+  onSetChainTarget: (chain: string, step: string, target: number) => void;
+  onSetPendingTraining: (toTrained: number, toExpert: number) => void;
 }
 
 const RESOURCE_EMOJI: Record<string, string> = {
@@ -19,7 +20,7 @@ const RESOURCE_EMOJI: Record<string, string> = {
   Furniture: '🛋️', Hardware: '🔧', Oil: '🛢️', Horses: '🐴',
   Food: '🌾', Grain: '🌾', Fish: '🐟', Gold: '🪙', Gems: '💎',
   Saltpeter: '💨', Rubber: '🌿', Copper: '🟤', Arms: '🗡️',
-  FreightCars: '🚃',
+  Paper: '📄', FreightCars: '🚃',
 };
 
 const CHAIN_CONFIG = [
@@ -27,22 +28,22 @@ const CHAIN_CONFIG = [
     key: 'timber_chain' as const,
     chain: 'timber',
     name: 'Timber', emoji: '🪵',
-    mill: { label: 'Timber → Lumber', feedEmoji: '🪵', laborKey: 'timber_mill_labor' as const, feedKey: 'timber_mill_feed' as const },
-    factory: { label: 'Lumber → Furniture', feedEmoji: '🪵', laborKey: 'lumber_factory_labor' as const, feedKey: 'lumber_factory_feed' as const },
+    mill: { label: 'Timber → Lumber', millKey: 'timber_mill' as const },
+    factory: { label: 'Lumber → Furniture', factoryKey: 'lumber_factory' as const },
   },
   {
     key: 'metal_chain' as const,
     chain: 'metal',
     name: 'Metal', emoji: '⚙️',
-    mill: { label: 'Coal+Iron → Steel', feedEmoji: '🪨+🔩', laborKey: 'metal_mill_labor' as const, feedKey: 'metal_mill_feed' as const },
-    factory: { label: 'Steel → Hardware', feedEmoji: '⚙️', laborKey: 'steel_factory_labor' as const, feedKey: 'steel_factory_feed' as const },
+    mill: { label: 'Coal+Iron → Steel', millKey: 'metal_mill' as const },
+    factory: { label: 'Steel → Hardware', factoryKey: 'steel_factory' as const },
   },
   {
     key: 'textile_chain' as const,
     chain: 'textile',
     name: 'Textile', emoji: '🧵',
-    mill: { label: 'Cotton/Wool → Fabric', feedEmoji: '🌸/🐑', laborKey: 'textile_mill_labor' as const, feedKey: 'textile_mill_feed' as const },
-    factory: { label: 'Fabric → Clothing', feedEmoji: '🧵', laborKey: 'garment_factory_labor' as const, feedKey: 'garment_factory_feed' as const },
+    mill: { label: 'Cotton/Wool → Fabric', millKey: 'textile_mill' as const },
+    factory: { label: 'Fabric → Clothing', factoryKey: 'garment_factory' as const },
   },
 ];
 
@@ -61,13 +62,29 @@ const CIV_EMOJI: Record<string, string> = {
 
 export default function IndustryPanel({
   industry, buildable,
-  onExpand, onRecruit, onBuildShip, onHire, onBuildFreightCar,
-  onSetChainLabor, onSetChainFeed,
+  onExpand, onRecruit, onBuildShip, onSetPendingCivilianHire, onBuildFreightCar,
+  onSetChainTarget, onSetPendingTraining,
 }: Props) {
-  const { buildings, warehouse, labor, production_forecast, chain_targets, can_expand } = industry;
+  const { buildings, warehouse, labor, production_forecast, chain_targets, can_expand,
+    pending_civilian_hires, pending_training, training_costs } = industry;
   const treasury = buildable?.treasury ?? 0;
   const arms = buildable?.arms ?? 0;
   const totalLabor = labor.total_labor_units;
+
+  // Aggregate committed resources from all chain forecasts
+  const committed: Record<string, number> = {};
+  const pf = production_forecast;
+  const addCommit = (key: string, v: number | undefined) => {
+    if (v) committed[key] = (committed[key] ?? 0) + v;
+  };
+  addCommit('Timber', pf.timber_chain.mill_committed_timber);
+  addCommit('Coal', pf.metal_chain.mill_committed_coal);
+  addCommit('Iron', pf.metal_chain.mill_committed_iron);
+  addCommit('Cotton', pf.textile_chain.mill_committed_cotton);
+  addCommit('Wool', pf.textile_chain.mill_committed_wool);
+  addCommit('Lumber', pf.timber_chain.factory_committed_lumber);
+  addCommit('Steel', pf.metal_chain.factory_committed_steel);
+  addCommit('Fabric', pf.textile_chain.factory_committed_fabric);
 
   return (
     <div style={{ fontSize: 'var(--ui-font-size, 14px)' }}>
@@ -84,37 +101,31 @@ export default function IndustryPanel({
         <div>
           <Section label="Production Chains" emoji="🏭">
             {CHAIN_CONFIG.map(cfg => {
-              const forecast = production_forecast[cfg.key];
+              const forecast = pf[cfg.key];
               return (
                 <div key={cfg.key} style={{ marginBottom: 10 }}>
                   <div style={{ fontWeight: 'bold', color: '#daa520', marginBottom: 4 }}>
                     {cfg.emoji} {cfg.name}
                   </div>
-                  <ChainStepRow
+                  <ChainOutputRow
                     label={cfg.mill.label}
-                    feedEmoji={cfg.mill.feedEmoji}
+                    cap={forecast.mill_cap}
+                    target={chain_targets[cfg.mill.millKey]}
                     output={forecast.mill_output}
-                    maxOutput={forecast.mill_max_output}
-                    resourceMax={forecast.mill_resource_max}
-                    laborMax={forecast.mill_labor_max}
-                    feedSaturationPct={forecast.mill_feed_saturation_pct}
-                    laborValue={chain_targets[cfg.mill.laborKey]}
-                    feedValue={chain_targets[cfg.mill.feedKey]}
-                    onLaborChange={v => onSetChainLabor(cfg.chain, 'mill', v)}
-                    onFeedChange={v => onSetChainFeed(cfg.chain, 'mill', v)}
+                    labor={forecast.mill_labor}
+                    forecast={forecast}
+                    step="mill"
+                    onTargetChange={v => onSetChainTarget(cfg.chain, 'mill', v)}
                   />
-                  <ChainStepRow
+                  <ChainOutputRow
                     label={cfg.factory.label}
-                    feedEmoji={cfg.factory.feedEmoji}
+                    cap={forecast.factory_cap}
+                    target={chain_targets[cfg.factory.factoryKey]}
                     output={forecast.factory_output}
-                    maxOutput={forecast.factory_max_output}
-                    resourceMax={forecast.factory_resource_max}
-                    laborMax={forecast.factory_labor_max}
-                    feedSaturationPct={forecast.factory_feed_saturation_pct}
-                    laborValue={chain_targets[cfg.factory.laborKey]}
-                    feedValue={chain_targets[cfg.factory.feedKey]}
-                    onLaborChange={v => onSetChainLabor(cfg.chain, 'factory', v)}
-                    onFeedChange={v => onSetChainFeed(cfg.chain, 'factory', v)}
+                    labor={forecast.factory_labor}
+                    forecast={forecast}
+                    step="factory"
+                    onTargetChange={v => onSetChainTarget(cfg.chain, 'factory', v)}
                   />
                 </div>
               );
@@ -131,6 +142,14 @@ export default function IndustryPanel({
               </div>
             </div>
           </Section>
+
+          <EducationSection
+            labor={labor}
+            pendingTraining={pending_training}
+            trainingCosts={training_costs}
+            paper={warehouse.materials['Paper'] ?? 0}
+            onSet={onSetPendingTraining}
+          />
         </div>
 
         {/* Column 2: Buildings + Warehouse */}
@@ -161,9 +180,52 @@ export default function IndustryPanel({
           </Section>
 
           <Section label="Warehouse" emoji="📦">
-            <WarehouseSection label="Resources" items={warehouse.resources} />
-            <WarehouseSection label="Materials" items={warehouse.materials} />
-            <WarehouseSection label="Goods" items={warehouse.goods} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 12px' }}>
+              <div>
+                <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', marginBottom: 3 }}>Resources</div>
+                {Object.entries(warehouse.resources)
+                  .filter(([, v]) => v > 0)
+                  .map(([k, v]) => {
+                    const c = committed[k] ?? 0;
+                    const free = v - c;
+                    return (
+                      <div key={k} style={{ fontSize: 'var(--ui-font-size, 14px)', marginBottom: 1 }}>
+                        {RESOURCE_EMOJI[k] ?? '📦'} {k.replace(/([A-Z])/g, ' $1').trim()}:{' '}
+                        <span style={{ color: free < v ? '#6ab0d4' : '#daa520' }}>{free}</span>
+                        {c > 0 && <span style={{ fontSize: 9, color: '#555', marginLeft: 2 }}>({v})</span>}
+                      </div>
+                    );
+                  })}
+              </div>
+              <div>
+                <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', marginBottom: 3 }}>Materials</div>
+                {Object.entries(warehouse.materials)
+                  .filter(([, v]) => v > 0)
+                  .map(([k, v]) => {
+                    const c = committed[k] ?? 0;
+                    const free = v - c;
+                    return (
+                      <div key={k} style={{ fontSize: 'var(--ui-font-size, 14px)', marginBottom: 1 }}>
+                        {RESOURCE_EMOJI[k] ?? '📦'} {k.replace(/([A-Z])/g, ' $1').trim()}:{' '}
+                        <span style={{ color: free < v ? '#6ab0d4' : '#daa520' }}>{free}</span>
+                        {c > 0 && <span style={{ fontSize: 9, color: '#555', marginLeft: 2 }}>({v})</span>}
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+            {Object.values(warehouse.goods).some(v => v > 0) && (
+              <div style={{ marginTop: 6 }}>
+                <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', marginBottom: 3 }}>Goods</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
+                  {Object.entries(warehouse.goods).filter(([, v]) => v > 0).map(([k, v]) => (
+                    <span key={k} style={{ fontSize: 'var(--ui-font-size, 14px)' }}>
+                      {RESOURCE_EMOJI[k] ?? '📦'} {k.replace(/([A-Z])/g, ' $1').trim()}: <span style={{ color: '#daa520' }}>{v}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </Section>
         </div>
 
@@ -225,17 +287,22 @@ export default function IndustryPanel({
 
           {buildable && buildable.civilians.filter(b => b.tech_met).length > 0 && (
             <Section label="Civilian Hiring" emoji="🧑‍🌾">
-              {buildable.civilians.filter(b => b.tech_met).map(b => (
-                <SliderRow
-                  key={b.type}
-                  emoji={CIV_EMOJI[b.type] ?? '👷'}
-                  label={b.type}
-                  sublabel={`$${b.cost}`}
-                  canAfford={b.can_afford}
-                  reason={!b.can_afford ? (b.reason ?? 'Cannot afford') : null}
-                  onCommit={() => onHire(b.type)}
-                />
-              ))}
+              {buildable.civilians.filter(b => b.tech_met).map(b => {
+                const maxCount = b.max_count ?? 0;
+                const pending = pending_civilian_hires[b.type] ?? 0;
+                return (
+                  <CivilianHireRow
+                    key={b.type}
+                    emoji={CIV_EMOJI[b.type] ?? '👷'}
+                    label={b.type}
+                    cost={b.cost ?? 0}
+                    expertRequired={b.expert_required ?? false}
+                    maxCount={maxCount}
+                    pending={pending}
+                    onSetCount={count => onSetPendingCivilianHire(b.type, count)}
+                  />
+                );
+              })}
             </Section>
           )}
         </div>
@@ -255,99 +322,224 @@ function Section({ label, emoji, children }: { label: string; emoji: string; chi
   );
 }
 
-function ChainStepRow({
-  label, feedEmoji, output, maxOutput, resourceMax, laborMax, feedSaturationPct,
-  laborValue, feedValue,
-  onLaborChange, onFeedChange,
+function millInputSummary(forecast: ChainForecast, step: 'mill' | 'factory'): string {
+  const parts: string[] = [];
+  if (step === 'mill') {
+    if (forecast.mill_committed_timber) parts.push(`${forecast.mill_committed_timber} Timber`);
+    if (forecast.mill_committed_coal) parts.push(`${forecast.mill_committed_coal} Coal`);
+    if (forecast.mill_committed_iron) parts.push(`${forecast.mill_committed_iron} Iron`);
+    if (forecast.mill_committed_cotton) parts.push(`${forecast.mill_committed_cotton} Cotton`);
+    if (forecast.mill_committed_wool) parts.push(`${forecast.mill_committed_wool} Wool`);
+    const labor = forecast.mill_labor;
+    if (labor > 0) parts.push(`${labor}⚒`);
+    return parts.join(' + ');
+  } else {
+    if (forecast.factory_committed_lumber) parts.push(`${forecast.factory_committed_lumber} Lumber`);
+    if (forecast.factory_committed_steel) parts.push(`${forecast.factory_committed_steel} Steel`);
+    if (forecast.factory_committed_fabric) parts.push(`${forecast.factory_committed_fabric} Fabric`);
+    const labor = forecast.factory_labor;
+    if (labor > 0) parts.push(`${labor}⚒`);
+    return parts.join(' + ');
+  }
+}
+
+function ChainOutputRow({
+  label, cap, target, output, labor, forecast, step, onTargetChange,
 }: {
   label: string;
-  feedEmoji: string;
+  cap: number;
+  target: number;
   output: number;
-  maxOutput: number;
-  resourceMax: number;
-  laborMax: number;
-  feedSaturationPct: number;
-  laborValue: number;
-  feedValue: number;
-  onLaborChange: (v: number) => void;
-  onFeedChange: (v: number) => void;
+  labor: number;
+  forecast: ChainForecast;
+  step: 'mill' | 'factory';
+  onTargetChange: (v: number) => void;
 }) {
-  const [pendingLabor, setPendingLabor] = useState<number | null>(null);
-  const [pendingFeed, setPendingFeed] = useState<number | null>(null);
+  const [pending, setPending] = useState<number | null>(null);
 
-  const commitLabor = useCallback(() => {
-    if (pendingLabor !== null) { onLaborChange(pendingLabor); setPendingLabor(null); }
-  }, [pendingLabor, onLaborChange]);
+  const sliderMax = cap > 0 ? cap : 10;
+  // Map CHAIN_TARGET_UNLIMITED sentinel → slider max position
+  const displayValue = pending !== null ? pending : (target >= CHAIN_TARGET_UNLIMITED ? sliderMax : Math.min(target, sliderMax));
 
-  const commitFeed = useCallback(() => {
-    if (pendingFeed !== null) { onFeedChange(pendingFeed); setPendingFeed(null); }
-  }, [pendingFeed, onFeedChange]);
+  const commit = useCallback(() => {
+    if (pending !== null) {
+      // slider at max → send unlimited
+      const actual = pending >= sliderMax ? CHAIN_TARGET_UNLIMITED : pending;
+      onTargetChange(actual);
+      setPending(null);
+    }
+  }, [pending, sliderMax, onTargetChange]);
 
-  const displayLabor = pendingLabor ?? laborValue;
-  const displayFeed = pendingFeed ?? feedValue;
-
-  const bindingLabel = resourceMax <= laborMax ? 'res' : 'labor';
+  const inputSummary = millInputSummary(forecast, step);
+  const outputLabel = output > 0 ? `→ ${output}` : '→ 0';
 
   return (
     <div style={{ marginBottom: 8, paddingLeft: 4 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#bbb', marginBottom: 3 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#bbb', marginBottom: 2 }}>
         <span>{label}</span>
         <span style={{ color: output > 0 ? '#daa520' : '#666', flexShrink: 0, marginLeft: 4 }}>
-          {output}{maxOutput > 0 ? `/${maxOutput}` : ''}
-          {maxOutput > 0 && (
-            <span style={{ fontSize: 9, color: '#666', marginLeft: 3 }}>
-              ({bindingLabel}: {Math.min(resourceMax, laborMax)})
-            </span>
-          )}
+          {inputSummary ? `${inputSummary} ${outputLabel}` : outputLabel}
         </span>
       </div>
-      {/* Labor slider */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
-        <span style={{ fontSize: 9, color: '#888', width: 22, flexShrink: 0 }}>👷</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span style={{ fontSize: 9, color: '#888', width: 22, flexShrink: 0 }}>🏭</span>
         <input
-          type="range" min={0} max={100} step={5}
-          value={displayLabor}
-          onChange={e => setPendingLabor(Number(e.target.value))}
-          onMouseUp={commitLabor}
-          onTouchEnd={commitLabor}
+          type="range" min={0} max={sliderMax} step={1}
+          value={displayValue}
+          onChange={e => setPending(Number(e.target.value))}
+          onMouseUp={commit}
+          onTouchEnd={commit}
           style={{ flex: 1, accentColor: '#daa520', height: 4, cursor: 'pointer' }}
         />
-        <span style={{ fontSize: 9, color: '#aaa', width: 26, textAlign: 'right', flexShrink: 0 }}>
-          {displayLabor}%
+        <span style={{ fontSize: 9, color: '#aaa', width: 28, textAlign: 'right', flexShrink: 0 }}>
+          {displayValue >= sliderMax ? '∞' : String(displayValue)}
         </span>
       </div>
-      {/* Feed slider with saturation tick */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <span style={{ fontSize: 9, color: '#888', width: 22, flexShrink: 0 }}>{feedEmoji}</span>
-        <div style={{ flex: 1, position: 'relative' }}>
-          <input
-            type="range" min={0} max={100} step={5}
-            value={displayFeed}
-            onChange={e => setPendingFeed(Number(e.target.value))}
-            onMouseUp={commitFeed}
-            onTouchEnd={commitFeed}
-            style={{ width: '100%', accentColor: '#4a8fd4', height: 4, cursor: 'pointer' }}
-          />
-          {feedSaturationPct < 100 && (
-            <div
-              title={`Saturation at ${feedSaturationPct}% — adding more feed beyond this point won't increase output`}
-              style={{
-                position: 'absolute',
-                left: `${feedSaturationPct}%`,
-                top: '50%',
-                transform: 'translate(-50%, -50%)',
-                width: 2,
-                height: 10,
-                background: '#4a8fd4',
-                opacity: 0.6,
-                pointerEvents: 'none',
-              }}
+    </div>
+  );
+}
+
+function EducationSection({
+  labor, pendingTraining, trainingCosts, paper, onSet,
+}: {
+  labor: IndustryData['labor'];
+  pendingTraining: { to_trained: number; to_expert: number };
+  trainingCosts: IndustryData['training_costs'];
+  paper: number;
+  onSet: (toTrained: number, toExpert: number) => void;
+}) {
+  const [pendToTrained, setPendToTrained] = useState<number | null>(null);
+  const [pendToExpert, setPendToExpert] = useState<number | null>(null);
+
+  const toTrainedVal = pendToTrained ?? pendingTraining.to_trained;
+  const toExpertVal = pendToExpert ?? pendingTraining.to_expert;
+
+  const maxToTrained = labor.untrained;
+  const maxToExpert = labor.trained;
+
+  const commitBoth = useCallback((tt: number, te: number) => {
+    onSet(tt, te);
+    setPendToTrained(null);
+    setPendToExpert(null);
+  }, [onSet]);
+
+  return (
+    <Section label="Education" emoji="🎓">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#bbb', marginBottom: 2 }}>
+            <span>👕→👔 Untrained→Trained</span>
+            <span style={{ color: '#888' }}>
+              cost: {trainingCosts.to_trained_paper}📄 + {trainingCosts.to_trained_labor}⚒ each
+            </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <input
+              type="range" min={0} max={maxToTrained} step={1}
+              value={toTrainedVal}
+              onChange={e => setPendToTrained(Number(e.target.value))}
+              onMouseUp={() => commitBoth(toTrainedVal, toExpertVal)}
+              onTouchEnd={() => commitBoth(toTrainedVal, toExpertVal)}
+              style={{ flex: 1, accentColor: '#6ab0d4', height: 4, cursor: 'pointer' }}
             />
+            <span style={{ fontSize: 10, color: '#aaa', width: 28, textAlign: 'right', flexShrink: 0 }}>
+              {toTrainedVal}
+            </span>
+          </div>
+          {toTrainedVal > 0 && (
+            <div style={{ fontSize: 9, color: '#888', marginTop: 1 }}>
+              Cost: {toTrainedVal * trainingCosts.to_trained_paper}📄 + {toTrainedVal * trainingCosts.to_trained_labor}⚒
+              {paper < toTrainedVal * trainingCosts.to_trained_paper && (
+                <span style={{ color: '#a66', marginLeft: 4 }}>⚠ need more paper</span>
+              )}
+            </div>
           )}
         </div>
-        <span style={{ fontSize: 9, color: '#aaa', width: 26, textAlign: 'right', flexShrink: 0 }}>
-          {displayFeed}%
-        </span>
+
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#bbb', marginBottom: 2 }}>
+            <span>👔→🥼 Trained→Expert</span>
+            <span style={{ color: '#888' }}>
+              cost: {trainingCosts.to_expert_paper}📄 + {trainingCosts.to_expert_labor}⚒ each
+            </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <input
+              type="range" min={0} max={maxToExpert} step={1}
+              value={toExpertVal}
+              onChange={e => setPendToExpert(Number(e.target.value))}
+              onMouseUp={() => commitBoth(toTrainedVal, toExpertVal)}
+              onTouchEnd={() => commitBoth(toTrainedVal, toExpertVal)}
+              style={{ flex: 1, accentColor: '#4a8fd4', height: 4, cursor: 'pointer' }}
+            />
+            <span style={{ fontSize: 10, color: '#aaa', width: 28, textAlign: 'right', flexShrink: 0 }}>
+              {toExpertVal}
+            </span>
+          </div>
+          {toExpertVal > 0 && (
+            <div style={{ fontSize: 9, color: '#888', marginTop: 1 }}>
+              Cost: {toExpertVal * trainingCosts.to_expert_paper}📄 + {toExpertVal * trainingCosts.to_expert_labor}⚒
+            </div>
+          )}
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+function CivilianHireRow({
+  emoji, label, cost, expertRequired, maxCount, pending, onSetCount,
+}: {
+  emoji: string;
+  label: string;
+  cost: number;
+  expertRequired: boolean;
+  maxCount: number;
+  pending: number;
+  onSetCount: (count: number) => void;
+}) {
+  const [localVal, setLocalVal] = useState<number | null>(null);
+  const display = localVal ?? pending;
+
+  const commit = useCallback(() => {
+    if (localVal !== null) {
+      onSetCount(localVal);
+      setLocalVal(null);
+    }
+  }, [localVal, onSetCount]);
+
+  const canHire = maxCount > 0;
+  const sublabel = expertRequired ? `$${cost} + 1 expert` : `$${cost}`;
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0', opacity: canHire ? 1 : 0.45 }}>
+      <span style={{ width: 18, textAlign: 'center' }}>{emoji}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 'var(--ui-font-size, 14px)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {label}
+          </span>
+          <span style={{ fontSize: 10, color: '#888', marginLeft: 4, flexShrink: 0 }}>{sublabel}</span>
+        </div>
+        {canHire ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+            <input
+              type="range" min={0} max={maxCount} step={1}
+              value={display}
+              onChange={e => setLocalVal(Number(e.target.value))}
+              onMouseUp={commit}
+              onTouchEnd={commit}
+              style={{ flex: 1, cursor: 'pointer', accentColor: '#daa520', height: 4 }}
+            />
+            <span style={{ fontSize: 10, color: display > 0 ? '#daa520' : '#555', width: 24, textAlign: 'right', flexShrink: 0 }}>
+              {display > 0 ? `+${display}` : ''}
+            </span>
+          </div>
+        ) : (
+          <div style={{ fontSize: 10, color: '#a66', marginTop: 1 }}>
+            {expertRequired ? 'Need expert workers' : 'Cannot afford'}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -374,17 +566,13 @@ interface SliderRowProps {
 
 function SliderRow({ emoji, label, sublabel, canAfford, reason, onCommit }: SliderRowProps) {
   const [value, setValue] = useState(0);
-  const committed = useRef(false);
 
   const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = Number(e.target.value);
-    setValue(v);
-    committed.current = false;
+    setValue(Number(e.target.value));
   }, []);
 
   const handleCommit = useCallback(() => {
-    if (value > 0 && canAfford && !committed.current) {
-      committed.current = true;
+    if (value > 0 && canAfford) {
       onCommit();
       setValue(0);
     }
@@ -423,23 +611,6 @@ function SliderRow({ emoji, label, sublabel, canAfford, reason, onCommit }: Slid
         ) : (
           <div style={{ fontSize: 10, color: '#a66', marginTop: 1 }}>{reason}</div>
         )}
-      </div>
-    </div>
-  );
-}
-
-function WarehouseSection({ label, items }: { label: string; items: Record<string, number> }) {
-  const entries = Object.entries(items).filter(([, v]) => v > 0);
-  if (entries.length === 0) return null;
-  return (
-    <div style={{ marginBottom: 4 }}>
-      <div style={{ fontSize: 10, color: '#888', textTransform: 'uppercase', marginBottom: 2 }}>{label}</div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
-        {entries.map(([k, v]) => (
-          <span key={k} style={{ fontSize: 'var(--ui-font-size, 14px)' }}>
-            {RESOURCE_EMOJI[k] ?? '📦'} {k.replace(/([A-Z])/g, ' $1').trim()}: <span style={{ color: '#daa520' }}>{v}</span>
-          </span>
-        ))}
       </div>
     </div>
   );

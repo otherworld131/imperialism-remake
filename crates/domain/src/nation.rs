@@ -1,6 +1,6 @@
 use crate::ai::AiPersonality;
 use crate::economy::buildings::{Building, BuildingType};
-use crate::economy::civilians::Civilian;
+use crate::economy::civilians::{Civilian, CivilianType};
 use crate::economy::labor::{LaborPool, WorkerType};
 use crate::economy::ledger::{CashSink, CashSource};
 use crate::economy::observability::BlockReason;
@@ -71,46 +71,31 @@ pub struct ReservationStateSnapshot {
     pub reserved_labor: HashMap<WorkerType, u32>,
 }
 
-/// Player-controlled allocation targets for each production chain step.
+/// Player-controlled output targets for each production chain step.
 ///
-/// `*_labor`: relative weight (0–100) for labor distribution across steps; normalized
-/// proportionally to total labor available. Default 100 for all steps (equal share).
-///
-/// `*_feed`: percentage (0–100) of available input resources/materials to feed into
-/// each step. Default 100 (consume all available). Unconsumed inputs stay in warehouse.
-///
-/// All nations use stored targets. AI nations carry defaults (all 100) from `NationEconomy::new()`.
+/// Each value is a desired output quantity (in units) for the step this turn.
+/// `u32::MAX` means "produce as much as possible" (no target cap applied).
+/// Setting a value to 0 stops production for that step entirely.
+/// AI nations use defaults (all `u32::MAX`) from `NationEconomy::new()`.
 #[derive(Debug, Clone)]
-pub struct ChainAllocationTargets {
-    pub timber_mill_labor: u8,
-    pub lumber_factory_labor: u8,
-    pub metal_mill_labor: u8,
-    pub steel_factory_labor: u8,
-    pub textile_mill_labor: u8,
-    pub garment_factory_labor: u8,
-    pub timber_mill_feed: u8,
-    pub lumber_factory_feed: u8,
-    pub metal_mill_feed: u8,
-    pub steel_factory_feed: u8,
-    pub textile_mill_feed: u8,
-    pub garment_factory_feed: u8,
+pub struct ChainOutputTargets {
+    pub timber_mill: u32,     // target lumber units
+    pub metal_mill: u32,      // target steel units
+    pub textile_mill: u32,    // target fabric units
+    pub lumber_factory: u32,  // target furniture units
+    pub steel_factory: u32,   // target hardware units
+    pub garment_factory: u32, // target clothing units
 }
 
-impl Default for ChainAllocationTargets {
+impl Default for ChainOutputTargets {
     fn default() -> Self {
         Self {
-            timber_mill_labor: 100,
-            lumber_factory_labor: 100,
-            metal_mill_labor: 100,
-            steel_factory_labor: 100,
-            textile_mill_labor: 100,
-            garment_factory_labor: 100,
-            timber_mill_feed: 100,
-            lumber_factory_feed: 100,
-            metal_mill_feed: 100,
-            steel_factory_feed: 100,
-            textile_mill_feed: 100,
-            garment_factory_feed: 100,
+            timber_mill: u32::MAX,
+            metal_mill: u32::MAX,
+            textile_mill: u32::MAX,
+            lumber_factory: u32::MAX,
+            steel_factory: u32::MAX,
+            garment_factory: u32::MAX,
         }
     }
 }
@@ -134,8 +119,17 @@ pub struct NationEconomy {
     /// Updated by the turn processor after `calculate_deliveries` completes.
     pub logistics: LogisticsState,
 
-    /// Player-controlled production chain allocation targets.
-    pub chain_targets: ChainAllocationTargets,
+    /// Player-controlled production chain output targets.
+    pub chain_targets: ChainOutputTargets,
+
+    /// Civilians queued for hiring at end of turn (civilian_type → count).
+    pub pending_civilian_hires: HashMap<CivilianType, u32>,
+
+    /// Workers queued for Untrained→Trained advancement at end of turn.
+    pub pending_train_to_trained: u32,
+
+    /// Workers queued for Trained→Expert advancement at end of turn.
+    pub pending_train_to_expert: u32,
 
     // ── Reservation accounting (Trello #162 / #169) ──────────────────
     /// Reserved treasury amount (sum of active treasury reservations).
@@ -164,7 +158,10 @@ impl NationEconomy {
             buildings: Vec::new(),
             labor: LaborPool::new(),
             logistics: LogisticsState::new(),
-            chain_targets: ChainAllocationTargets::default(),
+            chain_targets: ChainOutputTargets::default(),
+            pending_civilian_hires: HashMap::new(),
+            pending_train_to_trained: 0,
+            pending_train_to_expert: 0,
             reserved_treasury: Money::ZERO,
             reserved_warehouse: BTreeMap::new(),
             reserved_materials: BTreeMap::new(),

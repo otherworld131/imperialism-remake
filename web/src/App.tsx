@@ -7,11 +7,11 @@ import {
   getUnitsInProvince, getCivilians, getShips, getValidMoveTargets, getBuildableUnits,
   queueUnitMove, cancelUnitMove, disbandUnit, deployCivilian, recallCivilian, engineerBuild,
   type EngineerBuildKind,
-  recruitArmyUnit, hireCivilian, buildShip,
+  recruitArmyUnit, buildShip,
   upgradeUnit, upgradeUnits,
   // New screen queries
   getTransportData, buildFreightCar, setTransportAllocation,
-  getIndustryData, expandBuilding, setChainLabor, setChainFeed,
+  getIndustryData, expandBuilding, setChainTarget, setPendingCivilianHire, setPendingTraining,
   getTradeData, setTradeSubsidy, setPlayerSellOrder, setPlayerBuyOrder,
   getDiplomacyScreenData,
   diplomacyBuildConsulate, diplomacyBuildEmbassy, diplomacyProposeNap,
@@ -1268,10 +1268,10 @@ function App() {
     }
   }, [isObserver, mapScale, tiles, gameJson, handleDeployCivilian]);
 
-  const handleHireCivilian = useCallback(async (civType: string) => {
+  const handleSetPendingCivilianHire = useCallback(async (civType: string, count: number) => {
     await runMutation(async () => {
       if (isObserver) return;
-      const cmd = await hireCivilian(gameJson, playerNationId, civType);
+      const cmd = await setPendingCivilianHire(gameJson, playerNationId, civType, count);
       if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
       else if (cmd.error) showError(`Hire failed: ${cmd.error}`);
     });
@@ -1315,21 +1315,21 @@ function App() {
     });
   }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
-  const handleSetChainLabor = useCallback(async (chain: string, step: string, share: number) => {
+  const handleSetChainTarget = useCallback(async (chain: string, step: string, target: number) => {
     await runMutation(async () => {
       if (isObserver) return;
-      const cmd = await setChainLabor(gameJson, playerNationId, chain, step, share);
+      const cmd = await setChainTarget(gameJson, playerNationId, chain, step, target);
       if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-      else if (cmd.error) showError(`Chain labor failed: ${cmd.error}`);
+      else if (cmd.error) showError(`Chain target failed: ${cmd.error}`);
     });
   }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
-  const handleSetChainFeed = useCallback(async (chain: string, step: string, pct: number) => {
+  const handleSetPendingTraining = useCallback(async (toTrained: number, toExpert: number) => {
     await runMutation(async () => {
       if (isObserver) return;
-      const cmd = await setChainFeed(gameJson, playerNationId, chain, step, pct);
+      const cmd = await setPendingTraining(gameJson, playerNationId, toTrained, toExpert);
       if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-      else if (cmd.error) showError(`Chain feed failed: ${cmd.error}`);
+      else if (cmd.error) showError(`Training failed: ${cmd.error}`);
     });
   }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
@@ -1726,10 +1726,10 @@ function App() {
                 onExpand={handleExpandBuilding}
                 onRecruit={handleRecruit}
                 onBuildShip={handleBuildShip}
-                onHire={handleHireCivilian}
+                onSetPendingCivilianHire={handleSetPendingCivilianHire}
                 onBuildFreightCar={handleBuildFreightCar}
-                onSetChainLabor={handleSetChainLabor}
-                onSetChainFeed={handleSetChainFeed}
+                onSetChainTarget={handleSetChainTarget}
+                onSetPendingTraining={handleSetPendingTraining}
               />
             ) : (
               <p style={styles.hint}>Loading industry data...</p>

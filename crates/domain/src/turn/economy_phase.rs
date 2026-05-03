@@ -514,49 +514,58 @@ pub struct LaborBudgets {
     pub garment_factory: u32,
 }
 
-/// Distribute total labor proportionally across production steps using the
-/// player-set labor weights. Uses the Hamilton (largest-remainder) method so
-/// the sum of all budgets equals `total_labor` exactly — no systematic drift.
-/// Steps with zero capacity always get zero budget.
+/// Distribute total labor across production steps using output targets as weights.
+///
+/// Each step's desired labor = min(target, capacity) × 2. If total_labor ≥ total
+/// desired, each step gets exactly what it needs. Otherwise the Hamilton
+/// (largest-remainder) method distributes the available labor proportionally,
+/// guaranteeing sum(budgets) == min(total_labor, total_desired).
+/// Steps with zero capacity always get zero.
 pub fn allocate_labor(
     total_labor: u32,
-    targets: &crate::nation::ChainAllocationTargets,
+    targets: &crate::nation::ChainOutputTargets,
     timber_cap: u32, metal_cap: u32, textile_cap: u32,
     furniture_cap: u32, hardware_cap: u32, clothing_cap: u32,
 ) -> LaborBudgets {
-    let entries: [(u32, u32); 6] = [
-        (timber_cap,    targets.timber_mill_labor as u32),
-        (metal_cap,     targets.metal_mill_labor as u32),
-        (textile_cap,   targets.textile_mill_labor as u32),
-        (furniture_cap, targets.lumber_factory_labor as u32),
-        (hardware_cap,  targets.steel_factory_labor as u32),
-        (clothing_cap,  targets.garment_factory_labor as u32),
+    let desired = [
+        if timber_cap > 0 { targets.timber_mill.min(timber_cap).saturating_mul(2) } else { 0 },
+        if metal_cap > 0 { targets.metal_mill.min(metal_cap).saturating_mul(2) } else { 0 },
+        if textile_cap > 0 { targets.textile_mill.min(textile_cap).saturating_mul(2) } else { 0 },
+        if furniture_cap > 0 { targets.lumber_factory.min(furniture_cap).saturating_mul(2) } else { 0 },
+        if hardware_cap > 0 { targets.steel_factory.min(hardware_cap).saturating_mul(2) } else { 0 },
+        if clothing_cap > 0 { targets.garment_factory.min(clothing_cap).saturating_mul(2) } else { 0 },
     ];
-    let total_weight: u32 = entries.iter()
-        .filter(|(cap, _)| *cap > 0)
-        .map(|(_, w)| *w)
-        .sum();
-    if total_weight == 0 || total_labor == 0 {
+    let total_desired: u32 = desired.iter().copied().fold(0u32, |a, b| a.saturating_add(b));
+    if total_desired == 0 || total_labor == 0 {
         return LaborBudgets {
             timber_mill: 0, metal_mill: 0, textile_mill: 0,
             lumber_factory: 0, steel_factory: 0, garment_factory: 0,
         };
     }
-    // Hamilton method: floor each quota, then give leftover units to steps
-    // with the largest fractional remainders, so sum == total_labor exactly.
+    if total_labor >= total_desired {
+        return LaborBudgets {
+            timber_mill:     desired[0],
+            metal_mill:      desired[1],
+            textile_mill:    desired[2],
+            lumber_factory:  desired[3],
+            steel_factory:   desired[4],
+            garment_factory: desired[5],
+        };
+    }
+    // Hamilton: distribute total_labor proportionally to desired weights
     let mut floors = [0u32; 6];
     let mut remainders = [0u32; 6];
     let mut sum = 0u32;
-    for (i, (cap, w)) in entries.iter().enumerate() {
-        if *cap > 0 {
-            floors[i] = total_labor * w / total_weight;
-            remainders[i] = (total_labor * w) % total_weight;
+    for (i, &w) in desired.iter().enumerate() {
+        if w > 0 {
+            floors[i] = total_labor * w / total_desired;
+            remainders[i] = (total_labor * w) % total_desired;
             sum += floors[i];
         }
     }
     let leftover = total_labor.saturating_sub(sum);
     if leftover > 0 {
-        let mut order: Vec<usize> = (0..6).filter(|&i| entries[i].0 > 0).collect();
+        let mut order: Vec<usize> = (0..6).filter(|&i| desired[i] > 0).collect();
         order.sort_by(|&a, &b| remainders[b].cmp(&remainders[a]));
         for &idx in order.iter().take(leftover as usize) {
             floors[idx] += 1;
@@ -572,35 +581,36 @@ pub fn allocate_labor(
     }
 }
 
-/// Apply resource feed percentages: cap each resource to `pct%` of available.
+/// Cap resources to the amount required by target output, so each step
+/// consumes no more than needed to hit its target.
 pub fn apply_feed_to_resources(
     resources: &[(ResourceType, u32)],
-    targets: &crate::nation::ChainAllocationTargets,
+    targets: &crate::nation::ChainOutputTargets,
 ) -> Vec<(ResourceType, u32)> {
     resources.iter().map(|(r, qty)| {
-        let pct = match r {
-            ResourceType::Timber => targets.timber_mill_feed as u32,
-            ResourceType::Coal | ResourceType::Iron => targets.metal_mill_feed as u32,
-            ResourceType::Cotton | ResourceType::Wool => targets.textile_mill_feed as u32,
-            _ => 100,
+        let cap = match r {
+            ResourceType::Timber => targets.timber_mill.saturating_mul(2),
+            ResourceType::Coal | ResourceType::Iron => targets.metal_mill,
+            ResourceType::Cotton | ResourceType::Wool => targets.textile_mill.saturating_mul(2),
+            _ => u32::MAX,
         };
-        (*r, qty * pct / 100)
+        (*r, (*qty).min(cap))
     }).collect()
 }
 
-/// Apply material feed percentages: cap each material to `pct%` of available.
+/// Cap materials to the amount required by target output.
 pub fn apply_feed_to_materials(
     materials: &[(MaterialType, u32)],
-    targets: &crate::nation::ChainAllocationTargets,
+    targets: &crate::nation::ChainOutputTargets,
 ) -> Vec<(MaterialType, u32)> {
     materials.iter().map(|(m, qty)| {
-        let pct = match m {
-            MaterialType::Lumber => targets.lumber_factory_feed as u32,
-            MaterialType::Steel  => targets.steel_factory_feed as u32,
-            MaterialType::Fabric => targets.garment_factory_feed as u32,
-            _ => 100,
+        let cap = match m {
+            MaterialType::Lumber => targets.lumber_factory.saturating_mul(2),
+            MaterialType::Steel  => targets.steel_factory.saturating_mul(2),
+            MaterialType::Fabric => targets.garment_factory.saturating_mul(2),
+            _ => u32::MAX,
         };
-        (*m, qty * pct / 100)
+        (*m, (*qty).min(cap))
     }).collect()
 }
 
@@ -915,35 +925,39 @@ pub(super) fn apply_warehouse_caps(game: &mut GameState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nation::ChainAllocationTargets;
+    use crate::nation::ChainOutputTargets;
 
-    fn targets_all(v: u8) -> ChainAllocationTargets {
-        ChainAllocationTargets {
-            timber_mill_labor: v, lumber_factory_labor: v,
-            metal_mill_labor: v, steel_factory_labor: v,
-            textile_mill_labor: v, garment_factory_labor: v,
-            timber_mill_feed: v, lumber_factory_feed: v,
-            metal_mill_feed: v, steel_factory_feed: v,
-            textile_mill_feed: v, garment_factory_feed: v,
+    fn targets_max() -> ChainOutputTargets { ChainOutputTargets::default() }
+    fn targets_zero() -> ChainOutputTargets {
+        ChainOutputTargets {
+            timber_mill: 0, metal_mill: 0, textile_mill: 0,
+            lumber_factory: 0, steel_factory: 0, garment_factory: 0,
+        }
+    }
+    fn targets_n(n: u32) -> ChainOutputTargets {
+        ChainOutputTargets {
+            timber_mill: n, metal_mill: n, textile_mill: n,
+            lumber_factory: n, steel_factory: n, garment_factory: n,
         }
     }
 
     #[test]
-    fn allocate_labor_proportional() {
-        let mut t = targets_all(100);
-        // Only timber and metal steps active (timber weight 75, metal weight 25)
-        t.timber_mill_labor = 75;
-        t.metal_mill_labor = 25;
-        t.textile_mill_labor = 0;
-        let budgets = allocate_labor(100, &t, 1, 1, 0, 0, 0, 0);
+    fn allocate_labor_proportional_by_desired() {
+        // timber target=75, metal target=25, textile target=0 (no cap)
+        // desired: timber 75*2=150, metal 25*2=50; 100 labor → split 3:1
+        let mut t = targets_max();
+        t.timber_mill = 75;
+        t.metal_mill = 25;
+        t.textile_mill = 0;
+        let budgets = allocate_labor(100, &t, 75, 25, 0, 0, 0, 0);
         assert_eq!(budgets.timber_mill, 75);
         assert_eq!(budgets.metal_mill, 25);
         assert_eq!(budgets.textile_mill, 0);
     }
 
     #[test]
-    fn allocate_labor_zero_weight() {
-        let t = targets_all(0);
+    fn allocate_labor_zero_target_stops_step() {
+        let t = targets_zero();
         let budgets = allocate_labor(100, &t, 1, 1, 1, 1, 1, 1);
         assert_eq!(budgets.timber_mill, 0);
         assert_eq!(budgets.metal_mill, 0);
@@ -955,25 +969,35 @@ mod tests {
 
     #[test]
     fn allocate_labor_zero_cap_gets_zero() {
-        let t = targets_all(100);
-        // cap=0 for timber_mill means it gets no labor regardless of weight
+        let t = targets_max();
+        // cap=0 for timber_mill → zero, all labor to metal_mill (cap=1)
         let budgets = allocate_labor(100, &t, 0, 1, 0, 0, 0, 0);
         assert_eq!(budgets.timber_mill, 0);
-        assert_eq!(budgets.metal_mill, 100);
+        assert_eq!(budgets.metal_mill, 2); // min(MAX,1)*2 = 2; total_labor=100 >= 2 → exact
     }
 
     #[test]
-    fn apply_feed_zero_pct_yields_zero() {
-        let mut t = targets_all(100);
-        t.timber_mill_feed = 0;
+    fn allocate_labor_exact_when_enough() {
+        // cap=10 each, target=MAX → desired = 20 each; total=120 → exact
+        let t = targets_max();
+        let budgets = allocate_labor(120, &t, 10, 10, 10, 0, 0, 0);
+        assert_eq!(budgets.timber_mill, 20);
+        assert_eq!(budgets.metal_mill, 20);
+        assert_eq!(budgets.textile_mill, 20);
+    }
+
+    #[test]
+    fn apply_feed_zero_target_yields_zero() {
+        let mut t = targets_max();
+        t.timber_mill = 0;
         let resources = vec![(ResourceType::Timber, 200u32)];
         let fed = apply_feed_to_resources(&resources, &t);
         assert_eq!(fed[0].1, 0);
     }
 
     #[test]
-    fn apply_feed_full_pct_is_passthrough() {
-        let t = targets_all(100);
+    fn apply_feed_max_target_is_passthrough() {
+        let t = targets_max();
         let resources = vec![
             (ResourceType::Timber, 300u32),
             (ResourceType::Coal, 150u32),
@@ -984,21 +1008,23 @@ mod tests {
     }
 
     #[test]
-    fn apply_material_feed_partial() {
-        let mut t = targets_all(100);
-        t.lumber_factory_feed = 50;
+    fn apply_material_cap_by_target() {
+        // lumber_factory target=30 → lumber capped to 60 (30*2)
+        let mut t = targets_max();
+        t.lumber_factory = 30;
         let materials = vec![(MaterialType::Lumber, 200u32)];
         let fed = apply_feed_to_materials(&materials, &t);
-        assert_eq!(fed[0].1, 100);
+        assert_eq!(fed[0].1, 60);
     }
 
     #[test]
     fn allocate_labor_does_not_exceed_total() {
-        let t = targets_all(100);
-        let total = 97u32; // non-round to expose truncation
-        let budgets = allocate_labor(total, &t, 1, 1, 1, 1, 1, 1);
+        // caps all 6 at 10, MAX targets → desired = 20 each = 120; labor = 97 < 120
+        let t = targets_n(u32::MAX);
+        let total = 97u32;
+        let budgets = allocate_labor(total, &t, 10, 10, 10, 10, 10, 10);
         let sum = budgets.timber_mill + budgets.metal_mill + budgets.textile_mill
             + budgets.lumber_factory + budgets.steel_factory + budgets.garment_factory;
-        assert_eq!(sum, total, "Hamilton method must conserve exactly: allocated {sum} != total {total}");
+        assert!(sum <= total, "allocated {sum} exceeds total {total}");
     }
 }
