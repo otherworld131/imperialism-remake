@@ -163,13 +163,13 @@ export default function DiplomacyBottomBar({
       {/* Action buttons row — centered, larger */}
       <div style={{ display: 'flex', gap: 8, justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
         <ActionBtn
-          label={`🏛️ Consulate${a ? ` $${a.consulate_cost}` : ''}`}
+          label="🏛️ Consulate"
           active={queuedAction?.kind === 'consulate'}
           disabled={isAnarchy || (a ? !a.can_build_consulate : false)}
           onClick={() => { queueAction({ kind: 'consulate' }); clearAllPickers(); }}
         />
         <ActionBtn
-          label={`🏰 Embassy${a ? ` $${a.embassy_cost}` : ''}`}
+          label="🏰 Embassy"
           active={queuedAction?.kind === 'embassy'}
           disabled={isAnarchy || (a ? !a.can_build_embassy : false)}
           onClick={() => { queueAction({ kind: 'embassy' }); clearAllPickers(); }}

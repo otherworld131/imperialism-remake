@@ -87,6 +87,26 @@ import TechScreen from './components/TechScreen';
 import Flag from './components/Flag';
 import { resourceLabel } from './resourceEmoji';
 
+function canTargetNationWithAction(
+  action: QueuedDiplomacyAction,
+  targetNationId: number,
+  diplomacy: DiplomacyScreenData | null,
+): boolean {
+  const rel = diplomacy?.relations.find(r => r.nation_id === targetNationId);
+  if (!rel || rel.is_in_anarchy) return false;
+  const a = rel.actions;
+  switch (action.kind) {
+    case 'consulate': return a.can_build_consulate;
+    case 'embassy': return a.can_build_embassy;
+    case 'nap': return a.can_propose_nap;
+    case 'alliance': return a.can_propose_alliance;
+    case 'peace': return a.can_propose_peace;
+    case 'grant': return a.can_send_grant;
+    case 'breakTreaty': return a.can_break_treaty && a.breakable_treaties.includes(action.treatyType);
+    case 'war': return a.can_declare_war;
+  }
+}
+
 function turnToYearQ(turn: number): string {
   const year = 1815 + Math.floor((turn - 1) / 4);
   return `${year} Q${((turn - 1) % 4) + 1}`;
@@ -739,6 +759,10 @@ function App() {
         showError('Select a foreign nation for this diplomatic action.');
         return;
       }
+      // Block click on a target that can't accept this action; keep queue so user can re-target.
+      if (!canTargetNationWithAction(queuedDiplomacyAction, targetNationId, diplomacyScreenData)) {
+        return;
+      }
       if (mutationLockRef.current) {
         showError('Another action is in progress — please wait.');
         return; // preserve queued action so user can retry
@@ -828,7 +852,7 @@ function App() {
       setProvinceUnits(null);
       setSelectedUnitIds([]);
     }
-  }, [mapMode, gameJson, playerNationId, selectedUnitIds, validMoveTargets, isDeployMode, deployingCivilian, deployableTiles, applyGameJson, provinceUnits, showError, runMutation, queuedDiplomacyAction, activeScreen, diploActionsRef, mutationLockRef]);
+  }, [mapMode, gameJson, playerNationId, selectedUnitIds, validMoveTargets, isDeployMode, deployingCivilian, deployableTiles, applyGameJson, provinceUnits, selectedTile, showError, runMutation, queuedDiplomacyAction, activeScreen, diplomacyScreenData, diploActionsRef, mutationLockRef]);
 
   const handleNavyMarkerClick = useCallback((marker: NavyMarker | null) => {
     if (!marker) {
@@ -1464,6 +1488,16 @@ function App() {
               lockZoom={activeScreen === 'diplomacy'}
               showDiplomacyMarkers={mapMode === 'diplomatic'}
               isDiplomacyTargetMode={activeScreen === 'diplomacy' && queuedDiplomacyAction != null}
+              isDiplomacyTargetInvalid={
+                activeScreen === 'diplomacy'
+                && queuedDiplomacyAction != null
+                && hoveredDiploTile != null
+                && (
+                  hoveredDiploTile.nation_id == null
+                  || hoveredDiploTile.nation_id === playerNationId
+                  || !canTargetNationWithAction(queuedDiplomacyAction, hoveredDiploTile.nation_id, diplomacyScreenData)
+                )
+              }
             />
           </div>
           {activeScreen === 'diplomacy' && diplomacyScreenData && (

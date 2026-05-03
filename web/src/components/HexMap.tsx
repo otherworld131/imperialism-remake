@@ -317,6 +317,8 @@ interface Props {
   limitedMapModes?: boolean;
   /** When true, the cursor changes to crosshair to signal the user should click a nation. */
   isDiplomacyTargetMode?: boolean;
+  /** When true, currently hovered target can't accept the queued action; cursor becomes not-allowed. */
+  isDiplomacyTargetInvalid?: boolean;
 }
 
 const CIVILIAN_EMOJI: Record<string, string> = {
@@ -367,6 +369,7 @@ export default function HexMap({
   showDiplomacyMarkers = false,
   limitedMapModes = false,
   isDiplomacyTargetMode = false,
+  isDiplomacyTargetInvalid = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Use props if provided (controlled mode), otherwise use local state (uncontrolled)
@@ -2906,7 +2909,7 @@ export default function HexMap({
         ref={canvasRef}
         role="img"
         aria-label="Game map"
-        style={{ width: '100%', height: '100%', display: 'block', cursor: dragging ? 'grabbing' : isDiplomacyTargetMode ? 'crosshair' : 'grab', touchAction: 'none' }}
+        style={{ width: '100%', height: '100%', display: 'block', cursor: dragging ? 'grabbing' : isDiplomacyTargetMode ? (isDiplomacyTargetInvalid ? 'not-allowed' : 'crosshair') : 'grab', touchAction: 'none' }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
