@@ -1425,7 +1425,7 @@ function App() {
       {/* Main area */}
       <div style={styles.mainArea} className="main-area-responsive">
         {/* Map — always mounted, hidden behind full-screen views to preserve zoom/pan */}
-        <div style={{ ...styles.mapContainer, display: isFullScreen(activeScreen) ? 'none' : undefined, flexDirection: 'column' }}>
+        <div style={{ ...styles.mapContainer, display: isFullScreen(activeScreen) ? 'none' : 'flex', flexDirection: 'column' }}>
           <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
             <HexMap
               tiles={tiles}
