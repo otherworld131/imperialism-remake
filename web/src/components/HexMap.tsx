@@ -319,6 +319,8 @@ interface Props {
   isDiplomacyTargetMode?: boolean;
   /** When true, currently hovered target can't accept the queued action; cursor becomes not-allowed. */
   isDiplomacyTargetInvalid?: boolean;
+  /** When set, the regular tile tooltip is replaced with this warning text. */
+  diplomacyInvalidReason?: string | null;
 }
 
 const CIVILIAN_EMOJI: Record<string, string> = {
@@ -370,6 +372,7 @@ export default function HexMap({
   limitedMapModes = false,
   isDiplomacyTargetMode = false,
   isDiplomacyTargetInvalid = false,
+  diplomacyInvalidReason = null,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Use props if provided (controlled mode), otherwise use local state (uncontrolled)
@@ -2919,7 +2922,31 @@ export default function HexMap({
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       />
-      {tooltip && (
+      {tooltip && (diplomacyInvalidReason ? (
+        <div
+          role="tooltip"
+          style={{
+            position: 'absolute',
+            left: tooltip.screenX + 14,
+            top: tooltip.screenY + 14,
+            background: 'rgba(70, 20, 20, 0.96)',
+            color: '#ffd0c0',
+            border: '1px solid #e44',
+            borderRadius: 4,
+            padding: '8px 12px',
+            fontSize: 12,
+            fontFamily: 'Georgia, serif',
+            lineHeight: 1.4,
+            maxWidth: 280,
+            zIndex: 20,
+            pointerEvents: 'none',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
+          }}
+        >
+          <div style={{ fontWeight: 'bold', color: '#ff8a7a', marginBottom: 3 }}>🚫 Action not available</div>
+          <div>{diplomacyInvalidReason}</div>
+        </div>
+      ) : (
         <HexTooltip
           tile={tooltip.tile}
           marker={tooltip.marker}
@@ -2930,7 +2957,7 @@ export default function HexMap({
           governmentTitleByNationId={governmentTitleByNationId}
           modeExtras={tooltip.tile && renderTooltipModeExtras ? renderTooltipModeExtras(tooltip.tile) : null}
         />
-      )}
+      ))}
       {/* Map controls */}
       <div style={{ position: 'absolute', bottom: 12, right: 12, display: 'flex', gap: 6, alignItems: 'flex-end' }}>
         {!lockZoom && (

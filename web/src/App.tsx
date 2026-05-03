@@ -107,6 +107,58 @@ function canTargetNationWithAction(
   }
 }
 
+function diplomacyInvalidReasonFor(
+  action: QueuedDiplomacyAction,
+  targetNationId: number | null | undefined,
+  playerNationId: number | null,
+  diplomacy: DiplomacyScreenData | null,
+): string | null {
+  if (targetNationId == null) return 'Click on a foreign nation to target this action.';
+  if (targetNationId === playerNationId) return 'Cannot target your own nation.';
+  const rel = diplomacy?.relations.find(r => r.nation_id === targetNationId);
+  if (!rel) return 'Cannot target this nation.';
+  const name = rel.nation_name;
+  if (rel.is_in_anarchy) return `${name} is in anarchy — diplomacy is unavailable.`;
+  switch (action.kind) {
+    case 'consulate':
+      if (rel.actions.can_build_consulate) return null;
+      if (rel.has_consulate || rel.has_embassy) return `${name} already has a consulate.`;
+      return `Cannot build consulate with ${name}.`;
+    case 'embassy':
+      if (rel.actions.can_build_embassy) return null;
+      if (rel.has_embassy) return `${name} already has an embassy.`;
+      if (!rel.has_consulate) return `Need a consulate with ${name} before opening an embassy.`;
+      return `Cannot build embassy with ${name}.`;
+    case 'nap':
+      if (rel.actions.can_propose_nap) return null;
+      if (rel.treaties.includes('NAP') || rel.treaties.includes('Alliance')) return `Already have a NAP / alliance with ${name}.`;
+      if (rel.has_pending_nap) return `NAP proposal already pending with ${name}.`;
+      if (rel.at_war) return `At war with ${name} — make peace first.`;
+      return `Cannot propose NAP to ${name}.`;
+    case 'alliance':
+      if (rel.actions.can_propose_alliance) return null;
+      if (rel.treaties.includes('Alliance')) return `Already allied with ${name}.`;
+      if (rel.has_pending_alliance) return `Alliance proposal already pending with ${name}.`;
+      if (rel.at_war) return `At war with ${name} — make peace first.`;
+      return `Cannot propose alliance to ${name}.`;
+    case 'peace':
+      if (rel.actions.can_propose_peace) return null;
+      if (!rel.at_war) return `Not at war with ${name}.`;
+      if (rel.has_pending_peace) return `Peace proposal already pending with ${name}.`;
+      return `Cannot propose peace to ${name}.`;
+    case 'grant':
+      if (rel.actions.can_send_grant) return null;
+      return `Cannot send grant to ${name} right now.`;
+    case 'breakTreaty':
+      if (rel.actions.can_break_treaty && rel.actions.breakable_treaties.includes(action.treatyType)) return null;
+      return `No ${action.treatyType} to break with ${name}.`;
+    case 'war':
+      if (rel.actions.can_declare_war) return null;
+      if (rel.at_war) return `Already at war with ${name}.`;
+      return `Cannot declare war on ${name}.`;
+  }
+}
+
 function turnToYearQ(turn: number): string {
   const year = 1815 + Math.floor((turn - 1) / 4);
   return `${year} Q${((turn - 1) % 4) + 1}`;
@@ -1497,6 +1549,11 @@ function App() {
                   || hoveredDiploTile.nation_id === playerNationId
                   || !canTargetNationWithAction(queuedDiplomacyAction, hoveredDiploTile.nation_id, diplomacyScreenData)
                 )
+              }
+              diplomacyInvalidReason={
+                (activeScreen === 'diplomacy' && queuedDiplomacyAction != null && hoveredDiploTile != null)
+                  ? diplomacyInvalidReasonFor(queuedDiplomacyAction, hoveredDiploTile.nation_id, playerNationId, diplomacyScreenData)
+                  : null
               }
             />
           </div>
