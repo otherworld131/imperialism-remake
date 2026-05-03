@@ -13,6 +13,7 @@ STATUS_FILE="$WEB_DIR/public/dev-server-status.json"
 FORCE_REBUILD=0
 WASM_BUILD_MODE="dev-no-opt"
 DEV_SERVER_PORT=43173
+DEV_SERVER_LOG="$WEB_DIR/.dev-server.log"
 
 usage() {
   cat <<EOF
@@ -112,7 +113,10 @@ trap 'write_status "failed" "Restart failed"' ERR
 
 write_status "restarting" "Stopping current dev server"
 echo ">> Killing dev server..."
-lsof -ti :"$DEV_SERVER_PORT" | xargs kill 2>/dev/null || true
+DEV_SERVER_PIDS="$(lsof -ti :"$DEV_SERVER_PORT" 2>/dev/null || true)"
+if [[ -n "$DEV_SERVER_PIDS" ]]; then
+  kill $DEV_SERVER_PIDS 2>/dev/null || true
+fi
 
 if needs_npm_install; then
   write_status "installing-deps" "Installing web dependencies"
@@ -140,14 +144,20 @@ fi
 
 write_status "starting-dev-server" "Booting Vite dev server"
 echo ">> Starting dev server..."
-(cd "$WEB_DIR" && npm run dev -- --port "$DEV_SERVER_PORT" &)
+: > "$DEV_SERVER_LOG"
+(
+  cd "$WEB_DIR"
+  nohup npm run dev -- --port "$DEV_SERVER_PORT" >>"$DEV_SERVER_LOG" 2>&1 < /dev/null &
+)
 
 if wait_for_dev_server; then
   write_status "ready" "Ready"
 else
   write_status "failed" "Timed out waiting for dev server"
   echo ">> Timed out waiting for dev server on http://localhost:$DEV_SERVER_PORT" >&2
+  echo ">> Dev server log: $DEV_SERVER_LOG" >&2
   exit 1
 fi
 
 echo ">> Done. Dev server starting on http://localhost:$DEV_SERVER_PORT"
+echo ">> Dev server log: $DEV_SERVER_LOG"
