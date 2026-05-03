@@ -299,6 +299,8 @@ interface Props {
   deployableTiles?: Set<string>;
   /** Tiles where prospector has already searched — shown as red X during prospector deploy mode. */
   prospectedTiles?: Set<string>;
+  /** ID of the currently selected civilian — its map emoji blinks like selected armies. */
+  selectedCivilianId?: number | null;
   disableFogOfWar?: boolean;
   organicBorders?: boolean;
   hideHexGrid?: boolean;
@@ -360,7 +362,7 @@ export default function HexMap({
   onMapModeChange, onTileClick, onTileHover, showHiddenResources = false, showAiCivilians = false,
   showResources = true, showTransportNetwork = true, showArmies = true,
   pendingMoves = [], validMoveTargets, isMovementMode = false,
-  isDeployMode = false, deployableTiles, prospectedTiles, disableFogOfWar = false,
+  isDeployMode = false, deployableTiles, prospectedTiles, selectedCivilianId = null, disableFogOfWar = false,
   organicBorders = true,
   hideHexGrid = false,
   scale: scaleProp, offset: offsetProp, onScaleChange, onOffsetChange,
@@ -2321,6 +2323,8 @@ export default function HexMap({
         if (!tile.civilian_on_tile) continue;
         // Skip AI civilians unless toggle is on
         if (!tile.civilian_on_tile.is_human && !showAiCivilians) continue;
+        // Blink selected civilian (same cadence as selected army indicator)
+        if (tile.civilian_on_tile.id === selectedCivilianId && !blinkOn) continue;
 
         const [px, py] = hexToPixel(tile.q, tile.r);
         const emoji = CIVILIAN_EMOJI[tile.civilian_on_tile.type] || '\u{1F464}';
@@ -2557,7 +2561,7 @@ export default function HexMap({
       isMovementMode, validMoveTargets, isDeployMode, deployableTiles, prospectedTiles, pendingMoves, nationLabels, disableFogOfWar,
       navyMarkers, seaZones, selectedNavyKey, mapGeometry, tileMap, diplomacyOverlay,
       hideHexGrid, highlightedNationId, classifiedEdges, maxArmyFP, mapDims,
-      selectedTileKey, blinkOn, showDiplomacyMarkers, provinceLabels, staticLayer]);
+      selectedTileKey, selectedCivilianId, blinkOn, showDiplomacyMarkers, provinceLabels, staticLayer]);
 
   const scheduleFrame = useCallback(() => {
     if (rafIdRef.current != null) return;
@@ -2575,7 +2579,7 @@ export default function HexMap({
   // driven pan) still trigger a frame. Also blinkOn for the troop-tier animation.
   useEffect(() => { scheduleFrame(); }, [scheduleFrame, scale, offset, blinkOn]);
 
-  // Blink interval: only runs when the selected tile is a capital with troops.
+  // Blink interval: runs when the selected tile is a capital with troops, or a civilian is selected.
   useEffect(() => {
     if (blinkIntervalRef.current) {
       clearInterval(blinkIntervalRef.current);
@@ -2584,7 +2588,7 @@ export default function HexMap({
     const selectedCapitalWithTroops = selectedTileKey
       ? tiles.find(t => `${t.q},${t.r}` === selectedTileKey && t.is_capital && t.army_unit_count > 0)
       : null;
-    if (selectedCapitalWithTroops) {
+    if (selectedCapitalWithTroops || selectedCivilianId != null) {
       blinkIntervalRef.current = setInterval(() => {
         setBlinkOn(b => !b);
       }, 500);
@@ -2597,7 +2601,7 @@ export default function HexMap({
         blinkIntervalRef.current = null;
       }
     };
-  }, [selectedTileKey, tiles]);
+  }, [selectedTileKey, selectedCivilianId, tiles]);
 
   // Cancel any pending RAF and commit timer on unmount.
   useEffect(() => () => {

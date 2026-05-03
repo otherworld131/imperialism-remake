@@ -89,9 +89,10 @@ export default function CivilianPanel({
                       </span>
                     )}
                   </span>
-                  {isSelected && (
-                    <span style={{ fontSize: 10, color: '#aaa' }}>selected ▶ map</span>
-                  )}
+                  {!civ.working
+                    ? <span style={{ fontSize: 10, color: '#8c8' }}>Click to redeploy</span>
+                    : isSelected && <span style={{ fontSize: 10, color: '#aaa' }}>selected ▶ map</span>
+                  }
                 </div>
                 {civ.working && civ.turns_remaining > 0 && (
                   <div style={{ marginTop: 2 }}>

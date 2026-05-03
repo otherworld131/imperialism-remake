@@ -798,6 +798,9 @@ function App() {
   }, [selectedUnitIds, gameJson, playerNationId]);
   const isMovementMode = selectedUnitIds.length > 0 && validMoveTargets !== null;
 
+  // Ref so handleTileClick can call handleDeployCivilian without a forward-reference in deps
+  const handleDeployCivilianRef = useRef<(civ: CivilianDetail) => void>(() => {});
+
   const handleTileClick = useCallback(async (tile: TileData) => {
     // Queued diplomacy action: fire the action against the clicked nation.
     if (queuedDiplomacyAction && activeScreen === 'diplomacy') {
@@ -868,7 +871,18 @@ function App() {
       }
 
       await runMutation(async () => {
-        const cmd = await deployCivilian(gameJson, deployingCivilian.id, tile.q, tile.r);
+        let currentJson = gameJson;
+        // If the civilian was deployed (idle redeploy), recall from current position first
+        if (deployingCivilian.position !== null) {
+          const recallCmd = await recallCivilian(currentJson, deployingCivilian.id);
+          if (recallCmd.ok && recallCmd.gameJson) {
+            currentJson = recallCmd.gameJson;
+          } else {
+            showError(`Recall failed: ${recallCmd.error ?? 'Unknown error'}`);
+            return;
+          }
+        }
+        const cmd = await deployCivilian(currentJson, deployingCivilian.id, tile.q, tile.r);
         if (cmd.ok && cmd.gameJson && (await applyGameJson(cmd.gameJson))) {
           setIsDeployMode(false);
           setDeployingCivilian(null);
@@ -885,9 +899,19 @@ function App() {
     setSelectedNavyKey(null);
     setSelectedUnitIds([]);
 
-    // Select civilian when clicking a tile that has a player civilian on it
+    // Select civilian when clicking a tile that has a player civilian on it.
+    // Idle civilians (working=false) enter deploy mode immediately.
     if (tile.civilian_on_tile?.is_human && tile.nation_id === playerNationId) {
-      setSelectedCivilianId(tile.civilian_on_tile.id);
+      const cot = tile.civilian_on_tile;
+      if (!cot.working) {
+        const civ: CivilianDetail = {
+          id: cot.id, type: cot.type, working: false, turns_remaining: 0,
+          position: { q: tile.q, r: tile.r },
+        };
+        handleDeployCivilianRef.current(civ);
+        return;
+      }
+      setSelectedCivilianId(cot.id);
     } else {
       setSelectedCivilianId(null);
     }
@@ -1114,11 +1138,15 @@ function App() {
     const validTiles = new Set<string>();
     const checkedTiles = new Set<string>();
     for (const t of tiles) {
+      const ter = t.terrain;
+      // For Prospectors: mark already-searched tiles for red-X overlay, even if occupied
+      if (civ.type === 'Prospector' && t.nation_id === playerNationId && PROSPECTOR_TERRAIN.has(ter) && t.is_prospected) {
+        checkedTiles.add(`${t.q},${t.r}`);
+      }
       if (t.nation_id !== playerNationId || t.terrain === 'Sea' || t.civilian_on_tile) continue;
       // Approximate CivilianType::can_improve logic from domain
       // F-012: Only use visible resources (not hidden deposits)
       const res = (t.resource && !t.resource_hidden) ? t.resource : null;
-      const ter = t.terrain;
       let canWork = false;
       switch (civ.type) {
         case 'Farmer': canWork = res === 'Grain' || res === 'Fruit' || res === 'Cotton'; break;
@@ -1130,14 +1158,11 @@ function App() {
         case 'Engineer': canWork = true; break; // any land tile
       }
       if (canWork) validTiles.add(`${t.q},${t.r}`);
-      // Track already-prospected deposit-capable tiles for the red-X overlay
-      if (civ.type === 'Prospector' && PROSPECTOR_TERRAIN.has(ter) && t.is_prospected) {
-        checkedTiles.add(`${t.q},${t.r}`);
-      }
     }
     setDeployableTiles(validTiles);
     setProspectedTiles(checkedTiles);
   }, [tiles, playerNationId]);
+  handleDeployCivilianRef.current = handleDeployCivilian;
 
   const handleRecallCivilian = useCallback(async (civilianId: number): Promise<boolean> => {
     let success = false;
@@ -1172,7 +1197,18 @@ function App() {
 
     await runMutation(async () => {
       if (isObserver) return;
-      const deployCmd = await deployCivilian(gameJson, civ.id, q, r);
+      let currentJson = gameJson;
+      // If the engineer was deployed (idle redeploy), recall first
+      if (civ.position !== null) {
+        const recallCmd = await recallCivilian(currentJson, civ.id);
+        if (recallCmd.ok && recallCmd.gameJson) {
+          currentJson = recallCmd.gameJson;
+        } else {
+          showError(`Recall failed: ${recallCmd.error ?? 'Unknown error'}`);
+          return;
+        }
+      }
+      const deployCmd = await deployCivilian(currentJson, civ.id, q, r);
       if (!deployCmd.ok || !deployCmd.gameJson) {
         showError(`Deploy failed: ${deployCmd.error ?? 'Unknown error'}`);
         return;
@@ -1189,35 +1225,42 @@ function App() {
     });
   }, [pendingEngineerDeploy, gameJson, applyGameJson, showError, runMutation, isObserver]);
 
-  // Selecting a civilian from the sidebar: undeployed → enter deploy mode; deployed → jump to map
+  // Selecting a civilian from the sidebar:
+  //   - undeployed → enter deploy mode
+  //   - deployed + idle (working=false) → enter deploy mode immediately; recall happens on tile click
+  //   - deployed + busy → navigate to map and select
   const handleSelectCivilian = useCallback(async (civ: CivilianDetail) => {
     if (isObserver) return;
     if (civ.position) {
-      // Deployed: navigate to map, select tile, and mark civilian as selected
-      setActiveScreen('map');
-      setSelectedCivilianId(civ.id);
-      setSelectedNavyKey(null);
-      setSelectedUnitIds([]);
-      // Update selectedTile to the civilian's tile so sidebar province context is correct
-      const civTile = tiles.find(t => t.q === civ.position!.q && t.r === civ.position!.r);
-      if (civTile) {
-        setSelectedTile(civTile);
-        if (civTile.is_capital && civTile.province_id != null) {
-          setProvinceUnits(await getUnitsInProvince(gameJson, civTile.province_id));
+      if (!civ.working) {
+        // Idle deployed civilian: enter deploy mode right away; tile click will recall+redeploy
+        setActiveScreen('map');
+        handleDeployCivilian(civ);
+      } else {
+        // Busy deployed civilian: navigate to map, select tile
+        setActiveScreen('map');
+        setSelectedCivilianId(civ.id);
+        setSelectedNavyKey(null);
+        setSelectedUnitIds([]);
+        const civTile = tiles.find(t => t.q === civ.position!.q && t.r === civ.position!.r);
+        if (civTile) {
+          setSelectedTile(civTile);
+          if (civTile.is_capital && civTile.province_id != null) {
+            setProvinceUnits(await getUnitsInProvince(gameJson, civTile.province_id));
+          } else {
+            setProvinceUnits(null);
+          }
         } else {
           setProvinceUnits(null);
         }
-      } else {
-        setProvinceUnits(null);
+        const HEX_SIZE = 18;
+        const SQRT3 = Math.sqrt(3);
+        const px = HEX_SIZE * (SQRT3 * civ.position.q + SQRT3 / 2 * civ.position.r);
+        const py = HEX_SIZE * (3 / 2 * civ.position.r);
+        const mapWidth = window.innerWidth - 300;
+        const mapHeight = window.innerHeight;
+        setMapOffset({ x: mapWidth / 2 - px * mapScale, y: mapHeight / 2 - py * mapScale });
       }
-      // Center map on the civilian's hex
-      const HEX_SIZE = 18;
-      const SQRT3 = Math.sqrt(3);
-      const px = HEX_SIZE * (SQRT3 * civ.position.q + SQRT3 / 2 * civ.position.r);
-      const py = HEX_SIZE * (3 / 2 * civ.position.r);
-      const mapWidth = window.innerWidth - 300;
-      const mapHeight = window.innerHeight;
-      setMapOffset({ x: mapWidth / 2 - px * mapScale, y: mapHeight / 2 - py * mapScale });
     } else {
       // Undeployed: enter deploy mode and switch to map
       setActiveScreen('map');
@@ -1623,6 +1666,7 @@ function App() {
               isDeployMode={isDeployMode}
               deployableTiles={deployableTiles}
               prospectedTiles={prospectedTiles}
+              selectedCivilianId={selectedCivilianId}
               disableFogOfWar={disableFogOfWar}
               organicBorders={organicBorders}
               hideHexGrid={hideHexGrid}
