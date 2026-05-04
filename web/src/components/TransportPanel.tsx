@@ -51,13 +51,11 @@ export default function TransportPanel({ transport, onBuildCar, onSetAllocation 
         {deliveries.map(d => {
           const pct = allocationMap[d.resource] ?? 0;
           const demandQty = demandMap[d.resource] ?? 0;
-          // When no allocations are set the domain distributes evenly; mirror that fallback
-          // so we don't show false red for all resources when pct=0 for everything.
           const anyAllocSet = Object.values(allocationMap).some(p => p > 0);
           const cap = remote_delivery_capacity ?? total_capacity;
           const projected = anyAllocSet
             ? Math.min(d.available, Math.floor(pct * cap / 100))
-            : Math.min(d.available, Math.floor(cap / Math.max(1, deliveries.length)));
+            : 0;
           const belowDemand = demandQty > 0 && projected < demandQty;
           return (
             <div key={d.resource} style={{

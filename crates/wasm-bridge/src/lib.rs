@@ -7,7 +7,8 @@ use domain::ai::common::{AiPersonality, personality_for_nation_index};
 use domain::economy::buildings::BuildingType;
 use domain::economy::civilians::{CivilianType, parse_civilian_type};
 use domain::economy::production::{
-    ProductionChain, calculate_factory_production, calculate_mill_production,
+    ProductionChain, calculate_armory_production, calculate_factory_production,
+    calculate_mill_production, calculate_paper_production,
 };
 use domain::economy::trade::{Commodity, base_price, commodity_price};
 use domain::economy::transport::TransportSystem;
@@ -1775,13 +1776,40 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
 
-    let arms_available = nation.material_amount(MaterialType::Arms);
-    let treasury = nation.economy.treasury;
-    let horses_available = nation.resource_amount(domain::types::ResourceType::Horses);
-    let oil_available = nation.resource_amount(domain::types::ResourceType::Oil);
-    let untrained_labor = nation.economy.labor.untrained;
-    let trained_labor = nation.economy.labor.trained;
-    let expert_labor = nation.economy.labor.expert;
+    let mut arms_available = nation.material_amount(MaterialType::Arms);
+    let mut treasury = nation.economy.treasury;
+    let mut horses_available = nation.resource_amount(domain::types::ResourceType::Horses);
+    let mut oil_available = nation.resource_amount(domain::types::ResourceType::Oil);
+    let mut untrained_labor = nation.economy.labor.untrained;
+    let mut trained_labor = nation.economy.labor.trained;
+    let mut expert_labor = nation.economy.labor.expert;
+
+    // Deduct resources already committed by queued army recruits so that
+    // max_count and affordability checks reflect truly available amounts.
+    for unit_str in &nation.economy.pending_army_recruits {
+        if let Ok(ut) = unit_str.parse::<ArmyUnitType>() {
+            let s = ut.stats();
+            treasury = treasury.checked_sub(s.cost).unwrap_or(domain::types::Money::ZERO);
+            arms_available = arms_available.saturating_sub(s.arms_required);
+            if s.requires_horse {
+                horses_available = horses_available.saturating_sub(1);
+            }
+            if s.fuel_required > 0 {
+                oil_available = oil_available.saturating_sub(s.fuel_required);
+            }
+            match s.recruit_tier {
+                domain::economy::labor::WorkerType::Untrained => {
+                    untrained_labor = untrained_labor.saturating_sub(1);
+                }
+                domain::economy::labor::WorkerType::Trained => {
+                    trained_labor = trained_labor.saturating_sub(1);
+                }
+                domain::economy::labor::WorkerType::Expert => {
+                    expert_labor = expert_labor.saturating_sub(1);
+                }
+            }
+        }
+    }
 
     // All buildable army units, ordered by category and era so the recruit
     // panel groups roles together.
@@ -1860,6 +1888,23 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
             };
             let can_afford = reason.is_none();
 
+            let max_by_treasury = if stats.cost.as_dollars() > 0 {
+                (treasury.as_dollars() / stats.cost.as_dollars()) as u32
+            } else { 99 };
+            let max_by_arms = if stats.arms_required > 0 {
+                arms_available / stats.arms_required
+            } else { 99 };
+            let max_by_horses = if stats.requires_horse { horses_available } else { 99 };
+            let max_by_oil = if stats.fuel_required > 0 {
+                oil_available / stats.fuel_required
+            } else { 99 };
+            let max_by_labor = labor_available;
+            let max_count = max_by_treasury
+                .min(max_by_arms)
+                .min(max_by_horses)
+                .min(max_by_oil)
+                .min(max_by_labor);
+
             serde_json::json!({
                 "type": format!("{:?}", t),
                 "category": format!("{:?}", stats.category),
@@ -1868,6 +1913,7 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
                 "firepower": stats.firepower,
                 "movement": stats.movement,
                 "can_afford": can_afford,
+                "max_count": max_count,
                 // Always true now that locked-by-tech variants are filtered out
                 // upstream; kept on the wire so the TS interface doesn't shift.
                 "tech_met": true,
@@ -1979,6 +2025,13 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
             let has_coal = nation.resource_amount(ResourceType::Coal) >= stats.coal_cost;
             let can_afford = has_fabric && has_lumber && has_arms && has_steel && has_coal;
 
+            let max_by_fabric = if stats.fabric_cost > 0 { nation.material_amount(MaterialType::Fabric) / stats.fabric_cost } else { 99 };
+            let max_by_lumber = if stats.lumber_cost > 0 { nation.material_amount(MaterialType::Lumber) / stats.lumber_cost } else { 99 };
+            let max_by_arms = if stats.arms_cost > 0 { nation.material_amount(MaterialType::Arms) / stats.arms_cost } else { 99 };
+            let max_by_steel = if stats.steel_cost > 0 { nation.material_amount(MaterialType::Steel) / stats.steel_cost } else { 99 };
+            let max_by_coal = if stats.coal_cost > 0 { nation.resource_amount(ResourceType::Coal) / stats.coal_cost } else { 99 };
+            let max_count = max_by_fabric.min(max_by_lumber).min(max_by_arms).min(max_by_steel).min(max_by_coal);
+
             let reason = if !tech_met {
                 Some(format!(
                     "Requires {}",
@@ -1995,6 +2048,7 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
                 "category": format!("{:?}", st.category()),
                 "resources_needed": serde_json::Value::Object(resources_needed),
                 "can_afford": can_afford,
+                "max_count": max_count,
                 "tech_met": tech_met,
                 "reason": reason,
                 "firepower": stats.firepower,
@@ -2401,7 +2455,8 @@ pub fn wasm_engineer_build(game_json: &str, civilian_id: u32, build_kind: &str) 
 
 // ── Command: Recruit Army Unit ───────────────────────────────────────
 
-/// Recruit a new army unit at the capital province.
+/// Queue an army unit for end-of-turn recruitment. Resources are NOT deducted
+/// until end-of-turn when the unit is actually created.
 #[wasm_bindgen]
 pub fn wasm_recruit_army_unit(game_json: &str, nation_id: u32, unit_type_str: &str) -> String {
     let mut game = match deserialize_game(game_json) {
@@ -2419,9 +2474,7 @@ pub fn wasm_recruit_army_unit(game_json: &str, nation_id: u32, unit_type_str: &s
         return "{\"error\":\"this unit type cannot be built\"}".to_string();
     }
 
-    let stats = unit_type.stats();
-
-    // Check tech prerequisite
+    // Tech and obsolescence checks only (no resource check at queue time)
     {
         let nation = match game.get_nation(nid) {
             Some(n) => n,
@@ -2432,56 +2485,65 @@ pub fn wasm_recruit_army_unit(game_json: &str, nation_id: u32, unit_type_str: &s
         {
             return format!("{{\"error\":\"requires tech: {}\"}}", tech);
         }
-        // Card #420: refuse to recruit a unit that's been obsoleted by a
-        // researched newer variant in its role chain.
         if unit_type.is_recruit_obsoleted(|tech| nation_has_tech(nation, tech, &game.game_data)) {
             return format!(
                 "{{\"error\":\"{:?} is obsoleted by a researched newer variant; recruit the upgrade instead\"}}",
                 unit_type
             );
         }
-        if nation.economy.treasury < stats.cost {
-            return "{\"error\":\"insufficient funds\"}".to_string();
-        }
-        if nation.material_amount(MaterialType::Arms) < stats.arms_required {
-            return "{\"error\":\"not enough arms\"}".to_string();
-        }
-        if stats.requires_horse && nation.resource_amount(domain::types::ResourceType::Horses) < 1 {
-            return "{\"error\":\"not enough horses\"}".to_string();
-        }
-        if stats.fuel_required > 0
-            && nation.resource_amount(domain::types::ResourceType::Oil) < stats.fuel_required
-        {
-            return "{\"error\":\"not enough fuel (oil)\"}".to_string();
-        }
-        let labor_available = match stats.recruit_tier {
-            domain::economy::labor::WorkerType::Untrained => nation.economy.labor.untrained,
-            domain::economy::labor::WorkerType::Trained => nation.economy.labor.trained,
-            domain::economy::labor::WorkerType::Expert => nation.economy.labor.expert,
-        };
-        if labor_available < 1 {
-            return format!(
-                "{{\"error\":\"not enough {:?} workers\"}}",
-                stats.recruit_tier
-            );
-        }
     }
 
-    // Deduct costs and create unit
-    let capital = {
-        let nation = match game.get_nation_mut(nid) {
+    if let Some(nation) = game.get_nation_mut(nid) {
+        nation.economy.pending_army_recruits.push(unit_type_str.to_string());
+    }
+
+    serialize_game(&game)
+}
+
+/// Set the number of queued recruits of a given unit type (replaces all existing
+/// queued recruits of that type with `count` copies). Resources deducted at end-of-turn.
+#[wasm_bindgen]
+pub fn wasm_set_pending_army_recruits(
+    game_json: &str,
+    nation_id: u32,
+    unit_type_str: &str,
+    count: u32,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let unit_type = match parse_army_unit_type(unit_type_str) {
+        Some(t) => t,
+        None => return format!("{{\"error\":\"unknown unit type: {}\"}}", unit_type_str),
+    };
+    if !unit_type.can_build() {
+        return "{\"error\":\"this unit type cannot be built\"}".to_string();
+    }
+    {
+        let nation = match game.get_nation(nid) {
             Some(n) => n,
             None => return "{\"error\":\"nation not found\"}".to_string(),
         };
-        nation.deduct_recruit_resources(unit_type);
-        nation.capital_province_id
-    };
-    let uid = game.alloc_unit_id();
-    let new_unit = ArmyUnit::new(uid, unit_type, nid, capital);
-    if let Some(nation) = game.get_nation_mut(nid) {
-        nation.military.army.push(new_unit);
+        if let Some(tech) = unit_type.required_tech()
+            && !nation_has_tech(nation, tech, &game.game_data)
+        {
+            return format!("{{\"error\":\"requires tech: {}\"}}", tech);
+        }
+        if unit_type.is_recruit_obsoleted(|tech| nation_has_tech(nation, tech, &game.game_data)) {
+            return format!(
+                "{{\"error\":\"{:?} is obsoleted; recruit the upgrade instead\"}}",
+                unit_type
+            );
+        }
     }
-
+    if let Some(nation) = game.get_nation_mut(nid) {
+        nation.economy.pending_army_recruits.retain(|s| s != unit_type_str);
+        for _ in 0..count {
+            nation.economy.pending_army_recruits.push(unit_type_str.to_string());
+        }
+    }
     serialize_game(&game)
 }
 
@@ -2662,7 +2724,9 @@ pub fn wasm_set_pending_training(
 
 // ── Command: Build Ship ──────────────────────────────────────────────
 
-/// Build a new ship.
+/// Queue a ship for end-of-turn construction. Resources are NOT deducted until end-of-turn.
+/// Calling this with the same ship type again replaces the existing order (idempotent for
+/// the slider pattern). Call wasm_cancel_ship_build to remove the order.
 #[wasm_bindgen]
 pub fn wasm_build_ship(game_json: &str, nation_id: u32, ship_type_str: &str) -> String {
     let mut game = match deserialize_game(game_json) {
@@ -2678,7 +2742,8 @@ pub fn wasm_build_ship(game_json: &str, nation_id: u32, ship_type_str: &str) -> 
 
     let stats = game.game_data.ship_stats(ship_type).clone();
 
-    // Check tech prerequisite
+    // Check tech prerequisite and affordability (resources must be available at queue time
+    // so the player gets immediate feedback, but deduction happens at end-of-turn).
     {
         let nation = match game.get_nation(nid) {
             Some(n) => n,
@@ -2689,7 +2754,6 @@ pub fn wasm_build_ship(game_json: &str, nation_id: u32, ship_type_str: &str) -> 
         {
             return format!("{{\"error\":\"requires tech: {}\"}}", tech);
         }
-        // Check all resources
         if nation.material_amount(MaterialType::Fabric) < stats.fabric_cost {
             return "{\"error\":\"not enough fabric\"}".to_string();
         }
@@ -2707,27 +2771,94 @@ pub fn wasm_build_ship(game_json: &str, nation_id: u32, ship_type_str: &str) -> 
         }
     }
 
-    // Deduct resources and create ship
+    // Queue ship for end-of-turn delivery; resources deducted then.
     {
         let nation = match game.get_nation_mut(nid) {
             Some(n) => n,
             None => return "{\"error\":\"nation not found\"}".to_string(),
         };
-        nation.consume_material(MaterialType::Fabric, stats.fabric_cost);
-        nation.consume_material(MaterialType::Lumber, stats.lumber_cost);
-        nation.consume_material(MaterialType::Arms, stats.arms_cost);
-        nation.consume_material(MaterialType::Steel, stats.steel_cost);
-        nation.remove_resource(ResourceType::Coal, stats.coal_cost);
-    }
-    let sid = game.alloc_unit_id();
-    let new_ship = Ship::with_data(sid, ship_type, nid, &game.game_data);
-    if let Some(nation) = game.get_nation_mut(nid) {
-        match ship_type.category() {
-            ShipCategory::Merchant => nation.military.merchant_fleet.push(new_ship),
-            ShipCategory::Warship => nation.military.warships.push(new_ship),
-        }
+        nation.economy.pending_ships.push(ship_type_str.to_string());
     }
 
+    serialize_game(&game)
+}
+
+/// Cancel a queued ship order (remove the first matching entry from pending_ships).
+#[wasm_bindgen]
+pub fn wasm_cancel_ship_build(game_json: &str, nation_id: u32, ship_type_str: &str) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let nation = match game.get_nation_mut(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
+    if let Some(pos) = nation.economy.pending_ships.iter().position(|s| s == ship_type_str) {
+        nation.economy.pending_ships.remove(pos);
+    }
+    serialize_game(&game)
+}
+
+/// Set the number of queued ships of a given type (replaces all existing queued
+/// ships of that type with `count` copies). Resources are deducted at end-of-turn.
+#[wasm_bindgen]
+pub fn wasm_set_pending_ships(
+    game_json: &str,
+    nation_id: u32,
+    ship_type_str: &str,
+    count: u32,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let ship_type = match parse_ship_type(ship_type_str) {
+        Some(t) => t,
+        None => return format!("{{\"error\":\"unknown ship type: {}\"}}", ship_type_str),
+    };
+    {
+        let nation = match game.get_nation(nid) {
+            Some(n) => n,
+            None => return "{\"error\":\"nation not found\"}".to_string(),
+        };
+        let stats = game.game_data.ship_stats(ship_type);
+        if let Some(ref tech) = stats.prerequisite_tech.clone()
+            && !nation_has_tech(nation, &tech, &game.game_data)
+        {
+            return format!("{{\"error\":\"requires tech: {}\"}}", tech);
+        }
+    }
+    {
+        let nation = match game.get_nation_mut(nid) {
+            Some(n) => n,
+            None => return "{\"error\":\"nation not found\"}".to_string(),
+        };
+        nation.economy.pending_ships.retain(|s| s != ship_type_str);
+        for _ in 0..count {
+            nation.economy.pending_ships.push(ship_type_str.to_string());
+        }
+    }
+    serialize_game(&game)
+}
+
+/// Toggle automatic minor-nation goods purchases for the player.
+#[wasm_bindgen]
+pub fn wasm_set_auto_trade_with_minors(
+    game_json: &str,
+    nation_id: u32,
+    enabled: bool,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    if let Some(nation) = game.get_nation_mut(nid) {
+        nation.economy.auto_trade_with_minors = enabled;
+    }
     serialize_game(&game)
 }
 
@@ -2858,6 +2989,7 @@ fn parse_building_type(name: &str) -> Option<BuildingType> {
         "FurnitureFactory" => Some(BuildingType::FurnitureFactory),
         "HardwareFactory" => Some(BuildingType::HardwareFactory),
         "ClothingFactory" => Some(BuildingType::ClothingFactory),
+        "PaperFactory" => Some(BuildingType::PaperFactory),
         "OilRefinery" => Some(BuildingType::OilRefinery),
         "PowerPlant" => Some(BuildingType::PowerPlant),
         _ => None,
@@ -2902,40 +3034,40 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         && available_steel >= steel_cost
         && available_labor >= labor_cost;
 
-    // Build available resources from warehouse for delivery calculation
-    let all_resources = [
-        ResourceType::Timber,
-        ResourceType::Coal,
-        ResourceType::Iron,
-        ResourceType::Cotton,
-        ResourceType::Wool,
-        ResourceType::Grain,
-        ResourceType::Fruit,
-        ResourceType::Livestock,
-        ResourceType::Horses,
-        ResourceType::Oil,
-        ResourceType::Gold,
-        ResourceType::Gems,
-        ResourceType::Fish,
-    ];
+    let (local_items, remote_items) = domain::economy::current_collectable_resources(&game, nid);
+    let mut available_map: std::collections::BTreeMap<ResourceType, u32> =
+        std::collections::BTreeMap::new();
+    for (resource, qty) in &local_items {
+        *available_map.entry(*resource).or_insert(0) += *qty;
+    }
+    for (resource, qty) in &remote_items {
+        *available_map.entry(*resource).or_insert(0) += *qty;
+    }
+    let available: Vec<(ResourceType, u32)> = available_map.into_iter().collect();
 
-    let available: Vec<(ResourceType, u32)> = all_resources
-        .iter()
-        .map(|&r| (r, nation.resource_amount(r)))
-        .filter(|(_, qty)| *qty > 0)
-        .collect();
-
-    // F-004 review fix: project deliveries against the full remote-delivery
-    // budget (rail freight + merchant-marine cargo) so the player-facing
-    // numbers match domain transport semantics. Telemetry of the rail-only
-    // result is kept under `rail_deliveries` for diagnostics.
+    // Project deliveries against the same local/remote split used by turn
+    // processing so the UI reflects what will actually be collected this turn.
     let merchant_cargo = nation.total_cargo_capacity(&game.game_data);
     let combined_transport = domain::economy::TransportSystem {
         freight_cars: transport.freight_cars + merchant_cargo,
         allocations: transport.allocations.clone(),
     };
-    let deliveries = combined_transport.calculate_deliveries(&available);
-    let rail_only_deliveries = transport.calculate_deliveries(&available);
+    let has_positive_allocations = transport.allocations.iter().any(|(_, pct)| *pct > 0);
+    let remote_deliveries = if has_positive_allocations {
+        combined_transport.calculate_deliveries(&remote_items)
+    } else {
+        Vec::new()
+    };
+    let rail_only_deliveries = if has_positive_allocations {
+        transport.calculate_deliveries(&remote_items)
+    } else {
+        Vec::new()
+    };
+    let mut delivered_map: std::collections::BTreeMap<ResourceType, u32> =
+        local_items.iter().copied().collect();
+    for (resource, qty) in &remote_deliveries {
+        *delivered_map.entry(*resource).or_insert(0) += *qty;
+    }
 
     let allocations_json: Vec<serde_json::Value> = transport
         .allocations
@@ -2951,11 +3083,7 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
     let deliveries_json: Vec<serde_json::Value> = available
         .iter()
         .map(|(r, avail)| {
-            let delivered = deliveries
-                .iter()
-                .find(|(dr, _)| *dr == *r)
-                .map(|(_, qty)| *qty)
-                .unwrap_or(0);
+            let delivered = delivered_map.get(r).copied().unwrap_or(0);
             serde_json::json!({
                 "resource": format!("{:?}", r),
                 "available": avail,
@@ -3032,36 +3160,17 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
     .to_string()
 }
 
-/// Build one freight car. Deducts 1 lumber + 1 steel from warehouse.
-/// Labor is checked but not consumed (labor is used during turn resolution).
 #[wasm_bindgen]
-pub fn wasm_build_freight_car(game_json: &str, nation_id: u32) -> String {
+pub fn wasm_set_pending_freight_cars(game_json: &str, nation_id: u32, count: u32) -> String {
     let mut game = match deserialize_game(game_json) {
         Ok(g) => g,
         Err(e) => return e,
     };
     let nid = NationId(nation_id);
-    let (labor_cost, lumber_cost, steel_cost) = TransportSystem::build_freight_car_cost();
-
-    let nation = match game.get_nation_mut(nid) {
-        Some(n) => n,
-        None => return "{\"error\":\"nation not found\"}".to_string(),
+    let Some(nation) = game.get_nation_mut(nid) else {
+        return "{\"error\":\"nation not found\"}".to_string();
     };
-
-    if nation.economy.labor.total_labor_units() < labor_cost {
-        return "{\"error\":\"not enough labor\"}".to_string();
-    }
-    if nation.material_amount(MaterialType::Lumber) < lumber_cost {
-        return "{\"error\":\"not enough lumber\"}".to_string();
-    }
-    if nation.material_amount(MaterialType::Steel) < steel_cost {
-        return "{\"error\":\"not enough steel\"}".to_string();
-    }
-
-    nation.consume_material(MaterialType::Lumber, lumber_cost);
-    nation.consume_material(MaterialType::Steel, steel_cost);
-    nation.military.transport.build_freight_cars(1);
-
+    nation.economy.pending_freight_cars = count;
     serialize_game(&game)
 }
 
@@ -3199,6 +3308,10 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
         .find(|b| b.building_type == BuildingType::HardwareFactory).map(|b| b.capacity).unwrap_or(0);
     let clothing_cap = nation.economy.buildings.iter()
         .find(|b| b.building_type == BuildingType::ClothingFactory).map(|b| b.capacity).unwrap_or(0);
+    let armory_cap = nation.economy.buildings.iter()
+        .find(|b| b.building_type == BuildingType::Armory).map(|b| b.capacity).unwrap_or(0);
+    let paper_cap = nation.economy.buildings.iter()
+        .find(|b| b.building_type == BuildingType::PaperFactory).map(|b| b.capacity).unwrap_or(0);
 
     let labor_units = labor.total_labor_units();
     let targets = &nation.economy.chain_targets;
@@ -3206,8 +3319,11 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
     // Compute labor budgets using the same Hamilton allocator as process_turn.
     let labor_budgets = domain::turn::economy_phase::allocate_labor(
         labor_units, targets,
-        lumber_mill_cap, steel_mill_cap, textile_mill_cap,
-        furniture_cap, hardware_cap, clothing_cap,
+        domain::turn::economy_phase::BuildingCapacities {
+            timber: lumber_mill_cap, metal: steel_mill_cap, textile: textile_mill_cap,
+            furniture: furniture_cap, hardware: hardware_cap, clothing: clothing_cap,
+            armory: armory_cap, paper: paper_cap,
+        },
     );
 
     // Resources committed to each mill (capped by output targets).
@@ -3256,6 +3372,33 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
     let hardware_prod  = calculate_factory_production(ProductionChain::Metal,  &fed_mats, hardware_cap,  labor_budgets.steel_factory);
     let clothing_prod  = calculate_factory_production(ProductionChain::Textile,&fed_mats, clothing_cap,  labor_budgets.garment_factory);
 
+    let steel_consumed_by_hardware = hardware_prod.materials_consumed.iter()
+        .find(|(m, _)| *m == MaterialType::Steel).map(|(_, q)| *q).unwrap_or(0);
+    let steel_for_armory = mat_steel.saturating_sub(steel_consumed_by_hardware).min(targets.armory);
+    let armory_cfg = &game.game_data.game_config;
+    let armory_prod = calculate_armory_production(
+        steel_for_armory, armory_cap, labor_budgets.armory,
+        armory_cfg.armory_steel_per_arm, armory_cfg.armory_labor_per_arm,
+    );
+    // armory_max uses total available steel (ignoring hardware's share) so the
+    // slider cap reflects what the armory *could* produce at full allocation,
+    // even when hardware is also configured. This lets the player see the
+    // trade-off and set a non-zero armory target.
+    let armory_max = calculate_armory_production(
+        mat_steel,
+        armory_cap, labor_units,
+        armory_cfg.armory_steel_per_arm, armory_cfg.armory_labor_per_arm,
+    );
+
+    // Paper chain (Lumber → Paper): uses current lumber in warehouse + this turn's mill output.
+    let lumber_for_paper = nation.material_amount(MaterialType::Lumber)
+        + timber_mill.materials_produced.first().map(|x| x.1).unwrap_or(0);
+    let paper_lumber_slice: Vec<(domain::types::MaterialType, u32)> = vec![(MaterialType::Lumber, lumber_for_paper)];
+    let paper_prod = calculate_paper_production(&paper_lumber_slice, paper_cap, labor_budgets.paper_factory);
+    let paper_max = calculate_paper_production(&paper_lumber_slice, paper_cap, labor_units);
+    let paper_committed_lumber = paper_prod.materials_consumed.iter()
+        .find(|(m, _)| *m == MaterialType::Lumber).map(|(_, q)| *q).unwrap_or(0);
+
     // Max materials for factory max: warehouse + max mill output at 100% feed.
     let max_mat_lumber = nation.material_amount(MaterialType::Lumber)
         + timber_res_max.materials_produced.first().map(|x| x.1).unwrap_or(0);
@@ -3278,9 +3421,49 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
 
     let freight_car_cost = game.game_data.game_config.freight_car_cost;
 
+    let committed_expert_civilian = nation.economy.pending_civilian_hires.values().sum::<u32>();
+    let committed_untrained_training = nation.economy.pending_train_to_trained;
+    let committed_trained_training = nation.economy.pending_train_to_expert;
+
+    // Committed resources from pending army recruits
+    let mut army_committed_arms = 0u32;
+    let mut army_committed_horses = 0u32;
+    let mut army_committed_untrained = 0u32;
+    let mut army_committed_trained = 0u32;
+    let mut army_committed_expert = 0u32;
+    for unit_str in &nation.economy.pending_army_recruits {
+        if let Ok(ut) = unit_str.parse::<ArmyUnitType>() {
+            let s = ut.stats();
+            army_committed_arms += s.arms_required;
+            if s.requires_horse { army_committed_horses += 1; }
+            match s.recruit_tier {
+                domain::economy::labor::WorkerType::Untrained => army_committed_untrained += 1,
+                domain::economy::labor::WorkerType::Trained   => army_committed_trained += 1,
+                domain::economy::labor::WorkerType::Expert    => army_committed_expert += 1,
+            }
+        }
+    }
+
+    let committed_expert = committed_expert_civilian + army_committed_expert;
+    let committed_untrained = committed_untrained_training + army_committed_untrained;
+    let committed_trained = committed_trained_training + army_committed_trained;
+    let cfg = &game.game_data.game_config;
+    let committed_labor_units = committed_untrained * cfg.untrained_labor
+        + committed_trained * cfg.trained_labor
+        + committed_expert * cfg.expert_labor;
+
+    let (fc_labor, fc_lumber, fc_steel) = domain::economy::transport::TransportSystem::build_freight_car_cost();
+    let max_fc = if fc_lumber > 0 && fc_steel > 0 && fc_labor > 0 {
+        (nation.material_amount(MaterialType::Lumber) / fc_lumber)
+        .min(nation.material_amount(MaterialType::Steel) / fc_steel)
+        .min(labor_units / fc_labor)
+    } else { 0 };
+
     serde_json::json!({
         "buildings": buildings_json,
         "freight_car_cost": freight_car_cost,
+        "pending_freight_cars": nation.economy.pending_freight_cars,
+        "max_freight_cars": max_fc,
         "warehouse": {
             "resources": resources_json,
             "materials": materials_json,
@@ -3292,6 +3475,10 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
             "expert": labor.expert,
             "total_workers": labor.total_workers(),
             "total_labor_units": labor.total_labor_units(),
+            "committed_expert": committed_expert,
+            "committed_untrained": committed_untrained,
+            "committed_trained": committed_trained,
+            "committed_labor_units": committed_labor_units,
         },
         "chain_targets": {
             "timber_mill": targets.timber_mill,
@@ -3300,6 +3487,8 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
             "lumber_factory": targets.lumber_factory,
             "steel_factory": targets.steel_factory,
             "garment_factory": targets.garment_factory,
+            "armory": targets.armory,
+            "paper_factory": targets.paper_factory,
         },
         "production_forecast": {
             "timber_chain": {
@@ -3314,7 +3503,7 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
                 "factory_output": furniture_prod.goods_produced.first().map(|x| x.1).unwrap_or(0),
                 "factory_labor": furniture_prod.labor_used,
                 "factory_max_output": furniture_res_max.goods_produced.first().map(|x| x.1).unwrap_or(0).min(furniture_labor_max.goods_produced.first().map(|x| x.1).unwrap_or(0)),
-                "factory_committed_lumber": fed_mats.iter().find(|(m,_)| *m == MaterialType::Lumber).map(|x| x.1).unwrap_or(0),
+                "factory_committed_lumber": furniture_prod.materials_consumed.iter().find(|(m,_)| *m == MaterialType::Lumber).map(|(_,q)| *q).unwrap_or(0),
             },
             "metal_chain": {
                 "mill_target": targets.metal_mill,
@@ -3329,7 +3518,7 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
                 "factory_output": hardware_prod.goods_produced.first().map(|x| x.1).unwrap_or(0),
                 "factory_labor": hardware_prod.labor_used,
                 "factory_max_output": hardware_res_max.goods_produced.first().map(|x| x.1).unwrap_or(0).min(hardware_labor_max.goods_produced.first().map(|x| x.1).unwrap_or(0)),
-                "factory_committed_steel": fed_mats.iter().find(|(m,_)| *m == MaterialType::Steel).map(|x| x.1).unwrap_or(0),
+                "factory_committed_steel": hardware_prod.materials_consumed.iter().find(|(m,_)| *m == MaterialType::Steel).map(|(_,q)| *q).unwrap_or(0),
             },
             "textile_chain": {
                 "mill_target": targets.textile_mill,
@@ -3346,7 +3535,28 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
                 "factory_max_output": clothing_res_max.goods_produced.first().map(|x| x.1).unwrap_or(0).min(clothing_labor_max.goods_produced.first().map(|x| x.1).unwrap_or(0)),
                 "factory_committed_fabric": fed_mats.iter().find(|(m,_)| *m == MaterialType::Fabric).map(|x| x.1).unwrap_or(0),
             },
+            "arms_chain": {
+                "armory_cap": armory_cap,
+                "armory_target": targets.armory,
+                "armory_output": armory_prod.materials_produced.first().map(|x| x.1).unwrap_or(0),
+                "armory_labor": armory_prod.labor_used,
+                "armory_max_output": armory_max.materials_produced.first().map(|x| x.1).unwrap_or(0),
+                "armory_committed_steel": steel_for_armory,
+            },
+            "paper_chain": {
+                "factory_cap": paper_cap,
+                "factory_target": targets.paper_factory,
+                "factory_output": paper_prod.materials_produced.first().map(|x| x.1).unwrap_or(0),
+                "factory_labor": paper_prod.labor_used,
+                "factory_max_output": paper_max.materials_produced.first().map(|x| x.1).unwrap_or(0),
+                "factory_committed_lumber": paper_committed_lumber,
+            },
         },
+        "pending_ships": nation.economy.pending_ships,
+        "pending_army_recruits": nation.economy.pending_army_recruits,
+        "army_committed_arms": army_committed_arms,
+        "army_committed_horses": army_committed_horses,
+        "auto_trade_with_minors": nation.economy.auto_trade_with_minors,
         "can_expand": can_expand,
         "pending_civilian_hires": nation.economy.pending_civilian_hires
             .iter()
@@ -3388,10 +3598,12 @@ pub fn wasm_set_chain_target(
     match (chain, step) {
         ("timber",  "mill")    => nation.economy.chain_targets.timber_mill    = target,
         ("timber",  "factory") => nation.economy.chain_targets.lumber_factory = target,
+        ("timber",  "paper")   => nation.economy.chain_targets.paper_factory  = target,
         ("metal",   "mill")    => nation.economy.chain_targets.metal_mill     = target,
         ("metal",   "factory") => nation.economy.chain_targets.steel_factory  = target,
         ("textile", "mill")    => nation.economy.chain_targets.textile_mill   = target,
         ("textile", "factory") => nation.economy.chain_targets.garment_factory= target,
+        ("arms",    "armory")  => nation.economy.chain_targets.armory          = target,
         _ => return "{\"error\":\"unknown chain/step\"}".to_string(),
     }
     serialize_game(&game)
@@ -3801,6 +4013,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         "sellable_resources": sellable_resources,
         "sellable_materials": sellable_materials,
         "sellable_goods": sellable_goods,
+        "auto_trade_with_minors": nation.economy.auto_trade_with_minors,
     })
     .to_string()
 }
@@ -7205,8 +7418,9 @@ mod tests {
 
         let base_json = serialize_game(&base_game);
 
-        // Baseline: default target (unlimited)
-        let default_turn_json = wasm_process_turn(&base_json);
+        // Baseline: set target to unlimited so lumber is produced
+        let unlimited_json = wasm_set_chain_target(&base_json, nation_id.0, "timber", "mill", u32::MAX);
+        let default_turn_json = wasm_process_turn(&unlimited_json);
         let default_val: serde_json::Value = serde_json::from_str(&default_turn_json).unwrap();
         let lumber_default = default_val["game"]["world"]["nations"][0]["economy"]["materials"]
             .as_object()

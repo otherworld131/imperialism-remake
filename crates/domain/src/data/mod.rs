@@ -59,6 +59,8 @@ pub struct GameConfig {
     pub train_to_trained_labor_cost: u32,
     pub train_to_expert_paper_cost: u32,
     pub train_to_expert_labor_cost: u32,
+    pub armory_steel_per_arm: u32,
+    pub armory_labor_per_arm: u32,
     // Production ratios
     pub resources_per_material: u32,
     pub materials_per_good: u32,
@@ -324,6 +326,8 @@ impl Default for GameConfig {
             train_to_trained_labor_cost: 4,
             train_to_expert_paper_cost: 2,
             train_to_expert_labor_cost: 8,
+            armory_steel_per_arm: 1,
+            armory_labor_per_arm: 2,
             resources_per_material: 2,
             materials_per_good: 2,
             coal_iron_ratio: 1,

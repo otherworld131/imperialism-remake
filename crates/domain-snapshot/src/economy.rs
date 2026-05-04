@@ -84,6 +84,7 @@ pub enum BuildingType {
     FurnitureFactory,
     HardwareFactory,
     ClothingFactory,
+    PaperFactory,
     OilRefinery,
     PowerPlant,
     AdvancedTextileMill,
@@ -534,6 +535,7 @@ impl From<d::buildings::BuildingType> for BuildingType {
             D::FurnitureFactory => Self::FurnitureFactory,
             D::HardwareFactory => Self::HardwareFactory,
             D::ClothingFactory => Self::ClothingFactory,
+            D::PaperFactory => Self::PaperFactory,
             D::OilRefinery => Self::OilRefinery,
             D::PowerPlant => Self::PowerPlant,
             D::AdvancedTextileMill => Self::AdvancedTextileMill,
@@ -559,6 +561,7 @@ impl From<BuildingType> for d::buildings::BuildingType {
             BuildingType::FurnitureFactory => D::FurnitureFactory,
             BuildingType::HardwareFactory => D::HardwareFactory,
             BuildingType::ClothingFactory => D::ClothingFactory,
+            BuildingType::PaperFactory => D::PaperFactory,
             BuildingType::OilRefinery => D::OilRefinery,
             BuildingType::PowerPlant => D::PowerPlant,
             BuildingType::AdvancedTextileMill => D::AdvancedTextileMill,
@@ -1205,37 +1208,28 @@ impl From<BlockReason> for d::observability::BlockReason {
 
 // ── Nation-level fields (used from nation.rs) ─────────────────────
 
+fn default_true() -> bool { true }
+
 /// Snapshot of player-controlled production chain output targets.
 /// Each field is a target output quantity (u32::MAX = unlimited).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ChainOutputTargets {
-    #[serde(default = "default_unlimited")]
+    #[serde(default)]
     pub timber_mill: u32,
-    #[serde(default = "default_unlimited")]
+    #[serde(default)]
     pub metal_mill: u32,
-    #[serde(default = "default_unlimited")]
+    #[serde(default)]
     pub textile_mill: u32,
-    #[serde(default = "default_unlimited")]
+    #[serde(default)]
     pub lumber_factory: u32,
-    #[serde(default = "default_unlimited")]
+    #[serde(default)]
     pub steel_factory: u32,
-    #[serde(default = "default_unlimited")]
+    #[serde(default)]
     pub garment_factory: u32,
-}
-
-fn default_unlimited() -> u32 { u32::MAX }
-
-impl Default for ChainOutputTargets {
-    fn default() -> Self {
-        Self {
-            timber_mill: u32::MAX,
-            metal_mill: u32::MAX,
-            textile_mill: u32::MAX,
-            lumber_factory: u32::MAX,
-            steel_factory: u32::MAX,
-            garment_factory: u32::MAX,
-        }
-    }
+    #[serde(default)]
+    pub armory: u32,
+    #[serde(default)]
+    pub paper_factory: u32,
 }
 
 impl From<&domain::nation::ChainOutputTargets> for ChainOutputTargets {
@@ -1247,6 +1241,8 @@ impl From<&domain::nation::ChainOutputTargets> for ChainOutputTargets {
             lumber_factory: v.lumber_factory,
             steel_factory: v.steel_factory,
             garment_factory: v.garment_factory,
+            armory: v.armory,
+            paper_factory: v.paper_factory,
         }
     }
 }
@@ -1260,6 +1256,8 @@ impl From<ChainOutputTargets> for domain::nation::ChainOutputTargets {
             lumber_factory: v.lumber_factory,
             steel_factory: v.steel_factory,
             garment_factory: v.garment_factory,
+            armory: v.armory,
+            paper_factory: v.paper_factory,
         }
     }
 }
@@ -1283,6 +1281,14 @@ pub struct NationEconomy {
     pub pending_train_to_trained: u32,
     #[serde(default)]
     pub pending_train_to_expert: u32,
+    #[serde(default)]
+    pub pending_freight_cars: u32,
+    #[serde(default)]
+    pub pending_ships: Vec<String>,
+    #[serde(default)]
+    pub pending_army_recruits: Vec<String>,
+    #[serde(default = "default_true")]
+    pub auto_trade_with_minors: bool,
     #[serde(default)]
     pub reserved_treasury: Money,
     #[serde(default)]
@@ -1317,6 +1323,10 @@ impl From<&domain::nation::NationEconomy> for NationEconomy {
                 .collect(),
             pending_train_to_trained: v.pending_train_to_trained,
             pending_train_to_expert: v.pending_train_to_expert,
+            pending_freight_cars: v.pending_freight_cars,
+            pending_ships: v.pending_ships.clone(),
+            pending_army_recruits: v.pending_army_recruits.clone(),
+            auto_trade_with_minors: v.auto_trade_with_minors,
             reserved_treasury: v.snapshot_reserved_treasury().into(),
             reserved_warehouse: v
                 .snapshot_reserved_warehouse()
@@ -1373,6 +1383,10 @@ impl From<NationEconomy> for domain::nation::NationEconomy {
             .collect();
         ne.pending_train_to_trained = v.pending_train_to_trained;
         ne.pending_train_to_expert = v.pending_train_to_expert;
+        ne.pending_freight_cars = v.pending_freight_cars;
+        ne.pending_ships = v.pending_ships;
+        ne.pending_army_recruits = v.pending_army_recruits;
+        ne.auto_trade_with_minors = v.auto_trade_with_minors;
         ne.restore_reservation_state(domain::nation::ReservationStateSnapshot {
             reserved_treasury: v.reserved_treasury.into(),
             reserved_warehouse: v
@@ -1411,12 +1425,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chain_targets_defaults_to_unlimited_when_missing() {
+    fn chain_targets_defaults_to_zero_when_missing() {
         let json = r#"{"treasury":0,"warehouse":{},"materials":{},"goods":{},"buildings":[],"labor":{"untrained":0,"trained":0,"expert":0}}"#;
         let economy: NationEconomy = serde_json::from_str(json).unwrap();
-        assert_eq!(economy.chain_targets.timber_mill, u32::MAX);
-        assert_eq!(economy.chain_targets.metal_mill, u32::MAX);
-        assert_eq!(economy.chain_targets.garment_factory, u32::MAX);
+        assert_eq!(economy.chain_targets.timber_mill, 0);
+        assert_eq!(economy.chain_targets.metal_mill, 0);
+        assert_eq!(economy.chain_targets.garment_factory, 0);
     }
 
     #[test]
@@ -1424,7 +1438,7 @@ mod tests {
         let json = r#"{"treasury":0,"warehouse":{},"materials":{},"goods":{},"buildings":[],"labor":{"untrained":0,"trained":0,"expert":0},"chain_targets":{"timber_mill":30}}"#;
         let economy: NationEconomy = serde_json::from_str(json).unwrap();
         assert_eq!(economy.chain_targets.timber_mill, 30);
-        assert_eq!(economy.chain_targets.metal_mill, u32::MAX);
-        assert_eq!(economy.chain_targets.garment_factory, u32::MAX);
+        assert_eq!(economy.chain_targets.metal_mill, 0);
+        assert_eq!(economy.chain_targets.garment_factory, 0);
     }
 }

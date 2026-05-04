@@ -6,7 +6,8 @@ use crate::economy::ledger::{
     StockpileFlowTracking,
 };
 use crate::economy::production::{
-    ProductionChain, calculate_factory_production, calculate_mill_production,
+    ProductionChain, calculate_armory_production, calculate_factory_production, calculate_mill_production,
+    calculate_paper_production,
 };
 use crate::economy::trade::TradeTransaction;
 use crate::events::*;
@@ -428,6 +429,15 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
 
     // 5d. Pending worker training: Untrained→Trained and Trained→Expert
     process_pending_worker_training(game);
+
+    // 5e. Pending freight car builds
+    process_pending_freight_cars(game);
+
+    // 5f. Pending ship construction
+    process_pending_ships(game);
+
+    // 5g. Pending army recruitment
+    process_pending_army_recruits(game);
 
     // 6. Maintenance costs (placeholder)
     apply_maintenance(game, &mut report);
@@ -1196,38 +1206,29 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
             continue;
         }
 
-        // Card #84: rail and merchant-marine cargo are tracked as separate
-        // legs of the remote-delivery budget. Sea (merchant-fleet) cargo
-        // contributes to the same combined pool as rail freight; the split
-        // is surfaced for telemetry and UI ("rail X / sea Y").
         let rail_capacity = nation.military.transport.total_capacity();
         let sea_capacity = nation.total_cargo_capacity(&game.game_data);
-        let freight_capacity = rail_capacity + sea_capacity;
+        let transport = nation.military.transport.clone();
+        let require_explicit_allocations = nation_id == game.human_player_nation;
+        let bonus_multiplier = match game.difficulty {
+            Difficulty::Hard if nation_id != game.human_player_nation => 1.1,
+            Difficulty::NighOnImpossible if nation_id != game.human_player_nation => 1.25,
+            _ => 1.0,
+        };
 
-        // Aggregate this turn's resource production for this nation, split by source
-        let capital_province_id = nation.capital_province_id;
-        let capital_tiles: std::collections::HashSet<crate::hex::HexCoord> = game
-            .world
-            .provinces
-            .iter()
-            .find(|p| p.id == capital_province_id)
-            .map(|p| p.tiles.iter().copied().collect())
-            .unwrap_or_default();
-
-        // Count total production this turn
-        let mut total_produced: u32 = 0;
-        let mut produced_this_turn: Vec<(ResourceType, u32)> = Vec::new();
-        for (nid, resource, amount) in &report.resource_production {
-            if *nid == nation_id && *amount > 0 {
-                if let Some(entry) = produced_this_turn.iter_mut().find(|(r, _)| *r == *resource) {
-                    entry.1 += amount;
-                } else {
-                    produced_this_turn.push((*resource, *amount));
-                }
-                total_produced += amount;
+        let (mut local_items, mut remote_items) =
+            crate::economy::current_collectable_resources(game, nation_id);
+        for items in [&mut local_items, &mut remote_items] {
+            for (_, qty) in items.iter_mut() {
+                *qty = (*qty as f64 * bonus_multiplier).round() as u32;
             }
         }
 
+        let total_produced: u32 = local_items
+            .iter()
+            .chain(remote_items.iter())
+            .map(|(_, q)| *q)
+            .sum();
         if total_produced == 0 {
             // No production this turn, but still record capacity so freight_unused
             // is non-zero and military rail-move checks later in the turn work correctly.
@@ -1239,95 +1240,48 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
             continue;
         }
 
-        // Only capital province tiles deliver for free (Card #412 — fidelity option).
-        // Use actual tile yields (via calculate_yield) so development level is respected.
-        let capital_yield: u32 = capital_tiles
-            .iter()
-            .filter_map(|&coord| game.world.hex_map.get_tile(coord))
-            .filter_map(|t: &crate::map::Tile| t.calculate_yield())
-            .map(|ra| ra.quantity)
-            .sum();
-        let local_delivery = capital_yield.min(total_produced);
-        let remote_delivery = total_produced - local_delivery;
+        let has_positive_allocations = transport.allocations.iter().any(|(_, pct)| *pct > 0);
+        let delivered_remote_items = if require_explicit_allocations && !has_positive_allocations {
+            Vec::new()
+        } else {
+            transport.calculate_deliveries(&remote_items)
+        };
 
-        // Remote resources are capped by freight car capacity
-        let overflow = if remote_delivery > freight_capacity {
-            let ov = remote_delivery - freight_capacity;
-            let Some(nation) = game.world.nations.iter_mut().find(|n| n.id == nation_id) else {
-                continue;
-            };
-            let mut remaining_to_remove = ov;
-
-            // Remove overflow from remote resources (approximation: remove proportionally)
-            for (resource, produced) in &produced_this_turn {
-                if remaining_to_remove == 0 {
-                    break;
-                }
-                let current_in_warehouse = nation.resource_amount(*resource);
-                let removable = (*produced)
-                    .min(current_in_warehouse)
-                    .min(remaining_to_remove);
+        let Some(nation) = game.world.nations.iter_mut().find(|n| n.id == nation_id) else {
+            continue;
+        };
+        for (resource, remote_available) in &remote_items {
+            let delivered = delivered_remote_items
+                .iter()
+                .find(|(r, _)| r == resource)
+                .map(|(_, qty)| *qty)
+                .unwrap_or(0);
+            let overflow = remote_available.saturating_sub(delivered);
+            if overflow > 0 {
+                let removable = overflow.min(nation.resource_amount(*resource));
                 if removable > 0 {
                     nation.remove_resource(*resource, removable);
                     report
                         .transport_overflow
                         .push((nation_id, *resource, removable));
-                    remaining_to_remove -= removable;
                 }
             }
-            ov
-        } else {
-            0
-        };
+        }
 
-        // Update logistics state (#165): record what was requested vs delivered.
-        // Only remote resources consume freight; local deliveries are free.
-        // Use Bresenham-style proportional split so sum(requested)=remote_delivery
-        // and sum(delivered)=delivered_remote exactly, preserving freight invariants.
-        {
-            let Some(nation) = game.world.nations.iter_mut().find(|n| n.id == nation_id) else {
-                continue;
-            };
-            if remote_delivery > 0 && total_produced > 0 {
-                let delivered_remote = remote_delivery.saturating_sub(overflow);
-                let requested_items = proportional_split(&produced_this_turn, remote_delivery);
-                let delivered_items = proportional_split(&produced_this_turn, delivered_remote);
-                nation.economy.logistics.update(
-                    rail_capacity,
-                    sea_capacity,
-                    &requested_items,
-                    &delivered_items,
-                );
-            } else {
-                // All production was local — no freight was needed or used.
-                nation
-                    .economy
-                    .logistics
-                    .update(rail_capacity, sea_capacity, &[], &[]);
-            }
+        if remote_items.is_empty() {
+            nation
+                .economy
+                .logistics
+                .update(rail_capacity, sea_capacity, &[], &[]);
+        } else {
+            nation.economy.logistics.update(
+                rail_capacity,
+                sea_capacity,
+                &remote_items,
+                &delivered_remote_items,
+            );
         }
     }
-}
-
-/// Distribute `target` units across resources proportionally to their `produced` quantities.
-///
-/// Uses a Bresenham accumulator so `sum(result) == target` exactly — no truncation loss.
-/// The total of all `produced` values is used as the denominator.
-fn proportional_split(produced: &[(ResourceType, u32)], target: u32) -> Vec<(ResourceType, u32)> {
-    let total: u32 = produced.iter().map(|(_, q)| q).sum();
-    if total == 0 || target == 0 {
-        return produced.iter().map(|&(r, _)| (r, 0)).collect();
-    }
-    let mut acc: u64 = 0;
-    produced
-        .iter()
-        .map(|&(resource, qty)| {
-            acc += qty as u64 * target as u64;
-            let allocated = (acc / total as u64) as u32;
-            acc %= total as u64;
-            (resource, allocated)
-        })
-        .collect()
 }
 
 /// Resolve immigration for all nations.
@@ -1840,11 +1794,114 @@ fn process_pending_worker_training(game: &mut GameState) {
     }
 }
 
+fn process_pending_freight_cars(game: &mut GameState) {
+    let (labor_cost, lumber_cost, steel_cost) = crate::economy::transport::TransportSystem::build_freight_car_cost();
+    let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
+    for nation_id in nation_ids {
+        let count = game.get_nation(nation_id)
+            .map(|n| n.economy.pending_freight_cars)
+            .unwrap_or(0);
+        if count == 0 { continue; }
+        let Some(nation) = game.get_nation_mut(nation_id) else { continue; };
+        nation.economy.pending_freight_cars = 0;
+        let max_by_lumber = nation.material_amount(MaterialType::Lumber) / lumber_cost.max(1);
+        let max_by_steel  = nation.material_amount(MaterialType::Steel)  / steel_cost.max(1);
+        let max_by_labor  = nation.economy.labor.total_labor_units() / labor_cost.max(1);
+        let actual = count.min(max_by_lumber).min(max_by_steel).min(max_by_labor);
+        if actual > 0 {
+            nation.consume_material(MaterialType::Lumber, actual * lumber_cost);
+            nation.consume_material(MaterialType::Steel,  actual * steel_cost);
+            nation.military.transport.build_freight_cars(actual);
+        }
+    }
+}
+
+fn process_pending_ships(game: &mut GameState) {
+    use crate::military::ships::{Ship, ShipCategory};
+    let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
+    for nation_id in nation_ids {
+        let pending: Vec<String> = game
+            .get_nation(nation_id)
+            .map(|n| n.economy.pending_ships.clone())
+            .unwrap_or_default();
+        if pending.is_empty() {
+            continue;
+        }
+        let Some(nation) = game.get_nation_mut(nation_id) else {
+            continue;
+        };
+        nation.economy.pending_ships.clear();
+        for ship_type_str in pending {
+            if let Ok(ship_type) = ship_type_str.parse::<crate::military::ships::ShipType>() {
+                // Deduct resources at end-of-turn when the ship is actually built.
+                let stats = game.game_data.ship_stats(ship_type).clone();
+                if let Some(n) = game.get_nation_mut(nation_id) {
+                    n.consume_material(MaterialType::Fabric, stats.fabric_cost);
+                    n.consume_material(MaterialType::Lumber, stats.lumber_cost);
+                    n.consume_material(MaterialType::Arms, stats.arms_cost);
+                    n.consume_material(MaterialType::Steel, stats.steel_cost);
+                    n.remove_resource(ResourceType::Coal, stats.coal_cost);
+                }
+                let sid = game.alloc_unit_id();
+                let new_ship = Ship::with_data(sid, ship_type, nation_id, &game.game_data);
+                if let Some(n) = game.get_nation_mut(nation_id) {
+                    match ship_type.category() {
+                        ShipCategory::Merchant => n.military.merchant_fleet.push(new_ship),
+                        ShipCategory::Warship => n.military.warships.push(new_ship),
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn process_pending_army_recruits(game: &mut GameState) {
+    let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
+    for nation_id in nation_ids {
+        let pending: Vec<String> = game
+            .get_nation(nation_id)
+            .map(|n| n.economy.pending_army_recruits.clone())
+            .unwrap_or_default();
+        if pending.is_empty() {
+            continue;
+        }
+        if let Some(nation) = game.get_nation_mut(nation_id) {
+            nation.economy.pending_army_recruits.clear();
+        }
+        let capital = match game.get_nation(nation_id).map(|n| n.capital_province_id) {
+            Some(id) => id,
+            None => continue,
+        };
+        for unit_type_str in pending {
+            if let Ok(unit_type) = unit_type_str.parse::<ArmyUnitType>()
+                && unit_type.can_build()
+            {
+                let can = game
+                    .get_nation(nation_id)
+                    .map(|n| n.can_recruit_unit(unit_type))
+                    .unwrap_or(false);
+                if can {
+                    if let Some(nation) = game.get_nation_mut(nation_id) {
+                        nation.deduct_recruit_resources(unit_type);
+                    }
+                    let uid = game.alloc_unit_id();
+                    let new_unit = ArmyUnit::new(uid, unit_type, nation_id, capital);
+                    if let Some(n) = game.get_nation_mut(nation_id) {
+                        n.military.army.push(new_unit);
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
     let cfg = &game.game_data.game_config;
     let untrained_mult = cfg.untrained_labor;
     let trained_mult = cfg.trained_labor;
     let expert_mult = cfg.expert_labor;
+    let armory_steel_per_arm = cfg.armory_steel_per_arm;
+    let armory_labor_per_arm = cfg.armory_labor_per_arm;
 
     let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
 
@@ -1893,10 +1950,19 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
 
         // Honor chain_targets: proportional labor allocation + feed percentages
         let targets = nation.economy.chain_targets.clone();
+        let armory_cap = nation.economy.buildings.iter()
+            .find(|b| b.building_type == BuildingType::Armory)
+            .map(|b| b.effective_capacity()).unwrap_or(0);
+        let paper_cap = nation.economy.buildings.iter()
+            .find(|b| b.building_type == BuildingType::PaperFactory)
+            .map(|b| b.effective_capacity()).unwrap_or(0);
         let labor = super::economy_phase::allocate_labor(
             total_labor, &targets,
-            lumber_mill_cap, steel_mill_cap, textile_mill_cap,
-            furniture_cap, hardware_cap, clothing_cap,
+            super::economy_phase::BuildingCapacities {
+                timber: lumber_mill_cap, metal: steel_mill_cap, textile: textile_mill_cap,
+                furniture: furniture_cap, hardware: hardware_cap, clothing: clothing_cap,
+                armory: armory_cap, paper: paper_cap,
+            },
         );
         let fed_resources = super::economy_phase::apply_feed_to_resources(&resources, &targets);
 
@@ -2044,6 +2110,67 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
                         .stockpile_flows
                         .factory_produced_goods
                         .push((nation_id, *good, *amount));
+                }
+            }
+        }
+
+        // ── Armory: Steel → Arms ──
+        let combined_materials_for_armory: Vec<(MaterialType, u32)> = nation
+            .economy
+            .materials
+            .iter()
+            .map(|(m, q)| (*m, *q))
+            .collect();
+        let fed_materials_for_armory = super::economy_phase::apply_feed_to_materials(&combined_materials_for_armory, &targets);
+        let armory_result = if armory_cap > 0 {
+            let steel_for_armory = fed_materials_for_armory.iter()
+                .find(|(m, _)| *m == MaterialType::Steel)
+                .map(|(_, q)| *q)
+                .unwrap_or(0)
+                .min(targets.armory);
+            Some(calculate_armory_production(
+                steel_for_armory,
+                armory_cap,
+                labor.armory,
+                armory_steel_per_arm,
+                armory_labor_per_arm,
+            ))
+        } else {
+            None
+        };
+        if let Some(result) = &armory_result {
+            for (material, amount) in &result.materials_consumed {
+                if *amount > 0 {
+                    let entry = nation.economy.materials.entry(*material).or_insert(0);
+                    *entry = entry.saturating_sub(*amount);
+                }
+            }
+            for (material, amount) in &result.materials_produced {
+                if *amount > 0 {
+                    *nation.economy.materials.entry(*material).or_insert(0) += *amount;
+                    report.production_output.push((nation_id, format!("{:?}", material), *amount));
+                    if let MaterialType::Arms = material {
+                        nation.military.total_arms_built = nation.military.total_arms_built.saturating_add(*amount);
+                    }
+                }
+            }
+        }
+
+        // ── Paper Factory: Lumber → Paper ──
+        if paper_cap > 0 {
+            let current_lumber = nation.economy.materials.get(&MaterialType::Lumber).copied().unwrap_or(0);
+            let lumber_slice: Vec<(MaterialType, u32)> = vec![(MaterialType::Lumber, current_lumber)];
+            let paper_result = calculate_paper_production(&lumber_slice, paper_cap, labor.paper_factory);
+            for (material, amount) in &paper_result.materials_consumed {
+                if *amount > 0 {
+                    let entry = nation.economy.materials.entry(*material).or_insert(0);
+                    *entry = entry.saturating_sub(*amount);
+                }
+            }
+            for (material, amount) in &paper_result.materials_produced {
+                if *amount > 0 {
+                    *nation.economy.materials.entry(*material).or_insert(0) += *amount;
+                    report.production_output.push((nation_id, format!("{:?}", material), *amount));
                 }
             }
         }
@@ -6440,6 +6567,13 @@ mod tests {
         );
         nation.economy.treasury = Money::dollars(5000);
 
+        // Set chain targets to unlimited so production runs at full capacity.
+        nation.economy.chain_targets = crate::nation::ChainOutputTargets {
+            timber_mill: u32::MAX, metal_mill: u32::MAX, textile_mill: u32::MAX,
+            lumber_factory: u32::MAX, steel_factory: u32::MAX, garment_factory: u32::MAX,
+            armory: 0, paper_factory: 0,
+        };
+
         // Give enough workers for full production (expert=4 labor each)
         nation.economy.labor.expert = 5; // 20 labor — enough for all mills + factories
 
@@ -7216,6 +7350,107 @@ mod tests {
         let nation = game.get_nation(NationId(1)).unwrap();
         assert_eq!(nation.resource_amount(ResourceType::Grain), 1);
         assert_eq!(nation.resource_amount(ResourceType::Timber), 1);
+    }
+
+    #[test]
+    fn human_remote_resources_require_explicit_transport_allocation() {
+        let cap = HexCoord::new(0, 0);
+        let remote_depot = HexCoord::new(2, 0);
+        let remote_timber = HexCoord::new(3, 0);
+
+        let mut hex_map = HexMap::new(10, 10);
+
+        let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        cap_tile.set_resource(ResourceType::Grain);
+        cap_tile.is_country_capital = true;
+        cap_tile.infrastructure.has_depot = true;
+        cap_tile.infrastructure.has_railroad = true;
+        hex_map.set_tile(cap, cap_tile);
+
+        let mut rail_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        rail_tile.infrastructure.has_railroad = true;
+        hex_map.set_tile(HexCoord::new(1, 0), rail_tile);
+
+        let mut depot_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        depot_tile.infrastructure.has_depot = true;
+        depot_tile.infrastructure.has_railroad = true;
+        hex_map.set_tile(remote_depot, depot_tile);
+
+        let mut timber_tile = Tile::with_province(TerrainType::Forest, ProvinceId(2));
+        timber_tile.set_resource(ResourceType::Timber);
+        hex_map.set_tile(remote_timber, timber_tile);
+
+        let province1 = Province::new(
+            ProvinceId(1),
+            "Home".to_string(),
+            NationId(1),
+            cap,
+            vec![cap, HexCoord::new(1, 0)],
+            4,
+        );
+        let province2 = Province::new(
+            ProvinceId(2),
+            "Remote".to_string(),
+            NationId(1),
+            remote_depot,
+            vec![remote_depot, remote_timber],
+            4,
+        );
+
+        let mut nation1 = Nation::new(
+            NationId(1),
+            "Testlandia".to_string(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        nation1.add_province(ProvinceId(2));
+        nation1.military.transport.build_freight_cars(5);
+
+        let mut game = crate::test_game_state! {
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "test".to_string(),
+        hex_map: hex_map,
+        provinces: vec![province1, province2],
+        nations: vec![nation1],
+        human_player_nation: NationId(1),
+        events: Vec::new(),
+        game_data: crate::data::test_game_data(),
+        diplomacy: DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
+
+        let report = process_turn(&mut game);
+        let nation = game.get_nation(NationId(1)).unwrap();
+
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 1);
+        assert_eq!(
+            nation.resource_amount(ResourceType::Timber),
+            0,
+            "remote timber should not be collected without an explicit allocation"
+        );
+        assert!(
+            report
+                .transport_overflow
+                .iter()
+                .any(|(nid, resource, qty)| *nid == NationId(1)
+                    && *resource == ResourceType::Timber
+                    && *qty == 1)
+        );
     }
 
     // ── Immigration ──────────────────────────────────────────
@@ -14099,6 +14334,11 @@ mod tests {
                 .military
                 .transport
                 .build_freight_cars(50);
+            // Human player now requires explicit allocations for remote resources.
+            game.world.nations[0]
+                .military
+                .transport
+                .set_allocation(ResourceType::Iron, 100);
 
             let before = game.world.nations[0].resource_amount(ResourceType::Iron);
             let _ = process_turn(&mut game);

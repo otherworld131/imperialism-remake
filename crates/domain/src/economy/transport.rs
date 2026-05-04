@@ -1,3 +1,5 @@
+use crate::game_state::GameState;
+use crate::map::infrastructure::{collectable_hexes, is_province_connected_multi};
 use crate::military::ships::Ship;
 use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::types::*;
@@ -428,6 +430,139 @@ pub fn compute_demand_forecast(
     }
 
     demand.into_iter().collect()
+}
+
+/// Compute currently collectable raw-resource yields for a nation, split into:
+/// - local/free delivery (country-capital collector radii)
+/// - remote/freight-gated delivery (connected depot radii and connected ports)
+///
+/// Returned quantities are base map yields only; caller-owned modifiers such as
+/// AI difficulty bonuses should be applied after the split so both local and
+/// remote sides stay consistent with turn-production accounting.
+pub fn current_collectable_resources(
+    game: &GameState,
+    nation_id: NationId,
+) -> (Vec<(ResourceType, u32)>, Vec<(ResourceType, u32)>) {
+    let Some(_nation) = game.get_nation(nation_id) else {
+        return (Vec::new(), Vec::new());
+    };
+
+    let owned: Vec<&crate::map::Province> = game
+        .world
+        .provinces
+        .iter()
+        .filter(|p| p.owner == nation_id)
+        .collect();
+    if owned.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    let capital_tiles: Vec<crate::hex::HexCoord> = owned
+        .iter()
+        .flat_map(|p| p.tiles.iter().copied())
+        .filter(|&coord| {
+            game.world
+                .hex_map
+                .get_tile(coord)
+                .is_some_and(|t| t.is_country_capital)
+        })
+        .collect();
+    if capital_tiles.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    let connected: std::collections::HashSet<ProvinceId> = owned
+        .iter()
+        .filter(|p| {
+            is_province_connected_multi(
+                &game.world.hex_map,
+                &capital_tiles,
+                p.id,
+                &game.world.provinces,
+            )
+        })
+        .map(|p| p.id)
+        .collect();
+
+    let collectable = collectable_hexes(&game.world.hex_map, &owned, &connected);
+    let owned_tiles: std::collections::HashSet<crate::hex::HexCoord> = owned
+        .iter()
+        .flat_map(|p| p.tiles.iter().copied())
+        .collect();
+    let mut local_hexes: std::collections::HashSet<crate::hex::HexCoord> =
+        std::collections::HashSet::new();
+    for &capital in &capital_tiles {
+        local_hexes.insert(capital);
+        for neighbor in capital.neighbors() {
+            if owned_tiles.contains(&neighbor) {
+                local_hexes.insert(neighbor);
+            }
+        }
+    }
+
+    let mut local: BTreeMap<ResourceType, u32> = BTreeMap::new();
+    let mut remote: BTreeMap<ResourceType, u32> = BTreeMap::new();
+
+    let mut add_yield = |coord: crate::hex::HexCoord, resource: ResourceType, qty: u32| {
+        if qty == 0 {
+            return;
+        }
+        let bucket = if local_hexes.contains(&coord) {
+            &mut local
+        } else {
+            &mut remote
+        };
+        *bucket.entry(resource).or_insert(0) += qty;
+    };
+
+    for province in &owned {
+        for &coord in &province.tiles {
+            if !collectable.contains(&coord) {
+                continue;
+            }
+            let Some(tile) = game.world.hex_map.get_tile(coord) else {
+                continue;
+            };
+            if let Some(y) = tile.calculate_yield() {
+                add_yield(coord, y.resource, y.quantity);
+            }
+
+            let is_port = tile.infrastructure.has_port;
+            let is_coastal_capital = tile.is_country_capital
+                && coord.neighbors().iter().any(|n| {
+                    game.world
+                        .hex_map
+                        .get_tile(*n)
+                        .is_some_and(|t| !t.terrain().is_land())
+                });
+            if !is_port && !is_coastal_capital {
+                continue;
+            }
+            let fish_qty = coord
+                .neighbors()
+                .iter()
+                .filter(|n| {
+                    let Some(t) = game.world.hex_map.get_tile(**n) else {
+                        return false;
+                    };
+                    if t.terrain().is_land() {
+                        return false;
+                    }
+                    !game
+                        .world
+                        .sea_zones
+                        .iter()
+                        .any(|z| z.is_lake && z.hexes.contains(*n))
+                })
+                .count() as u32;
+            add_yield(coord, ResourceType::Fish, fish_qty.min(3));
+        }
+    }
+
+    (
+        local.into_iter().collect(),
+        remote.into_iter().collect(),
+    )
 }
 
 /// Calculate the transport size of an army unit (= arms required to build it).

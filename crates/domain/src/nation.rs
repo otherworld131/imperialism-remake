@@ -85,17 +85,21 @@ pub struct ChainOutputTargets {
     pub lumber_factory: u32,  // target furniture units
     pub steel_factory: u32,   // target hardware units
     pub garment_factory: u32, // target clothing units
+    pub armory: u32,          // target Arms units (from Armory)
+    pub paper_factory: u32,   // target Paper units (Lumber → Paper)
 }
 
 impl Default for ChainOutputTargets {
     fn default() -> Self {
         Self {
-            timber_mill: u32::MAX,
-            metal_mill: u32::MAX,
-            textile_mill: u32::MAX,
-            lumber_factory: u32::MAX,
-            steel_factory: u32::MAX,
+            timber_mill:     u32::MAX,
+            metal_mill:      u32::MAX,
+            textile_mill:    u32::MAX,
+            lumber_factory:  u32::MAX,
+            steel_factory:   u32::MAX,
             garment_factory: u32::MAX,
+            armory:          u32::MAX,
+            paper_factory:   u32::MAX,
         }
     }
 }
@@ -131,6 +135,19 @@ pub struct NationEconomy {
     /// Workers queued for Trained→Expert advancement at end of turn.
     pub pending_train_to_expert: u32,
 
+    /// Freight cars queued for building at end of turn.
+    pub pending_freight_cars: u32,
+
+    /// Ships queued for construction at end of turn (ship type name strings).
+    pub pending_ships: Vec<String>,
+
+    /// Army units queued for recruitment at end of turn (unit type name strings).
+    pub pending_army_recruits: Vec<String>,
+
+    /// When false, minor nations' automatic purchase bids are skipped for this
+    /// nation. Player toggle; AI nations always leave this true.
+    pub auto_trade_with_minors: bool,
+
     // ── Reservation accounting (Trello #162 / #169) ──────────────────
     /// Reserved treasury amount (sum of active treasury reservations).
     pub(crate) reserved_treasury: Money,
@@ -162,6 +179,10 @@ impl NationEconomy {
             pending_civilian_hires: HashMap::new(),
             pending_train_to_trained: 0,
             pending_train_to_expert: 0,
+            pending_freight_cars: 0,
+            pending_ships: Vec::new(),
+            pending_army_recruits: Vec::new(),
+            auto_trade_with_minors: true,
             reserved_treasury: Money::ZERO,
             reserved_warehouse: BTreeMap::new(),
             reserved_materials: BTreeMap::new(),

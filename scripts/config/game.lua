@@ -16,6 +16,8 @@ game_config = {
 
     -- Building a civilian unit permanently removes one expert worker
     civilian_costs_expert = true,
+    armory_steel_per_arm  = 1,   -- Steel consumed per Arm produced at the Armory
+    armory_labor_per_arm  = 2,   -- Labor units required per Arm produced
 
     -- Worker training costs (paper material + labor per worker trained)
     train_to_trained_paper_cost = 1,  -- paper per Untrained->Trained promotion

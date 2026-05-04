@@ -7,10 +7,10 @@ import {
   getUnitsInProvince, getCivilians, getShips, getValidMoveTargets, getBuildableUnits,
   queueUnitMove, cancelUnitMove, disbandUnit, deployCivilian, recallCivilian, engineerBuild,
   type EngineerBuildKind,
-  recruitArmyUnit, buildShip,
+  setPendingShips, setAutoTradeWithMinors, setPendingArmyRecruit,
   upgradeUnit, upgradeUnits,
   // New screen queries
-  getTransportData, buildFreightCar, setTransportAllocation,
+  getTransportData, setPendingFreightCars, setTransportAllocation,
   getIndustryData, expandBuilding, setChainTarget, setPendingCivilianHire, setPendingTraining,
   getTradeData, setTradeSubsidy, setPlayerSellOrder, setPlayerBuyOrder,
   getDiplomacyScreenData,
@@ -1079,19 +1079,14 @@ function App() {
     });
   }, [isObserver, selectedUnitIds, gameJson, applyGameJson, selectedTile, showError, runMutation]);
 
-  const handleRecruit = useCallback(async (unitType: string) => {
+  const handleSetPendingArmyRecruit = useCallback(async (unitType: string, count: number) => {
     await runMutation(async () => {
       if (isObserver) return;
-      const cmd = await recruitArmyUnit(gameJson, playerNationId, unitType);
-      if (cmd.ok && cmd.gameJson && (await applyGameJson(cmd.gameJson))) {
-        if (selectedTile?.province_id != null) {
-          setProvinceUnits(await getUnitsInProvince(cmd.gameJson, selectedTile.province_id));
-        }
-      } else if (cmd.error) {
-        showError(`Recruit failed: ${cmd.error}`);
-      }
+      const cmd = await setPendingArmyRecruit(gameJson, playerNationId, unitType, count);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Recruit order failed: ${cmd.error}`);
     });
-  }, [gameJson, playerNationId, applyGameJson, selectedTile, showError, runMutation]);
+  }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
   // Card #417: upgrade a single unit to its next-era variant.
   const handleUpgradeUnit = useCallback(async (unitId: number) => {
@@ -1277,23 +1272,32 @@ function App() {
     });
   }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
-  const handleBuildShip = useCallback(async (shipType: string) => {
+  const handleSetPendingShips = useCallback(async (shipType: string, count: number) => {
     await runMutation(async () => {
       if (isObserver) return;
-      const cmd = await buildShip(gameJson, playerNationId, shipType);
+      const cmd = await setPendingShips(gameJson, playerNationId, shipType, count);
       if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-      else if (cmd.error) showError(`Build failed: ${cmd.error}`);
+      else if (cmd.error) showError(`Ship order failed: ${cmd.error}`);
+    });
+  }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
+
+  const handleSetAutoTradeWithMinors = useCallback(async (enabled: boolean) => {
+    await runMutation(async () => {
+      if (isObserver) return;
+      const cmd = await setAutoTradeWithMinors(gameJson, playerNationId, enabled);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Auto-trade toggle failed: ${cmd.error}`);
     });
   }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
   // ── New screen handlers ──────────────────────────────────────────
 
-  const handleBuildFreightCar = useCallback(async () => {
+  const handleSetPendingFreightCars = useCallback(async (count: number) => {
     await runMutation(async () => {
       if (isObserver) return;
-      const cmd = await buildFreightCar(gameJson, playerNationId);
+      const cmd = await setPendingFreightCars(gameJson, playerNationId, count);
       if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
-      else if (cmd.error) showError(`Build failed: ${cmd.error}`);
+      else if (cmd.error) showError(`Freight car failed: ${cmd.error}`);
     });
   }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
@@ -1724,10 +1728,10 @@ function App() {
                 industry={industryData}
                 buildable={buildable}
                 onExpand={handleExpandBuilding}
-                onRecruit={handleRecruit}
-                onBuildShip={handleBuildShip}
+                onSetPendingArmyRecruit={handleSetPendingArmyRecruit}
+                onSetPendingShips={handleSetPendingShips}
                 onSetPendingCivilianHire={handleSetPendingCivilianHire}
-                onBuildFreightCar={handleBuildFreightCar}
+                onSetPendingFreightCars={handleSetPendingFreightCars}
                 onSetChainTarget={handleSetChainTarget}
                 onSetPendingTraining={handleSetPendingTraining}
               />
@@ -1795,6 +1799,7 @@ function App() {
             onSetSubsidy={handleSetSubsidy}
             onSetSellOrder={handleSetSellOrder}
             onSetBuyOrder={handleSetBuyOrder}
+            onSetAutoTradeWithMinors={handleSetAutoTradeWithMinors}
             onClose={() => setActiveScreen('map')}
           />
         )}
@@ -2162,7 +2167,7 @@ function App() {
             transportData ? (
               <TransportPanel
                 transport={transportData}
-                onBuildCar={handleBuildFreightCar}
+                onBuildCar={() => handleSetPendingFreightCars(1)}
                 onSetAllocation={handleSetAllocation}
               />
             ) : (

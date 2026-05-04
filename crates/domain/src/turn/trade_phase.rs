@@ -220,7 +220,12 @@ pub(super) fn resolve_trade_session(
                     .unwrap_or(false),
             };
 
-            if has_stock {
+            let player_allows_auto_trade = game
+                .get_nation(human_id)
+                .map(|n| n.economy.auto_trade_with_minors)
+                .unwrap_or(true);
+
+            if has_stock && player_allows_auto_trade {
                 let revenue = Money::dollars(buy_price.as_dollars() * bid.quantity as i64);
                 let commodity_label = match bid.commodity {
                     trade::ManufacturedCommodity::Material(m) => format!("{m}"),
@@ -233,11 +238,13 @@ pub(super) fn resolve_trade_session(
                             if let Some(s) = seller.economy.materials.get_mut(&m) {
                                 *s = s.saturating_sub(bid.quantity);
                             }
+                            report.stockpile_flows.auto_sold_materials.push((human_id, m, bid.quantity));
                         }
                         trade::ManufacturedCommodity::Goods(g) => {
                             if let Some(s) = seller.economy.goods.get_mut(&g) {
                                 *s = s.saturating_sub(bid.quantity);
                             }
+                            report.stockpile_flows.auto_sold_goods.push((human_id, g, bid.quantity));
                         }
                     }
                     seller.archives.goods_sales_revenue_dollars += revenue.as_dollars();

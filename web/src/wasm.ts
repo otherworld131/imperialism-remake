@@ -902,6 +902,22 @@ export async function buildShip(gameJson: string, nationId: number, shipType: st
   return runCmd('wasm_build_ship', gameJson, nationId, shipType);
 }
 
+export async function cancelShipBuild(gameJson: string, nationId: number, shipType: string): Promise<CommandResult> {
+  return runCmd('wasm_cancel_ship_build', gameJson, nationId, shipType);
+}
+
+export async function setPendingShips(gameJson: string, nationId: number, shipType: string, count: number): Promise<CommandResult> {
+  return runCmd('wasm_set_pending_ships', gameJson, nationId, shipType, Math.max(0, Math.round(count)));
+}
+
+export async function setAutoTradeWithMinors(gameJson: string, nationId: number, enabled: boolean): Promise<CommandResult> {
+  return runCmd('wasm_set_auto_trade_with_minors', gameJson, nationId, enabled);
+}
+
+export async function setPendingArmyRecruit(gameJson: string, nationId: number, unitType: string, count: number): Promise<CommandResult> {
+  return runCmd('wasm_set_pending_army_recruits', gameJson, nationId, unitType, Math.max(0, Math.round(count)));
+}
+
 // ── Transport types & functions ─────────────────────────────────────
 
 export interface TransportAllocation {
@@ -941,8 +957,8 @@ export async function getTransportData(gameJson: string, nationId: number): Prom
   return parsed;
 }
 
-export async function buildFreightCar(gameJson: string, nationId: number): Promise<CommandResult> {
-  return runCmd('wasm_build_freight_car', gameJson, nationId);
+export async function setPendingFreightCars(gameJson: string, nationId: number, count: number): Promise<CommandResult> {
+  return runCmd('wasm_set_pending_freight_cars', gameJson, nationId, Math.max(0, Math.round(count)));
 }
 
 export async function setTransportAllocation(gameJson: string, nationId: number, resource: string, percentage: number): Promise<CommandResult> {
@@ -994,6 +1010,26 @@ export interface ChainOutputTargets {
   lumber_factory: number;
   steel_factory: number;
   garment_factory: number;
+  armory: number;
+  paper_factory: number;
+}
+
+export interface PaperChainForecast {
+  factory_cap: number;
+  factory_target: number;
+  factory_output: number;
+  factory_labor: number;
+  factory_max_output: number;
+  factory_committed_lumber: number;
+}
+
+export interface ArmsChainForecast {
+  armory_cap: number;
+  armory_target: number;
+  armory_output: number;
+  armory_labor: number;
+  armory_max_output: number;
+  armory_committed_steel: number;
 }
 
 export interface TrainingCosts {
@@ -1006,6 +1042,8 @@ export interface TrainingCosts {
 export interface IndustryData {
   buildings: BuildingInfo[];
   freight_car_cost: number;
+  pending_freight_cars: number;
+  max_freight_cars: number;
   warehouse: {
     resources: Record<string, number>;
     materials: Record<string, number>;
@@ -1017,13 +1055,24 @@ export interface IndustryData {
     expert: number;
     total_workers: number;
     total_labor_units: number;
+    committed_expert: number;
+    committed_untrained: number;
+    committed_trained: number;
+    committed_labor_units: number;
   };
   chain_targets: ChainOutputTargets;
   production_forecast: {
     timber_chain: ChainForecast;
     metal_chain: ChainForecast;
     textile_chain: ChainForecast;
+    arms_chain: ArmsChainForecast;
+    paper_chain: PaperChainForecast;
   };
+  pending_ships: string[];
+  pending_army_recruits: string[];
+  army_committed_arms: number;
+  army_committed_horses: number;
+  auto_trade_with_minors: boolean;
   can_expand: Record<string, boolean>;
   pending_civilian_hires: Record<string, number>;
   pending_training: { to_trained: number; to_expert: number };
@@ -1125,6 +1174,7 @@ export interface TradeData {
   sellable_resources: SellableItem[];
   sellable_materials: SellableItem[];
   sellable_goods: SellableItem[];
+  auto_trade_with_minors: boolean;
 }
 
 export async function getTradeData(gameJson: string, nationId: number): Promise<TradeData | null> {

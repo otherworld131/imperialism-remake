@@ -1777,12 +1777,14 @@ pub(crate) fn ai_build_transport_proactive(game: &mut GameState, nation_id: Nati
         None => return,
     };
 
-    // Calculate total resources in warehouse
-    let total_resources: u32 = nation.economy.warehouse.values().sum();
     let capacity = nation.military.transport.total_capacity();
+    let freight_unused = nation.economy.logistics.freight_unused;
+    let (_local_items, remote_items) = crate::economy::current_collectable_resources(game, nation_id);
+    let remote_total: u32 = remote_items.iter().map(|(_, qty)| *qty).sum();
 
-    // If resources exceed capacity, we need more freight cars
-    if total_resources <= capacity {
+    // Build when the remote network is already beyond rail capacity, or when
+    // last turn's freight pool was nearly saturated.
+    if remote_total <= capacity && (capacity == 0 || freight_unused > 2) {
         return;
     }
 

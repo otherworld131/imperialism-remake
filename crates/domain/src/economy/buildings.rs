@@ -16,6 +16,7 @@ pub enum BuildingType {
     FurnitureFactory,
     HardwareFactory,
     ClothingFactory,
+    PaperFactory,
     // Late-game
     OilRefinery,
     PowerPlant,
@@ -34,6 +35,7 @@ impl std::fmt::Display for BuildingType {
             Self::FurnitureFactory => write!(f, "Furniture Factory"),
             Self::HardwareFactory => write!(f, "Hardware Factory"),
             Self::ClothingFactory => write!(f, "Clothing Factory"),
+            Self::PaperFactory => write!(f, "Paper Factory"),
             Self::OilRefinery => write!(f, "Oil Refinery"),
             Self::PowerPlant => write!(f, "Power Plant"),
             Self::AdvancedTextileMill => write!(f, "Advanced Textile Mill"),
@@ -61,6 +63,7 @@ impl std::str::FromStr for BuildingType {
             "Furniture Factory" => Ok(Self::FurnitureFactory),
             "Hardware Factory" => Ok(Self::HardwareFactory),
             "Clothing Factory" => Ok(Self::ClothingFactory),
+            "Paper Factory" => Ok(Self::PaperFactory),
             "Oil Refinery" => Ok(Self::OilRefinery),
             "Power Plant" => Ok(Self::PowerPlant),
             "Advanced Textile Mill" => Ok(Self::AdvancedTextileMill),

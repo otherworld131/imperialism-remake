@@ -141,6 +141,65 @@ pub fn calculate_factory_production(
     }
 }
 
+/// Paper Factory: 2 Lumber → 1 Paper (plus 2 labor per unit).
+///
+/// Produces `MaterialType::Paper`, consumes `MaterialType::Lumber`.
+pub fn calculate_paper_production(
+    available_lumber: &[(MaterialType, u32)],
+    factory_cap: u32,
+    available_labor: u32,
+) -> ProductionResult {
+    let labor_limited = available_labor / 2;
+    let lumber = available_lumber
+        .iter()
+        .filter(|(m, _)| *m == MaterialType::Lumber)
+        .map(|(_, q)| q)
+        .sum::<u32>();
+    let material_limited = lumber / 2;
+    let units = factory_cap.min(material_limited).min(labor_limited);
+    ProductionResult {
+        materials_produced: vec![(MaterialType::Paper, units)],
+        goods_produced: vec![],
+        resources_consumed: vec![],
+        materials_consumed: vec![(MaterialType::Lumber, units * 2)],
+        labor_used: units * 2,
+    }
+}
+
+/// Armory: Steel + labor → Arms.
+///
+/// `steel_per_arm` Steel consumed per Arm produced (default 1).
+/// `labor_per_arm` labor units per Arm produced (default 2).
+/// Capacity is in Arms units (like all other caps are in output units).
+pub fn calculate_armory_production(
+    steel_available: u32,
+    armory_cap: u32,
+    available_labor: u32,
+    steel_per_arm: u32,
+    labor_per_arm: u32,
+) -> ProductionResult {
+    if armory_cap == 0 || steel_per_arm == 0 || labor_per_arm == 0 {
+        return ProductionResult {
+            materials_produced: vec![(MaterialType::Arms, 0)],
+            goods_produced: vec![],
+            resources_consumed: vec![],
+            materials_consumed: vec![(MaterialType::Steel, 0)],
+            labor_used: 0,
+        };
+    }
+    let resource_limited = steel_available / steel_per_arm;
+    let labor_limited = available_labor / labor_per_arm;
+    let arms = armory_cap.min(resource_limited).min(labor_limited);
+    let steel_consumed = arms * steel_per_arm;
+    ProductionResult {
+        materials_produced: vec![(MaterialType::Arms, arms)],
+        goods_produced: vec![],
+        resources_consumed: vec![],
+        materials_consumed: vec![(MaterialType::Steel, steel_consumed)],
+        labor_used: arms * labor_per_arm,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

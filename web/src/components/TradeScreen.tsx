@@ -15,12 +15,13 @@ interface Props {
   onSetSubsidy: (nationId: number, amount: number) => void;
   onSetSellOrder: (commodity: string, commodityType: string, quantity: number) => void;
   onSetBuyOrder: (resource: string, quantity: number, maxPrice: number) => void;
+  onSetAutoTradeWithMinors: (enabled: boolean) => void;
   onClose: () => void;
 }
 
 type TradeTab = 'orders' | 'summary';
 
-export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSellOrder, onSetBuyOrder, onClose }: Props) {
+export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSellOrder, onSetBuyOrder, onSetAutoTradeWithMinors, onClose }: Props) {
   const flagBySellerId: Record<number, string> = {};
   for (const n of nations) {
     if (n.flag_svg) flagBySellerId[n.id] = n.flag_svg;
@@ -104,7 +105,21 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
             <div style={styles.body}>
               {/* Sell section */}
               <div style={styles.column}>
-                <h3 style={styles.sectionTitle}>Sell Orders</h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <h3 style={{ ...styles.sectionTitle, margin: 0 }}>Sell Orders</h3>
+                  <button
+                    onClick={() => onSetAutoTradeWithMinors(!(trade?.auto_trade_with_minors ?? true))}
+                    style={{
+                      background: (trade?.auto_trade_with_minors ?? true) ? '#2a4a2a' : '#4a2a2a',
+                      color: (trade?.auto_trade_with_minors ?? true) ? '#6d6' : '#d66',
+                      border: `1px solid ${(trade?.auto_trade_with_minors ?? true) ? '#4a7a4a' : '#7a4a4a'}`,
+                      borderRadius: 4, padding: '2px 8px', fontSize: 10, cursor: 'pointer',
+                    }}
+                    title="When enabled, minor nations may automatically buy your goods each turn"
+                  >
+                    🤝 Minor auto-buy: {(trade?.auto_trade_with_minors ?? true) ? 'ON' : 'OFF'}
+                  </button>
+                </div>
 
                 {[
                   { label: 'Resources', items: sellable_resources, type: 'Resource' },

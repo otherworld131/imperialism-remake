@@ -663,6 +663,10 @@ fn new_game_inner(
                 .economy
                 .buildings
                 .push(Building::new(BuildingType::ClothingFactory, 1));
+            nation
+                .economy
+                .buildings
+                .push(Building::new(BuildingType::PaperFactory, 1));
         }
 
         // Starting warehouse contents based on difficulty.
@@ -686,6 +690,7 @@ fn new_game_inner(
                 nation.add_material(MaterialType::Fabric, 5);
                 // Starting food supply to prevent early starvation
                 nation.add_material(MaterialType::CannedFood, 40);
+                nation.add_material(MaterialType::Paper, 10);
             }
             Difficulty::Normal => {
                 nation.add_resource(ResourceType::Timber, 10);
@@ -700,6 +705,7 @@ fn new_game_inner(
                 nation.add_material(MaterialType::Fabric, 2);
                 // Starting food supply — enough for ~10 turns while building food chain
                 nation.add_material(MaterialType::CannedFood, 20);
+                nation.add_material(MaterialType::Paper, 10);
             }
             Difficulty::Hard | Difficulty::NighOnImpossible => {
                 // Minimal starting stockpile to bootstrap economy
@@ -712,6 +718,7 @@ fn new_game_inner(
                 nation.add_material(MaterialType::Steel, 3);
                 // Small food buffer
                 nation.add_material(MaterialType::CannedFood, 10);
+                nation.add_material(MaterialType::Paper, 10);
             }
         }
 
