@@ -87,19 +87,22 @@ pub struct ChainOutputTargets {
     pub garment_factory: u32, // target clothing units
     pub armory: u32,          // target Arms units (from Armory)
     pub paper_factory: u32,   // target Paper units (Lumber → Paper)
+    /// Target CannedFood units from the cannery (Grain + Fruit + Fish/Livestock → CannedFood).
+    pub canned_food_factory: u32,
 }
 
 impl Default for ChainOutputTargets {
     fn default() -> Self {
         Self {
-            timber_mill:     u32::MAX,
-            metal_mill:      u32::MAX,
-            textile_mill:    u32::MAX,
-            lumber_factory:  u32::MAX,
-            steel_factory:   u32::MAX,
-            garment_factory: u32::MAX,
-            armory:          u32::MAX,
-            paper_factory:   u32::MAX,
+            timber_mill:        u32::MAX,
+            metal_mill:         u32::MAX,
+            textile_mill:       u32::MAX,
+            lumber_factory:     u32::MAX,
+            steel_factory:      u32::MAX,
+            garment_factory:    u32::MAX,
+            armory:             u32::MAX,
+            paper_factory:      u32::MAX,
+            canned_food_factory: u32::MAX,
         }
     }
 }

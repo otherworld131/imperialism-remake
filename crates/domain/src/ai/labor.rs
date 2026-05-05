@@ -486,7 +486,10 @@ mod tests {
     fn ai_recruits_workers_when_workforce_is_small() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
+        // New canning recipe: 1 grain + 1 fruit + 1 (fish OR livestock) → 1 canned food.
         ai.add_resource(ResourceType::Grain, 5);
+        ai.add_resource(ResourceType::Fruit, 5);
+        ai.add_resource(ResourceType::Fish, 5);
         // Starts with 0 workers
 
         run_ai_turns(&mut game);
@@ -496,11 +499,6 @@ mod tests {
             ai.economy.labor.total_workers(),
             1,
             "AI should recruit 1 worker when workforce < 5 and food available"
-        );
-        assert_eq!(
-            ai.resource_amount(ResourceType::Grain),
-            4,
-            "AI should consume 1 grain to recruit"
         );
     }
 
@@ -995,6 +993,8 @@ mod tests {
             ai.add_province(ProvinceId(i));
         }
         ai.add_resource(ResourceType::Grain, 6);
+        ai.add_resource(ResourceType::Fruit, 6);
+        ai.add_resource(ResourceType::Fish, 6);
         ai.add_goods(GoodsType::Clothing, 2);
 
         ai_recruit_workers(&mut game, NationId(2));

@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type { IndustryData, BuildableUnits, ChainForecast, PaperChainForecast } from '../wasm';
+import type { IndustryData, BuildableUnits, ChainForecast, PaperChainForecast, FoodChainForecast } from '../wasm';
 
 interface Props {
   industry: IndustryData;
@@ -18,7 +18,8 @@ const RESOURCE_EMOJI: Record<string, string> = {
   Timber: '🪵', Lumber: '🪵', Coal: '🪨', Iron: '🔩', Steel: '⚙️',
   Cotton: '🌸', Wool: '🐑', Fabric: '🧵', Clothing: '👗',
   Furniture: '🛋️', Hardware: '🔧', Oil: '🛢️', Horses: '🐴',
-  Food: '🌾', Grain: '🌾', Fish: '🐟', Gold: '🪙', Gems: '💎',
+  Food: '🌾', Grain: '🌾', Fruit: '🍇', Fish: '🐟', Livestock: '🐄',
+  Gold: '🪙', Gems: '💎',
   Saltpeter: '💨', Rubber: '🌿', Copper: '🟤', Arms: '🗡️',
   Paper: '📄', CannedFood: '🥫', FreightCars: '🚃',
 };
@@ -94,6 +95,11 @@ export default function IndustryPanel({
   if (pf.paper_chain?.factory_committed_lumber) {
     committed['Lumber'] = (committed['Lumber'] ?? 0) + pf.paper_chain.factory_committed_lumber;
   }
+  // Food chain: deduct grain/fruit/fish/livestock committed to canning
+  addCommit('Grain', pf.food_chain?.factory_committed_grain);
+  addCommit('Fruit', pf.food_chain?.factory_committed_fruit);
+  addCommit('Fish', pf.food_chain?.factory_committed_fish);
+  addCommit('Livestock', pf.food_chain?.factory_committed_livestock);
   // Education: deduct paper committed to training
   const paperPerTrained = training_costs.to_trained_paper;
   const paperPerExpert = training_costs.to_expert_paper;
@@ -119,7 +125,8 @@ export default function IndustryPanel({
     (pf.metal_chain.mill_labor ?? 0) + (pf.metal_chain.factory_labor ?? 0) +
     (pf.textile_chain.mill_labor ?? 0) + (pf.textile_chain.factory_labor ?? 0) +
     (pf.arms_chain.armory_labor ?? 0) +
-    (pf.paper_chain?.factory_labor ?? 0);
+    (pf.paper_chain?.factory_labor ?? 0) +
+    (pf.food_chain?.factory_labor ?? 0);
 
   const totalLaborUnits = labor.total_labor_units;
   const committedLaborUnits = (labor.committed_labor_units ?? 0) + productionLaborCommitted;
@@ -190,6 +197,18 @@ export default function IndustryPanel({
                 </div>
               );
             })}
+            {pf.food_chain && pf.food_chain.factory_cap > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontWeight: 'bold', color: '#daa520', marginBottom: 4 }}>
+                  🥫 Food
+                </div>
+                <FoodRow
+                  forecast={pf.food_chain}
+                  target={chain_targets.canned_food_factory ?? 0}
+                  onTargetChange={v => onSetChainTarget('food', 'factory', v)}
+                />
+              </div>
+            )}
           </Section>
 
           <Section label="Labor" emoji="👷">
@@ -619,6 +638,71 @@ function PaperRow({
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <span style={{ fontSize: 9, color: '#888', width: 22, flexShrink: 0 }}>📄</span>
+        <input
+          type="range" min={0} max={effectiveCap} step={1}
+          value={localValue}
+          onChange={handleChange}
+          onMouseUp={commit}
+          onTouchEnd={commit}
+          style={{ flex: 1, accentColor: '#daa520', height: 4, cursor: 'pointer' }}
+        />
+        <span style={{ fontSize: 9, color: '#aaa', width: 28, textAlign: 'right', flexShrink: 0 }}>
+          {localValue}/{effectiveCap}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function FoodRow({
+  forecast, target, onTargetChange,
+}: {
+  forecast: FoodChainForecast;
+  target: number;
+  onTargetChange: (v: number) => void;
+}) {
+  const effectiveCap = Math.max(0, Math.min(forecast.factory_cap, forecast.factory_max_output));
+  const [localValue, setLocalValue] = useState<number>(() => clampTarget(target, effectiveCap));
+  const isDraggingRef = useRef(false);
+  const lastSentRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (isDraggingRef.current) return;
+    if (lastSentRef.current !== null && target !== lastSentRef.current) return;
+    lastSentRef.current = null;
+    setLocalValue(clampTarget(target, effectiveCap));
+  }, [target, effectiveCap]);
+
+  const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    isDraggingRef.current = true;
+    setLocalValue(Number(e.target.value));
+  }, []);
+
+  const commit = useCallback(() => {
+    isDraggingRef.current = false;
+    lastSentRef.current = localValue;
+    onTargetChange(localValue);
+  }, [localValue, onTargetChange]);
+
+  const parts: string[] = [];
+  if (forecast.factory_committed_grain > 0) parts.push(`${forecast.factory_committed_grain} 🌾`);
+  if (forecast.factory_committed_fruit > 0) parts.push(`${forecast.factory_committed_fruit} 🍇`);
+  if (forecast.factory_committed_fish > 0) parts.push(`${forecast.factory_committed_fish} 🐟`);
+  if (forecast.factory_committed_livestock > 0) parts.push(`${forecast.factory_committed_livestock} 🐄`);
+  if (forecast.factory_labor > 0) parts.push(`${forecast.factory_labor}⚒`);
+  const inputSummary = parts.join(' + ');
+  const outputLabel = forecast.factory_output > 0 ? `→ ${forecast.factory_output}` : '→ 0';
+
+  return (
+    <div style={{ marginBottom: 8, paddingLeft: 4 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#bbb', marginBottom: 2 }}>
+        <span>Grain + Fruit + Fish/Livestock → Canned</span>
+        <span style={{ color: forecast.factory_output > 0 ? '#daa520' : '#666', flexShrink: 0, marginLeft: 4 }}>
+          {inputSummary ? `${inputSummary} ${outputLabel}` : outputLabel}
+        </span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span style={{ fontSize: 9, color: '#888', width: 22, flexShrink: 0 }}>🥫</span>
         <input
           type="range" min={0} max={effectiveCap} step={1}
           value={localValue}

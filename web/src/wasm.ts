@@ -1019,6 +1019,7 @@ export interface ChainOutputTargets {
   garment_factory: number;
   armory: number;
   paper_factory: number;
+  canned_food_factory: number;
 }
 
 export interface PaperChainForecast {
@@ -1028,6 +1029,18 @@ export interface PaperChainForecast {
   factory_labor: number;
   factory_max_output: number;
   factory_committed_lumber: number;
+}
+
+export interface FoodChainForecast {
+  factory_cap: number;
+  factory_target: number;
+  factory_output: number;
+  factory_labor: number;
+  factory_max_output: number;
+  factory_committed_grain: number;
+  factory_committed_fruit: number;
+  factory_committed_fish: number;
+  factory_committed_livestock: number;
 }
 
 export interface ArmsChainForecast {
@@ -1079,6 +1092,7 @@ export interface IndustryData {
     textile_chain: ChainForecast;
     arms_chain: ArmsChainForecast;
     paper_chain: PaperChainForecast;
+    food_chain: FoodChainForecast;
   };
   pending_ships: string[];
   pending_army_recruits: string[];

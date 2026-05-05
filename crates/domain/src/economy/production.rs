@@ -166,6 +166,52 @@ pub fn calculate_paper_production(
     }
 }
 
+/// Cannery: 1 Grain + 1 Fruit + 1 (Fish OR Livestock) → 1 CannedFood (plus 2 labor per unit).
+///
+/// Output is limited by `min(factory_cap, grain, fruit, fish + livestock, labor / 2)`.
+/// Fish is preferred over livestock when consuming the meat slot.
+pub fn calculate_canned_food_production(
+    available_resources: &[(ResourceType, u32)],
+    factory_cap: u32,
+    available_labor: u32,
+) -> ProductionResult {
+    let labor_limited = available_labor / 2;
+    let grain = resource_available(available_resources, ResourceType::Grain);
+    let fruit = resource_available(available_resources, ResourceType::Fruit);
+    let fish = resource_available(available_resources, ResourceType::Fish);
+    let livestock = resource_available(available_resources, ResourceType::Livestock);
+    let meat = fish + livestock;
+
+    let units = factory_cap
+        .min(grain)
+        .min(fruit)
+        .min(meat)
+        .min(labor_limited);
+
+    let fish_used = fish.min(units);
+    let livestock_used = units - fish_used;
+
+    let mut resources_consumed: Vec<(ResourceType, u32)> = Vec::new();
+    if units > 0 {
+        resources_consumed.push((ResourceType::Grain, units));
+        resources_consumed.push((ResourceType::Fruit, units));
+    }
+    if fish_used > 0 {
+        resources_consumed.push((ResourceType::Fish, fish_used));
+    }
+    if livestock_used > 0 {
+        resources_consumed.push((ResourceType::Livestock, livestock_used));
+    }
+
+    ProductionResult {
+        materials_produced: vec![(MaterialType::CannedFood, units)],
+        goods_produced: vec![],
+        resources_consumed,
+        materials_consumed: vec![],
+        labor_used: units * 2,
+    }
+}
+
 /// Armory: Steel + labor → Arms.
 ///
 /// `steel_per_arm` Steel consumed per Arm produced (default 1).
@@ -614,6 +660,144 @@ mod tests {
             vec![(MaterialType::Steel, 4)],
             "Steel mill should produce steel when both coal and iron are available"
         );
+    }
+
+    // ── Cannery: 1 grain + 1 fruit + 1 (fish OR livestock) → 1 canned food ──
+
+    #[test]
+    fn cannery_basic_with_fish() {
+        let result = calculate_canned_food_production(
+            &[
+                (ResourceType::Grain, 5),
+                (ResourceType::Fruit, 5),
+                (ResourceType::Fish, 5),
+            ],
+            3,
+            20,
+        );
+        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 3)]);
+        assert!(result.resources_consumed.contains(&(ResourceType::Grain, 3)));
+        assert!(result.resources_consumed.contains(&(ResourceType::Fruit, 3)));
+        assert!(result.resources_consumed.contains(&(ResourceType::Fish, 3)));
+        assert_eq!(result.labor_used, 6);
+    }
+
+    #[test]
+    fn cannery_basic_with_livestock() {
+        let result = calculate_canned_food_production(
+            &[
+                (ResourceType::Grain, 5),
+                (ResourceType::Fruit, 5),
+                (ResourceType::Livestock, 5),
+            ],
+            3,
+            20,
+        );
+        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 3)]);
+        assert!(result.resources_consumed.contains(&(ResourceType::Livestock, 3)));
+        assert!(!result.resources_consumed.iter().any(|(r, _)| *r == ResourceType::Fish));
+    }
+
+    #[test]
+    fn cannery_mixed_fish_and_livestock_prefers_fish() {
+        // 1 fish + 4 livestock available, want 3 cans → 1 fish + 2 livestock
+        let result = calculate_canned_food_production(
+            &[
+                (ResourceType::Grain, 10),
+                (ResourceType::Fruit, 10),
+                (ResourceType::Fish, 1),
+                (ResourceType::Livestock, 4),
+            ],
+            3,
+            20,
+        );
+        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 3)]);
+        assert!(result.resources_consumed.contains(&(ResourceType::Fish, 1)));
+        assert!(result.resources_consumed.contains(&(ResourceType::Livestock, 2)));
+    }
+
+    #[test]
+    fn cannery_no_grain() {
+        let result = calculate_canned_food_production(
+            &[
+                (ResourceType::Fruit, 10),
+                (ResourceType::Fish, 10),
+            ],
+            5,
+            20,
+        );
+        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 0)]);
+        assert!(result.resources_consumed.is_empty());
+        assert_eq!(result.labor_used, 0);
+    }
+
+    #[test]
+    fn cannery_no_fruit() {
+        let result = calculate_canned_food_production(
+            &[
+                (ResourceType::Grain, 10),
+                (ResourceType::Fish, 10),
+            ],
+            5,
+            20,
+        );
+        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 0)]);
+    }
+
+    #[test]
+    fn cannery_no_meat() {
+        let result = calculate_canned_food_production(
+            &[
+                (ResourceType::Grain, 10),
+                (ResourceType::Fruit, 10),
+            ],
+            5,
+            20,
+        );
+        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 0)]);
+    }
+
+    #[test]
+    fn cannery_limited_by_capacity() {
+        let result = calculate_canned_food_production(
+            &[
+                (ResourceType::Grain, 100),
+                (ResourceType::Fruit, 100),
+                (ResourceType::Fish, 100),
+            ],
+            2,
+            20,
+        );
+        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 2)]);
+    }
+
+    #[test]
+    fn cannery_limited_by_labor() {
+        let result = calculate_canned_food_production(
+            &[
+                (ResourceType::Grain, 100),
+                (ResourceType::Fruit, 100),
+                (ResourceType::Fish, 100),
+            ],
+            10,
+            3, // 3 labor → 1 unit
+        );
+        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 1)]);
+        assert_eq!(result.labor_used, 2);
+    }
+
+    #[test]
+    fn cannery_zero_capacity() {
+        let result = calculate_canned_food_production(
+            &[
+                (ResourceType::Grain, 10),
+                (ResourceType::Fruit, 10),
+                (ResourceType::Fish, 10),
+            ],
+            0,
+            20,
+        );
+        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 0)]);
     }
 
     // ── Textile mill accepts cotton or wool ──────────────────────

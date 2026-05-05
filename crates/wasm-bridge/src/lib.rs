@@ -7,8 +7,8 @@ use domain::ai::common::{AiPersonality, personality_for_nation_index};
 use domain::economy::buildings::BuildingType;
 use domain::economy::civilians::{CivilianType, parse_civilian_type};
 use domain::economy::production::{
-    ProductionChain, calculate_armory_production, calculate_factory_production,
-    calculate_mill_production, calculate_paper_production,
+    ProductionChain, calculate_armory_production, calculate_canned_food_production,
+    calculate_factory_production, calculate_mill_production, calculate_paper_production,
 };
 use domain::economy::trade::{Commodity, base_price, commodity_price};
 use domain::economy::transport::TransportSystem;
@@ -3352,6 +3352,8 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
         .find(|b| b.building_type == BuildingType::Armory).map(|b| b.capacity).unwrap_or(0);
     let paper_cap = nation.economy.buildings.iter()
         .find(|b| b.building_type == BuildingType::PaperFactory).map(|b| b.capacity).unwrap_or(0);
+    let canned_food_cap = nation.economy.buildings.iter()
+        .find(|b| b.building_type == BuildingType::FoodProcessing).map(|b| b.capacity).unwrap_or(0);
 
     let labor_units = labor.total_labor_units();
     let targets = &nation.economy.chain_targets;
@@ -3362,7 +3364,7 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
         domain::turn::economy_phase::BuildingCapacities {
             timber: lumber_mill_cap, metal: steel_mill_cap, textile: textile_mill_cap,
             furniture: furniture_cap, hardware: hardware_cap, clothing: clothing_cap,
-            armory: armory_cap, paper: paper_cap,
+            armory: armory_cap, paper: paper_cap, canned_food: canned_food_cap,
         },
     );
 
@@ -3370,6 +3372,7 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
     let all_res: Vec<(ResourceType, u32)> = [
         ResourceType::Timber, ResourceType::Coal, ResourceType::Iron,
         ResourceType::Cotton, ResourceType::Wool,
+        ResourceType::Grain, ResourceType::Fruit, ResourceType::Fish, ResourceType::Livestock,
     ].iter().map(|&r| (r, nation.resource_amount(r))).collect();
 
     let fed_res = domain::turn::economy_phase::apply_feed_to_resources(&all_res, targets);
@@ -3438,6 +3441,19 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
     let paper_max = calculate_paper_production(&paper_lumber_slice, paper_cap, labor_units);
     let paper_committed_lumber = paper_prod.materials_consumed.iter()
         .find(|(m, _)| *m == MaterialType::Lumber).map(|(_, q)| *q).unwrap_or(0);
+
+    // Cannery: 1 Grain + 1 Fruit + 1 (Fish OR Livestock) → 1 CannedFood.
+    let canned_prod = calculate_canned_food_production(&fed_res, canned_food_cap, labor_budgets.canned_food_factory);
+    let canned_res_max = calculate_canned_food_production(&max_res, canned_food_cap, unlimited_labor);
+    let canned_labor_max = calculate_canned_food_production(&max_res, canned_food_cap, labor_units);
+    let canned_committed_grain = canned_prod.resources_consumed.iter()
+        .find(|(r, _)| *r == ResourceType::Grain).map(|(_, q)| *q).unwrap_or(0);
+    let canned_committed_fruit = canned_prod.resources_consumed.iter()
+        .find(|(r, _)| *r == ResourceType::Fruit).map(|(_, q)| *q).unwrap_or(0);
+    let canned_committed_fish = canned_prod.resources_consumed.iter()
+        .find(|(r, _)| *r == ResourceType::Fish).map(|(_, q)| *q).unwrap_or(0);
+    let canned_committed_livestock = canned_prod.resources_consumed.iter()
+        .find(|(r, _)| *r == ResourceType::Livestock).map(|(_, q)| *q).unwrap_or(0);
 
     // Max materials for factory max: warehouse + max mill output at 100% feed.
     let max_mat_lumber = nation.material_amount(MaterialType::Lumber)
@@ -3530,6 +3546,7 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
             "garment_factory": targets.garment_factory,
             "armory": targets.armory,
             "paper_factory": targets.paper_factory,
+            "canned_food_factory": targets.canned_food_factory,
         },
         "production_forecast": {
             "timber_chain": {
@@ -3592,6 +3609,17 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
                 "factory_max_output": paper_max.materials_produced.first().map(|x| x.1).unwrap_or(0),
                 "factory_committed_lumber": paper_committed_lumber,
             },
+            "food_chain": {
+                "factory_cap": canned_food_cap,
+                "factory_target": targets.canned_food_factory,
+                "factory_output": canned_prod.materials_produced.first().map(|x| x.1).unwrap_or(0),
+                "factory_labor": canned_prod.labor_used,
+                "factory_max_output": canned_res_max.materials_produced.first().map(|x| x.1).unwrap_or(0).min(canned_labor_max.materials_produced.first().map(|x| x.1).unwrap_or(0)),
+                "factory_committed_grain": canned_committed_grain,
+                "factory_committed_fruit": canned_committed_fruit,
+                "factory_committed_fish": canned_committed_fish,
+                "factory_committed_livestock": canned_committed_livestock,
+            },
         },
         "pending_ships": nation.economy.pending_ships,
         "pending_army_recruits": nation.economy.pending_army_recruits,
@@ -3651,6 +3679,7 @@ pub fn wasm_set_chain_target(
         ("textile", "mill")    => nation.economy.chain_targets.textile_mill   = target,
         ("textile", "factory") => nation.economy.chain_targets.garment_factory= target,
         ("arms",    "armory")  => nation.economy.chain_targets.armory          = target,
+        ("food",    "factory") => nation.economy.chain_targets.canned_food_factory = target,
         _ => return "{\"error\":\"unknown chain/step\"}".to_string(),
     }
     serialize_game(&game)

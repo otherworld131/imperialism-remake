@@ -1230,6 +1230,8 @@ pub struct ChainOutputTargets {
     pub armory: u32,
     #[serde(default)]
     pub paper_factory: u32,
+    #[serde(default)]
+    pub canned_food_factory: u32,
 }
 
 impl From<&domain::nation::ChainOutputTargets> for ChainOutputTargets {
@@ -1243,6 +1245,7 @@ impl From<&domain::nation::ChainOutputTargets> for ChainOutputTargets {
             garment_factory: v.garment_factory,
             armory: v.armory,
             paper_factory: v.paper_factory,
+            canned_food_factory: v.canned_food_factory,
         }
     }
 }
@@ -1258,6 +1261,7 @@ impl From<ChainOutputTargets> for domain::nation::ChainOutputTargets {
             garment_factory: v.garment_factory,
             armory: v.armory,
             paper_factory: v.paper_factory,
+            canned_food_factory: v.canned_food_factory,
         }
     }
 }

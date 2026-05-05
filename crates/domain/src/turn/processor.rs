@@ -6,8 +6,8 @@ use crate::economy::ledger::{
     StockpileFlowTracking,
 };
 use crate::economy::production::{
-    ProductionChain, calculate_armory_production, calculate_factory_production, calculate_mill_production,
-    calculate_paper_production,
+    ProductionChain, calculate_armory_production, calculate_canned_food_production,
+    calculate_factory_production, calculate_mill_production, calculate_paper_production,
 };
 use crate::economy::trade::TradeTransaction;
 use crate::events::*;
@@ -555,9 +555,6 @@ fn run_pre_immigration_phases(game: &mut GameState, report: &mut TurnReport) {
 
     // 4. Tick buildings (process expansion timers)
     tick_buildings(game);
-
-    // 4b. Food processing: convert raw food to canned food
-    process_food(game, report);
 
     // 5. Food consumption
     food_consumption(game, report);
@@ -1935,12 +1932,15 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
         let paper_cap = nation.economy.buildings.iter()
             .find(|b| b.building_type == BuildingType::PaperFactory)
             .map(|b| b.effective_capacity()).unwrap_or(0);
+        let canned_food_cap = nation.economy.buildings.iter()
+            .find(|b| b.building_type == BuildingType::FoodProcessing)
+            .map(|b| b.effective_capacity()).unwrap_or(0);
         let labor = super::economy_phase::allocate_labor(
             total_labor, &targets,
             super::economy_phase::BuildingCapacities {
                 timber: lumber_mill_cap, metal: steel_mill_cap, textile: textile_mill_cap,
                 furniture: furniture_cap, hardware: hardware_cap, clothing: clothing_cap,
-                armory: armory_cap, paper: paper_cap,
+                armory: armory_cap, paper: paper_cap, canned_food: canned_food_cap,
             },
         );
         let fed_resources = super::economy_phase::apply_feed_to_resources(&resources, &targets);
@@ -2153,6 +2153,83 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
                 }
             }
         }
+
+        // ── Cannery: 1 Grain + 1 Fruit + 1 (Fish OR Livestock) → 1 CannedFood ──
+        if canned_food_cap > 0 {
+            // Reserve raw food for worker consumption first: workers eat after
+            // production, so canning everything available would starve them.
+            // Workers eat from grain → fruit → livestock → fish → canned, in
+            // priority order. The cannery only sees the surplus beyond worker
+            // need (after subtracting existing canned stock that workers can
+            // fall back on).
+            let workers = nation.economy.labor.total_workers();
+            let canned_in_stock = nation.material_amount(MaterialType::CannedFood);
+            let raw_food_reserved_for_workers = workers.saturating_sub(canned_in_stock);
+            let current_resources: Vec<(ResourceType, u32)> = nation
+                .economy
+                .warehouse
+                .iter()
+                .map(|(r, q)| {
+                    let surplus = if matches!(*r,
+                        ResourceType::Grain | ResourceType::Fruit
+                            | ResourceType::Fish | ResourceType::Livestock)
+                    {
+                        // Subtract this resource's share of worker food, in
+                        // priority order. Grain reserves first up to total
+                        // need, then fruit covers the residual, then livestock,
+                        // then fish — matching food_consumption ordering.
+                        let already_reserved = match *r {
+                            ResourceType::Grain => 0,
+                            ResourceType::Fruit => nation.resource_amount(ResourceType::Grain),
+                            ResourceType::Livestock =>
+                                nation.resource_amount(ResourceType::Grain)
+                                    + nation.resource_amount(ResourceType::Fruit),
+                            ResourceType::Fish =>
+                                nation.resource_amount(ResourceType::Grain)
+                                    + nation.resource_amount(ResourceType::Fruit)
+                                    + nation.resource_amount(ResourceType::Livestock),
+                            _ => 0,
+                        };
+                        let still_needed = raw_food_reserved_for_workers
+                            .saturating_sub(already_reserved);
+                        q.saturating_sub(still_needed.min(*q))
+                    } else {
+                        *q
+                    };
+                    (*r, surplus)
+                })
+                .collect();
+            let fed_for_cannery =
+                super::economy_phase::apply_feed_to_resources(&current_resources, &targets);
+            let canned_result = calculate_canned_food_production(
+                &fed_for_cannery,
+                canned_food_cap,
+                labor.canned_food_factory,
+            );
+            for (resource, amount) in &canned_result.resources_consumed {
+                if *amount > 0 {
+                    nation.remove_resource(*resource, *amount);
+                    report
+                        .stockpile_flows
+                        .food_processed_inputs
+                        .push((nation_id, *resource, *amount));
+                }
+            }
+            for (material, amount) in &canned_result.materials_produced {
+                if *amount > 0 {
+                    *nation.economy.materials.entry(*material).or_insert(0) += *amount;
+                    report
+                        .production_output
+                        .push((nation_id, format!("{:?}", material), *amount));
+                    if let MaterialType::CannedFood = material {
+                        report
+                            .stockpile_flows
+                            .canned_food_produced
+                            .push((nation_id, *amount));
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2331,123 +2408,6 @@ fn resolve_town_production(game: &mut GameState, report: &mut TurnReport) {
                 ));
             }
         }
-    }
-}
-
-/// Process food: convert raw food into canned food using FoodProcessing buildings.
-///
-/// If a nation has a FoodProcessing building and raw food (grain/fruit/livestock),
-/// convert up to (building capacity) units: 2 raw food -> 1 canned food.
-/// Prioritize grain for canning.
-fn process_food(game: &mut GameState, report: &mut TurnReport) {
-    let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
-
-    for nation_id in nation_ids {
-        let nation = match game.world.nations.iter().find(|n| n.id == nation_id) {
-            Some(n) => n,
-            None => continue,
-        };
-
-        // Don't process food if there are no workers to feed
-        if nation.economy.labor.total_workers() == 0 {
-            continue;
-        }
-
-        let food_processing_cap = nation
-            .economy
-            .buildings
-            .iter()
-            .find(|b| b.building_type == BuildingType::FoodProcessing)
-            .map(|b| b.effective_capacity())
-            .unwrap_or(0);
-
-        if food_processing_cap == 0 {
-            continue;
-        }
-
-        let grain = nation.resource_amount(ResourceType::Grain);
-        let fruit = nation.resource_amount(ResourceType::Fruit);
-        let livestock = nation.resource_amount(ResourceType::Livestock);
-        let fish = nation.resource_amount(ResourceType::Fish);
-        let total_raw_food = grain + fruit + livestock + fish;
-
-        // Reserve raw food for worker consumption (runs next step).
-        // Only convert surplus beyond what workers need to eat.
-        let workers = nation.economy.labor.total_workers();
-        let food_after_workers = total_raw_food.saturating_sub(workers);
-
-        if food_after_workers < 2 {
-            continue;
-        }
-
-        // Maximum units we can produce: limited by capacity and surplus food
-        let raw_food_limited = food_after_workers / 2;
-        let units_to_produce = food_processing_cap.min(raw_food_limited);
-
-        if units_to_produce == 0 {
-            continue;
-        }
-
-        // Consume raw food: prioritize grain, then fruit, then livestock
-        let mut remaining_to_consume = units_to_produce * 2;
-
-        let grain_used = grain.min(remaining_to_consume);
-        remaining_to_consume -= grain_used;
-
-        let fruit_used = fruit.min(remaining_to_consume);
-        remaining_to_consume -= fruit_used;
-
-        let livestock_used = livestock.min(remaining_to_consume);
-        remaining_to_consume -= livestock_used;
-
-        let fish_used = fish.min(remaining_to_consume);
-        // remaining_to_consume should be 0 now
-
-        let Some(nation) = game.world.nations.iter_mut().find(|n| n.id == nation_id) else {
-            continue;
-        };
-        if grain_used > 0 {
-            nation.remove_resource(ResourceType::Grain, grain_used);
-            report.stockpile_flows.food_processed_inputs.push((
-                nation_id,
-                ResourceType::Grain,
-                grain_used,
-            ));
-        }
-        if fruit_used > 0 {
-            nation.remove_resource(ResourceType::Fruit, fruit_used);
-            report.stockpile_flows.food_processed_inputs.push((
-                nation_id,
-                ResourceType::Fruit,
-                fruit_used,
-            ));
-        }
-        if livestock_used > 0 {
-            nation.remove_resource(ResourceType::Livestock, livestock_used);
-            report.stockpile_flows.food_processed_inputs.push((
-                nation_id,
-                ResourceType::Livestock,
-                livestock_used,
-            ));
-        }
-        if fish_used > 0 {
-            nation.remove_resource(ResourceType::Fish, fish_used);
-            report.stockpile_flows.food_processed_inputs.push((
-                nation_id,
-                ResourceType::Fish,
-                fish_used,
-            ));
-        }
-
-        nation.add_material(MaterialType::CannedFood, units_to_produce);
-
-        report
-            .production_output
-            .push((nation_id, "CannedFood".to_string(), units_to_produce));
-        report
-            .stockpile_flows
-            .canned_food_produced
-            .push((nation_id, units_to_produce));
     }
 }
 
@@ -6550,7 +6510,7 @@ mod tests {
         nation.economy.chain_targets = crate::nation::ChainOutputTargets {
             timber_mill: u32::MAX, metal_mill: u32::MAX, textile_mill: u32::MAX,
             lumber_factory: u32::MAX, steel_factory: u32::MAX, garment_factory: u32::MAX,
-            armory: 0, paper_factory: 0,
+            armory: 0, paper_factory: 0, canned_food_factory: u32::MAX,
         };
 
         // Give enough workers for full production (expert=4 labor each)
@@ -7068,23 +7028,30 @@ mod tests {
     fn food_processing_converts_raw_food_to_canned() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        nation.economy.labor = LaborPool::new();
-        // Need workers for food processing to trigger
-        nation.economy.labor.untrained = 1;
-        // Add a FoodProcessing building with capacity 3
+        // Disable all other chains so labor flows entirely to the cannery.
+        nation.economy.chain_targets.timber_mill = 0;
+        nation.economy.chain_targets.metal_mill = 0;
+        nation.economy.chain_targets.textile_mill = 0;
+        nation.economy.chain_targets.lumber_factory = 0;
+        nation.economy.chain_targets.steel_factory = 0;
+        nation.economy.chain_targets.garment_factory = 0;
+        // Plenty of labor (5 expert = 20 labor; cannery wants 6).
+        // Add a FoodProcessing building with capacity 3.
+        // New recipe: 1 grain + 1 fruit + 1 (fish OR livestock) → 1 canned food.
         nation
             .economy
             .buildings
             .push(Building::new(BuildingType::FoodProcessing, 3));
-        // 9 grain: 6 consumed by processing (cap 3 × 2), 1 consumed by worker, 2 remain
-        nation.add_resource(ResourceType::Grain, 9);
+        // Provide 8 of each input. Cannery reserves 5 grain for the 5 expert
+        // workers (worker-food-first guard), leaving 3 grain + 8 fruit + 8 fish
+        // available — cannery cap=3 → produces 3 canned food.
+        nation.add_resource(ResourceType::Grain, 8);
+        nation.add_resource(ResourceType::Fruit, 8);
+        nation.add_resource(ResourceType::Fish, 8);
 
         let report = process_turn(&mut game);
 
-        // FoodProcessing: cap 3, 8 grain / 2 = 4 limited by cap = 3 canned food
-        // Consumes 6 grain, leaves 2
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.resource_amount(ResourceType::Grain), 2);
         assert_eq!(nation.material_amount(MaterialType::CannedFood), 3);
 
         let canned_output: u32 = report
@@ -7094,6 +7061,46 @@ mod tests {
             .map(|(_, _, q)| *q)
             .sum();
         assert_eq!(canned_output, 3);
+    }
+
+    #[test]
+    fn cannery_does_not_starve_workers_at_unlimited_default() {
+        // Regression for F-002: with the default unlimited target, the cannery
+        // must not consume grain/fruit/fish that workers need to eat this turn.
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.economy.chain_targets.timber_mill = 0;
+        nation.economy.chain_targets.metal_mill = 0;
+        nation.economy.chain_targets.textile_mill = 0;
+        nation.economy.chain_targets.lumber_factory = 0;
+        nation.economy.chain_targets.steel_factory = 0;
+        nation.economy.chain_targets.garment_factory = 0;
+        // 5 expert workers = 5 food/turn. Cannery cap 10 (oversized vs supply).
+        nation
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::FoodProcessing, 10));
+        // 4 of each raw input — total 12 food, enough for 5 workers + canning surplus.
+        // Workers reserve 5 grain (only 4 grain available, then 1 fruit). Canning
+        // sees 0 grain + 3 fruit + 4 fish → bottleneck is grain → 0 canned.
+        // No starvation: workers eat 4 grain + 1 fruit = 5 food.
+        nation.add_resource(ResourceType::Grain, 4);
+        nation.add_resource(ResourceType::Fruit, 4);
+        nation.add_resource(ResourceType::Fish, 4);
+
+        let report = process_turn(&mut game);
+
+        // No starvation
+        let starved: u32 = report
+            .starvation
+            .iter()
+            .filter(|(nid, _)| *nid == NationId(1))
+            .map(|(_, q)| *q)
+            .sum();
+        assert_eq!(starved, 0, "Default cannery target must not starve workers");
+
+        let nation = game.get_nation(NationId(1)).unwrap();
+        assert_eq!(nation.economy.labor.total_workers(), 5);
     }
 
     // ── Building tick ─────────────────────────────────────────
@@ -8410,8 +8417,10 @@ mod tests {
             .buildings
             .push(Building::new(BuildingType::FoodProcessing, 5));
 
-        // Plenty of raw food for canning this turn.
+        // Plenty of all canning inputs (1 grain + 1 fruit + 1 fish/livestock per can).
         nation.add_resource(ResourceType::Grain, 50);
+        nation.add_resource(ResourceType::Fruit, 50);
+        nation.add_resource(ResourceType::Fish, 50);
 
         // Queue one immigrant and pre-stock clothing only.
         nation.economy.pending_immigration = 1;
