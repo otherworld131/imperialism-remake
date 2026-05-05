@@ -6,8 +6,8 @@
 //! with non-economy steps, then calls `release_all_reservations` once at the end
 //! of all three batches to honour the documented reservation lifetime contract.
 //!
-//! Lighter helpers (warehouse caps, building tick, blockade capacity,
-//! maintenance, blockade headlines) live here alongside the phase types.
+//! Lighter helpers (building tick, blockade capacity, maintenance, blockade
+//! headlines) live here alongside the phase types.
 //! The heavy execution functions (`collect_resources`, `run_production`)
 //! remain in `processor.rs`; trade resolution now lives in `trade_phase.rs`.
 
@@ -976,49 +976,6 @@ pub(super) fn apply_blockade_effects(game: &GameState, report: &mut TurnReport) 
                     )
                     .for_nation(nation_id),
                 );
-            }
-        }
-    }
-}
-
-/// Apply warehouse capacity caps to prevent infinite resource accumulation.
-///
-/// Each nation's Warehouse building capacity determines storage limits:
-/// - Raw resources: capped at `50 * warehouse_capacity` per resource type
-/// - Materials: capped at `50 * warehouse_capacity` per material type
-/// - Finished goods: capped at `25 * warehouse_capacity` per goods type
-///
-/// Excess resources above the cap are silently lost (spoilage/waste).
-/// Nations without a Warehouse building use a default capacity of 1.
-pub(super) fn apply_warehouse_caps(game: &mut GameState) {
-    for nation in &mut game.world.nations {
-        let warehouse_capacity = nation
-            .economy
-            .buildings
-            .iter()
-            .find(|b| b.building_type == BuildingType::Warehouse)
-            .map(|b| b.effective_capacity())
-            .unwrap_or(1);
-
-        let raw_cap = 50 * warehouse_capacity;
-        let material_cap = 50 * warehouse_capacity;
-        let goods_cap = 25 * warehouse_capacity;
-
-        for amount in nation.economy.warehouse.values_mut() {
-            if *amount > raw_cap {
-                *amount = raw_cap;
-            }
-        }
-
-        for amount in nation.economy.materials.values_mut() {
-            if *amount > material_cap {
-                *amount = material_cap;
-            }
-        }
-
-        for amount in nation.economy.goods.values_mut() {
-            if *amount > goods_cap {
-                *amount = goods_cap;
             }
         }
     }

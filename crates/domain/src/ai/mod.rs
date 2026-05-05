@@ -11,6 +11,7 @@ mod research;
 pub mod snapshot;
 mod spending;
 mod tactical;
+mod transport;
 
 pub use common::{AiPersonality, personality_for_nation_index};
 pub use diplomacy::{ai_manage_diplomacy, ai_pre_election_strategy, minor_nation_bonus_trade};
@@ -101,6 +102,10 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<AiAction> {
         labor::ai_deploy_civilians(game, *nation_id);
         economy::ai_trade(game, *nation_id);
         economy::ai_build_transport_proactive(game, *nation_id);
+        // AI freight allocation: cover worker food + every active mill / cannery's
+        // raw inputs. Without this the transport system delivers nothing remote
+        // (cards [1/6], Trello).
+        transport::ai_allocate_transport(game, *nation_id);
         diplomacy::ai_manage_diplomacy(game, *nation_id, &mut actions);
         diplomacy::ai_pre_election_strategy(game, *nation_id, &mut actions);
         naval::ai_build_merchant_ships(game, *nation_id);

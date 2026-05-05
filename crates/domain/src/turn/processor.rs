@@ -25,9 +25,7 @@ use crate::turn::diplomacy_phase::{
 };
 #[cfg(test)]
 use crate::turn::economy_phase::compute_blockade_capacity;
-use crate::turn::economy_phase::{
-    apply_blockade_effects, apply_maintenance, apply_warehouse_caps, tick_buildings,
-};
+use crate::turn::economy_phase::{apply_blockade_effects, apply_maintenance, tick_buildings};
 use crate::turn::news_phase::generate_newspaper;
 use crate::turn::rewards_phase::resolve_rewards;
 use crate::turn::scoring::{CouncilVoteResult, calculate_score, run_council_vote};
@@ -549,9 +547,6 @@ fn run_pre_immigration_phases(game: &mut GameState, report: &mut TurnReport) {
     let reserved_trade = validate_and_reserve(game, trade_orders);
     execute_reserved_economy(game, report, reserved_trade);
     clear_economy_batch_reservations(game);
-
-    // 3c. Warehouse capacity caps: prevent infinite resource accumulation
-    apply_warehouse_caps(game);
 
     // 4. Tick buildings (process expansion timers)
     tick_buildings(game);
@@ -11131,87 +11126,6 @@ mod tests {
         assert!(
             !defender.province_ids.contains(&ProvinceId(2)),
             "Defender should no longer have Province 2"
-        );
-    }
-
-    // ── Warehouse capacity caps ───────────────────────────────────
-
-    #[test]
-    fn warehouse_caps_raw_resources() {
-        let mut game = test_game_state();
-        // Default warehouse capacity is 1, so raw cap = 50
-        game.world.nations[0].add_resource(ResourceType::Timber, 100);
-        assert_eq!(
-            game.world.nations[0].resource_amount(ResourceType::Timber),
-            100
-        );
-
-        apply_warehouse_caps(&mut game);
-        assert_eq!(
-            game.world.nations[0].resource_amount(ResourceType::Timber),
-            50
-        );
-    }
-
-    #[test]
-    fn warehouse_caps_materials() {
-        let mut game = test_game_state();
-        // Default warehouse capacity is 1, so material cap = 50
-        game.world.nations[0].add_material(MaterialType::Lumber, 80);
-
-        apply_warehouse_caps(&mut game);
-        assert_eq!(
-            game.world.nations[0].material_amount(MaterialType::Lumber),
-            50
-        );
-    }
-
-    #[test]
-    fn warehouse_caps_finished_goods() {
-        let mut game = test_game_state();
-        // Default warehouse capacity is 1, so goods cap = 25
-        game.world.nations[0].add_goods(GoodsType::Furniture, 40);
-
-        apply_warehouse_caps(&mut game);
-        assert_eq!(game.world.nations[0].goods_amount(GoodsType::Furniture), 25);
-    }
-
-    #[test]
-    fn warehouse_caps_scale_with_capacity() {
-        let mut game = test_game_state();
-        // Add a Warehouse building with capacity 4: raw cap = 200, material cap = 200, goods cap = 100
-        game.world.nations[0]
-            .economy
-            .buildings
-            .push(Building::new(BuildingType::Warehouse, 4));
-
-        game.world.nations[0].add_resource(ResourceType::Coal, 250);
-        game.world.nations[0].add_material(MaterialType::Steel, 250);
-        game.world.nations[0].add_goods(GoodsType::Hardware, 150);
-
-        apply_warehouse_caps(&mut game);
-        assert_eq!(
-            game.world.nations[0].resource_amount(ResourceType::Coal),
-            200
-        );
-        assert_eq!(
-            game.world.nations[0].material_amount(MaterialType::Steel),
-            200
-        );
-        assert_eq!(game.world.nations[0].goods_amount(GoodsType::Hardware), 100);
-    }
-
-    #[test]
-    fn warehouse_caps_do_not_reduce_below_cap() {
-        let mut game = test_game_state();
-        // Default warehouse capacity is 1, so raw cap = 50
-        game.world.nations[0].add_resource(ResourceType::Iron, 30);
-
-        apply_warehouse_caps(&mut game);
-        // Should remain unchanged since 30 < 50
-        assert_eq!(
-            game.world.nations[0].resource_amount(ResourceType::Iron),
-            30
         );
     }
 

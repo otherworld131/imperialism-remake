@@ -960,7 +960,8 @@ impl Nation {
 
     /// Add raw resources to the warehouse.
     pub fn add_resource(&mut self, resource: ResourceType, amount: u32) {
-        *self.economy.warehouse.entry(resource).or_insert(0) += amount;
+        let entry = self.economy.warehouse.entry(resource).or_insert(0);
+        *entry = entry.saturating_add(amount);
     }
 
     /// Remove raw resources from the warehouse.
@@ -1017,12 +1018,14 @@ impl Nation {
 
     /// Add materials to the warehouse.
     pub fn add_material(&mut self, material: MaterialType, amount: u32) {
-        *self.economy.materials.entry(material).or_insert(0) += amount;
+        let entry = self.economy.materials.entry(material).or_insert(0);
+        *entry = entry.saturating_add(amount);
     }
 
     /// Add finished goods to the warehouse.
     pub fn add_goods(&mut self, goods: GoodsType, amount: u32) {
-        *self.economy.goods.entry(goods).or_insert(0) += amount;
+        let entry = self.economy.goods.entry(goods).or_insert(0);
+        *entry = entry.saturating_add(amount);
     }
 
     /// Returns true if the nation has enough treasury, arms, horses, oil, and
