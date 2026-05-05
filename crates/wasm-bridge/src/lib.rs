@@ -2722,6 +2722,22 @@ pub fn wasm_set_pending_training(
     serialize_game(&game)
 }
 
+/// Set the pending immigration count for end-of-turn processing.
+#[wasm_bindgen]
+pub fn wasm_set_pending_immigration(game_json: &str, nation_id: u32, count: u32) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let nation = match game.get_nation_mut(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
+    nation.economy.pending_immigration = count;
+    serialize_game(&game)
+}
+
 // ── Command: Build Ship ──────────────────────────────────────────────
 
 /// Queue a ship for end-of-turn construction. Resources are NOT deducted until end-of-turn.
@@ -3035,15 +3051,28 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         && available_labor >= labor_cost;
 
     let (local_items, remote_items) = domain::economy::current_collectable_resources(&game, nid);
-    let mut available_map: std::collections::BTreeMap<ResourceType, u32> =
+    let mut local_available_map: std::collections::BTreeMap<ResourceType, u32> =
         std::collections::BTreeMap::new();
     for (resource, qty) in &local_items {
-        *available_map.entry(*resource).or_insert(0) += *qty;
+        *local_available_map.entry(*resource).or_insert(0) += *qty;
     }
+    let local_deliveries_json: Vec<serde_json::Value> = local_available_map
+        .iter()
+        .map(|(r, qty)| {
+            serde_json::json!({
+                "resource": format!("{:?}", r),
+                "available": qty,
+                "delivered": qty,
+            })
+        })
+        .collect();
+
+    let mut remote_available_map: std::collections::BTreeMap<ResourceType, u32> =
+        std::collections::BTreeMap::new();
     for (resource, qty) in &remote_items {
-        *available_map.entry(*resource).or_insert(0) += *qty;
+        *remote_available_map.entry(*resource).or_insert(0) += *qty;
     }
-    let available: Vec<(ResourceType, u32)> = available_map.into_iter().collect();
+    let remote_available: Vec<(ResourceType, u32)> = remote_available_map.into_iter().collect();
 
     // Project deliveries against the same local/remote split used by turn
     // processing so the UI reflects what will actually be collected this turn.
@@ -3052,7 +3081,7 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         freight_cars: transport.freight_cars + merchant_cargo,
         allocations: transport.allocations.clone(),
     };
-    let has_positive_allocations = transport.allocations.iter().any(|(_, pct)| *pct > 0);
+    let has_positive_allocations = transport.allocations.iter().any(|(_, units)| *units > 0);
     let remote_deliveries = if has_positive_allocations {
         combined_transport.calculate_deliveries(&remote_items)
     } else {
@@ -3064,7 +3093,7 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         Vec::new()
     };
     let mut delivered_map: std::collections::BTreeMap<ResourceType, u32> =
-        local_items.iter().copied().collect();
+        std::collections::BTreeMap::new();
     for (resource, qty) in &remote_deliveries {
         *delivered_map.entry(*resource).or_insert(0) += *qty;
     }
@@ -3072,15 +3101,15 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
     let allocations_json: Vec<serde_json::Value> = transport
         .allocations
         .iter()
-        .map(|(r, pct)| {
+        .map(|(r, units)| {
             serde_json::json!({
                 "resource": format!("{:?}", r),
-                "percentage": pct,
+                "units": units,
             })
         })
         .collect();
 
-    let deliveries_json: Vec<serde_json::Value> = available
+    let deliveries_json: Vec<serde_json::Value> = remote_available
         .iter()
         .map(|(r, avail)| {
             let delivered = delivered_map.get(r).copied().unwrap_or(0);
@@ -3093,7 +3122,7 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         .collect();
 
     let merchant_ship_count = nation.merchant_ship_count();
-    let rail_only_deliveries_json: Vec<serde_json::Value> = available
+    let rail_only_deliveries_json: Vec<serde_json::Value> = remote_available
         .iter()
         .map(|(r, _avail)| {
             let delivered = rail_only_deliveries
@@ -3116,7 +3145,7 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
     // render the demand indicator even when the player has none in warehouse (F-013).
     let mut deliveries_with_demand = deliveries_json;
     for (r, _qty) in &demand_forecast {
-        let already_present = available.iter().any(|(ar, _)| ar == r);
+        let already_present = remote_available.iter().any(|(ar, _)| ar == r);
         if !already_present {
             deliveries_with_demand.push(serde_json::json!({
                 "resource": format!("{:?}", r),
@@ -3124,6 +3153,16 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
                 "delivered": 0,
             }));
         }
+    }
+    for (r, units) in &transport.allocations {
+        if *units == 0 || deliveries_with_demand.iter().any(|entry| entry["resource"] == format!("{:?}", r)) {
+            continue;
+        }
+        deliveries_with_demand.push(serde_json::json!({
+            "resource": format!("{:?}", r),
+            "available": 0,
+            "delivered": 0,
+        }));
     }
 
     let demand_json: Vec<serde_json::Value> = demand_forecast
@@ -3154,6 +3193,7 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         "available_steel": available_steel,
         "available_labor": available_labor,
         "deliveries": deliveries_with_demand,
+        "local_deliveries": local_deliveries_json,
         "rail_only_deliveries": rail_only_deliveries_json,
         "demand": demand_json,
     })
@@ -3174,13 +3214,13 @@ pub fn wasm_set_pending_freight_cars(game_json: &str, nation_id: u32, count: u32
     serialize_game(&game)
 }
 
-/// Set transport allocation for a resource type (percentage 0-100).
+/// Set transport allocation for a resource type (explicit freight units).
 #[wasm_bindgen]
 pub fn wasm_set_transport_allocation(
     game_json: &str,
     nation_id: u32,
     resource: &str,
-    percentage: u32,
+    units: u32,
 ) -> String {
     let mut game = match deserialize_game(game_json) {
         Ok(g) => g,
@@ -3200,7 +3240,7 @@ pub fn wasm_set_transport_allocation(
     nation
         .military
         .transport
-        .set_allocation(res, percentage.min(100));
+        .set_allocation(res, units);
     serialize_game(&game)
 }
 
@@ -3424,6 +3464,8 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
     let committed_expert_civilian = nation.economy.pending_civilian_hires.values().sum::<u32>();
     let committed_untrained_training = nation.economy.pending_train_to_trained;
     let committed_trained_training = nation.economy.pending_train_to_expert;
+    let cfg = &game.game_data.game_config;
+    let max_pending_immigration = nation.max_immigration_queue(cfg);
 
     // Committed resources from pending army recruits
     let mut army_committed_arms = 0u32;
@@ -3447,7 +3489,6 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
     let committed_expert = committed_expert_civilian + army_committed_expert;
     let committed_untrained = committed_untrained_training + army_committed_untrained;
     let committed_trained = committed_trained_training + army_committed_trained;
-    let cfg = &game.game_data.game_config;
     let committed_labor_units = committed_untrained * cfg.untrained_labor
         + committed_trained * cfg.trained_labor
         + committed_expert * cfg.expert_labor;
@@ -3562,9 +3603,15 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
             .iter()
             .map(|(k, v)| (format!("{}", k), serde_json::json!(v)))
             .collect::<serde_json::Map<String, serde_json::Value>>(),
+        "pending_immigration": nation.economy.pending_immigration,
+        "max_pending_immigration": max_pending_immigration,
         "pending_training": {
             "to_trained": nation.economy.pending_train_to_trained,
             "to_expert": nation.economy.pending_train_to_expert,
+        },
+        "immigration_costs": {
+            "canned_food": cfg.immigration_canned_food,
+            "clothing": cfg.immigration_clothing,
         },
         "training_costs": {
             "to_trained_paper": game.game_data.game_config.train_to_trained_paper_cost,
@@ -5480,6 +5527,15 @@ pub fn wasm_get_political_snapshot(game_json: &str, turn: u32) -> String {
 /// Return the newspaper headline archive for all past turns.
 #[wasm_bindgen]
 pub fn wasm_get_newspaper_archive(game_json: &str) -> String {
+    wasm_get_newspaper_archive_since(game_json, 0)
+}
+
+/// Return newspaper archive entries after `after_turn`.
+///
+/// This lets the frontend refresh an already-loaded archive incrementally
+/// instead of reserializing the full archive each time the newspaper opens.
+#[wasm_bindgen]
+pub fn wasm_get_newspaper_archive_since(game_json: &str, after_turn: u32) -> String {
     let game = match game_from_json(game_json) {
         Ok(g) => g,
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
@@ -5488,6 +5544,7 @@ pub fn wasm_get_newspaper_archive(game_json: &str) -> String {
     let archive: Vec<serde_json::Value> = game
         .archive.newspaper_archive
         .iter()
+        .filter(|(turn, _)| turn.0 > after_turn)
         .map(|(turn, headlines)| {
             let items: Vec<serde_json::Value> = headlines
                 .iter()

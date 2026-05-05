@@ -3,60 +3,45 @@ import { resourceLabel } from '../resourceEmoji';
 
 interface Props {
   transport: TransportData;
-  onBuildCar: () => void;
-  onSetAllocation: (resource: string, percentage: number) => void;
+  onSetAllocation: (resource: string, units: number) => void;
 }
 
-export default function TransportPanel({ transport, onBuildCar, onSetAllocation }: Props) {
-  const { freight_cars, total_capacity, remote_delivery_capacity, military_transport_capacity, allocations, build_cost, can_build, deliveries, demand = [] } = transport;
+export default function TransportPanel({ transport, onSetAllocation }: Props) {
+  const { total_capacity, remote_delivery_capacity, military_transport_capacity, allocations, deliveries, demand = [], local_deliveries = [] } = transport;
 
   const allocationMap: Record<string, number> = {};
-  for (const a of allocations) allocationMap[a.resource] = a.percentage;
+  for (const a of allocations) allocationMap[a.resource] = a.units;
 
   const demandMap: Record<string, number> = {};
   for (const d of demand) demandMap[d.resource] = d.demand;
 
-  const totalPct = Object.values(allocationMap).reduce((s, v) => s + v, 0);
+  const cap = remote_delivery_capacity ?? total_capacity;
+  const allocatedUnitsByResource: Record<string, number> = {};
+  for (const d of deliveries) {
+    allocatedUnitsByResource[d.resource] = allocationMap[d.resource] ?? 0;
+  }
+  const totalAllocatedUnits = Object.values(allocationMap).reduce((sum, units) => sum + units, 0);
+  const remainingCapacity = Math.max(0, cap - totalAllocatedUnits);
 
   return (
     <div style={{ fontSize: 'var(--ui-font-size, 14px)' }}>
       <div style={{ fontWeight: 'bold', marginBottom: 6 }}>Freight Cars</div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-        <span>Cars: {freight_cars}</span>
-        <span>Capacity: {total_capacity}</span>
-      </div>
-      <div style={{ marginBottom: 6 }}>
-        <button
-          onClick={onBuildCar}
-          disabled={!can_build}
-          style={btnStyle(can_build ? '#2a6' : '#444')}
-        >
-          Build Car
-        </button>
-        <span style={{ fontSize: 10, color: '#888', marginLeft: 6 }}>
-          {build_cost.lumber}L + {build_cost.steel}S
-        </span>
+        <span>Capacity: {remainingCapacity} ({cap})</span>
       </div>
 
       <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 6 }}>
         <div style={{ fontWeight: 'bold', marginBottom: 4 }}>Resource Allocation</div>
-        {totalPct > 100 && (
-          <div style={{ color: '#e44', fontSize: 11, marginBottom: 4 }}>
-            Total exceeds 100% ({totalPct}%)
-          </div>
-        )}
         {deliveries.length === 0 && (
           <div style={{ color: '#888', fontStyle: 'italic', fontSize: 'var(--ui-font-size, 14px)' }}>No resources available</div>
         )}
         {deliveries.map(d => {
-          const pct = allocationMap[d.resource] ?? 0;
+          const allocatedUnits = allocatedUnitsByResource[d.resource] ?? 0;
+          const projectedDelivery = Math.min(allocatedUnits, d.available);
           const demandQty = demandMap[d.resource] ?? 0;
-          const anyAllocSet = Object.values(allocationMap).some(p => p > 0);
-          const cap = remote_delivery_capacity ?? total_capacity;
-          const projected = anyAllocSet
-            ? Math.min(d.available, Math.floor(pct * cap / 100))
-            : 0;
-          const belowDemand = demandQty > 0 && projected < demandQty;
+          const belowDemand = demandQty > 0 && projectedDelivery < demandQty;
+          const canDecrease = allocatedUnits > 0;
+          const canIncrease = remainingCapacity > 0 && cap > 0;
           return (
             <div key={d.resource} style={{
               display: 'flex', alignItems: 'center', gap: 4, marginBottom: 3,
@@ -66,27 +51,43 @@ export default function TransportPanel({ transport, onBuildCar, onSetAllocation 
             }}>
               <span style={{ flex: 1, fontSize: 'var(--ui-font-size, 14px)' }}>{resourceLabel(d.resource)}</span>
               <button
-                onClick={() => onSetAllocation(d.resource, Math.max(0, pct - 10))}
-                style={smallBtn}
+                onClick={() => onSetAllocation(d.resource, allocatedUnits - 1)}
+                disabled={!canDecrease}
+                style={smallBtn(!canDecrease)}
               >-</button>
-              <span style={{ width: 32, textAlign: 'center', fontSize: 11 }}>{pct}%</span>
+              <span style={{ width: 40, textAlign: 'center', fontSize: 11 }}>{allocatedUnits}/{d.available}</span>
               <button
-                onClick={() => onSetAllocation(d.resource, Math.min(100, pct + 10))}
-                style={smallBtn}
+                onClick={() => onSetAllocation(d.resource, allocatedUnits + 1)}
+                disabled={!canIncrease}
+                style={smallBtn(!canIncrease)}
               >+</button>
-              <span style={{ fontSize: 10, width: 36, textAlign: 'right',
-                color: belowDemand ? '#e44' : '#999' }}>
-                {d.delivered}/{d.available}
-              </span>
               {belowDemand && (
-                <span style={{ fontSize: 9, color: '#e44', marginLeft: 2 }} title={`Demand: ${demandQty}`}>
+                <span style={{ fontSize: 9, color: '#e44', marginLeft: 'auto' }} title={`Demand: ${demandQty}`}>
                   ▼{demandQty}
                 </span>
+              )}
+              {!belowDemand && (
+                <span style={{ width: 24, marginLeft: 'auto' }} />
               )}
             </div>
           );
         })}
       </div>
+
+      {local_deliveries.length > 0 && (
+        <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 8 }}>
+          <div style={{ fontWeight: 'bold', marginBottom: 4 }}>Local Collection</div>
+          {local_deliveries.map(d => (
+            <div key={d.resource} style={{
+              display: 'flex', alignItems: 'center', gap: 4, marginBottom: 3,
+              background: 'rgba(255,255,255,0.03)', borderRadius: 3, padding: '3px 4px',
+            }}>
+              <span style={{ flex: 1, fontSize: 'var(--ui-font-size, 14px)' }}>{resourceLabel(d.resource)}</span>
+              <span style={{ fontSize: 11, color: '#999' }}>{d.delivered}/{d.available}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 8 }}>
         <div style={{ fontWeight: 'bold', marginBottom: 4 }}>Military Transport</div>
@@ -98,14 +99,15 @@ export default function TransportPanel({ transport, onBuildCar, onSetAllocation 
   );
 }
 
-function btnStyle(bg: string): React.CSSProperties {
+function smallBtn(disabled: boolean): React.CSSProperties {
   return {
-    background: bg, color: '#fff', border: 'none', borderRadius: 3,
-    padding: '2px 8px', fontSize: 11, cursor: 'pointer',
+    background: disabled ? '#26211a' : '#3a3520',
+    color: disabled ? '#7f7765' : '#e0d8c0',
+    border: 'none',
+    borderRadius: 2,
+    padding: '1px 5px',
+    fontSize: 11,
+    cursor: disabled ? 'default' : 'pointer',
+    minWidth: 18,
   };
 }
-
-const smallBtn: React.CSSProperties = {
-  background: '#3a3520', color: '#e0d8c0', border: 'none', borderRadius: 2,
-  padding: '1px 5px', fontSize: 11, cursor: 'pointer', minWidth: 18,
-};

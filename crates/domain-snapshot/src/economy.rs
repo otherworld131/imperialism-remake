@@ -1282,6 +1282,8 @@ pub struct NationEconomy {
     #[serde(default)]
     pub pending_train_to_expert: u32,
     #[serde(default)]
+    pub pending_immigration: u32,
+    #[serde(default)]
     pub pending_freight_cars: u32,
     #[serde(default)]
     pub pending_ships: Vec<String>,
@@ -1323,6 +1325,7 @@ impl From<&domain::nation::NationEconomy> for NationEconomy {
                 .collect(),
             pending_train_to_trained: v.pending_train_to_trained,
             pending_train_to_expert: v.pending_train_to_expert,
+            pending_immigration: v.pending_immigration,
             pending_freight_cars: v.pending_freight_cars,
             pending_ships: v.pending_ships.clone(),
             pending_army_recruits: v.pending_army_recruits.clone(),
@@ -1383,6 +1386,7 @@ impl From<NationEconomy> for domain::nation::NationEconomy {
             .collect();
         ne.pending_train_to_trained = v.pending_train_to_trained;
         ne.pending_train_to_expert = v.pending_train_to_expert;
+        ne.pending_immigration = v.pending_immigration;
         ne.pending_freight_cars = v.pending_freight_cars;
         ne.pending_ships = v.pending_ships;
         ne.pending_army_recruits = v.pending_army_recruits;

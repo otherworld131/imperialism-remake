@@ -11,14 +11,14 @@ import {
   upgradeUnit, upgradeUnits,
   // New screen queries
   getTransportData, setPendingFreightCars, setTransportAllocation,
-  getIndustryData, expandBuilding, setChainTarget, setPendingCivilianHire, setPendingTraining,
+  getIndustryData, expandBuilding, setChainTarget, setPendingCivilianHire, setPendingTraining, setPendingImmigration,
   getTradeData, setTradeSubsidy, setPlayerSellOrder, setPlayerBuyOrder,
   getDiplomacyScreenData,
   diplomacyBuildConsulate, diplomacyBuildEmbassy, diplomacyProposeNap,
   diplomacyProposeAlliance, diplomacyDeclareWar, diplomacySendGrant,
   diplomacyBreakTreaty, diplomacyProposePeace,
   getPendingProposals, acceptProposal, rejectProposal,
-  getNewspaperArchive,
+  getNewspaperArchive, getNewspaperArchiveSince,
   getPoliticalSnapshot,
   getBattleArchive,
   getLedgerData,
@@ -164,6 +164,7 @@ function App() {
   const mutationLockRef = useRef(false);
   const skipCancelRef = useRef(false);
   const newsArchiveCacheRef = useRef(new Map<string, ArchivedNewspaper[]>());
+  const latestNewsArchiveRef = useRef<ArchivedNewspaper[]>([]);
   const archiveRequestSeqRef = useRef(0);
   const currentGameJsonRef = useRef('');
   const deferredDerivedRefreshRef = useRef(false);
@@ -253,6 +254,7 @@ function App() {
 
   const loadNewspaperArchive = useCallback(async () => {
     if (!gameJson) {
+      latestNewsArchiveRef.current = [];
       setArchiveData([]);
       setArchiveLoadState('idle');
       return;
@@ -267,8 +269,14 @@ function App() {
     }
     setArchiveLoadState('loading');
     try {
-      const archive = await getNewspaperArchive(gameJson);
+      const previousArchive = latestNewsArchiveRef.current;
+      const afterTurn = previousArchive.reduce((max, entry) => Math.max(max, entry.turn), 0);
+      const delta = afterTurn > 0
+        ? await getNewspaperArchiveSince(gameJson, afterTurn)
+        : await getNewspaperArchive(gameJson);
       if (archiveRequestSeqRef.current !== requestSeq || requestedJson !== currentGameJsonRef.current) return;
+      const archive = afterTurn > 0 ? [...previousArchive, ...delta] : delta;
+      latestNewsArchiveRef.current = archive;
       newsArchiveCacheRef.current.set(gameJson, archive);
       setArchiveData(archive);
       setArchiveLoadState('loaded');
@@ -300,6 +308,7 @@ function App() {
   const [diplomacyScreenData, setDiplomacyScreenData] = useState<DiplomacyScreenData | null>(null);
   const [_ledgerData, setLedgerData] = useState<LedgerData | null>(null);
   const [gpLedgerData, setGpLedgerData] = useState<GPLedgerEntry[]>([]);
+  const gpLedgerDataRef = useRef<GPLedgerEntry[]>([]);
   // Previous-turn snapshot of the ledger data, kept so the UI can render
   // turn-over-turn deltas on every stat column. Rotated only when the turn
   // number actually advances — not on every refetch — so mid-turn refreshes
@@ -435,13 +444,14 @@ function App() {
     // delta comparison pinned to "last turn" rather than "last refetch".
     const newTurn: number = state?.turn?.[0] ?? state?.turn ?? 1;
     if (prevLedgerTurnRef.current !== null && newTurn !== prevLedgerTurnRef.current) {
-      setPrevGpLedgerData(gpLedgerData);
+      setPrevGpLedgerData(gpLedgerDataRef.current);
     }
     prevLedgerTurnRef.current = newTurn;
+    gpLedgerDataRef.current = gpLedgerRes;
     setGpLedgerData(gpLedgerRes);
     deferredDerivedRefreshRef.current = false;
     return true;
-  }, [showError, disableFogOfWar, gpLedgerData]);
+  }, [showError, disableFogOfWar]);
 
   const applyGameJsonLightweight = useCallback((json: string): boolean => {
     let state;
@@ -467,7 +477,9 @@ function App() {
     void applyGameJson(gameJson);
   }, [activeScreen, gameJson, applyGameJson]);
 
-  // Re-fetch tiles when fog of war toggle changes
+  // Re-fetch tiles when fog of war toggle changes. Game-state changes refresh
+  // map/navy through applyGameJson/applyGameJsonLightweight, so don't duplicate
+  // those worker calls here on every gameJson update.
   useEffect(() => {
     (async () => {
       if (gameJson) {
@@ -475,7 +487,7 @@ function App() {
         setNavyMarkers(await getNavyMarkers(gameJson, disableFogOfWar));
       }
     })();
-  }, [disableFogOfWar, gameJson]);
+  }, [disableFogOfWar]);
 
   const handleGameStart = async (json: string, params: GameStartParams) => {
     await runMutation(async () => {
@@ -531,6 +543,7 @@ function App() {
       setCurrentNavalBattles([]);
       setProposalData(null);
       setShowProposals(false);
+      latestNewsArchiveRef.current = [];
       setArchiveData([]);
       setArchiveLoadState('idle');
       newsArchiveCacheRef.current.clear();
@@ -545,6 +558,7 @@ function App() {
     await runMutation(async () => {
       setBusyMessage('Processing turn…');
       try {
+        const archivedTurn = gameState?.turn?.[0] ?? gameState?.turn ?? 0;
         const result = await processTurn(gameJson);
         if (result.error) { alert(result.error); return; }
         const newJson = JSON.stringify(result.game);
@@ -553,6 +567,15 @@ function App() {
         setHeadlines(result.report?.headlines || []);
         setCurrentBattles(result.report?.battles || []);
         setCurrentNavalBattles(result.report?.naval_battles || []);
+        const turnArchive = archivedTurn > 0
+          ? [{
+              turn: archivedTurn,
+              year: result.report?.year ?? 0,
+              quarter: result.report?.quarter ?? 0,
+              headlines: result.report?.headlines || [],
+            }]
+          : [];
+        latestNewsArchiveRef.current = [...latestNewsArchiveRef.current, ...turnArchive];
         setArchiveData([]);
         setArchiveLoadState('idle');
         // Check for pending proposals
@@ -569,7 +592,7 @@ function App() {
         setBusyMessage(null);
       }
     });
-  }, [gameJson, applyGameJsonLightweight, runMutation]);
+  }, [gameJson, gameState, applyGameJsonLightweight, runMutation]);
 
   const dismissNewspaper = useCallback(() => {
     setActiveScreen('map');
@@ -589,21 +612,26 @@ function App() {
       skipCancelRef.current = false;
       setSkipCancellable(true);
       try {
-        for (let i = 0; i < n; i++) {
+        let processed = 0;
+        while (processed < n) {
           if (skipCancelRef.current) break;
           setBusyMessage(`Processing ${turnToYearQ(currentTurn)}… (click to stop)`);
-          const result = await processTurns(currentJson, 1);
+          const batchSize = Math.min(50, n - processed);
+          const result = await processTurns(currentJson, batchSize);
           if ((result as any).error) { alert((result as any).error); return; }
           currentJson = JSON.stringify(result.game);
           currentTurn = result.game?.turn?.[0] ?? result.game?.turn ?? (currentTurn + 1);
+          processed += result.reports.length;
           allHeadlines.push(...result.reports.flatMap((r: any) => r.headlines));
           lastBattles = result.reports.flatMap((r: any) => r.battles);
           lastNavalBattles = result.reports.flatMap((r: any) => r.naval_battles);
+          if (result.stopped_early || result.reports.length === 0) break;
         }
         if (!applyGameJsonLightweight(currentJson)) return;
         setHeadlines(allHeadlines);
         setCurrentBattles(lastBattles);
         setCurrentNavalBattles(lastNavalBattles);
+        latestNewsArchiveRef.current = [];
         setArchiveData([]);
         setArchiveLoadState('idle');
         setProvinceUnits(null);
@@ -678,6 +706,7 @@ function App() {
       setCurrentBattles(lastBattlesSkip);
       setCurrentNavalBattles(lastNavalBattlesSkip);
       setActiveScreen('newspaper');
+      latestNewsArchiveRef.current = [];
       setArchiveData([]);
       setArchiveLoadState('idle');
       setProvinceUnits(null);
@@ -1301,10 +1330,10 @@ function App() {
     });
   }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
-  const handleSetAllocation = useCallback(async (resource: string, percentage: number) => {
+  const handleSetAllocation = useCallback(async (resource: string, units: number) => {
     await runMutation(async () => {
       if (isObserver) return;
-      const cmd = await setTransportAllocation(gameJson, playerNationId, resource, percentage);
+      const cmd = await setTransportAllocation(gameJson, playerNationId, resource, units);
       if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
       else if (cmd.error) showError(`Allocation failed: ${cmd.error}`);
     });
@@ -1334,6 +1363,15 @@ function App() {
       const cmd = await setPendingTraining(gameJson, playerNationId, toTrained, toExpert);
       if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
       else if (cmd.error) showError(`Training failed: ${cmd.error}`);
+    });
+  }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
+
+  const handleSetPendingImmigration = useCallback(async (count: number) => {
+    await runMutation(async () => {
+      if (isObserver) return;
+      const cmd = await setPendingImmigration(gameJson, playerNationId, count);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error) showError(`Immigration failed: ${cmd.error}`);
     });
   }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
@@ -1733,6 +1771,7 @@ function App() {
                 onSetPendingCivilianHire={handleSetPendingCivilianHire}
                 onSetPendingFreightCars={handleSetPendingFreightCars}
                 onSetChainTarget={handleSetChainTarget}
+                onSetPendingImmigration={handleSetPendingImmigration}
                 onSetPendingTraining={handleSetPendingTraining}
               />
             ) : (
@@ -2167,7 +2206,6 @@ function App() {
             transportData ? (
               <TransportPanel
                 transport={transportData}
-                onBuildCar={() => handleSetPendingFreightCars(1)}
                 onSetAllocation={handleSetAllocation}
               />
             ) : (

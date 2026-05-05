@@ -718,6 +718,12 @@ export async function getNewspaperArchive(gameJson: string): Promise<ArchivedNew
   return parsed;
 }
 
+export async function getNewspaperArchiveSince(gameJson: string, afterTurn: number): Promise<ArchivedNewspaper[]> {
+  const parsed = JSON.parse(await call<string>('wasm_get_newspaper_archive_since', gameJson, afterTurn));
+  if (parsed.error || !Array.isArray(parsed)) return [];
+  return parsed;
+}
+
 export async function getPoliticalSnapshot(gameJson: string, turn: number): Promise<PoliticalSnapshot | null> {
   const parsed = JSON.parse(await call<string>('wasm_get_political_snapshot', gameJson, turn));
   if (parsed.error) return null;
@@ -922,7 +928,7 @@ export async function setPendingArmyRecruit(gameJson: string, nationId: number, 
 
 export interface TransportAllocation {
   resource: string;
-  percentage: number;
+  units: number;
 }
 
 export interface TransportDelivery {
@@ -948,6 +954,7 @@ export interface TransportData {
   available_steel: number;
   available_labor: number;
   deliveries: TransportDelivery[];
+  local_deliveries?: TransportDelivery[];
   demand: TransportDemand[];
 }
 
@@ -961,8 +968,8 @@ export async function setPendingFreightCars(gameJson: string, nationId: number, 
   return runCmd('wasm_set_pending_freight_cars', gameJson, nationId, Math.max(0, Math.round(count)));
 }
 
-export async function setTransportAllocation(gameJson: string, nationId: number, resource: string, percentage: number): Promise<CommandResult> {
-  return runCmd('wasm_set_transport_allocation', gameJson, nationId, resource, percentage);
+export async function setTransportAllocation(gameJson: string, nationId: number, resource: string, units: number): Promise<CommandResult> {
+  return runCmd('wasm_set_transport_allocation', gameJson, nationId, resource, Math.max(0, Math.round(units)));
 }
 
 // ── Industry types & functions ──────────────────────────────────────
@@ -1039,6 +1046,11 @@ export interface TrainingCosts {
   to_expert_labor: number;
 }
 
+export interface ImmigrationCosts {
+  canned_food: number;
+  clothing: number;
+}
+
 export interface IndustryData {
   buildings: BuildingInfo[];
   freight_car_cost: number;
@@ -1075,7 +1087,10 @@ export interface IndustryData {
   auto_trade_with_minors: boolean;
   can_expand: Record<string, boolean>;
   pending_civilian_hires: Record<string, number>;
+  pending_immigration: number;
+  max_pending_immigration: number;
   pending_training: { to_trained: number; to_expert: number };
+  immigration_costs: ImmigrationCosts;
   training_costs: TrainingCosts;
 }
 
@@ -1096,6 +1111,10 @@ export async function setChainTarget(gameJson: string, nationId: number, chain: 
 
 export async function setPendingTraining(gameJson: string, nationId: number, toTrained: number, toExpert: number): Promise<CommandResult> {
   return runCmd('wasm_set_pending_training', gameJson, nationId, Math.max(0, Math.round(toTrained)), Math.max(0, Math.round(toExpert)));
+}
+
+export async function setPendingImmigration(gameJson: string, nationId: number, count: number): Promise<CommandResult> {
+  return runCmd('wasm_set_pending_immigration', gameJson, nationId, Math.max(0, Math.round(count)));
 }
 
 // ── Trade types & functions ─────────────────────────────────────────

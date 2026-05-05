@@ -421,8 +421,8 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 5. Food consumption
     food_consumption(game, &mut report);
 
-    // 5b. Immigration: auto-recruit workers if nation has surplus food and materials
-    resolve_immigration(game, &mut report);
+    // 5b. Pending immigration: process queued worker recruitment orders.
+    process_pending_immigration(game, &mut report);
 
     // 5c. Pending civilian hires: process queued hiring orders
     process_pending_civilian_hires(game);
@@ -1240,7 +1240,7 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
             continue;
         }
 
-        let has_positive_allocations = transport.allocations.iter().any(|(_, pct)| *pct > 0);
+        let has_positive_allocations = transport.allocations.iter().any(|(_, units)| *units > 0);
         let delivered_remote_items = if require_explicit_allocations && !has_positive_allocations {
             Vec::new()
         } else {
@@ -1284,137 +1284,79 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
     }
 }
 
-/// Resolve immigration for all nations.
+/// Process queued immigration orders.
 ///
-/// For each nation, if they have the required materials (1 CannedFood + 1 Clothing + 1 Furniture)
-/// in their goods/materials warehouses, auto-recruit 1 untrained worker.
-/// Limit: max 1 immigrant per 4 provinces (or per 3 if Capitol building is expanded beyond level 1).
-/// Only recruits if the nation has a food surplus (total food > total workers).
-fn resolve_immigration(game: &mut GameState, report: &mut TurnReport) {
-    let cfg = &game.game_data.game_config;
-    let prov_per_imm = cfg.provinces_per_immigrant;
-    let prov_per_imm_upgraded = cfg.provinces_per_immigrant_upgraded;
-    let req_canned = cfg.immigration_canned_food;
-    let req_clothing = cfg.immigration_clothing;
-    let req_furniture = cfg.immigration_furniture;
-
+/// Each immigrant consumes canned food + clothing and produces one untrained
+/// worker. Orders are capped by the nation's province-based immigration rate.
+fn process_pending_immigration(game: &mut GameState, report: &mut TurnReport) {
+    let cfg = game.game_data.game_config.clone();
     let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
-    let nation_ids_copy = nation_ids.clone();
 
     for nation_id in nation_ids {
-        let nation = match game.world.nations.iter().find(|n| n.id == nation_id) {
-            Some(n) => n,
-            None => continue,
-        };
-
-        // Only Great Powers get immigration; skip anarchic nations
-        if !nation.is_great_power() || nation.diplomacy.is_in_anarchy {
-            continue;
-        }
-
-        // Check food surplus: total raw food > total workers
-        let grain = nation.resource_amount(ResourceType::Grain);
-        let fruit = nation.resource_amount(ResourceType::Fruit);
-        let livestock = nation.resource_amount(ResourceType::Livestock);
-        let fish = nation.resource_amount(ResourceType::Fish);
-        let total_food = grain + fruit + livestock + fish;
-        let total_workers = nation.economy.labor.total_workers();
-
-        if total_food <= total_workers {
-            continue; // no food surplus
-        }
-
-        // Immigration limit: 1 per 4 provinces, or 1 per 3 if Capitol expanded
-        let capitol_expanded = nation
-            .economy
-            .buildings
-            .iter()
-            .find(|b| b.building_type == BuildingType::Capitol)
-            .map(|b| b.effective_capacity() > 1)
-            .unwrap_or(false);
-
-        let provinces_per_immigrant = if capitol_expanded {
-            prov_per_imm_upgraded
-        } else {
-            prov_per_imm
-        };
-        let province_count = nation.province_count() as u32;
-        let max_immigrants = if province_count == 0 || provinces_per_immigrant == 0 {
-            0
-        } else {
-            province_count / provinces_per_immigrant
-        };
-
-        if max_immigrants == 0 {
-            continue;
-        }
-
-        // Check if nation has required materials for immigration
-        let has_canned_food = nation.material_amount(MaterialType::CannedFood) >= req_canned;
-        let has_clothing = nation.goods_amount(GoodsType::Clothing) >= req_clothing;
-        let has_furniture = nation.goods_amount(GoodsType::Furniture) >= req_furniture;
-
-        if !has_canned_food || !has_clothing || !has_furniture {
-            continue;
-        }
-
-        // Recruit immigrants (up to max_immigrants, consuming 1 set of materials per immigrant)
-        let mut recruited = 0;
-        let Some(nation) = game.world.nations.iter_mut().find(|n| n.id == nation_id) else {
-            continue;
-        };
-
-        for _ in 0..max_immigrants {
-            // Check materials for each immigrant
-            let can_food = nation.material_amount(MaterialType::CannedFood) >= req_canned;
-            let can_clothing = nation.goods_amount(GoodsType::Clothing) >= req_clothing;
-            let can_furniture = nation.goods_amount(GoodsType::Furniture) >= req_furniture;
-
-            if !can_food || !can_clothing || !can_furniture {
-                break;
+        let requested = {
+            let Some(nation) = game.get_nation_mut(nation_id) else {
+                continue;
+            };
+            if nation.diplomacy.is_in_anarchy {
+                continue;
             }
-
-            nation.consume_material(MaterialType::CannedFood, req_canned);
-            nation.consume_goods(GoodsType::Clothing, req_clothing);
-            nation.consume_goods(GoodsType::Furniture, req_furniture);
-            nation.economy.labor.recruit_immigrant();
-            recruited += 1;
-            report.stockpile_flows.immigration_consumed_materials.push((
-                nation_id,
-                MaterialType::CannedFood,
-                req_canned,
-            ));
-            report.stockpile_flows.immigration_consumed_goods.push((
-                nation_id,
-                GoodsType::Clothing,
-                req_clothing,
-            ));
-            report.stockpile_flows.immigration_consumed_goods.push((
-                nation_id,
-                GoodsType::Furniture,
-                req_furniture,
-            ));
+            let requested = nation.economy.pending_immigration;
+            nation.economy.pending_immigration = 0;
+            requested
+        };
+        if requested == 0 {
+            continue;
         }
 
-        if recruited > 0 {
-            report.immigration.push((nation_id, recruited));
-        }
-    }
-
-    // Emergency recruitment: nations with 0 workers get 1 free worker per turn
-    // (government-subsidized labor to prevent permanent death spiral)
-    for nation_id in nation_ids_copy {
-        let nation = match game.world.nations.iter_mut().find(|n| n.id == nation_id) {
-            Some(n) => n,
-            None => continue,
+        let Some(nation) = game.get_nation_mut(nation_id) else {
+            continue;
         };
         if !nation.is_great_power() {
             continue;
         }
-        if nation.economy.labor.total_workers() == 0 {
-            nation.economy.labor.recruit_immigrant();
-            report.immigration.push((nation_id, 1));
+
+        let max_by_canned_food = if cfg.immigration_canned_food > 0 {
+            nation.material_amount(MaterialType::CannedFood) / cfg.immigration_canned_food
+        } else {
+            requested
+        };
+        let max_by_clothing = if cfg.immigration_clothing > 0 {
+            nation.goods_amount(GoodsType::Clothing) / cfg.immigration_clothing
+        } else {
+            requested
+        };
+        let actual = requested
+            .min(nation.immigration_turn_capacity(&cfg))
+            .min(max_by_canned_food)
+            .min(max_by_clothing);
+
+        if actual == 0 {
+            continue;
         }
+
+        if cfg.immigration_canned_food > 0 {
+            nation.consume_material(
+                MaterialType::CannedFood,
+                actual * cfg.immigration_canned_food,
+            );
+            report.stockpile_flows.immigration_consumed_materials.push((
+                nation_id,
+                MaterialType::CannedFood,
+                actual * cfg.immigration_canned_food,
+            ));
+        }
+        if cfg.immigration_clothing > 0 {
+            nation.consume_goods(GoodsType::Clothing, actual * cfg.immigration_clothing);
+            report.stockpile_flows.immigration_consumed_goods.push((
+                nation_id,
+                GoodsType::Clothing,
+                actual * cfg.immigration_clothing,
+            ));
+        }
+        for _ in 0..actual {
+            nation.economy.labor.recruit_immigrant();
+        }
+        report.immigration.push((nation_id, actual));
     }
 }
 
@@ -7456,20 +7398,14 @@ mod tests {
     // ── Immigration ──────────────────────────────────────────
 
     #[test]
-    fn immigration_requires_materials_and_food_surplus() {
+    fn queued_immigration_recruits_workers_from_canned_food_and_clothing() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
 
-        // Give sufficient materials for immigration
+        nation.economy.pending_immigration = 1;
+        nation.add_resource(ResourceType::Grain, 10);
         nation.add_material(MaterialType::CannedFood, 2);
         nation.add_goods(GoodsType::Clothing, 2);
-        nation.add_goods(GoodsType::Furniture, 2);
-
-        // Give food surplus
-        nation.add_resource(ResourceType::Grain, 20);
-
-        // Start with 0 workers so food surplus is guaranteed
-        nation.economy.labor.untrained = 0;
 
         // Give enough provinces: need at least 4 provinces for 1 immigrant
         for i in 2..=5 {
@@ -7494,21 +7430,20 @@ mod tests {
             nation.economy.labor.untrained, 1,
             "Should have 1 untrained worker"
         );
+        assert_eq!(
+            nation.goods_amount(GoodsType::Furniture),
+            0,
+            "Furniture should not be required or consumed"
+        );
     }
 
     #[test]
-    fn immigration_does_not_happen_without_food_surplus() {
+    fn queued_immigration_does_not_happen_without_required_inputs() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
 
-        // Materials present
-        nation.add_material(MaterialType::CannedFood, 2);
-        nation.add_goods(GoodsType::Clothing, 2);
-        nation.add_goods(GoodsType::Furniture, 2);
-
-        // Workers need food: 5 workers, only 4 food -> no surplus
-        nation.economy.labor.untrained = 5;
-        nation.add_resource(ResourceType::Grain, 4);
+        nation.economy.pending_immigration = 1;
+        nation.add_material(MaterialType::CannedFood, 1);
 
         for i in 2..=5 {
             nation.add_province(ProvinceId(i));
@@ -7522,49 +7457,19 @@ mod tests {
             .filter(|(nid, _)| *nid == NationId(1))
             .map(|(_, q)| *q)
             .sum();
-        assert_eq!(immigration, 0, "No immigration without food surplus");
+        assert_eq!(immigration, 0, "No immigration without clothing");
     }
 
     #[test]
-    fn immigration_does_not_happen_without_materials() {
+    fn immigration_is_not_automatic_when_not_queued() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-
-        // Start with some workers so emergency recruitment doesn't trigger
-        nation.economy.labor.untrained = 2;
-        // Plenty of food, no materials
-        nation.add_resource(ResourceType::Grain, 20);
 
         for i in 2..=5 {
             nation.add_province(ProvinceId(i));
         }
-
-        let report = process_turn(&mut game);
-
-        let immigration: u32 = report
-            .immigration
-            .iter()
-            .filter(|(nid, _)| *nid == NationId(1))
-            .map(|(_, q)| *q)
-            .sum();
-        assert_eq!(immigration, 0, "No immigration without materials");
-    }
-
-    #[test]
-    fn immigration_limited_by_province_count() {
-        let mut game = test_game_state_with_production();
-        let nation = game.get_nation_mut(NationId(1)).unwrap();
-
-        // Plenty of everything
         nation.add_material(MaterialType::CannedFood, 10);
         nation.add_goods(GoodsType::Clothing, 10);
-        nation.add_goods(GoodsType::Furniture, 10);
-        nation.add_resource(ResourceType::Grain, 50);
-        // Start with 1 worker so emergency recruitment doesn't trigger
-        nation.economy.labor.untrained = 1;
-
-        // With only 1 province, max immigrants = 1/4 = 0
-        // (already has 1 province from construction)
 
         let report = process_turn(&mut game);
 
@@ -7574,7 +7479,31 @@ mod tests {
             .filter(|(nid, _)| *nid == NationId(1))
             .map(|(_, q)| *q)
             .sum();
-        assert_eq!(immigration, 0, "No immigration with fewer than 4 provinces");
+        assert_eq!(immigration, 0, "Immigration should not occur without a queued order");
+    }
+
+    #[test]
+    fn immigration_is_limited_by_province_count_per_turn() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+
+        nation.add_resource(ResourceType::Grain, 10);
+        nation.add_material(MaterialType::CannedFood, 10);
+        nation.add_goods(GoodsType::Clothing, 10);
+        nation.economy.pending_immigration = 3;
+        for i in 2..=8 {
+            nation.add_province(ProvinceId(i));
+        }
+
+        let report = process_turn(&mut game);
+
+        let immigration: u32 = report
+            .immigration
+            .iter()
+            .filter(|(nid, _)| *nid == NationId(1))
+            .map(|(_, q)| *q)
+            .sum();
+        assert_eq!(immigration, 2, "7 provinces should allow only 2 immigrants this turn");
     }
 
     // ── Building tick / expansion ──────────────────────────────
@@ -8434,7 +8363,7 @@ mod tests {
     }
 
     #[test]
-    fn immigration_cycle_food_canned_food_clothing_furniture_new_worker() {
+    fn queued_immigration_can_use_canned_food_processed_this_turn() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
 
@@ -8444,27 +8373,23 @@ mod tests {
             .buildings
             .push(Building::new(BuildingType::FoodProcessing, 5));
 
-        // Plenty of raw food for canning and surplus
+        // Plenty of raw food for canning this turn.
         nation.add_resource(ResourceType::Grain, 50);
 
-        // Pre-stock clothing and furniture for immigration
+        // Queue one immigrant and pre-stock clothing only.
+        nation.economy.pending_immigration = 1;
         nation.add_goods(GoodsType::Clothing, 5);
-        nation.add_goods(GoodsType::Furniture, 5);
-
-        // Start with 0 workers so food surplus is guaranteed
-        nation.economy.labor.untrained = 0;
 
         // Need at least 4 provinces for 1 immigrant per turn
         for i in 2..=5 {
             nation.add_province(ProvinceId(i));
         }
 
-        // Run one turn: food processing creates CannedFood, immigration uses it
+        // Run one turn: food processing creates CannedFood, queued immigration uses it.
         let report = process_turn(&mut game);
 
         let nation = game.get_nation(NationId(1)).unwrap();
 
-        // Should have recruited at least 1 immigrant
         let immigration: u32 = report
             .immigration
             .iter()
@@ -9881,28 +9806,15 @@ mod tests {
     // ── Immigration consumes correct goods ──────────────────────
 
     #[test]
-    fn immigration_consumes_correct_goods() {
+    fn immigration_consumes_canned_food_and_clothing_only() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
 
-        // Add food processing building
-        nation
-            .economy
-            .buildings
-            .push(Building::new(BuildingType::FoodProcessing, 5));
-
-        // Plenty of raw food (surplus for immigration)
-        nation.add_resource(ResourceType::Grain, 50);
-
-        // Pre-stock the exact goods needed for 1 immigrant:
-        // 1 CannedFood + 1 Clothing + 1 Furniture
+        nation.add_resource(ResourceType::Grain, 10);
+        nation.economy.pending_immigration = 1;
         nation.add_material(MaterialType::CannedFood, 2);
         nation.add_goods(GoodsType::Clothing, 2);
         nation.add_goods(GoodsType::Furniture, 2);
-
-        // Start with 0 workers so food surplus is guaranteed
-        nation.economy.labor.untrained = 0;
-        nation.economy.labor.trained = 0;
 
         // Need 4 provinces for 1 immigrant slot
         for i in 2..=5 {
@@ -9927,16 +9839,11 @@ mod tests {
             .sum();
         assert!(immigration >= 1, "Should recruit at least 1 immigrant");
 
-        // Verify goods were consumed (at least 1 of each per immigrant)
-        // Note: food processing may produce additional canned food during the turn,
-        // so we check that the amount decreased from what it would have been.
-        // The key invariant is: per immigrant, 1 CannedFood + 1 Clothing + 1 Furniture consumed.
+        // Verify only canned food + clothing are consumed.
         let canned_after = nation.material_amount(MaterialType::CannedFood);
         let clothing_after = nation.goods_amount(GoodsType::Clothing);
         let furniture_after = nation.goods_amount(GoodsType::Furniture);
 
-        // Clothing and Furniture are only consumed by immigration (no production adds them
-        // in this test since there are no raw resources for the mills/factories)
         assert!(
             clothing_after < clothing_before,
             "Clothing should be consumed by immigration: before={}, after={}",
@@ -9944,19 +9851,16 @@ mod tests {
             clothing_after
         );
         assert!(
-            furniture_after < furniture_before,
-            "Furniture should be consumed by immigration: before={}, after={}",
+            furniture_after == furniture_before,
+            "Furniture should not be consumed by immigration: before={}, after={}",
             furniture_before,
             furniture_after
         );
-        // CannedFood: food processing may produce more, but at least some should have been consumed
-        // We can verify indirectly via the immigration count
-        let _ = canned_before;
-        let _ = canned_after;
-        // The immigration count confirms consumption happened
         assert!(
-            immigration >= 1,
-            "Immigration confirms CannedFood + Clothing + Furniture were consumed"
+            canned_after < canned_before,
+            "Canned food should be consumed by immigration: before={}, after={}",
+            canned_before,
+            canned_after
         );
     }
 
@@ -14338,7 +14242,7 @@ mod tests {
             game.world.nations[0]
                 .military
                 .transport
-                .set_allocation(ResourceType::Iron, 100);
+                .set_allocation(ResourceType::Iron, 1);
 
             let before = game.world.nations[0].resource_amount(ResourceType::Iron);
             let _ = process_turn(&mut game);

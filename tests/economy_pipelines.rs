@@ -523,118 +523,103 @@ fn snapshot_includes_reserved_inventory_in_total() {
 
 // ── 6. Workforce growth under constrained inputs ──────────────────────────────
 
-/// With sufficient food surplus, workers are recruited (immigration fires).
+/// Queued immigration should recruit workers when the required goods exist.
 #[test]
-fn immigration_occurs_with_food_surplus_and_goods() {
-    let mut game = new_observer_game("immigration_test", Difficulty::Normal);
-
-    // Give all nations massive food surplus and the required goods to trigger immigration.
-    for nation in &mut game.world.nations {
-        if !nation.is_great_power() {
-            continue;
-        }
-        // Add plenty of food (10× workers to ensure surplus).
-        let workers = nation.economy.labor.total_workers().max(1);
-        nation
-            .economy
-            .add(Commodity::Resource(ResourceType::Grain), workers * 10);
-        nation
-            .economy
-            .add(Commodity::Resource(ResourceType::Fruit), workers * 5);
-        // Add immigration goods.
-        nation
-            .economy
-            .add(Commodity::Goods(GoodsType::Furniture), 20);
-        nation
-            .economy
-            .add(Commodity::Goods(GoodsType::Clothing), 20);
-        nation
-            .economy
-            .add(Commodity::Material(MaterialType::CannedFood), 20);
-    }
+fn queued_immigration_occurs_with_canned_food_and_clothing() {
+    let mut game = new_game("immigration_test", Difficulty::Normal, 0);
+    let human_id = game.human_player_nation;
+    let nation = game.get_nation_mut(human_id).unwrap();
+    nation.economy.pending_immigration = 1;
+    nation
+        .economy
+        .add(Commodity::Goods(GoodsType::Clothing), 20);
+    nation
+        .economy
+        .add(Commodity::Material(MaterialType::CannedFood), 20);
 
     // Record initial worker counts.
-    let initial_workers: std::collections::HashMap<NationId, u32> = game
-        .great_powers()
-        .iter()
-        .map(|n| (n.id, n.economy.labor.total_workers()))
-        .collect();
+    let initial_workers = game
+        .get_nation(human_id)
+        .unwrap()
+        .economy
+        .labor
+        .total_workers();
 
-    // Process several turns — immigration should fire for at least one GP.
     let report = process_turn(&mut game);
 
-    let any_immigration = !report.immigration.is_empty();
-    let any_growth = game.great_powers().iter().any(|n| {
-        let init = initial_workers.get(&n.id).copied().unwrap_or(0);
-        n.economy.labor.total_workers() > init
-    });
+    let human_immigration: u32 = report
+        .immigration
+        .iter()
+        .filter(|(nid, _)| *nid == human_id)
+        .map(|(_, qty)| *qty)
+        .sum();
+    let any_growth = game
+        .get_nation(human_id)
+        .unwrap()
+        .economy
+        .labor
+        .total_workers()
+        > initial_workers;
 
     assert!(
-        any_immigration || any_growth,
-        "expected immigration to occur with food surplus and required goods"
+        human_immigration > 0 || any_growth,
+        "expected queued immigration to occur with canned food and clothing"
     );
 }
 
-/// Without food surplus, immigration should not fire.
+/// Stockpiles alone should not trigger immigration without a queued order.
 #[test]
-fn immigration_does_not_occur_without_food_surplus() {
-    let mut game = new_observer_game("no_immigration_test", Difficulty::Normal);
-
-    // Remove all food from all Great Powers.
-    for nation in &mut game.world.nations {
-        if !nation.is_great_power() {
-            continue;
-        }
-        nation.economy.warehouse.remove(&ResourceType::Grain);
-        nation.economy.warehouse.remove(&ResourceType::Fruit);
-        nation.economy.warehouse.remove(&ResourceType::Livestock);
-    }
+fn immigration_does_not_occur_without_queued_order() {
+    let mut game = new_game("no_immigration_test", Difficulty::Normal, 0);
+    let human_id = game.human_player_nation;
+    let nation = game.get_nation_mut(human_id).unwrap();
+    nation
+        .economy
+        .add(Commodity::Goods(GoodsType::Clothing), 20);
+    nation
+        .economy
+        .add(Commodity::Material(MaterialType::CannedFood), 20);
 
     let report = process_turn(&mut game);
 
-    // Immigration should not have fired for any GP without food.
-    let gp_ids: std::collections::HashSet<NationId> =
-        game.great_powers().iter().map(|n| n.id).collect();
-    let gp_immigration: Vec<_> = report
+    let human_immigration: Vec<_> = report
         .immigration
         .iter()
-        .filter(|(nid, _)| gp_ids.contains(nid))
+        .filter(|(nid, _)| *nid == human_id)
         .collect();
 
     assert!(
-        gp_immigration.is_empty(),
-        "immigration should not occur without food surplus, but got {gp_immigration:?}"
+        human_immigration.is_empty(),
+        "immigration should not occur without a queued order, but got {human_immigration:?}"
     );
 }
 
 // ── Transport allocation fixes (#165) ─────────────────────────────────────────
 
-/// set_allocation clamps values > 100 to 100.
+/// set_allocation stores explicit unit assignments.
 #[test]
-fn set_allocation_clamps_to_100() {
+fn set_allocation_stores_units() {
     let mut ts = TransportSystem::new();
-    ts.set_allocation(ResourceType::Coal, 150); // should be clamped to 100
-    let pct = ts
+    ts.set_allocation(ResourceType::Coal, 150);
+    let units = ts
         .allocations
         .iter()
         .find(|(r, _)| *r == ResourceType::Coal)
         .map(|(_, p)| *p);
     assert_eq!(
-        pct,
-        Some(100),
-        "allocation should be clamped to 100, got {pct:?}"
+        units,
+        Some(150),
+        "allocation should store exact units, got {units:?}"
     );
 }
 
-/// Wasted capacity from a capped resource is redistributed to other resources.
+/// Capacity left over from an unavailable assigned resource stays unused.
 #[test]
-fn wasted_capacity_is_redistributed() {
+fn unavailable_assigned_capacity_stays_unused() {
     let mut ts = TransportSystem::new();
     ts.build_freight_cars(10);
-    // Allocate 80% to Timber but only 2 units of Timber are available.
-    // The remaining 6 units (80% of 10 = 8, but only 2 delivered) should go to Coal.
-    ts.set_allocation(ResourceType::Timber, 80);
-    ts.set_allocation(ResourceType::Coal, 20);
+    ts.set_allocation(ResourceType::Timber, 8);
+    ts.set_allocation(ResourceType::Coal, 2);
 
     let available = vec![(ResourceType::Timber, 2), (ResourceType::Coal, 20)];
     let deliveries = ts.calculate_deliveries(&available);
@@ -648,36 +633,27 @@ fn wasted_capacity_is_redistributed() {
         .find(|(r, _)| *r == ResourceType::Coal)
         .map(|(_, q)| *q);
 
-    // Timber gets 2 (capped by availability). Remaining capacity should be used.
+    // Timber gets 2 (capped by availability). The missing 6 stay unassigned.
     assert_eq!(timber, Some(2), "timber should get up to its 2 available");
-    let total: u32 = deliveries.iter().map(|(_, q)| q).sum();
-    assert!(
-        total > 2,
-        "total delivery should exceed timber-only (wasted capacity should be redistributed): total={total}"
-    );
-    let _ = coal; // consumed by total check above
+    assert_eq!(coal, Some(2));
 }
 
-/// Resources without explicit allocation receive unused freight capacity.
+/// Resources without explicit allocation do not receive transport.
 #[test]
-fn unallocated_resources_receive_leftover_capacity() {
+fn unallocated_resources_receive_no_capacity() {
     let mut ts = TransportSystem::new();
     ts.build_freight_cars(10);
-    // Only Timber has an allocation. Coal is unallocated.
-    ts.set_allocation(ResourceType::Timber, 50);
+    ts.set_allocation(ResourceType::Timber, 5);
 
     let available = vec![(ResourceType::Timber, 5), (ResourceType::Coal, 10)];
     let deliveries = ts.calculate_deliveries(&available);
 
-    // Coal should receive some capacity from the unallocated 50%.
+    // Coal should remain untransported without an explicit assignment.
     let coal = deliveries
         .iter()
         .find(|(r, _)| *r == ResourceType::Coal)
         .map(|(_, q)| *q);
-    assert!(
-        coal.is_some() && coal.unwrap() > 0,
-        "unallocated Coal should receive leftover freight capacity, got coal={coal:?}"
-    );
+    assert_eq!(coal, None, "unallocated Coal should receive nothing");
 }
 
 // ── reserved_inventory snapshot ───────────────────────────────────────────────
@@ -719,34 +695,15 @@ fn reserved_inventory_reflects_active_reservations() {
     let _ = nation.economy.release(id2);
 }
 
-/// Iterative redistribution: capacity freed by a demand-capped resource reaches others.
-///
-/// Regression test for the F-003 finding: a single-pass even-split drops capacity
-/// when the first resource in the list has less demand than its fair share.
+/// No allocations means no delivery, even if enough capacity exists.
 #[test]
-fn iterative_redistribution_exhausts_capacity() {
+fn no_allocations_mean_no_delivery() {
     let mut ts = TransportSystem::new();
     ts.build_freight_cars(10);
-    // No allocations — pure even distribution.
-    // A has demand=1 (less than base share of 5), B has demand=20.
-    // After A gets 1, remaining 9 should all flow to B (not just 5).
     let available = vec![(ResourceType::Coal, 1), (ResourceType::Timber, 20)];
     let deliveries = ts.calculate_deliveries(&available);
 
-    let total: u32 = deliveries.iter().map(|(_, q)| q).sum();
-    assert_eq!(
-        total, 10,
-        "all 10 freight-car capacity should be used; got {total}"
-    );
-    let timber = deliveries
-        .iter()
-        .find(|(r, _)| *r == ResourceType::Timber)
-        .map(|(_, q)| *q);
-    assert_eq!(
-        timber,
-        Some(9),
-        "Timber should receive the 9 remaining after Coal gets 1"
-    );
+    assert!(deliveries.is_empty());
 }
 
 /// freight_committed never exceeds freight_total regardless of production mix.

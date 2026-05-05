@@ -135,6 +135,9 @@ pub struct NationEconomy {
     /// Workers queued for Trained→Expert advancement at end of turn.
     pub pending_train_to_expert: u32,
 
+    /// Untrained workers queued for immigration recruitment at end of turn.
+    pub pending_immigration: u32,
+
     /// Freight cars queued for building at end of turn.
     pub pending_freight_cars: u32,
 
@@ -179,6 +182,7 @@ impl NationEconomy {
             pending_civilian_hires: HashMap::new(),
             pending_train_to_trained: 0,
             pending_train_to_expert: 0,
+            pending_immigration: 0,
             pending_freight_cars: 0,
             pending_ships: Vec::new(),
             pending_army_recruits: Vec::new(),
@@ -923,6 +927,116 @@ impl Nation {
     /// The number of provinces controlled by this nation.
     pub fn province_count(&self) -> usize {
         self.province_ids.len()
+    }
+
+    /// How many immigrants this nation may recruit this turn based on provinces
+    /// and Capitol level.
+    pub fn immigration_turn_capacity(&self, cfg: &crate::data::GameConfig) -> u32 {
+        if !self.is_great_power() {
+            return 0;
+        }
+        let capitol_expanded = self
+            .economy
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::Capitol)
+            .map(|b| b.effective_capacity() > 1)
+            .unwrap_or(false);
+        let provinces_per_immigrant = if capitol_expanded {
+            cfg.provinces_per_immigrant_upgraded
+        } else {
+            cfg.provinces_per_immigrant
+        };
+        let province_count = self.province_count() as u32;
+        if province_count == 0 || provinces_per_immigrant == 0 {
+            0
+        } else {
+            province_count / provinces_per_immigrant
+        }
+    }
+
+    /// How many immigrant workers this nation can currently queue, limited by
+    /// the per-turn immigration cap and the inputs expected to remain after
+    /// food processing and worker food consumption resolve this turn.
+    pub fn max_immigration_queue(&self, cfg: &crate::data::GameConfig) -> u32 {
+        let projected_canned_food = self.projected_canned_food_after_food_steps();
+        let by_canned_food = if cfg.immigration_canned_food > 0 {
+            projected_canned_food / cfg.immigration_canned_food
+        } else {
+            u32::MAX
+        };
+        let by_clothing = if cfg.immigration_clothing > 0 {
+            self.goods_amount(GoodsType::Clothing) / cfg.immigration_clothing
+        } else {
+            u32::MAX
+        };
+        self.immigration_turn_capacity(cfg)
+            .min(by_canned_food)
+            .min(by_clothing)
+    }
+
+    /// Project how much canned food will still be available after this turn's
+    /// food processing and worker food consumption steps.
+    pub fn projected_canned_food_after_food_steps(&self) -> u32 {
+        let mut grain = self.resource_amount(ResourceType::Grain);
+        let mut fruit = self.resource_amount(ResourceType::Fruit);
+        let mut livestock = self.resource_amount(ResourceType::Livestock);
+        let mut fish = self.resource_amount(ResourceType::Fish);
+        let mut canned = self.material_amount(MaterialType::CannedFood);
+
+        let food_processing_cap = self
+            .economy
+            .buildings
+            .iter()
+            .find(|b| b.building_type == BuildingType::FoodProcessing)
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
+
+        if food_processing_cap > 0 {
+            let total_raw_food = grain + fruit + livestock + fish;
+            let workers = self.economy.labor.total_workers();
+            let food_after_workers = total_raw_food.saturating_sub(workers);
+            let units_to_produce = food_processing_cap.min(food_after_workers / 2);
+            if units_to_produce > 0 {
+                let mut remaining = units_to_produce * 2;
+
+                let grain_used = grain.min(remaining);
+                grain -= grain_used;
+                remaining -= grain_used;
+
+                let fruit_used = fruit.min(remaining);
+                fruit -= fruit_used;
+                remaining -= fruit_used;
+
+                let livestock_used = livestock.min(remaining);
+                livestock -= livestock_used;
+                remaining -= livestock_used;
+
+                let fish_used = fish.min(remaining);
+                fish -= fish_used;
+
+                canned += units_to_produce;
+            }
+        }
+
+        let population = self.economy.labor.total_workers();
+        let total_food = grain + fruit + livestock + fish + canned;
+        let mut remaining = population.min(total_food);
+
+        let grain_consumed = grain.min(remaining);
+        remaining -= grain_consumed;
+
+        let fruit_consumed = fruit.min(remaining);
+        remaining -= fruit_consumed;
+
+        let livestock_consumed = livestock.min(remaining);
+        remaining -= livestock_consumed;
+
+        let fish_consumed = fish.min(remaining);
+        remaining -= fish_consumed;
+
+        let canned_consumed = canned.min(remaining);
+        canned.saturating_sub(canned_consumed)
     }
 
     /// Add raw resources to the warehouse.

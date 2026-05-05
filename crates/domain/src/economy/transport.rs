@@ -105,8 +105,8 @@ impl LogisticsState {
 pub struct TransportSystem {
     /// Total freight cars owned
     pub freight_cars: u32,
-    /// Resource allocation: what percentage of capacity goes to each resource type
-    pub allocations: Vec<(ResourceType, u32)>, // (resource, percentage 0-100)
+    /// Resource allocation: how many freight units are explicitly assigned.
+    pub allocations: Vec<(ResourceType, u32)>, // (resource, assigned units)
 }
 
 impl TransportSystem {
@@ -133,23 +133,34 @@ impl TransportSystem {
         self.freight_cars += count;
     }
 
-    /// Set the transport priority for a resource type as a percentage (0-100).
-    /// If the resource already has an allocation, it is updated.
-    /// Values above 100 are clamped to 100 (fix: Areas-4 finding #8).
-    pub fn set_allocation(&mut self, resource: ResourceType, percentage: u32) {
-        let pct = percentage.min(100);
-        if let Some(entry) = self.allocations.iter_mut().find(|(r, _)| *r == resource) {
-            entry.1 = pct;
-        } else {
-            self.allocations.push((resource, pct));
+    /// Set the explicit freight-unit allocation for a resource type.
+    /// If the resource already has an allocation, it is updated; zero removes it.
+    /// Total assigned units are clamped to the available freight-car capacity.
+    pub fn set_allocation(&mut self, resource: ResourceType, units: u32) {
+        if units == 0 {
+            self.allocations.retain(|(r, _)| *r != resource);
+            return;
         }
+        let assigned_elsewhere: u32 = self
+            .allocations
+            .iter()
+            .filter(|(r, _)| *r != resource)
+            .map(|(_, units)| *units)
+            .sum();
+        let capped_units = units.min(self.freight_cars.saturating_sub(assigned_elsewhere));
+        if let Some(entry) = self.allocations.iter_mut().find(|(r, _)| *r == resource) {
+            entry.1 = capped_units;
+        } else {
+            self.allocations.push((resource, capped_units));
+        }
+        self.allocations.retain(|(_, units)| *units > 0);
     }
 
     /// Given available resources from tiles, calculate how many of each resource
     /// get delivered based on capacity and allocations.
     ///
-    /// If no allocations are set, resources are distributed evenly across all
-    /// available types. Total delivered cannot exceed `freight_cars`.
+    /// Only explicitly assigned resources are delivered. Total delivered cannot
+    /// exceed `freight_cars`.
     pub fn calculate_deliveries(
         &self,
         available: &[(ResourceType, u32)],
@@ -171,113 +182,39 @@ impl TransportSystem {
 
         let capacity = self.freight_cars;
 
-        // Check whether any of the available resources have allocations set.
+        // Check whether any of the available resources have explicit allocations set.
         let has_allocations = nonempty.iter().any(|(r, _)| {
             self.allocations
                 .iter()
-                .any(|(ar, pct)| *ar == *r && *pct > 0)
+                .any(|(ar, units)| *ar == *r && *units > 0)
         });
 
         if !has_allocations {
-            // Even distribution: split capacity equally, capped by availability.
-            return Self::distribute_evenly(&nonempty, capacity);
-        }
-
-        // Allocation-based distribution.
-        let total_pct: u32 = self
-            .allocations
-            .iter()
-            .filter(|(r, _)| nonempty.iter().any(|(nr, _)| *nr == *r))
-            .map(|(_, pct)| pct)
-            .sum();
-
-        if total_pct == 0 {
-            return Self::distribute_evenly(&nonempty, capacity);
+            return Vec::new();
         }
 
         let mut result: Vec<(ResourceType, u32)> = Vec::new();
         let mut remaining_capacity = capacity;
 
-        // First pass: allocate proportional shares to resources with explicit allocations.
+        // Explicit-unit distribution: honor assigned units directly, capped by
+        // availability and remaining system capacity. Unassigned capacity stays unused.
         for (resource, avail) in &nonempty {
-            let pct = self
+            let assigned = self
                 .allocations
                 .iter()
                 .find(|(r, _)| *r == *resource)
-                .map(|(_, p)| *p)
+                .map(|(_, units)| *units)
                 .unwrap_or(0);
 
-            if pct == 0 {
+            if assigned == 0 || remaining_capacity == 0 {
                 continue;
             }
 
-            // Proportional share of capacity based on allocation percentage.
-            let share = (capacity as u64 * pct as u64 / total_pct as u64) as u32;
-            let delivered = share.min(*avail).min(remaining_capacity);
+            let delivered = assigned.min(*avail).min(remaining_capacity);
 
             if delivered > 0 {
                 result.push((*resource, delivered));
                 remaining_capacity -= delivered;
-            }
-        }
-
-        // Second pass: redistribute any wasted capacity and serve unallocated resources.
-        // Wasted capacity arises when a resource's availability is less than its share
-        // (fix: Areas-4 finding #1). Unallocated resources are those with no explicit
-        // allocation entry but with available quantity (fix: Areas-4 finding #2).
-        if remaining_capacity > 0 {
-            let unallocated: Vec<(ResourceType, u32)> = nonempty
-                .iter()
-                .filter(|(r, _)| {
-                    !self
-                        .allocations
-                        .iter()
-                        .any(|(ar, pct)| *ar == *r && *pct > 0)
-                })
-                .map(|(r, avail)| {
-                    // Remaining demand: subtract what was already delivered in pass 1.
-                    let already = result
-                        .iter()
-                        .find(|(dr, _)| *dr == *r)
-                        .map(|(_, q)| *q)
-                        .unwrap_or(0);
-                    (*r, avail.saturating_sub(already))
-                })
-                .filter(|(_, demand)| *demand > 0)
-                .collect();
-
-            // Also give already-allocated resources a second bite if they had leftover demand.
-            let second_round: Vec<(ResourceType, u32)> = nonempty
-                .iter()
-                .filter_map(|(r, avail)| {
-                    let already = result
-                        .iter()
-                        .find(|(dr, _)| *dr == *r)
-                        .map(|(_, q)| *q)
-                        .unwrap_or(0);
-                    let remaining_demand = avail.saturating_sub(already);
-                    if remaining_demand > 0 {
-                        Some((*r, remaining_demand))
-                    } else {
-                        None
-                    }
-                })
-                .filter(|(r, _)| !unallocated.iter().any(|(ur, _)| ur == r))
-                .collect();
-
-            let all_leftovers: Vec<(ResourceType, u32)> =
-                unallocated.into_iter().chain(second_round).collect();
-
-            if !all_leftovers.is_empty() {
-                let extra = Self::distribute_evenly_partial(&all_leftovers, remaining_capacity);
-                for (r, qty) in extra {
-                    if let Some(entry) = result.iter_mut().find(|(dr, _)| *dr == r) {
-                        entry.1 += qty;
-                    } else {
-                        result.push((r, qty));
-                    }
-                    remaining_capacity = remaining_capacity.saturating_sub(qty);
-                }
             }
         }
 
@@ -289,73 +226,6 @@ impl TransportSystem {
         self.freight_cars / 5
     }
 
-    /// Distribute `capacity` evenly across `demands`, capping each entry by its
-    /// requested amount. Helper for both even-distribution mode and the second
-    /// pass of allocation-based distribution.
-    fn distribute_evenly_partial(
-        demands: &[(ResourceType, u32)],
-        capacity: u32,
-    ) -> Vec<(ResourceType, u32)> {
-        Self::distribute_evenly(demands, capacity)
-    }
-
-    /// Distribute capacity evenly across available resources, capped by each
-    /// resource's availability.
-    ///
-    /// Iterates until capacity is exhausted or all demand is met so that capacity
-    /// freed by demand-capped resources is redistributed to others rather than wasted.
-    fn distribute_evenly(
-        available: &[(ResourceType, u32)],
-        capacity: u32,
-    ) -> Vec<(ResourceType, u32)> {
-        let mut remaining_demand: Vec<(ResourceType, u32)> = available
-            .iter()
-            .filter(|(_, qty)| *qty > 0)
-            .copied()
-            .collect();
-        let mut result: Vec<(ResourceType, u32)> = Vec::new();
-        let mut remaining_capacity = capacity;
-
-        loop {
-            let active_count = remaining_demand.iter().filter(|(_, d)| *d > 0).count() as u32;
-            if active_count == 0 || remaining_capacity == 0 {
-                break;
-            }
-            let base = remaining_capacity / active_count;
-            let mut extra = remaining_capacity % active_count;
-            let mut granted_this_round = 0u32;
-
-            for (resource, demand) in remaining_demand.iter_mut() {
-                if *demand == 0 || remaining_capacity == 0 {
-                    continue;
-                }
-                let mut share = base;
-                if extra > 0 {
-                    share += 1;
-                    extra -= 1;
-                }
-                let granted = share.min(*demand).min(remaining_capacity);
-                if granted > 0 {
-                    *demand -= granted;
-                    remaining_capacity -= granted;
-                    granted_this_round += granted;
-                    if let Some(entry) = result.iter_mut().find(|(r, _)| *r == *resource) {
-                        entry.1 += granted;
-                    } else {
-                        result.push((*resource, granted));
-                    }
-                }
-            }
-
-            // If nothing was granted this round (all active resources have demand=0 or
-            // capacity=0), avoid infinite loop.
-            if granted_this_round == 0 {
-                break;
-            }
-        }
-
-        result
-    }
 }
 
 /// Calculate how many army units can be transported by rail.
@@ -660,48 +530,39 @@ mod tests {
         assert_eq!(ts.military_transport_capacity(), 2);
     }
 
-    // ── Even distribution when no allocations set ────────────────
+    // ── No delivery without allocations ──────────────────────────
 
     #[test]
-    fn even_distribution_single_resource() {
+    fn no_delivery_without_allocations_single_resource() {
         let mut ts = TransportSystem::new();
         ts.build_freight_cars(5);
 
         let available = vec![(ResourceType::Timber, 10)];
         let deliveries = ts.calculate_deliveries(&available);
 
-        assert_eq!(deliveries.len(), 1);
-        assert_eq!(deliveries[0], (ResourceType::Timber, 5));
+        assert!(deliveries.is_empty());
     }
 
     #[test]
-    fn even_distribution_two_resources() {
+    fn no_delivery_without_allocations_two_resources() {
         let mut ts = TransportSystem::new();
         ts.build_freight_cars(10);
 
         let available = vec![(ResourceType::Timber, 20), (ResourceType::Coal, 20)];
         let deliveries = ts.calculate_deliveries(&available);
 
-        assert_eq!(deliveries.len(), 2);
-        assert_eq!(deliveries[0], (ResourceType::Timber, 5));
-        assert_eq!(deliveries[1], (ResourceType::Coal, 5));
+        assert!(deliveries.is_empty());
     }
 
     #[test]
-    fn even_distribution_capped_by_availability() {
+    fn no_delivery_without_allocations_capped_by_availability() {
         let mut ts = TransportSystem::new();
         ts.build_freight_cars(10);
 
         let available = vec![(ResourceType::Timber, 3), (ResourceType::Coal, 20)];
         let deliveries = ts.calculate_deliveries(&available);
 
-        // Timber gets min(5, 3) = 3 and the unused 2-capacity remainder is
-        // redistributed to Coal instead of being dropped.
-        let timber = deliveries.iter().find(|(r, _)| *r == ResourceType::Timber);
-        let coal = deliveries.iter().find(|(r, _)| *r == ResourceType::Coal);
-
-        assert_eq!(timber, Some(&(ResourceType::Timber, 3)));
-        assert_eq!(coal, Some(&(ResourceType::Coal, 7)));
+        assert!(deliveries.is_empty());
     }
 
     #[test]
@@ -728,8 +589,8 @@ mod tests {
     fn allocation_based_delivery() {
         let mut ts = TransportSystem::new();
         ts.build_freight_cars(10);
-        ts.set_allocation(ResourceType::Timber, 70);
-        ts.set_allocation(ResourceType::Coal, 30);
+        ts.set_allocation(ResourceType::Timber, 7);
+        ts.set_allocation(ResourceType::Coal, 3);
 
         let available = vec![(ResourceType::Timber, 20), (ResourceType::Coal, 20)];
         let deliveries = ts.calculate_deliveries(&available);
@@ -737,7 +598,6 @@ mod tests {
         let timber = deliveries.iter().find(|(r, _)| *r == ResourceType::Timber);
         let coal = deliveries.iter().find(|(r, _)| *r == ResourceType::Coal);
 
-        // 70% of 10 = 7, 30% of 10 = 3
         assert_eq!(timber, Some(&(ResourceType::Timber, 7)));
         assert_eq!(coal, Some(&(ResourceType::Coal, 3)));
     }
@@ -746,11 +606,11 @@ mod tests {
     fn allocation_capped_by_availability() {
         let mut ts = TransportSystem::new();
         ts.build_freight_cars(10);
-        ts.set_allocation(ResourceType::Timber, 80);
-        ts.set_allocation(ResourceType::Coal, 20);
+        ts.set_allocation(ResourceType::Timber, 8);
+        ts.set_allocation(ResourceType::Coal, 2);
 
         let available = vec![
-            (ResourceType::Timber, 3), // only 3 available despite 80% allocation
+            (ResourceType::Timber, 3), // only 3 available despite 8 assigned units
             (ResourceType::Coal, 20),
         ];
         let deliveries = ts.calculate_deliveries(&available);
@@ -758,28 +618,51 @@ mod tests {
         let timber = deliveries.iter().find(|(r, _)| *r == ResourceType::Timber);
         let coal = deliveries.iter().find(|(r, _)| *r == ResourceType::Coal);
 
-        // Timber is capped at 3; the unused 5 capacity from its 80% share is
-        // redistributed, so Coal receives 2 + 5 = 7.
+        // Timber is capped at 3; the unused 5 assigned units remain unused.
         assert_eq!(timber, Some(&(ResourceType::Timber, 3)));
-        assert_eq!(coal, Some(&(ResourceType::Coal, 7)));
+        assert_eq!(coal, Some(&(ResourceType::Coal, 2)));
     }
 
     #[test]
     fn set_allocation_updates_existing() {
         let mut ts = TransportSystem::new();
-        ts.set_allocation(ResourceType::Timber, 50);
-        ts.set_allocation(ResourceType::Timber, 80);
+        ts.set_allocation(ResourceType::Timber, 5);
+        ts.set_allocation(ResourceType::Timber, 8);
 
         assert_eq!(ts.allocations.len(), 1);
-        assert_eq!(ts.allocations[0], (ResourceType::Timber, 80));
+        assert_eq!(ts.allocations[0], (ResourceType::Timber, 8));
+    }
+
+    #[test]
+    fn set_allocation_clamps_total_units_to_capacity() {
+        let mut ts = TransportSystem::new();
+        ts.build_freight_cars(5);
+        ts.set_allocation(ResourceType::Timber, 4);
+        ts.set_allocation(ResourceType::Coal, 4);
+
+        let timber = ts
+            .allocations
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Timber)
+            .map(|(_, units)| *units);
+        let coal = ts
+            .allocations
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Coal)
+            .map(|(_, units)| *units);
+        let total: u32 = ts.allocations.iter().map(|(_, units)| *units).sum();
+
+        assert_eq!(timber, Some(4));
+        assert_eq!(coal, Some(1));
+        assert_eq!(total, 5);
     }
 
     #[test]
     fn delivery_total_does_not_exceed_capacity() {
         let mut ts = TransportSystem::new();
         ts.build_freight_cars(5);
-        ts.set_allocation(ResourceType::Timber, 50);
-        ts.set_allocation(ResourceType::Coal, 50);
+        ts.set_allocation(ResourceType::Timber, 5);
+        ts.set_allocation(ResourceType::Coal, 5);
 
         let available = vec![(ResourceType::Timber, 100), (ResourceType::Coal, 100)];
         let deliveries = ts.calculate_deliveries(&available);

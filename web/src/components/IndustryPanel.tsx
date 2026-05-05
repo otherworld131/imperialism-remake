@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type { IndustryData, BuildableUnits, ChainForecast, ArmsChainForecast, PaperChainForecast } from '../wasm';
+import type { IndustryData, BuildableUnits, ChainForecast, PaperChainForecast } from '../wasm';
 
 interface Props {
   industry: IndustryData;
@@ -10,6 +10,7 @@ interface Props {
   onSetPendingCivilianHire: (civilianType: string, count: number) => void;
   onSetPendingFreightCars: (count: number) => void;
   onSetChainTarget: (chain: string, step: string, target: number) => void;
+  onSetPendingImmigration: (count: number) => void;
   onSetPendingTraining: (toTrained: number, toExpert: number) => void;
 }
 
@@ -19,7 +20,7 @@ const RESOURCE_EMOJI: Record<string, string> = {
   Furniture: '🛋️', Hardware: '🔧', Oil: '🛢️', Horses: '🐴',
   Food: '🌾', Grain: '🌾', Fish: '🐟', Gold: '🪙', Gems: '💎',
   Saltpeter: '💨', Rubber: '🌿', Copper: '🟤', Arms: '🗡️',
-  Paper: '📄', FreightCars: '🚃',
+  Paper: '📄', CannedFood: '🥫', FreightCars: '🚃',
 };
 
 const CHAIN_CONFIG = [
@@ -63,10 +64,10 @@ const CIV_EMOJI: Record<string, string> = {
 export default function IndustryPanel({
   industry, buildable,
   onExpand, onSetPendingArmyRecruit, onSetPendingShips, onSetPendingCivilianHire, onSetPendingFreightCars,
-  onSetChainTarget, onSetPendingTraining,
+  onSetChainTarget, onSetPendingImmigration, onSetPendingTraining,
 }: Props) {
   const { buildings, warehouse, labor, production_forecast, chain_targets, can_expand,
-    pending_civilian_hires, pending_training, training_costs,
+    pending_civilian_hires, pending_immigration, max_pending_immigration, pending_training, immigration_costs, training_costs,
     pending_freight_cars, max_freight_cars, pending_ships, pending_army_recruits,
     army_committed_arms, army_committed_horses } = industry;
   const treasury = buildable?.treasury ?? 0;
@@ -98,8 +99,12 @@ export default function IndustryPanel({
   const paperPerExpert = training_costs.to_expert_paper;
   const committedPaper = (pending_training.to_trained * paperPerTrained) + (pending_training.to_expert * paperPerExpert);
   if (committedPaper > 0) addCommit('Paper', committedPaper);
+  if (pending_immigration > 0) {
+    addCommit('CannedFood', pending_immigration * immigration_costs.canned_food);
+    addCommit('Clothing', pending_immigration * immigration_costs.clothing);
+  }
   // Freight cars: deduct committed lumber + steel (1 each per car)
-  const [fcLaborPerCar, fcLumberPerCar, fcSteelPerCar] = [2, 1, 1];
+  const [, fcLumberPerCar, fcSteelPerCar] = [2, 1, 1];
   if (pending_freight_cars > 0) {
     addCommit('Lumber', pending_freight_cars * fcLumberPerCar);
     addCommit('Steel', pending_freight_cars * fcSteelPerCar);
@@ -208,6 +213,13 @@ export default function IndustryPanel({
             paper={warehouse.materials['Paper'] ?? 0}
             onSet={onSetPendingTraining}
           />
+
+          <ImmigrationSection
+            pending={pending_immigration}
+            max={max_pending_immigration}
+            costs={immigration_costs}
+            onSetCount={onSetPendingImmigration}
+          />
         </div>
 
         {/* Column 2: Buildings + Warehouse */}
@@ -261,7 +273,7 @@ export default function IndustryPanel({
                   .filter(([, v]) => v > 0)
                   .map(([k, v]) => {
                     const c = committed[k] ?? 0;
-                    const free = v - c;
+                    const free = Math.max(0, v - c);
                     return (
                       <div key={k} style={{ fontSize: 'var(--ui-font-size, 14px)', marginBottom: 1 }}>
                         {RESOURCE_EMOJI[k] ?? '📦'} {k.replace(/([A-Z])/g, ' $1').trim()}:{' '}
@@ -276,11 +288,17 @@ export default function IndustryPanel({
               <div style={{ marginTop: 6 }}>
                 <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', marginBottom: 3 }}>Goods</div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
-                  {Object.entries(warehouse.goods).filter(([, v]) => v > 0).map(([k, v]) => (
-                    <span key={k} style={{ fontSize: 'var(--ui-font-size, 14px)' }}>
-                      {RESOURCE_EMOJI[k] ?? '📦'} {k.replace(/([A-Z])/g, ' $1').trim()}: <span style={{ color: '#daa520' }}>{v}</span>
-                    </span>
-                  ))}
+                  {Object.entries(warehouse.goods).filter(([, v]) => v > 0).map(([k, v]) => {
+                    const c = committed[k] ?? 0;
+                    const free = Math.max(0, v - c);
+                    return (
+                      <span key={k} style={{ fontSize: 'var(--ui-font-size, 14px)' }}>
+                        {RESOURCE_EMOJI[k] ?? '📦'} {k.replace(/([A-Z])/g, ' $1').trim()}:{' '}
+                        <span style={{ color: free < v ? '#6ab0d4' : '#daa520' }}>{free}</span>
+                        {c > 0 && <span style={{ fontSize: 9, color: '#555', marginLeft: 2 }}>({v})</span>}
+                      </span>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -718,6 +736,65 @@ function EducationSection({
             </div>
           )}
         </div>
+      </div>
+    </Section>
+  );
+}
+
+function ImmigrationSection({
+  pending, max, costs, onSetCount,
+}: {
+  pending: number;
+  max: number;
+  costs: IndustryData['immigration_costs'];
+  onSetCount: (count: number) => void;
+}) {
+  const [localVal, setLocalVal] = useState<number>(pending);
+  const isDraggingRef = useRef(false);
+  const lastSentRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (isDraggingRef.current) return;
+    if (lastSentRef.current !== null && pending !== lastSentRef.current) return;
+    lastSentRef.current = null;
+    setLocalVal(pending);
+  }, [pending]);
+
+  const commit = useCallback(() => {
+    isDraggingRef.current = false;
+    lastSentRef.current = localVal;
+    onSetCount(localVal);
+  }, [localVal, onSetCount]);
+
+  const showSlider = max > 0 || pending > 0;
+  const sliderMax = Math.max(max, pending);
+
+  return (
+    <Section label="Immigration" emoji="🧳">
+      <div style={{ padding: '3px 0', opacity: showSlider ? 1 : 0.45 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#bbb', marginBottom: 2 }}>
+          <span>New Untrained Workers</span>
+          <span style={{ fontSize: 10, color: '#888' }}>{costs.canned_food}🥫 + {costs.clothing}👗 each</span>
+        </div>
+        {showSlider ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <input
+              type="range" min={0} max={sliderMax} step={1}
+              value={localVal}
+              onChange={e => { isDraggingRef.current = true; setLocalVal(Number(e.target.value)); }}
+              onMouseUp={commit}
+              onTouchEnd={commit}
+              style={{ flex: 1, cursor: 'pointer', accentColor: '#daa520', height: 4 }}
+            />
+            <span style={{ fontSize: 10, color: localVal > 0 ? '#daa520' : '#555', width: 28, textAlign: 'right', flexShrink: 0 }}>
+              {localVal > 0 ? `+${localVal}` : '0'}
+            </span>
+          </div>
+        ) : (
+          <div style={{ fontSize: 10, color: '#a66', marginTop: 1 }}>
+            Need canned food, clothing, and immigration slots this turn
+          </div>
+        )}
       </div>
     </Section>
   );

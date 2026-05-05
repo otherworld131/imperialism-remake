@@ -1,20 +1,18 @@
-use crate::economy::buildings::BuildingType;
 use crate::economy::civilians::CivilianType;
+#[cfg(test)]
+use crate::economy::buildings::{Building, BuildingType};
 #[cfg(test)]
 use crate::economy::civilians::{Civilian, next_civilian_id};
 use crate::game_state::GameState;
 use crate::types::*;
 
-/// AI only recruits if total food (grain + fruit + livestock) exceeds total workers
-/// (i.e., there is a surplus to feed the new worker next turn).
-/// AI also processes food first if it has a FoodProcessing building and raw food.
+/// AI turns canned food + clothing into queued immigrant workers using the
+/// same projected end-of-turn capacity contract exposed to the player UI.
 pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
-    // First, process food if possible
-    ai_process_food(game, nation_id);
-
     // Extract config values before borrowing nation mutably.
     let wealthy_threshold =
         Money::dollars(game.game_data.game_config.labor_wealthy_treasury_threshold);
+    let immigration_cfg = game.game_data.game_config.clone();
     let workers_per_province_base = game.game_data.game_config.labor_workers_per_province_base;
     let workers_per_province_wealthy = game
         .game_data
@@ -28,11 +26,6 @@ pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
     };
 
     let total_workers = nation.economy.labor.total_workers();
-    let grain = nation.resource_amount(ResourceType::Grain);
-    let fruit = nation.resource_amount(ResourceType::Fruit);
-    let livestock = nation.resource_amount(ResourceType::Livestock);
-    let fish = nation.resource_amount(ResourceType::Fish);
-    let total_food = grain + fruit + livestock + fish;
 
     // Scale max workers with province count, min floor.
     // Wealthy nations invest in workforce growth.
@@ -44,89 +37,9 @@ pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
     let max_workers =
         (nation.province_count() as u32 * workers_per_province).max(min_workers_floor);
 
-    // Only recruit if workforce is below target AND there is surplus food
-    if total_workers < max_workers && total_food > total_workers {
-        // Consume 1 grain (or fruit/livestock/fish) to recruit
-        if nation.resource_amount(ResourceType::Grain) > 0 {
-            nation.remove_resource(ResourceType::Grain, 1);
-        } else if nation.resource_amount(ResourceType::Fruit) > 0 {
-            nation.remove_resource(ResourceType::Fruit, 1);
-        } else if nation.resource_amount(ResourceType::Livestock) > 0 {
-            nation.remove_resource(ResourceType::Livestock, 1);
-        } else if nation.resource_amount(ResourceType::Fish) > 0 {
-            nation.remove_resource(ResourceType::Fish, 1);
-        }
-        nation.economy.labor.recruit_immigrant();
-    }
-}
-
-/// AI processes food: if the nation has a FoodProcessing building and raw food,
-/// convert raw food to canned food (2 raw -> 1 canned).
-fn ai_process_food(game: &mut GameState, nation_id: NationId) {
-    let nation = match game.get_nation_mut(nation_id) {
-        Some(n) => n,
-        None => return,
-    };
-
-    let food_processing_cap = nation
-        .economy
-        .buildings
-        .iter()
-        .find(|b| b.building_type == BuildingType::FoodProcessing)
-        .map(|b| b.effective_capacity())
-        .unwrap_or(0);
-
-    if food_processing_cap == 0 {
-        return;
-    }
-
-    let grain = nation.resource_amount(ResourceType::Grain);
-    let fruit = nation.resource_amount(ResourceType::Fruit);
-    let livestock = nation.resource_amount(ResourceType::Livestock);
-    let fish = nation.resource_amount(ResourceType::Fish);
-    let total_raw = grain + fruit + livestock + fish;
-
-    // Only process if we have excess food beyond worker needs
-    let workers = nation.economy.labor.total_workers();
-    if total_raw <= workers {
-        return; // Don't process food we need to eat
-    }
-
-    let available_for_processing = total_raw - workers;
-    if available_for_processing < 2 {
-        return;
-    }
-
-    let raw_limited = available_for_processing / 2;
-    let units = food_processing_cap.min(raw_limited);
-
-    if units == 0 {
-        return;
-    }
-
-    // Consume grain first, then fruit, then livestock, then fish
-    let mut remaining = units * 2;
-    let grain_used = grain.min(remaining);
-    remaining -= grain_used;
-    let fruit_used = fruit.min(remaining);
-    remaining -= fruit_used;
-    let livestock_used = livestock.min(remaining);
-    remaining -= livestock_used;
-    let fish_used = fish.min(remaining);
-
-    if grain_used > 0 {
-        nation.remove_resource(ResourceType::Grain, grain_used);
-    }
-    if fruit_used > 0 {
-        nation.remove_resource(ResourceType::Fruit, fruit_used);
-    }
-    if livestock_used > 0 {
-        nation.remove_resource(ResourceType::Livestock, livestock_used);
-    }
-    if fish_used > 0 {
-        nation.remove_resource(ResourceType::Fish, fish_used);
-    }
-    nation.add_material(MaterialType::CannedFood, units);
+    let desired = max_workers.saturating_sub(total_workers);
+    let max_queue = nation.max_immigration_queue(&immigration_cfg);
+    nation.economy.pending_immigration = desired.min(max_queue);
 }
 
 /// Manage civilian units: hire new ones and deploy idle ones to improvable tiles.
@@ -1025,6 +938,76 @@ mod tests {
         assert_eq!(
             ai.military.civilians[0].position, None,
             "Civilian should not be deployed"
+        );
+    }
+
+    #[test]
+    fn ai_queues_immigration_when_inputs_and_capacity_exist() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.economy.labor.untrained = 0;
+        ai.economy.labor.trained = 0;
+        ai.economy.labor.expert = 0;
+        for i in 50..=53 {
+            ai.add_province(ProvinceId(i));
+        }
+        ai.add_material(MaterialType::CannedFood, 3);
+        ai.add_goods(GoodsType::Clothing, 3);
+
+        ai_recruit_workers(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            ai.economy.pending_immigration, 1,
+            "AI should queue up to its province-based immigration rate"
+        );
+    }
+
+    #[test]
+    fn ai_does_not_queue_immigration_without_clothing() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.economy.labor.untrained = 0;
+        ai.economy.labor.trained = 0;
+        ai.economy.labor.expert = 0;
+        for i in 60..=63 {
+            ai.add_province(ProvinceId(i));
+        }
+        ai.add_material(MaterialType::CannedFood, 3);
+
+        ai_recruit_workers(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(ai.economy.pending_immigration, 0);
+    }
+
+    #[test]
+    fn ai_can_queue_immigration_from_projected_food_processing_output() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.economy.labor.untrained = 2;
+        ai.economy.labor.trained = 0;
+        ai.economy.labor.expert = 0;
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::FoodProcessing, 2));
+        for i in 70..=73 {
+            ai.add_province(ProvinceId(i));
+        }
+        ai.add_resource(ResourceType::Grain, 6);
+        ai.add_goods(GoodsType::Clothing, 2);
+
+        ai_recruit_workers(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            ai.economy.pending_immigration, 1,
+            "AI should account for canned food that will be produced later in the turn"
+        );
+        assert_eq!(
+            ai.material_amount(MaterialType::CannedFood),
+            0,
+            "Planning immigration should not mutate stockpiles during AI setup"
         );
     }
 
