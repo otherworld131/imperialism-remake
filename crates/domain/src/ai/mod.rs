@@ -94,6 +94,11 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<AiAction> {
         }
         research::ai_research_tech(game, *nation_id, current_year, &mut actions);
         economy::ai_manage_economy(game, *nation_id);
+        // Card [2/6]: set per-chain output targets so labor & feed allocation
+        // favor chains the AI can actually run, instead of leaving every
+        // slider at u32::MAX (which spreads labor evenly and starves
+        // resource-light chains like steel).
+        economy::ai_set_production_targets(game, *nation_id);
         economy::ai_manage_resources(game, *nation_id, &mut actions);
         labor::ai_recruit_workers(game, *nation_id);
         // Need-based spending: replaces independent military, infrastructure,

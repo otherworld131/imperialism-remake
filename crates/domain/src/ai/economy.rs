@@ -1630,6 +1630,246 @@ fn expand_building(game: &mut GameState, nation_id: NationId, bt: BuildingType, 
     }
 }
 
+/// Set per-chain output targets so labor & feed allocation favor chains
+/// the AI can actually run, instead of leaving every slider at `u32::MAX`.
+///
+/// For each step, target = min(input_supply, capacity, demand_estimate).
+/// Shared inputs (lumber → furniture vs paper, steel → hardware vs armory)
+/// are split via Lua weights so personalities differ. War nations bias
+/// steel toward the armory; peacetime nations bias it toward hardware.
+///
+/// Cards [2/6] AI: Production target setter — fill all 9 ChainOutputTargets sliders
+#[allow(unused_variables)] // personality used only with cfg(feature = "lua")
+pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationId) {
+    let personality = get_personality(game, nation_id);
+
+    #[cfg(feature = "lua")]
+    let lua_cfg = game
+        .game_data
+        .lua_engine
+        .as_ref()
+        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+
+    // ── Chain split weights (Lua-tunable per personality) ────────────
+    // Lumber gets split between furniture and paper.
+    let lumber_furniture_weight: f64 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.lumber_furniture_weight) {
+            break 'val v;
+        }
+        0.7
+    };
+    // Steel gets split between hardware (peacetime) and armory (wartime).
+    let steel_armory_weight_peace: f64 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg
+            .as_ref()
+            .and_then(|c| c.steel_armory_weight_peace)
+        {
+            break 'val v;
+        }
+        0.2
+    };
+    let steel_armory_weight_war: f64 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.steel_armory_weight_war) {
+            break 'val v;
+        }
+        0.7
+    };
+    // Buffer multiplier for canned-food target relative to projected immigration.
+    let canned_food_buffer: f64 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.canned_food_buffer) {
+            break 'val v;
+        }
+        1.5
+    };
+    // Floor target so a chain that ran out of inputs this turn still asks for
+    // labor next turn — without this, a transient shortage would zero the
+    // target and leave the chain dormant even after inputs return.
+    let min_chain_target: u32 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.min_chain_target) {
+            break 'val v;
+        }
+        1
+    };
+
+    let snap = super::snapshot::NationEconomySnapshot::build(game, nation_id);
+
+    // Wartime flag: any active war.
+    let at_war = game
+        .world
+        .diplomacy
+        .is_at_war_with_anyone(nation_id);
+
+    // Projected immigration demand (this turn's queue + next turn's likely queue).
+    let pending_immigration = game
+        .get_nation(nation_id)
+        .map(|n| n.economy.pending_immigration)
+        .unwrap_or(0);
+
+    // ── Mill targets ──────────────────────────────────────────────────
+    // Strategy: target = cap when we have supply, low (≥ min_chain_target)
+    // when we don't. This redirects scarce labor from chains that would
+    // produce nothing this turn (no inputs) toward chains that can actually
+    // run — and avoids the path-of-least-resistance failure mode where every
+    // chain at u32::MAX splits labor evenly and starves the bottleneck.
+    let timber_mill_cap = snap.building_capacity(BuildingType::LumberMill);
+    let metal_mill_cap = snap.building_capacity(BuildingType::SteelMill);
+    let textile_mill_cap = snap.building_capacity(BuildingType::TextileMill);
+
+    let timber_supply = snap.resource(ResourceType::Timber);
+    let coal_iron_supply = snap.resource(ResourceType::Coal).min(snap.resource(ResourceType::Iron));
+    let cotton_wool_supply = snap.resource(ResourceType::Cotton) + snap.resource(ResourceType::Wool);
+
+    let timber_mill_target = mill_target(timber_supply >= 2, timber_mill_cap, min_chain_target);
+    let metal_mill_target = mill_target(coal_iron_supply >= 1, metal_mill_cap, min_chain_target);
+    let textile_mill_target = mill_target(cotton_wool_supply >= 2, textile_mill_cap, min_chain_target);
+
+    // ── Factory targets ──────────────────────────────────────────────
+    // Factories consume 2 units of material per 1 good (materials_per_good=2).
+    // Lumber gets split between furniture and paper; steel gets split between
+    // hardware and armory. These splits are what let us balance Furniture vs
+    // Paper output (or Hardware vs Arms) — without targets, lumber is
+    // first-come-first-served by the production order in `economy_phase`,
+    // which always favored furniture and starved paper/armory.
+    let lumber_supply = snap.material(MaterialType::Lumber)
+        .saturating_add(timber_mill_target);
+    let steel_supply = snap.material(MaterialType::Steel)
+        .saturating_add(metal_mill_target);
+    let fabric_supply = snap.material(MaterialType::Fabric)
+        .saturating_add(textile_mill_target);
+
+    let furniture_cap = snap.building_capacity(BuildingType::FurnitureFactory);
+    let hardware_cap = snap.building_capacity(BuildingType::HardwareFactory);
+    let clothing_cap = snap.building_capacity(BuildingType::ClothingFactory);
+    let armory_cap = snap.building_capacity(BuildingType::Armory);
+    let paper_cap = snap.building_capacity(BuildingType::PaperFactory);
+    let canned_food_cap = snap.building_capacity(BuildingType::FoodProcessing);
+
+    // Lumber split: furniture vs paper. Each unit of factory output needs
+    // 2 lumber. We split the available lumber (warehouse + projected mill
+    // output) by a Lua-tunable share so personalities can favor industry
+    // (more furniture) vs research (more paper).
+    let lumber_for_furniture = ((lumber_supply as f64) * lumber_furniture_weight) as u32;
+    let lumber_for_paper = lumber_supply.saturating_sub(lumber_for_furniture);
+    let furniture_target = factory_target(
+        lumber_for_furniture / 2,
+        lumber_for_furniture >= 2,
+        furniture_cap,
+        min_chain_target,
+    );
+    let paper_target = factory_target(
+        lumber_for_paper / 2,
+        lumber_for_paper >= 2,
+        paper_cap,
+        min_chain_target,
+    );
+
+    // Steel split: armory vs hardware. War shifts the split toward armory.
+    // Hardware needs 2 steel/unit, armory needs 1 steel/arm.
+    let armory_share = if at_war { steel_armory_weight_war } else { steel_armory_weight_peace };
+    let steel_for_armory = ((steel_supply as f64) * armory_share) as u32;
+    let steel_for_hardware = steel_supply.saturating_sub(steel_for_armory);
+    let hardware_target = factory_target(
+        steel_for_hardware / 2,
+        steel_for_hardware >= 2,
+        hardware_cap,
+        min_chain_target,
+    );
+    let armory_target = factory_target(
+        steel_for_armory,
+        steel_for_armory >= 1,
+        armory_cap,
+        min_chain_target,
+    );
+
+    // Fabric → clothing.
+    let clothing_target = factory_target(
+        fabric_supply / 2,
+        fabric_supply >= 2,
+        clothing_cap,
+        min_chain_target,
+    );
+
+    // Canned food: target ≈ projected immigration × buffer, gated by inputs.
+    // The cannery consumes 1 grain + 1 fruit + 1 fish/livestock per canned food.
+    let grain = snap.resource(ResourceType::Grain);
+    let fruit = snap.resource(ResourceType::Fruit);
+    let fish_or_livestock = snap.resource(ResourceType::Fish)
+        .saturating_add(snap.resource(ResourceType::Livestock));
+    let cannery_input_cap = grain.min(fruit).min(fish_or_livestock);
+    let immigration_demand =
+        ((pending_immigration as f64) * canned_food_buffer).ceil() as u32;
+    // Always allow at least 1 unit of cannery output so feed-grain flows even
+    // when the immigration queue is empty — workers want canned food too.
+    let canned_food_demand = immigration_demand.max(1);
+    let canned_food_target = factory_target(
+        canned_food_demand,
+        cannery_input_cap >= 1,
+        canned_food_cap,
+        min_chain_target,
+    );
+
+    // Write targets back to the nation.
+    let Some(nation) = game.get_nation_mut(nation_id) else {
+        return;
+    };
+    let t = &mut nation.economy.chain_targets;
+    t.timber_mill = timber_mill_target;
+    t.metal_mill = metal_mill_target;
+    t.textile_mill = textile_mill_target;
+    t.lumber_factory = furniture_target;
+    t.steel_factory = hardware_target;
+    t.garment_factory = clothing_target;
+    t.armory = armory_target;
+    t.paper_factory = paper_target;
+    t.canned_food_factory = canned_food_target;
+
+    if game.ai_debug {
+        let nation_name = game
+            .get_nation(nation_id)
+            .map(|n| n.name.as_str())
+            .unwrap_or("?");
+        eprintln!(
+            "[AI:{}:targets] timber={} metal={} textile={} furn={} hard={} cloth={} armory={} paper={} food={} (war={})",
+            nation_name,
+            timber_mill_target, metal_mill_target, textile_mill_target,
+            furniture_target, hardware_target, clothing_target,
+            armory_target, paper_target, canned_food_target,
+            at_war,
+        );
+    }
+}
+
+/// Mill target: use full capacity when supply exists; otherwise drop to the
+/// minimum so labor is freed for chains that can actually run this turn.
+fn mill_target(has_supply: bool, capacity: u32, min_target: u32) -> u32 {
+    if capacity == 0 {
+        return 0;
+    }
+    if has_supply {
+        capacity
+    } else {
+        min_target.min(capacity)
+    }
+}
+
+/// Factory target: clamp `desired` (= split-share of available material) to
+/// [min_target, capacity] when supply is sufficient; drop to min_target
+/// otherwise so unrunnable factories don't compete with running ones for labor.
+fn factory_target(desired: u32, has_supply: bool, capacity: u32, min_target: u32) -> u32 {
+    if capacity == 0 {
+        return 0;
+    }
+    if !has_supply {
+        return min_target.min(capacity);
+    }
+    desired.max(min_target).min(capacity)
+}
+
 /// Sell excess tradeable resources on the market for cash.
 ///
 /// Reserve amount and treasury cap are Lua-configurable per personality.
@@ -2958,6 +3198,165 @@ mod tests {
         assert!(
             mill.pending_capacity > 0,
             "building should have one pending expansion"
+        );
+    }
+
+    // ── Card [2/6]: production target setter tests ────────────────────
+
+    #[test]
+    fn ai_set_production_targets_uses_full_mill_capacity_with_supply() {
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+        // Bootstrap a steel mill at cap=4 with abundant coal+iron
+        let ai = game.get_nation_mut(ai_id).unwrap();
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 4));
+        ai.add_resource(ResourceType::Coal, 10);
+        ai.add_resource(ResourceType::Iron, 10);
+
+        ai_set_production_targets(&mut game, ai_id);
+
+        let ai = game.get_nation(ai_id).unwrap();
+        assert_eq!(
+            ai.economy.chain_targets.metal_mill, 4,
+            "metal_mill target should equal cap when coal+iron supply is plentiful"
+        );
+    }
+
+    #[test]
+    fn ai_set_production_targets_drops_chain_when_no_input() {
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+        // Steel mill exists but no coal/iron in warehouse.
+        let ai = game.get_nation_mut(ai_id).unwrap();
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 4));
+        // ensure clean slate
+        ai.economy.warehouse.remove(&ResourceType::Coal);
+        ai.economy.warehouse.remove(&ResourceType::Iron);
+
+        ai_set_production_targets(&mut game, ai_id);
+
+        let ai = game.get_nation(ai_id).unwrap();
+        assert!(
+            ai.economy.chain_targets.metal_mill < 4,
+            "metal_mill target should drop below cap when coal/iron are missing — got {}",
+            ai.economy.chain_targets.metal_mill
+        );
+    }
+
+    #[test]
+    fn ai_set_production_targets_zero_for_missing_buildings() {
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+        // Make sure the AI has no buildings of the relevant types.
+        let ai = game.get_nation_mut(ai_id).unwrap();
+        ai.economy.buildings.retain(|b| {
+            !matches!(
+                b.building_type,
+                BuildingType::SteelMill
+                    | BuildingType::LumberMill
+                    | BuildingType::TextileMill
+                    | BuildingType::PaperFactory
+                    | BuildingType::Armory
+                    | BuildingType::FurnitureFactory
+                    | BuildingType::HardwareFactory
+                    | BuildingType::ClothingFactory
+                    | BuildingType::FoodProcessing
+            )
+        });
+
+        ai_set_production_targets(&mut game, ai_id);
+
+        let ai = game.get_nation(ai_id).unwrap();
+        let t = &ai.economy.chain_targets;
+        assert_eq!(t.metal_mill, 0);
+        assert_eq!(t.timber_mill, 0);
+        assert_eq!(t.textile_mill, 0);
+        assert_eq!(t.armory, 0);
+        assert_eq!(t.paper_factory, 0);
+        assert_eq!(t.canned_food_factory, 0);
+    }
+
+    #[test]
+    fn ai_set_production_targets_war_shifts_steel_to_armory() {
+        // Two AI games on the same map; one at war, one not. The wartime
+        // AI should set a higher armory target relative to hardware.
+        use crate::diplomacy::DiplomacyState;
+
+        let setup = |at_war: bool| {
+            let mut game = test_game_with_ai();
+            let ai_id = NationId(2);
+            let ai = game.get_nation_mut(ai_id).unwrap();
+            // Provide both factories at equal capacity and abundant steel.
+            ai.economy
+                .buildings
+                .push(Building::new(BuildingType::HardwareFactory, 50));
+            ai.economy
+                .buildings
+                .push(Building::new(BuildingType::Armory, 50));
+            ai.add_material(MaterialType::Steel, 20);
+            if at_war {
+                game.world.diplomacy = DiplomacyState::new();
+                game.world
+                    .diplomacy
+                    .initialize_great_powers(&[NationId(1), NationId(2)]);
+                game.world
+                    .diplomacy
+                    .declare_war(NationId(2), NationId(1));
+            }
+            ai_set_production_targets(&mut game, ai_id);
+            let ai = game.get_nation(ai_id).unwrap();
+            (
+                ai.economy.chain_targets.steel_factory,
+                ai.economy.chain_targets.armory,
+            )
+        };
+
+        let (peace_hardware, peace_armory) = setup(false);
+        let (war_hardware, war_armory) = setup(true);
+
+        assert!(
+            war_armory > peace_armory,
+            "war should raise armory target (war={}, peace={})",
+            war_armory,
+            peace_armory
+        );
+        assert!(
+            peace_hardware >= war_hardware,
+            "peace should keep hardware target at least as high as war (peace={}, war={})",
+            peace_hardware,
+            war_hardware
+        );
+    }
+
+    #[test]
+    fn ai_set_production_targets_paper_gets_share_of_lumber() {
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+        let ai = game.get_nation_mut(ai_id).unwrap();
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::PaperFactory, 2));
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::FurnitureFactory, 2));
+        ai.add_material(MaterialType::Lumber, 20);
+
+        ai_set_production_targets(&mut game, ai_id);
+
+        let ai = game.get_nation(ai_id).unwrap();
+        assert!(
+            ai.economy.chain_targets.paper_factory > 0,
+            "paper factory should get a share of available lumber, got {}",
+            ai.economy.chain_targets.paper_factory
+        );
+        assert!(
+            ai.economy.chain_targets.lumber_factory > 0,
+            "furniture factory should also get a share, got {}",
+            ai.economy.chain_targets.lumber_factory
         );
     }
 }

@@ -72,6 +72,14 @@ balanced = {
     food_processing_expansion_threshold = 2,
     infra_budget_scale_threshold = 20000,
 
+    -- Card [2/6]: production-chain target split weights
+    lumber_furniture_weight = 0.7,         -- 70% of lumber → furniture, 30% → paper
+    steel_armory_weight_peace = 0.2,       -- 20% of steel → armory in peacetime
+    steel_armory_weight_war = 0.7,         -- 70% of steel → armory at war
+    canned_food_buffer = 1.5,              -- canned food target = 1.5× immigration queue
+    min_chain_target = 1,                  -- floor so transient shortages don't zero a chain
+
+
     -- Worker training
     worker_train_threshold = 1,
     worker_promote_threshold = 2,

@@ -74,6 +74,14 @@ aggressive = {
     food_processing_expansion_threshold = 3,
     infra_budget_scale_threshold = 25000,
 
+    -- Card [2/6]: militarist tilt — heavier armory share, smaller civilian buffer
+    lumber_furniture_weight = 0.6,
+    steel_armory_weight_peace = 0.4,
+    steel_armory_weight_war = 0.85,
+    canned_food_buffer = 1.2,
+    min_chain_target = 1,
+
+
     -- Worker training
     worker_train_threshold = 1,
     worker_promote_threshold = 2,

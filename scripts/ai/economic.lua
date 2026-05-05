@@ -71,6 +71,13 @@ economic = {
     food_processing_expansion_threshold = 2,
     infra_budget_scale_threshold = 15000,
 
+    -- Card [2/6]: industrialist tilt — heavier hardware/furniture, larger food buffer
+    lumber_furniture_weight = 0.75,
+    steel_armory_weight_peace = 0.1,
+    steel_armory_weight_war = 0.5,
+    canned_food_buffer = 2.0,
+    min_chain_target = 1,
+
     -- Worker training
     worker_train_threshold = 1,
     worker_promote_threshold = 1,

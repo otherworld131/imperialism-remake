@@ -999,6 +999,19 @@ pub struct LuaAiConfig {
     pub food_processing_expansion_threshold: Option<u32>,
     pub infra_budget_scale_threshold: Option<i64>,
 
+    // Card [2/6]: production-chain target weights.
+    /// Share of available lumber routed to furniture (vs paper), 0..1.
+    pub lumber_furniture_weight: Option<f64>,
+    /// Share of steel routed to armory in peacetime (vs hardware), 0..1.
+    pub steel_armory_weight_peace: Option<f64>,
+    /// Share of steel routed to armory at war (vs hardware), 0..1.
+    pub steel_armory_weight_war: Option<f64>,
+    /// Multiplier on projected immigration demand for canned-food target.
+    pub canned_food_buffer: Option<f64>,
+    /// Floor target for any chain whose building exists, so transient input
+    /// shortages don't permanently zero a chain's slider.
+    pub min_chain_target: Option<u32>,
+
     // Spending weights (need-based scoring system)
     pub spending_military_weight: Option<f64>,
     pub spending_economy_weight: Option<f64>,
@@ -1195,6 +1208,13 @@ impl LuaAiConfig {
         self.goods_reserve = sanitize_opt_u32(self.goods_reserve, 0, 100);
         self.food_processing_expansion_threshold =
             sanitize_opt_u32(self.food_processing_expansion_threshold, 0, 1000);
+        // Card [2/6]: production-chain target weights
+        self.lumber_furniture_weight = sanitize_opt_f64(self.lumber_furniture_weight, 0.0, 1.0);
+        self.steel_armory_weight_peace =
+            sanitize_opt_f64(self.steel_armory_weight_peace, 0.0, 1.0);
+        self.steel_armory_weight_war = sanitize_opt_f64(self.steel_armory_weight_war, 0.0, 1.0);
+        self.canned_food_buffer = sanitize_opt_f64(self.canned_food_buffer, 0.0, 10.0);
+        self.min_chain_target = sanitize_opt_u32(self.min_chain_target, 0, 1000);
 
         // Treasury thresholds
         self.tier1_treasury = sanitize_opt_i64(self.tier1_treasury, 0, 10_000_000);
@@ -1374,6 +1394,12 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
                 .get("food_processing_expansion_threshold")
                 .ok(),
             infra_budget_scale_threshold: table.get("infra_budget_scale_threshold").ok(),
+            // Card [2/6]: production-chain target weights
+            lumber_furniture_weight: table.get("lumber_furniture_weight").ok(),
+            steel_armory_weight_peace: table.get("steel_armory_weight_peace").ok(),
+            steel_armory_weight_war: table.get("steel_armory_weight_war").ok(),
+            canned_food_buffer: table.get("canned_food_buffer").ok(),
+            min_chain_target: table.get::<u32>("min_chain_target").ok(),
             // Spending weights
             spending_military_weight: table.get("spending_military_weight").ok(),
             spending_economy_weight: table.get("spending_economy_weight").ok(),
@@ -1783,6 +1809,11 @@ mod tests {
             goods_reserve: None,
             food_processing_expansion_threshold: None,
             infra_budget_scale_threshold: None,
+            lumber_furniture_weight: None,
+            steel_armory_weight_peace: None,
+            steel_armory_weight_war: None,
+            canned_food_buffer: None,
+            min_chain_target: None,
             spending_military_weight: Some(f64::INFINITY),
             spending_economy_weight: None,
             spending_diplomacy_weight: None,
@@ -1888,6 +1919,11 @@ mod tests {
             goods_reserve: None,
             food_processing_expansion_threshold: None,
             infra_budget_scale_threshold: None,
+            lumber_furniture_weight: None,
+            steel_armory_weight_peace: None,
+            steel_armory_weight_war: None,
+            canned_food_buffer: None,
+            min_chain_target: None,
             spending_military_weight: None,
             spending_economy_weight: None,
             spending_diplomacy_weight: None,
@@ -2032,6 +2068,11 @@ mod tests {
             goods_reserve: None,
             food_processing_expansion_threshold: None,
             infra_budget_scale_threshold: None,
+            lumber_furniture_weight: None,
+            steel_armory_weight_peace: None,
+            steel_armory_weight_war: None,
+            canned_food_buffer: None,
+            min_chain_target: None,
             spending_military_weight: None,
             spending_economy_weight: None,
             spending_diplomacy_weight: None,

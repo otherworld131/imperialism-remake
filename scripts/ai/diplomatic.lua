@@ -71,6 +71,13 @@ diplomatic = {
     food_processing_expansion_threshold = 2,
     infra_budget_scale_threshold = 15000,
 
+    -- Card [2/6]: balanced civilian tilt
+    lumber_furniture_weight = 0.7,
+    steel_armory_weight_peace = 0.15,
+    steel_armory_weight_war = 0.6,
+    canned_food_buffer = 1.7,
+    min_chain_target = 1,
+
     -- Worker training
     worker_train_threshold = 1,
     worker_promote_threshold = 2,
