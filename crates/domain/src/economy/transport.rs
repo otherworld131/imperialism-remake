@@ -135,25 +135,24 @@ impl TransportSystem {
 
     /// Set the explicit freight-unit allocation for a resource type.
     /// If the resource already has an allocation, it is updated; zero removes it.
-    /// Total assigned units are clamped to the available freight-car capacity.
+    ///
+    /// **No cap is enforced here.** Effective transport capacity is
+    /// `freight_cars + merchant_marine_cargo` (rail + sea), but
+    /// `TransportSystem` does not know about the merchant marine, so any
+    /// rail-only clamp here would prevent valid combined-pool allocations.
+    /// `calculate_deliveries` enforces the hard rail-only cap at delivery
+    /// time; callers (UI freight panel, AI allocator) are responsible for
+    /// keeping the running total within the combined cap.
     pub fn set_allocation(&mut self, resource: ResourceType, units: u32) {
         if units == 0 {
             self.allocations.retain(|(r, _)| *r != resource);
             return;
         }
-        let assigned_elsewhere: u32 = self
-            .allocations
-            .iter()
-            .filter(|(r, _)| *r != resource)
-            .map(|(_, units)| *units)
-            .sum();
-        let capped_units = units.min(self.freight_cars.saturating_sub(assigned_elsewhere));
         if let Some(entry) = self.allocations.iter_mut().find(|(r, _)| *r == resource) {
-            entry.1 = capped_units;
+            entry.1 = units;
         } else {
-            self.allocations.push((resource, capped_units));
+            self.allocations.push((resource, units));
         }
-        self.allocations.retain(|(_, units)| *units > 0);
     }
 
     /// Given available resources from tiles, calculate how many of each resource
@@ -634,7 +633,10 @@ mod tests {
     }
 
     #[test]
-    fn set_allocation_clamps_total_units_to_capacity() {
+    fn set_allocation_does_not_clamp_per_unit() {
+        // `set_allocation` no longer caps against `freight_cars` — the cap moved
+        // to `calculate_deliveries` so that combined rail+sea allocations work
+        // (Trello bug #461). Over-allocation is still bounded at delivery time.
         let mut ts = TransportSystem::new();
         ts.build_freight_cars(5);
         ts.set_allocation(ResourceType::Timber, 4);
@@ -650,11 +652,18 @@ mod tests {
             .iter()
             .find(|(r, _)| *r == ResourceType::Coal)
             .map(|(_, units)| *units);
-        let total: u32 = ts.allocations.iter().map(|(_, units)| *units).sum();
 
         assert_eq!(timber, Some(4));
-        assert_eq!(coal, Some(1));
-        assert_eq!(total, 5);
+        assert_eq!(coal, Some(4));
+
+        // Capacity is still enforced at delivery time.
+        let available = vec![(ResourceType::Timber, 100), (ResourceType::Coal, 100)];
+        let total: u32 = ts
+            .calculate_deliveries(&available)
+            .iter()
+            .map(|(_, q)| *q)
+            .sum();
+        assert!(total <= 5, "delivery still capped by freight_cars");
     }
 
     #[test]

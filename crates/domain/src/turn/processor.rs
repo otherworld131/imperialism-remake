@@ -1238,6 +1238,15 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
         let rail_capacity = nation.military.transport.total_capacity();
         let sea_capacity = nation.total_cargo_capacity(&game.game_data);
         let transport = nation.military.transport.clone();
+        // Remote deliveries use rail freight + merchant-marine cargo as a
+        // single combined pool. The UI's freight panel already projects against
+        // this combined capacity (`crates/wasm-bridge/src/lib.rs:3079`); the
+        // turn processor must agree, otherwise sea capacity is shown but never
+        // delivers (Trello bug #461).
+        let combined_transport = crate::economy::TransportSystem {
+            freight_cars: rail_capacity.saturating_add(sea_capacity),
+            allocations: transport.allocations.clone(),
+        };
         let require_explicit_allocations = nation_id == game.human_player_nation;
         let bonus_multiplier = match game.difficulty {
             Difficulty::Hard if nation_id != game.human_player_nation => 1.1,
@@ -1273,7 +1282,7 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
         let delivered_remote_items = if require_explicit_allocations && !has_positive_allocations {
             Vec::new()
         } else {
-            transport.calculate_deliveries(&remote_items)
+            combined_transport.calculate_deliveries(&remote_items)
         };
 
         let Some(nation) = game.world.nations.iter_mut().find(|n| n.id == nation_id) else {

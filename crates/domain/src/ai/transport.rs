@@ -54,8 +54,13 @@ pub fn ai_allocate_transport(game: &mut GameState, nation_id: NationId) {
     let Some(nation) = game.get_nation(nation_id) else {
         return;
     };
-    let freight_cars = nation.military.transport.freight_cars;
-    if freight_cars == 0 {
+    let rail_capacity = nation.military.transport.freight_cars;
+    let sea_capacity = nation.total_cargo_capacity(&game.game_data);
+    // Combined rail + sea pool — matches what `resolve_transport` actually
+    // delivers each turn (Trello bug #461). Even with zero rail, sea cargo can
+    // carry remote yields (e.g. an island nation with a Trader).
+    let total_capacity = rail_capacity.saturating_add(sea_capacity);
+    if total_capacity == 0 {
         return;
     }
 
@@ -80,7 +85,7 @@ pub fn ai_allocate_transport(game: &mut GameState, nation_id: NationId) {
     let nation = game.get_nation(nation_id).expect("nation present");
     let demand = compute_remote_demand(nation, &game.game_data, &remote_items);
 
-    let allocations = distribute_freight(freight_cars, &demand);
+    let allocations = distribute_freight(total_capacity, &demand);
 
     let nation = game.get_nation_mut(nation_id).expect("nation present");
     nation.military.transport.allocations.clear();
@@ -486,6 +491,22 @@ mod tests {
             demand.is_empty(),
             "no production buildings + no workers → no demand"
         );
+    }
+
+    #[test]
+    fn floor_distributes_when_freight_below_demand_count() {
+        // 3 demand resources but only 2 freight slots — floor pass should
+        // allocate 1 each to two of them and 0 to the third.
+        let out = distribute_freight(
+            2,
+            &[
+                (ResourceType::Coal, 10),
+                (ResourceType::Iron, 10),
+                (ResourceType::Grain, 10),
+            ],
+        );
+        let total: u32 = out.iter().map(|(_, u)| *u).sum();
+        assert_eq!(total, 2);
     }
 
     #[test]

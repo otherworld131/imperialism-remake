@@ -1777,13 +1777,19 @@ pub(crate) fn ai_build_transport_proactive(game: &mut GameState, nation_id: Nati
         None => return,
     };
 
-    let capacity = nation.military.transport.total_capacity();
+    // Use combined rail + sea capacity so the gate matches what
+    // `resolve_transport` actually delivers (Trello bug #461). Without this,
+    // an AI nation with a strong merchant marine but little rail would still
+    // get pushed to overbuild rail cars.
+    let rail_capacity = nation.military.transport.total_capacity();
+    let sea_capacity = nation.total_cargo_capacity(&game.game_data);
+    let capacity = rail_capacity.saturating_add(sea_capacity);
     let freight_unused = nation.economy.logistics.freight_unused;
     let (_local_items, remote_items) = crate::economy::current_collectable_resources(game, nation_id);
     let remote_total: u32 = remote_items.iter().map(|(_, qty)| *qty).sum();
 
-    // Build when the remote network is already beyond rail capacity, or when
-    // last turn's freight pool was nearly saturated.
+    // Build when the remote network is already beyond combined capacity, or
+    // when last turn's freight pool was nearly saturated.
     if remote_total <= capacity && (capacity == 0 || freight_unused > 2) {
         return;
     }
