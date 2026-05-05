@@ -1874,9 +1874,10 @@ fn mill_target(runnable: u32, capacity: u32, min_target: u32) -> u32 {
     runnable.min(capacity)
 }
 
-/// Factory target: clamp `desired` (= split-share of available material) to
-/// [min_target, capacity] when supply is sufficient; drop to min_target
-/// otherwise so unrunnable factories don't compete with running ones for labor.
+/// Factory target: when supply is sufficient, target = min(desired, capacity)
+/// — the desired figure is already runnable (callers pass the split-share
+/// converted to output units), so we never inflate it. When supply is
+/// insufficient we drop to the anti-oscillation floor.
 fn factory_target(desired: u32, has_supply: bool, capacity: u32, min_target: u32) -> u32 {
     if capacity == 0 {
         return 0;
@@ -1884,7 +1885,7 @@ fn factory_target(desired: u32, has_supply: bool, capacity: u32, min_target: u32
     if !has_supply {
         return min_target.min(capacity);
     }
-    desired.max(min_target).min(capacity)
+    desired.min(capacity)
 }
 
 /// Sell excess tradeable resources on the market for cash.
@@ -3394,6 +3395,30 @@ mod tests {
             ai.economy.chain_targets.canned_food_factory, 2,
             "canned_food target must clamp to scarcest ingredient (grain=2)"
         );
+    }
+
+    #[test]
+    fn mill_target_does_not_inflate_when_runnable_is_zero() {
+        // Direct exercise of the helper to lock in the contract: even with a
+        // non-default min_target, an unrunnable mill should never target above
+        // its anti-oscillation floor.
+        // (LuaAiConfig sanitization caps min_chain_target at 2, but defense
+        // in depth: the helper itself must not multiply the floor by capacity.)
+        assert_eq!(mill_target(0, 10, 2), 2);
+        assert_eq!(mill_target(0, 10, 0), 0);
+        assert_eq!(mill_target(3, 10, 2), 3);
+        assert_eq!(mill_target(20, 10, 2), 10);
+    }
+
+    #[test]
+    fn factory_target_does_not_inflate_floor_above_desired() {
+        // When supply is present, factory target is min(desired, capacity).
+        // The floor only applies when supply is missing.
+        assert_eq!(factory_target(5, true, 10, 2), 5);
+        assert_eq!(factory_target(0, true, 10, 2), 0);
+        assert_eq!(factory_target(20, true, 10, 2), 10);
+        assert_eq!(factory_target(5, false, 10, 2), 2); // floor wins
+        assert_eq!(factory_target(5, false, 10, 0), 0);
     }
 
     #[test]

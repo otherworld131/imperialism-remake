@@ -1214,7 +1214,10 @@ impl LuaAiConfig {
             sanitize_opt_f64(self.steel_armory_weight_peace, 0.0, 1.0);
         self.steel_armory_weight_war = sanitize_opt_f64(self.steel_armory_weight_war, 0.0, 1.0);
         self.canned_food_buffer = sanitize_opt_f64(self.canned_food_buffer, 0.0, 10.0);
-        self.min_chain_target = sanitize_opt_u32(self.min_chain_target, 0, 1000);
+        // `min_chain_target` is the anti-oscillation floor for unrunnable
+        // chains. Capped tightly so a non-default Lua value can't reintroduce
+        // the inflated-target bug fixed in round 1 of the adversarial review.
+        self.min_chain_target = sanitize_opt_u32(self.min_chain_target, 0, 2);
 
         // Treasury thresholds
         self.tier1_treasury = sanitize_opt_i64(self.tier1_treasury, 0, 10_000_000);
