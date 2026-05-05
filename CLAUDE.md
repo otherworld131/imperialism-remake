@@ -151,16 +151,18 @@ cargo run --release --bin imperialism -- --batch N > report.json
 # Single interactive game
 cargo run --release --bin imperialism -- [map_key] [nation_index]
 
-# Web frontend — rebuild WASM and (re)start the dev server
-./web/restart-web-server.sh
-# Use optimized WASM when testing gameplay/runtime performance
+# Web frontend — rebuild WASM and (re)start the dev server.
+# Default to --opt: optimized WASM is the right build for gameplay,
+# runtime performance, and any user-facing testing.
 ./web/restart-web-server.sh --opt
+# Faster rebuild for inner-loop UI/glue iteration only (unoptimized):
+./web/restart-web-server.sh
 # Then open http://localhost:43173
 ```
 
 After implementing any plan that touches game logic, **always run a few batch games** (e.g. `--batch 3`) to verify the full game loop works end-to-end, not just unit tests.
 
-After any changes to Rust code that affect the web frontend, use `./web/restart-web-server.sh` to rebuild the WASM bridge and restart the dev server. Use `./web/restart-web-server.sh --opt` when you need an optimized WASM build for performance testing.
+After any changes to Rust code that affect the web frontend, use `./web/restart-web-server.sh --opt` to rebuild the WASM bridge (optimized) and restart the dev server. Use the unoptimized `./web/restart-web-server.sh` only for fast inner-loop iteration on UI/glue code.
 
 ## Reference: Original Game Manual
 
