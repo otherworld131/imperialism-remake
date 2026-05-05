@@ -35,6 +35,7 @@ pub enum TechEffect {
     LuaScript(String),
 }
 
+#[derive(Clone)]
 pub struct TechTree {
     technologies: Vec<Technology>,
 }

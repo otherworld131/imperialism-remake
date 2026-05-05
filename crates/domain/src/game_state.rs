@@ -35,6 +35,7 @@ pub struct PoliticalSnapshot {
 
 /// Live world snapshot: everything that describes "what is true right now"
 /// in the game world — map, provinces, nations, diplomacy, and market state.
+#[derive(Clone)]
 pub struct WorldState {
     /// Key identifying which map is loaded.
     pub map_key: String,
@@ -55,7 +56,7 @@ pub struct WorldState {
 }
 
 /// Historical records accumulated over the course of the game.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GameArchive {
     /// History of major game events. Use `render_history_event` for player-facing text.
     pub history: Vec<(TurnNumber, HistoryEvent)>,
@@ -72,7 +73,7 @@ pub struct GameArchive {
 }
 
 /// In-turn state that is either not serialized or rebuilt each turn.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct TransientState {
     /// Event log for the current turn (not saved).
     pub events: Vec<DomainEvent>,
@@ -126,6 +127,7 @@ pub struct TransientState {
 /// Top-level aggregate root representing the complete state of a game.
 /// Owns `world` (live snapshot), `archive` (history), and `transient`
 /// (current-turn working state), plus game-loop scalars.
+#[derive(Clone)]
 pub struct GameState {
     /// Current turn number.
     pub turn: TurnNumber,

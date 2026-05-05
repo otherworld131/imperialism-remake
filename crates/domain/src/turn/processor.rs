@@ -368,58 +368,7 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // 0d. Resolve civilian actions (tick working civilians, apply improvements)
     resolve_civilian_actions(game, &mut report);
 
-    // 1. Economy phase: collect tile resources (plan → reserve → execute, Trello #161)
-    // Only collect_resources fires here; production and trade run after their
-    // interleaved steps (transport, monetary conversion, town production).
-    use crate::turn::economy_phase::{
-        EconomicOrderKind, collect_economic_orders, execute_reserved_economy, validate_and_reserve,
-    };
-    let collect_orders: Vec<_> = collect_economic_orders(game)
-        .into_iter()
-        .filter(|o| o.kind == EconomicOrderKind::CollectTileResources)
-        .collect();
-    let reserved_collect = validate_and_reserve(game, collect_orders);
-    execute_reserved_economy(game, &mut report, reserved_collect);
-    clear_economy_batch_reservations(game);
-
-    // 1b. Transport resolution: cap resources delivered by freight car capacity
-    resolve_transport(game, &mut report);
-
-    // 2. Gold/Gems -> money conversion
-    convert_monetary_resources(game, &mut report);
-
-    // 3. Production phase (plan → reserve → execute)
-    let produce_orders: Vec<_> = collect_economic_orders(game)
-        .into_iter()
-        .filter(|o| o.kind == EconomicOrderKind::RunProduction)
-        .collect();
-    let reserved_produce = validate_and_reserve(game, produce_orders);
-    execute_reserved_economy(game, &mut report, reserved_produce);
-    clear_economy_batch_reservations(game);
-
-    // 3a. Town production: Villages and Towns produce materials and goods autonomously
-    resolve_town_production(game, &mut report);
-
-    // 3b. Trade phase (plan → reserve → execute; blockade capacity computed inside)
-    let trade_orders: Vec<_> = collect_economic_orders(game)
-        .into_iter()
-        .filter(|o| o.kind == EconomicOrderKind::ExecuteTrade)
-        .collect();
-    let reserved_trade = validate_and_reserve(game, trade_orders);
-    execute_reserved_economy(game, &mut report, reserved_trade);
-    clear_economy_batch_reservations(game);
-
-    // 3c. Warehouse capacity caps: prevent infinite resource accumulation
-    apply_warehouse_caps(game);
-
-    // 4. Tick buildings (process expansion timers)
-    tick_buildings(game);
-
-    // 4b. Food processing: convert raw food to canned food
-    process_food(game, &mut report);
-
-    // 5. Food consumption
-    food_consumption(game, &mut report);
+    run_pre_immigration_phases(game, &mut report);
 
     // 5b. Pending immigration: process queued worker recruitment orders.
     process_pending_immigration(game, &mut report);
@@ -557,6 +506,94 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         .push(DomainEvent::TurnStarted(TurnStarted { turn: game.turn }));
 
     report
+}
+
+fn run_pre_immigration_phases(game: &mut GameState, report: &mut TurnReport) {
+    // 1. Economy phase: collect tile resources (plan → reserve → execute, Trello #161)
+    // Only collect_resources fires here; production and trade run after their
+    // interleaved steps (transport, monetary conversion, town production).
+    use crate::turn::economy_phase::{
+        EconomicOrderKind, collect_economic_orders, execute_reserved_economy, validate_and_reserve,
+    };
+    let collect_orders: Vec<_> = collect_economic_orders(game)
+        .into_iter()
+        .filter(|o| o.kind == EconomicOrderKind::CollectTileResources)
+        .collect();
+    let reserved_collect = validate_and_reserve(game, collect_orders);
+    execute_reserved_economy(game, report, reserved_collect);
+    clear_economy_batch_reservations(game);
+
+    // 1b. Transport resolution: cap resources delivered by freight car capacity
+    resolve_transport(game, report);
+
+    // 2. Gold/Gems -> money conversion
+    convert_monetary_resources(game, report);
+
+    // 3. Production phase (plan → reserve → execute)
+    let produce_orders: Vec<_> = collect_economic_orders(game)
+        .into_iter()
+        .filter(|o| o.kind == EconomicOrderKind::RunProduction)
+        .collect();
+    let reserved_produce = validate_and_reserve(game, produce_orders);
+    execute_reserved_economy(game, report, reserved_produce);
+    clear_economy_batch_reservations(game);
+
+    // 3a. Town production: Villages and Towns produce materials and goods autonomously
+    resolve_town_production(game, report);
+
+    // 3b. Trade phase (plan → reserve → execute; blockade capacity computed inside)
+    let trade_orders: Vec<_> = collect_economic_orders(game)
+        .into_iter()
+        .filter(|o| o.kind == EconomicOrderKind::ExecuteTrade)
+        .collect();
+    let reserved_trade = validate_and_reserve(game, trade_orders);
+    execute_reserved_economy(game, report, reserved_trade);
+    clear_economy_batch_reservations(game);
+
+    // 3c. Warehouse capacity caps: prevent infinite resource accumulation
+    apply_warehouse_caps(game);
+
+    // 4. Tick buildings (process expansion timers)
+    tick_buildings(game);
+
+    // 4b. Food processing: convert raw food to canned food
+    process_food(game, report);
+
+    // 5. Food consumption
+    food_consumption(game, report);
+}
+
+pub fn projected_immigration_queue_capacity(game: &GameState, nation_id: NationId) -> u32 {
+    let Some(nation) = game.get_nation(nation_id) else {
+        return 0;
+    };
+    if nation.diplomacy.is_in_anarchy || !nation.is_great_power() {
+        return 0;
+    }
+
+    let mut projected = game.clone();
+    let mut report = TurnReport::empty();
+    run_pre_immigration_phases(&mut projected, &mut report);
+
+    let cfg = &projected.game_data.game_config;
+    let Some(nation) = projected.get_nation(nation_id) else {
+        return 0;
+    };
+
+    let max_by_canned_food = if cfg.immigration_canned_food > 0 {
+        nation.material_amount(MaterialType::CannedFood) / cfg.immigration_canned_food
+    } else {
+        u32::MAX
+    };
+    let max_by_clothing = if cfg.immigration_clothing > 0 {
+        nation.goods_amount(GoodsType::Clothing) / cfg.immigration_clothing
+    } else {
+        u32::MAX
+    };
+    nation
+        .immigration_turn_capacity(cfg)
+        .min(max_by_canned_food)
+        .min(max_by_clothing)
 }
 
 /// Derive per-nation `CashFlow` from the scattered per-source fields on
@@ -8400,6 +8437,48 @@ mod tests {
         assert_eq!(
             nation.economy.labor.untrained, 1,
             "Should have 1 untrained worker after immigration"
+        );
+    }
+
+    #[test]
+    fn projected_immigration_capacity_includes_same_turn_clothing_production() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.add_material(MaterialType::CannedFood, 1);
+        nation.add_resource(ResourceType::Cotton, 4);
+        nation.add_resource(ResourceType::Grain, 10);
+        for i in 2..=5 {
+            nation.add_province(ProvinceId(i));
+        }
+
+        let cap = projected_immigration_queue_capacity(&game, NationId(1));
+        assert_eq!(
+            cap, 1,
+            "Projected immigration cap should include clothing produced earlier in the turn"
+        );
+    }
+
+    #[test]
+    fn projected_immigration_capacity_does_not_assume_food_processing_with_zero_workers() {
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.economy.labor.untrained = 0;
+        nation.economy.labor.trained = 0;
+        nation.economy.labor.expert = 0;
+        nation
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::FoodProcessing, 5));
+        nation.add_resource(ResourceType::Grain, 20);
+        nation.add_goods(GoodsType::Clothing, 1);
+        for i in 2..=5 {
+            nation.add_province(ProvinceId(i));
+        }
+
+        let cap = projected_immigration_queue_capacity(&game, NationId(1));
+        assert_eq!(
+            cap, 0,
+            "Zero-worker nations should not project canned food from processing that never runs"
         );
     }
 

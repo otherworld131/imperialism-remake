@@ -9,7 +9,8 @@ pub(crate) mod trade_phase;
 
 pub use processor::{
     TurnReport, accept_pact_defense, accept_request_to_join_empire, connected_provinces,
-    continue_pact_defense_cascade, process_turn, reject_request_to_join_empire,
+    continue_pact_defense_cascade, process_turn, projected_immigration_queue_capacity,
+    reject_request_to_join_empire,
 };
 pub use scoring::{
     CouncilVoteResult, GovernorVoteDetail, NationScore, calculate_score, governor_vote,

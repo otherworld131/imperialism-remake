@@ -3465,7 +3465,7 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
     let committed_untrained_training = nation.economy.pending_train_to_trained;
     let committed_trained_training = nation.economy.pending_train_to_expert;
     let cfg = &game.game_data.game_config;
-    let max_pending_immigration = nation.max_immigration_queue(cfg);
+    let max_pending_immigration = domain::turn::projected_immigration_queue_capacity(&game, nid);
 
     // Committed resources from pending army recruits
     let mut army_committed_arms = 0u32;

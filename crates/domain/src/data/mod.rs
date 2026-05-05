@@ -511,6 +511,19 @@ pub struct GameData {
     pub game_config: GameConfig,
 }
 
+impl Clone for GameData {
+    fn clone(&self) -> Self {
+        Self {
+            tech_tree: self.tech_tree.clone(),
+            unit_stats: self.unit_stats.clone(),
+            ship_stats: self.ship_stats.clone(),
+            #[cfg(feature = "lua")]
+            lua_engine: None,
+            game_config: self.game_config.clone(),
+        }
+    }
+}
+
 impl GameData {
     /// Look up ship stats by type. Panics if the ship type is missing — this
     /// indicates a data file that doesn't define all ShipType variants.

@@ -10,6 +10,7 @@ use super::tile::Tile;
 ///
 /// Not every coordinate within the bounding rectangle necessarily has a tile —
 /// the map can have irregular coastlines, islands, etc.
+#[derive(Clone)]
 pub struct HexMap {
     tiles: BTreeMap<HexCoord, Tile>,
     width: i32,

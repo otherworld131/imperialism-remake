@@ -12,13 +12,14 @@ pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
     // Extract config values before borrowing nation mutably.
     let wealthy_threshold =
         Money::dollars(game.game_data.game_config.labor_wealthy_treasury_threshold);
-    let immigration_cfg = game.game_data.game_config.clone();
     let workers_per_province_base = game.game_data.game_config.labor_workers_per_province_base;
     let workers_per_province_wealthy = game
         .game_data
         .game_config
         .labor_workers_per_province_wealthy;
     let min_workers_floor = game.game_data.game_config.labor_min_workers_floor;
+
+    let max_queue = crate::turn::projected_immigration_queue_capacity(game, nation_id);
 
     let nation = match game.get_nation_mut(nation_id) {
         Some(n) => n,
@@ -38,7 +39,6 @@ pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
         (nation.province_count() as u32 * workers_per_province).max(min_workers_floor);
 
     let desired = max_workers.saturating_sub(total_workers);
-    let max_queue = nation.max_immigration_queue(&immigration_cfg);
     nation.economy.pending_immigration = desired.min(max_queue);
 }
 
