@@ -1711,35 +1711,48 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
         .unwrap_or(0);
 
     // ── Mill targets ──────────────────────────────────────────────────
-    // Strategy: target = cap when we have supply, low (≥ min_chain_target)
-    // when we don't. This redirects scarce labor from chains that would
-    // produce nothing this turn (no inputs) toward chains that can actually
-    // run — and avoids the path-of-least-resistance failure mode where every
-    // chain at u32::MAX splits labor evenly and starves the bottleneck.
+    // Target = min(capacity, input-limited output). Mills produce 1 unit per
+    // 2 raw inputs (per-resource for timber/cotton/wool, per-pair for
+    // coal+iron). Setting target above the input-limited output would inflate
+    // the chain's labor-allocator weight (= `min(target, cap) × 2`) and steal
+    // labor from chains that can actually run this turn. The Lua-tunable
+    // floor `min_chain_target` keeps a chain's slider non-zero so a one-turn
+    // freight gap doesn't permanently silence it.
     let timber_mill_cap = snap.building_capacity(BuildingType::LumberMill);
     let metal_mill_cap = snap.building_capacity(BuildingType::SteelMill);
     let textile_mill_cap = snap.building_capacity(BuildingType::TextileMill);
 
     let timber_supply = snap.resource(ResourceType::Timber);
-    let coal_iron_supply = snap.resource(ResourceType::Coal).min(snap.resource(ResourceType::Iron));
-    let cotton_wool_supply = snap.resource(ResourceType::Cotton) + snap.resource(ResourceType::Wool);
+    let coal_iron_supply = snap
+        .resource(ResourceType::Coal)
+        .min(snap.resource(ResourceType::Iron));
+    let cotton_wool_supply = snap
+        .resource(ResourceType::Cotton)
+        .saturating_add(snap.resource(ResourceType::Wool));
 
-    let timber_mill_target = mill_target(timber_supply >= 2, timber_mill_cap, min_chain_target);
-    let metal_mill_target = mill_target(coal_iron_supply >= 1, metal_mill_cap, min_chain_target);
-    let textile_mill_target = mill_target(cotton_wool_supply >= 2, textile_mill_cap, min_chain_target);
+    let timber_mill_runnable = timber_supply / 2;
+    let metal_mill_runnable = coal_iron_supply;
+    let textile_mill_runnable = cotton_wool_supply / 2;
+
+    let timber_mill_target = mill_target(timber_mill_runnable, timber_mill_cap, min_chain_target);
+    let metal_mill_target = mill_target(metal_mill_runnable, metal_mill_cap, min_chain_target);
+    let textile_mill_target =
+        mill_target(textile_mill_runnable, textile_mill_cap, min_chain_target);
 
     // ── Factory targets ──────────────────────────────────────────────
     // Factories consume 2 units of material per 1 good (materials_per_good=2).
     // Lumber gets split between furniture and paper; steel gets split between
-    // hardware and armory. These splits are what let us balance Furniture vs
-    // Paper output (or Hardware vs Arms) — without targets, lumber is
-    // first-come-first-served by the production order in `economy_phase`,
-    // which always favored furniture and starved paper/armory.
-    let lumber_supply = snap.material(MaterialType::Lumber)
+    // hardware and armory. The factory-side projection uses *capped* mill
+    // output (`mill_target` already bounded by capacity AND runnable input)
+    // so we never over-promise downstream targets.
+    let lumber_supply = snap
+        .material(MaterialType::Lumber)
         .saturating_add(timber_mill_target);
-    let steel_supply = snap.material(MaterialType::Steel)
+    let steel_supply = snap
+        .material(MaterialType::Steel)
         .saturating_add(metal_mill_target);
-    let fabric_supply = snap.material(MaterialType::Fabric)
+    let fabric_supply = snap
+        .material(MaterialType::Fabric)
         .saturating_add(textile_mill_target);
 
     let furniture_cap = snap.building_capacity(BuildingType::FurnitureFactory);
@@ -1794,20 +1807,23 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
         min_chain_target,
     );
 
-    // Canned food: target ≈ projected immigration × buffer, gated by inputs.
-    // The cannery consumes 1 grain + 1 fruit + 1 fish/livestock per canned food.
+    // Canned food: target = min(projected demand, cannery input bottleneck).
+    // The cannery consumes 1 grain + 1 fruit + 1 fish/livestock per canned
+    // food unit, so the runnable output equals the smallest of the three.
     let grain = snap.resource(ResourceType::Grain);
     let fruit = snap.resource(ResourceType::Fruit);
-    let fish_or_livestock = snap.resource(ResourceType::Fish)
+    let fish_or_livestock = snap
+        .resource(ResourceType::Fish)
         .saturating_add(snap.resource(ResourceType::Livestock));
     let cannery_input_cap = grain.min(fruit).min(fish_or_livestock);
     let immigration_demand =
         ((pending_immigration as f64) * canned_food_buffer).ceil() as u32;
-    // Always allow at least 1 unit of cannery output so feed-grain flows even
-    // when the immigration queue is empty — workers want canned food too.
+    // Always allow at least 1 unit of demand so workers can be fed even when
+    // the immigration queue is empty.
     let canned_food_demand = immigration_demand.max(1);
+    let canned_food_runnable = canned_food_demand.min(cannery_input_cap);
     let canned_food_target = factory_target(
-        canned_food_demand,
+        canned_food_runnable,
         cannery_input_cap >= 1,
         canned_food_cap,
         min_chain_target,
@@ -1844,17 +1860,18 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
     }
 }
 
-/// Mill target: use full capacity when supply exists; otherwise drop to the
-/// minimum so labor is freed for chains that can actually run this turn.
-fn mill_target(has_supply: bool, capacity: u32, min_target: u32) -> u32 {
+/// Mill target: clamp to the minimum of capacity and the input-limited
+/// runnable output. When `runnable == 0` we fall back to `min_target` so a
+/// transient supply gap doesn't permanently silence a chain (re-promoting it
+/// next turn means waiting another full turn for any output).
+fn mill_target(runnable: u32, capacity: u32, min_target: u32) -> u32 {
     if capacity == 0 {
         return 0;
     }
-    if has_supply {
-        capacity
-    } else {
-        min_target.min(capacity)
+    if runnable == 0 {
+        return min_target.min(capacity);
     }
+    runnable.min(capacity)
 }
 
 /// Factory target: clamp `desired` (= split-share of available material) to
@@ -3329,6 +3346,53 @@ mod tests {
             "peace should keep hardware target at least as high as war (peace={}, war={})",
             peace_hardware,
             war_hardware
+        );
+    }
+
+    #[test]
+    fn ai_set_production_targets_metal_mill_clamped_by_partial_input() {
+        // Coal/iron at 1 each — the steel mill can only run 1 unit even though
+        // capacity is 10. Target must clamp to 1, not stay at cap.
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+        let ai = game.get_nation_mut(ai_id).unwrap();
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 10));
+        ai.add_resource(ResourceType::Coal, 1);
+        ai.add_resource(ResourceType::Iron, 1);
+
+        ai_set_production_targets(&mut game, ai_id);
+
+        let ai = game.get_nation(ai_id).unwrap();
+        assert_eq!(
+            ai.economy.chain_targets.metal_mill, 1,
+            "metal_mill target must clamp to coal/iron bottleneck (1), not cap (10)"
+        );
+    }
+
+    #[test]
+    fn ai_set_production_targets_cannery_clamped_by_input_bottleneck() {
+        // Cannery cap=10, demand pretends to be high (we'd need a queue but
+        // we'll let it default to 1 which gets buffered up). Inputs: only
+        // 2 grain + 5 fruit + 5 fish. Target should clamp to 2.
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+        let ai = game.get_nation_mut(ai_id).unwrap();
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::FoodProcessing, 10));
+        ai.economy.pending_immigration = 50; // big projected demand
+        ai.add_resource(ResourceType::Grain, 2);
+        ai.add_resource(ResourceType::Fruit, 5);
+        ai.add_resource(ResourceType::Fish, 5);
+
+        ai_set_production_targets(&mut game, ai_id);
+
+        let ai = game.get_nation(ai_id).unwrap();
+        assert_eq!(
+            ai.economy.chain_targets.canned_food_factory, 2,
+            "canned_food target must clamp to scarcest ingredient (grain=2)"
         );
     }
 
