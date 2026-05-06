@@ -95,10 +95,6 @@ fn best_tech_merchant(game: &GameState, nation_id: NationId) -> ShipType {
 }
 
 /// Sum of projected per-turn raw-resource consumption from chain targets.
-/// Used as a proxy for the AI's structural throughput need: any consumption
-/// the AI can't satisfy locally must be imported, and imports flow over
-/// cargo. Selling (export) does not consume cargo in the current trade
-/// model — only the buyer pays cargo — so this is the relevant signal.
 fn projected_raw_consumption_per_turn(game: &GameState, nation_id: NationId) -> u32 {
     let Some(nation) = game.get_nation(nation_id) else {
         return 0;
@@ -109,26 +105,69 @@ fn projected_raw_consumption_per_turn(game: &GameState, nation_id: NationId) -> 
         .sum()
 }
 
-/// Project per-turn raw-resource consumption from chain targets and compare
-/// to current merchant-marine cargo capacity. Returns `true` when the AI's
-/// projected throughput would saturate cargo and benefit from another ship.
+/// Per-turn import gap: the slice of raw-resource consumption that cannot be
+/// sourced from the nation's own provinces (local + remote yield) and must
+/// be bought on the world market.
+///
+/// Imports flow exclusively over merchant cargo in the current trade model
+/// (`generate_need_based_bids` caps total bid quantity at `total_cargo_capacity`),
+/// so this is the *correct* number to compare against cargo when deciding
+/// whether to grow the merchant navy. Comparing gross consumption (the old
+/// behavior) wildly overstates cargo need for self-sufficient nations.
+fn projected_import_gap_per_turn(game: &GameState, nation_id: NationId) -> u32 {
+    let Some(nation) = game.get_nation(nation_id) else {
+        return 0;
+    };
+    let needs = crate::economy::trade::projected_resource_needs(nation);
+    if needs.is_empty() {
+        return 0;
+    }
+    let (local, remote) = crate::economy::current_collectable_resources(game, nation_id);
+    let supply_for = |r: ResourceType| -> u32 {
+        let l = local
+            .iter()
+            .find(|(rr, _)| *rr == r)
+            .map(|(_, q)| *q)
+            .unwrap_or(0);
+        let m = remote
+            .iter()
+            .find(|(rr, _)| *rr == r)
+            .map(|(_, q)| *q)
+            .unwrap_or(0);
+        l.saturating_add(m)
+    };
+    let mut gap = 0u32;
+    for (r, need) in needs {
+        gap = gap.saturating_add(need.saturating_sub(supply_for(r)));
+    }
+    gap
+}
+
+/// Returns `true` when the AI's projected per-turn imports — the slice of
+/// chain consumption it can't source locally — exceed current merchant cargo,
+/// and another hull would relieve the bottleneck.
 ///
 /// This is the trigger for the merchant-navy expansion reserve and for
-/// continuing to build merchant ships past the static personality cap.
+/// continuing to build merchant ships past the static personality cap. We
+/// gate on **import gap**, not gross consumption: a self-sufficient steel
+/// economy doesn't need more cargo no matter how big its mills are, while a
+/// nation whose iron is only available abroad needs cargo immediately even
+/// if its overall consumption is small.
 pub(crate) fn wants_more_merchant_cargo(game: &GameState, nation_id: NationId) -> bool {
     let Some(nation) = game.get_nation(nation_id) else {
         return false;
     };
-    let demand_per_turn = projected_raw_consumption_per_turn(game, nation_id);
-    if demand_per_turn == 0 {
-        // No active chains projecting raw consumption — no import pressure,
-        // even if the nation has zero merchant ships. Avoids spurious
-        // material reservations in test scenarios with no buildings.
+    // No chain targets → no import pressure at all. Avoids spurious material
+    // reservations in test scenarios with no buildings.
+    if projected_raw_consumption_per_turn(game, nation_id) == 0 {
         return false;
     }
-    // A ship's cargo budget recurs every turn — if per-turn raw consumption
-    // exceeds capacity, imports are throttled.
-    demand_per_turn > nation.total_cargo_capacity(&game.game_data)
+    let import_gap = projected_import_gap_per_turn(game, nation_id);
+    if import_gap == 0 {
+        // Fully self-sufficient — no need to grow cargo regardless of size.
+        return false;
+    }
+    import_gap > nation.total_cargo_capacity(&game.game_data)
 }
 
 /// Materials the AI holds back from other consumers (warship build, freight
@@ -417,22 +456,17 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
             pc.max_merchant_ships
         }
     };
-    // When demand-bound, scale the cap from `projected_raw_consumption`.
-    // `projected_resource_needs` over-states cargo need because most raw
-    // inputs are produced locally — only the unmet portion actually flows
-    // over cargo. Empirically, ~25% of raw consumption ends up as imports
-    // for a typical AI economy. We use a 1/4 divisor to convert "total
-    // chain demand" → "expected import volume", then size the target
-    // fleet against that. The static cap is honored as a floor.
+    // When demand-bound, size the target fleet against the actual import gap
+    // (chain consumption minus own-province yield). The static cap is honored
+    // as a floor.
     let max_ships: usize = if demand_bound {
-        let demand = projected_raw_consumption_per_turn(game, nation_id);
+        let import_gap = projected_import_gap_per_turn(game, nation_id);
         let hull_cargo = game
             .game_data
             .ship_stats(best_tech_merchant(game, nation_id))
             .cargo
             .max(1);
-        let import_estimate = demand / 4;
-        let target = import_estimate.div_ceil(hull_cargo) as usize;
+        let target = import_gap.div_ceil(hull_cargo) as usize;
         static_cap.max(target)
     } else {
         static_cap
