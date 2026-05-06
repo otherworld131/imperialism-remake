@@ -77,6 +77,8 @@ aggressive = {
     arms_sell_reserve = 30,
     goods_sell_treasury_threshold = 4000,
     goods_reserve = 1,
+    -- Aggressive likes liquidity for war — drain harder.
+    goods_fat_stockpile_threshold = 20,
     food_processing_expansion_threshold = 3,
     infra_budget_scale_threshold = 25000,
 

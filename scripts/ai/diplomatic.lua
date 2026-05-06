@@ -73,6 +73,7 @@ diplomatic = {
     arms_sell_reserve = 8,
     goods_sell_treasury_threshold = 3000,
     goods_reserve = 2,
+    goods_fat_stockpile_threshold = 30,
     food_processing_expansion_threshold = 2,
     infra_budget_scale_threshold = 15000,
 

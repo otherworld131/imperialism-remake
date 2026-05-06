@@ -356,11 +356,20 @@ pub fn generate_minor_nation_offers(
     offers
 }
 
-/// Auto-generate trade offers from Minor Nations with optional resource withholding.
+/// Auto-generate trade offers from Minor Nations with random-subset selection
+/// of which resource types are offered each turn.
 ///
-/// `withhold_chance` is 0–100: each minor nation has this % chance to withhold
-/// one randomly chosen resource offer for this turn. `seed` drives the PRNG so
-/// results are deterministic for a given turn.
+/// `withhold_chance > 0` switches the minor to "random subset" mode: each turn
+/// the minor picks K ∈ [1, N] resource types uniformly at random from the N
+/// tradeable types it produces, and offers the **full turn yield** of each
+/// chosen type (one offer per type). The remaining types are withheld until a
+/// future turn. This mirrors the original Imperialism behavior where minor
+/// nations rotate which goods hit the world market, instead of dumping every
+/// commodity every turn.
+///
+/// `withhold_chance == 0` keeps the legacy "offer everything" behavior, used
+/// by older tests and by callers that want a stable offer pool. `seed` drives
+/// the xorshift64 PRNG so results are deterministic per turn.
 pub fn generate_minor_nation_offers_with_seed(
     nations: &[Nation],
     provinces: &[crate::map::Province],
@@ -399,34 +408,46 @@ pub fn generate_minor_nation_offers_with_seed(
             }
         }
 
-        // Decide which resource (if any) to withhold this turn
-        let tradeable: Vec<ResourceType> = production
+        // Trello: each turn the minor nation puts up for sale a random subset
+        // of its tradeable resource types — between 1 and N, where N is the
+        // count of distinct tradeable types it produces. For every type in
+        // the chosen subset it offers the *full* turn yield (one offer per
+        // type, not split). When `withhold_chance == 0` the subset is the
+        // full set (back-compat behavior — every type offered every turn).
+        let mut tradeable: Vec<ResourceType> = production
             .keys()
             .copied()
             .filter(|r| r.is_tradeable())
             .collect();
+        // Sort for determinism — BTreeMap iteration is already stable but
+        // an explicit sort makes the seed→subset mapping readable in tests.
+        tradeable.sort_by_key(|r| format!("{r:?}"));
 
-        let withheld = if !tradeable.is_empty() && withhold_chance > 0 {
-            // xorshift64 step
+        let offered_set: std::collections::HashSet<ResourceType> = if tradeable.is_empty() {
+            std::collections::HashSet::new()
+        } else if withhold_chance == 0 {
+            tradeable.iter().copied().collect()
+        } else {
+            // Pick K ∈ [1, N] uniformly, then sample K types from `tradeable`
+            // using a Fisher-Yates partial shuffle driven by xorshift64.
+            let n = tradeable.len();
             rng_state ^= rng_state << 13;
             rng_state ^= rng_state >> 7;
             rng_state ^= rng_state << 17;
-            let roll = (rng_state >> 32) as u32 % 100;
-            if roll < withhold_chance {
+            let k = ((rng_state >> 32) as usize) % n + 1;
+            let mut deck = tradeable.clone();
+            for i in 0..k {
                 rng_state ^= rng_state << 13;
                 rng_state ^= rng_state >> 7;
                 rng_state ^= rng_state << 17;
-                let idx = ((rng_state >> 32) as usize) % tradeable.len();
-                Some(tradeable[idx])
-            } else {
-                None
+                let pick = i + ((rng_state >> 32) as usize) % (n - i);
+                deck.swap(i, pick);
             }
-        } else {
-            None
+            deck.into_iter().take(k).collect()
         };
 
         for (resource, quantity) in &production {
-            if Some(*resource) == withheld {
+            if !offered_set.contains(resource) {
                 continue;
             }
             if resource.is_tradeable() && *quantity > 0 {
@@ -1362,18 +1383,53 @@ mod tests {
     }
 
     #[test]
-    fn withhold_chance_100_withholds_exactly_one_resource() {
+    fn withhold_chance_nonzero_picks_subset_in_range() {
         let (nations, provinces, hex_map) = make_minor_with_resources();
         let offers_full = generate_minor_nation_offers(&nations, &provinces, &hex_map);
         assert_eq!(offers_full.len(), 2, "setup: minor must have 2 resources");
-        // At 100% chance, exactly one resource should be withheld
-        let offers_withheld =
-            generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 100, 99);
-        assert_eq!(
-            offers_withheld.len(),
-            1,
-            "100% chance must withhold exactly one of two resources"
-        );
+        // With a nonzero withhold_chance the offer count is K ∈ [1, N].
+        // Verify across several seeds that we observe both K=1 and K=2.
+        let mut saw_one = false;
+        let mut saw_two = false;
+        for seed in 1..50u64 {
+            let n =
+                generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 100, seed)
+                    .len();
+            assert!(
+                (1..=2).contains(&n),
+                "subset size must stay in [1, N=2], got {n}"
+            );
+            if n == 1 {
+                saw_one = true;
+            }
+            if n == 2 {
+                saw_two = true;
+            }
+        }
+        assert!(saw_one && saw_two, "subset size must vary across seeds");
+    }
+
+    #[test]
+    fn withhold_chance_nonzero_offers_full_quantity_when_type_is_chosen() {
+        // Whatever subset of types is offered, each offer carries the full
+        // turn yield for that type (no quantity splitting).
+        let (nations, provinces, hex_map) = make_minor_with_resources();
+        let full = generate_minor_nation_offers(&nations, &provinces, &hex_map);
+        let by_resource: std::collections::HashMap<_, _> =
+            full.iter().map(|o| (o.resource, o.quantity)).collect();
+
+        for seed in 1..20u64 {
+            let offers =
+                generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 100, seed);
+            for o in &offers {
+                let expected = by_resource[&o.resource];
+                assert_eq!(
+                    o.quantity, expected,
+                    "minor must offer full turn yield for {:?}, got {} (expected {})",
+                    o.resource, o.quantity, expected
+                );
+            }
+        }
     }
 
     #[test]

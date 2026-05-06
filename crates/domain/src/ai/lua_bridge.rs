@@ -1015,6 +1015,12 @@ pub struct LuaAiConfig {
     pub arms_sell_reserve: Option<u32>,
     pub goods_sell_treasury_threshold: Option<i64>,
     pub goods_reserve: Option<u32>,
+    /// Per-goods-type stockpile size above which the AI auto-dumps to the
+    /// world market regardless of treasury level. Without this the AI hoards
+    /// finished goods once trade brings the treasury above
+    /// `goods_sell_treasury_threshold`, since the minor-bid path only drains
+    /// 1 unit per minor per turn.
+    pub goods_fat_stockpile_threshold: Option<u32>,
     pub food_processing_expansion_threshold: Option<u32>,
     pub infra_budget_scale_threshold: Option<i64>,
 
@@ -1244,6 +1250,8 @@ impl LuaAiConfig {
         // the auto-sale path entirely.
         self.arms_sell_reserve = sanitize_opt_u32(self.arms_sell_reserve, 0, 200);
         self.goods_reserve = sanitize_opt_u32(self.goods_reserve, 0, 100);
+        self.goods_fat_stockpile_threshold =
+            sanitize_opt_u32(self.goods_fat_stockpile_threshold, 0, 1_000);
         self.food_processing_expansion_threshold =
             sanitize_opt_u32(self.food_processing_expansion_threshold, 0, 1000);
         // Card [2/6]: production-chain target weights
@@ -1438,6 +1446,7 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             arms_sell_reserve: table.get("arms_sell_reserve").ok(),
             goods_sell_treasury_threshold: table.get("goods_sell_treasury_threshold").ok(),
             goods_reserve: table.get("goods_reserve").ok(),
+            goods_fat_stockpile_threshold: table.get("goods_fat_stockpile_threshold").ok(),
             food_processing_expansion_threshold: table
                 .get("food_processing_expansion_threshold")
                 .ok(),
@@ -1862,6 +1871,7 @@ mod tests {
             arms_sell_reserve: None,
             goods_sell_treasury_threshold: None,
             goods_reserve: None,
+            goods_fat_stockpile_threshold: None,
             food_processing_expansion_threshold: None,
             infra_budget_scale_threshold: None,
             lumber_furniture_weight: None,
@@ -1977,6 +1987,7 @@ mod tests {
             arms_sell_reserve: None,
             goods_sell_treasury_threshold: None,
             goods_reserve: None,
+            goods_fat_stockpile_threshold: None,
             food_processing_expansion_threshold: None,
             infra_budget_scale_threshold: None,
             lumber_furniture_weight: None,
@@ -2131,6 +2142,7 @@ mod tests {
             arms_sell_reserve: None,
             goods_sell_treasury_threshold: None,
             goods_reserve: None,
+            goods_fat_stockpile_threshold: None,
             food_processing_expansion_threshold: None,
             infra_budget_scale_threshold: None,
             lumber_furniture_weight: None,

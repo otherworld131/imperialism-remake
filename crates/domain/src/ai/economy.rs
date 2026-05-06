@@ -1260,12 +1260,40 @@ pub fn ai_manage_resources(
         }
         2
     };
+    // Fat-stockpile dump: even with a healthy treasury, liquidate goods that
+    // pile up far beyond any plausible turn-over-turn consumption. Without
+    // this, GPs hoard hundreds of furniture/clothing/hardware once trade
+    // brings the treasury above `goods_sell_threshold` and the minor-bid
+    // path (1 unit per minor per turn) can't drain the warehouse.
+    let goods_fat_stockpile_threshold: u32 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg
+            .as_ref()
+            .and_then(|c| c.goods_fat_stockpile_threshold)
+        {
+            break 'val v;
+        }
+        30
+    };
 
     // Build snapshot for all planning reads (Trello #163).
     let snapshot = super::snapshot::NationEconomySnapshot::build(game, nation_id);
 
-    // Only sell goods when treasury is low
-    if snapshot.treasury >= Money::dollars(goods_sell_threshold) {
+    // Two trigger conditions for the goods auto-sale:
+    //   1. Treasury below `goods_sell_threshold` — emergency cash run
+    //      (legacy behavior).
+    //   2. Any single goods-type stockpile above `goods_fat_stockpile_threshold`
+    //      — drain the warehouse so production keeps flowing instead of
+    //      capacity going to waste.
+    let treasury_low = snapshot.treasury < Money::dollars(goods_sell_threshold);
+    let any_fat = [
+        GoodsType::Furniture,
+        GoodsType::Hardware,
+        GoodsType::Clothing,
+    ]
+    .iter()
+    .any(|g| snapshot.goods(*g) >= goods_fat_stockpile_threshold);
+    if !treasury_low && !any_fat {
         return;
     }
 
@@ -1286,10 +1314,20 @@ pub fn ai_manage_resources(
     for (goods_type, price_per_unit) in &goods_prices {
         // Read from snapshot (stable view of the turn).
         let amount = snapshot.goods(*goods_type);
-        if amount <= goods_reserve {
+        // Two floors: the static `goods_reserve` is the absolute minimum we
+        // ever drop to, used in the emergency-cash branch. The fat-stockpile
+        // branch only drains down to `goods_fat_stockpile_threshold` so the
+        // AI keeps a healthy buffer for war/disasters and doesn't yo-yo
+        // between dump and refill.
+        let floor = if treasury_low {
+            goods_reserve
+        } else {
+            goods_fat_stockpile_threshold
+        };
+        if amount <= floor {
             continue;
         }
-        let excess = amount - goods_reserve;
+        let excess = amount - floor;
         let revenue = Money::dollars(*price_per_unit) * excess as i64;
 
         // Mutations go through game.
@@ -2700,6 +2738,36 @@ mod tests {
             "Should not sell goods when treasury is sufficient"
         );
         assert!(actions.is_empty(), "No action should be reported");
+    }
+
+    #[test]
+    fn ai_dumps_fat_stockpile_even_when_treasury_high() {
+        // Trello fat-stockpile dump: even with treasury well above the
+        // emergency threshold, goods piled up far beyond
+        // `goods_fat_stockpile_threshold` get auto-sold to the world market.
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+        let ai = game.get_nation_mut(ai_id).unwrap();
+        ai.economy.treasury = Money::dollars(50_000); // way above sell threshold
+        ai.add_goods(GoodsType::Furniture, 100); // far above default 30 threshold
+        ai.add_goods(GoodsType::Hardware, 5); // below threshold — must stay
+
+        let mut actions = Vec::new();
+        ai_manage_resources(&mut game, ai_id, &mut actions);
+
+        let ai = game.get_nation(ai_id).unwrap();
+        // Fat-stockpile branch drains down to the threshold (30 by default),
+        // not all the way to the static reserve.
+        assert!(
+            ai.goods_amount(GoodsType::Furniture) <= 30,
+            "fat-stockpile dump must drain Furniture to threshold, got {}",
+            ai.goods_amount(GoodsType::Furniture)
+        );
+        assert_eq!(
+            ai.goods_amount(GoodsType::Hardware),
+            5,
+            "Hardware below threshold must not be touched"
+        );
     }
 
     #[test]

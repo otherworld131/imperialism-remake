@@ -74,6 +74,8 @@ economic = {
     arms_sell_reserve = 6,
     goods_sell_treasury_threshold = 2000,
     goods_reserve = 3,
+    -- Industrialist tolerates slightly larger stockpiles before dumping.
+    goods_fat_stockpile_threshold = 40,
     food_processing_expansion_threshold = 2,
     infra_budget_scale_threshold = 15000,
 

@@ -74,6 +74,9 @@ balanced = {
     arms_sell_reserve = 12,
     goods_sell_treasury_threshold = 3000,
     goods_reserve = 2,
+    -- Fat-stockpile dump: drain finished goods above 30 units regardless of
+    -- treasury so the warehouse doesn't bloat once trade goes positive.
+    goods_fat_stockpile_threshold = 30,
     food_processing_expansion_threshold = 2,
     infra_budget_scale_threshold = 20000,
 
