@@ -27,5 +27,7 @@ test_report.html
 # Test game output
 test_games/
 
-# Claude Code local settings
-.claude/
+# Claude Code local settings (but keep .claude/skills/ tracked so project
+# skills are shared with everyone working on the repo).
+.claude/*
+!.claude/skills/
