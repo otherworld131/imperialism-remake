@@ -1713,6 +1713,44 @@ pub(crate) fn expansions_per_turn_target(game: &GameState, personality: AiPerson
     2
 }
 
+/// Lua-tunable: minimum treasury (dollars) the AI keeps before placing
+/// buy-side trade bids. Card [3/6] cash-guard. Default $5,000.
+pub(crate) fn trade_buy_treasury_floor(game: &GameState, personality: AiPersonality) -> i64 {
+    #[cfg(feature = "lua")]
+    {
+        if let Some(cfg) = game
+            .game_data
+            .lua_engine
+            .as_ref()
+            .and_then(|e| super::lua_bridge::lua_get_config(e, personality))
+            && let Some(v) = cfg.trade_buy_treasury_floor
+        {
+            return v;
+        }
+    }
+    let _ = (game, personality);
+    5_000
+}
+
+/// Lua-tunable: how many turns of input the AI tries to buffer per resource
+/// when placing buy-side trade bids. Card [3/6]. Default 3 turns.
+pub(crate) fn trade_buy_buffer_turns(game: &GameState, personality: AiPersonality) -> u32 {
+    #[cfg(feature = "lua")]
+    {
+        if let Some(cfg) = game
+            .game_data
+            .lua_engine
+            .as_ref()
+            .and_then(|e| super::lua_bridge::lua_get_config(e, personality))
+            && let Some(v) = cfg.trade_buy_buffer_turns
+        {
+            return v;
+        }
+    }
+    let _ = (game, personality);
+    3
+}
+
 /// Lua-tunable: per-building multiplier that grows the expansion reserve as
 /// the economy grows. A nation with N expandable buildings reserves enough
 /// material for `ceil(N × factor)` simultaneous expansions (capped from
@@ -1771,10 +1809,7 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
     // Steel gets split between hardware (peacetime) and armory (wartime).
     let steel_armory_weight_peace: f64 = 'val: {
         #[cfg(feature = "lua")]
-        if let Some(v) = lua_cfg
-            .as_ref()
-            .and_then(|c| c.steel_armory_weight_peace)
-        {
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.steel_armory_weight_peace) {
             break 'val v;
         }
         0.2
@@ -1808,10 +1843,7 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
     let snap = super::snapshot::NationEconomySnapshot::build(game, nation_id);
 
     // Wartime flag: any active war.
-    let at_war = game
-        .world
-        .diplomacy
-        .is_at_war_with_anyone(nation_id);
+    let at_war = game.world.diplomacy.is_at_war_with_anyone(nation_id);
 
     // Projected immigration demand (this turn's queue + next turn's likely queue).
     let pending_immigration = game
@@ -1905,7 +1937,11 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
 
     // Steel split: armory vs hardware. War shifts the split toward armory.
     // Hardware needs 2 steel/unit, armory needs 1 steel/arm.
-    let armory_share = if at_war { steel_armory_weight_war } else { steel_armory_weight_peace };
+    let armory_share = if at_war {
+        steel_armory_weight_war
+    } else {
+        steel_armory_weight_peace
+    };
     let steel_for_armory = ((steel_supply as f64) * armory_share) as u32;
     let steel_for_hardware = steel_supply.saturating_sub(steel_for_armory);
     let hardware_target = factory_target(
@@ -1938,8 +1974,7 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
         .resource(ResourceType::Fish)
         .saturating_add(snap.resource(ResourceType::Livestock));
     let cannery_input_cap = grain.min(fruit).min(fish_or_livestock);
-    let immigration_demand =
-        ((pending_immigration as f64) * canned_food_buffer).ceil() as u32;
+    let immigration_demand = ((pending_immigration as f64) * canned_food_buffer).ceil() as u32;
     // Always allow at least 1 unit of demand so workers can be fed even when
     // the immigration queue is empty.
     let canned_food_demand = immigration_demand.max(1);
@@ -1974,9 +2009,15 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
         eprintln!(
             "[AI:{}:targets] timber={} metal={} textile={} furn={} hard={} cloth={} armory={} paper={} food={} (war={})",
             nation_name,
-            timber_mill_target, metal_mill_target, textile_mill_target,
-            furniture_target, hardware_target, clothing_target,
-            armory_target, paper_target, canned_food_target,
+            timber_mill_target,
+            metal_mill_target,
+            textile_mill_target,
+            furniture_target,
+            hardware_target,
+            clothing_target,
+            armory_target,
+            paper_target,
+            canned_food_target,
             at_war,
         );
     }
@@ -2165,7 +2206,8 @@ pub(crate) fn ai_build_transport_proactive(game: &mut GameState, nation_id: Nati
     let sea_capacity = nation.total_cargo_capacity(&game.game_data);
     let capacity = rail_capacity.saturating_add(sea_capacity);
     let freight_unused = nation.economy.logistics.freight_unused;
-    let (_local_items, remote_items) = crate::economy::current_collectable_resources(game, nation_id);
+    let (_local_items, remote_items) =
+        crate::economy::current_collectable_resources(game, nation_id);
     let remote_total: u32 = remote_items.iter().map(|(_, qty)| *qty).sum();
 
     // Build when the remote network is already beyond combined capacity, or
@@ -3443,9 +3485,7 @@ mod tests {
                 game.world
                     .diplomacy
                     .initialize_great_powers(&[NationId(1), NationId(2)]);
-                game.world
-                    .diplomacy
-                    .declare_war(NationId(2), NationId(1));
+                game.world.diplomacy.declare_war(NationId(2), NationId(1));
             }
             ai_set_production_targets(&mut game, ai_id);
             let ai = game.get_nation(ai_id).unwrap();
@@ -3588,7 +3628,10 @@ mod tests {
         let (lumber_lo, _) = reserve_for_expansion(&game, ai_id, 2, 0.5);
         let (lumber_hi, _) = reserve_for_expansion(&game, ai_id, 2, 1.0);
         let (lumber_huge, _) = reserve_for_expansion(&game, ai_id, 2, 2.0);
-        assert_eq!(lumber_lo, 8, "factor 0.5 × 4 = 2 ≤ floor(2) → reserve still 8");
+        assert_eq!(
+            lumber_lo, 8,
+            "factor 0.5 × 4 = 2 ≤ floor(2) → reserve still 8"
+        );
         assert_eq!(lumber_hi, 16, "factor 1.0 × 4 = 4 → reserve 16");
         assert_eq!(lumber_huge, 32, "factor 2.0 × 4 = 8 → reserve 32");
     }

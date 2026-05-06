@@ -188,8 +188,21 @@ pub(super) fn resolve_trade_session(
                 .get(gp_id)
                 .copied()
                 .unwrap_or_else(|| nation.total_cargo_capacity(&game.game_data));
-            let bids =
-                trade::generate_smart_bids(nation, &offers, &game.world.diplomacy, cargo_capacity);
+            // Need-based bids drive AI buying (Trello card [3/6]):
+            //   * project chain consumption × buffer_turns to compute gaps;
+            //   * stop bidding when treasury would drop below the floor;
+            //   * honor `auto_trade_with_minors` (skip minor offers when off).
+            let personality = crate::ai::common::get_personality(game, *gp_id);
+            let treasury_floor = crate::ai::economy::trade_buy_treasury_floor(game, personality);
+            let buffer_turns = crate::ai::economy::trade_buy_buffer_turns(game, personality);
+            let bids = trade::generate_need_based_bids(
+                nation,
+                &game.world.nations,
+                &offers,
+                cargo_capacity,
+                Money::dollars(treasury_floor),
+                buffer_turns,
+            );
             all_bids.extend(bids);
         }
     }
@@ -221,11 +234,10 @@ pub(super) fn resolve_trade_session(
                     game,
                     crate::ai::common::AiPersonality::Balanced,
                 );
-                let buildings_factor =
-                    crate::ai::economy::expansion_reserve_buildings_factor(
-                        game,
-                        crate::ai::common::AiPersonality::Balanced,
-                    );
+                let buildings_factor = crate::ai::economy::expansion_reserve_buildings_factor(
+                    game,
+                    crate::ai::common::AiPersonality::Balanced,
+                );
                 crate::ai::economy::reserve_for_expansion(
                     game,
                     human_id,
@@ -270,13 +282,21 @@ pub(super) fn resolve_trade_session(
                             if let Some(s) = seller.economy.materials.get_mut(&m) {
                                 *s = s.saturating_sub(bid.quantity);
                             }
-                            report.stockpile_flows.auto_sold_materials.push((human_id, m, bid.quantity));
+                            report.stockpile_flows.auto_sold_materials.push((
+                                human_id,
+                                m,
+                                bid.quantity,
+                            ));
                         }
                         trade::ManufacturedCommodity::Goods(g) => {
                             if let Some(s) = seller.economy.goods.get_mut(&g) {
                                 *s = s.saturating_sub(bid.quantity);
                             }
-                            report.stockpile_flows.auto_sold_goods.push((human_id, g, bid.quantity));
+                            report.stockpile_flows.auto_sold_goods.push((
+                                human_id,
+                                g,
+                                bid.quantity,
+                            ));
                         }
                     }
                     seller.archives.goods_sales_revenue_dollars += revenue.as_dollars();

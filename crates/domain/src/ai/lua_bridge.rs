@@ -717,7 +717,9 @@ pub fn load_unit_stats(
 /// `default_ship_stats()`. Requires full coverage of all [`ShipType`] variants.
 pub fn load_ship_stats(
     engine: &LuaEngine,
-) -> Option<std::collections::HashMap<crate::military::ships::ShipType, crate::military::ships::ShipStats>> {
+) -> Option<
+    std::collections::HashMap<crate::military::ships::ShipType, crate::military::ships::ShipStats>,
+> {
     use crate::military::ships::{ShipCategory, ShipStats, ShipType};
     use std::collections::HashMap;
 
@@ -758,7 +760,10 @@ pub fn load_ship_stats(
         let ship_type: ShipType = match name.parse() {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("[ships.lua] unknown ship '{}': {}, refusing partial load", name, e);
+                eprintln!(
+                    "[ships.lua] unknown ship '{}': {}, refusing partial load",
+                    name, e
+                );
                 return None;
             }
         };
@@ -767,23 +772,26 @@ pub fn load_ship_stats(
             "Merchant" => ShipCategory::Merchant,
             "Warship" => ShipCategory::Warship,
             other => {
-                eprintln!("[ships.lua] '{}' has unknown category '{}', refusing partial load", name, other);
+                eprintln!(
+                    "[ships.lua] '{}' has unknown category '{}', refusing partial load",
+                    name, other
+                );
                 return None;
             }
         };
         let stats = ShipStats {
-            firepower:   require_ship!(row, name, "firepower",   u32),
-            range:       require_ship!(row, name, "range",       u32),
-            armor:       require_ship!(row, name, "armor",       u32),
-            hull:        require_ship!(row, name, "hull",        u32),
-            speed:       require_ship!(row, name, "speed",       u32),
-            cargo:       require_ship!(row, name, "cargo",       u32),
+            firepower: require_ship!(row, name, "firepower", u32),
+            range: require_ship!(row, name, "range", u32),
+            armor: require_ship!(row, name, "armor", u32),
+            hull: require_ship!(row, name, "hull", u32),
+            speed: require_ship!(row, name, "speed", u32),
+            cargo: require_ship!(row, name, "cargo", u32),
             fabric_cost: require_ship!(row, name, "fabric_cost", u32),
             lumber_cost: require_ship!(row, name, "lumber_cost", u32),
-            arms_cost:   require_ship!(row, name, "arms_cost",   u32),
-            steel_cost:  require_ship!(row, name, "steel_cost",  u32),
-            coal_cost:   require_ship!(row, name, "coal_cost",   u32),
-            era:         require_ship!(row, name, "era",         u8),
+            arms_cost: require_ship!(row, name, "arms_cost", u32),
+            steel_cost: require_ship!(row, name, "steel_cost", u32),
+            coal_cost: require_ship!(row, name, "coal_cost", u32),
+            era: require_ship!(row, name, "era", u8),
             category,
             prerequisite_tech: row.get::<String>("prerequisite_tech").ok(),
         };
@@ -795,7 +803,8 @@ pub fn load_ship_stats(
     if !missing.is_empty() {
         eprintln!(
             "[ships.lua] missing {} ship type(s): {:?} — refusing partial load",
-            missing.len(), missing
+            missing.len(),
+            missing
         );
         return None;
     }
@@ -994,6 +1003,11 @@ pub struct LuaAiConfig {
     pub high_treasury_expansion_threshold: Option<i64>,
     pub trade_resource_reserve: Option<u32>,
     pub trade_treasury_cap: Option<i64>,
+    /// Card [3/6] — buy-side trade. Treasury floor; AI never bids below this.
+    pub trade_buy_treasury_floor: Option<i64>,
+    /// Card [3/6] — buy-side trade. How many turns of input to buffer per
+    /// resource. AI bids to top up to `per_turn_demand × buffer_turns`.
+    pub trade_buy_buffer_turns: Option<u32>,
     pub goods_sell_treasury_threshold: Option<i64>,
     pub goods_reserve: Option<u32>,
     pub food_processing_expansion_threshold: Option<u32>,
@@ -1217,13 +1231,16 @@ impl LuaAiConfig {
         self.expansion_threshold_multiplier =
             sanitize_opt_u32(self.expansion_threshold_multiplier, 1, 20);
         self.trade_resource_reserve = sanitize_opt_u32(self.trade_resource_reserve, 0, 100);
+        // Card [3/6]: buy-side trade tunables.
+        self.trade_buy_buffer_turns = sanitize_opt_u32(self.trade_buy_buffer_turns, 0, 20);
+        self.trade_buy_treasury_floor =
+            sanitize_opt_i64(self.trade_buy_treasury_floor, 0, 10_000_000);
         self.goods_reserve = sanitize_opt_u32(self.goods_reserve, 0, 100);
         self.food_processing_expansion_threshold =
             sanitize_opt_u32(self.food_processing_expansion_threshold, 0, 1000);
         // Card [2/6]: production-chain target weights
         self.lumber_furniture_weight = sanitize_opt_f64(self.lumber_furniture_weight, 0.0, 1.0);
-        self.steel_armory_weight_peace =
-            sanitize_opt_f64(self.steel_armory_weight_peace, 0.0, 1.0);
+        self.steel_armory_weight_peace = sanitize_opt_f64(self.steel_armory_weight_peace, 0.0, 1.0);
         self.steel_armory_weight_war = sanitize_opt_f64(self.steel_armory_weight_war, 0.0, 1.0);
         self.canned_food_buffer = sanitize_opt_f64(self.canned_food_buffer, 0.0, 10.0);
         // `min_chain_target` is the anti-oscillation floor for unrunnable
@@ -1232,8 +1249,7 @@ impl LuaAiConfig {
         self.min_chain_target = sanitize_opt_u32(self.min_chain_target, 0, 2);
         // Reserve at most 8 simultaneous expansions per turn — beyond that
         // the reserve would starve hardware production indefinitely.
-        self.expansions_per_turn_target =
-            sanitize_opt_u32(self.expansions_per_turn_target, 0, 8);
+        self.expansions_per_turn_target = sanitize_opt_u32(self.expansions_per_turn_target, 0, 8);
         self.expansion_reserve_buildings_factor =
             sanitize_opt_f64(self.expansion_reserve_buildings_factor, 0.0, 4.0);
 
@@ -1409,6 +1425,8 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             high_treasury_expansion_threshold: table.get("high_treasury_expansion_threshold").ok(),
             trade_resource_reserve: table.get("trade_resource_reserve").ok(),
             trade_treasury_cap: table.get("trade_treasury_cap").ok(),
+            trade_buy_treasury_floor: table.get("trade_buy_treasury_floor").ok(),
+            trade_buy_buffer_turns: table.get("trade_buy_buffer_turns").ok(),
             goods_sell_treasury_threshold: table.get("goods_sell_treasury_threshold").ok(),
             goods_reserve: table.get("goods_reserve").ok(),
             food_processing_expansion_threshold: table
@@ -1830,6 +1848,8 @@ mod tests {
             high_treasury_expansion_threshold: None,
             trade_resource_reserve: None,
             trade_treasury_cap: None,
+            trade_buy_treasury_floor: None,
+            trade_buy_buffer_turns: None,
             goods_sell_treasury_threshold: None,
             goods_reserve: None,
             food_processing_expansion_threshold: None,
@@ -1942,6 +1962,8 @@ mod tests {
             high_treasury_expansion_threshold: None,
             trade_resource_reserve: None,
             trade_treasury_cap: None,
+            trade_buy_treasury_floor: None,
+            trade_buy_buffer_turns: None,
             goods_sell_treasury_threshold: None,
             goods_reserve: None,
             food_processing_expansion_threshold: None,
@@ -2093,6 +2115,8 @@ mod tests {
             high_treasury_expansion_threshold: None,
             trade_resource_reserve: None,
             trade_treasury_cap: None,
+            trade_buy_treasury_floor: None,
+            trade_buy_buffer_turns: None,
             goods_sell_treasury_threshold: None,
             goods_reserve: None,
             food_processing_expansion_threshold: None,

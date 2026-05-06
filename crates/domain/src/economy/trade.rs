@@ -516,6 +516,81 @@ pub struct MinorGoodsBid {
     pub price_per_unit: Money,
 }
 
+/// Project per-resource consumption demand for one turn from a nation's
+/// production-chain output targets. Used by need-based buy-side trade
+/// (Trello card [3/6] — AI buy-side trade).
+///
+/// Inputs are read straight from `nation.economy.chain_targets` and the
+/// existing Rust chain ratios:
+///   * Lumber Mill: 2 Timber → 1 Lumber
+///   * Steel Mill:  1 Coal + 1 Iron → 1 Steel
+///   * Textile:     2 (Cotton ∪ Wool) → 1 Fabric
+///   * Cannery:     1 Grain + 1 Fruit + 1 (Fish ∪ Livestock) → 1 CannedFood
+///
+/// Steps with target `u32::MAX` (the default "no cap") are clamped to the
+/// building's current capacity so a fresh AI without targets still gets a
+/// sane projection. Steps without a corresponding building contribute 0.
+pub fn projected_resource_needs(nation: &Nation) -> std::collections::BTreeMap<ResourceType, u32> {
+    use crate::economy::buildings::BuildingType;
+    use std::collections::BTreeMap;
+
+    let mut needs: BTreeMap<ResourceType, u32> = BTreeMap::new();
+    let cap = |bt: BuildingType| -> u32 {
+        nation
+            .economy
+            .buildings
+            .iter()
+            .find(|b| b.building_type == bt)
+            .map(|b| b.capacity)
+            .unwrap_or(0)
+    };
+    let resolve = |target: u32, capacity: u32| -> u32 {
+        if capacity == 0 {
+            return 0;
+        }
+        if target == u32::MAX {
+            capacity
+        } else {
+            target.min(capacity)
+        }
+    };
+
+    let t = &nation.economy.chain_targets;
+
+    // Lumber Mill: 2 timber per lumber
+    let lumber_units = resolve(t.timber_mill, cap(BuildingType::LumberMill));
+    if lumber_units > 0 {
+        *needs.entry(ResourceType::Timber).or_insert(0) += lumber_units * 2;
+    }
+    // Steel Mill: 1 coal + 1 iron per steel
+    let steel_units = resolve(t.metal_mill, cap(BuildingType::SteelMill));
+    if steel_units > 0 {
+        *needs.entry(ResourceType::Coal).or_insert(0) += steel_units;
+        *needs.entry(ResourceType::Iron).or_insert(0) += steel_units;
+    }
+    // Textile Mill: 2 cotton-or-wool per fabric — split 50/50 so we hedge.
+    let fabric_units = resolve(t.textile_mill, cap(BuildingType::TextileMill));
+    if fabric_units > 0 {
+        let half = fabric_units; // 2 raw per fabric, half each side rounds up
+        *needs.entry(ResourceType::Cotton).or_insert(0) += half;
+        *needs.entry(ResourceType::Wool).or_insert(0) += half;
+    }
+    // Cannery: 1 grain + 1 fruit + 1 (fish|livestock) per canned-food unit.
+    // The protein input is fungible (fish OR livestock); split so the totals
+    // sum exactly to canned_units, not 2× canned_units.
+    let canned_units = resolve(t.canned_food_factory, cap(BuildingType::FoodProcessing));
+    if canned_units > 0 {
+        *needs.entry(ResourceType::Grain).or_insert(0) += canned_units;
+        *needs.entry(ResourceType::Fruit).or_insert(0) += canned_units;
+        let fish = canned_units / 2;
+        let livestock = canned_units - fish;
+        *needs.entry(ResourceType::Fish).or_insert(0) += fish;
+        *needs.entry(ResourceType::Livestock).or_insert(0) += livestock;
+    }
+
+    needs
+}
+
 /// Generate trade bids for an AI nation based on available offers and cargo capacity.
 ///
 /// Rules:
@@ -592,6 +667,136 @@ pub fn generate_smart_bids(
         });
 
         remaining_cargo -= bid_qty;
+    }
+
+    bids
+}
+
+/// Generate **need-based** buy bids for an AI Great Power.
+///
+/// Replaces `generate_smart_bids` for AI driving by projecting per-resource
+/// consumption from `chain_targets` (Trello card [2/6]) and bidding only on
+/// resources the nation actually needs to keep its production lines fed.
+///
+/// Behavior summary:
+/// 1. Compute target stockpile per resource = projected per-turn consumption ×
+///    `buffer_turns`. Subtract current warehouse stock to get the gap.
+/// 2. Skip resources where gap == 0 (no shortage → no bid).
+/// 3. Bid up to `min(gap, available_offer_qty, remaining_cargo)`, ordered by
+///    largest gap first so the most-starved chain gets fed even if cargo runs
+///    out.
+/// 4. Stop bidding when the projected total cost would push treasury below
+///    `treasury_floor`. Each bid uses base_price for the cost projection.
+/// 5. When `auto_trade_with_minors == false`, skip offers from minor nations.
+///
+/// This honors the AI's `auto_trade_with_minors` flag (Trello card [3/6]) and
+/// gives the buy-side a cash guard so trade can never bankrupt the AI.
+pub fn generate_need_based_bids(
+    nation: &Nation,
+    all_nations: &[Nation],
+    available_offers: &[TradeOffer],
+    max_cargo: u32,
+    treasury_floor: Money,
+    buffer_turns: u32,
+) -> Vec<TradeBid> {
+    if max_cargo == 0 || buffer_turns == 0 {
+        return Vec::new();
+    }
+
+    // Resolve "is seller a minor nation" cheaply.
+    let is_minor = |seller: NationId| -> bool {
+        all_nations
+            .iter()
+            .find(|n| n.id == seller)
+            .is_some_and(|n| !n.is_great_power())
+    };
+
+    // Filter offers per the auto_trade_with_minors policy and self-exclusion.
+    let allow_minors = nation.economy.auto_trade_with_minors;
+    let eligible_offers: Vec<&TradeOffer> = available_offers
+        .iter()
+        .filter(|o| o.seller != nation.id)
+        .filter(|o| allow_minors || !is_minor(o.seller))
+        .collect();
+
+    if eligible_offers.is_empty() {
+        return Vec::new();
+    }
+
+    let needs = projected_resource_needs(nation);
+    if needs.is_empty() {
+        return Vec::new();
+    }
+
+    // Compute per-resource gap = (per_turn_demand × buffer_turns) − current stock.
+    // Drop resources with no gap.
+    let mut gaps: Vec<(ResourceType, u32)> = needs
+        .into_iter()
+        .filter_map(|(r, per_turn)| {
+            let target_stock = per_turn.saturating_mul(buffer_turns);
+            let stock = nation.resource_amount(r);
+            let gap = target_stock.saturating_sub(stock);
+            if gap > 0 { Some((r, gap)) } else { None }
+        })
+        .collect();
+    if gaps.is_empty() {
+        return Vec::new();
+    }
+    // Order by largest gap first (deterministic tiebreak by resource debug name).
+    gaps.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| format!("{:?}", a.0).cmp(&format!("{:?}", b.0)))
+    });
+
+    let mut bids = Vec::new();
+    let mut remaining_cargo = max_cargo;
+    let mut projected_spend = Money::ZERO;
+    let cash_available = nation.economy.treasury - treasury_floor;
+    if cash_available <= Money::ZERO {
+        return Vec::new();
+    }
+
+    for (resource, gap) in gaps {
+        if remaining_cargo == 0 {
+            break;
+        }
+
+        let total_available: u32 = eligible_offers
+            .iter()
+            .filter(|o| o.resource == resource)
+            .map(|o| o.quantity)
+            .sum();
+        if total_available == 0 {
+            continue;
+        }
+
+        let bp = base_price(resource);
+        if bp == Money::ZERO {
+            continue;
+        }
+        // Stay under the cash budget (use base price as a worst-case predictor;
+        // actual fills are at offer price ≤ max_price_per_unit).
+        let cash_left = cash_available - projected_spend;
+        if cash_left <= Money::ZERO {
+            break;
+        }
+        let cash_qty: u32 = (cash_left.as_dollars() / bp.as_dollars())
+            .clamp(0, u32::MAX as i64) as u32;
+
+        let bid_qty = gap.min(total_available).min(remaining_cargo).min(cash_qty);
+        if bid_qty == 0 {
+            continue;
+        }
+
+        let max_price = Money::dollars(bp.as_dollars() * 120 / 100);
+        bids.push(TradeBid {
+            buyer: nation.id,
+            resource,
+            quantity: bid_qty,
+            max_price_per_unit: max_price,
+        });
+        remaining_cargo -= bid_qty;
+        projected_spend += bp * bid_qty as i64;
     }
 
     bids
@@ -1272,6 +1477,312 @@ mod tests {
         assert_eq!(entry.resource, ResourceType::Timber);
         assert_eq!(entry.quantity, 3);
         assert_eq!(entry.total_cost, Money::dollars(150));
+    }
+
+    // ── Need-based buy-side bids (Trello card [3/6]) ──────────────────
+
+    fn make_gp(id: u32) -> crate::nation::Nation {
+        use crate::nation::{Nation, NationColor};
+        Nation::new(
+            NationId(id),
+            format!("GP{id}"),
+            NationColor::Yellow,
+            NationType::GreatPower,
+            ProvinceId(id),
+        )
+    }
+
+    #[test]
+    fn need_based_buy_resource_with_deficit_and_cash() {
+        use crate::economy::buildings::{Building, BuildingType};
+        let mut buyer = make_gp(2);
+        buyer.economy.treasury = Money::dollars(20_000);
+        // Owns a SteelMill capacity 2 ⇒ needs 2 coal + 2 iron per turn.
+        // With 3 turns of buffer, target stock = 6 each. Stock is 0 ⇒ gap 6.
+        buyer
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 2));
+        buyer.economy.chain_targets.metal_mill = 2;
+
+        let seller = make_gp(3);
+        let nations = vec![buyer.clone(), seller.clone()];
+        let offers = vec![
+            TradeOffer {
+                seller: NationId(3),
+                resource: ResourceType::Coal,
+                quantity: 10,
+                price_per_unit: base_price(ResourceType::Coal),
+            },
+            TradeOffer {
+                seller: NationId(3),
+                resource: ResourceType::Iron,
+                quantity: 10,
+                price_per_unit: base_price(ResourceType::Iron),
+            },
+        ];
+
+        let bids = generate_need_based_bids(
+            &buyer,
+            &nations,
+            &offers,
+            100,                   // ample cargo
+            Money::dollars(5_000), // treasury floor
+            3,                     // buffer turns
+        );
+
+        let coal_bid = bids.iter().find(|b| b.resource == ResourceType::Coal);
+        let iron_bid = bids.iter().find(|b| b.resource == ResourceType::Iron);
+        assert!(
+            coal_bid.is_some(),
+            "should bid for coal when SteelMill is starved"
+        );
+        assert!(
+            iron_bid.is_some(),
+            "should bid for iron when SteelMill is starved"
+        );
+        assert_eq!(coal_bid.unwrap().quantity, 6, "buffer 3 × 2 demand = 6");
+        assert_eq!(iron_bid.unwrap().quantity, 6);
+    }
+
+    #[test]
+    fn need_based_no_bid_when_no_deficit() {
+        use crate::economy::buildings::{Building, BuildingType};
+        let mut buyer = make_gp(2);
+        buyer.economy.treasury = Money::dollars(20_000);
+        buyer
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 2));
+        buyer.economy.chain_targets.metal_mill = 2;
+        // Already stocked beyond buffer × demand
+        buyer.add_resource(ResourceType::Coal, 100);
+        buyer.add_resource(ResourceType::Iron, 100);
+
+        let seller = make_gp(3);
+        let nations = vec![buyer.clone(), seller.clone()];
+        let offers = vec![TradeOffer {
+            seller: NationId(3),
+            resource: ResourceType::Coal,
+            quantity: 10,
+            price_per_unit: base_price(ResourceType::Coal),
+        }];
+
+        let bids =
+            generate_need_based_bids(&buyer, &nations, &offers, 100, Money::dollars(5_000), 3);
+        assert!(bids.is_empty(), "well-stocked AI must not bid");
+    }
+
+    #[test]
+    fn need_based_respects_treasury_floor() {
+        use crate::economy::buildings::{Building, BuildingType};
+        let mut buyer = make_gp(2);
+        // Treasury sits exactly at the floor → cash_available is 0 → no bids.
+        buyer.economy.treasury = Money::dollars(5_000);
+        buyer
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 2));
+        buyer.economy.chain_targets.metal_mill = 2;
+
+        let seller = make_gp(3);
+        let nations = vec![buyer.clone(), seller.clone()];
+        let offers = vec![TradeOffer {
+            seller: NationId(3),
+            resource: ResourceType::Coal,
+            quantity: 10,
+            price_per_unit: base_price(ResourceType::Coal),
+        }];
+
+        let bids =
+            generate_need_based_bids(&buyer, &nations, &offers, 100, Money::dollars(5_000), 3);
+        assert!(bids.is_empty(), "must not spend below the treasury floor");
+    }
+
+    #[test]
+    fn need_based_caps_bid_quantity_by_cash() {
+        use crate::economy::buildings::{Building, BuildingType};
+        let mut buyer = make_gp(2);
+        // Coal base price = $75. Above floor of $5k we have $300 → 4 coal max.
+        buyer.economy.treasury = Money::dollars(5_300);
+        buyer
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 5));
+        buyer.economy.chain_targets.metal_mill = 5;
+
+        let seller = make_gp(3);
+        let nations = vec![buyer.clone(), seller.clone()];
+        // Offer iron expensively so coal alone is bid.
+        let offers = vec![TradeOffer {
+            seller: NationId(3),
+            resource: ResourceType::Coal,
+            quantity: 100,
+            price_per_unit: base_price(ResourceType::Coal),
+        }];
+
+        let bids =
+            generate_need_based_bids(&buyer, &nations, &offers, 100, Money::dollars(5_000), 3);
+        let coal = bids
+            .iter()
+            .find(|b| b.resource == ResourceType::Coal)
+            .unwrap();
+        // $300 cash budget / $75 = 4 max coal.
+        assert!(
+            coal.quantity <= 4,
+            "cash floor must cap bid qty (got {})",
+            coal.quantity
+        );
+    }
+
+    #[test]
+    fn need_based_skips_minors_when_auto_trade_off() {
+        use crate::economy::buildings::{Building, BuildingType};
+        let mut buyer = make_gp(2);
+        buyer.economy.treasury = Money::dollars(20_000);
+        buyer
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 2));
+        buyer.economy.chain_targets.metal_mill = 2;
+        buyer.economy.auto_trade_with_minors = false;
+
+        // Seller is a minor — should be filtered out when flag is off.
+        let minor = make_minor_nation(3);
+        let nations = vec![buyer.clone(), minor.clone()];
+        let offers = vec![TradeOffer {
+            seller: NationId(3),
+            resource: ResourceType::Coal,
+            quantity: 10,
+            price_per_unit: base_price(ResourceType::Coal),
+        }];
+
+        let bids =
+            generate_need_based_bids(&buyer, &nations, &offers, 100, Money::dollars(5_000), 3);
+        assert!(
+            bids.is_empty(),
+            "auto_trade_with_minors=false must skip minor offers"
+        );
+    }
+
+    #[test]
+    fn need_based_includes_minors_when_auto_trade_on() {
+        use crate::economy::buildings::{Building, BuildingType};
+        let mut buyer = make_gp(2);
+        buyer.economy.treasury = Money::dollars(20_000);
+        buyer
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 2));
+        buyer.economy.chain_targets.metal_mill = 2;
+        // Default is true; assert behavior explicitly.
+        buyer.economy.auto_trade_with_minors = true;
+
+        let minor = make_minor_nation(3);
+        let nations = vec![buyer.clone(), minor.clone()];
+        let offers = vec![TradeOffer {
+            seller: NationId(3),
+            resource: ResourceType::Coal,
+            quantity: 10,
+            price_per_unit: base_price(ResourceType::Coal),
+        }];
+
+        let bids =
+            generate_need_based_bids(&buyer, &nations, &offers, 100, Money::dollars(5_000), 3);
+        assert!(
+            bids.iter().any(|b| b.resource == ResourceType::Coal),
+            "auto_trade_with_minors=true must accept minor offers"
+        );
+    }
+
+    #[test]
+    fn projected_resource_needs_clamps_u32_max_target_to_capacity() {
+        use crate::economy::buildings::{Building, BuildingType};
+        let mut nation = make_gp(2);
+        nation
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 3));
+        // u32::MAX is the default "no cap" sentinel — must be clamped to capacity.
+        nation.economy.chain_targets.metal_mill = u32::MAX;
+
+        let needs = projected_resource_needs(&nation);
+        assert_eq!(needs.get(&ResourceType::Coal).copied().unwrap_or(0), 3);
+        assert_eq!(needs.get(&ResourceType::Iron).copied().unwrap_or(0), 3);
+    }
+
+    #[test]
+    fn projected_resource_needs_cannery_protein_sums_to_canned_units() {
+        use crate::economy::buildings::{Building, BuildingType};
+        let mut nation = make_gp(2);
+        nation
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::FoodProcessing, 5));
+        nation.economy.chain_targets.canned_food_factory = 5;
+
+        let needs = projected_resource_needs(&nation);
+        // Grain + fruit always one-for-one with canned units.
+        assert_eq!(needs.get(&ResourceType::Grain).copied().unwrap_or(0), 5);
+        assert_eq!(needs.get(&ResourceType::Fruit).copied().unwrap_or(0), 5);
+        // Protein is fungible: fish + livestock must total canned_units, not double-count.
+        let fish = needs.get(&ResourceType::Fish).copied().unwrap_or(0);
+        let livestock = needs.get(&ResourceType::Livestock).copied().unwrap_or(0);
+        assert_eq!(fish + livestock, 5, "protein split must sum to canned output");
+    }
+
+    #[test]
+    fn need_based_zero_buffer_turns_yields_no_bids() {
+        use crate::economy::buildings::{Building, BuildingType};
+        let mut buyer = make_gp(2);
+        buyer.economy.treasury = Money::dollars(20_000);
+        buyer
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 2));
+        buyer.economy.chain_targets.metal_mill = 2;
+
+        let seller = make_gp(3);
+        let nations = vec![buyer.clone(), seller.clone()];
+        let offers = vec![TradeOffer {
+            seller: NationId(3),
+            resource: ResourceType::Coal,
+            quantity: 10,
+            price_per_unit: base_price(ResourceType::Coal),
+        }];
+
+        let bids = generate_need_based_bids(
+            &buyer,
+            &nations,
+            &offers,
+            100,
+            Money::dollars(5_000),
+            0, // disable buy-side trade
+        );
+        assert!(bids.is_empty(), "buffer_turns=0 must short-circuit to no bids");
+    }
+
+    #[test]
+    fn projected_resource_needs_uses_chain_targets() {
+        use crate::economy::buildings::{Building, BuildingType};
+        let mut nation = make_gp(2);
+        nation
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 4));
+        nation.economy.chain_targets.timber_mill = 4;
+        nation
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 3));
+        nation.economy.chain_targets.metal_mill = 3;
+
+        let needs = projected_resource_needs(&nation);
+        // Lumber Mill 4 → 8 timber per turn.
+        assert_eq!(needs.get(&ResourceType::Timber).copied().unwrap_or(0), 8);
+        // Steel Mill 3 → 3 coal + 3 iron per turn.
+        assert_eq!(needs.get(&ResourceType::Coal).copied().unwrap_or(0), 3);
+        assert_eq!(needs.get(&ResourceType::Iron).copied().unwrap_or(0), 3);
     }
 
     #[test]

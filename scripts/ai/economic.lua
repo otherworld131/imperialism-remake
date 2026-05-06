@@ -66,6 +66,10 @@ economic = {
     high_treasury_expansion_threshold = 12000,
     trade_resource_reserve = 15,
     trade_treasury_cap = 25000,
+    -- Card [3/6]: industrialist holds bigger cash buffer but stockpiles 4 turns
+    -- of input so factories never wait on imported coal/iron.
+    trade_buy_treasury_floor = 7000,
+    trade_buy_buffer_turns = 4,
     goods_sell_treasury_threshold = 2000,
     goods_reserve = 3,
     food_processing_expansion_threshold = 2,
