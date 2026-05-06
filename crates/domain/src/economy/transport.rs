@@ -120,11 +120,7 @@ impl TransportSystem {
 
     /// Each car carries 1 unit, so total capacity equals the number of freight cars.
     pub fn total_capacity(&self) -> u32 {
-        // DEBUG (do not revert until requested): force a fixed 400-unit
-        // rail-transport capacity for every nation so we can isolate whether
-        // freight scarcity is the cause of low steel/arms production.
-        let _ = self.freight_cars;
-        400
+        self.freight_cars
     }
 
     /// Returns the cost to build a single freight car: (labor, lumber, steel).

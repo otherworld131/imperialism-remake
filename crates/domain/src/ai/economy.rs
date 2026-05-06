@@ -1981,16 +1981,25 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
     // commit lumber/steel/fabric the AI is saving for a merchant ship.
     let (m_fabric_reserve, m_lumber_reserve, m_steel_reserve, _m_coal) =
         super::naval::merchant_navy_material_reserve(game, nation_id);
+    // Hold back lumber + steel for the next-turn freight-car build when the
+    // remote freight network is already saturating capacity. Without this,
+    // the hardware factory + armory chain projection swallows every steel
+    // unit and `ai_build_transport_proactive` (which runs later in the AI
+    // loop) finds nothing to spend on cars.
+    let (freight_lumber_reserve, freight_steel_reserve) =
+        freight_expansion_material_reserve(game, nation_id);
     let lumber_supply = snap
         .material(MaterialType::Lumber)
         .saturating_add(timber_mill_target)
         .saturating_sub(lumber_reserve)
-        .saturating_sub(m_lumber_reserve);
+        .saturating_sub(m_lumber_reserve)
+        .saturating_sub(freight_lumber_reserve);
     let steel_supply = snap
         .material(MaterialType::Steel)
         .saturating_add(metal_mill_target)
         .saturating_sub(steel_reserve)
-        .saturating_sub(m_steel_reserve);
+        .saturating_sub(m_steel_reserve)
+        .saturating_sub(freight_steel_reserve);
     let fabric_supply = snap
         .material(MaterialType::Fabric)
         .saturating_add(textile_mill_target)
@@ -2333,6 +2342,63 @@ fn ai_build_transport(game: &mut GameState, nation_id: NationId) {
     }
 }
 
+/// Per-turn cap on how many freight cars `ai_build_transport_proactive`
+/// constructs once the freight network is saturated. Mirrors the build cap
+/// used inside the function so the reserve and the build agree.
+const FREIGHT_BUILD_CAP_PER_TURN: u32 = 2;
+
+/// Returns `true` when the AI's combined rail + sea capacity can't cover the
+/// raw-resource yields its provinces could collect this turn — i.e. when
+/// expanding freight would actually unlock more deliveries.
+///
+/// Mirrors the gate inside `ai_build_transport_proactive`: either the
+/// remote-collectable network already exceeds capacity, or last turn's
+/// freight pool ran nearly saturated.
+pub(crate) fn wants_more_freight_cars(game: &GameState, nation_id: NationId) -> bool {
+    let Some(nation) = game.get_nation(nation_id) else {
+        return false;
+    };
+    let rail_capacity = nation.military.transport.total_capacity();
+    let sea_capacity = nation.total_cargo_capacity(&game.game_data);
+    let capacity = rail_capacity.saturating_add(sea_capacity);
+    let freight_unused = nation.economy.logistics.freight_unused;
+    let (_local, remote_items) = crate::economy::current_collectable_resources(game, nation_id);
+    let remote_total: u32 = remote_items.iter().map(|(_, qty)| *qty).sum();
+    // Same gate as `ai_build_transport_proactive` (negated): we *want* to
+    // build when remote yield exceeds capacity OR the freight pool was nearly
+    // saturated last turn.
+    !(remote_total <= capacity && (capacity == 0 || freight_unused > 2))
+}
+
+/// Lumber + steel the AI holds back from other consumers (factory chain
+/// projection, warship arms-conversion, scored-spending arms production) so
+/// the next-turn freight-car build has the materials it needs. Returns
+/// `(lumber, steel)`.
+///
+/// Returns `(0, 0)` when `wants_more_freight_cars` is false — the reserve
+/// only kicks in when remote freight is actually saturated. Otherwise
+/// returns enough for `FREIGHT_BUILD_CAP_PER_TURN` cars (1 lumber + 1 steel
+/// each).
+///
+/// Mirrors `reserve_for_expansion` and `merchant_navy_material_reserve`: a
+/// small, predictable hold-back that keeps materials around long enough for
+/// the next-turn freight build to succeed instead of being drained by
+/// hardware-factory + arms + warship consumers earlier in the AI loop.
+pub(crate) fn freight_expansion_material_reserve(
+    game: &GameState,
+    nation_id: NationId,
+) -> (u32, u32) {
+    if !wants_more_freight_cars(game, nation_id) {
+        return (0, 0);
+    }
+    // Each freight car costs 1 lumber + 1 steel.
+    let (_, lumber_per, steel_per) = crate::economy::TransportSystem::build_freight_car_cost();
+    (
+        FREIGHT_BUILD_CAP_PER_TURN.saturating_mul(lumber_per),
+        FREIGHT_BUILD_CAP_PER_TURN.saturating_mul(steel_per),
+    )
+}
+
 /// Proactive transport building: build freight cars when transport capacity
 /// is insufficient for current resource production.
 ///
@@ -2371,7 +2437,7 @@ pub(crate) fn ai_build_transport_proactive(game: &mut GameState, nation_id: Nati
     // starved by freight-car construction.
     let (_, m_lumber_reserve, m_steel_reserve, _) =
         super::naval::merchant_navy_material_reserve(game, nation_id);
-    let cars_to_build = 2u32;
+    let cars_to_build = FREIGHT_BUILD_CAP_PER_TURN;
     let lumber_available = nation
         .material_amount(MaterialType::Lumber)
         .saturating_sub(m_lumber_reserve);

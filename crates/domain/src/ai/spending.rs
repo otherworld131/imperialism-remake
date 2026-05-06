@@ -1400,9 +1400,12 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
         );
         let (_, _, m_steel_reserve, _) =
             super::naval::merchant_navy_material_reserve(game, nation_id);
+        let (_, freight_steel_reserve) =
+            super::economy::freight_expansion_material_reserve(game, nation_id);
         let usable_steel = steel_have
             .saturating_sub(steel_reserve)
-            .saturating_sub(m_steel_reserve);
+            .saturating_sub(m_steel_reserve)
+            .saturating_sub(freight_steel_reserve);
         let needs_arms_production = arms_have < arms_need && usable_steel > 0;
         let arms_to_produce = if needs_arms_production {
             (arms_need - arms_have).min(usable_steel)

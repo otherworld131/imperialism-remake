@@ -265,10 +265,12 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
         super::economy::expansion_reserve_buildings_factor(game, personality),
     );
     let (_, _, merchant_steel, _) = merchant_navy_material_reserve(game, nation_id);
+    let (_, freight_steel) = super::economy::freight_expansion_material_reserve(game, nation_id);
     let steel_for_arms = steel_have
         .saturating_sub(steel_need)
         .saturating_sub(steel_reserve)
-        .saturating_sub(merchant_steel);
+        .saturating_sub(merchant_steel)
+        .saturating_sub(freight_steel);
     if arms_have < arms_need && steel_for_arms > 0 {
         let arms_to_produce = (arms_need - arms_have).min(steel_for_arms);
         let Some(nation) = game.get_nation_mut(nation_id) else {
