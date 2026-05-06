@@ -185,6 +185,29 @@ python3 tools/pdf_extract.py --search "capital city" 10-30
 
 Requires PyMuPDF (`pip install pymupdf`).
 
+## Inspecting Batch Game Reports
+
+After running `cargo run --release --bin imperialism -- --batch N`, use the
+**`/batch-analyze`** skill (defined under `.claude/skills/batch-analyze/`)
+to print focused summaries of the JSON output. The underlying tool is
+`tools/batch_analyze.py` and is **data-driven** — any new field added to
+`src/batch.rs::NationSnapshot` is discoverable via `--list-keys` without
+code changes.
+
+```bash
+# Default: every section, year 1830 + last available.
+python3 tools/batch_analyze.py /tmp/batch.json
+
+# Targeted question (e.g. "is the AI buying Coal/Iron?"):
+python3 tools/batch_analyze.py /tmp/batch.json --section trade --keys Coal,Iron
+
+# Stream from cargo directly:
+cargo run --release --bin imperialism -- --batch 3 | python3 tools/batch_analyze.py -
+```
+
+Sections: `summary`, `trade`, `warehouse`, `materials`, `paper`,
+`bankruptcy`, plus `--section field --field NAME` for any scalar.
+
 ## Conventions
 
 - `cargo build` must succeed with zero warnings at all times

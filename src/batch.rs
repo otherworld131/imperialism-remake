@@ -79,11 +79,15 @@ pub(crate) struct NationSnapshot {
     active_wars: usize,
     provinces_gained: i32,
     // Material stockpiles for naval debug (fabric+lumber+arms needed to build a frigate;
-    // steel can be converted to arms so it's included too)
+    // steel can be converted to arms so it's included too).
     fabric: u32,
     lumber: u32,
     arms: u32,
     steel: u32,
+    // Full material warehouse (Lumber/Steel/Fabric/Paper/Arms/CannedFood) —
+    // captured here so debug tooling can verify e.g. that the paper chain is
+    // producing, which the legacy fields above don't expose.
+    materials: BTreeMap<String, u32>,
     // Raw-resource warehouse — every tradeable type, so you can see at a
     // glance which inputs the AI is starving on or hoarding.
     warehouse: BTreeMap<String, u32>,
@@ -253,6 +257,17 @@ fn take_snapshot(
                 lumber: nation.material_amount(domain::types::MaterialType::Lumber),
                 arms: nation.material_amount(domain::types::MaterialType::Arms),
                 steel: nation.material_amount(domain::types::MaterialType::Steel),
+                materials: {
+                    use domain::types::MaterialType::*;
+                    let mut m = BTreeMap::new();
+                    for mat in [Lumber, Steel, Fabric, Paper, Arms, CannedFood] {
+                        let qty = nation.material_amount(mat);
+                        if qty > 0 {
+                            m.insert(format!("{mat:?}"), qty);
+                        }
+                    }
+                    m
+                },
                 warehouse: {
                     use domain::types::ResourceType::*;
                     let mut w = BTreeMap::new();
