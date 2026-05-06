@@ -208,11 +208,43 @@ pub(super) fn resolve_trade_session(
             // Try to fill from human player first, then AI GPs
             let mut filled = false;
 
-            // Check human player stock
+            // Check human player stock. Apply the same expansion reserve we
+            // give AI GPs so auto-trade with minors doesn't drain lumber/steel
+            // that the player needs for industrial expansion. The player can
+            // still sell manually via the trade screen, and they can disable
+            // this auto-trade entirely via `auto_trade_with_minors`.
+            let (human_lumber_reserve, human_steel_reserve) = {
+                // The human doesn't have a personality, so use the Balanced
+                // tunables — they're the most conservative across all four
+                // personality presets.
+                let per_turn = crate::ai::economy::expansions_per_turn_target(
+                    game,
+                    crate::ai::common::AiPersonality::Balanced,
+                );
+                let buildings_factor =
+                    crate::ai::economy::expansion_reserve_buildings_factor(
+                        game,
+                        crate::ai::common::AiPersonality::Balanced,
+                    );
+                crate::ai::economy::reserve_for_expansion(
+                    game,
+                    human_id,
+                    per_turn,
+                    buildings_factor,
+                )
+            };
             let has_stock = match bid.commodity {
                 trade::ManufacturedCommodity::Material(m) => game
                     .get_nation(human_id)
-                    .map(|n| n.economy.materials.get(&m).copied().unwrap_or(0) >= bid.quantity)
+                    .map(|n| {
+                        let stock = n.economy.materials.get(&m).copied().unwrap_or(0);
+                        let reserve = match m {
+                            MaterialType::Lumber => human_lumber_reserve,
+                            MaterialType::Steel => human_steel_reserve,
+                            _ => 0,
+                        };
+                        stock.saturating_sub(reserve) >= bid.quantity
+                    })
                     .unwrap_or(false),
                 trade::ManufacturedCommodity::Goods(g) => game
                     .get_nation(human_id)
@@ -282,16 +314,44 @@ pub(super) fn resolve_trade_session(
             }
 
             if !filled {
-                // Try AI GP sellers (skip human, already checked)
+                // Try AI GP sellers (skip human, already checked).
+                // AI GPs hold back lumber+steel for industrial expansion — see
+                // `crate::ai::economy::reserve_for_expansion`. The auto-bid
+                // resolver must respect that reserve, otherwise minor nations
+                // can drain the entire steel/lumber stockpile every turn and
+                // the AI never has materials available for `expand_building`
+                // to pay for the next mill/factory tier.
                 for gp_id in &gp_ids {
                     if *gp_id == human_id {
                         continue;
                     }
+                    let (lumber_reserve, steel_reserve) = {
+                        let personality = crate::ai::common::get_personality(game, *gp_id);
+                        let per_turn =
+                            crate::ai::economy::expansions_per_turn_target(game, personality);
+                        let buildings_factor =
+                            crate::ai::economy::expansion_reserve_buildings_factor(
+                                game,
+                                personality,
+                            );
+                        crate::ai::economy::reserve_for_expansion(
+                            game,
+                            *gp_id,
+                            per_turn,
+                            buildings_factor,
+                        )
+                    };
                     let gp_has_stock = match bid.commodity {
                         trade::ManufacturedCommodity::Material(m) => game
                             .get_nation(*gp_id)
                             .map(|n| {
-                                n.economy.materials.get(&m).copied().unwrap_or(0) >= bid.quantity
+                                let stock = n.economy.materials.get(&m).copied().unwrap_or(0);
+                                let reserve = match m {
+                                    MaterialType::Lumber => lumber_reserve,
+                                    MaterialType::Steel => steel_reserve,
+                                    _ => 0,
+                                };
+                                stock.saturating_sub(reserve) >= bid.quantity
                             })
                             .unwrap_or(false),
                         trade::ManufacturedCommodity::Goods(g) => game

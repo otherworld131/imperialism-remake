@@ -1011,6 +1011,18 @@ pub struct LuaAiConfig {
     /// Floor target for any chain whose building exists, so transient input
     /// shortages don't permanently zero a chain's slider.
     pub min_chain_target: Option<u32>,
+    /// How many simultaneous tier-jump expansions the AI reserves
+    /// lumber+steel for each turn. The reserve is held back from the
+    /// hardware factory, naval/freight construction, and any other
+    /// optional consumer so expansion always has materials available.
+    pub expansions_per_turn_target: Option<u32>,
+    /// Per-building multiplier that grows the expansion reserve as the
+    /// economy grows. With factor=0.5 a nation with 10 expandable
+    /// buildings reserves enough material for 5 simultaneous expansions
+    /// (capped from below by `expansions_per_turn_target`). Default 0.0
+    /// keeps existing behavior; set higher to give large economies more
+    /// headroom.
+    pub expansion_reserve_buildings_factor: Option<f64>,
 
     // Spending weights (need-based scoring system)
     pub spending_military_weight: Option<f64>,
@@ -1218,6 +1230,12 @@ impl LuaAiConfig {
         // chains. Capped tightly so a non-default Lua value can't reintroduce
         // the inflated-target bug fixed in round 1 of the adversarial review.
         self.min_chain_target = sanitize_opt_u32(self.min_chain_target, 0, 2);
+        // Reserve at most 8 simultaneous expansions per turn — beyond that
+        // the reserve would starve hardware production indefinitely.
+        self.expansions_per_turn_target =
+            sanitize_opt_u32(self.expansions_per_turn_target, 0, 8);
+        self.expansion_reserve_buildings_factor =
+            sanitize_opt_f64(self.expansion_reserve_buildings_factor, 0.0, 4.0);
 
         // Treasury thresholds
         self.tier1_treasury = sanitize_opt_i64(self.tier1_treasury, 0, 10_000_000);
@@ -1403,6 +1421,10 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             steel_armory_weight_war: table.get("steel_armory_weight_war").ok(),
             canned_food_buffer: table.get("canned_food_buffer").ok(),
             min_chain_target: table.get::<u32>("min_chain_target").ok(),
+            expansions_per_turn_target: table.get::<u32>("expansions_per_turn_target").ok(),
+            expansion_reserve_buildings_factor: table
+                .get::<f64>("expansion_reserve_buildings_factor")
+                .ok(),
             // Spending weights
             spending_military_weight: table.get("spending_military_weight").ok(),
             spending_economy_weight: table.get("spending_economy_weight").ok(),
@@ -1817,6 +1839,8 @@ mod tests {
             steel_armory_weight_war: None,
             canned_food_buffer: None,
             min_chain_target: None,
+            expansions_per_turn_target: None,
+            expansion_reserve_buildings_factor: None,
             spending_military_weight: Some(f64::INFINITY),
             spending_economy_weight: None,
             spending_diplomacy_weight: None,
@@ -1927,6 +1951,8 @@ mod tests {
             steel_armory_weight_war: None,
             canned_food_buffer: None,
             min_chain_target: None,
+            expansions_per_turn_target: None,
+            expansion_reserve_buildings_factor: None,
             spending_military_weight: None,
             spending_economy_weight: None,
             spending_diplomacy_weight: None,
@@ -2076,6 +2102,8 @@ mod tests {
             steel_armory_weight_war: None,
             canned_food_buffer: None,
             min_chain_target: None,
+            expansions_per_turn_target: None,
+            expansion_reserve_buildings_factor: None,
             spending_military_weight: None,
             spending_economy_weight: None,
             spending_diplomacy_weight: None,

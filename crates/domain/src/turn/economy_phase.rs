@@ -156,6 +156,8 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
             .map(|(m, q)| (*m, *q))
             .collect();
 
+        // DEBUG (do not revert until requested): the LaborPool::total_labor_units_with
+        // method returns a fixed 200; this call site is unchanged for clarity.
         let total_labor =
             nation
                 .economy

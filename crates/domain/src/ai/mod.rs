@@ -1,7 +1,7 @@
 pub mod assessment;
 pub mod common;
 mod diplomacy;
-mod economy;
+pub(crate) mod economy;
 mod labor;
 #[cfg(feature = "lua")]
 pub(crate) mod lua_bridge;

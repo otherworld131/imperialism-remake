@@ -80,6 +80,10 @@ aggressive = {
     steel_armory_weight_war = 0.85,
     canned_food_buffer = 1.2,
     min_chain_target = 1,
+    -- Aggressive militarises hardware/arms more aggressively, so a smaller
+    -- expansion reserve — but still scale with economy size.
+    expansions_per_turn_target = 1,
+    expansion_reserve_buildings_factor = 0.3,
 
 
     -- Worker training

@@ -104,7 +104,18 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
 
     // Produce arms from steel if we're short.
     // Reserve steel_need for the hull first; only surplus steel can substitute for arms.
-    let steel_for_arms = steel_have.saturating_sub(steel_need);
+    // Also hold back the AI's expansion-reserve steel so the conversion never
+    // starves a planned mill/factory upgrade.
+    let personality = get_personality(game, nation_id);
+    let (_, steel_reserve) = super::economy::reserve_for_expansion(
+        game,
+        nation_id,
+        super::economy::expansions_per_turn_target(game, personality),
+        super::economy::expansion_reserve_buildings_factor(game, personality),
+    );
+    let steel_for_arms = steel_have
+        .saturating_sub(steel_need)
+        .saturating_sub(steel_reserve);
     if arms_have < arms_need && steel_for_arms > 0 {
         let arms_to_produce = (arms_need - arms_have).min(steel_for_arms);
         let Some(nation) = game.get_nation_mut(nation_id) else {

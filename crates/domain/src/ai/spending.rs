@@ -1390,9 +1390,18 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
         let arms_have = nation.material_amount(MaterialType::Arms);
         let steel_have = nation.material_amount(MaterialType::Steel);
         // Produce arms from steel if we're short, mirroring build_one_warship.
-        let needs_arms_production = arms_have < arms_need && steel_have > 0;
+        // Hold back the AI's expansion-reserve steel so unit recruitment never
+        // starves a planned mill/factory upgrade.
+        let (_, steel_reserve) = super::economy::reserve_for_expansion(
+            game,
+            nation_id,
+            super::economy::expansions_per_turn_target(game, personality),
+            super::economy::expansion_reserve_buildings_factor(game, personality),
+        );
+        let usable_steel = steel_have.saturating_sub(steel_reserve);
+        let needs_arms_production = arms_have < arms_need && usable_steel > 0;
         let arms_to_produce = if needs_arms_production {
-            (arms_need - arms_have).min(steel_have)
+            (arms_need - arms_have).min(usable_steel)
         } else {
             0
         };

@@ -12,7 +12,7 @@ use crate::types::*;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
-use super::common::{PersonalityConfig, get_personality};
+use super::common::{AiPersonality, PersonalityConfig, get_personality};
 
 /// Build mills and factories when the nation has the required materials.
 fn ai_build_infrastructure(game: &mut GameState, nation_id: NationId) {
@@ -1630,6 +1630,115 @@ fn expand_building(game: &mut GameState, nation_id: NationId, bt: BuildingType, 
     }
 }
 
+/// Lumber + steel the AI should hold back for building expansion.
+///
+/// Returns `(lumber_reserve, steel_reserve)`. Both equal `worst_step ×
+/// effective_expansions` where `worst_step` is the largest single-tier
+/// capacity jump across all buildings the nation already owns and
+/// `effective_expansions = max(expansions_per_turn, building_count ×
+/// buildings_factor)`. The buildings-factor lets the reserve grow as the
+/// economy grows, so a nation with many buildings under construction can
+/// hold back more material to keep expanding all of them in parallel.
+///
+/// Without this reserve every turn's lumber/steel is consumed by the
+/// hardware factory + arms production + freight cars + ship construction +
+/// minor-nation auto-bids before `expand_building` has a chance to pay for
+/// the next mill/factory tier, leaving economies stuck at starter capacity.
+pub(crate) fn reserve_for_expansion(
+    game: &GameState,
+    nation_id: NationId,
+    expansions_per_turn: u32,
+    buildings_factor: f64,
+) -> (u32, u32) {
+    let Some(nation) = game.get_nation(nation_id) else {
+        return (0, 0);
+    };
+    // Largest next-tier delta across the nation's existing buildings.
+    // expansion_cost(delta) = (delta, delta), so worst-step lumber == steel.
+    let worst_step = nation
+        .economy
+        .buildings
+        .iter()
+        .map(|b| b.next_capacity().saturating_sub(b.capacity))
+        .max()
+        .unwrap_or(0);
+    let worst_step = worst_step.max(1); // always reserve at least a +1 expansion
+
+    // Building-count contribution. We count only mills/factories/armory/
+    // food-processing/paper because those are the buildings the AI actually
+    // expands; capitol/shipyard/etc. are fixed.
+    let expandable_count = nation
+        .economy
+        .buildings
+        .iter()
+        .filter(|b| {
+            matches!(
+                b.building_type,
+                BuildingType::LumberMill
+                    | BuildingType::SteelMill
+                    | BuildingType::TextileMill
+                    | BuildingType::FurnitureFactory
+                    | BuildingType::HardwareFactory
+                    | BuildingType::ClothingFactory
+                    | BuildingType::Armory
+                    | BuildingType::PaperFactory
+                    | BuildingType::FoodProcessing
+            )
+        })
+        .count() as u32;
+    let from_buildings = ((expandable_count as f64) * buildings_factor)
+        .ceil()
+        .max(0.0) as u32;
+    let effective_expansions = expansions_per_turn.max(from_buildings);
+
+    let target = worst_step.saturating_mul(effective_expansions);
+    (target, target)
+}
+
+/// Lua-tunable read for the expansion-reserve multiplier (turns per expansion).
+pub(crate) fn expansions_per_turn_target(game: &GameState, personality: AiPersonality) -> u32 {
+    #[cfg(feature = "lua")]
+    {
+        if let Some(cfg) = game
+            .game_data
+            .lua_engine
+            .as_ref()
+            .and_then(|e| super::lua_bridge::lua_get_config(e, personality))
+            && let Some(v) = cfg.expansions_per_turn_target
+        {
+            return v;
+        }
+    }
+    let _ = (game, personality);
+    2
+}
+
+/// Lua-tunable: per-building multiplier that grows the expansion reserve as
+/// the economy grows. A nation with N expandable buildings reserves enough
+/// material for `ceil(N × factor)` simultaneous expansions (capped from
+/// below by `expansions_per_turn_target`). Default 0.0 keeps existing
+/// behavior; set to 0.5 to reserve enough for half the buildings to expand
+/// in parallel each turn.
+pub(crate) fn expansion_reserve_buildings_factor(
+    game: &GameState,
+    personality: AiPersonality,
+) -> f64 {
+    #[cfg(feature = "lua")]
+    {
+        if let Some(cfg) = game
+            .game_data
+            .lua_engine
+            .as_ref()
+            .and_then(|e| super::lua_bridge::lua_get_config(e, personality))
+            && let Some(v) = cfg.expansion_reserve_buildings_factor
+        {
+            return v;
+        }
+    }
+    let _ = (game, personality);
+    0.0
+}
+
 /// Set per-chain output targets so labor & feed allocation favor chains
 /// the AI can actually run, instead of leaving every slider at `u32::MAX`.
 ///
@@ -1745,12 +1854,25 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
     // hardware and armory. The factory-side projection uses *capped* mill
     // output (`mill_target` already bounded by capacity AND runnable input)
     // so we never over-promise downstream targets.
+    //
+    // Hold back lumber + steel for building expansion before the factory
+    // production phase consumes everything. Without this reserve the
+    // hardware factory swallows every steel unit and `expand_building`
+    // never finds materials to pay for the next tier-jump.
+    let (lumber_reserve, steel_reserve) = reserve_for_expansion(
+        game,
+        nation_id,
+        expansions_per_turn_target(game, personality),
+        expansion_reserve_buildings_factor(game, personality),
+    );
     let lumber_supply = snap
         .material(MaterialType::Lumber)
-        .saturating_add(timber_mill_target);
+        .saturating_add(timber_mill_target)
+        .saturating_sub(lumber_reserve);
     let steel_supply = snap
         .material(MaterialType::Steel)
-        .saturating_add(metal_mill_target);
+        .saturating_add(metal_mill_target)
+        .saturating_sub(steel_reserve);
     let fabric_supply = snap
         .material(MaterialType::Fabric)
         .saturating_add(textile_mill_target);
@@ -3419,6 +3541,102 @@ mod tests {
         assert_eq!(factory_target(20, true, 10, 2), 10);
         assert_eq!(factory_target(5, false, 10, 2), 2); // floor wins
         assert_eq!(factory_target(5, false, 10, 0), 0);
+    }
+
+    #[test]
+    fn reserve_for_expansion_scales_with_worst_step() {
+        // Buildings at cap 8 each. Next tier is 12, delta=4. Worst-step
+        // expansion costs (4 lumber, 4 steel). With expansions_per_turn=2
+        // we reserve (8, 8).
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+        let ai = game.get_nation_mut(ai_id).unwrap();
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 8));
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 8));
+
+        let (lumber, steel) = reserve_for_expansion(&game, ai_id, 2, 0.0);
+        assert_eq!(lumber, 8, "delta=4 × 2 expansions = 8 lumber");
+        assert_eq!(steel, 8, "delta=4 × 2 expansions = 8 steel");
+    }
+
+    #[test]
+    fn reserve_for_expansion_scales_with_buildings_factor() {
+        // 4 expandable buildings at cap=8 → next-tier delta=4. With
+        // expansions_per_turn=2 and buildings_factor=0.5, effective =
+        // max(2, ceil(4 × 0.5)) = max(2, 2) = 2 → reserve (8, 8). Bump
+        // buildings_factor to 1.0 → effective = max(2, 4) = 4 → (16, 16).
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+        let ai = game.get_nation_mut(ai_id).unwrap();
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 8));
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 8));
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::TextileMill, 8));
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::HardwareFactory, 8));
+
+        let (lumber_lo, _) = reserve_for_expansion(&game, ai_id, 2, 0.5);
+        let (lumber_hi, _) = reserve_for_expansion(&game, ai_id, 2, 1.0);
+        let (lumber_huge, _) = reserve_for_expansion(&game, ai_id, 2, 2.0);
+        assert_eq!(lumber_lo, 8, "factor 0.5 × 4 = 2 ≤ floor(2) → reserve still 8");
+        assert_eq!(lumber_hi, 16, "factor 1.0 × 4 = 4 → reserve 16");
+        assert_eq!(lumber_huge, 32, "factor 2.0 × 4 = 8 → reserve 32");
+    }
+
+    #[test]
+    fn reserve_for_expansion_scales_with_zero_buildings() {
+        // No buildings at all → worst-step defaults to 1 (always reserve at
+        // least one expansion's worth so a fresh AI can bootstrap).
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+        let ai = game.get_nation_mut(ai_id).unwrap();
+        ai.economy.buildings.clear();
+
+        let (lumber, steel) = reserve_for_expansion(&game, ai_id, 2, 0.0);
+        assert_eq!(lumber, 2);
+        assert_eq!(steel, 2);
+    }
+
+    #[test]
+    fn reserve_held_back_from_factory_targets() {
+        // Factory has cap=4 and we have 20 lumber + 20 steel (huge surplus).
+        // Without reserve, hardware target would be ~7 (steel 20 × 0.8 / 2 = 8,
+        // capped at cap=4). With reserve subtracting (8,8), steel_supply
+        // becomes 12, hardware share = 9.6, hardware target = 4 (still cap).
+        // The point is the reserve subtraction doesn't break high-capacity
+        // factories, but does shrink targets when supply is tight.
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+        let ai = game.get_nation_mut(ai_id).unwrap();
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 8));
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::HardwareFactory, 4));
+        // Tight supply: 6 steel + 0 mill output projection. Reserve = 8
+        // (delta=4 × 2). After reserve, steel_supply = 0 → hardware target
+        // drops to min_chain_target floor.
+        ai.add_material(MaterialType::Steel, 6);
+
+        ai_set_production_targets(&mut game, ai_id);
+
+        let ai = game.get_nation(ai_id).unwrap();
+        assert!(
+            ai.economy.chain_targets.steel_factory <= 1,
+            "with steel<reserve, hardware target should drop to floor, got {}",
+            ai.economy.chain_targets.steel_factory
+        );
     }
 
     #[test]

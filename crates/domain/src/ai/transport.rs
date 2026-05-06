@@ -54,7 +54,9 @@ pub fn ai_allocate_transport(game: &mut GameState, nation_id: NationId) {
     let Some(nation) = game.get_nation(nation_id) else {
         return;
     };
-    let rail_capacity = nation.military.transport.freight_cars;
+    // Use the canonical `total_capacity()` accessor (and not `freight_cars`
+    // directly) so any override in `TransportState` flows here too.
+    let rail_capacity = nation.military.transport.total_capacity();
     let sea_capacity = nation.total_cargo_capacity(&game.game_data);
     // Combined rail + sea pool — matches what `resolve_transport` actually
     // delivers each turn (Trello bug #461). Even with zero rail, sea cargo can
@@ -243,8 +245,21 @@ fn compute_remote_demand(
         &mut demand,
     );
 
-    // Cap each demand by what the map actually yields remotely. There is no
-    // point reserving freight for a resource we cannot collect this turn.
+    // Soak any remaining freight by raising each resource's demand to its full
+    // remote yield. Per-building need above acts as a priority floor (the
+    // floor + water-filling passes in `distribute_freight` honor it via
+    // ordering and proportional weights), but with slack capacity there's no
+    // reason to leave remote yield uncollected — extra material stockpiles in
+    // the warehouse and feeds future expansion or trade.
+    for (r, avail) in remote_items {
+        let entry = demand.entry(*r).or_insert(0);
+        if *entry < *avail {
+            *entry = *avail;
+        }
+    }
+
+    // Emit demand entries in `DEMAND_RESOURCES` priority order, capped by
+    // remote availability (we never want more than we can collect this turn).
     let mut out: Vec<(ResourceType, u32)> = Vec::new();
     for r in DEMAND_RESOURCES {
         let want = demand.get(&r).copied().unwrap_or(0);
@@ -380,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn demand_cannery_meat_is_single_pool() {
+    fn demand_cannery_meat_pulls_remote_when_freight_slack() {
         // Cannery cap=4 needs 4 meat, split between fish/livestock by remote
         // availability. With fish=10 remote and livestock=0 remote, all 4 meat
         // demand should land on fish (and total fish+livestock demand = 4, not 8).
@@ -407,12 +422,14 @@ mod tests {
             .find(|(r, _)| *r == ResourceType::Livestock)
             .map(|(_, q)| *q)
             .unwrap_or(0);
-        assert_eq!(fish + livestock, 4, "meat is a single 4-unit pool, not 8");
-        assert_eq!(livestock, 0, "no livestock remote → all meat to fish");
+        // New semantic: with slack freight, demand = remote_avail. Cannery
+        // only *needs* 4 meat, but there's no reason to leave 6 fish behind.
+        assert_eq!(fish, 10, "fish demand should equal remote availability");
+        assert_eq!(livestock, 0, "no livestock remote → no livestock demand");
     }
 
     #[test]
-    fn demand_textile_fiber_is_single_pool() {
+    fn demand_textile_fiber_pulls_remote_when_freight_slack() {
         // Textile mill cap=3 → 6 fiber units split across cotton/wool.
         // With cotton=4 remote and wool=4 remote, expect ~3 each (not 6+3=9).
         let mut nation = make_test_nation();
@@ -436,7 +453,9 @@ mod tests {
             .find(|(r, _)| *r == ResourceType::Wool)
             .map(|(_, q)| *q)
             .unwrap_or(0);
-        assert_eq!(cotton + wool, 6, "fiber is a single 6-unit pool, not 9");
+        // New semantic: demand = remote availability when freight is slack;
+        // we collect everything we can and stockpile the surplus.
+        assert_eq!(cotton + wool, 8, "demand should equal sum of remote availability");
     }
 
     #[test]
@@ -482,15 +501,20 @@ mod tests {
     }
 
     #[test]
-    fn demand_empty_when_no_buildings_no_workers() {
+    fn demand_falls_through_to_remote_when_no_per_need() {
+        // Even with no buildings and no workers, the AI should still ask for
+        // any remote yield it can collect — the surplus stockpiles and feeds
+        // future expansion or trade.
         let nation = make_test_nation();
         let data = crate::data::GameData::default();
         let remote = vec![(ResourceType::Coal, 5)];
         let demand = compute_remote_demand(&nation, &data, &remote);
-        assert!(
-            demand.is_empty(),
-            "no production buildings + no workers → no demand"
-        );
+        let coal = demand
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Coal)
+            .map(|(_, q)| *q)
+            .unwrap_or(0);
+        assert_eq!(coal, 5, "should demand all 5 remote coal even with no SteelMill");
     }
 
     #[test]
