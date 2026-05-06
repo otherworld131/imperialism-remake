@@ -1976,17 +1976,25 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
         expansions_per_turn_target(game, personality),
         expansion_reserve_buildings_factor(game, personality),
     );
+    // Hold back materials queued for the next merchant hull so the chain
+    // projection (which drives factory output and feeds expansion) doesn't
+    // commit lumber/steel/fabric the AI is saving for a merchant ship.
+    let (m_fabric_reserve, m_lumber_reserve, m_steel_reserve, _m_coal) =
+        super::naval::merchant_navy_material_reserve(game, nation_id);
     let lumber_supply = snap
         .material(MaterialType::Lumber)
         .saturating_add(timber_mill_target)
-        .saturating_sub(lumber_reserve);
+        .saturating_sub(lumber_reserve)
+        .saturating_sub(m_lumber_reserve);
     let steel_supply = snap
         .material(MaterialType::Steel)
         .saturating_add(metal_mill_target)
-        .saturating_sub(steel_reserve);
+        .saturating_sub(steel_reserve)
+        .saturating_sub(m_steel_reserve);
     let fabric_supply = snap
         .material(MaterialType::Fabric)
-        .saturating_add(textile_mill_target);
+        .saturating_add(textile_mill_target)
+        .saturating_sub(m_fabric_reserve);
 
     let furniture_cap = snap.building_capacity(BuildingType::FurnitureFactory);
     let hardware_cap = snap.building_capacity(BuildingType::HardwareFactory);
@@ -2191,6 +2199,11 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
 
     let current_turn = game.turn;
     let mut total_revenue = Money::ZERO;
+    // Hold back coal queued for the next merchant hull — Paddlewheeler
+    // and Freighter both list coal_cost > 0, so unconditional auto-sell
+    // would starve their construction even with the reserve elsewhere.
+    let (_, _, _, m_coal_reserve) =
+        super::naval::merchant_navy_material_reserve(game, nation_id);
     {
         let nation = match game.get_nation_mut(nation_id) {
             Some(n) => n,
@@ -2222,16 +2235,22 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
         ];
         for resource in tradeable_resources {
             let amount = nation.resource_amount(resource);
-            // Per-resource floor: the larger of the static reserve and the
-            // need-based buffer. Resources with no active chain (Horses,
-            // Oil, …) fall back to the static reserve; chain inputs hold
-            // back the projected buffer × turns.
+            // Per-resource floor: the larger of the static reserve, the
+            // need-based buffer, and (for coal) the merchant-navy reserve.
+            // Resources with no active chain (Horses, Oil, …) fall back to
+            // the static reserve; chain inputs hold back the projected
+            // buffer × turns.
             let need_floor = needs
                 .get(&resource)
                 .copied()
                 .unwrap_or(0)
                 .saturating_mul(buffer_turns);
-            let floor = trade_resource_reserve.max(need_floor);
+            let merchant_floor = if resource == ResourceType::Coal {
+                m_coal_reserve
+            } else {
+                0
+            };
+            let floor = trade_resource_reserve.max(need_floor).max(merchant_floor);
             if amount > floor {
                 let excess = amount - floor;
                 let price = trade::base_price(resource);
@@ -2269,6 +2288,11 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
 /// Cost per freight car: 1 lumber + 1 steel (labor requirement simplified away).
 /// Builds 2 freight cars if possible.
 fn ai_build_transport(game: &mut GameState, nation_id: NationId) {
+    // Hold back the merchant-navy reserve so the next merchant hull isn't
+    // starved by freight-car construction. Compute before the mut borrow.
+    let (_, m_lumber_reserve, m_steel_reserve, _) =
+        super::naval::merchant_navy_material_reserve(game, nation_id);
+
     let nation = match game.get_nation_mut(nation_id) {
         Some(n) => n,
         None => return,
@@ -2280,10 +2304,14 @@ fn ai_build_transport(game: &mut GameState, nation_id: NationId) {
         return;
     }
 
-    // Build up to 2 freight cars per turn (cost: 1 lumber + 1 steel each)
+    // Build up to 2 freight cars per turn (cost: 1 lumber + 1 steel each).
     let cars_to_build = (target_cars - nation.military.transport.freight_cars).min(2);
-    let lumber_available = nation.material_amount(MaterialType::Lumber);
-    let steel_available = nation.material_amount(MaterialType::Steel);
+    let lumber_available = nation
+        .material_amount(MaterialType::Lumber)
+        .saturating_sub(m_lumber_reserve);
+    let steel_available = nation
+        .material_amount(MaterialType::Steel)
+        .saturating_sub(m_steel_reserve);
     let affordable = cars_to_build.min(lumber_available).min(steel_available);
 
     if affordable > 0 {
@@ -2338,10 +2366,18 @@ pub(crate) fn ai_build_transport_proactive(game: &mut GameState, nation_id: Nati
         return;
     }
 
-    // Build additional freight cars (1 lumber + 1 steel each, up to 2 per turn)
+    // Build additional freight cars (1 lumber + 1 steel each, up to 2 per turn).
+    // Hold back the merchant-navy reserve so the next merchant hull isn't
+    // starved by freight-car construction.
+    let (_, m_lumber_reserve, m_steel_reserve, _) =
+        super::naval::merchant_navy_material_reserve(game, nation_id);
     let cars_to_build = 2u32;
-    let lumber_available = nation.material_amount(MaterialType::Lumber);
-    let steel_available = nation.material_amount(MaterialType::Steel);
+    let lumber_available = nation
+        .material_amount(MaterialType::Lumber)
+        .saturating_sub(m_lumber_reserve);
+    let steel_available = nation
+        .material_amount(MaterialType::Steel)
+        .saturating_sub(m_steel_reserve);
     let affordable = cars_to_build.min(lumber_available).min(steel_available);
 
     if affordable > 0 {

@@ -1398,7 +1398,11 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
             super::economy::expansions_per_turn_target(game, personality),
             super::economy::expansion_reserve_buildings_factor(game, personality),
         );
-        let usable_steel = steel_have.saturating_sub(steel_reserve);
+        let (_, _, m_steel_reserve, _) =
+            super::naval::merchant_navy_material_reserve(game, nation_id);
+        let usable_steel = steel_have
+            .saturating_sub(steel_reserve)
+            .saturating_sub(m_steel_reserve);
         let needs_arms_production = arms_have < arms_need && usable_steel > 0;
         let arms_to_produce = if needs_arms_production {
             (arms_need - arms_have).min(usable_steel)

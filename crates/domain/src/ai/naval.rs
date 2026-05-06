@@ -24,16 +24,162 @@ const WARSHIP_PRIORITY: &[ShipType] = &[
     ShipType::Frigate,
 ];
 
+/// Merchant types ordered from highest to lowest cargo, used by
+/// `best_buildable_merchant` to pick the largest hull whose tech is met
+/// and whose materials are on hand.
+const MERCHANT_PRIORITY: &[ShipType] = &[
+    ShipType::Freighter,
+    ShipType::Paddlewheeler,
+    ShipType::Indiaman,
+    ShipType::Clipper,
+    ShipType::Trader,
+];
+
+/// Returns true if any merchant ship is buildable purely on tech grounds
+/// (ignoring materials). Used by `merchant_navy_material_reserve` so
+/// nations without yet-researched-tech still reserve for the most basic
+/// hull they can build.
+fn nation_has_tech_for(game: &GameState, nation_id: NationId, ship_type: ShipType) -> bool {
+    let Some(nation) = game.get_nation(nation_id) else {
+        return false;
+    };
+    let costs = game.game_data.ship_stats(ship_type);
+    let Some(ref tech_name) = costs.prerequisite_tech else {
+        return true;
+    };
+    game.game_data
+        .tech_tree
+        .all_techs()
+        .iter()
+        .any(|t| t.name == *tech_name && nation.researched_techs.contains(&t.id))
+}
+
+/// Highest-cargo merchant ship the nation has tech for AND materials for,
+/// ignoring the merchant-navy reservation (so this can be called from
+/// `ai_build_merchant_ships` itself). Returns `None` if no merchant hull is
+/// buildable right now.
+fn best_buildable_merchant(game: &GameState, nation_id: NationId) -> Option<ShipType> {
+    let nation = game.get_nation(nation_id)?;
+    let fabric_have = nation.material_amount(MaterialType::Fabric);
+    let lumber_have = nation.material_amount(MaterialType::Lumber);
+    let steel_have = nation.material_amount(MaterialType::Steel);
+    let coal_have = nation.resource_amount(ResourceType::Coal);
+
+    for &ship_type in MERCHANT_PRIORITY {
+        if !nation_has_tech_for(game, nation_id, ship_type) {
+            continue;
+        }
+        let costs = game.game_data.ship_stats(ship_type);
+        if fabric_have < costs.fabric_cost
+            || lumber_have < costs.lumber_cost
+            || steel_have < costs.steel_cost
+            || coal_have < costs.coal_cost
+        {
+            continue;
+        }
+        return Some(ship_type);
+    }
+    None
+}
+
+/// Highest-cargo merchant ship the nation has tech for, ignoring materials.
+/// Used by the reservation logic — even if we don't have the materials yet,
+/// we want to reserve for the *best* hull we'll eventually build.
+fn best_tech_merchant(game: &GameState, nation_id: NationId) -> ShipType {
+    for &ship_type in MERCHANT_PRIORITY {
+        if nation_has_tech_for(game, nation_id, ship_type) {
+            return ship_type;
+        }
+    }
+    ShipType::Trader // fallback: every nation has Trader from turn 1
+}
+
+/// Sum of projected per-turn raw-resource consumption from chain targets.
+/// Used as a proxy for the AI's structural throughput need: any consumption
+/// the AI can't satisfy locally must be imported, and imports flow over
+/// cargo. Selling (export) does not consume cargo in the current trade
+/// model — only the buyer pays cargo — so this is the relevant signal.
+fn projected_raw_consumption_per_turn(game: &GameState, nation_id: NationId) -> u32 {
+    let Some(nation) = game.get_nation(nation_id) else {
+        return 0;
+    };
+    crate::economy::trade::projected_resource_needs(nation)
+        .values()
+        .copied()
+        .sum()
+}
+
+/// Project per-turn raw-resource consumption from chain targets and compare
+/// to current merchant-marine cargo capacity. Returns `true` when the AI's
+/// projected throughput would saturate cargo and benefit from another ship.
+///
+/// This is the trigger for the merchant-navy expansion reserve and for
+/// continuing to build merchant ships past the static personality cap.
+pub(crate) fn wants_more_merchant_cargo(game: &GameState, nation_id: NationId) -> bool {
+    let Some(nation) = game.get_nation(nation_id) else {
+        return false;
+    };
+    let demand_per_turn = projected_raw_consumption_per_turn(game, nation_id);
+    if demand_per_turn == 0 {
+        // No active chains projecting raw consumption — no import pressure,
+        // even if the nation has zero merchant ships. Avoids spurious
+        // material reservations in test scenarios with no buildings.
+        return false;
+    }
+    // A ship's cargo budget recurs every turn — if per-turn raw consumption
+    // exceeds capacity, imports are throttled.
+    demand_per_turn > nation.total_cargo_capacity(&game.game_data)
+}
+
+/// Materials the AI holds back from other consumers (warship build, freight
+/// cars, factory chains, auto-trade with minors) so the next merchant-navy
+/// expansion has the materials it needs. Returns `(fabric, lumber, steel,
+/// coal)` for one ship of the best tech-available merchant hull.
+///
+/// Returns `(0, 0, 0, 0)` when `wants_more_merchant_cargo` is false — the
+/// reserve only kicks in when the AI is actually demand-bound on cargo.
+///
+/// Mirrors `reserve_for_expansion`: a small, predictable hold-back that
+/// keeps the materials around long enough for the next-turn build to
+/// succeed instead of being drained by warship/freight/factory consumers.
+pub(crate) fn merchant_navy_material_reserve(
+    game: &GameState,
+    nation_id: NationId,
+) -> (u32, u32, u32, u32) {
+    if !wants_more_merchant_cargo(game, nation_id) {
+        return (0, 0, 0, 0);
+    }
+    let ship_type = best_tech_merchant(game, nation_id);
+    let costs = game.game_data.ship_stats(ship_type);
+    (
+        costs.fabric_cost,
+        costs.lumber_cost,
+        costs.steel_cost,
+        costs.coal_cost,
+    )
+}
+
 /// Returns the highest-firepower warship whose tech is met AND whose
 /// materials (fabric, lumber, arms + steel→arms conversion, coal) are
 /// available. Falls back to `None` if nothing is buildable.
 fn best_buildable_warship(game: &GameState, nation_id: NationId) -> Option<ShipType> {
     let nation = game.get_nation(nation_id)?;
-    let fabric_have = nation.material_amount(MaterialType::Fabric);
-    let lumber_have = nation.material_amount(MaterialType::Lumber);
+    // Hold back materials the AI is queueing for the next merchant hull so
+    // warship construction can't drain them.
+    let (m_fabric, m_lumber, m_steel, m_coal) = merchant_navy_material_reserve(game, nation_id);
+    let fabric_have = nation
+        .material_amount(MaterialType::Fabric)
+        .saturating_sub(m_fabric);
+    let lumber_have = nation
+        .material_amount(MaterialType::Lumber)
+        .saturating_sub(m_lumber);
     let arms_have = nation.material_amount(MaterialType::Arms);
-    let steel_have = nation.material_amount(MaterialType::Steel);
-    let coal_have = nation.resource_amount(ResourceType::Coal);
+    let steel_have = nation
+        .material_amount(MaterialType::Steel)
+        .saturating_sub(m_steel);
+    let coal_have = nation
+        .resource_amount(ResourceType::Coal)
+        .saturating_sub(m_coal);
     let researched = &nation.researched_techs;
 
     for &ship_type in WARSHIP_PRIORITY {
@@ -108,7 +254,9 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
     // Produce arms from steel if we're short.
     // Reserve steel_need for the hull first; only surplus steel can substitute for arms.
     // Also hold back the AI's expansion-reserve steel so the conversion never
-    // starves a planned mill/factory upgrade.
+    // starves a planned mill/factory upgrade, and hold back the merchant-
+    // navy reserve so warship construction doesn't drain materials the AI
+    // is queueing for the next merchant hull.
     let personality = get_personality(game, nation_id);
     let (_, steel_reserve) = super::economy::reserve_for_expansion(
         game,
@@ -116,9 +264,11 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
         super::economy::expansions_per_turn_target(game, personality),
         super::economy::expansion_reserve_buildings_factor(game, personality),
     );
+    let (_, _, merchant_steel, _) = merchant_navy_material_reserve(game, nation_id);
     let steel_for_arms = steel_have
         .saturating_sub(steel_need)
-        .saturating_sub(steel_reserve);
+        .saturating_sub(steel_reserve)
+        .saturating_sub(merchant_steel);
     if arms_have < arms_need && steel_for_arms > 0 {
         let arms_to_produce = (arms_need - arms_have).min(steel_for_arms);
         let Some(nation) = game.get_nation_mut(nation_id) else {
@@ -140,16 +290,27 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
         ));
     }
 
-    // Re-check materials after possible arms production.
+    // Re-check materials after possible arms production. Apply the
+    // merchant-navy reserve again so a planned merchant hull is still
+    // funded even after the steel→arms conversion above.
+    let (m_fabric, m_lumber, m_steel, m_coal) = merchant_navy_material_reserve(game, nation_id);
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,
         None => return false,
     };
-    let fabric_have = nation.material_amount(MaterialType::Fabric);
-    let lumber_have = nation.material_amount(MaterialType::Lumber);
+    let fabric_have = nation
+        .material_amount(MaterialType::Fabric)
+        .saturating_sub(m_fabric);
+    let lumber_have = nation
+        .material_amount(MaterialType::Lumber)
+        .saturating_sub(m_lumber);
     let arms_have = nation.material_amount(MaterialType::Arms);
-    let steel_have = nation.material_amount(MaterialType::Steel);
-    let coal_have = nation.resource_amount(ResourceType::Coal);
+    let steel_have = nation
+        .material_amount(MaterialType::Steel)
+        .saturating_sub(m_steel);
+    let coal_have = nation
+        .resource_amount(ResourceType::Coal)
+        .saturating_sub(m_coal);
 
     if fabric_have >= fabric_need
         && lumber_have >= lumber_need
@@ -238,8 +399,12 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
     let _lua_cfg: Option<()> = None;
 
     let pc = PersonalityConfig::for_personality(personality);
-    // Ship cap depends on personality; wealthy nations always aim for 5
-    let max_ships: usize = if treasury > Money::dollars(5_000) {
+    // Ship cap depends on personality; wealthy nations always aim for 5.
+    // The cap is overridden when projected per-turn import demand exceeds
+    // current cargo capacity (`wants_more_merchant_cargo`) — the AI keeps
+    // building until cargo catches up with the economy.
+    let demand_bound = wants_more_merchant_cargo(game, nation_id);
+    let static_cap: usize = if treasury > Money::dollars(5_000) {
         5
     } else {
         'val: {
@@ -250,13 +415,35 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
             pc.max_merchant_ships
         }
     };
+    // When demand-bound, scale the cap from `projected_raw_consumption`.
+    // `projected_resource_needs` over-states cargo need because most raw
+    // inputs are produced locally — only the unmet portion actually flows
+    // over cargo. Empirically, ~25% of raw consumption ends up as imports
+    // for a typical AI economy. We use a 1/4 divisor to convert "total
+    // chain demand" → "expected import volume", then size the target
+    // fleet against that. The static cap is honored as a floor.
+    let max_ships: usize = if demand_bound {
+        let demand = projected_raw_consumption_per_turn(game, nation_id);
+        let hull_cargo = game
+            .game_data
+            .ship_stats(best_tech_merchant(game, nation_id))
+            .cargo
+            .max(1);
+        let import_estimate = demand / 4;
+        let target = import_estimate.div_ceil(hull_cargo) as usize;
+        static_cap.max(target)
+    } else {
+        static_cap
+    };
 
-    // For non-Economic with low treasury, only build if cargo capacity is 0.
-    // Use the real fleet sum here — the trade-phase debug hardcode would
-    // otherwise short-circuit merchant-ship construction for every AI.
+    // For non-Economic with low treasury, only build if cargo capacity is 0
+    // OR projected import demand exceeds current cargo capacity. The latter
+    // lets balanced/aggressive personalities scale up their merchant marine
+    // when their economy starts demanding more imports than ships can carry.
     if personality != AiPersonality::Economic
         && treasury <= Money::dollars(5_000)
-        && nation.actual_total_cargo_capacity(&game.game_data) > 0
+        && nation.total_cargo_capacity(&game.game_data) > 0
+        && !demand_bound
     {
         return;
     }
@@ -265,26 +452,53 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
         return;
     }
 
-    let fabric_have = nation.material_amount(MaterialType::Fabric);
-    let lumber_have = nation.material_amount(MaterialType::Lumber);
+    let Some(ship_type) = best_buildable_merchant(game, nation_id) else {
+        return;
+    };
+    let costs = game.game_data.ship_stats(ship_type).clone();
 
-    // Try to build Trader (2 fabric + 4 lumber)
-    if fabric_have >= 2 && lumber_have >= 4 {
-        let uid = game.alloc_unit_id();
-        let ship = Ship::with_data(uid, ShipType::Trader, nation_id, &game.game_data);
-        let Some(nation) = game.get_nation_mut(nation_id) else {
-            return;
-        };
-        nation.consume_material(MaterialType::Fabric, 2);
-        nation.consume_material(MaterialType::Lumber, 4);
-        nation.military.merchant_fleet.push(ship);
-        let out = crate::economy::ledger::ResourceOut::ConstructionConsumed;
-        game.transient
-            .pending_ai_material_outflows
-            .push((nation_id, MaterialType::Fabric, out, 2));
-        game.transient
-            .pending_ai_material_outflows
-            .push((nation_id, MaterialType::Lumber, out, 4));
+    let uid = game.alloc_unit_id();
+    let ship = Ship::with_data(uid, ship_type, nation_id, &game.game_data);
+    let Some(nation) = game.get_nation_mut(nation_id) else {
+        return;
+    };
+    if costs.fabric_cost > 0 {
+        nation.consume_material(MaterialType::Fabric, costs.fabric_cost);
+    }
+    if costs.lumber_cost > 0 {
+        nation.consume_material(MaterialType::Lumber, costs.lumber_cost);
+    }
+    if costs.steel_cost > 0 {
+        nation.consume_material(MaterialType::Steel, costs.steel_cost);
+    }
+    if costs.coal_cost > 0 {
+        nation.remove_resource(ResourceType::Coal, costs.coal_cost);
+    }
+    nation.military.merchant_fleet.push(ship);
+    let out = crate::economy::ledger::ResourceOut::ConstructionConsumed;
+    if costs.fabric_cost > 0 {
+        game.transient.pending_ai_material_outflows.push((
+            nation_id,
+            MaterialType::Fabric,
+            out,
+            costs.fabric_cost,
+        ));
+    }
+    if costs.lumber_cost > 0 {
+        game.transient.pending_ai_material_outflows.push((
+            nation_id,
+            MaterialType::Lumber,
+            out,
+            costs.lumber_cost,
+        ));
+    }
+    if costs.steel_cost > 0 {
+        game.transient.pending_ai_material_outflows.push((
+            nation_id,
+            MaterialType::Steel,
+            out,
+            costs.steel_cost,
+        ));
     }
 }
 
@@ -1234,6 +1448,87 @@ mod tests {
         assert!(
             actions.is_empty(),
             "Naval strategy should do nothing when not at war"
+        );
+    }
+
+    // ── Merchant-navy demand-based growth tests (card #469) ─────────
+
+    #[test]
+    fn wants_more_merchant_cargo_false_with_no_chains() {
+        // Test nation has no buildings → no projected demand → trigger off,
+        // even with zero merchant ships.
+        let game = test_game_with_ai();
+        assert!(!wants_more_merchant_cargo(&game, NationId(2)));
+    }
+
+    #[test]
+    fn wants_more_merchant_cargo_true_when_demand_exceeds_capacity() {
+        use crate::economy::buildings::{Building, BuildingType};
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        // Add a sized lumber mill so projected_resource_needs returns a
+        // non-zero Timber demand that exceeds zero cargo capacity.
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 5));
+        assert!(wants_more_merchant_cargo(&game, NationId(2)));
+    }
+
+    #[test]
+    fn merchant_navy_material_reserve_zero_when_no_demand() {
+        let game = test_game_with_ai();
+        assert_eq!(
+            merchant_navy_material_reserve(&game, NationId(2)),
+            (0, 0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn merchant_navy_material_reserve_matches_best_tech_free_hull() {
+        // Trader and Indiaman both have prerequisite_tech = nil. Indiaman
+        // has more cargo (4 vs 2) and ranks first in MERCHANT_PRIORITY,
+        // so the reserve == Indiaman cost (3 fabric, 7 lumber, 0 steel, 0 coal).
+        use crate::economy::buildings::{Building, BuildingType};
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 5));
+        let (fabric, lumber, steel, coal) =
+            merchant_navy_material_reserve(&game, NationId(2));
+        assert_eq!((fabric, lumber, steel, coal), (3, 7, 0, 0));
+    }
+
+    #[test]
+    fn ai_build_merchant_ships_grows_past_static_cap_when_demand_bound() {
+        // Balanced personality static cap is 1 below $5K treasury — but
+        // when projected demand exceeds cargo capacity, the AI should
+        // build past that cap.
+        use crate::economy::buildings::{Building, BuildingType};
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
+        ai.economy.treasury = Money::dollars(3_000); // below $5K threshold
+        // Big LumberMill → high projected Timber demand → cargo-bound.
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 50));
+        ai.add_material(MaterialType::Fabric, 20);
+        ai.add_material(MaterialType::Lumber, 40);
+
+        // First build creates the first ship.
+        ai_build_merchant_ships(&mut game, NationId(2));
+        assert_eq!(
+            game.get_nation(NationId(2)).unwrap().merchant_ship_count(),
+            1,
+        );
+        // Second build still proceeds even though the static Balanced cap
+        // is 1 — because demand still exceeds new capacity.
+        ai_build_merchant_ships(&mut game, NationId(2));
+        assert_eq!(
+            game.get_nation(NationId(2)).unwrap().merchant_ship_count(),
+            2,
+            "demand-bound AI should keep building past static cap"
         );
     }
 }

@@ -6,7 +6,7 @@ mod labor;
 #[cfg(feature = "lua")]
 pub(crate) mod lua_bridge;
 mod military;
-mod naval;
+pub(crate) mod naval;
 mod research;
 pub mod snapshot;
 mod spending;

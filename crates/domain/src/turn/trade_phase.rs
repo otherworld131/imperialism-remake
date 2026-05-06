@@ -373,6 +373,11 @@ pub(super) fn resolve_trade_session(
                             buildings_factor,
                         )
                     };
+                    // Hold back materials queued for the next merchant hull
+                    // so minor-nation auto-trade can't drain the merchant
+                    // navy's lumber/fabric/steel reservation.
+                    let (m_fabric_reserve, m_lumber_reserve, m_steel_reserve, _m_coal) =
+                        crate::ai::naval::merchant_navy_material_reserve(game, *gp_id);
                     // Trello card #465: don't sell arms unless stockpile
                     // covers every queued army recruit plus a per-personality
                     // reserve. Otherwise the AI can't actually field troops.
@@ -393,8 +398,13 @@ pub(super) fn resolve_trade_session(
                             .map(|n| {
                                 let stock = n.economy.materials.get(&m).copied().unwrap_or(0);
                                 let reserve = match m {
-                                    MaterialType::Lumber => lumber_reserve,
-                                    MaterialType::Steel => steel_reserve,
+                                    MaterialType::Lumber => {
+                                        lumber_reserve.saturating_add(m_lumber_reserve)
+                                    }
+                                    MaterialType::Steel => {
+                                        steel_reserve.saturating_add(m_steel_reserve)
+                                    }
+                                    MaterialType::Fabric => m_fabric_reserve,
                                     MaterialType::Arms => arms_reserve_total,
                                     _ => 0,
                                 };

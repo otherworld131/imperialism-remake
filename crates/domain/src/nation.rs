@@ -1182,21 +1182,6 @@ impl Nation {
 
     /// Total cargo capacity of all merchant ships in the fleet.
     pub fn total_cargo_capacity(&self, data: &crate::data::GameData) -> u32 {
-        // DEBUG (do not revert until requested): force a fixed 200-unit
-        // merchant-marine cargo capacity for every nation so we can isolate
-        // whether sea-cargo scarcity is throttling buy-side trade for
-        // Coal/Iron. Same pattern as the freight-cars=400 and labor=200
-        // hardcodes elsewhere. Scoring still reads the real fleet sum via
-        // `actual_total_cargo_capacity` so victory points reflect actual
-        // ships built.
-        let _ = data;
-        200
-    }
-
-    /// Real cargo-capacity sum across the merchant fleet, ignoring the
-    /// trade-phase debug hardcode in `total_cargo_capacity`. Used by scoring
-    /// so victory points still correlate with actual merchant marine size.
-    pub fn actual_total_cargo_capacity(&self, data: &crate::data::GameData) -> u32 {
         self.military
             .merchant_fleet
             .iter()
