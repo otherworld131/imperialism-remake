@@ -84,12 +84,21 @@ pub(crate) struct NationSnapshot {
     lumber: u32,
     arms: u32,
     steel: u32,
+    // Raw-resource warehouse — every tradeable type, so you can see at a
+    // glance which inputs the AI is starving on or hoarding.
+    warehouse: BTreeMap<String, u32>,
+    // Recent trade activity: last `RECENT_TRADE_WINDOW` turns of
+    // `archives.trade_history`, grouped by `(direction, commodity)` →
+    // total quantity. Direction is "bought" or "sold".
+    recent_trades: BTreeMap<String, u32>,
     // Cumulative per-source cash flow totals (dollars) — for tracing AI
     // money-in / money-out evolution across a game. Source/sink keys are the
     // enum variant names (e.g. "GoldGemsConversion", "ArmyMaintenance").
     cash_income_totals: BTreeMap<String, i64>,
     cash_expense_totals: BTreeMap<String, i64>,
 }
+
+const RECENT_TRADE_WINDOW: u32 = 4;
 
 #[derive(serde::Serialize)]
 pub(crate) struct AggregateReport {
@@ -244,6 +253,33 @@ fn take_snapshot(
                 lumber: nation.material_amount(domain::types::MaterialType::Lumber),
                 arms: nation.material_amount(domain::types::MaterialType::Arms),
                 steel: nation.material_amount(domain::types::MaterialType::Steel),
+                warehouse: {
+                    use domain::types::ResourceType::*;
+                    let mut w = BTreeMap::new();
+                    for r in [
+                        Timber, Coal, Iron, Cotton, Wool, Grain, Fruit, Livestock, Horses, Oil,
+                        Fish, Gold, Gems,
+                    ] {
+                        let qty = nation.resource_amount(r);
+                        if qty > 0 {
+                            w.insert(format!("{r:?}"), qty);
+                        }
+                    }
+                    w
+                },
+                recent_trades: {
+                    let cutoff = game.turn.0.saturating_sub(RECENT_TRADE_WINDOW);
+                    let mut m: BTreeMap<String, u32> = BTreeMap::new();
+                    for entry in &nation.archives.trade_history {
+                        if entry.turn.0 < cutoff {
+                            continue;
+                        }
+                        let dir = if entry.bought { "bought" } else { "sold" };
+                        let key = format!("{}:{}", dir, entry.commodity_label);
+                        *m.entry(key).or_insert(0) += entry.quantity;
+                    }
+                    m
+                },
                 cash_income_totals: nation
                     .archives
                     .cash_income_totals
