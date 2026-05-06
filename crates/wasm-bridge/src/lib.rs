@@ -4064,13 +4064,17 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         .rev()
         .filter(|entry| entry.turn.0 >= history_min_turn)
         .map(|entry| {
+            let partner_nation = if entry.partner.0 == 0 {
+                None
+            } else {
+                game.get_nation(entry.partner)
+            };
             let partner_name = if entry.partner.0 == 0 {
                 "World Market"
             } else {
-                game.get_nation(entry.partner)
-                    .map(|n| n.name.as_str())
-                    .unwrap_or("Unknown")
+                partner_nation.map(|n| n.name.as_str()).unwrap_or("Unknown")
             };
+            let partner_is_great_power = partner_nation.map(|n| n.is_great_power()).unwrap_or(false);
             // Use commodity_label when set (manufactured goods), fall back to resource name
             let commodity = if entry.commodity_label.is_empty() {
                 format!("{:?}", entry.resource)
@@ -4081,6 +4085,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
                 "turn": entry.turn.0,
                 "partner_name": partner_name,
                 "partner_id": entry.partner.0,
+                "partner_is_great_power": partner_is_great_power,
                 "resource": commodity,
                 "quantity": entry.quantity,
                 "total_cost": entry.total_cost.as_dollars(),

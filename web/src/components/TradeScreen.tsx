@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import type { TradeData } from '../wasm';
 import { resourceLabel } from '../resourceEmoji';
 import Flag from './Flag';
@@ -19,7 +19,34 @@ interface Props {
   onClose: () => void;
 }
 
-type TradeTab = 'orders' | 'summary';
+type TradeTab = 'orders' | 'historical';
+type OfferSortKey = 'resource' | 'seller_name' | 'quantity' | 'price' | 'is_great_power';
+const OFFER_COLS: { key: OfferSortKey; label: string }[] = [
+  { key: 'resource', label: 'Resource' },
+  { key: 'seller_name', label: 'Seller' },
+  { key: 'quantity', label: 'Avail' },
+  { key: 'price', label: 'Price' },
+  { key: 'is_great_power', label: 'GP' },
+];
+type HistSortKey = 'turn' | 'resource' | 'quantity' | 'total_cost' | 'partner_name' | 'bought' | 'partner_is_great_power';
+const HIST_COLS_SPLIT: { key: HistSortKey; label: string }[] = [
+  { key: 'turn', label: 'Turn' },
+  { key: 'resource', label: 'Resource' },
+  { key: 'bought', label: 'B/S' },
+  { key: 'quantity', label: 'Qty' },
+  { key: 'total_cost', label: 'Cost' },
+  { key: 'partner_name', label: 'Partner' },
+  { key: 'partner_is_great_power', label: 'GP' },
+];
+type AggSortKey = 'turn' | 'resource' | 'bought' | 'sold' | 'boughtCost' | 'soldCost';
+const HIST_COLS_AGG: { key: AggSortKey; label: string }[] = [
+  { key: 'turn', label: 'Turn' },
+  { key: 'resource', label: 'Resource' },
+  { key: 'bought', label: 'Bought' },
+  { key: 'boughtCost', label: 'Cost' },
+  { key: 'sold', label: 'Sold' },
+  { key: 'soldCost', label: 'Revenue' },
+];
 
 export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSellOrder, onSetBuyOrder, onSetAutoTradeWithMinors, onClose }: Props) {
   const flagBySellerId: Record<number, string> = {};
@@ -29,6 +56,34 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
   const [buyModalResource, setBuyModalResource] = useState<string | null>(null);
   const [buyQuantity, setBuyQuantity] = useState(1);
   const [activeTab, setActiveTab] = useState<TradeTab>('orders');
+  const [offerSort, setOfferSort] = useState<{ key: OfferSortKey; dir: 1 | -1 }[]>([{ key: 'resource', dir: 1 }]);
+  const cycleOfferSort = useCallback((key: OfferSortKey) => {
+    setOfferSort(prev => {
+      const idx = prev.findIndex(s => s.key === key);
+      if (idx === -1) return [...prev, { key, dir: 1 }];
+      if (prev[idx].dir === 1) return prev.map((s, i) => i === idx ? { key, dir: -1 } : s);
+      return prev.filter((_, i) => i !== idx);
+    });
+  }, []);
+  const [histSort, setHistSort] = useState<{ key: HistSortKey; dir: 1 | -1 }[]>([{ key: 'turn', dir: -1 }]);
+  const cycleHistSort = useCallback((key: HistSortKey) => {
+    setHistSort(prev => {
+      const idx = prev.findIndex(s => s.key === key);
+      if (idx === -1) return [...prev, { key, dir: 1 }];
+      if (prev[idx].dir === 1) return prev.map((s, i) => i === idx ? { key, dir: -1 } : s);
+      return prev.filter((_, i) => i !== idx);
+    });
+  }, []);
+  const [aggSort, setAggSort] = useState<{ key: AggSortKey; dir: 1 | -1 }[]>([{ key: 'turn', dir: -1 }]);
+  const cycleAggSort = useCallback((key: AggSortKey) => {
+    setAggSort(prev => {
+      const idx = prev.findIndex(s => s.key === key);
+      if (idx === -1) return [...prev, { key, dir: 1 }];
+      if (prev[idx].dir === 1) return prev.map((s, i) => i === idx ? { key, dir: -1 } : s);
+      return prev.filter((_, i) => i !== idx);
+    });
+  }, []);
+  const [histSplit, setHistSplit] = useState(false);
   const [selectedSummaryTurn, setSelectedSummaryTurn] = useState<number | null>(null);
 
   const tradeHistory: any[] = trade?.trade_history ?? [];
@@ -39,25 +94,52 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
     return turns.sort((a, b) => b - a);
   }, [tradeHistory]);
 
-  const activeSummaryTurn = selectedSummaryTurn ?? (turnsSorted[0] ?? null);
-
-  // Trades for the selected summary turn, grouped by resource
-  const summaryByResource = useMemo(() => {
-    const relevant = tradeHistory.filter((h: any) => h.turn === activeSummaryTurn);
-    const map: Record<string, { bought: number; sold: number; boughtCost: number; soldCost: number; partners: Set<string> }> = {};
-    for (const h of relevant) {
-      if (!map[h.resource]) map[h.resource] = { bought: 0, sold: 0, boughtCost: 0, soldCost: 0, partners: new Set() };
-      if (h.bought) {
-        map[h.resource].bought += h.quantity;
-        map[h.resource].boughtCost += h.total_cost;
-      } else {
-        map[h.resource].sold += h.quantity;
-        map[h.resource].soldCost += h.total_cost;
+  const sortedOffers = useMemo(() => {
+    if (!trade) return [];
+    return [...trade.available_offers].sort((a: any, b: any) => {
+      for (const { key, dir } of offerSort) {
+        const av = a[key], bv = b[key];
+        const cmp = typeof av === 'boolean' ? (av === bv ? 0 : av ? -1 : 1)
+          : typeof av === 'number' ? av - bv
+          : String(av).localeCompare(String(bv));
+        if (cmp !== 0) return cmp * dir;
       }
-      map[h.resource].partners.add(h.partner_name);
+      return 0;
+    });
+  }, [trade, offerSort]);
+
+  const sortedHistory = useMemo(() => {
+    return [...tradeHistory].sort((a: any, b: any) => {
+      for (const { key, dir } of histSort) {
+        const av = a[key], bv = b[key];
+        const cmp = typeof av === 'boolean' ? (av === bv ? 0 : av ? -1 : 1)
+          : typeof av === 'number' ? av - bv
+          : String(av).localeCompare(String(bv));
+        if (cmp !== 0) return cmp * dir;
+      }
+      return 0;
+    });
+  }, [tradeHistory, histSort]);
+
+  const aggregatedHistory = useMemo(() => {
+    const filtered = selectedSummaryTurn === null ? tradeHistory : tradeHistory.filter((h: any) => h.turn === selectedSummaryTurn);
+    const map: Record<string, { turn: number; resource: string; bought: number; sold: number; boughtCost: number; soldCost: number }> = {};
+    for (const h of filtered) {
+      const k = `${h.turn}__${h.resource}`;
+      if (!map[k]) map[k] = { turn: h.turn, resource: h.resource, bought: 0, sold: 0, boughtCost: 0, soldCost: 0 };
+      if (h.bought) { map[k].bought += h.quantity; map[k].boughtCost += h.total_cost; }
+      else { map[k].sold += h.quantity; map[k].soldCost += h.total_cost; }
     }
-    return Object.entries(map).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [tradeHistory, activeSummaryTurn]);
+    const rows = Object.values(map);
+    return rows.sort((a, b) => {
+      for (const { key, dir } of aggSort) {
+        const av = (a as any)[key], bv = (b as any)[key];
+        const cmp = typeof av === 'number' ? av - bv : String(av).localeCompare(String(bv));
+        if (cmp !== 0) return cmp * dir;
+      }
+      return 0;
+    });
+  }, [tradeHistory, selectedSummaryTurn, aggSort]);
 
   if (!trade) {
     return (
@@ -93,9 +175,9 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
               onClick={() => setActiveTab('orders')}
             >Orders</button>
             <button
-              style={activeTab === 'summary' ? styles.modeTabActive : styles.modeTab}
-              onClick={() => setActiveTab('summary')}
-            >Summary</button>
+              style={activeTab === 'historical' ? styles.modeTabActive : styles.modeTab}
+              onClick={() => setActiveTab('historical')}
+            >Historical</button>
           </div>
           <button onClick={onClose} style={styles.closeBtn}>Esc</button>
         </div>
@@ -155,15 +237,20 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
                 <table style={styles.table}>
                   <thead>
                     <tr>
-                      <th style={styles.th}>Resource</th>
-                      <th style={styles.th}>Seller</th>
-                      <th style={styles.th}>Avail</th>
-                      <th style={styles.th}>Price</th>
+                      {OFFER_COLS.map(col => (
+                        <th
+                          key={col.key}
+                          style={{ ...styles.th, cursor: 'pointer', userSelect: 'none' as const }}
+                          onClick={() => cycleOfferSort(col.key)}
+                        >
+                          {col.label}{(() => { const s = offerSort.find(x => x.key === col.key); if (!s) return ''; const rank = offerSort.length > 1 ? String(offerSort.indexOf(s) + 1) : ''; return (s.dir === 1 ? ' ▲' : ' ▼') + rank; })()}
+                        </th>
+                      ))}
                       <th style={styles.th}></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {available_offers.map((offer: any, i: number) => (
+                    {sortedOffers.map((offer: any, i: number) => (
                       <tr key={i} style={{ opacity: offer.is_great_power ? 0.9 : 1 }}>
                         <td style={styles.td}>{resourceLabel(offer.resource)}</td>
                         <td style={{ ...styles.td, color: offer.is_great_power ? '#daa520' : '#999', fontSize: 11 }}>
@@ -171,11 +258,14 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
                             {flagBySellerId[offer.seller_id] && (
                               <Flag svg={flagBySellerId[offer.seller_id]} width={18} height={12} title={offer.seller_name} />
                             )}
-                            {offer.seller_name}{offer.is_great_power ? ' (GP)' : ''}
+                            {offer.seller_name}
                           </span>
                         </td>
                         <td style={styles.td}>{offer.quantity}</td>
                         <td style={styles.td}>${offer.price}</td>
+                        <td style={{ ...styles.td, color: '#daa520', textAlign: 'center' as const }}>
+                          {offer.is_great_power ? '★' : ''}
+                        </td>
                         <td style={styles.td}>
                           <button
                             onClick={() => { setBuyModalResource(offer.resource); setBuyQuantity(1); }}
@@ -221,27 +311,10 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
               </div>
             </div>
 
-            {/* Trade history */}
-            <div style={styles.historySection}>
-              <h3 style={styles.sectionTitle}>Trade History</h3>
-              <div style={styles.historyScroll}>
-                {trade_history.length === 0 && <span style={{ color: '#666' }}>No trades yet</span>}
-                {trade_history.map((h: any, i: number) => (
-                  <div key={i} style={styles.historyRow}>
-                    <span>T{h.turn}</span>
-                    <span>{h.quantity}x {resourceLabel(h.resource)}</span>
-                    <span>{h.partner_name}</span>
-                    <span style={{ color: h.bought ? '#e63946' : '#2a9d8f' }}>
-                      {h.bought ? '-' : '+'}${h.total_cost}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
           </>
         )}
 
-        {activeTab === 'summary' && (
+        {activeTab === 'historical' && (
           <div style={styles.summaryBody}>
             {/* Turn sidebar */}
             <div style={styles.summarySidebar}>
@@ -254,8 +327,8 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
                 return (
                   <button
                     key={t}
-                    style={t === activeSummaryTurn ? styles.summaryItemActive : styles.summaryItem}
-                    onClick={() => setSelectedSummaryTurn(t)}
+                    style={t === selectedSummaryTurn ? styles.summaryItemActive : styles.summaryItem}
+                    onClick={() => setSelectedSummaryTurn(prev => prev === t ? null : t)}
                   >
                     Turn {t}
                     <span style={styles.summaryBadge}>{count}</span>
@@ -264,54 +337,99 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
               })}
             </div>
 
-            {/* Summary content */}
+            {/* Historical content */}
             <div style={styles.summaryContent}>
-              {activeSummaryTurn === null ? (
-                <p style={{ color: '#666', padding: 24 }}>No trade data available.</p>
-              ) : (
-                <>
-                  <h3 style={{ ...styles.sectionTitle, marginBottom: 16 }}>
-                    Turn {activeSummaryTurn} — Trade by Resource
-                  </h3>
-                  {summaryByResource.length === 0 ? (
-                    <p style={{ color: '#666' }}>No trades recorded for this turn.</p>
-                  ) : (
-                    <table style={{ ...styles.table, maxWidth: 700 }}>
-                      <thead>
-                        <tr>
-                          <th style={{ ...styles.th, textAlign: 'left' as const }}>Resource</th>
-                          <th style={styles.th}>Bought</th>
-                          <th style={styles.th}>Cost</th>
-                          <th style={styles.th}>Sold</th>
-                          <th style={styles.th}>Revenue</th>
-                          <th style={{ ...styles.th, textAlign: 'left' as const }}>Partners</th>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#999', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={histSplit}
+                    onChange={e => setHistSplit(e.target.checked)}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  Split individual transactions
+                </label>
+              </div>
+              {trade_history.length === 0 ? (
+                <p style={{ color: '#666' }}>No trade data available.</p>
+              ) : histSplit ? (
+                <table style={styles.table}>
+                  <thead>
+                    <tr>
+                      {HIST_COLS_SPLIT.map(col => (
+                        <th
+                          key={col.key}
+                          style={{ ...styles.th, cursor: 'pointer', userSelect: 'none' as const }}
+                          onClick={() => cycleHistSort(col.key)}
+                        >
+                          {col.label}{(() => { const s = histSort.find(x => x.key === col.key); if (!s) return ''; const rank = histSort.length > 1 ? String(histSort.indexOf(s) + 1) : ''; return (s.dir === 1 ? ' ▲' : ' ▼') + rank; })()}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedHistory
+                      .filter((h: any) => selectedSummaryTurn === null || h.turn === selectedSummaryTurn)
+                      .map((h: any, i: number) => (
+                        <tr key={i}>
+                          <td style={styles.td}>{h.turn}</td>
+                          <td style={{ ...styles.td, color: '#daa520' }}>{resourceLabel(h.resource)}</td>
+                          <td style={{ ...styles.td, color: h.bought ? '#e63946' : '#2a9d8f' }}>{h.bought ? 'Buy' : 'Sell'}</td>
+                          <td style={styles.td}>{h.quantity}</td>
+                          <td style={{ ...styles.td, color: h.bought ? '#e63946' : '#2a9d8f' }}>
+                            {h.bought ? '-' : '+'}${h.total_cost.toLocaleString()}
+                          </td>
+                          <td style={{ ...styles.td, fontSize: 11 }}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                              {flagBySellerId[h.partner_id] && (
+                                <Flag svg={flagBySellerId[h.partner_id]} width={18} height={12} title={h.partner_name} />
+                              )}
+                              <span style={{ color: h.partner_is_great_power ? '#daa520' : '#999' }}>{h.partner_name}</span>
+                            </span>
+                          </td>
+                          <td style={{ ...styles.td, color: '#daa520', textAlign: 'center' as const }}>
+                            {h.partner_is_great_power ? '★' : ''}
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {summaryByResource.map(([resource, data]) => (
-                          <tr key={resource} style={{ borderBottom: '1px solid #1a1a2e' }}>
-                            <td style={{ ...styles.td, textAlign: 'left' as const, color: '#daa520' }}>{resourceLabel(resource)}</td>
-                            <td style={{ ...styles.td, color: data.bought > 0 ? '#e63946' : '#555' }}>
-                              {data.bought > 0 ? data.bought : '—'}
-                            </td>
-                            <td style={{ ...styles.td, color: data.bought > 0 ? '#e63946' : '#555' }}>
-                              {data.bought > 0 ? `$${data.boughtCost.toLocaleString()}` : '—'}
-                            </td>
-                            <td style={{ ...styles.td, color: data.sold > 0 ? '#2a9d8f' : '#555' }}>
-                              {data.sold > 0 ? data.sold : '—'}
-                            </td>
-                            <td style={{ ...styles.td, color: data.sold > 0 ? '#2a9d8f' : '#555' }}>
-                              {data.sold > 0 ? `$${data.soldCost.toLocaleString()}` : '—'}
-                            </td>
-                            <td style={{ ...styles.td, textAlign: 'left' as const, color: '#999', fontSize: 11 }}>
-                              {Array.from(data.partners).join(', ')}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </>
+                      ))}
+                  </tbody>
+                </table>
+              ) : (
+                <table style={styles.table}>
+                  <thead>
+                    <tr>
+                      {HIST_COLS_AGG.map(col => (
+                        <th
+                          key={col.key}
+                          style={{ ...styles.th, cursor: 'pointer', userSelect: 'none' as const }}
+                          onClick={() => cycleAggSort(col.key)}
+                        >
+                          {col.label}{(() => { const s = aggSort.find(x => x.key === col.key); if (!s) return ''; const rank = aggSort.length > 1 ? String(aggSort.indexOf(s) + 1) : ''; return (s.dir === 1 ? ' ▲' : ' ▼') + rank; })()}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {aggregatedHistory.map((row, i) => (
+                      <tr key={i}>
+                        <td style={styles.td}>{row.turn}</td>
+                        <td style={{ ...styles.td, color: '#daa520' }}>{resourceLabel(row.resource)}</td>
+                        <td style={{ ...styles.td, color: row.bought > 0 ? '#e63946' : '#555' }}>
+                          {row.bought > 0 ? row.bought : '—'}
+                        </td>
+                        <td style={{ ...styles.td, color: row.bought > 0 ? '#e63946' : '#555' }}>
+                          {row.bought > 0 ? `-$${row.boughtCost.toLocaleString()}` : '—'}
+                        </td>
+                        <td style={{ ...styles.td, color: row.sold > 0 ? '#2a9d8f' : '#555' }}>
+                          {row.sold > 0 ? row.sold : '—'}
+                        </td>
+                        <td style={{ ...styles.td, color: row.sold > 0 ? '#2a9d8f' : '#555' }}>
+                          {row.sold > 0 ? `+$${row.soldCost.toLocaleString()}` : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               )}
             </div>
           </div>

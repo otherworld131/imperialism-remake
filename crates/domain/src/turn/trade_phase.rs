@@ -121,7 +121,7 @@ pub(super) fn resolve_trade_session(
             }
             for (commodity, qty, revenue) in &goods_sold {
                 let commodity_label = match commodity {
-                    trade::Commodity::Material(m) => format!("{m}"),
+                    trade::Commodity::Material(m) => format!("{m:?}"),
                     trade::Commodity::Goods(g) => format!("{g:?}"),
                     trade::Commodity::Resource(r) => format!("{r:?}"),
                 };
@@ -284,7 +284,7 @@ pub(super) fn resolve_trade_session(
             if has_stock && player_allows_auto_trade {
                 let revenue = Money::dollars(buy_price.as_dollars() * bid.quantity as i64);
                 let commodity_label = match bid.commodity {
-                    trade::ManufacturedCommodity::Material(m) => format!("{m}"),
+                    trade::ManufacturedCommodity::Material(m) => format!("{m:?}"),
                     trade::ManufacturedCommodity::Goods(g) => format!("{g:?}"),
                 };
                 if let Some(seller) = game.get_nation_mut(human_id) {
@@ -409,7 +409,7 @@ pub(super) fn resolve_trade_session(
                     if gp_has_stock {
                         let revenue = Money::dollars(buy_price.as_dollars() * bid.quantity as i64);
                         let commodity_label = match bid.commodity {
-                            trade::ManufacturedCommodity::Material(m) => format!("{m}"),
+                            trade::ManufacturedCommodity::Material(m) => format!("{m:?}"),
                             trade::ManufacturedCommodity::Goods(g) => format!("{g:?}"),
                         };
                         if let Some(seller) = game.get_nation_mut(*gp_id) {

@@ -19,6 +19,7 @@ const EMOJI: Record<string, string> = {
   Paper:      '📄',
   Arms:       '🔫',
   CannedFood: '🥫',
+  'Canned Food': '🥫',
   // Goods
   Furniture:  '🪑',
   Clothing:   '👗',
