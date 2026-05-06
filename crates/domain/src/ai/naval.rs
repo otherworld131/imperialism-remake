@@ -251,10 +251,12 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
         }
     };
 
-    // For non-Economic with low treasury, only build if cargo capacity is 0
+    // For non-Economic with low treasury, only build if cargo capacity is 0.
+    // Use the real fleet sum here — the trade-phase debug hardcode would
+    // otherwise short-circuit merchant-ship construction for every AI.
     if personality != AiPersonality::Economic
         && treasury <= Money::dollars(5_000)
-        && nation.total_cargo_capacity(&game.game_data) > 0
+        && nation.actual_total_cargo_capacity(&game.game_data) > 0
     {
         return;
     }

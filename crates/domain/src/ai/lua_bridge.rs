@@ -1036,6 +1036,14 @@ pub struct LuaAiConfig {
     /// Floor target for any chain whose building exists, so transient input
     /// shortages don't permanently zero a chain's slider.
     pub min_chain_target: Option<u32>,
+    /// Workforce-to-paper ratio: produce one paper unit per N workers as a
+    /// floor for the paper-factory target. Backs worker training and tech
+    /// research, both of which scale with workforce. Default 4.
+    pub paper_workers_per_unit: Option<u32>,
+    /// Hard cap on the worker-derived paper-output floor. Prevents the AI
+    /// from locking the entire lumber supply into paper at high worker
+    /// counts. Default 40.
+    pub paper_target_max: Option<u32>,
     /// How many simultaneous tier-jump expansions the AI reserves
     /// lumber+steel for each turn. The reserve is held back from the
     /// hardware factory, naval/freight construction, and any other
@@ -1263,6 +1271,9 @@ impl LuaAiConfig {
         // chains. Capped tightly so a non-default Lua value can't reintroduce
         // the inflated-target bug fixed in round 1 of the adversarial review.
         self.min_chain_target = sanitize_opt_u32(self.min_chain_target, 0, 2);
+        // Paper worker scaling. Wide ranges so personalities can flex.
+        self.paper_workers_per_unit = sanitize_opt_u32(self.paper_workers_per_unit, 1, 100);
+        self.paper_target_max = sanitize_opt_u32(self.paper_target_max, 0, 200);
         // Reserve at most 8 simultaneous expansions per turn — beyond that
         // the reserve would starve hardware production indefinitely.
         self.expansions_per_turn_target = sanitize_opt_u32(self.expansions_per_turn_target, 0, 8);
@@ -1457,6 +1468,8 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             steel_armory_weight_war: table.get("steel_armory_weight_war").ok(),
             canned_food_buffer: table.get("canned_food_buffer").ok(),
             min_chain_target: table.get::<u32>("min_chain_target").ok(),
+            paper_workers_per_unit: table.get::<u32>("paper_workers_per_unit").ok(),
+            paper_target_max: table.get::<u32>("paper_target_max").ok(),
             expansions_per_turn_target: table.get::<u32>("expansions_per_turn_target").ok(),
             expansion_reserve_buildings_factor: table
                 .get::<f64>("expansion_reserve_buildings_factor")
@@ -1879,6 +1892,8 @@ mod tests {
             steel_armory_weight_war: None,
             canned_food_buffer: None,
             min_chain_target: None,
+            paper_workers_per_unit: None,
+            paper_target_max: None,
             expansions_per_turn_target: None,
             expansion_reserve_buildings_factor: None,
             spending_military_weight: Some(f64::INFINITY),
@@ -1995,6 +2010,8 @@ mod tests {
             steel_armory_weight_war: None,
             canned_food_buffer: None,
             min_chain_target: None,
+            paper_workers_per_unit: None,
+            paper_target_max: None,
             expansions_per_turn_target: None,
             expansion_reserve_buildings_factor: None,
             spending_military_weight: None,
@@ -2150,6 +2167,8 @@ mod tests {
             steel_armory_weight_war: None,
             canned_food_buffer: None,
             min_chain_target: None,
+            paper_workers_per_unit: None,
+            paper_target_max: None,
             expansions_per_turn_target: None,
             expansion_reserve_buildings_factor: None,
             spending_military_weight: None,

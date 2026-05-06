@@ -37,9 +37,14 @@ fn ai_build_infrastructure(game: &mut GameState, nation_id: NationId) {
         }
     }
 
-    // Build factories: first one of each type is free (bootstrap), same as mills
+    // Build factories: first one of each type is free (bootstrap), same as mills.
+    // Paper Factory is bootstrapped alongside the LumberMill (it consumes
+    // Lumber the same way the FurnitureFactory does) — without this the AI
+    // never builds paper, blocking worker training & tech research on harder
+    // difficulties where free starting factories aren't given.
     let mill_factory_pairs = [
         (BuildingType::LumberMill, BuildingType::FurnitureFactory),
+        (BuildingType::LumberMill, BuildingType::PaperFactory),
         (BuildingType::SteelMill, BuildingType::HardwareFactory),
         (BuildingType::TextileMill, BuildingType::ClothingFactory),
     ];
@@ -1897,6 +1902,22 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
         }
         1
     };
+    // Workforce → paper-output scaling. One paper unit per N workers, capped
+    // by `paper_target_max`. Default: 1 paper per 4 workers, max 40.
+    let paper_workers_per_unit: u32 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.paper_workers_per_unit) {
+            break 'val v;
+        }
+        4
+    };
+    let paper_target_max: u32 = 'val: {
+        #[cfg(feature = "lua")]
+        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.paper_target_max) {
+            break 'val v;
+        }
+        40
+    };
 
     let snap = super::snapshot::NationEconomySnapshot::build(game, nation_id);
 
@@ -1986,9 +2007,23 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
         furniture_cap,
         min_chain_target,
     );
+    // Paper backs worker training & tech research, both of which scale with
+    // workforce size. Compute a worker-derived floor so a nation that's
+    // adding workers gets paper output to keep up — clamped to a hard cap
+    // (default 40) so we don't lock the entire lumber supply into paper.
+    // The floor still respects supply/capacity via `factory_target`, so when
+    // there's no lumber the chain falls back to `min_chain_target`.
+    let paper_worker_floor = if paper_workers_per_unit == 0 {
+        paper_target_max.min(paper_cap)
+    } else {
+        (snap.total_workers / paper_workers_per_unit)
+            .min(paper_target_max)
+            .min(paper_cap)
+    };
+    let raw_paper_target = (lumber_for_paper / 2).max(paper_worker_floor);
     let paper_target = factory_target(
-        lumber_for_paper / 2,
-        lumber_for_paper >= 2,
+        raw_paper_target,
+        lumber_for_paper >= 2 || paper_worker_floor > 0,
         paper_cap,
         min_chain_target,
     );
