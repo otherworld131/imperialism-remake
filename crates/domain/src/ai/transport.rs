@@ -24,16 +24,45 @@ fn ai_difficulty_multiplier(game: &GameState, nation_id: NationId) -> f64 {
     }
 }
 
-/// Resources that can drive non-trivial freight demand for an AI nation.
-/// Order is significant only for floor-allocation tie-breaking.
+/// Strict freight priority tiers (lower number = filled first).
+///
+/// Tier 1: Food (Grain, Fruit, Livestock, Fish) — workers must eat or chains
+///         halt; this tier is filled up to the nation's per-turn food need.
+/// Tier 2: Iron + Coal (and Steel, once materials become freight-routable) —
+///         the steel-mill chain feeds the entire industrial base.
+/// Tier 3: Timber (and Lumber, once materials become freight-routable) —
+///         feeds furniture/paper for goods + tech.
+/// Tier 4: Everything else (Cotton, Wool, Horses, Oil, Gold, Gems).
+///
+/// Within a tier the allocator fills each resource up to its computed demand
+/// (capped by remote availability). Lower tiers receive zero capacity until
+/// higher tiers are fully satisfied.
+fn freight_priority_tier(r: ResourceType) -> u8 {
+    match r {
+        ResourceType::Grain | ResourceType::Fruit | ResourceType::Livestock | ResourceType::Fish => 1,
+        ResourceType::Iron | ResourceType::Coal => 2,
+        ResourceType::Timber => 3,
+        // Cotton, Wool, Horses, Oil, Gold, Gems → tier 4.
+        _ => 4,
+    }
+}
+
+/// Resources that can drive non-trivial freight demand for an AI nation,
+/// listed in priority order (matches `freight_priority_tier`). Materials
+/// (Steel/Lumber) are not freight-routable yet; when that changes, slot Steel
+/// into tier 2 and Lumber into tier 3 here AND in `freight_priority_tier`.
 const DEMAND_RESOURCES: [ResourceType; 9] = [
-    ResourceType::Coal,
-    ResourceType::Iron,
+    // Tier 1: food.
     ResourceType::Grain,
     ResourceType::Fruit,
     ResourceType::Livestock,
     ResourceType::Fish,
+    // Tier 2: industrial cores (steel-mill inputs).
+    ResourceType::Iron,
+    ResourceType::Coal,
+    // Tier 3: timber chain.
     ResourceType::Timber,
+    // Tier 4: everything else.
     ResourceType::Cotton,
     ResourceType::Wool,
 ];
@@ -54,14 +83,10 @@ pub fn ai_allocate_transport(game: &mut GameState, nation_id: NationId) {
     let Some(nation) = game.get_nation(nation_id) else {
         return;
     };
-    // Use the canonical `total_capacity()` accessor (and not `freight_cars`
-    // directly) so any override in `TransportState` flows here too.
-    let rail_capacity = nation.military.transport.total_capacity();
-    let sea_capacity = nation.total_cargo_capacity(&game.game_data);
     // Combined rail + sea pool — matches what `resolve_transport` actually
-    // delivers each turn (Trello bug #461). Even with zero rail, sea cargo can
-    // carry remote yields (e.g. an island nation with a Trader).
-    let total_capacity = rail_capacity.saturating_add(sea_capacity);
+    // delivers each turn (Trello bug #461). Trade doesn't deplete sea cargo,
+    // so the full merchant-marine cargo is available for remote yields too.
+    let total_capacity = nation.total_transport_capacity(&game.game_data);
     if total_capacity == 0 {
         return;
     }
@@ -135,16 +160,35 @@ fn apportion_pool_to_pair(
     }
 }
 
-/// For each resource in `DEMAND_RESOURCES` compute `min(remote_available, demand)`.
-/// Returns only entries with positive value.
+/// Per-resource freight demand split into a critical part (mandatory: worker
+/// food need + active mill/cannery inputs) and a slack part (anything else
+/// up to remote availability — e.g. stockpile coal beyond the steel-mill's
+/// current need).
+///
+/// `distribute_freight` fills critical demand strictly tier-by-tier first,
+/// then revisits each resource in tier order to soak slack capacity. This
+/// guarantees that food and steel-mill chains are funded before, say, cotton
+/// — even when remote yield is huge and would otherwise dilute proportional
+/// allocation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct FreightDemand {
+    critical: u32,
+    slack: u32,
+}
+
+/// Compute per-resource freight demand split into critical (must-haul) vs
+/// slack (nice-to-haul-up-to-availability). Critical demand reflects what
+/// the nation actually consumes per turn; slack is the surplus on the map
+/// that we haul if there's leftover capacity after every higher tier's
+/// critical demand is met.
 fn compute_remote_demand(
     nation: &crate::nation::Nation,
     game_data: &crate::data::GameData,
     remote_items: &[(ResourceType, u32)],
-) -> Vec<(ResourceType, u32)> {
-    let mut demand: BTreeMap<ResourceType, u32> = BTreeMap::new();
+) -> Vec<(ResourceType, FreightDemand)> {
+    let mut critical: BTreeMap<ResourceType, u32> = BTreeMap::new();
 
-    // ── Worker food demand ──
+    // ── Worker food demand (tier 1 critical) ──
     // Workers eat from grain → fruit → livestock → fish in priority order.
     // We project the total food need across whichever of the four foods are
     // remotely collectable, weighted by current warehouse share so the freight
@@ -177,20 +221,20 @@ fn compute_remote_demand(
                 let mut last: Option<ResourceType> = None;
                 for (r, avail) in &remote_food {
                     let share = ((*avail as u64) * (food_need as u64) / total_avail as u64) as u32;
-                    *demand.entry(*r).or_insert(0) += share;
+                    *critical.entry(*r).or_insert(0) += share;
                     assigned = assigned.saturating_add(share);
                     last = Some(*r);
                 }
                 if let Some(r) = last
                     && assigned < food_need
                 {
-                    *demand.entry(r).or_insert(0) += food_need - assigned;
+                    *critical.entry(r).or_insert(0) += food_need - assigned;
                 }
             }
         }
     }
 
-    // ── Mill / cannery raw-input demand ──
+    // ── Mill / cannery raw-input demand (tier 2/3/4 critical) ──
     let mut textile_fiber_demand: u32 = 0;
     let mut cannery_meat_demand: u32 = 0;
     for building in &nation.economy.buildings {
@@ -200,11 +244,11 @@ fn compute_remote_demand(
         }
         match building.building_type {
             BuildingType::LumberMill => {
-                *demand.entry(ResourceType::Timber).or_insert(0) += cap.saturating_mul(2);
+                *critical.entry(ResourceType::Timber).or_insert(0) += cap.saturating_mul(2);
             }
             BuildingType::SteelMill => {
-                *demand.entry(ResourceType::Coal).or_insert(0) += cap;
-                *demand.entry(ResourceType::Iron).or_insert(0) += cap;
+                *critical.entry(ResourceType::Coal).or_insert(0) += cap;
+                *critical.entry(ResourceType::Iron).or_insert(0) += cap;
             }
             BuildingType::TextileMill | BuildingType::AdvancedTextileMill => {
                 // Cotton + wool feed a single fiber pool (`2 × cap` total).
@@ -213,8 +257,8 @@ fn compute_remote_demand(
             }
             BuildingType::FoodProcessing => {
                 // Cannery: 1 grain + 1 fruit + 1 (fish OR livestock) per unit.
-                *demand.entry(ResourceType::Grain).or_insert(0) += cap;
-                *demand.entry(ResourceType::Fruit).or_insert(0) += cap;
+                *critical.entry(ResourceType::Grain).or_insert(0) += cap;
+                *critical.entry(ResourceType::Fruit).or_insert(0) += cap;
                 // Meat slot is a single pool of size `cap`, split below across
                 // fish/livestock by remote availability.
                 cannery_meat_demand = cannery_meat_demand.saturating_add(cap);
@@ -230,7 +274,7 @@ fn compute_remote_demand(
         ResourceType::Cotton,
         ResourceType::Wool,
         remote_items,
-        &mut demand,
+        &mut critical,
     );
 
     // Apportion cannery meat (single cap pool) across fish/livestock by remote
@@ -240,109 +284,116 @@ fn compute_remote_demand(
         ResourceType::Fish,
         ResourceType::Livestock,
         remote_items,
-        &mut demand,
+        &mut critical,
     );
 
-    // Soak any remaining freight by raising each resource's demand to its full
-    // remote yield. Per-building need above acts as a priority floor (the
-    // floor + water-filling passes in `distribute_freight` honor it via
-    // ordering and proportional weights), but with slack capacity there's no
-    // reason to leave remote yield uncollected — extra material stockpiles in
-    // the warehouse and feeds future expansion or trade.
-    for (r, avail) in remote_items {
-        let entry = demand.entry(*r).or_insert(0);
-        if *entry < *avail {
-            *entry = *avail;
-        }
-    }
-
-    // Emit demand entries in `DEMAND_RESOURCES` priority order, capped by
-    // remote availability (we never want more than we can collect this turn).
-    let mut out: Vec<(ResourceType, u32)> = Vec::new();
+    // Build the (resource, FreightDemand) list in priority order. For each
+    // resource:
+    //   critical = min(computed need, remote availability)
+    //   slack    = remote availability - critical
+    // Slack-only entries (no active chain need but remote yield exists) still
+    // get a tier-4 slack allocation so surplus map yield is hauled into the
+    // warehouse when capacity allows.
+    let mut out: Vec<(ResourceType, FreightDemand)> = Vec::new();
+    let mut seen: std::collections::BTreeSet<ResourceType> = std::collections::BTreeSet::new();
     for r in DEMAND_RESOURCES {
-        let want = demand.get(&r).copied().unwrap_or(0);
-        if want == 0 {
-            continue;
-        }
         let avail = remote_items
             .iter()
             .find(|(rr, _)| *rr == r)
             .map(|(_, q)| *q)
             .unwrap_or(0);
-        let effective = want.min(avail);
-        if effective > 0 {
-            out.push((r, effective));
+        if avail == 0 {
+            continue;
         }
+        let need = critical.get(&r).copied().unwrap_or(0);
+        let crit = need.min(avail);
+        let slack = avail.saturating_sub(crit);
+        out.push((
+            r,
+            FreightDemand {
+                critical: crit,
+                slack,
+            },
+        ));
+        seen.insert(r);
+    }
+    // Resources outside `DEMAND_RESOURCES` (Horses, Oil, Gold, Gems …) — still
+    // worth hauling as tier-4 slack if the map yields them and capacity allows.
+    for (r, avail) in remote_items {
+        if seen.contains(r) || *avail == 0 {
+            continue;
+        }
+        out.push((
+            *r,
+            FreightDemand {
+                critical: 0,
+                slack: *avail,
+            },
+        ));
     }
     out
 }
 
-/// Distribute `freight_cars` across `demand` entries. Each entry first gets a
-/// 1-car floor (capacity permitting), then any remaining cars are filled by
-/// proportional share rounded down, with leftover cars handed to the largest
-/// remaining demand to avoid wasting capacity.
+/// Distribute `freight_cars` strictly tier-by-tier:
+///   1. Walk tiers 1..=4 in order. For each tier, give every resource its
+///      full `critical` demand before moving to the next tier. Inside a tier,
+///      iterate in the input list's order (which reflects intra-tier
+///      preference, e.g. Iron before Coal).
+///   2. After all critical demand is satisfied (or capacity runs out), revisit
+///      tiers in the same order and allocate `slack` (extra remote yield up to
+///      availability), again tier-by-tier so surplus capacity prefers
+///      higher-tier stockpiles.
+///
+/// This guarantees that food and steel-mill chains are funded before, say,
+/// cotton, regardless of how large the lower-tier remote yield is.
 fn distribute_freight(
     freight_cars: u32,
-    demand: &[(ResourceType, u32)],
+    demand: &[(ResourceType, FreightDemand)],
 ) -> Vec<(ResourceType, u32)> {
+    let mut allocations: Vec<(ResourceType, u32)> = demand.iter().map(|(r, _)| (*r, 0)).collect();
     if freight_cars == 0 || demand.is_empty() {
-        return Vec::new();
+        return allocations;
     }
 
-    // Cap each entry's share at min(freight_cars, demand) — never assign more
-    // cars to a resource than what we actually expect to collect.
-    let mut allocations: Vec<(ResourceType, u32)> = demand.iter().map(|(r, _)| (*r, 0)).collect();
     let mut remaining = freight_cars;
 
-    // Floor pass: 1 car per resource with positive demand, in DEMAND_RESOURCES
-    // priority order.
-    for (i, (_, want)) in demand.iter().enumerate() {
+    // Phase 1: critical demand, tier-by-tier.
+    for tier in 1u8..=4 {
         if remaining == 0 {
             break;
         }
-        if *want > 0 {
-            allocations[i].1 = 1;
-            remaining -= 1;
-        }
-    }
-
-    // Water-filling pass: in each round, distribute the remaining cars by
-    // proportional share among resources that still have unmet demand. Cap each
-    // grant by the resource's remaining `room`, accumulate leftovers, and
-    // repeat until either no rooms remain or no progress is made.
-    while remaining > 0 {
-        // Live total of unmet demand among resources still under their cap.
-        let mut active_demand: u64 = 0;
-        for (i, (_, want)) in demand.iter().enumerate() {
-            if allocations[i].1 < *want {
-                active_demand += *want as u64;
-            }
-        }
-        if active_demand == 0 {
-            break;
-        }
-
-        let mut progress = false;
-        let initial_remaining = remaining;
-        for (i, (_, want)) in demand.iter().enumerate() {
+        for (i, (resource, fd)) in demand.iter().enumerate() {
             if remaining == 0 {
                 break;
             }
-            let already = allocations[i].1;
-            let room = want.saturating_sub(already);
-            if room == 0 {
+            if freight_priority_tier(*resource) != tier {
                 continue;
             }
-            let share = ((*want as u64 * initial_remaining as u64) / active_demand).max(1) as u32;
-            let extra = share.min(room).min(remaining);
-            if extra > 0 {
-                allocations[i].1 = already + extra;
-                remaining -= extra;
-                progress = true;
+            let grant = fd.critical.min(remaining);
+            if grant > 0 {
+                allocations[i].1 += grant;
+                remaining -= grant;
             }
         }
-        if !progress {
+    }
+
+    // Phase 2: slack (soak surplus map yield), tier-by-tier in the same order.
+    for tier in 1u8..=4 {
+        if remaining == 0 {
             break;
+        }
+        for (i, (resource, fd)) in demand.iter().enumerate() {
+            if remaining == 0 {
+                break;
+            }
+            if freight_priority_tier(*resource) != tier {
+                continue;
+            }
+            let grant = fd.slack.min(remaining);
+            if grant > 0 {
+                allocations[i].1 += grant;
+                remaining -= grant;
+            }
         }
     }
 
@@ -365,6 +416,32 @@ mod tests {
         )
     }
 
+    /// Total freight demand for a resource (critical + slack).
+    fn total_demand(out: &[(ResourceType, FreightDemand)], r: ResourceType) -> u32 {
+        out.iter()
+            .find(|(rr, _)| *rr == r)
+            .map(|(_, fd)| fd.critical + fd.slack)
+            .unwrap_or(0)
+    }
+
+    /// Helper: build a `(ResourceType, FreightDemand)` list with all demand as
+    /// `critical` (back-compat with old tests that exercise `distribute_freight`
+    /// against single-value totals).
+    fn crit(items: &[(ResourceType, u32)]) -> Vec<(ResourceType, FreightDemand)> {
+        items
+            .iter()
+            .map(|(r, q)| {
+                (
+                    *r,
+                    FreightDemand {
+                        critical: *q,
+                        slack: 0,
+                    },
+                )
+            })
+            .collect()
+    }
+
     #[test]
     fn demand_steel_mill_drives_coal_and_iron() {
         let mut nation = make_test_nation();
@@ -379,16 +456,17 @@ mod tests {
             (ResourceType::Timber, 10),
         ];
         let demand = compute_remote_demand(&nation, &data, &remote);
-        let coal = demand
-            .iter()
-            .find(|(r, _)| *r == ResourceType::Coal)
-            .map(|(_, q)| *q);
-        let iron = demand
-            .iter()
-            .find(|(r, _)| *r == ResourceType::Iron)
-            .map(|(_, q)| *q);
-        assert!(coal.is_some_and(|q| q > 0), "steel mill should demand coal");
-        assert!(iron.is_some_and(|q| q > 0), "steel mill should demand iron");
+        let coal = demand.iter().find(|(r, _)| *r == ResourceType::Coal);
+        let iron = demand.iter().find(|(r, _)| *r == ResourceType::Iron);
+        // SteelMill cap=4 → 4 critical coal + 4 critical iron (cap=4 each input).
+        assert!(
+            coal.is_some_and(|(_, fd)| fd.critical >= 4),
+            "steel mill should drive critical coal demand"
+        );
+        assert!(
+            iron.is_some_and(|(_, fd)| fd.critical >= 4),
+            "steel mill should drive critical iron demand"
+        );
     }
 
     #[test]
@@ -409,26 +487,17 @@ mod tests {
             // No livestock available remotely.
         ];
         let demand = compute_remote_demand(&nation, &data, &remote);
-        let fish = demand
-            .iter()
-            .find(|(r, _)| *r == ResourceType::Fish)
-            .map(|(_, q)| *q)
-            .unwrap_or(0);
-        let livestock = demand
-            .iter()
-            .find(|(r, _)| *r == ResourceType::Livestock)
-            .map(|(_, q)| *q)
-            .unwrap_or(0);
-        // New semantic: with slack freight, demand = remote_avail. Cannery
-        // only *needs* 4 meat, but there's no reason to leave 6 fish behind.
-        assert_eq!(fish, 10, "fish demand should equal remote availability");
+        let fish = total_demand(&demand, ResourceType::Fish);
+        let livestock = total_demand(&demand, ResourceType::Livestock);
+        // critical = min(4 meat need, 10 fish remote) = 4. slack = 10-4 = 6.
+        // Total visible demand including slack soak = 10.
+        assert_eq!(fish, 10, "fish total demand should equal remote availability");
         assert_eq!(livestock, 0, "no livestock remote → no livestock demand");
     }
 
     #[test]
     fn demand_textile_fiber_pulls_remote_when_freight_slack() {
         // Textile mill cap=3 → 6 fiber units split across cotton/wool.
-        // With cotton=4 remote and wool=4 remote, expect ~3 each (not 6+3=9).
         let mut nation = make_test_nation();
         let data = crate::data::GameData::default();
         nation
@@ -437,22 +506,14 @@ mod tests {
             .push(Building::new(BuildingType::TextileMill, 3));
         let remote = vec![(ResourceType::Cotton, 4), (ResourceType::Wool, 4)];
         let demand = compute_remote_demand(&nation, &data, &remote);
-        let cotton = demand
-            .iter()
-            .find(|(r, _)| *r == ResourceType::Cotton)
-            .map(|(_, q)| *q)
-            .unwrap_or(0);
-        let wool = demand
-            .iter()
-            .find(|(r, _)| *r == ResourceType::Wool)
-            .map(|(_, q)| *q)
-            .unwrap_or(0);
-        // New semantic: demand = remote availability when freight is slack;
-        // we collect everything we can and stockpile the surplus.
+        let cotton = total_demand(&demand, ResourceType::Cotton);
+        let wool = total_demand(&demand, ResourceType::Wool);
+        // Total demand (critical + slack) = remote availability when slack is
+        // soaked.
         assert_eq!(
             cotton + wool,
             8,
-            "demand should equal sum of remote availability"
+            "total demand should equal sum of remote availability"
         );
     }
 
@@ -472,7 +533,7 @@ mod tests {
         let demand = compute_remote_demand(&nation, &data, &remote);
         for r in [ResourceType::Grain, ResourceType::Fruit, ResourceType::Fish] {
             assert!(
-                demand.iter().any(|(rr, q)| *rr == r && *q > 0),
+                total_demand(&demand, r) > 0,
                 "cannery should demand {:?}",
                 r
             );
@@ -490,48 +551,55 @@ mod tests {
             .push(Building::new(BuildingType::LumberMill, 4));
         let remote = vec![(ResourceType::Timber, 3)];
         let demand = compute_remote_demand(&nation, &data, &remote);
-        let timber = demand
+        let timber = total_demand(&demand, ResourceType::Timber);
+        assert_eq!(timber, 3, "demand must be capped by remote availability");
+        let entry = demand
             .iter()
             .find(|(r, _)| *r == ResourceType::Timber)
-            .map(|(_, q)| *q)
-            .unwrap_or(0);
-        assert_eq!(timber, 3, "demand must be capped by remote availability");
+            .unwrap()
+            .1;
+        // critical caps at avail (3), slack is 0.
+        assert_eq!(entry.critical, 3);
+        assert_eq!(entry.slack, 0);
     }
 
     #[test]
     fn demand_falls_through_to_remote_when_no_per_need() {
         // Even with no buildings and no workers, the AI should still ask for
-        // any remote yield it can collect — the surplus stockpiles and feeds
-        // future expansion or trade.
+        // any remote yield it can collect — surplus is hauled as slack.
         let nation = make_test_nation();
         let data = crate::data::GameData::default();
         let remote = vec![(ResourceType::Coal, 5)];
         let demand = compute_remote_demand(&nation, &data, &remote);
-        let coal = demand
+        let entry = demand
             .iter()
             .find(|(r, _)| *r == ResourceType::Coal)
-            .map(|(_, q)| *q)
-            .unwrap_or(0);
-        assert_eq!(
-            coal, 5,
-            "should demand all 5 remote coal even with no SteelMill"
-        );
+            .unwrap()
+            .1;
+        // No SteelMill → critical=0, slack=5 (everything is opportunistic haul).
+        assert_eq!(entry.critical, 0);
+        assert_eq!(entry.slack, 5);
     }
 
     #[test]
     fn floor_distributes_when_freight_below_demand_count() {
-        // 3 demand resources but only 2 freight slots — floor pass should
-        // allocate 1 each to two of them and 0 to the third.
-        let out = distribute_freight(
-            2,
-            &[
-                (ResourceType::Coal, 10),
-                (ResourceType::Iron, 10),
-                (ResourceType::Grain, 10),
-            ],
-        );
+        // 3 demand resources but only 2 freight slots. Strict tier order:
+        // Grain (tier 1) wins all 2 cars before Coal/Iron (tier 2) get any.
+        let demand = crit(&[
+            (ResourceType::Coal, 10),
+            (ResourceType::Iron, 10),
+            (ResourceType::Grain, 10),
+        ]);
+        let out = distribute_freight(2, &demand);
         let total: u32 = out.iter().map(|(_, u)| *u).sum();
         assert_eq!(total, 2);
+        let grain = out
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Grain)
+            .unwrap()
+            .1;
+        // Tier 1 (Grain) takes priority over tier 2 (Coal/Iron) under scarcity.
+        assert_eq!(grain, 2, "tier-1 grain should consume both cars");
     }
 
     #[test]
@@ -542,33 +610,17 @@ mod tests {
 
     #[test]
     fn zero_freight_no_allocations() {
-        let out = distribute_freight(0, &[(ResourceType::Coal, 5), (ResourceType::Iron, 3)]);
+        let demand = crit(&[(ResourceType::Coal, 5), (ResourceType::Iron, 3)]);
+        let out = distribute_freight(0, &demand);
         assert!(out.iter().all(|(_, u)| *u == 0));
     }
 
     #[test]
-    fn floor_one_per_resource() {
-        // 5 freight cars, 2 resources with equal demand → at least 1 each.
-        let out = distribute_freight(5, &[(ResourceType::Coal, 10), (ResourceType::Iron, 10)]);
-        let coal = out
-            .iter()
-            .find(|(r, _)| *r == ResourceType::Coal)
-            .unwrap()
-            .1;
-        let iron = out
-            .iter()
-            .find(|(r, _)| *r == ResourceType::Iron)
-            .unwrap()
-            .1;
-        assert!(coal >= 1);
-        assert!(iron >= 1);
-        assert_eq!(coal + iron, 5);
-    }
-
-    #[test]
     fn allocation_capped_by_demand() {
-        // Demand only 2 of coal but 10 freight cars available. Coal stops at 2.
-        let out = distribute_freight(10, &[(ResourceType::Coal, 2), (ResourceType::Iron, 100)]);
+        // Demand only 2 of coal but 10 freight cars available. Coal stops at 2,
+        // remaining 8 cars go to Iron.
+        let demand = crit(&[(ResourceType::Coal, 2), (ResourceType::Iron, 100)]);
+        let out = distribute_freight(10, &demand);
         let coal = out
             .iter()
             .find(|(r, _)| *r == ResourceType::Coal)
@@ -585,15 +637,165 @@ mod tests {
 
     #[test]
     fn allocation_total_does_not_exceed_freight() {
-        let out = distribute_freight(
-            7,
-            &[
-                (ResourceType::Coal, 5),
-                (ResourceType::Iron, 5),
-                (ResourceType::Grain, 5),
-            ],
-        );
+        let demand = crit(&[
+            (ResourceType::Coal, 5),
+            (ResourceType::Iron, 5),
+            (ResourceType::Grain, 5),
+        ]);
+        let out = distribute_freight(7, &demand);
         let total: u32 = out.iter().map(|(_, u)| *u).sum();
         assert!(total <= 7);
+    }
+
+    #[test]
+    fn strict_tiers_food_before_industrial() {
+        // Grain (tier 1) and Iron (tier 2) both demand 5; only 5 cars available.
+        // Grain must take all 5; Iron gets 0.
+        let demand = crit(&[(ResourceType::Iron, 5), (ResourceType::Grain, 5)]);
+        let out = distribute_freight(5, &demand);
+        let grain = out
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Grain)
+            .unwrap()
+            .1;
+        let iron = out
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Iron)
+            .unwrap()
+            .1;
+        assert_eq!(grain, 5, "tier-1 must be filled before tier-2");
+        assert_eq!(iron, 0, "tier-2 gets nothing while tier-1 is unmet");
+    }
+
+    #[test]
+    fn strict_tiers_industrial_before_timber_before_other() {
+        // Iron (tier 2), Timber (tier 3), Cotton (tier 4) each demand 3.
+        // 6 cars: Iron gets 3, Timber gets 3, Cotton 0.
+        let demand = crit(&[
+            (ResourceType::Cotton, 3),
+            (ResourceType::Iron, 3),
+            (ResourceType::Timber, 3),
+        ]);
+        let out = distribute_freight(6, &demand);
+        let iron = out
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Iron)
+            .unwrap()
+            .1;
+        let timber = out
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Timber)
+            .unwrap()
+            .1;
+        let cotton = out
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Cotton)
+            .unwrap()
+            .1;
+        assert_eq!(iron, 3);
+        assert_eq!(timber, 3);
+        assert_eq!(cotton, 0, "tier 4 gets nothing while tiers 2-3 unmet");
+    }
+
+    #[test]
+    fn slack_phase_runs_after_critical_satisfied() {
+        // Coal critical=2 slack=8, Cotton critical=2 slack=8. With 20 cars,
+        // critical phase (4 total) finishes both, then slack phase fills tier-2
+        // coal slack first (8 cars), then tier-4 cotton slack (8 cars). Total=20.
+        let demand = vec![
+            (
+                ResourceType::Cotton,
+                FreightDemand {
+                    critical: 2,
+                    slack: 8,
+                },
+            ),
+            (
+                ResourceType::Coal,
+                FreightDemand {
+                    critical: 2,
+                    slack: 8,
+                },
+            ),
+        ];
+        let out = distribute_freight(20, &demand);
+        let coal = out
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Coal)
+            .unwrap()
+            .1;
+        let cotton = out
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Cotton)
+            .unwrap()
+            .1;
+        // With 20 cars and total demand 20, both are fully filled.
+        assert_eq!(coal, 10);
+        assert_eq!(cotton, 10);
+    }
+
+    #[test]
+    fn slack_phase_prefers_higher_tier_under_scarcity() {
+        // Critical zero, only slack. Coal (tier 2) slack=5, Cotton (tier 4)
+        // slack=5. With 5 cars, all go to coal.
+        let demand = vec![
+            (
+                ResourceType::Cotton,
+                FreightDemand {
+                    critical: 0,
+                    slack: 5,
+                },
+            ),
+            (
+                ResourceType::Coal,
+                FreightDemand {
+                    critical: 0,
+                    slack: 5,
+                },
+            ),
+        ];
+        let out = distribute_freight(5, &demand);
+        let coal = out
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Coal)
+            .unwrap()
+            .1;
+        let cotton = out
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Cotton)
+            .unwrap()
+            .1;
+        assert_eq!(coal, 5, "tier-2 slack outranks tier-4 slack");
+        assert_eq!(cotton, 0);
+    }
+
+    #[test]
+    fn freight_priority_tier_assignments() {
+        // Verify the user-requested tier ordering.
+        // Tier 1: foods.
+        for r in [
+            ResourceType::Grain,
+            ResourceType::Fruit,
+            ResourceType::Livestock,
+            ResourceType::Fish,
+        ] {
+            assert_eq!(freight_priority_tier(r), 1, "{:?} must be tier 1", r);
+        }
+        // Tier 2: Iron, Coal.
+        assert_eq!(freight_priority_tier(ResourceType::Iron), 2);
+        assert_eq!(freight_priority_tier(ResourceType::Coal), 2);
+        // Tier 3: Timber.
+        assert_eq!(freight_priority_tier(ResourceType::Timber), 3);
+        // Tier 4: everything else.
+        for r in [
+            ResourceType::Cotton,
+            ResourceType::Wool,
+            ResourceType::Horses,
+            ResourceType::Oil,
+            ResourceType::Gold,
+            ResourceType::Gems,
+        ] {
+            assert_eq!(freight_priority_tier(r), 4, "{:?} must be tier 4", r);
+        }
     }
 }

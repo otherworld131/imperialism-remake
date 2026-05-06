@@ -1189,6 +1189,19 @@ impl Nation {
             .sum()
     }
 
+    /// Combined remote-delivery capacity: freight cars + merchant-marine cargo.
+    ///
+    /// Both legs feed the same per-turn delivery pool (`resolve_transport`).
+    /// Trade does not deplete cargo capacity — the same hulls that haul yields
+    /// also conduct trade — so sea cargo is fully available for collecting
+    /// remote yields each turn alongside rail.
+    pub fn total_transport_capacity(&self, data: &crate::data::GameData) -> u32 {
+        self.military
+            .transport
+            .total_capacity()
+            .saturating_add(self.total_cargo_capacity(data))
+    }
+
     /// Number of merchant ships in the fleet.
     pub fn merchant_ship_count(&self) -> usize {
         self.military.merchant_fleet.len()

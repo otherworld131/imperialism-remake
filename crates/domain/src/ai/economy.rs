@@ -2358,9 +2358,7 @@ pub(crate) fn wants_more_freight_cars(game: &GameState, nation_id: NationId) -> 
     let Some(nation) = game.get_nation(nation_id) else {
         return false;
     };
-    let rail_capacity = nation.military.transport.total_capacity();
-    let sea_capacity = nation.total_cargo_capacity(&game.game_data);
-    let capacity = rail_capacity.saturating_add(sea_capacity);
+    let capacity = nation.total_transport_capacity(&game.game_data);
     let freight_unused = nation.economy.logistics.freight_unused;
     let (_local, remote_items) = crate::economy::current_collectable_resources(game, nation_id);
     let remote_total: u32 = remote_items.iter().map(|(_, qty)| *qty).sum();
@@ -2418,9 +2416,7 @@ pub(crate) fn ai_build_transport_proactive(game: &mut GameState, nation_id: Nati
     // `resolve_transport` actually delivers (Trello bug #461). Without this,
     // an AI nation with a strong merchant marine but little rail would still
     // get pushed to overbuild rail cars.
-    let rail_capacity = nation.military.transport.total_capacity();
-    let sea_capacity = nation.total_cargo_capacity(&game.game_data);
-    let capacity = rail_capacity.saturating_add(sea_capacity);
+    let capacity = nation.total_transport_capacity(&game.game_data);
     let freight_unused = nation.economy.logistics.freight_unused;
     let (_local_items, remote_items) =
         crate::economy::current_collectable_resources(game, nation_id);
