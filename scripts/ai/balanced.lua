@@ -70,6 +70,8 @@ balanced = {
     -- Card [3/6]: buy-side trade. Keep $5k cash safety net; buffer 3 turns.
     trade_buy_treasury_floor = 5000,
     trade_buy_buffer_turns = 3,
+    -- Card #465: hold back at least this many arms above queued-recruit demand.
+    arms_sell_reserve = 12,
     goods_sell_treasury_threshold = 3000,
     goods_reserve = 2,
     food_processing_expansion_threshold = 2,

@@ -66,8 +66,7 @@ pub fn ai_allocate_transport(game: &mut GameState, nation_id: NationId) {
         return;
     }
 
-    let (_local, mut remote_items) =
-        crate::economy::current_collectable_resources(game, nation_id);
+    let (_local, mut remote_items) = crate::economy::current_collectable_resources(game, nation_id);
     // Mirror `resolve_transport` (processor.rs:1252): AI difficulty multipliers
     // scale up remote yields. Apply the same multiplier here so demand caps and
     // delivery-time availability agree.
@@ -210,8 +209,7 @@ fn compute_remote_demand(
             BuildingType::TextileMill | BuildingType::AdvancedTextileMill => {
                 // Cotton + wool feed a single fiber pool (`2 × cap` total).
                 // Apportion across cotton/wool by remote availability below.
-                textile_fiber_demand =
-                    textile_fiber_demand.saturating_add(cap.saturating_mul(2));
+                textile_fiber_demand = textile_fiber_demand.saturating_add(cap.saturating_mul(2));
             }
             BuildingType::FoodProcessing => {
                 // Cannery: 1 grain + 1 fruit + 1 (fish OR livestock) per unit.
@@ -335,8 +333,7 @@ fn distribute_freight(
             if room == 0 {
                 continue;
             }
-            let share =
-                ((*want as u64 * initial_remaining as u64) / active_demand).max(1) as u32;
+            let share = ((*want as u64 * initial_remaining as u64) / active_demand).max(1) as u32;
             let extra = share.min(room).min(remaining);
             if extra > 0 {
                 allocations[i].1 = already + extra;
@@ -438,10 +435,7 @@ mod tests {
             .economy
             .buildings
             .push(Building::new(BuildingType::TextileMill, 3));
-        let remote = vec![
-            (ResourceType::Cotton, 4),
-            (ResourceType::Wool, 4),
-        ];
+        let remote = vec![(ResourceType::Cotton, 4), (ResourceType::Wool, 4)];
         let demand = compute_remote_demand(&nation, &data, &remote);
         let cotton = demand
             .iter()
@@ -455,7 +449,11 @@ mod tests {
             .unwrap_or(0);
         // New semantic: demand = remote availability when freight is slack;
         // we collect everything we can and stockpile the surplus.
-        assert_eq!(cotton + wool, 8, "demand should equal sum of remote availability");
+        assert_eq!(
+            cotton + wool,
+            8,
+            "demand should equal sum of remote availability"
+        );
     }
 
     #[test]
@@ -514,7 +512,10 @@ mod tests {
             .find(|(r, _)| *r == ResourceType::Coal)
             .map(|(_, q)| *q)
             .unwrap_or(0);
-        assert_eq!(coal, 5, "should demand all 5 remote coal even with no SteelMill");
+        assert_eq!(
+            coal, 5,
+            "should demand all 5 remote coal even with no SteelMill"
+        );
     }
 
     #[test]
@@ -541,22 +542,24 @@ mod tests {
 
     #[test]
     fn zero_freight_no_allocations() {
-        let out = distribute_freight(
-            0,
-            &[(ResourceType::Coal, 5), (ResourceType::Iron, 3)],
-        );
+        let out = distribute_freight(0, &[(ResourceType::Coal, 5), (ResourceType::Iron, 3)]);
         assert!(out.iter().all(|(_, u)| *u == 0));
     }
 
     #[test]
     fn floor_one_per_resource() {
         // 5 freight cars, 2 resources with equal demand → at least 1 each.
-        let out = distribute_freight(
-            5,
-            &[(ResourceType::Coal, 10), (ResourceType::Iron, 10)],
-        );
-        let coal = out.iter().find(|(r, _)| *r == ResourceType::Coal).unwrap().1;
-        let iron = out.iter().find(|(r, _)| *r == ResourceType::Iron).unwrap().1;
+        let out = distribute_freight(5, &[(ResourceType::Coal, 10), (ResourceType::Iron, 10)]);
+        let coal = out
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Coal)
+            .unwrap()
+            .1;
+        let iron = out
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Iron)
+            .unwrap()
+            .1;
         assert!(coal >= 1);
         assert!(iron >= 1);
         assert_eq!(coal + iron, 5);
@@ -565,12 +568,17 @@ mod tests {
     #[test]
     fn allocation_capped_by_demand() {
         // Demand only 2 of coal but 10 freight cars available. Coal stops at 2.
-        let out = distribute_freight(
-            10,
-            &[(ResourceType::Coal, 2), (ResourceType::Iron, 100)],
-        );
-        let coal = out.iter().find(|(r, _)| *r == ResourceType::Coal).unwrap().1;
-        let iron = out.iter().find(|(r, _)| *r == ResourceType::Iron).unwrap().1;
+        let out = distribute_freight(10, &[(ResourceType::Coal, 2), (ResourceType::Iron, 100)]);
+        let coal = out
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Coal)
+            .unwrap()
+            .1;
+        let iron = out
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Iron)
+            .unwrap()
+            .1;
         assert_eq!(coal, 2);
         assert_eq!(iron, 8);
     }

@@ -245,6 +245,17 @@ pub(super) fn resolve_trade_session(
                     buildings_factor,
                 )
             };
+            // Card #465: also reserve arms for the human's queued recruits.
+            let human_arms_reserve_total: u32 = {
+                let pending = game
+                    .get_nation(human_id)
+                    .map(|n| n.pending_recruits_arms_cost())
+                    .unwrap_or(0);
+                pending.saturating_add(crate::ai::economy::arms_sell_reserve(
+                    game,
+                    crate::ai::common::AiPersonality::Balanced,
+                ))
+            };
             let has_stock = match bid.commodity {
                 trade::ManufacturedCommodity::Material(m) => game
                     .get_nation(human_id)
@@ -253,6 +264,7 @@ pub(super) fn resolve_trade_session(
                         let reserve = match m {
                             MaterialType::Lumber => human_lumber_reserve,
                             MaterialType::Steel => human_steel_reserve,
+                            MaterialType::Arms => human_arms_reserve_total,
                             _ => 0,
                         };
                         stock.saturating_sub(reserve) >= bid.quantity
@@ -361,6 +373,20 @@ pub(super) fn resolve_trade_session(
                             buildings_factor,
                         )
                     };
+                    // Trello card #465: don't sell arms unless stockpile
+                    // covers every queued army recruit plus a per-personality
+                    // reserve. Otherwise the AI can't actually field troops.
+                    let arms_reserve_total: u32 = {
+                        let personality = crate::ai::common::get_personality(game, *gp_id);
+                        let pending = game
+                            .get_nation(*gp_id)
+                            .map(|n| n.pending_recruits_arms_cost())
+                            .unwrap_or(0);
+                        pending.saturating_add(crate::ai::economy::arms_sell_reserve(
+                            game,
+                            personality,
+                        ))
+                    };
                     let gp_has_stock = match bid.commodity {
                         trade::ManufacturedCommodity::Material(m) => game
                             .get_nation(*gp_id)
@@ -369,6 +395,7 @@ pub(super) fn resolve_trade_session(
                                 let reserve = match m {
                                     MaterialType::Lumber => lumber_reserve,
                                     MaterialType::Steel => steel_reserve,
+                                    MaterialType::Arms => arms_reserve_total,
                                     _ => 0,
                                 };
                                 stock.saturating_sub(reserve) >= bid.quantity

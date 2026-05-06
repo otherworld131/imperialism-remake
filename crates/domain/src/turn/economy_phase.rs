@@ -181,9 +181,15 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
             total_labor,
             &targets,
             BuildingCapacities {
-                timber: timber_cap, metal: steel_cap, textile: textile_cap,
-                furniture: furniture_cap, hardware: hardware_cap, clothing: clothing_cap,
-                armory: armory_cap, paper: paper_cap, canned_food: canned_food_cap,
+                timber: timber_cap,
+                metal: steel_cap,
+                textile: textile_cap,
+                furniture: furniture_cap,
+                hardware: hardware_cap,
+                clothing: clothing_cap,
+                armory: armory_cap,
+                paper: paper_cap,
+                canned_food: canned_food_cap,
             },
         );
 
@@ -249,7 +255,10 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
 
         // Apply feed% to materials (warehouse + mill output combined).
         let fed_materials = apply_feed_to_materials(
-            &materials_inventory.iter().map(|(k, v)| (*k, *v)).collect::<Vec<_>>(),
+            &materials_inventory
+                .iter()
+                .map(|(k, v)| (*k, *v))
+                .collect::<Vec<_>>(),
             &targets,
         );
 
@@ -286,7 +295,11 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
 
         let steel_consumed_by_factory = hardware_result
             .as_ref()
-            .and_then(|r| r.materials_consumed.iter().find(|(m, _)| *m == MaterialType::Steel))
+            .and_then(|r| {
+                r.materials_consumed
+                    .iter()
+                    .find(|(m, _)| *m == MaterialType::Steel)
+            })
             .map(|(_, qty)| *qty)
             .unwrap_or(0);
         let armory_result = if armory_cap > 0 {
@@ -309,7 +322,11 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
 
         let lumber_consumed_by_furniture = furniture_result
             .as_ref()
-            .and_then(|r| r.materials_consumed.iter().find(|(m, _)| *m == MaterialType::Lumber))
+            .and_then(|r| {
+                r.materials_consumed
+                    .iter()
+                    .find(|(m, _)| *m == MaterialType::Lumber)
+            })
             .map(|(_, qty)| *qty)
             .unwrap_or(0);
         let paper_result = if paper_cap > 0 {
@@ -319,7 +336,11 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
                 .unwrap_or(0)
                 .saturating_sub(lumber_consumed_by_furniture);
             let fed: Vec<(MaterialType, u32)> = vec![(MaterialType::Lumber, lumber_for_paper)];
-            Some(calculate_paper_production(&fed, paper_cap, labor_budgets.paper_factory))
+            Some(calculate_paper_production(
+                &fed,
+                paper_cap,
+                labor_budgets.paper_factory,
+            ))
         } else {
             None
         };
@@ -339,9 +360,15 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
         };
 
         let mut material_needs: BTreeMap<MaterialType, u32> = BTreeMap::new();
-        for result in [&furniture_result, &hardware_result, &clothing_result, &armory_result, &paper_result]
-            .into_iter()
-            .flatten()
+        for result in [
+            &furniture_result,
+            &hardware_result,
+            &clothing_result,
+            &armory_result,
+            &paper_result,
+        ]
+        .into_iter()
+        .flatten()
         {
             for (material, qty) in &result.materials_consumed {
                 let starting_stock = starting_materials.get(material).copied().unwrap_or(0);
@@ -358,11 +385,18 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
             .flatten()
             .map(|r| r.labor_used)
             .sum::<u32>()
-            + [&furniture_result, &hardware_result, &clothing_result, &armory_result, &paper_result, &canned_food_result]
-                .into_iter()
-                .flatten()
-                .map(|r| r.labor_used)
-                .sum::<u32>();
+            + [
+                &furniture_result,
+                &hardware_result,
+                &clothing_result,
+                &armory_result,
+                &paper_result,
+                &canned_food_result,
+            ]
+            .into_iter()
+            .flatten()
+            .map(|r| r.labor_used)
+            .sum::<u32>();
 
         let Some(nation) = game.get_nation_mut(nation_id) else {
             continue;
@@ -619,34 +653,82 @@ pub fn allocate_labor(
     let paper_cap = caps.paper;
     let canned_food_cap = caps.canned_food;
     let desired = [
-        if timber_cap > 0 { targets.timber_mill.min(timber_cap).saturating_mul(2) } else { 0 },
-        if metal_cap > 0 { targets.metal_mill.min(metal_cap).saturating_mul(2) } else { 0 },
-        if textile_cap > 0 { targets.textile_mill.min(textile_cap).saturating_mul(2) } else { 0 },
-        if furniture_cap > 0 { targets.lumber_factory.min(furniture_cap).saturating_mul(2) } else { 0 },
-        if hardware_cap > 0 { targets.steel_factory.min(hardware_cap).saturating_mul(2) } else { 0 },
-        if clothing_cap > 0 { targets.garment_factory.min(clothing_cap).saturating_mul(2) } else { 0 },
-        if armory_cap > 0 { targets.armory.min(armory_cap).saturating_mul(2) } else { 0 },
-        if paper_cap > 0 { targets.paper_factory.min(paper_cap).saturating_mul(2) } else { 0 },
-        if canned_food_cap > 0 { targets.canned_food_factory.min(canned_food_cap).saturating_mul(2) } else { 0 },
+        if timber_cap > 0 {
+            targets.timber_mill.min(timber_cap).saturating_mul(2)
+        } else {
+            0
+        },
+        if metal_cap > 0 {
+            targets.metal_mill.min(metal_cap).saturating_mul(2)
+        } else {
+            0
+        },
+        if textile_cap > 0 {
+            targets.textile_mill.min(textile_cap).saturating_mul(2)
+        } else {
+            0
+        },
+        if furniture_cap > 0 {
+            targets.lumber_factory.min(furniture_cap).saturating_mul(2)
+        } else {
+            0
+        },
+        if hardware_cap > 0 {
+            targets.steel_factory.min(hardware_cap).saturating_mul(2)
+        } else {
+            0
+        },
+        if clothing_cap > 0 {
+            targets.garment_factory.min(clothing_cap).saturating_mul(2)
+        } else {
+            0
+        },
+        if armory_cap > 0 {
+            targets.armory.min(armory_cap).saturating_mul(2)
+        } else {
+            0
+        },
+        if paper_cap > 0 {
+            targets.paper_factory.min(paper_cap).saturating_mul(2)
+        } else {
+            0
+        },
+        if canned_food_cap > 0 {
+            targets
+                .canned_food_factory
+                .min(canned_food_cap)
+                .saturating_mul(2)
+        } else {
+            0
+        },
     ];
-    let total_desired: u32 = desired.iter().copied().fold(0u32, |a, b| a.saturating_add(b));
+    let total_desired: u32 = desired
+        .iter()
+        .copied()
+        .fold(0u32, |a, b| a.saturating_add(b));
     if total_desired == 0 || total_labor == 0 {
         return LaborBudgets {
-            timber_mill: 0, metal_mill: 0, textile_mill: 0,
-            lumber_factory: 0, steel_factory: 0, garment_factory: 0,
-            armory: 0, paper_factory: 0, canned_food_factory: 0,
+            timber_mill: 0,
+            metal_mill: 0,
+            textile_mill: 0,
+            lumber_factory: 0,
+            steel_factory: 0,
+            garment_factory: 0,
+            armory: 0,
+            paper_factory: 0,
+            canned_food_factory: 0,
         };
     }
     if total_labor >= total_desired {
         return LaborBudgets {
-            timber_mill:         desired[0],
-            metal_mill:          desired[1],
-            textile_mill:        desired[2],
-            lumber_factory:      desired[3],
-            steel_factory:       desired[4],
-            garment_factory:     desired[5],
-            armory:              desired[6],
-            paper_factory:       desired[7],
+            timber_mill: desired[0],
+            metal_mill: desired[1],
+            textile_mill: desired[2],
+            lumber_factory: desired[3],
+            steel_factory: desired[4],
+            garment_factory: desired[5],
+            armory: desired[6],
+            paper_factory: desired[7],
             canned_food_factory: desired[8],
         };
     }
@@ -670,14 +752,14 @@ pub fn allocate_labor(
         }
     }
     LaborBudgets {
-        timber_mill:         floors[0],
-        metal_mill:          floors[1],
-        textile_mill:        floors[2],
-        lumber_factory:      floors[3],
-        steel_factory:       floors[4],
-        garment_factory:     floors[5],
-        armory:              floors[6],
-        paper_factory:       floors[7],
+        timber_mill: floors[0],
+        metal_mill: floors[1],
+        textile_mill: floors[2],
+        lumber_factory: floors[3],
+        steel_factory: floors[4],
+        garment_factory: floors[5],
+        armory: floors[6],
+        paper_factory: floors[7],
         canned_food_factory: floors[8],
     }
 }
@@ -688,17 +770,22 @@ pub fn apply_feed_to_resources(
     resources: &[(ResourceType, u32)],
     targets: &crate::nation::ChainOutputTargets,
 ) -> Vec<(ResourceType, u32)> {
-    resources.iter().map(|(r, qty)| {
-        let cap = match r {
-            ResourceType::Timber => targets.timber_mill.saturating_mul(2),
-            ResourceType::Coal | ResourceType::Iron => targets.metal_mill,
-            ResourceType::Cotton | ResourceType::Wool => targets.textile_mill.saturating_mul(2),
-            ResourceType::Grain | ResourceType::Fruit | ResourceType::Fish | ResourceType::Livestock
-                => targets.canned_food_factory,
-            _ => u32::MAX,
-        };
-        (*r, (*qty).min(cap))
-    }).collect()
+    resources
+        .iter()
+        .map(|(r, qty)| {
+            let cap = match r {
+                ResourceType::Timber => targets.timber_mill.saturating_mul(2),
+                ResourceType::Coal | ResourceType::Iron => targets.metal_mill,
+                ResourceType::Cotton | ResourceType::Wool => targets.textile_mill.saturating_mul(2),
+                ResourceType::Grain
+                | ResourceType::Fruit
+                | ResourceType::Fish
+                | ResourceType::Livestock => targets.canned_food_factory,
+                _ => u32::MAX,
+            };
+            (*r, (*qty).min(cap))
+        })
+        .collect()
 }
 
 /// Cap materials to the amount required by target output.
@@ -706,16 +793,24 @@ pub fn apply_feed_to_materials(
     materials: &[(MaterialType, u32)],
     targets: &crate::nation::ChainOutputTargets,
 ) -> Vec<(MaterialType, u32)> {
-    materials.iter().map(|(m, qty)| {
-        let cap = match m {
-            MaterialType::Lumber => targets.lumber_factory.saturating_mul(2)
-                .saturating_add(targets.paper_factory.saturating_mul(2)),
-            MaterialType::Steel  => targets.steel_factory.saturating_mul(2).saturating_add(targets.armory),
-            MaterialType::Fabric => targets.garment_factory.saturating_mul(2),
-            _ => u32::MAX,
-        };
-        (*m, (*qty).min(cap))
-    }).collect()
+    materials
+        .iter()
+        .map(|(m, qty)| {
+            let cap = match m {
+                MaterialType::Lumber => targets
+                    .lumber_factory
+                    .saturating_mul(2)
+                    .saturating_add(targets.paper_factory.saturating_mul(2)),
+                MaterialType::Steel => targets
+                    .steel_factory
+                    .saturating_mul(2)
+                    .saturating_add(targets.armory),
+                MaterialType::Fabric => targets.garment_factory.saturating_mul(2),
+                _ => u32::MAX,
+            };
+            (*m, (*qty).min(cap))
+        })
+        .collect()
 }
 
 fn reserve_inventory(
@@ -990,23 +1085,41 @@ mod tests {
 
     fn targets_max() -> ChainOutputTargets {
         ChainOutputTargets {
-            timber_mill: u32::MAX, metal_mill: u32::MAX, textile_mill: u32::MAX,
-            lumber_factory: u32::MAX, steel_factory: u32::MAX, garment_factory: u32::MAX,
-            armory: 0, paper_factory: 0, canned_food_factory: 0,
+            timber_mill: u32::MAX,
+            metal_mill: u32::MAX,
+            textile_mill: u32::MAX,
+            lumber_factory: u32::MAX,
+            steel_factory: u32::MAX,
+            garment_factory: u32::MAX,
+            armory: 0,
+            paper_factory: 0,
+            canned_food_factory: 0,
         }
     }
     fn targets_zero() -> ChainOutputTargets {
         ChainOutputTargets {
-            timber_mill: 0, metal_mill: 0, textile_mill: 0,
-            lumber_factory: 0, steel_factory: 0, garment_factory: 0,
-            armory: 0, paper_factory: 0, canned_food_factory: 0,
+            timber_mill: 0,
+            metal_mill: 0,
+            textile_mill: 0,
+            lumber_factory: 0,
+            steel_factory: 0,
+            garment_factory: 0,
+            armory: 0,
+            paper_factory: 0,
+            canned_food_factory: 0,
         }
     }
     fn targets_n(n: u32) -> ChainOutputTargets {
         ChainOutputTargets {
-            timber_mill: n, metal_mill: n, textile_mill: n,
-            lumber_factory: n, steel_factory: n, garment_factory: n,
-            armory: 0, paper_factory: 0, canned_food_factory: 0,
+            timber_mill: n,
+            metal_mill: n,
+            textile_mill: n,
+            lumber_factory: n,
+            steel_factory: n,
+            garment_factory: n,
+            armory: 0,
+            paper_factory: 0,
+            canned_food_factory: 0,
         }
     }
 
@@ -1018,7 +1131,21 @@ mod tests {
         t.timber_mill = 75;
         t.metal_mill = 25;
         t.textile_mill = 0;
-        let budgets = allocate_labor(100, &t, BuildingCapacities { timber: 75, metal: 25, textile: 0, furniture: 0, hardware: 0, clothing: 0, armory: 0, paper: 0, canned_food: 0 });
+        let budgets = allocate_labor(
+            100,
+            &t,
+            BuildingCapacities {
+                timber: 75,
+                metal: 25,
+                textile: 0,
+                furniture: 0,
+                hardware: 0,
+                clothing: 0,
+                armory: 0,
+                paper: 0,
+                canned_food: 0,
+            },
+        );
         assert_eq!(budgets.timber_mill, 75);
         assert_eq!(budgets.metal_mill, 25);
         assert_eq!(budgets.textile_mill, 0);
@@ -1027,7 +1154,21 @@ mod tests {
     #[test]
     fn allocate_labor_zero_target_stops_step() {
         let t = targets_zero();
-        let budgets = allocate_labor(100, &t, BuildingCapacities { timber: 1, metal: 1, textile: 1, furniture: 1, hardware: 1, clothing: 1, armory: 0, paper: 0, canned_food: 0 });
+        let budgets = allocate_labor(
+            100,
+            &t,
+            BuildingCapacities {
+                timber: 1,
+                metal: 1,
+                textile: 1,
+                furniture: 1,
+                hardware: 1,
+                clothing: 1,
+                armory: 0,
+                paper: 0,
+                canned_food: 0,
+            },
+        );
         assert_eq!(budgets.timber_mill, 0);
         assert_eq!(budgets.metal_mill, 0);
         assert_eq!(budgets.textile_mill, 0);
@@ -1039,12 +1180,32 @@ mod tests {
     #[test]
     fn allocate_labor_zero_cap_gets_zero() {
         let t = ChainOutputTargets {
-            timber_mill: u32::MAX, metal_mill: u32::MAX, textile_mill: 0,
-            lumber_factory: 0, steel_factory: 0, garment_factory: 0,
-            armory: 0, paper_factory: 0, canned_food_factory: 0,
+            timber_mill: u32::MAX,
+            metal_mill: u32::MAX,
+            textile_mill: 0,
+            lumber_factory: 0,
+            steel_factory: 0,
+            garment_factory: 0,
+            armory: 0,
+            paper_factory: 0,
+            canned_food_factory: 0,
         };
         // cap=0 for timber_mill → zero, all labor to metal_mill (cap=1)
-        let budgets = allocate_labor(100, &t, BuildingCapacities { timber: 0, metal: 1, textile: 0, furniture: 0, hardware: 0, clothing: 0, armory: 0, paper: 0, canned_food: 0 });
+        let budgets = allocate_labor(
+            100,
+            &t,
+            BuildingCapacities {
+                timber: 0,
+                metal: 1,
+                textile: 0,
+                furniture: 0,
+                hardware: 0,
+                clothing: 0,
+                armory: 0,
+                paper: 0,
+                canned_food: 0,
+            },
+        );
         assert_eq!(budgets.timber_mill, 0);
         assert_eq!(budgets.metal_mill, 2); // min(MAX,1)*2 = 2; total_labor=100 >= 2 → exact
     }
@@ -1053,11 +1214,31 @@ mod tests {
     fn allocate_labor_exact_when_enough() {
         // cap=10 each, target=MAX → desired = 20 each; total=120 → exact
         let t = ChainOutputTargets {
-            timber_mill: u32::MAX, metal_mill: u32::MAX, textile_mill: u32::MAX,
-            lumber_factory: 0, steel_factory: 0, garment_factory: 0,
-            armory: 0, paper_factory: 0, canned_food_factory: 0,
+            timber_mill: u32::MAX,
+            metal_mill: u32::MAX,
+            textile_mill: u32::MAX,
+            lumber_factory: 0,
+            steel_factory: 0,
+            garment_factory: 0,
+            armory: 0,
+            paper_factory: 0,
+            canned_food_factory: 0,
         };
-        let budgets = allocate_labor(120, &t, BuildingCapacities { timber: 10, metal: 10, textile: 10, furniture: 0, hardware: 0, clothing: 0, armory: 0, paper: 0, canned_food: 0 });
+        let budgets = allocate_labor(
+            120,
+            &t,
+            BuildingCapacities {
+                timber: 10,
+                metal: 10,
+                textile: 10,
+                furniture: 0,
+                hardware: 0,
+                clothing: 0,
+                armory: 0,
+                paper: 0,
+                canned_food: 0,
+            },
+        );
         assert_eq!(budgets.timber_mill, 20);
         assert_eq!(budgets.metal_mill, 20);
         assert_eq!(budgets.textile_mill, 20);
@@ -1085,10 +1266,7 @@ mod tests {
             paper_factory: 0,
             canned_food_factory: 0,
         };
-        let resources = vec![
-            (ResourceType::Timber, 300u32),
-            (ResourceType::Coal, 150u32),
-        ];
+        let resources = vec![(ResourceType::Timber, 300u32), (ResourceType::Coal, 150u32)];
         let fed = apply_feed_to_resources(&resources, &t);
         assert_eq!(fed[0].1, 300);
         assert_eq!(fed[1].1, 150);
@@ -1109,9 +1287,27 @@ mod tests {
         // caps all 6 at 10, MAX targets → desired = 20 each = 120; labor = 97 < 120
         let t = targets_n(u32::MAX);
         let total = 97u32;
-        let budgets = allocate_labor(total, &t, BuildingCapacities { timber: 10, metal: 10, textile: 10, furniture: 10, hardware: 10, clothing: 10, armory: 0, paper: 0, canned_food: 0 });
-        let sum = budgets.timber_mill + budgets.metal_mill + budgets.textile_mill
-            + budgets.lumber_factory + budgets.steel_factory + budgets.garment_factory;
+        let budgets = allocate_labor(
+            total,
+            &t,
+            BuildingCapacities {
+                timber: 10,
+                metal: 10,
+                textile: 10,
+                furniture: 10,
+                hardware: 10,
+                clothing: 10,
+                armory: 0,
+                paper: 0,
+                canned_food: 0,
+            },
+        );
+        let sum = budgets.timber_mill
+            + budgets.metal_mill
+            + budgets.textile_mill
+            + budgets.lumber_factory
+            + budgets.steel_factory
+            + budgets.garment_factory;
         assert!(sum <= total, "allocated {sum} exceeds total {total}");
     }
 }

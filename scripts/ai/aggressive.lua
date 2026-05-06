@@ -73,6 +73,8 @@ aggressive = {
     -- buffers 3 turns so wartime steel/arms output isn't input-starved.
     trade_buy_treasury_floor = 3000,
     trade_buy_buffer_turns = 3,
+    -- Card #465: militarist hoards arms — large reserve.
+    arms_sell_reserve = 30,
     goods_sell_treasury_threshold = 4000,
     goods_reserve = 1,
     food_processing_expansion_threshold = 3,

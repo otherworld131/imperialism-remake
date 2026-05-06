@@ -1008,6 +1008,11 @@ pub struct LuaAiConfig {
     /// Card [3/6] — buy-side trade. How many turns of input to buffer per
     /// resource. AI bids to top up to `per_turn_demand × buffer_turns`.
     pub trade_buy_buffer_turns: Option<u32>,
+    /// Card #465 — Arms reservation. Minimum arms held back from any
+    /// auto-sale path on top of the queued-recruit demand. Larger values
+    /// favor sustained army growth; smaller values let the AI liquidate
+    /// arms when the warehouse swells.
+    pub arms_sell_reserve: Option<u32>,
     pub goods_sell_treasury_threshold: Option<i64>,
     pub goods_reserve: Option<u32>,
     pub food_processing_expansion_threshold: Option<u32>,
@@ -1235,6 +1240,9 @@ impl LuaAiConfig {
         self.trade_buy_buffer_turns = sanitize_opt_u32(self.trade_buy_buffer_turns, 0, 20);
         self.trade_buy_treasury_floor =
             sanitize_opt_i64(self.trade_buy_treasury_floor, 0, 10_000_000);
+        // Card #465: arms_sell_reserve. 0..=200 — large values would freeze
+        // the auto-sale path entirely.
+        self.arms_sell_reserve = sanitize_opt_u32(self.arms_sell_reserve, 0, 200);
         self.goods_reserve = sanitize_opt_u32(self.goods_reserve, 0, 100);
         self.food_processing_expansion_threshold =
             sanitize_opt_u32(self.food_processing_expansion_threshold, 0, 1000);
@@ -1427,6 +1435,7 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             trade_treasury_cap: table.get("trade_treasury_cap").ok(),
             trade_buy_treasury_floor: table.get("trade_buy_treasury_floor").ok(),
             trade_buy_buffer_turns: table.get("trade_buy_buffer_turns").ok(),
+            arms_sell_reserve: table.get("arms_sell_reserve").ok(),
             goods_sell_treasury_threshold: table.get("goods_sell_treasury_threshold").ok(),
             goods_reserve: table.get("goods_reserve").ok(),
             food_processing_expansion_threshold: table
@@ -1850,6 +1859,7 @@ mod tests {
             trade_treasury_cap: None,
             trade_buy_treasury_floor: None,
             trade_buy_buffer_turns: None,
+            arms_sell_reserve: None,
             goods_sell_treasury_threshold: None,
             goods_reserve: None,
             food_processing_expansion_threshold: None,
@@ -1964,6 +1974,7 @@ mod tests {
             trade_treasury_cap: None,
             trade_buy_treasury_floor: None,
             trade_buy_buffer_turns: None,
+            arms_sell_reserve: None,
             goods_sell_treasury_threshold: None,
             goods_reserve: None,
             food_processing_expansion_threshold: None,
@@ -2117,6 +2128,7 @@ mod tests {
             trade_treasury_cap: None,
             trade_buy_treasury_floor: None,
             trade_buy_buffer_turns: None,
+            arms_sell_reserve: None,
             goods_sell_treasury_threshold: None,
             goods_reserve: None,
             food_processing_expansion_threshold: None,

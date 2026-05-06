@@ -247,6 +247,34 @@ impl Tile {
             _ => Some(ResourceAmount::new(resource, 1 + level)),
         }
     }
+
+    /// Yield this tile would produce if it were developed to at least level 1.
+    ///
+    /// Used for **minor-nation auto-trade offers** (Trello card #464): in
+    /// Imperialism (1997), minor nations offer their resources on the world
+    /// market as if every deposit were already developed at level 1, even when
+    /// the underlying tile is unprospected or unimproved. This gives Great
+    /// Powers a stable industrial feedstock pipeline from day one — they buy
+    /// coal/iron from minors that haven't (and never will) build mines
+    /// themselves.
+    ///
+    /// Returns `None` only when the tile carries no `resource_deposit` at all.
+    /// For Coal/Iron/Oil/Gold/Gems this returns a level-1 yield even when
+    /// `improvement_level == 0` and `prospected == false`. For surface
+    /// resources (already productive at level 0) this matches `calculate_yield`
+    /// at min(actual_level, 1) → 1 if unimproved, otherwise the actual yield.
+    pub fn calculate_minor_offer_yield(&self) -> Option<ResourceAmount> {
+        let resource = self.resource_deposit?;
+        let level = (self.improvement_level as u32).max(1);
+
+        match resource {
+            ResourceType::Coal | ResourceType::Iron | ResourceType::Oil => {
+                Some(ResourceAmount::new(resource, 2 * level))
+            }
+            ResourceType::Gold | ResourceType::Gems => Some(ResourceAmount::new(resource, level)),
+            _ => Some(ResourceAmount::new(resource, 1 + level)),
+        }
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────
@@ -958,5 +986,61 @@ mod tests {
                 "{terrain:?} without resource should yield nothing"
             );
         }
+    }
+
+    // ── Minor-nation offer yield (Trello #464) ─────────────────
+
+    #[test]
+    fn minor_offer_yield_undiscovered_coal_reports_level_1() {
+        let mut tile = Tile::new(TerrainType::Hills);
+        tile.set_resource(ResourceType::Coal);
+        // unprospected, level 0 — calculate_yield says None …
+        assert_eq!(tile.calculate_yield(), None);
+        // … but minor offers list it at level-1 yield (2 coal).
+        assert_eq!(
+            tile.calculate_minor_offer_yield(),
+            Some(ResourceAmount::new(ResourceType::Coal, 2))
+        );
+    }
+
+    #[test]
+    fn minor_offer_yield_undiscovered_iron_reports_level_1() {
+        let mut tile = Tile::new(TerrainType::Mountain);
+        tile.set_resource(ResourceType::Iron);
+        assert_eq!(
+            tile.calculate_minor_offer_yield(),
+            Some(ResourceAmount::new(ResourceType::Iron, 2))
+        );
+    }
+
+    #[test]
+    fn minor_offer_yield_no_deposit_returns_none() {
+        let tile = Tile::new(TerrainType::Grassland);
+        assert_eq!(tile.calculate_minor_offer_yield(), None);
+    }
+
+    #[test]
+    fn minor_offer_yield_developed_tile_reports_actual_level() {
+        let mut tile = Tile::new(TerrainType::Hills);
+        tile.set_resource(ResourceType::Coal);
+        tile.set_improvement_level(3);
+        // Developed deposits use the actual level (6 coal at level 3),
+        // not a clamped-to-1 yield.
+        assert_eq!(
+            tile.calculate_minor_offer_yield(),
+            Some(ResourceAmount::new(ResourceType::Coal, 6))
+        );
+    }
+
+    #[test]
+    fn minor_offer_yield_surface_resource_at_level_zero_reports_one() {
+        let mut tile = Tile::new(TerrainType::Grassland);
+        tile.set_resource(ResourceType::Grain);
+        // calculate_yield returns 1 grain at level 0 (surface 1+level).
+        // calculate_minor_offer_yield clamps level up to 1, so still 2.
+        assert_eq!(
+            tile.calculate_minor_offer_yield(),
+            Some(ResourceAmount::new(ResourceType::Grain, 2))
+        );
     }
 }

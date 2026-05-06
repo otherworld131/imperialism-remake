@@ -41,9 +41,12 @@ fn best_buildable_warship(game: &GameState, nation_id: NationId) -> Option<ShipT
 
         // Check tech requirement.
         if let Some(ref tech_name) = costs.prerequisite_tech {
-            let has_tech = game.game_data.tech_tree.all_techs().iter().any(|t| {
-                t.name == *tech_name && researched.contains(&t.id)
-            });
+            let has_tech = game
+                .game_data
+                .tech_tree
+                .all_techs()
+                .iter()
+                .any(|t| t.name == *tech_name && researched.contains(&t.id));
             if !has_tech {
                 continue;
             }
@@ -172,16 +175,36 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
         nation.military.warships_built += 1;
         let out = crate::economy::ledger::ResourceOut::ConstructionConsumed;
         if fabric_need > 0 {
-            game.transient.pending_ai_material_outflows.push((nation_id, MaterialType::Fabric, out, fabric_need));
+            game.transient.pending_ai_material_outflows.push((
+                nation_id,
+                MaterialType::Fabric,
+                out,
+                fabric_need,
+            ));
         }
         if lumber_need > 0 {
-            game.transient.pending_ai_material_outflows.push((nation_id, MaterialType::Lumber, out, lumber_need));
+            game.transient.pending_ai_material_outflows.push((
+                nation_id,
+                MaterialType::Lumber,
+                out,
+                lumber_need,
+            ));
         }
         if arms_need > 0 {
-            game.transient.pending_ai_material_outflows.push((nation_id, MaterialType::Arms, out, arms_need));
+            game.transient.pending_ai_material_outflows.push((
+                nation_id,
+                MaterialType::Arms,
+                out,
+                arms_need,
+            ));
         }
         if steel_need > 0 {
-            game.transient.pending_ai_material_outflows.push((nation_id, MaterialType::Steel, out, steel_need));
+            game.transient.pending_ai_material_outflows.push((
+                nation_id,
+                MaterialType::Steel,
+                out,
+                steel_need,
+            ));
         }
         return true;
     }
@@ -799,7 +822,7 @@ mod tests {
         ai.economy.treasury = Money::dollars(5_000);
         ai.add_material(MaterialType::Fabric, 15); // 5 × 3
         ai.add_material(MaterialType::Lumber, 40); // 5 × 8
-        ai.add_material(MaterialType::Arms, 25);   // 5 × 5
+        ai.add_material(MaterialType::Arms, 25); // 5 × 5
 
         for _ in 0..5 {
             assert!(build_one_warship(&mut game, NationId(2)));

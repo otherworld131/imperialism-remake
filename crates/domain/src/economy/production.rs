@@ -675,9 +675,20 @@ mod tests {
             3,
             20,
         );
-        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 3)]);
-        assert!(result.resources_consumed.contains(&(ResourceType::Grain, 3)));
-        assert!(result.resources_consumed.contains(&(ResourceType::Fruit, 3)));
+        assert_eq!(
+            result.materials_produced,
+            vec![(MaterialType::CannedFood, 3)]
+        );
+        assert!(
+            result
+                .resources_consumed
+                .contains(&(ResourceType::Grain, 3))
+        );
+        assert!(
+            result
+                .resources_consumed
+                .contains(&(ResourceType::Fruit, 3))
+        );
         assert!(result.resources_consumed.contains(&(ResourceType::Fish, 3)));
         assert_eq!(result.labor_used, 6);
     }
@@ -693,9 +704,21 @@ mod tests {
             3,
             20,
         );
-        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 3)]);
-        assert!(result.resources_consumed.contains(&(ResourceType::Livestock, 3)));
-        assert!(!result.resources_consumed.iter().any(|(r, _)| *r == ResourceType::Fish));
+        assert_eq!(
+            result.materials_produced,
+            vec![(MaterialType::CannedFood, 3)]
+        );
+        assert!(
+            result
+                .resources_consumed
+                .contains(&(ResourceType::Livestock, 3))
+        );
+        assert!(
+            !result
+                .resources_consumed
+                .iter()
+                .any(|(r, _)| *r == ResourceType::Fish)
+        );
     }
 
     #[test]
@@ -711,22 +734,29 @@ mod tests {
             3,
             20,
         );
-        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 3)]);
+        assert_eq!(
+            result.materials_produced,
+            vec![(MaterialType::CannedFood, 3)]
+        );
         assert!(result.resources_consumed.contains(&(ResourceType::Fish, 1)));
-        assert!(result.resources_consumed.contains(&(ResourceType::Livestock, 2)));
+        assert!(
+            result
+                .resources_consumed
+                .contains(&(ResourceType::Livestock, 2))
+        );
     }
 
     #[test]
     fn cannery_no_grain() {
         let result = calculate_canned_food_production(
-            &[
-                (ResourceType::Fruit, 10),
-                (ResourceType::Fish, 10),
-            ],
+            &[(ResourceType::Fruit, 10), (ResourceType::Fish, 10)],
             5,
             20,
         );
-        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 0)]);
+        assert_eq!(
+            result.materials_produced,
+            vec![(MaterialType::CannedFood, 0)]
+        );
         assert!(result.resources_consumed.is_empty());
         assert_eq!(result.labor_used, 0);
     }
@@ -734,27 +764,27 @@ mod tests {
     #[test]
     fn cannery_no_fruit() {
         let result = calculate_canned_food_production(
-            &[
-                (ResourceType::Grain, 10),
-                (ResourceType::Fish, 10),
-            ],
+            &[(ResourceType::Grain, 10), (ResourceType::Fish, 10)],
             5,
             20,
         );
-        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 0)]);
+        assert_eq!(
+            result.materials_produced,
+            vec![(MaterialType::CannedFood, 0)]
+        );
     }
 
     #[test]
     fn cannery_no_meat() {
         let result = calculate_canned_food_production(
-            &[
-                (ResourceType::Grain, 10),
-                (ResourceType::Fruit, 10),
-            ],
+            &[(ResourceType::Grain, 10), (ResourceType::Fruit, 10)],
             5,
             20,
         );
-        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 0)]);
+        assert_eq!(
+            result.materials_produced,
+            vec![(MaterialType::CannedFood, 0)]
+        );
     }
 
     #[test]
@@ -768,7 +798,10 @@ mod tests {
             2,
             20,
         );
-        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 2)]);
+        assert_eq!(
+            result.materials_produced,
+            vec![(MaterialType::CannedFood, 2)]
+        );
     }
 
     #[test]
@@ -782,7 +815,10 @@ mod tests {
             10,
             3, // 3 labor → 1 unit
         );
-        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 1)]);
+        assert_eq!(
+            result.materials_produced,
+            vec![(MaterialType::CannedFood, 1)]
+        );
         assert_eq!(result.labor_used, 2);
     }
 
@@ -797,7 +833,10 @@ mod tests {
             0,
             20,
         );
-        assert_eq!(result.materials_produced, vec![(MaterialType::CannedFood, 0)]);
+        assert_eq!(
+            result.materials_produced,
+            vec![(MaterialType::CannedFood, 0)]
+        );
     }
 
     // ── Textile mill accepts cotton or wool ──────────────────────

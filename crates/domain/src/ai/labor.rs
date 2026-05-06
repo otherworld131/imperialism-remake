@@ -1,6 +1,6 @@
-use crate::economy::civilians::CivilianType;
 #[cfg(test)]
 use crate::economy::buildings::{Building, BuildingType};
+use crate::economy::civilians::CivilianType;
 #[cfg(test)]
 use crate::economy::civilians::{Civilian, next_civilian_id};
 use crate::game_state::GameState;

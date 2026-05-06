@@ -142,7 +142,6 @@ fn read_required(base: &Path, relative: &str) -> String {
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +206,4 @@ mod tests {
         let result = load_tech_tree("not valid ron");
         assert!(result.is_err());
     }
-
 }

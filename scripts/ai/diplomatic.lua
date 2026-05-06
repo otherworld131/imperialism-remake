@@ -69,6 +69,8 @@ diplomatic = {
     -- Card [3/6]: diplomatic favors steady trade with neighbors; same buffer.
     trade_buy_treasury_floor = 5000,
     trade_buy_buffer_turns = 3,
+    -- Card #465: diplomatic keeps a small army; small reserve.
+    arms_sell_reserve = 8,
     goods_sell_treasury_threshold = 3000,
     goods_reserve = 2,
     food_processing_expansion_threshold = 2,

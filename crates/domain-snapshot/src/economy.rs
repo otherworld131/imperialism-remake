@@ -1208,7 +1208,9 @@ impl From<BlockReason> for d::observability::BlockReason {
 
 // ── Nation-level fields (used from nation.rs) ─────────────────────
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// Snapshot of player-controlled production chain output targets.
 /// Each field is a target output quantity (u32::MAX = unlimited).

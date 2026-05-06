@@ -327,8 +327,10 @@ pub fn generate_minor_nation_offers(
                 continue;
             }
             for tile_coord in &province.tiles {
+                // Trello #464: minors offer level-1 yields regardless of
+                // prospect/improvement state.
                 if let Some(tile) = hex_map.get_tile(*tile_coord)
-                    && let Some(yield_amount) = tile.calculate_yield()
+                    && let Some(yield_amount) = tile.calculate_minor_offer_yield()
                 {
                     *production.entry(yield_amount.resource).or_insert(0) += yield_amount.quantity;
                 }
@@ -385,8 +387,12 @@ pub fn generate_minor_nation_offers_with_seed(
                 continue;
             }
             for tile_coord in &province.tiles {
+                // Trello #464: minor nations advertise their resources at
+                // level-1 yields even when the deposit is unprospected /
+                // unimproved. This is what supplies the world market with
+                // coal/iron from minors that never develop their own tiles.
                 if let Some(tile) = hex_map.get_tile(*tile_coord)
-                    && let Some(yield_amount) = tile.calculate_yield()
+                    && let Some(yield_amount) = tile.calculate_minor_offer_yield()
                 {
                     *production.entry(yield_amount.resource).or_insert(0) += yield_amount.quantity;
                 }
@@ -780,8 +786,8 @@ pub fn generate_need_based_bids(
         if cash_left <= Money::ZERO {
             break;
         }
-        let cash_qty: u32 = (cash_left.as_dollars() / bp.as_dollars())
-            .clamp(0, u32::MAX as i64) as u32;
+        let cash_qty: u32 =
+            (cash_left.as_dollars() / bp.as_dollars()).clamp(0, u32::MAX as i64) as u32;
 
         let bid_qty = gap.min(total_available).min(remaining_cargo).min(cash_qty);
         if bid_qty == 0 {
@@ -1059,14 +1065,16 @@ mod tests {
             .filter(|o| o.resource == ResourceType::Cotton)
             .collect();
 
+        // Card #464: minors offer at level-1 yield. For surface resources
+        // (Timber, Cotton) on unimproved tiles that's 1 + 1 = 2.
         assert_eq!(timber_offers.len(), 1);
         assert_eq!(timber_offers[0].seller, NationId(10));
-        assert_eq!(timber_offers[0].quantity, 1);
+        assert_eq!(timber_offers[0].quantity, 2);
         assert_eq!(timber_offers[0].price_per_unit, Money::dollars(50));
 
         assert_eq!(cotton_offers.len(), 1);
         assert_eq!(cotton_offers[0].seller, NationId(10));
-        assert_eq!(cotton_offers[0].quantity, 1);
+        assert_eq!(cotton_offers[0].quantity, 2);
         assert_eq!(cotton_offers[0].price_per_unit, Money::dollars(60));
     }
 
@@ -1301,6 +1309,45 @@ mod tests {
             ProvinceId(20),
         );
         (vec![minor], vec![province], hex_map)
+    }
+
+    #[test]
+    fn minor_offers_include_undiscovered_coal_at_level_1_card_464() {
+        use crate::map::Province;
+        let coord = HexCoord::new(0, 0);
+        let mut hex_map = HexMap::new(10, 10);
+        // Hills + Coal but unprospected, level 0 — calculate_yield says None.
+        let mut tile = Tile::with_province(TerrainType::Hills, ProvinceId(20));
+        tile.set_resource(ResourceType::Coal);
+        hex_map.set_tile(coord, tile);
+        let province = Province::new(
+            ProvinceId(20),
+            "Coal Country".to_string(),
+            NationId(10),
+            coord,
+            vec![coord],
+            3,
+        );
+        let minor = Nation::new(
+            NationId(10),
+            "Coalia".to_string(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(20),
+        );
+
+        let offers = generate_minor_nation_offers(&[minor], &[province], &hex_map);
+        let coal_offer = offers.iter().find(|o| o.resource == ResourceType::Coal);
+        assert!(
+            coal_offer.is_some(),
+            "minor nation must offer undiscovered Coal at level-1 yield (Trello #464)"
+        );
+        // Level-1 Coal yield = 2; price at base $75.
+        assert_eq!(coal_offer.unwrap().quantity, 2);
+        assert_eq!(
+            coal_offer.unwrap().price_per_unit,
+            base_price(ResourceType::Coal)
+        );
     }
 
     #[test]
@@ -1728,7 +1775,11 @@ mod tests {
         // Protein is fungible: fish + livestock must total canned_units, not double-count.
         let fish = needs.get(&ResourceType::Fish).copied().unwrap_or(0);
         let livestock = needs.get(&ResourceType::Livestock).copied().unwrap_or(0);
-        assert_eq!(fish + livestock, 5, "protein split must sum to canned output");
+        assert_eq!(
+            fish + livestock,
+            5,
+            "protein split must sum to canned output"
+        );
     }
 
     #[test]
@@ -1759,7 +1810,10 @@ mod tests {
             Money::dollars(5_000),
             0, // disable buy-side trade
         );
-        assert!(bids.is_empty(), "buffer_turns=0 must short-circuit to no bids");
+        assert!(
+            bids.is_empty(),
+            "buffer_turns=0 must short-circuit to no bids"
+        );
     }
 
     #[test]

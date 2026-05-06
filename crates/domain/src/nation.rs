@@ -94,14 +94,14 @@ pub struct ChainOutputTargets {
 impl Default for ChainOutputTargets {
     fn default() -> Self {
         Self {
-            timber_mill:        u32::MAX,
-            metal_mill:         u32::MAX,
-            textile_mill:       u32::MAX,
-            lumber_factory:     u32::MAX,
-            steel_factory:      u32::MAX,
-            garment_factory:    u32::MAX,
-            armory:             u32::MAX,
-            paper_factory:      u32::MAX,
+            timber_mill: u32::MAX,
+            metal_mill: u32::MAX,
+            textile_mill: u32::MAX,
+            lumber_factory: u32::MAX,
+            steel_factory: u32::MAX,
+            garment_factory: u32::MAX,
+            armory: u32::MAX,
+            paper_factory: u32::MAX,
             canned_food_factory: u32::MAX,
         }
     }
@@ -1101,6 +1101,19 @@ impl Nation {
         self.researched_techs.contains(&tech)
     }
 
+    /// Total arms required to fulfill every queued recruitment in
+    /// `pending_army_recruits`. Trello card #465 — auto-sales paths must
+    /// hold back at least this many arms before the AI is allowed to sell
+    /// any to minor nations or the world market.
+    pub fn pending_recruits_arms_cost(&self) -> u32 {
+        self.economy
+            .pending_army_recruits
+            .iter()
+            .filter_map(|s| s.parse::<ArmyUnitType>().ok())
+            .map(|t| t.stats().arms_required)
+            .sum()
+    }
+
     /// Returns all army units stationed in a given province.
     pub fn units_in_province(&self, province: ProvinceId) -> Vec<&ArmyUnit> {
         self.military
@@ -1985,6 +1998,36 @@ mod tests {
         let mut n = recruit_ready_nation();
         n.economy.materials.clear();
         assert!(!n.can_recruit_unit(ArmyUnitType::Regulars));
+    }
+
+    // ── pending_recruits_arms_cost (Trello #465) ──────────────
+
+    #[test]
+    fn pending_recruits_arms_cost_zero_with_empty_queue() {
+        let n = recruit_ready_nation();
+        assert_eq!(n.pending_recruits_arms_cost(), 0);
+    }
+
+    #[test]
+    fn pending_recruits_arms_cost_sums_queued_units() {
+        let mut n = recruit_ready_nation();
+        n.economy
+            .pending_army_recruits
+            .push(format!("{:?}", ArmyUnitType::Regulars));
+        n.economy
+            .pending_army_recruits
+            .push(format!("{:?}", ArmyUnitType::Regulars));
+        let one = ArmyUnitType::Regulars.stats().arms_required;
+        assert_eq!(n.pending_recruits_arms_cost(), one * 2);
+    }
+
+    #[test]
+    fn pending_recruits_arms_cost_ignores_unparseable_strings() {
+        let mut n = recruit_ready_nation();
+        n.economy
+            .pending_army_recruits
+            .push("NotAUnitType".to_string());
+        assert_eq!(n.pending_recruits_arms_cost(), 0);
     }
 
     #[test]

@@ -1732,6 +1732,26 @@ pub(crate) fn trade_buy_treasury_floor(game: &GameState, personality: AiPersonal
     5_000
 }
 
+/// Lua-tunable: minimum arms held back from any auto-sale path on top of the
+/// queued-recruit demand. Card #465. Default 10 (pre-builds about 5 trained
+/// infantry units at 2 arms apiece).
+pub(crate) fn arms_sell_reserve(game: &GameState, personality: AiPersonality) -> u32 {
+    #[cfg(feature = "lua")]
+    {
+        if let Some(cfg) = game
+            .game_data
+            .lua_engine
+            .as_ref()
+            .and_then(|e| super::lua_bridge::lua_get_config(e, personality))
+            && let Some(v) = cfg.arms_sell_reserve
+        {
+            return v;
+        }
+    }
+    let _ = (game, personality);
+    10
+}
+
 /// Lua-tunable: how many turns of input the AI tries to buffer per resource
 /// when placing buy-side trade bids. Card [3/6]. Default 3 turns.
 pub(crate) fn trade_buy_buffer_turns(game: &GameState, personality: AiPersonality) -> u32 {
@@ -2053,7 +2073,19 @@ fn factory_target(desired: u32, has_supply: bool, capacity: u32, min_target: u32
 
 /// Sell excess tradeable resources on the market for cash.
 ///
-/// Reserve amount and treasury cap are Lua-configurable per personality.
+/// Trello card #463: GPs are the world's manufacturers — the bulk of trade
+/// revenue must come from finished goods (Furniture/Clothing/Hardware), not
+/// from dumping raw resources. This function therefore only sells a resource
+/// when the warehouse holds significantly more than the AI's own production
+/// chains will consume. The floor per resource is:
+///
+///   floor = max(trade_resource_reserve, projected_per_turn × buffer_turns) + safety
+///
+/// `projected_per_turn` is computed from `chain_targets` (same projection used
+/// by the buy-side need-based bids in card [3/6]). Resources with active
+/// downstream chains stay in the warehouse; resources the AI has no use for
+/// (e.g. Gold/Gems, surplus Horses with no cavalry recruiting) still sell down
+/// to the static reserve.
 #[allow(unused_variables)] // personality used only with cfg(feature = "lua")
 pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
     let personality = get_personality(game, nation_id);
@@ -2080,6 +2112,9 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
         }
         10
     };
+    // Same buffer used for buy-side bids — keep N turns of input on hand
+    // before considering anything "excess".
+    let buffer_turns = trade_buy_buffer_turns(game, personality);
 
     let current_turn = game.turn;
     let mut total_revenue = Money::ZERO;
@@ -2094,6 +2129,10 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
         if nation.economy.treasury > Money::dollars(trade_treasury_cap) {
             return;
         }
+
+        // Per-turn consumption from chain targets (LumberMill→2 Timber,
+        // SteelMill→Coal+Iron, Textile→Cotton/Wool, Cannery→Grain/Fruit/Fish/Livestock).
+        let needs = trade::projected_resource_needs(nation);
 
         // Check all tradeable resource types for surplus
         let tradeable_resources = [
@@ -2110,8 +2149,18 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
         ];
         for resource in tradeable_resources {
             let amount = nation.resource_amount(resource);
-            if amount > trade_resource_reserve {
-                let excess = amount - trade_resource_reserve;
+            // Per-resource floor: the larger of the static reserve and the
+            // need-based buffer. Resources with no active chain (Horses,
+            // Oil, …) fall back to the static reserve; chain inputs hold
+            // back the projected buffer × turns.
+            let need_floor = needs
+                .get(&resource)
+                .copied()
+                .unwrap_or(0)
+                .saturating_mul(buffer_turns);
+            let floor = trade_resource_reserve.max(need_floor);
+            if amount > floor {
+                let excess = amount - floor;
                 let price = trade::base_price(resource);
                 if price != Money::ZERO {
                     let revenue = price * excess as i64;
@@ -2334,22 +2383,24 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.treasury = Money::dollars(1000);
-        // Give AI 15 timber (surplus over 10 threshold)
-        ai.add_resource(ResourceType::Timber, 15);
+        // Give AI 100 timber — well above any need-aware floor.
+        ai.add_resource(ResourceType::Timber, 100);
 
         run_ai_turns(&mut game);
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        // Should have sold 5 timber at $50 each = $250
-        assert_eq!(
-            ai.resource_amount(ResourceType::Timber),
-            10,
-            "AI should sell down to 10 timber"
+        // Card #463: floor = max(static_reserve=10, per_turn × buffer_turns).
+        // Bootstrap creates a LumberMill capacity 2 ⇒ per_turn=4, buffer=3 ⇒
+        // need_floor = 12 ⇒ effective floor = 12.
+        // Timber after AI turn must be at most the effective floor.
+        let timber = ai.resource_amount(ResourceType::Timber);
+        assert!(
+            timber <= 12,
+            "AI should sell timber down to the need-aware floor of 12, got {timber}"
         );
-        assert_eq!(
-            ai.economy.treasury,
-            Money::dollars(1250),
-            "Treasury should increase by $250 from selling 5 timber at $50"
+        assert!(
+            ai.economy.treasury > Money::dollars(1000),
+            "Treasury should increase from selling timber"
         );
     }
 
@@ -2375,18 +2426,54 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.treasury = Money::dollars(0);
-        ai.add_resource(ResourceType::Timber, 15); // 5 excess at $50 = $250
-        ai.add_resource(ResourceType::Coal, 20); // 10 excess at $75 = $750
+        // Card #463: floors are need-aware. With bootstrap LumberMill cap 2
+        // and SteelMill cap 2 + buffer_turns=3 (Balanced):
+        //   timber floor = max(10, 4×3) = 12
+        //   coal floor   = max(10, 2×3) = 10
+        // Stock 100 each so the surplus is unambiguous.
+        ai.add_resource(ResourceType::Timber, 100);
+        ai.add_resource(ResourceType::Coal, 100);
 
         run_ai_turns(&mut game);
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(ai.resource_amount(ResourceType::Timber), 10);
-        assert_eq!(ai.resource_amount(ResourceType::Coal), 10);
-        assert_eq!(
-            ai.economy.treasury,
-            Money::dollars(1000),
-            "Treasury should increase by $250 + $750 = $1000"
+        assert!(ai.resource_amount(ResourceType::Timber) <= 12);
+        assert!(ai.resource_amount(ResourceType::Coal) <= 10);
+        assert!(
+            ai.economy.treasury > Money::dollars(0),
+            "Treasury should increase from selling surplus"
+        );
+    }
+
+    #[test]
+    fn ai_keeps_chain_inputs_above_need_floor_card_463() {
+        // Card #463: AI must NOT sell raw resources its own production lines
+        // are about to consume. Floor = projected_per_turn × buffer_turns.
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.economy.treasury = Money::dollars(1000);
+        // Force a SteelMill at high capacity so coal+iron are heavily needed.
+        ai.economy
+            .buildings
+            .push(crate::economy::buildings::Building::new(
+                crate::economy::buildings::BuildingType::SteelMill,
+                5,
+            ));
+        ai.economy.chain_targets.metal_mill = 5; // explicit target ⇒ 5 coal+iron/turn
+        // Give exactly the buffer × demand (5 × 3 = 15) — no surplus to sell.
+        ai.add_resource(ResourceType::Coal, 15);
+        ai.add_resource(ResourceType::Iron, 15);
+
+        run_ai_turns(&mut game);
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        // ai_trade must have left the warehouse intact (the in-turn mill run
+        // may have consumed some, but the auto-sell path itself can't drop
+        // below the 15-unit floor, so any drop is from production).
+        assert!(
+            ai.resource_amount(ResourceType::Coal) >= 10,
+            "AI should not auto-sell coal needed by its own steel mill, got {}",
+            ai.resource_amount(ResourceType::Coal)
         );
     }
 

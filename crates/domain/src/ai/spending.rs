@@ -1410,19 +1410,22 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
     };
     // Only convert when all non-arms requirements are already met; prevents
     // consuming steel when treasury, labor, horse, or oil would block anyway.
-    let non_arms_ok = game.get_nation(nation_id).map(|n| {
-        let stats = unit_type.stats();
-        let labor_ok = match stats.recruit_tier {
-            crate::economy::labor::WorkerType::Untrained => n.economy.labor.untrained >= 1,
-            crate::economy::labor::WorkerType::Trained => n.economy.labor.trained >= 1,
-            crate::economy::labor::WorkerType::Expert => n.economy.labor.expert >= 1,
-        };
-        n.economy.treasury >= stats.cost
-            && labor_ok
-            && (!stats.requires_horse || n.resource_amount(ResourceType::Horses) >= 1)
-            && (stats.fuel_required == 0
-                || n.resource_amount(ResourceType::Oil) >= stats.fuel_required)
-    }).unwrap_or(false);
+    let non_arms_ok = game
+        .get_nation(nation_id)
+        .map(|n| {
+            let stats = unit_type.stats();
+            let labor_ok = match stats.recruit_tier {
+                crate::economy::labor::WorkerType::Untrained => n.economy.labor.untrained >= 1,
+                crate::economy::labor::WorkerType::Trained => n.economy.labor.trained >= 1,
+                crate::economy::labor::WorkerType::Expert => n.economy.labor.expert >= 1,
+            };
+            n.economy.treasury >= stats.cost
+                && labor_ok
+                && (!stats.requires_horse || n.resource_amount(ResourceType::Horses) >= 1)
+                && (stats.fuel_required == 0
+                    || n.resource_amount(ResourceType::Oil) >= stats.fuel_required)
+        })
+        .unwrap_or(false);
     if arms_to_produce > 0 && non_arms_ok {
         if let Some(nation) = game.get_nation_mut(nation_id) {
             nation.consume_material(MaterialType::Steel, arms_to_produce);

@@ -70,6 +70,8 @@ economic = {
     -- of input so factories never wait on imported coal/iron.
     trade_buy_treasury_floor = 7000,
     trade_buy_buffer_turns = 4,
+    -- Card #465: industrialist tolerates small army; small reserve.
+    arms_sell_reserve = 6,
     goods_sell_treasury_threshold = 2000,
     goods_reserve = 3,
     food_processing_expansion_threshold = 2,

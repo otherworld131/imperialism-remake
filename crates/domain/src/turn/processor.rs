@@ -1679,33 +1679,50 @@ fn process_pending_civilian_hires(game: &mut GameState) {
 
     for nation_id in nation_ids {
         let pending: Vec<(CivilianType, u32)> = {
-            let Some(nation) = game.get_nation_mut(nation_id) else { continue };
-            if nation.diplomacy.is_in_anarchy { continue; }
+            let Some(nation) = game.get_nation_mut(nation_id) else {
+                continue;
+            };
+            if nation.diplomacy.is_in_anarchy {
+                continue;
+            }
             nation.economy.pending_civilian_hires.drain().collect()
         };
-        if pending.is_empty() { continue; }
+        if pending.is_empty() {
+            continue;
+        }
 
         for (civ_type, count) in pending {
             let cost_per = civ_type.creation_cost(&cfg);
             let actual = {
-                let Some(nation) = game.get_nation(nation_id) else { break };
+                let Some(nation) = game.get_nation(nation_id) else {
+                    break;
+                };
                 let max_by_cash = if cost_per > Money::ZERO {
                     (nation.economy.treasury.as_dollars() / cost_per.as_dollars())
                         .clamp(0, u32::MAX as i64) as u32
                 } else {
                     count
                 };
-                let max_by_experts = if civilian_costs_expert { nation.economy.labor.expert } else { count };
+                let max_by_experts = if civilian_costs_expert {
+                    nation.economy.labor.expert
+                } else {
+                    count
+                };
                 count.min(max_by_cash).min(max_by_experts)
             };
-            if actual == 0 { continue; }
+            if actual == 0 {
+                continue;
+            }
 
             let total_cost = Money::dollars(cost_per.as_dollars() * i64::from(actual));
             {
-                let Some(nation) = game.get_nation_mut(nation_id) else { break };
+                let Some(nation) = game.get_nation_mut(nation_id) else {
+                    break;
+                };
                 nation.economy.treasury -= total_cost;
                 if civilian_costs_expert {
-                    nation.economy.labor.expert = nation.economy.labor.expert.saturating_sub(actual);
+                    nation.economy.labor.expert =
+                        nation.economy.labor.expert.saturating_sub(actual);
                 }
             }
             for _ in 0..actual {
@@ -1727,16 +1744,27 @@ fn process_pending_worker_training(game: &mut GameState) {
 
     for nation_id in nation_ids {
         let (req_trained, req_expert) = {
-            let Some(nation) = game.get_nation_mut(nation_id) else { continue };
-            if nation.diplomacy.is_in_anarchy { continue; }
-            let t = (nation.economy.pending_train_to_trained, nation.economy.pending_train_to_expert);
+            let Some(nation) = game.get_nation_mut(nation_id) else {
+                continue;
+            };
+            if nation.diplomacy.is_in_anarchy {
+                continue;
+            }
+            let t = (
+                nation.economy.pending_train_to_trained,
+                nation.economy.pending_train_to_expert,
+            );
             nation.economy.pending_train_to_trained = 0;
             nation.economy.pending_train_to_expert = 0;
             t
         };
-        if req_trained == 0 && req_expert == 0 { continue; }
+        if req_trained == 0 && req_expert == 0 {
+            continue;
+        }
 
-        let Some(nation) = game.get_nation_mut(nation_id) else { continue };
+        let Some(nation) = game.get_nation_mut(nation_id) else {
+            continue;
+        };
         let avail_paper = nation.material_amount(MaterialType::Paper);
         let avail_labor = nation.economy.labor.total_labor_units();
 
@@ -1746,22 +1774,39 @@ fn process_pending_worker_training(game: &mut GameState) {
         let lp_e = cfg.train_to_expert_labor_cost;
 
         let max_train = req_trained
-            .min(if pp_t > 0 { avail_paper / pp_t } else { req_trained })
-            .min(if lp_t > 0 { avail_labor / lp_t } else { req_trained })
+            .min(if pp_t > 0 {
+                avail_paper / pp_t
+            } else {
+                req_trained
+            })
+            .min(if lp_t > 0 {
+                avail_labor / lp_t
+            } else {
+                req_trained
+            })
             .min(nation.economy.labor.untrained);
 
         let rem_paper = avail_paper.saturating_sub(max_train * pp_t);
         let rem_labor = avail_labor.saturating_sub(max_train * lp_t);
         let max_expert = req_expert
-            .min(if pp_e > 0 { rem_paper / pp_e } else { req_expert })
-            .min(if lp_e > 0 { rem_labor / lp_e } else { req_expert })
+            .min(if pp_e > 0 {
+                rem_paper / pp_e
+            } else {
+                req_expert
+            })
+            .min(if lp_e > 0 {
+                rem_labor / lp_e
+            } else {
+                req_expert
+            })
             .min(nation.economy.labor.trained);
 
         if max_train > 0 {
             if let Some(v) = nation.economy.materials.get_mut(&MaterialType::Paper) {
                 *v = v.saturating_sub(max_train * pp_t);
             }
-            nation.economy.labor.untrained = nation.economy.labor.untrained.saturating_sub(max_train);
+            nation.economy.labor.untrained =
+                nation.economy.labor.untrained.saturating_sub(max_train);
             nation.economy.labor.trained += max_train;
         }
         if max_expert > 0 {
@@ -1775,22 +1820,28 @@ fn process_pending_worker_training(game: &mut GameState) {
 }
 
 fn process_pending_freight_cars(game: &mut GameState) {
-    let (labor_cost, lumber_cost, steel_cost) = crate::economy::transport::TransportSystem::build_freight_car_cost();
+    let (labor_cost, lumber_cost, steel_cost) =
+        crate::economy::transport::TransportSystem::build_freight_car_cost();
     let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
     for nation_id in nation_ids {
-        let count = game.get_nation(nation_id)
+        let count = game
+            .get_nation(nation_id)
             .map(|n| n.economy.pending_freight_cars)
             .unwrap_or(0);
-        if count == 0 { continue; }
-        let Some(nation) = game.get_nation_mut(nation_id) else { continue; };
+        if count == 0 {
+            continue;
+        }
+        let Some(nation) = game.get_nation_mut(nation_id) else {
+            continue;
+        };
         nation.economy.pending_freight_cars = 0;
         let max_by_lumber = nation.material_amount(MaterialType::Lumber) / lumber_cost.max(1);
-        let max_by_steel  = nation.material_amount(MaterialType::Steel)  / steel_cost.max(1);
-        let max_by_labor  = nation.economy.labor.total_labor_units() / labor_cost.max(1);
+        let max_by_steel = nation.material_amount(MaterialType::Steel) / steel_cost.max(1);
+        let max_by_labor = nation.economy.labor.total_labor_units() / labor_cost.max(1);
         let actual = count.min(max_by_lumber).min(max_by_steel).min(max_by_labor);
         if actual > 0 {
             nation.consume_material(MaterialType::Lumber, actual * lumber_cost);
-            nation.consume_material(MaterialType::Steel,  actual * steel_cost);
+            nation.consume_material(MaterialType::Steel, actual * steel_cost);
             nation.military.transport.build_freight_cars(actual);
         }
     }
@@ -1909,42 +1960,85 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
                 .total_labor_units_with(untrained_mult, trained_mult, expert_mult);
 
         // Building capacities
-        let lumber_mill_cap = nation.economy.buildings.iter()
+        let lumber_mill_cap = nation
+            .economy
+            .buildings
+            .iter()
             .find(|b| b.building_type == BuildingType::LumberMill)
-            .map(|b| b.effective_capacity()).unwrap_or(0);
-        let steel_mill_cap = nation.economy.buildings.iter()
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
+        let steel_mill_cap = nation
+            .economy
+            .buildings
+            .iter()
             .find(|b| b.building_type == BuildingType::SteelMill)
-            .map(|b| b.effective_capacity()).unwrap_or(0);
-        let textile_mill_cap = nation.economy.buildings.iter()
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
+        let textile_mill_cap = nation
+            .economy
+            .buildings
+            .iter()
             .find(|b| b.building_type == BuildingType::TextileMill)
-            .map(|b| b.effective_capacity()).unwrap_or(0);
-        let furniture_cap = nation.economy.buildings.iter()
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
+        let furniture_cap = nation
+            .economy
+            .buildings
+            .iter()
             .find(|b| b.building_type == BuildingType::FurnitureFactory)
-            .map(|b| b.effective_capacity()).unwrap_or(0);
-        let hardware_cap = nation.economy.buildings.iter()
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
+        let hardware_cap = nation
+            .economy
+            .buildings
+            .iter()
             .find(|b| b.building_type == BuildingType::HardwareFactory)
-            .map(|b| b.effective_capacity()).unwrap_or(0);
-        let clothing_cap = nation.economy.buildings.iter()
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
+        let clothing_cap = nation
+            .economy
+            .buildings
+            .iter()
             .find(|b| b.building_type == BuildingType::ClothingFactory)
-            .map(|b| b.effective_capacity()).unwrap_or(0);
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
 
         // Honor chain_targets: proportional labor allocation + feed percentages
         let targets = nation.economy.chain_targets.clone();
-        let armory_cap = nation.economy.buildings.iter()
+        let armory_cap = nation
+            .economy
+            .buildings
+            .iter()
             .find(|b| b.building_type == BuildingType::Armory)
-            .map(|b| b.effective_capacity()).unwrap_or(0);
-        let paper_cap = nation.economy.buildings.iter()
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
+        let paper_cap = nation
+            .economy
+            .buildings
+            .iter()
             .find(|b| b.building_type == BuildingType::PaperFactory)
-            .map(|b| b.effective_capacity()).unwrap_or(0);
-        let canned_food_cap = nation.economy.buildings.iter()
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
+        let canned_food_cap = nation
+            .economy
+            .buildings
+            .iter()
             .find(|b| b.building_type == BuildingType::FoodProcessing)
-            .map(|b| b.effective_capacity()).unwrap_or(0);
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0);
         let labor = super::economy_phase::allocate_labor(
-            total_labor, &targets,
+            total_labor,
+            &targets,
             super::economy_phase::BuildingCapacities {
-                timber: lumber_mill_cap, metal: steel_mill_cap, textile: textile_mill_cap,
-                furniture: furniture_cap, hardware: hardware_cap, clothing: clothing_cap,
-                armory: armory_cap, paper: paper_cap, canned_food: canned_food_cap,
+                timber: lumber_mill_cap,
+                metal: steel_mill_cap,
+                textile: textile_mill_cap,
+                furniture: furniture_cap,
+                hardware: hardware_cap,
+                clothing: clothing_cap,
+                armory: armory_cap,
+                paper: paper_cap,
+                canned_food: canned_food_cap,
             },
         );
         let fed_resources = super::economy_phase::apply_feed_to_resources(&resources, &targets);
@@ -2031,7 +2125,8 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
             .iter()
             .map(|(m, q)| (*m, *q))
             .collect();
-        let fed_materials = super::economy_phase::apply_feed_to_materials(&combined_materials, &targets);
+        let fed_materials =
+            super::economy_phase::apply_feed_to_materials(&combined_materials, &targets);
 
         let furniture_result = if furniture_cap > 0 {
             Some(calculate_factory_production(
@@ -2104,9 +2199,11 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
             .iter()
             .map(|(m, q)| (*m, *q))
             .collect();
-        let fed_materials_for_armory = super::economy_phase::apply_feed_to_materials(&combined_materials_for_armory, &targets);
+        let fed_materials_for_armory =
+            super::economy_phase::apply_feed_to_materials(&combined_materials_for_armory, &targets);
         let armory_result = if armory_cap > 0 {
-            let steel_for_armory = fed_materials_for_armory.iter()
+            let steel_for_armory = fed_materials_for_armory
+                .iter()
                 .find(|(m, _)| *m == MaterialType::Steel)
                 .map(|(_, q)| *q)
                 .unwrap_or(0)
@@ -2131,9 +2228,12 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
             for (material, amount) in &result.materials_produced {
                 if *amount > 0 {
                     *nation.economy.materials.entry(*material).or_insert(0) += *amount;
-                    report.production_output.push((nation_id, format!("{:?}", material), *amount));
+                    report
+                        .production_output
+                        .push((nation_id, format!("{:?}", material), *amount));
                     if let MaterialType::Arms = material {
-                        nation.military.total_arms_built = nation.military.total_arms_built.saturating_add(*amount);
+                        nation.military.total_arms_built =
+                            nation.military.total_arms_built.saturating_add(*amount);
                     }
                 }
             }
@@ -2141,9 +2241,16 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
 
         // ── Paper Factory: Lumber → Paper ──
         if paper_cap > 0 {
-            let current_lumber = nation.economy.materials.get(&MaterialType::Lumber).copied().unwrap_or(0);
-            let lumber_slice: Vec<(MaterialType, u32)> = vec![(MaterialType::Lumber, current_lumber)];
-            let paper_result = calculate_paper_production(&lumber_slice, paper_cap, labor.paper_factory);
+            let current_lumber = nation
+                .economy
+                .materials
+                .get(&MaterialType::Lumber)
+                .copied()
+                .unwrap_or(0);
+            let lumber_slice: Vec<(MaterialType, u32)> =
+                vec![(MaterialType::Lumber, current_lumber)];
+            let paper_result =
+                calculate_paper_production(&lumber_slice, paper_cap, labor.paper_factory);
             for (material, amount) in &paper_result.materials_consumed {
                 if *amount > 0 {
                     let entry = nation.economy.materials.entry(*material).or_insert(0);
@@ -2153,7 +2260,9 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
             for (material, amount) in &paper_result.materials_produced {
                 if *amount > 0 {
                     *nation.economy.materials.entry(*material).or_insert(0) += *amount;
-                    report.production_output.push((nation_id, format!("{:?}", material), *amount));
+                    report
+                        .production_output
+                        .push((nation_id, format!("{:?}", material), *amount));
                 }
             }
         }
@@ -2174,10 +2283,13 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
                 .warehouse
                 .iter()
                 .map(|(r, q)| {
-                    let surplus = if matches!(*r,
-                        ResourceType::Grain | ResourceType::Fruit
-                            | ResourceType::Fish | ResourceType::Livestock)
-                    {
+                    let surplus = if matches!(
+                        *r,
+                        ResourceType::Grain
+                            | ResourceType::Fruit
+                            | ResourceType::Fish
+                            | ResourceType::Livestock
+                    ) {
                         // Subtract this resource's share of worker food, in
                         // priority order. Grain reserves first up to total
                         // need, then fruit covers the residual, then livestock,
@@ -2185,17 +2297,19 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
                         let already_reserved = match *r {
                             ResourceType::Grain => 0,
                             ResourceType::Fruit => nation.resource_amount(ResourceType::Grain),
-                            ResourceType::Livestock =>
-                                nation.resource_amount(ResourceType::Grain)
-                                    + nation.resource_amount(ResourceType::Fruit),
-                            ResourceType::Fish =>
+                            ResourceType::Livestock => {
                                 nation.resource_amount(ResourceType::Grain)
                                     + nation.resource_amount(ResourceType::Fruit)
-                                    + nation.resource_amount(ResourceType::Livestock),
+                            }
+                            ResourceType::Fish => {
+                                nation.resource_amount(ResourceType::Grain)
+                                    + nation.resource_amount(ResourceType::Fruit)
+                                    + nation.resource_amount(ResourceType::Livestock)
+                            }
                             _ => 0,
                         };
-                        let still_needed = raw_food_reserved_for_workers
-                            .saturating_sub(already_reserved);
+                        let still_needed =
+                            raw_food_reserved_for_workers.saturating_sub(already_reserved);
                         q.saturating_sub(still_needed.min(*q))
                     } else {
                         *q
@@ -6512,9 +6626,15 @@ mod tests {
 
         // Set chain targets to unlimited so production runs at full capacity.
         nation.economy.chain_targets = crate::nation::ChainOutputTargets {
-            timber_mill: u32::MAX, metal_mill: u32::MAX, textile_mill: u32::MAX,
-            lumber_factory: u32::MAX, steel_factory: u32::MAX, garment_factory: u32::MAX,
-            armory: 0, paper_factory: 0, canned_food_factory: u32::MAX,
+            timber_mill: u32::MAX,
+            metal_mill: u32::MAX,
+            textile_mill: u32::MAX,
+            lumber_factory: u32::MAX,
+            steel_factory: u32::MAX,
+            garment_factory: u32::MAX,
+            armory: 0,
+            paper_factory: 0,
+            canned_food_factory: u32::MAX,
         };
 
         // Give enough workers for full production (expert=4 labor each)
@@ -7527,7 +7647,10 @@ mod tests {
             .filter(|(nid, _)| *nid == NationId(1))
             .map(|(_, q)| *q)
             .sum();
-        assert_eq!(immigration, 0, "Immigration should not occur without a queued order");
+        assert_eq!(
+            immigration, 0,
+            "Immigration should not occur without a queued order"
+        );
     }
 
     #[test]
@@ -7551,7 +7674,10 @@ mod tests {
             .filter(|(nid, _)| *nid == NationId(1))
             .map(|(_, q)| *q)
             .sum();
-        assert_eq!(immigration, 2, "7 provinces should allow only 2 immigrants this turn");
+        assert_eq!(
+            immigration, 2,
+            "7 provinces should allow only 2 immigrants this turn"
+        );
     }
 
     // ── Building tick / expansion ──────────────────────────────

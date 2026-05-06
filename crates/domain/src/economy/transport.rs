@@ -228,7 +228,6 @@ impl TransportSystem {
     pub fn military_transport_capacity(&self) -> u32 {
         self.freight_cars / 5
     }
-
 }
 
 /// Calculate how many army units can be transported by rail.
@@ -358,10 +357,8 @@ pub fn current_collectable_resources(
         .collect();
 
     let collectable = collectable_hexes(&game.world.hex_map, &owned, &connected);
-    let owned_tiles: std::collections::HashSet<crate::hex::HexCoord> = owned
-        .iter()
-        .flat_map(|p| p.tiles.iter().copied())
-        .collect();
+    let owned_tiles: std::collections::HashSet<crate::hex::HexCoord> =
+        owned.iter().flat_map(|p| p.tiles.iter().copied()).collect();
     let mut local_hexes: std::collections::HashSet<crate::hex::HexCoord> =
         std::collections::HashSet::new();
     for &capital in &capital_tiles {
@@ -432,10 +429,7 @@ pub fn current_collectable_resources(
         }
     }
 
-    (
-        local.into_iter().collect(),
-        remote.into_iter().collect(),
-    )
+    (local.into_iter().collect(), remote.into_iter().collect())
 }
 
 /// Calculate the transport size of an army unit (= arms required to build it).
