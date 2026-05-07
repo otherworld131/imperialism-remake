@@ -69,7 +69,8 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         voluntary_incorporation_threshold: table
             .get("voluntary_incorporation_threshold")
             .unwrap_or(90),
-        trade_relation_improvement_cap: table.get("trade_relation_improvement_cap").unwrap_or(2),
+        trade_relation_improvement_cap: table.get("trade_relation_improvement_cap").unwrap_or(15),
+        trade_relation_improvement_per_resource: table.get("trade_relation_improvement_per_resource").unwrap_or(2),
         trade_relation_turn_interval: table.get("trade_relation_turn_interval").unwrap_or(3),
         starting_freight_cars: table.get("starting_freight_cars").unwrap_or(15),
         starting_engineers: table.get("starting_engineers").unwrap_or(1),
@@ -336,6 +337,7 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         ai_embassy_min_relation: cfg.ai_embassy_min_relation.clamp(-100, 100),
         voluntary_incorporation_threshold: cfg.voluntary_incorporation_threshold.clamp(-100, 100),
         trade_relation_improvement_cap: cfg.trade_relation_improvement_cap.max(0),
+        trade_relation_improvement_per_resource: cfg.trade_relation_improvement_per_resource.max(0),
         trade_relation_turn_interval: cfg.trade_relation_turn_interval.max(1),
         starting_freight_cars: cfg.starting_freight_cars,
         starting_engineers: cfg.starting_engineers,

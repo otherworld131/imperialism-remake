@@ -630,7 +630,7 @@ pub fn ai_manage_diplomacy(
 pub fn ai_pre_election_strategy(
     game: &mut GameState,
     nation_id: NationId,
-    actions: &mut Vec<super::AiAction>,
+    _actions: &mut Vec<super::AiAction>,
 ) {
     // Only activate within 4 turns of a decade election
     if !game.turn.is_near_decade_election(4) {
@@ -703,79 +703,6 @@ pub fn ai_pre_election_strategy(
         ));
     }
 
-    // All personalities try to build embassies with MNs that have consulates,
-    // but with different treasury thresholds based on personality.
-    let embassy_treasury_threshold: Money = 'val: {
-        #[cfg(feature = "lua")]
-        if let Some(v) = lua_cfg.as_ref().and_then(|c| c.embassy_treasury_threshold) {
-            break 'val Money::dollars(v);
-        }
-        Money::dollars(pc.embassy_treasury_threshold_dollars as i64)
-    };
-    let embassy_cost = Money::dollars(game.game_data.game_config.embassy_cost);
-    let min_relation = game.game_data.game_config.ai_embassy_min_relation;
-    let treasury_ok = game
-        .get_nation(nation_id)
-        .is_some_and(|n| n.economy.treasury >= embassy_treasury_threshold);
-    if treasury_ok {
-        for mn_id in &minor_ids {
-            // Card #210: relation gate applies uniformly — priority-minor
-            // targets do NOT bypass it. Consulate alone gives a relationship
-            // bonus, so the costly embassy waits until rapport has warmed.
-            let warm_enough = game
-                .world
-                .diplomacy
-                .get_relation(nation_id, *mn_id)
-                .is_some_and(|r| r.has_consulate && !r.has_embassy && r.score >= min_relation);
-            if !warm_enough {
-                continue;
-            }
-
-            let can_afford = game
-                .get_nation(nation_id)
-                .is_some_and(|n| n.economy.treasury.checked_sub(embassy_cost).is_some());
-            if !can_afford {
-                break;
-            }
-
-            if game
-                .world
-                .diplomacy
-                .build_embassy(nation_id, *mn_id)
-                .is_ok()
-            {
-                if let Some(nation) = game.get_nation_mut(nation_id) {
-                    nation.economy.treasury -= embassy_cost;
-                }
-                game.transient.pending_ai_cash_spending.push((
-                    nation_id,
-                    crate::economy::ledger::CashSink::AiDiplomacyEmbassy,
-                    embassy_cost,
-                    Some(*mn_id),
-                ));
-                let nation_name = game
-                    .get_nation(nation_id)
-                    .map(|n| n.name.clone())
-                    .unwrap_or_default();
-                let mn_name = game
-                    .get_nation(*mn_id)
-                    .map(|n| n.name.clone())
-                    .unwrap_or_default();
-                actions.push(super::AiAction {
-                    text: format!(
-                        "{} built an embassy in {} ahead of the election",
-                        nation_name, mn_name
-                    ),
-                    reason: format!(
-                        "election approaching at turn {}; {:?} personality building influence",
-                        game.turn.0, personality
-                    ),
-                    is_non_action: false,
-                    nation_id,
-                });
-            }
-        }
-    }
 }
 
 /// Minor Nation bonus trade: when a MN has an embassy with a GP and relationship > 50,

@@ -41,6 +41,7 @@ pub enum SpendingCategory {
 struct SpendingWeights {
     military_weight: f64,
     economy_weight: f64,
+    #[allow(dead_code)] // used in #[cfg(test)] score_consulate / score_embassy
     diplomacy_weight: f64,
     reserve: Money,
     min_threshold: f64,
@@ -150,30 +151,6 @@ pub(crate) fn ai_scored_spending(
                 game,
                 nation_id,
                 SpendingCategory::Infrastructure,
-                current_turn,
-                military_priority,
-            );
-            if opt.cost <= available {
-                options.push(opt);
-            }
-        }
-        if let Some(mut opt) = score_consulate(game, nation_id, &weights) {
-            opt.score += backlog_bonus(
-                game,
-                nation_id,
-                SpendingCategory::Consulate,
-                current_turn,
-                military_priority,
-            );
-            if opt.cost <= available {
-                options.push(opt);
-            }
-        }
-        if let Some(mut opt) = score_embassy(game, nation_id, &weights) {
-            opt.score += backlog_bonus(
-                game,
-                nation_id,
-                SpendingCategory::Embassy,
                 current_turn,
                 military_priority,
             );
@@ -434,10 +411,6 @@ fn backlog_bonus(
         (AiPersonality::Aggressive, SpendingCategory::Infrastructure) => {
             cfg.backlog_weight_aggressive_infra
         }
-        (AiPersonality::Aggressive, SpendingCategory::Consulate)
-        | (AiPersonality::Aggressive, SpendingCategory::Embassy) => {
-            cfg.backlog_weight_aggressive_diplomacy
-        }
         (AiPersonality::Aggressive, SpendingCategory::HireEngineer) => {
             cfg.backlog_weight_aggressive_hire_engineer
         }
@@ -449,10 +422,6 @@ fn backlog_bonus(
         }
         (AiPersonality::Balanced, SpendingCategory::Infrastructure) => {
             cfg.backlog_weight_balanced_infra
-        }
-        (AiPersonality::Balanced, SpendingCategory::Consulate)
-        | (AiPersonality::Balanced, SpendingCategory::Embassy) => {
-            cfg.backlog_weight_balanced_diplomacy
         }
         (AiPersonality::Balanced, SpendingCategory::HireEngineer) => {
             cfg.backlog_weight_balanced_hire_engineer
@@ -466,10 +435,6 @@ fn backlog_bonus(
         (AiPersonality::Economic, SpendingCategory::Infrastructure) => {
             cfg.backlog_weight_economic_infra
         }
-        (AiPersonality::Economic, SpendingCategory::Consulate)
-        | (AiPersonality::Economic, SpendingCategory::Embassy) => {
-            cfg.backlog_weight_economic_diplomacy
-        }
         (AiPersonality::Economic, SpendingCategory::HireEngineer) => {
             cfg.backlog_weight_economic_hire_engineer
         }
@@ -482,10 +447,6 @@ fn backlog_bonus(
         (AiPersonality::Diplomatic, SpendingCategory::Infrastructure) => {
             cfg.backlog_weight_diplomatic_infra
         }
-        (AiPersonality::Diplomatic, SpendingCategory::Consulate)
-        | (AiPersonality::Diplomatic, SpendingCategory::Embassy) => {
-            cfg.backlog_weight_diplomatic_diplomacy
-        }
         (AiPersonality::Diplomatic, SpendingCategory::HireEngineer) => {
             cfg.backlog_weight_diplomatic_hire_engineer
         }
@@ -495,6 +456,9 @@ fn backlog_bonus(
         // Warship is aliased to Military above — this arm is unreachable,
         // but the exhaustiveness check still wants it covered.
         (_, SpendingCategory::Warship) => cfg.backlog_weight_balanced_military,
+        // Consulate/Embassy are no longer scored in the main loop (handled by
+        // ai_diplomatic_mop_up instead), so these arms are unreachable.
+        (_, SpendingCategory::Consulate) | (_, SpendingCategory::Embassy) => 0,
     };
 
     // At war or military-lagging: double the military backlog weight to bias
@@ -716,6 +680,7 @@ fn score_infrastructure(
     })
 }
 
+#[cfg(test)]
 fn score_consulate(
     game: &GameState,
     nation_id: NationId,
@@ -842,6 +807,7 @@ fn score_consulate(
     })
 }
 
+#[cfg(test)]
 fn score_embassy(
     game: &GameState,
     nation_id: NationId,
@@ -1219,6 +1185,7 @@ fn execute_with_plan(
     match category {
         SpendingCategory::Military => execute_military(game, nation_id, actions),
         SpendingCategory::Infrastructure => execute_infrastructure(game, nation_id, plan),
+        // Consulate/Embassy are handled by ai_diplomatic_mop_up, not the scored loop.
         SpendingCategory::Consulate => execute_consulate(game, nation_id),
         SpendingCategory::Embassy => execute_embassy(game, nation_id),
         SpendingCategory::HireEngineer => execute_hire_engineer(game, nation_id),
@@ -2404,6 +2371,80 @@ fn load_weights(game: &GameState, personality: AiPersonality) -> SpendingWeights
     // Suppress unused variable warning when lua feature is off
     let _ = game;
     w
+}
+
+/// Greedily build all affordable consulates and embassies each turn.
+///
+/// Consulates and embassies only cost money — they have no strategic
+/// opportunity cost like recruiting a unit or building infrastructure. So they
+/// should not compete in the scored spending auction. Instead, after the main
+/// loop runs, this pass builds every consulate and embassy the AI can afford
+/// above its treasury reserve, in priority order, until money runs out.
+pub(crate) fn ai_diplomatic_mop_up(game: &mut GameState, nation_id: NationId) {
+    // Build consulates until we can't afford the next one or there are none left.
+    // No reserve deduction — consulates/embassies are pure money purchases and
+    // should not be blocked by the strategic spending reserve.
+    loop {
+        let consulate_cost = Money::dollars(game.game_data.game_config.consulate_cost);
+        let can_afford = game
+            .get_nation(nation_id)
+            .is_some_and(|n| n.economy.treasury >= consulate_cost);
+        if !can_afford {
+            break;
+        }
+        // Check if there is anything to build before calling execute.
+        let has_target = game.world.nations.iter().any(|n| {
+            !n.is_great_power()
+                && !n.province_ids.is_empty()
+                && !n.diplomacy.is_in_anarchy
+                && game
+                    .world
+                    .diplomacy
+                    .get_relation(nation_id, n.id)
+                    .is_none_or(|r| !r.has_consulate)
+        });
+        if !has_target {
+            break;
+        }
+        let treasury_before = game.get_nation(nation_id).map(|n| n.economy.treasury);
+        execute_consulate(game, nation_id);
+        let treasury_after = game.get_nation(nation_id).map(|n| n.economy.treasury);
+        if treasury_before == treasury_after {
+            // execute_consulate found nothing to build
+            break;
+        }
+    }
+
+    // Build embassies until we can't afford the next one or there are none left.
+    loop {
+        let embassy_cost = Money::dollars(game.game_data.game_config.embassy_cost);
+        let min_relation = game.game_data.game_config.ai_embassy_min_relation;
+        let can_afford = game
+            .get_nation(nation_id)
+            .is_some_and(|n| n.economy.treasury >= embassy_cost);
+        if !can_afford {
+            break;
+        }
+        let has_target = game.world.nations.iter().any(|n| {
+            !n.is_great_power()
+                && !n.province_ids.is_empty()
+                && !n.diplomacy.is_in_anarchy
+                && game
+                    .world
+                    .diplomacy
+                    .get_relation(nation_id, n.id)
+                    .is_some_and(|r| r.has_consulate && !r.has_embassy && r.score >= min_relation)
+        });
+        if !has_target {
+            break;
+        }
+        let treasury_before = game.get_nation(nation_id).map(|n| n.economy.treasury);
+        execute_embassy(game, nation_id);
+        let treasury_after = game.get_nation(nation_id).map(|n| n.economy.treasury);
+        if treasury_before == treasury_after {
+            break;
+        }
+    }
 }
 
 #[cfg(test)]

@@ -104,6 +104,7 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<AiAction> {
         // Need-based spending: replaces independent military, infrastructure,
         // consulate, embassy, and civilian hiring decisions
         spending::ai_scored_spending(game, *nation_id, &mut actions);
+        spending::ai_diplomatic_mop_up(game, *nation_id);
         labor::ai_deploy_civilians(game, *nation_id);
         economy::ai_trade(game, *nation_id);
         economy::ai_build_transport_proactive(game, *nation_id);

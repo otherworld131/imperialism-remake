@@ -279,20 +279,23 @@ game_config = {
     -- to an embassy. Consulates already give a relationship bonus, so the
     -- expensive embassy should wait for real warmth. Priority-minor targets
     -- bypass this gate.
-    ai_embassy_min_relation = 50,
+    ai_embassy_min_relation = 25,
 
     -- Diplomatic relationship tuning
     -- Minor nations voluntarily join a Great Power's empire when their relation
-    -- score reaches this value. Range is [-100, 100], so 90 = near-max trust.
-    voluntary_incorporation_threshold = 90,
+    -- score reaches this value. Range is [-100, 100], so 95 = near-max trust.
+    voluntary_incorporation_threshold = 95,
     -- Per-turn cap on relationship improvement from trade with a consulate.
     -- The raw improvement is the number of distinct resources traded;
     -- capping prevents broad trade portfolios from trivially maxing relations.
-    trade_relation_improvement_cap = 2,
+    trade_relation_improvement_cap = 15,
+    -- Relationship improvement per distinct resource traded (per interval).
+    -- Total improvement = resources * per_resource, capped at improvement_cap.
+    trade_relation_improvement_per_resource = 2,
     -- Only apply the trade relationship improvement once every N turns.
     -- Combined with the cap above, this controls how fast a GP can befriend
     -- a minor nation through passive trade alone. Set to 1 for every turn.
-    trade_relation_turn_interval = 3,
+    trade_relation_turn_interval = 1,
 
     -- Minor nation trade behaviour
     -- Chance (0–100) that a minor nation withholds one random resource offer each turn.
