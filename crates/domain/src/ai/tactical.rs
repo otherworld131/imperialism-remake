@@ -342,11 +342,9 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
         }
     }
 
-    // ── Phase B: spread to undefended border / forward staging ──────
+    // ── Phase B: redistribute surplus units ─────────────────────────
     // Under a `Safe` threat, the capital only needs `reserve_normal` units;
-    // everything else is surplus and should push to the front. When the
-    // threat is non-Safe, we still distribute *genuine* surplus beyond the
-    // threatened reserve.
+    // everything else is surplus and should push forward.
     // Count only movable units at the capital when computing surplus —
     // static garrison (militia) can't be "spread forward" anyway.
     let capital_have_now: usize = {
@@ -360,19 +358,7 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
     };
     let capital_surplus = capital_have_now.saturating_sub(capital_reserve_target);
 
-    // Destinations: empty border first, then low-garrisoned border,
-    // then provinces adjacent to a pending attack target (forward staging).
-    let mut dest_priority: Vec<ProvinceId> = Vec::new();
-    let mut border_sorted: Vec<(ProvinceId, usize)> = border_provinces
-        .iter()
-        .map(|&pid| (pid, *unit_counts.get(&pid).unwrap_or(&0)))
-        .collect();
-    border_sorted.sort_by_key(|&(_, c)| c);
-    for (pid, _) in border_sorted {
-        dest_priority.push(pid);
-    }
-    // Forward staging: provinces we own that are adjacent to a province
-    // currently in pending_attacks targeted by this nation.
+    // Pending attack targets and pending naval landings *we* are running.
     let pending_attack_targets: Vec<ProvinceId> = game
         .transient
         .pending_attacks
@@ -380,22 +366,108 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
         .filter(|(a, _)| *a == nation_id)
         .map(|(_, p)| *p)
         .collect();
-    if !pending_attack_targets.is_empty() {
-        for &pid in &owned_provinces {
-            if pid == capital_pid || dest_priority.contains(&pid) {
-                continue;
+    let our_pending_landings: Vec<ProvinceId> = game
+        .transient
+        .pending_landings
+        .iter()
+        .filter(|(nid, _, _)| *nid == nation_id)
+        .map(|(_, pid, _)| *pid)
+        .collect();
+
+    // Destination strategy diverges between wartime and peacetime.
+    //
+    // **Wartime** (we have at least one enemy): cumulate units where it
+    // matters. A thinly-spread border is a recipe for piecemeal defeat —
+    // pick at most a handful of decisive destinations and pile units onto
+    // them.
+    //   1. If we have a pending naval landing, the capital is the
+    //      embarkation point: keep surplus AT the capital so it can ship
+    //      out, instead of bleeding it to peripheral border provinces.
+    //   2. Provinces adjacent to a pending attack target (forward staging
+    //      for this turn's planned offensive) are top priority.
+    //   3. Otherwise, the *single* border province that touches the most
+    //      enemy provinces — the natural Schwerpunkt of the front.
+    //
+    // **Peacetime** (no enemies): we still bias toward border provinces so
+    // a fresh war finds units already forward, but the round-robin spread
+    // across all neighbours is fine here — there is no decisive point yet.
+    let mut dest_priority: Vec<ProvinceId> = Vec::new();
+    let concentrate = !enemies.is_empty();
+    if concentrate {
+        if !our_pending_landings.is_empty() {
+            // Beachhead in flight — concentrate at the capital.
+            dest_priority.push(capital_pid);
+        }
+        // Forward staging adjacent to pending attack targets.
+        if !pending_attack_targets.is_empty() {
+            let mut staging: Vec<(ProvinceId, usize)> = Vec::new();
+            for &pid in &owned_provinces {
+                if pid == capital_pid {
+                    continue;
+                }
+                let Some(prov) = game.get_province(pid) else {
+                    continue;
+                };
+                let staged_targets = pending_attack_targets
+                    .iter()
+                    .filter(|&&tpid| {
+                        game.get_province(tpid).is_some_and(|tp| {
+                            crate::map::provinces_are_adjacent(&game.world.hex_map, prov, tp)
+                        })
+                    })
+                    .count();
+                if staged_targets > 0 {
+                    staging.push((pid, staged_targets));
+                }
             }
-            let Some(prov) = game.get_province(pid) else {
-                continue;
-            };
-            let is_staging = pending_attack_targets.iter().any(|&tpid| {
-                game.get_province(tpid).is_some_and(|tp| {
-                    crate::map::provinces_are_adjacent(&game.world.hex_map, prov, tp)
+            // Most-connected staging province first.
+            staging.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
+            for (pid, _) in staging {
+                if !dest_priority.contains(&pid) {
+                    dest_priority.push(pid);
+                }
+            }
+        }
+        // Schwerpunkt: the single border province bordering the most enemy
+        // provinces. If multiple tie, prefer the one with the fewest units
+        // already there (so we reinforce the weak shoulder, not the strong
+        // one).
+        if dest_priority.is_empty() && !border_provinces.is_empty() {
+            let best = border_provinces
+                .iter()
+                .filter_map(|&pid| {
+                    let prov = game.get_province(pid)?;
+                    let enemy_neighbours = prov
+                        .tiles
+                        .iter()
+                        .flat_map(|&t| t.neighbors())
+                        .filter_map(|n| {
+                            game.world
+                                .hex_map
+                                .get_tile(n)
+                                .and_then(|tile| tile.province_id)
+                        })
+                        .filter(|npid| frontier_province_ids.contains(npid))
+                        .collect::<std::collections::HashSet<_>>()
+                        .len();
+                    let have = *unit_counts.get(&pid).unwrap_or(&0);
+                    Some((pid, enemy_neighbours, have))
                 })
-            });
-            if is_staging {
+                .max_by_key(|&(_, n, have)| (n, std::cmp::Reverse(have)));
+            if let Some((pid, _, _)) = best {
                 dest_priority.push(pid);
             }
+        }
+    } else {
+        // Peacetime: spread to every owned province adjacent to a foreign
+        // neighbour, lightest-garrison first.
+        let mut border_sorted: Vec<(ProvinceId, usize)> = border_provinces
+            .iter()
+            .map(|&pid| (pid, *unit_counts.get(&pid).unwrap_or(&0)))
+            .collect();
+        border_sorted.sort_by_key(|&(_, c)| c);
+        for (pid, _) in border_sorted {
+            dest_priority.push(pid);
         }
     }
 
@@ -403,17 +475,37 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
         return;
     }
 
-    // Sources for spreading: capital surplus first, then any interior
-    // province with >1 stationed unit (leaving at least 1 if it's not
-    // empty — we won't fully vacate interior small stacks here).
+    // Sources: capital surplus first (unless the capital is itself the
+    // chosen destination — then it stays put), then any interior province
+    // with >1 stationed unit.
+    let capital_is_destination = dest_priority.contains(&capital_pid);
     let mut spread_sources: Vec<(ProvinceId, usize)> = Vec::new();
-    if capital_surplus > 0 {
+    if capital_surplus > 0 && !capital_is_destination {
         spread_sources.push((capital_pid, capital_surplus));
     }
     for &pid in &interior_provinces {
+        if dest_priority.contains(&pid) {
+            // This interior province *is* a chosen destination — don't
+            // drain it.
+            continue;
+        }
         let have = *unit_counts.get(&pid).unwrap_or(&0);
         if have > 1 {
             spread_sources.push((pid, have - 1));
+        }
+    }
+    // In wartime, also drain over-stocked *non-chosen* border provinces
+    // toward the chosen Schwerpunkt: this is the core of the card —
+    // concentrate, don't disperse. Leave 1 unit behind as a tripwire.
+    if concentrate {
+        for &pid in &border_provinces {
+            if dest_priority.contains(&pid) {
+                continue;
+            }
+            let have = *unit_counts.get(&pid).unwrap_or(&0);
+            if have > 1 {
+                spread_sources.push((pid, have - 1));
+            }
         }
     }
 
@@ -1259,9 +1351,11 @@ mod tests {
 
         ai_distribute_field_army(&mut game, NationId(2), AiPersonality::Balanced);
 
-        // Capital is Safe (enemy is ~5 hexes away, no adjacent enemy-owned
-        // province touches the capital), so Phase B spreads the surplus.
-        // Expect moves to each of the three undefended border provinces.
+        // Capital is Safe but we are at war: the AI must CONCENTRATE the
+        // surplus on a decisive border instead of dispersing it across all
+        // three border provinces (peacetime spread is wrong in wartime —
+        // see Trello card #470). Each of the three borders touches exactly
+        // one enemy province, so a single Schwerpunkt is chosen.
         let destinations: std::collections::HashSet<ProvinceId> = game
             .transient
             .pending_moves
@@ -1269,17 +1363,332 @@ mod tests {
             .filter(|(nid, _, _)| *nid == NationId(2))
             .map(|(_, _, dest)| *dest)
             .collect();
-        assert!(
-            destinations.contains(&ProvinceId(2))
-                && destinations.contains(&ProvinceId(3))
-                && destinations.contains(&ProvinceId(4)),
-            "should queue moves to all three undefended border provinces; got {:?}",
+        assert_eq!(
+            destinations.len(),
+            1,
+            "wartime dispersal should converge on ONE Schwerpunkt, not spread \
+             across borders; got {:?}",
             destinations
         );
+        let chosen = *destinations.iter().next().unwrap();
         assert!(
-            game.transient.pending_moves.len() >= 3,
-            "should queue at least 3 redeployments in a single turn; got {}",
-            game.transient.pending_moves.len()
+            [ProvinceId(2), ProvinceId(3), ProvinceId(4)].contains(&chosen),
+            "Schwerpunkt should be one of the border provinces; got {:?}",
+            chosen
+        );
+        // Most of the capital's 8-unit pile should funnel to that single
+        // border (capital reserve = 2 in normal threat, so up to 6 move).
+        let to_chosen = game
+            .transient
+            .pending_moves
+            .iter()
+            .filter(|(nid, _, dest)| *nid == NationId(2) && *dest == chosen)
+            .count();
+        assert!(
+            to_chosen >= 5,
+            "expected most of the surplus to pile onto the Schwerpunkt; got {}",
+            to_chosen
+        );
+    }
+
+    #[test]
+    fn ai_does_not_disperse_in_wartime() {
+        // Stronger version of the above: 4 border provinces, two of them
+        // touch *two* enemy provinces (so they are the natural Schwerpunkt),
+        // the other two touch only one. The AI should pile units on the
+        // double-bordered ones and ignore the singletons.
+        use crate::map::{HexMap, Province};
+        use crate::nation::{Nation, NationColor};
+
+        let mut hex_map = HexMap::new(40, 40);
+        let tile = |x: i32, y: i32| HexCoord::new(x, y);
+        let capital_tile = tile(10, 10);
+        hex_map.set_tile(
+            capital_tile,
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        // Border province #2 (touches two enemies — the Schwerpunkt).
+        let b2 = tile(15, 10);
+        hex_map.set_tile(
+            b2,
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+        // Border province #3 (touches only one enemy).
+        let b3 = tile(15, 14);
+        hex_map.set_tile(
+            b3,
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(3)),
+        );
+        // Two enemy provinces adjacent to b2, one adjacent to b3.
+        let e10 = tile(16, 10);
+        let e11 = tile(15, 9);
+        let e12 = tile(16, 14);
+        hex_map.set_tile(
+            e10,
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(10)),
+        );
+        hex_map.set_tile(
+            e11,
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(11)),
+        );
+        hex_map.set_tile(
+            e12,
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(12)),
+        );
+
+        let provinces = vec![
+            Province::new(
+                ProvinceId(1),
+                "Capital".into(),
+                NationId(2),
+                capital_tile,
+                vec![capital_tile],
+                4,
+            ),
+            Province::new(ProvinceId(2), "B2".into(), NationId(2), b2, vec![b2], 4),
+            Province::new(ProvinceId(3), "B3".into(), NationId(2), b3, vec![b3], 4),
+            Province::new(ProvinceId(10), "E10".into(), NationId(3), e10, vec![e10], 3),
+            Province::new(ProvinceId(11), "E11".into(), NationId(3), e11, vec![e11], 3),
+            Province::new(ProvinceId(12), "E12".into(), NationId(3), e12, vec![e12], 3),
+        ];
+
+        let mut ai = Nation::new(
+            NationId(2),
+            "AINation".into(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
+        ai.add_province(ProvinceId(2));
+        ai.add_province(ProvinceId(3));
+        for i in 0..6 {
+            ai.military.army.push(ArmyUnit::new(
+                UnitId(7100 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(1),
+            ));
+        }
+        let enemy = Nation::new(
+            NationId(3),
+            "Enemy".into(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(10),
+        );
+        let human = Nation::new(
+            NationId(1),
+            "Human".into(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(99),
+        );
+
+        let mut diplomacy = crate::diplomacy::DiplomacyState::new();
+        diplomacy.declare_war(NationId(2), NationId(3));
+
+        let mut game = crate::test_game_state! {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map: hex_map,
+            provinces: provinces,
+            nations: vec![human, ai, enemy],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: crate::data::GameData::default(),
+            diplomacy: diplomacy,
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
+            political_archive: Vec::new(),
+            ai_debug: false,
+            observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
+            next_unit_id: 6_000_000,
+        };
+
+        ai_distribute_field_army(&mut game, NationId(2), AiPersonality::Balanced);
+
+        let to_b2 = game
+            .transient
+            .pending_moves
+            .iter()
+            .filter(|(nid, _, dest)| *nid == NationId(2) && *dest == ProvinceId(2))
+            .count();
+        let to_b3 = game
+            .transient
+            .pending_moves
+            .iter()
+            .filter(|(nid, _, dest)| *nid == NationId(2) && *dest == ProvinceId(3))
+            .count();
+        assert!(
+            to_b2 > 0,
+            "Schwerpunkt B2 (touches 2 enemies) must receive units"
+        );
+        assert_eq!(
+            to_b3, 0,
+            "Single-enemy border B3 must NOT receive units in wartime — \
+             only the Schwerpunkt is reinforced"
+        );
+    }
+
+    #[test]
+    fn ai_concentrates_at_capital_when_landing_pending() {
+        // With a pending naval landing in flight, the capital is the
+        // embarkation point: surplus units must stay AT the capital
+        // instead of being shipped to the land border.
+        use crate::map::{HexMap, Province};
+        use crate::nation::{Nation, NationColor};
+
+        let mut hex_map = HexMap::new(30, 30);
+        let tile = |x: i32, y: i32| HexCoord::new(x, y);
+        let capital_tile = tile(10, 10);
+        hex_map.set_tile(
+            capital_tile,
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(1)),
+        );
+        let border_tile = tile(15, 10);
+        hex_map.set_tile(
+            border_tile,
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+        let enemy_tile = tile(16, 10);
+        hex_map.set_tile(
+            enemy_tile,
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(10)),
+        );
+        // Overseas landing target.
+        let landing_tile = tile(20, 20);
+        hex_map.set_tile(
+            landing_tile,
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(11)),
+        );
+
+        let provinces = vec![
+            Province::new(
+                ProvinceId(1),
+                "Capital".into(),
+                NationId(2),
+                capital_tile,
+                vec![capital_tile],
+                4,
+            ),
+            Province::new(
+                ProvinceId(2),
+                "Border".into(),
+                NationId(2),
+                border_tile,
+                vec![border_tile],
+                4,
+            ),
+            Province::new(
+                ProvinceId(10),
+                "Enemy".into(),
+                NationId(3),
+                enemy_tile,
+                vec![enemy_tile],
+                3,
+            ),
+            Province::new(
+                ProvinceId(11),
+                "Overseas".into(),
+                NationId(3),
+                landing_tile,
+                vec![landing_tile],
+                3,
+            ),
+        ];
+
+        let mut ai = Nation::new(
+            NationId(2),
+            "AINation".into(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
+        ai.add_province(ProvinceId(2));
+        for i in 0..6 {
+            ai.military.army.push(ArmyUnit::new(
+                UnitId(7200 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(1),
+            ));
+        }
+        let enemy = Nation::new(
+            NationId(3),
+            "Enemy".into(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(10),
+        );
+        let human = Nation::new(
+            NationId(1),
+            "Human".into(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(99),
+        );
+        let mut diplomacy = crate::diplomacy::DiplomacyState::new();
+        diplomacy.declare_war(NationId(2), NationId(3));
+
+        let mut game = crate::test_game_state! {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map: hex_map,
+            provinces: provinces,
+            nations: vec![human, ai, enemy],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: crate::data::GameData::default(),
+            diplomacy: diplomacy,
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: vec![(NationId(2), ProvinceId(11), TurnNumber::new(1))],
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
+            political_archive: Vec::new(),
+            ai_debug: false,
+            observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
+            next_unit_id: 6_000_000,
+        };
+
+        ai_distribute_field_army(&mut game, NationId(2), AiPersonality::Balanced);
+
+        // No moves OUT of the capital — the units stay to embark.
+        let from_capital = game
+            .transient
+            .pending_moves
+            .iter()
+            .filter(|(nid, _, _)| *nid == NationId(2))
+            .filter(|(_, uid, _)| {
+                game.get_nation(NationId(2))
+                    .and_then(|n| n.military.army.iter().find(|u| u.id == *uid))
+                    .map(|u| u.position == ProvinceId(1))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(
+            from_capital, 0,
+            "capital units must stay put when a landing is pending; got {} moves out",
+            from_capital
         );
     }
 
