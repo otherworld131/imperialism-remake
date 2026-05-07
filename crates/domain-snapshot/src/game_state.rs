@@ -4,8 +4,92 @@ use crate::events::{Headline, HistoryEvent};
 use crate::map::{HexMap, Province};
 use crate::military::{BattleResult, NavalBattleResult};
 use crate::nation::Nation;
-use crate::types::{Difficulty, NationId, ProvinceId, TurnNumber};
+use crate::types::{Difficulty, Money, NationId, ProvinceId, ResourceType, TurnNumber};
 use domain::game_state as dgs;
+
+// ── MarketTurnRecord ─────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct MarketTurnRecord {
+    pub offers: Vec<MarketOfferRecord>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MarketOfferRecord {
+    pub seller: NationId,
+    pub resource: ResourceType,
+    pub offered: u32,
+    pub price_per_unit: Money,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fills: Vec<MarketFillRecord>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MarketFillRecord {
+    pub buyer: NationId,
+    pub quantity: u32,
+    pub price_per_unit: Money,
+}
+
+impl From<&dgs::MarketTurnRecord> for MarketTurnRecord {
+    fn from(v: &dgs::MarketTurnRecord) -> Self {
+        Self {
+            offers: v.offers.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<MarketTurnRecord> for dgs::MarketTurnRecord {
+    fn from(v: MarketTurnRecord) -> Self {
+        Self {
+            offers: v.offers.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&dgs::MarketOfferRecord> for MarketOfferRecord {
+    fn from(v: &dgs::MarketOfferRecord) -> Self {
+        Self {
+            seller: v.seller.into(),
+            resource: v.resource.into(),
+            offered: v.offered,
+            price_per_unit: v.price_per_unit.into(),
+            fills: v.fills.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<MarketOfferRecord> for dgs::MarketOfferRecord {
+    fn from(v: MarketOfferRecord) -> Self {
+        Self {
+            seller: v.seller.into(),
+            resource: v.resource.into(),
+            offered: v.offered,
+            price_per_unit: v.price_per_unit.into(),
+            fills: v.fills.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&dgs::MarketFillRecord> for MarketFillRecord {
+    fn from(v: &dgs::MarketFillRecord) -> Self {
+        Self {
+            buyer: v.buyer.into(),
+            quantity: v.quantity,
+            price_per_unit: v.price_per_unit.into(),
+        }
+    }
+}
+
+impl From<MarketFillRecord> for dgs::MarketFillRecord {
+    fn from(v: MarketFillRecord) -> Self {
+        Self {
+            buyer: v.buyer.into(),
+            quantity: v.quantity,
+            price_per_unit: v.price_per_unit.into(),
+        }
+    }
+}
 
 // ── PoliticalSnapshot ────────────────────────────────────────────────
 
@@ -42,6 +126,8 @@ pub struct GameArchive {
     pub battle_archive: Vec<(TurnNumber, Vec<BattleResult>, Vec<NavalBattleResult>)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub political_archive: Vec<(TurnNumber, PoliticalSnapshot)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub market_archive: Vec<(TurnNumber, MarketTurnRecord)>,
 }
 
 // ── TransientState ───────────────────────────────────────────────────
@@ -192,6 +278,11 @@ impl From<&dgs::GameArchive> for GameArchive {
                 .iter()
                 .map(|(t, ps)| ((*t).into(), ps.into()))
                 .collect(),
+            market_archive: v
+                .market_archive
+                .iter()
+                .map(|(t, mr)| ((*t).into(), mr.into()))
+                .collect(),
         }
     }
 }
@@ -224,6 +315,11 @@ impl From<GameArchive> for dgs::GameArchive {
                 .political_archive
                 .into_iter()
                 .map(|(t, ps)| (t.into(), ps.into()))
+                .collect(),
+            market_archive: v
+                .market_archive
+                .into_iter()
+                .map(|(t, mr)| (t.into(), mr.into()))
                 .collect(),
         }
     }

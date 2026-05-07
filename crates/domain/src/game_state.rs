@@ -70,6 +70,46 @@ pub struct GameArchive {
     /// and per-nation capitals at the end of each turn. Used to render the
     /// political map at any past turn from the news archive.
     pub political_archive: Vec<(TurnNumber, PoliticalSnapshot)>,
+    /// Per-turn market activity log: every resource offered, by whom, and which
+    /// buyers (and how much) ended up filling each offer. Bounded to the last
+    /// `MARKET_ARCHIVE_DEPTH` turns to keep save size in check; older turns
+    /// are discarded automatically. Powers the "Historical Market" UI tab.
+    pub market_archive: Vec<(TurnNumber, MarketTurnRecord)>,
+}
+
+/// Number of turns of market activity retained in `GameArchive::market_archive`.
+pub const MARKET_ARCHIVE_DEPTH: usize = 30;
+
+/// Per-turn record of every offer placed on the world market and which
+/// buyers (if any) filled it. Built and pushed into `GameArchive` each turn
+/// from `trade_phase::resolve_trade_session`.
+#[derive(Debug, Clone, Default)]
+pub struct MarketTurnRecord {
+    pub offers: Vec<MarketOfferRecord>,
+}
+
+/// One row in `MarketTurnRecord::offers`. The same `(seller, resource)` may
+/// appear in multiple rows if it was sold via multiple offer entries (e.g. a
+/// minor nation that withholds part of its stock posts a single row per
+/// turn). Aggregating by `(seller, resource)` is safe for UI display.
+#[derive(Debug, Clone)]
+pub struct MarketOfferRecord {
+    pub seller: NationId,
+    pub resource: ResourceType,
+    /// Quantity originally posted on the market this turn.
+    pub offered: u32,
+    /// Asking price per unit at the time of posting (informational).
+    pub price_per_unit: Money,
+    /// Buyers and their fill quantities. Empty if no one matched the offer.
+    pub fills: Vec<MarketFillRecord>,
+}
+
+/// A single buyer's fill against a `MarketOfferRecord`.
+#[derive(Debug, Clone)]
+pub struct MarketFillRecord {
+    pub buyer: NationId,
+    pub quantity: u32,
+    pub price_per_unit: Money,
 }
 
 /// In-turn state that is either not serialized or rebuilt each turn.

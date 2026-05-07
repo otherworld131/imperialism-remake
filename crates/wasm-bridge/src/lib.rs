@@ -4343,9 +4343,71 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         .sum();
     let remaining_cargo = total_cargo.saturating_sub(orders_qty);
 
+    // Per-turn market activity archive — feeds the "Historical Market" tab.
+    // Newest turn first so the UI sidebar can show latest at the top.
+    let market_archive: Vec<serde_json::Value> = game
+        .archive
+        .market_archive
+        .iter()
+        .rev()
+        .map(|(turn, record)| {
+            let offers_json: Vec<serde_json::Value> = record
+                .offers
+                .iter()
+                .map(|row| {
+                    let seller_nation = game.get_nation(row.seller);
+                    let seller_name = seller_nation
+                        .map(|n| n.name.as_str())
+                        .unwrap_or("Unknown")
+                        .to_string();
+                    let seller_is_great_power = seller_nation
+                        .map(|n| n.is_great_power())
+                        .unwrap_or(false);
+                    let fills_json: Vec<serde_json::Value> = row
+                        .fills
+                        .iter()
+                        .map(|fill| {
+                            let buyer_nation = game.get_nation(fill.buyer);
+                            let buyer_name = buyer_nation
+                                .map(|n| n.name.as_str())
+                                .unwrap_or("Unknown")
+                                .to_string();
+                            let buyer_is_great_power = buyer_nation
+                                .map(|n| n.is_great_power())
+                                .unwrap_or(false);
+                            serde_json::json!({
+                                "buyer_id": fill.buyer.0,
+                                "buyer_name": buyer_name,
+                                "buyer_is_great_power": buyer_is_great_power,
+                                "quantity": fill.quantity,
+                                "price_per_unit": fill.price_per_unit.as_dollars(),
+                            })
+                        })
+                        .collect();
+                    let sold: u32 = row.fills.iter().map(|f| f.quantity).sum();
+                    serde_json::json!({
+                        "seller_id": row.seller.0,
+                        "seller_name": seller_name,
+                        "seller_is_great_power": seller_is_great_power,
+                        "resource": format!("{:?}", row.resource),
+                        "offered": row.offered,
+                        "sold": sold,
+                        "price_per_unit": row.price_per_unit.as_dollars(),
+                        "fills": fills_json,
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "turn": turn.0,
+                "offers": offers_json,
+            })
+        })
+        .collect();
+
     serde_json::json!({
         "market_prices": market_prices,
         "trade_history": history,
+        "market_archive": market_archive,
         "subsidies": subsidies,
         "trade_balance": {
             "total_bought": total_bought,

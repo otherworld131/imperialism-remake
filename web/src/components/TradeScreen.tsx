@@ -19,7 +19,7 @@ interface Props {
   onClose: () => void;
 }
 
-type TradeTab = 'orders' | 'historical';
+type TradeTab = 'orders' | 'historical_country' | 'historical_market';
 type OfferSortKey = 'resource' | 'seller_name' | 'quantity' | 'price' | 'is_great_power';
 const OFFER_COLS: { key: OfferSortKey; label: string }[] = [
   { key: 'resource', label: 'Resource' },
@@ -38,14 +38,24 @@ const HIST_COLS_SPLIT: { key: HistSortKey; label: string }[] = [
   { key: 'partner_name', label: 'Partner' },
   { key: 'partner_is_great_power', label: 'GP' },
 ];
-type AggSortKey = 'turn' | 'resource' | 'bought' | 'sold' | 'boughtCost' | 'soldCost';
+type AggSortKey = 'turn' | 'resource' | 'partner_name' | 'bought' | 'sold' | 'boughtCost' | 'soldCost';
 const HIST_COLS_AGG: { key: AggSortKey; label: string }[] = [
   { key: 'turn', label: 'Turn' },
   { key: 'resource', label: 'Resource' },
+  { key: 'partner_name', label: 'Partner' },
   { key: 'bought', label: 'Bought' },
   { key: 'boughtCost', label: 'Cost' },
   { key: 'sold', label: 'Sold' },
   { key: 'soldCost', label: 'Revenue' },
+];
+
+type MarketSortKey = 'resource' | 'seller_name' | 'offered' | 'sold' | 'price_per_unit';
+const MARKET_COLS: { key: MarketSortKey; label: string }[] = [
+  { key: 'resource', label: 'Resource' },
+  { key: 'seller_name', label: 'Seller' },
+  { key: 'offered', label: 'Offered' },
+  { key: 'sold', label: 'Sold' },
+  { key: 'price_per_unit', label: 'Price' },
 ];
 
 export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSellOrder, onSetBuyOrder, onSetAutoTradeWithMinors, onClose }: Props) {
@@ -85,8 +95,21 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
   }, []);
   const [histSplit, setHistSplit] = useState(false);
   const [selectedSummaryTurn, setSelectedSummaryTurn] = useState<number | null>(null);
+  const [marketSort, setMarketSort] = useState<{ key: MarketSortKey; dir: 1 | -1 }[]>([
+    { key: 'resource', dir: 1 },
+  ]);
+  const cycleMarketSort = useCallback((key: MarketSortKey) => {
+    setMarketSort(prev => {
+      const idx = prev.findIndex(s => s.key === key);
+      if (idx === -1) return [...prev, { key, dir: 1 }];
+      if (prev[idx].dir === 1) return prev.map((s, i) => i === idx ? { key, dir: -1 } : s);
+      return prev.filter((_, i) => i !== idx);
+    });
+  }, []);
+  const [selectedMarketTurn, setSelectedMarketTurn] = useState<number | null>(null);
 
   const tradeHistory: any[] = trade?.trade_history ?? [];
+  const marketArchive: any[] = (trade as any)?.market_archive ?? [];
 
   // Group trade history by turn, sorted newest first
   const turnsSorted = useMemo(() => {
@@ -123,10 +146,30 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
 
   const aggregatedHistory = useMemo(() => {
     const filtered = selectedSummaryTurn === null ? tradeHistory : tradeHistory.filter((h: any) => h.turn === selectedSummaryTurn);
-    const map: Record<string, { turn: number; resource: string; bought: number; sold: number; boughtCost: number; soldCost: number }> = {};
+    type Row = {
+      turn: number;
+      resource: string;
+      partner_id: number;
+      partner_name: string;
+      partner_is_great_power: boolean;
+      bought: number;
+      sold: number;
+      boughtCost: number;
+      soldCost: number;
+    };
+    const map: Record<string, Row> = {};
     for (const h of filtered) {
-      const k = `${h.turn}__${h.resource}`;
-      if (!map[k]) map[k] = { turn: h.turn, resource: h.resource, bought: 0, sold: 0, boughtCost: 0, soldCost: 0 };
+      const k = `${h.turn}__${h.resource}__${h.partner_id ?? -1}`;
+      if (!map[k]) {
+        map[k] = {
+          turn: h.turn,
+          resource: h.resource,
+          partner_id: h.partner_id ?? 0,
+          partner_name: h.partner_name ?? 'World Market',
+          partner_is_great_power: !!h.partner_is_great_power,
+          bought: 0, sold: 0, boughtCost: 0, soldCost: 0,
+        };
+      }
       if (h.bought) { map[k].bought += h.quantity; map[k].boughtCost += h.total_cost; }
       else { map[k].sold += h.quantity; map[k].soldCost += h.total_cost; }
     }
@@ -140,6 +183,31 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
       return 0;
     });
   }, [tradeHistory, selectedSummaryTurn, aggSort]);
+
+  // Market history: turns available, newest first.
+  const marketTurnsSorted = useMemo(() => {
+    return marketArchive
+      .map((rec: any) => rec.turn as number)
+      .sort((a, b) => b - a);
+  }, [marketArchive]);
+
+  // Sorted offer rows for the currently-selected market turn (or the latest if
+  // none is explicitly selected). Returns [] if archive is empty.
+  const sortedMarketOffers = useMemo(() => {
+    if (marketArchive.length === 0) return [] as any[];
+    const turn = selectedMarketTurn ?? marketTurnsSorted[0];
+    const rec = marketArchive.find((r: any) => r.turn === turn);
+    if (!rec) return [];
+    const rows: any[] = [...(rec.offers ?? [])];
+    return rows.sort((a, b) => {
+      for (const { key, dir } of marketSort) {
+        const av = (a as any)[key], bv = (b as any)[key];
+        const cmp = typeof av === 'number' ? av - bv : String(av).localeCompare(String(bv));
+        if (cmp !== 0) return cmp * dir;
+      }
+      return 0;
+    });
+  }, [marketArchive, marketTurnsSorted, selectedMarketTurn, marketSort]);
 
   if (!trade) {
     return (
@@ -175,9 +243,13 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
               onClick={() => setActiveTab('orders')}
             >Orders</button>
             <button
-              style={activeTab === 'historical' ? styles.modeTabActive : styles.modeTab}
-              onClick={() => setActiveTab('historical')}
-            >Historical</button>
+              style={activeTab === 'historical_country' ? styles.modeTabActive : styles.modeTab}
+              onClick={() => setActiveTab('historical_country')}
+            >Historical Country</button>
+            <button
+              style={activeTab === 'historical_market' ? styles.modeTabActive : styles.modeTab}
+              onClick={() => setActiveTab('historical_market')}
+            >Historical Market</button>
           </div>
           <button onClick={onClose} style={styles.closeBtn}>Esc</button>
         </div>
@@ -314,7 +386,7 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
           </>
         )}
 
-        {activeTab === 'historical' && (
+        {activeTab === 'historical_country' && (
           <div style={styles.summaryBody}>
             {/* Turn sidebar */}
             <div style={styles.summarySidebar}>
@@ -414,6 +486,17 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
                       <tr key={i}>
                         <td style={styles.td}>{row.turn}</td>
                         <td style={{ ...styles.td, color: '#daa520' }}>{resourceLabel(row.resource)}</td>
+                        <td style={{ ...styles.td, fontSize: 11 }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            {flagBySellerId[row.partner_id] && (
+                              <Flag svg={flagBySellerId[row.partner_id]} width={18} height={12} title={row.partner_name} />
+                            )}
+                            <span style={{ color: row.partner_is_great_power ? '#daa520' : '#999' }}>
+                              {row.partner_name}
+                            </span>
+                            {row.partner_is_great_power && <span style={{ color: '#daa520', marginLeft: 2 }}>★</span>}
+                          </span>
+                        </td>
                         <td style={{ ...styles.td, color: row.bought > 0 ? '#e63946' : '#555' }}>
                           {row.bought > 0 ? row.bought : '—'}
                         </td>
@@ -428,6 +511,112 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
                         </td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'historical_market' && (
+          <div style={styles.summaryBody}>
+            {/* Turn sidebar */}
+            <div style={styles.summarySidebar}>
+              <div style={styles.summaryArchiveTitle}>Past Turns</div>
+              {marketTurnsSorted.length === 0 && (
+                <p style={{ color: '#666', fontSize: 12, padding: '8px 0' }}>No market data yet.</p>
+              )}
+              {marketTurnsSorted.map(t => {
+                const rec = marketArchive.find((r: any) => r.turn === t);
+                const count = rec?.offers?.length ?? 0;
+                const active = (selectedMarketTurn ?? marketTurnsSorted[0]) === t;
+                return (
+                  <button
+                    key={t}
+                    style={active ? styles.summaryItemActive : styles.summaryItem}
+                    onClick={() => setSelectedMarketTurn(t)}
+                  >
+                    Turn {t}
+                    <span style={styles.summaryBadge}>{count}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Market content */}
+            <div style={styles.summaryContent}>
+              {marketArchive.length === 0 ? (
+                <p style={{ color: '#666' }}>No market activity recorded yet.</p>
+              ) : sortedMarketOffers.length === 0 ? (
+                <p style={{ color: '#666' }}>No offers on this turn.</p>
+              ) : (
+                <table style={styles.table}>
+                  <thead>
+                    <tr>
+                      {MARKET_COLS.map(col => (
+                        <th
+                          key={col.key}
+                          style={{ ...styles.th, cursor: 'pointer', userSelect: 'none' as const }}
+                          onClick={() => cycleMarketSort(col.key)}
+                        >
+                          {col.label}{(() => { const s = marketSort.find(x => x.key === col.key); if (!s) return ''; const rank = marketSort.length > 1 ? String(marketSort.indexOf(s) + 1) : ''; return (s.dir === 1 ? ' ▲' : ' ▼') + rank; })()}
+                        </th>
+                      ))}
+                      <th style={styles.th}>Bought by</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedMarketOffers.map((row: any, i: number) => {
+                      const sold = row.sold ?? 0;
+                      const offered = row.offered ?? 0;
+                      const unsold = offered > sold ? offered - sold : 0;
+                      const pct = offered > 0 ? Math.round((sold / offered) * 100) : 0;
+                      return (
+                        <tr key={i}>
+                          <td style={{ ...styles.td, color: '#daa520' }}>{resourceLabel(row.resource)}</td>
+                          <td style={{ ...styles.td, fontSize: 11 }}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                              {flagBySellerId[row.seller_id] && (
+                                <Flag svg={flagBySellerId[row.seller_id]} width={18} height={12} title={row.seller_name} />
+                              )}
+                              <span style={{ color: row.seller_is_great_power ? '#daa520' : '#999' }}>
+                                {row.seller_name}
+                              </span>
+                              {row.seller_is_great_power && <span style={{ color: '#daa520', marginLeft: 2 }}>★</span>}
+                            </span>
+                          </td>
+                          <td style={styles.td}>{offered}</td>
+                          <td style={{ ...styles.td, color: sold === 0 ? '#666' : sold === offered ? '#2a9d8f' : '#daa520' }}>
+                            {sold} {offered > 0 && <span style={{ color: '#666', fontSize: 10 }}>({pct}%)</span>}
+                            {unsold > 0 && <span style={{ color: '#888', fontSize: 10, marginLeft: 4 }}>−{unsold}</span>}
+                          </td>
+                          <td style={styles.td}>${row.price_per_unit}</td>
+                          <td style={styles.td}>
+                            {(row.fills ?? []).length === 0 ? (
+                              <span style={{ color: '#555', fontSize: 11 }}>—</span>
+                            ) : (
+                              <div style={{ display: 'flex', flexWrap: 'wrap' as const, gap: 6, fontSize: 11 }}>
+                                {row.fills.map((f: any, k: number) => (
+                                  <span
+                                    key={k}
+                                    style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                                    title={`${f.buyer_name} bought ${f.quantity} @ $${f.price_per_unit}`}
+                                  >
+                                    {flagBySellerId[f.buyer_id] && (
+                                      <Flag svg={flagBySellerId[f.buyer_id]} width={14} height={10} title={f.buyer_name} />
+                                    )}
+                                    <span style={{ color: f.buyer_is_great_power ? '#daa520' : '#999' }}>
+                                      {f.buyer_name}
+                                    </span>
+                                    <span style={{ color: '#bbb' }}>×{f.quantity}</span>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}

@@ -685,6 +685,67 @@ pub(super) fn resolve_trade_session(
     report.trade_transactions = transactions;
     let transactions = &report.trade_transactions;
 
+    // 8a. Archive per-turn market activity for the "Historical Market" UI:
+    //     every offer (seller × resource) plus the per-buyer fills it received.
+    //     Bounded to the last MARKET_ARCHIVE_DEPTH turns to keep saves small.
+    {
+        use crate::game_state::{
+            MARKET_ARCHIVE_DEPTH, MarketFillRecord, MarketOfferRecord, MarketTurnRecord,
+        };
+        // Aggregate offers by (seller, resource). Multiple offers from the
+        // same minor for the same resource collapse into one row so the UI
+        // shows one line per supplier.
+        type OfferKey = (NationId, ResourceType);
+        let mut offer_rows: std::collections::BTreeMap<OfferKey, MarketOfferRecord> =
+            std::collections::BTreeMap::new();
+        for offer in &offers {
+            let entry = offer_rows
+                .entry((offer.seller, offer.resource))
+                .or_insert_with(|| MarketOfferRecord {
+                    seller: offer.seller,
+                    resource: offer.resource,
+                    offered: 0,
+                    price_per_unit: offer.price_per_unit,
+                    fills: Vec::new(),
+                });
+            entry.offered = entry.offered.saturating_add(offer.quantity);
+        }
+        for txn in transactions {
+            // Aggregate fills per buyer per offer-row.
+            let entry = offer_rows
+                .entry((txn.seller, txn.resource))
+                .or_insert_with(|| MarketOfferRecord {
+                    seller: txn.seller,
+                    resource: txn.resource,
+                    offered: 0,
+                    price_per_unit: txn.price_per_unit,
+                    fills: Vec::new(),
+                });
+            if let Some(fill) = entry.fills.iter_mut().find(|f| f.buyer == txn.buyer) {
+                fill.quantity = fill.quantity.saturating_add(txn.quantity);
+            } else {
+                entry.fills.push(MarketFillRecord {
+                    buyer: txn.buyer,
+                    quantity: txn.quantity,
+                    price_per_unit: txn.price_per_unit,
+                });
+            }
+        }
+        if !offer_rows.is_empty() {
+            let record = MarketTurnRecord {
+                offers: offer_rows.into_values().collect(),
+            };
+            game.archive.market_archive.push((current_turn, record));
+            // Bound to MARKET_ARCHIVE_DEPTH most recent turns.
+            let len = game.archive.market_archive.len();
+            if len > MARKET_ARCHIVE_DEPTH {
+                game.archive
+                    .market_archive
+                    .drain(0..len - MARKET_ARCHIVE_DEPTH);
+            }
+        }
+    }
+
     // 8b. Update persistent market state (#164): record per-resource supply, demand, sold.
     {
         let mut supply_map: std::collections::BTreeMap<ResourceType, u32> =
