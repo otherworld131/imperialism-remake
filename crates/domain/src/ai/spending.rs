@@ -2392,17 +2392,32 @@ pub(crate) fn ai_diplomatic_mop_up(game: &mut GameState, nation_id: NationId) {
         if !can_afford {
             break;
         }
-        // Check if there is anything to build before calling execute.
-        let has_target = game.world.nations.iter().any(|n| {
-            !n.is_great_power()
-                && !n.province_ids.is_empty()
-                && !n.diplomacy.is_in_anarchy
-                && game
-                    .world
-                    .diplomacy
-                    .get_relation(nation_id, n.id)
-                    .is_none_or(|r| !r.has_consulate)
-        });
+        // Below the wealth threshold, cap consulates at the personality limit so
+        // cash-strapped early-game nations don't blow their treasury on diplomacy.
+        // Above it, build consulates freely with any affordable minor.
+        let has_target = {
+            let cfg = &game.game_data.game_config;
+            let nation = match game.get_nation(nation_id) {
+                Some(n) => n,
+                None => return,
+            };
+            let wealthy = nation.economy.treasury.as_dollars() >= cfg.labor_wealthy_treasury_threshold;
+            let cap = priority_target_count(cfg, nation.diplomacy.ai_personality.unwrap_or(AiPersonality::Balanced)) as u32;
+            let existing: u32 = game.world.nations.iter()
+                .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
+                .filter(|n| game.world.diplomacy.get_relation(nation_id, n.id).is_some_and(|r| r.has_consulate))
+                .count() as u32;
+            if !wealthy && existing >= cap {
+                false
+            } else {
+                game.world.nations.iter().any(|n| {
+                    !n.is_great_power()
+                        && !n.province_ids.is_empty()
+                        && !n.diplomacy.is_in_anarchy
+                        && game.world.diplomacy.get_relation(nation_id, n.id).is_none_or(|r| !r.has_consulate)
+                })
+            }
+        };
         if !has_target {
             break;
         }
