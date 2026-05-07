@@ -162,11 +162,14 @@ pub(super) fn resolve_trade_session(
         }
     }
 
-    // 2. Generate bids: AI GPs use smart bids, human player uses manual buy orders
+    // 2. Generate bids: AI GPs use need-based auto-bids; the human-controlled
+    //    GP uses manual buy orders. In observer mode the human seat is a
+    //    viewpoint only — its nation is AI-controlled, so it must also use
+    //    auto-bids (otherwise it never imports anything).
     let mut all_bids = Vec::new();
 
     for gp_id in &gp_ids {
-        if *gp_id == human_id {
+        if *gp_id == human_id && !game.observer_mode {
             // Use player's manual buy orders instead of auto-generated bids
             if let Some(human) = game.get_nation(*gp_id) {
                 for order in &human.diplomacy.player_buy_orders {

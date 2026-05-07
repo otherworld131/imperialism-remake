@@ -108,6 +108,7 @@ macro_rules! test_game_state {
                 newspaper_archive: $newspaper_archive,
                 battle_archive: $battle_archive,
                 political_archive: $political_archive,
+                market_archive: Vec::new(),
             },
             transient: $crate::game_state::TransientState {
                 events: $events,
