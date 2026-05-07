@@ -1796,7 +1796,9 @@ pub(crate) fn arms_sell_reserve(game: &GameState, personality: AiPersonality) ->
 }
 
 /// Lua-tunable: how many turns of input the AI tries to buffer per resource
-/// when placing buy-side trade bids. Card [3/6]. Default 3 turns.
+/// when placing buy-side trade bids. Card [3/6]. Default 2 turns: every
+/// nation aims to keep two turns' worth of every chain input in the
+/// warehouse, and bids on the world market to close any shortfall.
 pub(crate) fn trade_buy_buffer_turns(game: &GameState, personality: AiPersonality) -> u32 {
     #[cfg(feature = "lua")]
     {
@@ -1811,7 +1813,7 @@ pub(crate) fn trade_buy_buffer_turns(game: &GameState, personality: AiPersonalit
         }
     }
     let _ = (game, personality);
-    3
+    2
 }
 
 /// Lua-tunable: per-building multiplier that grows the expansion reserve as

@@ -190,15 +190,29 @@ pub(super) fn resolve_trade_session(
                 .unwrap_or_else(|| nation.total_cargo_capacity(&game.game_data));
             // Need-based bids drive AI buying (Trello card [3/6]):
             //   * project chain consumption × buffer_turns to compute gaps;
+            //   * rank by import urgency (gap not coverable from own provinces)
+            //     so resources without local supply bid first under cargo scarcity;
             //   * stop bidding when treasury would drop below the floor;
             //   * honor `auto_trade_with_minors` (skip minor offers when off).
             let personality = crate::ai::common::get_personality(game, *gp_id);
             let treasury_floor = crate::ai::economy::trade_buy_treasury_floor(game, personality);
             let buffer_turns = crate::ai::economy::trade_buy_buffer_turns(game, personality);
+            // Per-turn own-province yield (local + remote, ungated by transport
+            // — the buy-side is asking "what *can* my map supply", not "what
+            // gets delivered this turn").
+            let (local, remote) =
+                crate::economy::current_collectable_resources(game, *gp_id);
+            let mut own_yield: std::collections::BTreeMap<ResourceType, u32> =
+                std::collections::BTreeMap::new();
+            for (r, q) in local.into_iter().chain(remote.into_iter()) {
+                *own_yield.entry(r).or_insert(0) += q;
+            }
+            let own_yield_vec: Vec<(ResourceType, u32)> = own_yield.into_iter().collect();
             let bids = trade::generate_need_based_bids(
                 nation,
                 &game.world.nations,
                 &offers,
+                &own_yield_vec,
                 cargo_capacity,
                 Money::dollars(treasury_floor),
                 buffer_turns,

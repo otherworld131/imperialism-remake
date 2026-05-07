@@ -66,10 +66,10 @@ economic = {
     high_treasury_expansion_threshold = 12000,
     trade_resource_reserve = 15,
     trade_treasury_cap = 25000,
-    -- Card [3/6]: industrialist holds bigger cash buffer but stockpiles 4 turns
-    -- of input so factories never wait on imported coal/iron.
+    -- Card [3/6]: industrialist holds bigger cash buffer; 2-turn target on
+    -- input stockpiles, same as other personalities.
     trade_buy_treasury_floor = 7000,
-    trade_buy_buffer_turns = 4,
+    trade_buy_buffer_turns = 2,
     -- Card #465: industrialist tolerates small army; small reserve.
     arms_sell_reserve = 6,
     goods_sell_treasury_threshold = 2000,

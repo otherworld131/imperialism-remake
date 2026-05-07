@@ -710,18 +710,23 @@ pub fn generate_smart_bids(
 ///    `buffer_turns`. Subtract current warehouse stock to get the gap.
 /// 2. Skip resources where gap == 0 (no shortage → no bid).
 /// 3. Bid up to `min(gap, available_offer_qty, remaining_cargo)`, ordered by
-///    largest gap first so the most-starved chain gets fed even if cargo runs
-///    out.
+///    *import urgency* — per-turn shortfall the nation can't cover from its
+///    own provinces — so resources without local supply (e.g. coal/iron in a
+///    nation that doesn't natively produce them) win cargo first when capacity
+///    is scarce. Largest absolute gap is the secondary tiebreak.
 /// 4. Stop bidding when the projected total cost would push treasury below
 ///    `treasury_floor`. Each bid uses base_price for the cost projection.
 /// 5. When `auto_trade_with_minors == false`, skip offers from minor nations.
 ///
-/// This honors the AI's `auto_trade_with_minors` flag (Trello card [3/6]) and
-/// gives the buy-side a cash guard so trade can never bankrupt the AI.
+/// `own_yield` is the nation's per-resource own-province supply per turn
+/// (local + remote = `current_collectable_resources`). Pass an empty slice
+/// from tests; the priority then degenerates to "largest gap first" which
+/// matches the legacy ordering.
 pub fn generate_need_based_bids(
     nation: &Nation,
     all_nations: &[Nation],
     available_offers: &[TradeOffer],
+    own_yield: &[(ResourceType, u32)],
     max_cargo: u32,
     treasury_floor: Money,
     buffer_turns: u32,
@@ -755,23 +760,40 @@ pub fn generate_need_based_bids(
         return Vec::new();
     }
 
+    let yield_for = |r: ResourceType| -> u32 {
+        own_yield
+            .iter()
+            .find(|(rr, _)| *rr == r)
+            .map(|(_, q)| *q)
+            .unwrap_or(0)
+    };
+
     // Compute per-resource gap = (per_turn_demand × buffer_turns) − current stock.
-    // Drop resources with no gap.
-    let mut gaps: Vec<(ResourceType, u32)> = needs
+    // Also compute import_urgency = per_turn_demand − own_yield (clamped at 0):
+    // resources the nation can't source domestically rank ahead of resources
+    // it produces locally, even if the local-production resource has a bigger
+    // absolute warehouse shortfall.
+    let mut gaps: Vec<(ResourceType, u32, u32)> = needs
         .into_iter()
         .filter_map(|(r, per_turn)| {
             let target_stock = per_turn.saturating_mul(buffer_turns);
             let stock = nation.resource_amount(r);
             let gap = target_stock.saturating_sub(stock);
-            if gap > 0 { Some((r, gap)) } else { None }
+            if gap == 0 {
+                return None;
+            }
+            let urgency = per_turn.saturating_sub(yield_for(r));
+            Some((r, gap, urgency))
         })
         .collect();
     if gaps.is_empty() {
         return Vec::new();
     }
-    // Order by largest gap first (deterministic tiebreak by resource debug name).
+    // Order by largest import urgency first, then largest gap, then resource
+    // name for determinism.
     gaps.sort_by(|a, b| {
-        b.1.cmp(&a.1)
+        b.2.cmp(&a.2)
+            .then_with(|| b.1.cmp(&a.1))
             .then_with(|| format!("{:?}", a.0).cmp(&format!("{:?}", b.0)))
     });
 
@@ -783,7 +805,7 @@ pub fn generate_need_based_bids(
         return Vec::new();
     }
 
-    for (resource, gap) in gaps {
+    for (resource, gap, _urgency) in gaps {
         if remaining_cargo == 0 {
             break;
         }
@@ -1629,6 +1651,7 @@ mod tests {
             &buyer,
             &nations,
             &offers,
+            &[],                   // no own yield (test scenario)
             100,                   // ample cargo
             Money::dollars(5_000), // treasury floor
             3,                     // buffer turns
@@ -1672,7 +1695,7 @@ mod tests {
         }];
 
         let bids =
-            generate_need_based_bids(&buyer, &nations, &offers, 100, Money::dollars(5_000), 3);
+            generate_need_based_bids(&buyer, &nations, &offers, &[], 100, Money::dollars(5_000), 3);
         assert!(bids.is_empty(), "well-stocked AI must not bid");
     }
 
@@ -1698,7 +1721,7 @@ mod tests {
         }];
 
         let bids =
-            generate_need_based_bids(&buyer, &nations, &offers, 100, Money::dollars(5_000), 3);
+            generate_need_based_bids(&buyer, &nations, &offers, &[], 100, Money::dollars(5_000), 3);
         assert!(bids.is_empty(), "must not spend below the treasury floor");
     }
 
@@ -1725,7 +1748,7 @@ mod tests {
         }];
 
         let bids =
-            generate_need_based_bids(&buyer, &nations, &offers, 100, Money::dollars(5_000), 3);
+            generate_need_based_bids(&buyer, &nations, &offers, &[], 100, Money::dollars(5_000), 3);
         let coal = bids
             .iter()
             .find(|b| b.resource == ResourceType::Coal)
@@ -1761,7 +1784,7 @@ mod tests {
         }];
 
         let bids =
-            generate_need_based_bids(&buyer, &nations, &offers, 100, Money::dollars(5_000), 3);
+            generate_need_based_bids(&buyer, &nations, &offers, &[], 100, Money::dollars(5_000), 3);
         assert!(
             bids.is_empty(),
             "auto_trade_with_minors=false must skip minor offers"
@@ -1791,7 +1814,7 @@ mod tests {
         }];
 
         let bids =
-            generate_need_based_bids(&buyer, &nations, &offers, 100, Money::dollars(5_000), 3);
+            generate_need_based_bids(&buyer, &nations, &offers, &[], 100, Money::dollars(5_000), 3);
         assert!(
             bids.iter().any(|b| b.resource == ResourceType::Coal),
             "auto_trade_with_minors=true must accept minor offers"
@@ -1862,6 +1885,7 @@ mod tests {
             &buyer,
             &nations,
             &offers,
+            &[],
             100,
             Money::dollars(5_000),
             0, // disable buy-side trade
