@@ -569,8 +569,6 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
                     {sortedMarketOffers.map((row: any, i: number) => {
                       const sold = row.sold ?? 0;
                       const offered = row.offered ?? 0;
-                      const unsold = offered > sold ? offered - sold : 0;
-                      const pct = offered > 0 ? Math.round((sold / offered) * 100) : 0;
                       return (
                         <tr key={i}>
                           <td style={{ ...styles.td, color: '#daa520' }}>{resourceLabel(row.resource)}</td>
@@ -587,8 +585,7 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
                           </td>
                           <td style={styles.td}>{offered}</td>
                           <td style={{ ...styles.td, color: sold === 0 ? '#666' : sold === offered ? '#2a9d8f' : '#daa520' }}>
-                            {sold} {offered > 0 && <span style={{ color: '#666', fontSize: 10 }}>({pct}%)</span>}
-                            {unsold > 0 && <span style={{ color: '#888', fontSize: 10, marginLeft: 4 }}>−{unsold}</span>}
+                            {sold}
                           </td>
                           <td style={styles.td}>${row.price_per_unit}</td>
                           <td style={styles.td}>
