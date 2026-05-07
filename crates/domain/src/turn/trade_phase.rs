@@ -217,6 +217,58 @@ pub(super) fn resolve_trade_session(
                 Money::dollars(treasury_floor),
                 buffer_turns,
             );
+
+            if game.ai_debug {
+                let needs = trade::projected_resource_needs(nation);
+                let total_offer_qty: u32 = offers.iter().map(|o| o.quantity).sum();
+                let yield_for = |r: ResourceType| -> u32 {
+                    own_yield_vec
+                        .iter()
+                        .find(|(rr, _)| *rr == r)
+                        .map(|(_, q)| *q)
+                        .unwrap_or(0)
+                };
+                let gap_summary: Vec<String> = needs
+                    .iter()
+                    .filter_map(|(r, per_turn)| {
+                        let target = per_turn.saturating_mul(buffer_turns);
+                        let stock = nation.resource_amount(*r);
+                        let gap = target.saturating_sub(stock);
+                        if gap == 0 {
+                            None
+                        } else {
+                            let urgency = per_turn.saturating_sub(yield_for(*r));
+                            let avail: u32 = offers
+                                .iter()
+                                .filter(|o| o.resource == *r && o.seller != nation.id)
+                                .map(|o| o.quantity)
+                                .sum();
+                            Some(format!(
+                                "{:?}(need={} stock={} gap={} urgency={} offer_qty={})",
+                                r, per_turn, stock, gap, urgency, avail
+                            ))
+                        }
+                    })
+                    .collect();
+                eprintln!(
+                    "[TRADE:{}] turn={} cargo={} treasury=${} floor=${} buf={} \
+                     offers_total={} bids={} | gaps: {}",
+                    nation.name,
+                    game.turn.0,
+                    cargo_capacity,
+                    nation.economy.treasury.as_dollars(),
+                    treasury_floor,
+                    buffer_turns,
+                    total_offer_qty,
+                    bids.len(),
+                    if gap_summary.is_empty() {
+                        "<none>".to_string()
+                    } else {
+                        gap_summary.join(", ")
+                    }
+                );
+            }
+
             all_bids.extend(bids);
         }
     }

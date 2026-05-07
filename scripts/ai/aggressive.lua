@@ -71,7 +71,7 @@ aggressive = {
     trade_treasury_cap = 15000,
     -- Card [3/6]: aggressive accepts a thinner cash safety net but still
     -- buffers 2 turns so wartime steel/arms output isn't input-starved.
-    trade_buy_treasury_floor = 3000,
+    trade_buy_treasury_floor = 1500,
     trade_buy_buffer_turns = 2,
     -- Card #465: militarist hoards arms — large reserve.
     arms_sell_reserve = 30,

@@ -774,14 +774,25 @@ fn new_game_inner(
             id_counter += 1;
         }
 
-        // Starting merchant fleet: 1 Trader for each Great Power
-        let trader = Ship::with_data(
-            UnitId(1_500_000 + i as u32),
-            ShipType::Trader,
+        // Starting merchant fleet: 2 Traders + 1 Indiaman per Great Power so
+        // first-turn cargo capacity (2×2 + 4 = 8) supports a meaningful
+        // import bid for nations missing critical raw resources.
+        for k in 0..2u32 {
+            let trader = Ship::with_data(
+                UnitId(1_500_000 + (i as u32) * 10 + k),
+                ShipType::Trader,
+                setup.nation_id,
+                &game_data,
+            );
+            nation.military.merchant_fleet.push(trader);
+        }
+        let indiaman = Ship::with_data(
+            UnitId(1_500_000 + (i as u32) * 10 + 9),
+            ShipType::Indiaman,
             setup.nation_id,
             &game_data,
         );
-        nation.military.merchant_fleet.push(trader);
+        nation.military.merchant_fleet.push(indiaman);
 
         // Starting warship: 1 Frigate for each Great Power
         let frigate = Ship::with_data(

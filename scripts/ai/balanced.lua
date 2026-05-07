@@ -67,8 +67,9 @@ balanced = {
     high_treasury_expansion_threshold = 15000,
     trade_resource_reserve = 10,
     trade_treasury_cap = 20000,
-    -- Card [3/6]: buy-side trade. Keep $5k cash safety net; buffer 2 turns.
-    trade_buy_treasury_floor = 5000,
+    -- Card [3/6]: buy-side trade. Floor lowered so early-game nations can
+    -- still bid on critical chain inputs they don't produce locally.
+    trade_buy_treasury_floor = 1500,
     trade_buy_buffer_turns = 2,
     -- Card #465: hold back at least this many arms above queued-recruit demand.
     arms_sell_reserve = 12,

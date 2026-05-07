@@ -797,55 +797,105 @@ pub fn generate_need_based_bids(
             .then_with(|| format!("{:?}", a.0).cmp(&format!("{:?}", b.0)))
     });
 
-    let mut bids = Vec::new();
-    let mut remaining_cargo = max_cargo;
-    let mut projected_spend = Money::ZERO;
     let cash_available = nation.economy.treasury - treasury_floor;
     if cash_available <= Money::ZERO {
         return Vec::new();
     }
 
-    for (resource, gap, _urgency) in gaps {
-        if remaining_cargo == 0 {
-            break;
-        }
-
-        let total_available: u32 = eligible_offers
+    // Pre-compute per-resource offer-pool quantity once.
+    let total_available_for = |resource: ResourceType| -> u32 {
+        eligible_offers
             .iter()
             .filter(|o| o.resource == resource)
             .map(|o| o.quantity)
-            .sum();
-        if total_available == 0 {
+            .sum()
+    };
+
+    let mut bid_qty_for: std::collections::BTreeMap<ResourceType, u32> =
+        std::collections::BTreeMap::new();
+    let mut remaining_cargo = max_cargo;
+    let mut projected_spend = Money::ZERO;
+
+    let cash_qty_left = |projected: Money, bp: Money| -> u32 {
+        let cash_left = cash_available - projected;
+        if cash_left <= Money::ZERO {
+            return 0;
+        }
+        (cash_left.as_dollars() / bp.as_dollars()).clamp(0, u32::MAX as i64) as u32
+    };
+
+    // Floor pass: allocate at least 1 unit per gap-positive resource in
+    // urgency order (subject to availability/cargo/cash). This guarantees
+    // every critical chain input gets *some* import even when one resource's
+    // gap is huge — without this, a single high-gap resource would consume
+    // all cargo and starve coal/iron-only-abroad nations from importing
+    // those at all.
+    for (resource, _gap, _urgency) in &gaps {
+        if remaining_cargo == 0 {
+            break;
+        }
+        let avail = total_available_for(*resource);
+        if avail == 0 {
             continue;
         }
-
-        let bp = base_price(resource);
+        let bp = base_price(*resource);
         if bp == Money::ZERO {
             continue;
         }
-        // Stay under the cash budget (use base price as a worst-case predictor;
-        // actual fills are at offer price ≤ max_price_per_unit).
-        let cash_left = cash_available - projected_spend;
-        if cash_left <= Money::ZERO {
-            break;
-        }
-        let cash_qty: u32 =
-            (cash_left.as_dollars() / bp.as_dollars()).clamp(0, u32::MAX as i64) as u32;
-
-        let bid_qty = gap.min(total_available).min(remaining_cargo).min(cash_qty);
-        if bid_qty == 0 {
+        let cq = cash_qty_left(projected_spend, bp);
+        if cq == 0 {
             continue;
         }
+        let unit = 1u32.min(avail).min(remaining_cargo).min(cq);
+        if unit == 0 {
+            continue;
+        }
+        *bid_qty_for.entry(*resource).or_insert(0) += unit;
+        remaining_cargo -= unit;
+        projected_spend += bp * unit as i64;
+    }
 
+    // Fill pass: walk priority order again, top each resource up toward its
+    // full gap. Highest-urgency resources fill first; once one is at its
+    // cap (gap, availability, cargo, or cash), move to the next.
+    for (resource, gap, _urgency) in &gaps {
+        if remaining_cargo == 0 {
+            break;
+        }
+        let already = bid_qty_for.get(resource).copied().unwrap_or(0);
+        let avail = total_available_for(*resource);
+        let bp = base_price(*resource);
+        if bp == Money::ZERO {
+            continue;
+        }
+        let room_gap = gap.saturating_sub(already);
+        let room_avail = avail.saturating_sub(already);
+        let cq = cash_qty_left(projected_spend, bp);
+        let extra = room_gap.min(room_avail).min(remaining_cargo).min(cq);
+        if extra == 0 {
+            continue;
+        }
+        *bid_qty_for.entry(*resource).or_insert(0) += extra;
+        remaining_cargo -= extra;
+        projected_spend += bp * extra as i64;
+    }
+
+    // Emit bids in priority order so the trade matcher sees the most-urgent
+    // resources first (matters when offers are matched FIFO).
+    let mut bids = Vec::new();
+    for (resource, _gap, _urgency) in &gaps {
+        let qty = bid_qty_for.get(resource).copied().unwrap_or(0);
+        if qty == 0 {
+            continue;
+        }
+        let bp = base_price(*resource);
         let max_price = Money::dollars(bp.as_dollars() * 120 / 100);
         bids.push(TradeBid {
             buyer: nation.id,
-            resource,
-            quantity: bid_qty,
+            resource: *resource,
+            quantity: qty,
             max_price_per_unit: max_price,
         });
-        remaining_cargo -= bid_qty;
-        projected_spend += bp * bid_qty as i64;
     }
 
     bids

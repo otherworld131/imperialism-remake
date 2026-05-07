@@ -1772,7 +1772,7 @@ pub(crate) fn trade_buy_treasury_floor(game: &GameState, personality: AiPersonal
         }
     }
     let _ = (game, personality);
-    5_000
+    1_500
 }
 
 /// Lua-tunable: minimum arms held back from any auto-sale path on top of the
