@@ -21,7 +21,14 @@ interface Props {
   onDismissSelected: () => void;
   onUpgradeUnit: (unitId: number) => void;
   onUpgradeSelected: () => void;
+  showHealDebug?: boolean;
 }
+
+const HEAL_BLOCK_LABEL: Record<string, string> = {
+  moved: 'no heal — moved this turn',
+  fought: 'no heal — fought this turn',
+  full_health: 'no heal — already at full HP',
+};
 
 export default function UnitPanel({
   provinceUnits, pendingMoves,
@@ -29,6 +36,7 @@ export default function UnitPanel({
   selectedUnitIds, onToggleUnit, onSelectAll,
   onCancelMove, onCancelSelectedMoves, onDismissSelected,
   onUpgradeUnit, onUpgradeSelected,
+  showHealDebug,
 }: Props) {
   const { army_units, garrison_count, province_name } = provinceUnits;
 
@@ -135,6 +143,16 @@ export default function UnitPanel({
                   <HealthBar health={unit.health} />
                   <span style={{ fontSize: 10, color: '#888' }}>{unit.health}%</span>
                 </div>
+                {showHealDebug && unit.heal_blocked_reason && (
+                  <div style={{ marginTop: 2, fontSize: 10, color: '#e88', fontStyle: 'italic' }}>
+                    {HEAL_BLOCK_LABEL[unit.heal_blocked_reason] ?? `no heal — ${unit.heal_blocked_reason}`}
+                  </div>
+                )}
+                {showHealDebug && !unit.heal_blocked_reason && unit.health < 100 && (
+                  <div style={{ marginTop: 2, fontSize: 10, color: '#8e8', fontStyle: 'italic' }}>
+                    healed last turn
+                  </div>
+                )}
                 {pending && (
                   <div style={{ marginTop: 3, fontSize: 11 }}>
                     <span style={{ color: '#ffd700' }}>

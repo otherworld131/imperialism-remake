@@ -123,6 +123,24 @@ export interface BattleUnit {
   effective_firepower: number;
 }
 
+/** Debug-only: explains the retreat decision for a battle. */
+export interface RetreatDebug {
+  /** "attacker", "defender", or "none" if no retreat fired. */
+  side: 'attacker' | 'defender' | 'none';
+  /** "pre_battle", "mid_battle", or "none". */
+  stage: 'pre_battle' | 'mid_battle' | 'none';
+  /** For pre-battle: opposing-FP / own-FP. For mid-battle: fraction of initial FP lost. */
+  measured_value: number;
+  /** Threshold the measured value was compared against. */
+  threshold: number;
+  attacker_prebattle_ratio: number;
+  defender_prebattle_ratio: number;
+  attacker_prebattle_threshold: number;
+  defender_prebattle_threshold: number;
+  /** Round of mid-battle retreat (1-based); 0 for pre-battle / no retreat. */
+  round: number;
+}
+
 export interface LandBattleData {
   type: 'land';
   attacker: string;
@@ -133,6 +151,7 @@ export interface LandBattleData {
   province_id: number;
   attacker_won: boolean;
   retreated: boolean;
+  defender_retreated: boolean;
   attacker_casualties: string[];
   defender_casualties: string[];
   attacker_survivors: BattleUnit[];
@@ -142,6 +161,8 @@ export interface LandBattleData {
   siege_reduced_fort: boolean;
   attacker_initial_count: number;
   defender_initial_count: number;
+  attacker_initial_fp: number;
+  defender_initial_fp: number;
   attacker_survivors_count: number;
   defender_survivors_count: number;
   medal_awards: MedalAward[];
@@ -150,6 +171,7 @@ export interface LandBattleData {
   origin_tiles: BattleTile[];
   origin_province_names: string[];
   is_naval_landing: boolean;
+  retreat_debug: RetreatDebug | null;
 }
 
 export interface NavalBattleData {
@@ -362,6 +384,11 @@ export interface ArmyUnitDetail {
   upgrade_cost: number | null;
   /** Extra Arms required beyond the current variant; null when upgrade_to is null. */
   upgrade_arms_delta: number | null;
+  /**
+   * Debug-only: why this unit didn't heal last turn. One of "moved",
+   * "fought", "full_health", or null when the unit healed normally.
+   */
+  heal_blocked_reason: 'moved' | 'fought' | 'full_health' | null;
 }
 
 export interface ProvinceUnits {

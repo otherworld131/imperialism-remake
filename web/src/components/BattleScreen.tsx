@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import type { TileData, LandBattleData, NavalBattleData, BattleData, ArchivedBattleTurn, BattleTile, BattleUnit } from '../wasm';
+import type { TileData, LandBattleData, NavalBattleData, BattleData, ArchivedBattleTurn, BattleTile, BattleUnit, RetreatDebug } from '../wasm';
 import { UnitRow } from './UnitRow';
 import { computeNationLabels } from '../lib/nationLabels';
 import Flag from './Flag';
@@ -70,12 +70,14 @@ interface Props {
   quarter: number;
   nations?: NationLite[];
   onClose: () => void;
+  showRetreatDebug?: boolean;
 }
 
 // ── Component ───────────────────────────────────────────────────
 export default function BattleScreen({
   currentBattles, currentNavalBattles, archiveData, tiles,
   year, quarter, nations = [], onClose,
+  showRetreatDebug,
 }: Props) {
   const flagById: Record<number, string> = {};
   for (const n of nations) { if (n.flag_svg) flagById[n.id] = n.flag_svg; }
@@ -425,7 +427,7 @@ export default function BattleScreen({
                 {/* Right column: battle details */}
                 <div style={styles.rightCol}>
                   {selectedBattle && selectedBattle.type === 'land' && (
-                    <LandBattleDetails battle={selectedBattle} flagById={flagById} />
+                    <LandBattleDetails battle={selectedBattle} flagById={flagById} showRetreatDebug={showRetreatDebug} />
                   )}
                   {selectedBattle && selectedBattle.type === 'naval' && (
                     <NavalBattleDetails battle={selectedBattle} flagById={flagById} />
@@ -441,7 +443,7 @@ export default function BattleScreen({
 }
 
 // ── Land battle details sub-component ───────────────────────────
-function LandBattleDetails({ battle, flagById }: { battle: LandBattleData; flagById: Record<number, string> }) {
+function LandBattleDetails({ battle, flagById, showRetreatDebug }: { battle: LandBattleData; flagById: Record<number, string>; showRetreatDebug?: boolean }) {
   const winnerName = battle.attacker_won ? battle.attacker : battle.defender;
   const winnerId = battle.attacker_won ? battle.attacker_id : battle.defender_id;
   const winnerFlag = flagById[winnerId];
@@ -497,6 +499,13 @@ function LandBattleDetails({ battle, flagById }: { battle: LandBattleData; flagB
         </div>
       </div>
 
+      {showRetreatDebug && battle.retreat_debug && (
+        <div style={styles.detailSection}>
+          <div style={styles.sectionTitle}>Retreat math (debug)</div>
+          <RetreatDebugBlock debug={battle.retreat_debug} battle={battle} />
+        </div>
+      )}
+
       {/* Forces — per-unit cards (main-map sidebar style) */}
       <div style={styles.detailSection}>
         <div style={styles.sectionTitle}>Forces</div>
@@ -533,6 +542,72 @@ function LandBattleDetails({ battle, flagById }: { battle: LandBattleData; flagB
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Retreat-math debug block ────────────────────────────────────
+function RetreatDebugBlock({ debug, battle }: { debug: RetreatDebug; battle: LandBattleData }) {
+  const fmt = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : String(n));
+  const labelStyle: React.CSSProperties = { color: '#aab', fontSize: 11 };
+  const numStyle: React.CSSProperties = { color: '#fff', fontFamily: 'monospace' };
+
+  let summary: React.ReactNode;
+  if (debug.stage === 'pre_battle') {
+    const sideTxt = debug.side === 'attacker' ? 'Attacker' : 'Defender';
+    summary = (
+      <div>
+        <strong>{sideTxt} bailed pre-battle.</strong>{' '}
+        <span style={labelStyle}>(opposing FP / own FP) =</span>{' '}
+        <span style={numStyle}>{fmt(debug.measured_value)}</span>{' '}
+        <span style={labelStyle}>&gt; threshold</span>{' '}
+        <span style={numStyle}>{fmt(debug.threshold)}</span>
+      </div>
+    );
+  } else if (debug.stage === 'mid_battle') {
+    const sideTxt = debug.side === 'attacker' ? 'Attacker' : 'Defender';
+    summary = (
+      <div>
+        <strong>{sideTxt} retreated mid-battle (round {debug.round}).</strong>{' '}
+        <span style={labelStyle}>FP loss =</span>{' '}
+        <span style={numStyle}>{(debug.measured_value * 100).toFixed(0)}%</span>{' '}
+        <span style={labelStyle}>&gt; threshold</span>{' '}
+        <span style={numStyle}>{(debug.threshold * 100).toFixed(0)}%</span>
+      </div>
+    );
+  } else {
+    summary = (
+      <div>
+        <strong>No retreat fired.</strong>{' '}
+        <span style={labelStyle}>Battle resolved over {debug.round} round(s).</span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ fontSize: 12, color: '#dcd6c4', display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {summary}
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 8, rowGap: 2 }}>
+        <span style={labelStyle}>Pre-battle ratios:</span>
+        <span>
+          <span style={numStyle}>atk {fmt(debug.attacker_prebattle_ratio)}</span>{' '}
+          <span style={labelStyle}>(thr {fmt(debug.attacker_prebattle_threshold)})</span>
+          {' · '}
+          <span style={numStyle}>def {fmt(debug.defender_prebattle_ratio)}</span>{' '}
+          <span style={labelStyle}>(thr {fmt(debug.defender_prebattle_threshold)})</span>
+        </span>
+        <span style={labelStyle}>Initial FP:</span>
+        <span>
+          <span style={numStyle}>atk {fmt(battle.attacker_initial_fp)}</span>
+          {' · '}
+          <span style={numStyle}>def {fmt(battle.defender_initial_fp)}</span>
+          {battle.terrain && (
+            <span style={labelStyle}>
+              {' '}(defender FP includes terrain {battle.terrain}{battle.fort_level > 0 ? `, fort L${battle.fort_level}` : ''})
+            </span>
+          )}
+        </span>
+      </div>
     </div>
   );
 }

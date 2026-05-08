@@ -202,6 +202,51 @@ pub struct BattleResult {
     /// True when the battle was an amphibious assault (units arrived via warship
     /// landing). False for land attacks across an adjacent border.
     pub is_naval_landing: bool,
+    /// Debug-only: explains what triggered a retreat decision (or that the
+    /// battle was fought to conclusion). Surfaced in the UI behind a toggle.
+    pub retreat_debug: Option<RetreatDebug>,
+}
+
+/// Stage at which a side decided to retreat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetreatStage {
+    /// Pre-battle bail: side bailed before any rounds based on FP ratio vs threshold.
+    PreBattle,
+    /// Mid-battle bail: side bailed after a round based on cumulative FP loss vs threshold.
+    MidBattle,
+    /// No retreat happened — battle was fought to conclusion.
+    None,
+}
+
+impl RetreatStage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RetreatStage::PreBattle => "pre_battle",
+            RetreatStage::MidBattle => "mid_battle",
+            RetreatStage::None => "none",
+        }
+    }
+}
+
+/// Debug info about which retreat-decision threshold triggered (or didn't).
+#[derive(Debug, Clone)]
+pub struct RetreatDebug {
+    /// Which side retreated, if any: "attacker" / "defender" / "none".
+    pub side: &'static str,
+    pub stage: RetreatStage,
+    /// For PreBattle: defender_FP / attacker_FP (attacker view) or vice versa.
+    /// For MidBattle: fraction of initial FP lost (0.0 .. 1.0).
+    pub measured_value: f64,
+    /// The threshold the measured value was compared against.
+    pub threshold: f64,
+    /// Optional second pair so we can show "the other side also wanted to bail".
+    pub attacker_prebattle_ratio: f64,
+    pub defender_prebattle_ratio: f64,
+    pub attacker_prebattle_threshold: f64,
+    pub defender_prebattle_threshold: f64,
+    /// Round number at which mid-battle retreat triggered (1-based). 0 for
+    /// pre-battle / no retreat.
+    pub round: u32,
 }
 
 /// Calculate the General bonus multiplier for a force.
@@ -442,6 +487,7 @@ pub fn resolve_battle_with_config(
             medal_awards: Vec::new(),
             attacker_origin_provinces: Vec::new(),
             is_naval_landing: false,
+            retreat_debug: None,
         };
     }
 
@@ -470,6 +516,7 @@ pub fn resolve_battle_with_config(
             medal_awards: Vec::new(),
             attacker_origin_provinces: Vec::new(),
             is_naval_landing: false,
+            retreat_debug: None,
         };
     }
 
@@ -505,6 +552,7 @@ pub fn resolve_battle_with_config(
             medal_awards,
             attacker_origin_provinces: Vec::new(),
             is_naval_landing: false,
+            retreat_debug: None,
         };
     }
 
@@ -543,6 +591,25 @@ pub fn resolve_battle_with_config(
         } else {
             attacker_would_bail
         };
+        let prebattle_debug = RetreatDebug {
+            side: if attacker_bails { "attacker" } else { "defender" },
+            stage: RetreatStage::PreBattle,
+            measured_value: if attacker_bails {
+                attacker_ratio
+            } else {
+                defender_ratio
+            },
+            threshold: if attacker_bails {
+                config.attacker_retreat_ratio
+            } else {
+                config.defender_retreat_ratio
+            },
+            attacker_prebattle_ratio: attacker_ratio,
+            defender_prebattle_ratio: defender_ratio,
+            attacker_prebattle_threshold: config.attacker_retreat_ratio,
+            defender_prebattle_threshold: config.defender_retreat_ratio,
+            round: 0,
+        };
         if attacker_bails {
             return BattleResult {
                 attacker: attacker.nation,
@@ -567,6 +634,7 @@ pub fn resolve_battle_with_config(
                 medal_awards: Vec::new(),
                 attacker_origin_provinces: Vec::new(),
                 is_naval_landing: false,
+                retreat_debug: Some(prebattle_debug),
             };
         } else {
             // Defender evacuates; attacker takes the province unopposed.
@@ -593,6 +661,7 @@ pub fn resolve_battle_with_config(
                 medal_awards: Vec::new(),
                 attacker_origin_provinces: Vec::new(),
                 is_naval_landing: false,
+                retreat_debug: Some(prebattle_debug),
             };
         }
     }
@@ -600,6 +669,8 @@ pub fn resolve_battle_with_config(
     // Combat rounds (up to 10)
     let mut retreated = false;
     let mut defender_retreated = false;
+    let mut midbattle_debug: Option<RetreatDebug> = None;
+    let mut current_round: u32 = 0;
     // Track damage dealt by each unit (keyed by UnitId) for medal eligibility
     let mut atk_damage_dealt: std::collections::HashMap<crate::map::UnitId, f64> =
         std::collections::HashMap::new();
@@ -610,6 +681,7 @@ pub fn resolve_battle_with_config(
         if atk_units.is_empty() || def_units.is_empty() {
             break;
         }
+        current_round += 1;
 
         // Calculate firepower for this round
         let atk_fp = attacker_total_firepower(&atk_units);
@@ -700,6 +772,17 @@ pub fn resolve_battle_with_config(
             let fp_lost_ratio = 1.0 - (current_atk_fp / attacker_initial_fp);
             if fp_lost_ratio > config.attacker_postbattle_fp_loss {
                 retreated = true;
+                midbattle_debug = Some(RetreatDebug {
+                    side: "attacker",
+                    stage: RetreatStage::MidBattle,
+                    measured_value: fp_lost_ratio,
+                    threshold: config.attacker_postbattle_fp_loss,
+                    attacker_prebattle_ratio: attacker_ratio,
+                    defender_prebattle_ratio: defender_ratio,
+                    attacker_prebattle_threshold: config.attacker_retreat_ratio,
+                    defender_prebattle_threshold: config.defender_retreat_ratio,
+                    round: current_round,
+                });
                 // Retreating units suffer 10% additional damage on remaining health
                 for unit in &mut atk_units {
                     let retreat_damage = (unit.health as f64 * 0.10) as u8;
@@ -725,6 +808,17 @@ pub fn resolve_battle_with_config(
             let fp_lost_ratio = 1.0 - (current_def_fp / raw_def_initial);
             if fp_lost_ratio > config.defender_postbattle_fp_loss {
                 defender_retreated = true;
+                midbattle_debug = Some(RetreatDebug {
+                    side: "defender",
+                    stage: RetreatStage::MidBattle,
+                    measured_value: fp_lost_ratio,
+                    threshold: config.defender_postbattle_fp_loss,
+                    attacker_prebattle_ratio: attacker_ratio,
+                    defender_prebattle_ratio: defender_ratio,
+                    attacker_prebattle_threshold: config.attacker_retreat_ratio,
+                    defender_prebattle_threshold: config.defender_retreat_ratio,
+                    round: current_round,
+                });
                 for unit in &mut def_units {
                     let retreat_damage = (unit.health as f64 * 0.10) as u8;
                     if retreat_damage > 0 {
@@ -800,6 +894,17 @@ pub fn resolve_battle_with_config(
         medal_awards,
         attacker_origin_provinces: Vec::new(),
         is_naval_landing: false,
+        retreat_debug: midbattle_debug.or(Some(RetreatDebug {
+            side: "none",
+            stage: RetreatStage::None,
+            measured_value: 0.0,
+            threshold: 0.0,
+            attacker_prebattle_ratio: attacker_ratio,
+            defender_prebattle_ratio: defender_ratio,
+            attacker_prebattle_threshold: config.attacker_retreat_ratio,
+            defender_prebattle_threshold: config.defender_retreat_ratio,
+            round: current_round,
+        })),
     }
 }
 

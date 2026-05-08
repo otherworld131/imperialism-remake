@@ -1543,6 +1543,7 @@ pub fn wasm_get_units_in_province(game_json: &str, province_id: u32) -> String {
                     "upgrade_to": upgrade_to_name,
                     "upgrade_cost": upgrade_cost_dollars,
                     "upgrade_arms_delta": upgrade_arms_delta,
+                    "heal_blocked_reason": unit.last_heal_block.map(|b| b.as_str()),
                 }));
             }
         }
@@ -5992,6 +5993,20 @@ fn serialize_battle(b: &BattleResult, game: &GameState) -> serde_json::Value {
             .collect()
     };
 
+    let retreat_debug = b.retreat_debug.as_ref().map(|d| {
+        serde_json::json!({
+            "side": d.side,
+            "stage": d.stage.as_str(),
+            "measured_value": d.measured_value,
+            "threshold": d.threshold,
+            "attacker_prebattle_ratio": d.attacker_prebattle_ratio,
+            "defender_prebattle_ratio": d.defender_prebattle_ratio,
+            "attacker_prebattle_threshold": d.attacker_prebattle_threshold,
+            "defender_prebattle_threshold": d.defender_prebattle_threshold,
+            "round": d.round,
+        })
+    });
+
     serde_json::json!({
         "type": "land",
         "attacker": attacker_name,
@@ -6002,6 +6017,7 @@ fn serialize_battle(b: &BattleResult, game: &GameState) -> serde_json::Value {
         "province_id": b.province.0,
         "attacker_won": b.attacker_won,
         "retreated": b.retreated,
+        "defender_retreated": b.defender_retreated,
         "attacker_casualties": b.attacker_casualties.iter()
             .map(|c| format!("{:?}", c)).collect::<Vec<_>>(),
         "defender_casualties": b.defender_casualties.iter()
@@ -6013,6 +6029,8 @@ fn serialize_battle(b: &BattleResult, game: &GameState) -> serde_json::Value {
         "siege_reduced_fort": b.siege_reduced_fort,
         "attacker_initial_count": b.attacker_initial_count,
         "defender_initial_count": b.defender_initial_count,
+        "attacker_initial_fp": b.attacker_initial_fp,
+        "defender_initial_fp": b.defender_initial_fp,
         "attacker_survivors_count": b.attacker_initial_count.saturating_sub(b.attacker_casualties.len()),
         "defender_survivors_count": b.defender_initial_count.saturating_sub(b.defender_casualties.len()),
         "medal_awards": b.medal_awards.iter()
@@ -6023,6 +6041,7 @@ fn serialize_battle(b: &BattleResult, game: &GameState) -> serde_json::Value {
         "origin_tiles": origin_tiles,
         "origin_province_names": origin_province_names,
         "is_naval_landing": b.is_naval_landing,
+        "retreat_debug": retreat_debug,
     })
 }
 
@@ -7048,6 +7067,7 @@ mod tests {
             defender_retreated: false,
             attacker_retreated_to: Vec::new(),
             defender_retreated_to: Vec::new(),
+            retreat_debug: None,
         };
 
         game.archive

@@ -209,6 +209,8 @@ function App() {
   const [showAiNonActions, setShowAiNonActions] = useState(false);
   const [showPersonalities, setShowPersonalities] = useState(false);
   const [disableFogOfWar, setDisableFogOfWar] = useState(false);
+  const [showHealDebug, setShowHealDebug] = useState(false);
+  const [showRetreatDebug, setShowRetreatDebug] = useState(false);
   const [organicBorders, setOrganicBorders] = useState(true);
   const [hideHexGrid, setHideHexGrid] = useState(false);
   const [showResources, setShowResources] = useState(true);
@@ -1852,6 +1854,7 @@ function App() {
             quarter={quarter}
             nations={gameState?.nations || []}
             onClose={() => setActiveScreen('map')}
+            showRetreatDebug={showRetreatDebug}
           />
         )}
         {activeScreen === 'legend' && (
@@ -2081,6 +2084,7 @@ function App() {
                     onDismissSelected={handleDismissSelected}
                     onUpgradeUnit={handleUpgradeUnit}
                     onUpgradeSelected={handleUpgradeSelected}
+                    showHealDebug={showHealDebug}
                   />
                 </div>
               )}
@@ -2183,6 +2187,14 @@ function App() {
                 <label>
                   <input type="checkbox" checked={disableFogOfWar} onChange={e => setDisableFogOfWar(e.target.checked)} />
                   {' '}Disable fog of war
+                </label>
+                <label>
+                  <input type="checkbox" checked={showHealDebug} onChange={e => setShowHealDebug(e.target.checked)} />
+                  {' '}Show heal-blocker reasons (units)
+                </label>
+                <label>
+                  <input type="checkbox" checked={showRetreatDebug} onChange={e => setShowRetreatDebug(e.target.checked)} />
+                  {' '}Show retreat math (battles)
                 </label>
               </div>
 

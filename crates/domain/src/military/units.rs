@@ -201,6 +201,25 @@ pub struct UnitStats {
     pub era: Era,
 }
 
+/// Reason a unit did not heal during the last rest-heal pass. Set every turn
+/// inside `heal_resting_units`. UI surfaces this through a debug toggle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HealBlock {
+    Moved,
+    Fought,
+    FullHealth,
+}
+
+impl HealBlock {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HealBlock::Moved => "moved",
+            HealBlock::Fought => "fought",
+            HealBlock::FullHealth => "full_health",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ArmyUnit {
     pub id: UnitId,
@@ -210,6 +229,9 @@ pub struct ArmyUnit {
     pub health: u8, // 0-100 in 5% increments
     pub medals: u8, // 0-4+
     pub movement_remaining: u32,
+    /// Why this unit didn't heal last turn. `None` means it either healed or
+    /// the field hasn't been populated yet (e.g. turn 0). Debug-only.
+    pub last_heal_block: Option<HealBlock>,
 }
 
 /// Process-global registry populated by the Lua loader at GameData init
@@ -1040,6 +1062,7 @@ impl ArmyUnit {
             health: 100,
             medals: 0,
             movement_remaining: stats.movement,
+            last_heal_block: None,
         }
     }
 

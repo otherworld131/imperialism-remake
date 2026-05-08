@@ -430,6 +430,8 @@ impl From<&d::combat::BattleResult> for BattleResult {
         }
     }
 }
+// `retreat_debug` is debug-only and lives only on the runtime BattleResult; the
+// snapshot type omits it so saves stay stable. Restoring sets it to `None`.
 impl From<BattleResult> for d::combat::BattleResult {
     fn from(v: BattleResult) -> Self {
         use domain::map::UnitId;
@@ -472,6 +474,7 @@ impl From<BattleResult> for d::combat::BattleResult {
                 .map(Into::into)
                 .collect(),
             is_naval_landing: v.is_naval_landing,
+            retreat_debug: None,
         }
     }
 }
