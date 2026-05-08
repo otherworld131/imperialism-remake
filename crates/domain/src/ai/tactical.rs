@@ -157,12 +157,27 @@ pub(crate) fn capital_threat_level(game: &GameState, nation_id: NationId) -> Cap
 
 /// Distribute the nation's field army each turn.
 ///
-/// Two phases, both capped by `max_redeploys_per_turn`:
-///   1. **Concentrate** — if the capital is threatened and has fewer than the
-///      threatened-reserve units, pull from safer interior / non-adjacent
-///      border provinces toward the capital.
-///   2. **Spread** — push surplus units (capital beyond its reserve, or any
-///      over-stocked interior province) to undefended border provinces.
+/// Two phases:
+///   1. **Concentrate (defensive)** — if the capital is threatened, pull
+///      units from interior / non-adjacent border provinces back toward
+///      the capital up to `capital_reserve_threatened`.
+///   2. **Redistribute residual surplus**:
+///      - **Wartime** (Trello #470): pile surplus on a small set of
+///        decisive destinations — the capital when a naval landing is
+///        pending (embarkation), forward staging adjacent to pending
+///        attack targets, or otherwise the Schwerpunkt border province
+///        bordering the most enemy provinces. Over-stocked non-Schwerpunkt
+///        borders are also drained toward the chosen point — concentrate,
+///        don't disperse.
+///      - **Peacetime** (no enemies): even round-robin spread to every
+///        owned province bordering a foreign neighbour, so a fresh war
+///        finds units already forward.
+///      - **Multi-hop staging**: long capital→front moves cost 5 freight
+///        cars per armament point and rejected moves are dropped at end
+///        of turn. When a source is non-adjacent to its target, the AI
+///        looks for a friendly intermediate adjacent to BOTH and routes
+///        the unit there for a free march; next turn's distribution picks
+///        it up at the intermediate for the second free leg.
 fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personality: AiPersonality) {
     // ── Load Lua tunables (feature-gated) ───────────────────────────
     #[cfg(feature = "lua")]
@@ -509,6 +524,56 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
         }
     }
 
+    // Multi-hop staging: when a source is non-adjacent to its destination
+    // (long rail haul, 5 freight cars per armament point), look for an
+    // intermediate friendly province adjacent to BOTH source and destination.
+    // Routing the unit there this turn turns one expensive rail leg into a
+    // free march; next turn's distribution picks it up at the intermediate
+    // (now adjacent to the final destination) for a second free march.
+    // This unblocks AI armies stranded at the capital by rail saturation.
+    //
+    // Precompute hops for every (source, dest) pair we might use, so the
+    // inner queueing loop can borrow `game` mutably without re-borrowing for
+    // adjacency checks.
+    let mut hop_cache: std::collections::HashMap<(ProvinceId, ProvinceId), ProvinceId> =
+        std::collections::HashMap::new();
+    for &(src_pid, _) in &spread_sources {
+        for &dest_pid in &dest_priority {
+            if src_pid == dest_pid {
+                continue;
+            }
+            let resolved = (|| {
+                let src_prov = game.get_province(src_pid)?;
+                let dest_prov = game.get_province(dest_pid)?;
+                if crate::map::provinces_are_adjacent(&game.world.hex_map, src_prov, dest_prov) {
+                    return Some(dest_pid); // already free-marchable
+                }
+                // Find a friendly intermediate adjacent to both. We prefer
+                // a non-destination intermediate (so we don't pull units
+                // toward another front), but accept a destination as a
+                // last resort — landing on a destination via free march
+                // is still useful and avoids the rail-blocked direct hop.
+                let is_bridge = |pid: ProvinceId| -> bool {
+                    if pid == src_pid || pid == dest_pid {
+                        return false;
+                    }
+                    game.get_province(pid).is_some_and(|p| {
+                        crate::map::provinces_are_adjacent(&game.world.hex_map, src_prov, p)
+                            && crate::map::provinces_are_adjacent(&game.world.hex_map, p, dest_prov)
+                    })
+                };
+                owned_provinces
+                    .iter()
+                    .copied()
+                    .filter(|&pid| !dest_priority.contains(&pid))
+                    .find(|&pid| is_bridge(pid))
+                    .or_else(|| owned_provinces.iter().copied().find(|&pid| is_bridge(pid)))
+            })()
+            .unwrap_or(dest_pid);
+            hop_cache.insert((src_pid, dest_pid), resolved);
+        }
+    }
+
     // Round-robin destinations so we balance across the front. No per-turn
     // cap — surplus redistributes in one pass. We also bail if every chosen
     // destination equals the current source (otherwise the while loop would
@@ -548,9 +613,16 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
             let Some(uid) = candidate else {
                 break; // nothing left to move from this source
             };
+            // Multi-hop: if the direct route would need rail and a friendly
+            // intermediate exists, route via the intermediate for a free
+            // march this turn.
+            let actual_dest = hop_cache
+                .get(&(src_pid, dest_pid))
+                .copied()
+                .unwrap_or(dest_pid);
             game.transient
                 .pending_moves
-                .push((nation_id, uid, dest_pid));
+                .push((nation_id, uid, actual_dest));
             already_pending.insert(uid);
             remaining -= 1;
         }
@@ -1689,6 +1761,270 @@ mod tests {
             from_capital, 0,
             "capital units must stay put when a landing is pending; got {} moves out",
             from_capital
+        );
+    }
+
+    #[test]
+    fn multi_hop_routes_via_intermediate_when_capital_not_adjacent_to_border() {
+        // Capital at (10,10), interior at (12,10), border at (14,10),
+        // enemy at (15,10). Capital is non-adjacent to border (would need
+        // rail), but the interior province bridges them. Surplus must
+        // route to the interior, not the border directly.
+        use crate::map::{HexMap, Province};
+        use crate::nation::{Nation, NationColor};
+
+        let mut hex_map = HexMap::new(40, 40);
+        let cap = HexCoord::new(10, 10);
+        let mid = HexCoord::new(12, 10);
+        let bdr = HexCoord::new(14, 10);
+        let enm = HexCoord::new(15, 10);
+        // Sanity: capital must NOT be adjacent to border tile, but mid
+        // bridges. cube distance(10,10)→(14,10) = 4; (10,10)→(12,10) = 2.
+        // Hex neighbours are distance-1, so two-hop bridge holds.
+        for (coord, pid) in [(cap, 1u32), (mid, 2), (bdr, 3), (enm, 10)] {
+            hex_map.set_tile(
+                coord,
+                crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(pid)),
+            );
+        }
+        // The chain must be adjacency-only; the test isn't meaningful if
+        // tiles happen to be adjacent. Use neighbour expansion of mid to
+        // include both cap and bdr.
+        let mid_neighbours: Vec<HexCoord> = mid.neighbors().into_iter().collect();
+        let cap_neighbours: Vec<HexCoord> = cap.neighbors().into_iter().collect();
+        // Make sure mid is adjacent to cap and bdr by painting border tiles
+        // INTO mid_neighbours so adjacency holds via the multi-tile province
+        // rule.
+        let _ = (mid_neighbours, cap_neighbours);
+        // Build provinces such that: cap province owns only `cap`; mid
+        // owns `mid` plus a tile bordering cap and a tile bordering bdr;
+        // bdr owns only `bdr`.
+        let mid_neighbour_of_cap = HexCoord::new(11, 10); // between cap and mid
+        let mid_neighbour_of_bdr = HexCoord::new(13, 10); // between mid and bdr
+        hex_map.set_tile(
+            mid_neighbour_of_cap,
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+        hex_map.set_tile(
+            mid_neighbour_of_bdr,
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+
+        let provinces = vec![
+            Province::new(ProvinceId(1), "Capital".into(), NationId(2), cap, vec![cap], 4),
+            Province::new(
+                ProvinceId(2),
+                "Mid".into(),
+                NationId(2),
+                mid,
+                vec![mid, mid_neighbour_of_cap, mid_neighbour_of_bdr],
+                4,
+            ),
+            Province::new(ProvinceId(3), "Border".into(), NationId(2), bdr, vec![bdr], 4),
+            Province::new(ProvinceId(10), "Enemy".into(), NationId(3), enm, vec![enm], 3),
+        ];
+
+        let mut ai = Nation::new(
+            NationId(2),
+            "AI".into(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
+        ai.add_province(ProvinceId(2));
+        ai.add_province(ProvinceId(3));
+        for i in 0..6 {
+            ai.military.army.push(ArmyUnit::new(
+                UnitId(7300 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(1),
+            ));
+        }
+        let enemy = Nation::new(
+            NationId(3),
+            "Enemy".into(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(10),
+        );
+        let human = Nation::new(
+            NationId(1),
+            "Human".into(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(99),
+        );
+        let mut diplomacy = crate::diplomacy::DiplomacyState::new();
+        diplomacy.declare_war(NationId(2), NationId(3));
+
+        let mut game = crate::test_game_state! {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map: hex_map,
+            provinces: provinces,
+            nations: vec![human, ai, enemy],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: crate::data::GameData::default(),
+            diplomacy: diplomacy,
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
+            political_archive: Vec::new(),
+            ai_debug: false,
+            observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
+            next_unit_id: 6_000_000,
+        };
+
+        ai_distribute_field_army(&mut game, NationId(2), AiPersonality::Balanced);
+
+        // The Schwerpunkt is Border (only border province). Capital is
+        // non-adjacent to Border, but Mid bridges them. Surplus from
+        // capital must route to Mid (free march), not Border (rail).
+        let to_mid = game
+            .transient
+            .pending_moves
+            .iter()
+            .filter(|(nid, _, dest)| *nid == NationId(2) && *dest == ProvinceId(2))
+            .count();
+        let to_border = game
+            .transient
+            .pending_moves
+            .iter()
+            .filter(|(nid, _, dest)| *nid == NationId(2) && *dest == ProvinceId(3))
+            .count();
+        assert!(
+            to_mid > 0,
+            "expected capital surplus to route via the bridging Mid province; \
+             got {} to Mid, {} to Border",
+            to_mid,
+            to_border
+        );
+    }
+
+    #[test]
+    fn multi_hop_falls_through_to_direct_when_no_intermediate_exists() {
+        // Capital adjacent to a single border province with NO bridging
+        // intermediate. The hop logic must fall through to the direct
+        // route — no exotic redirect, no panic.
+        use crate::map::{HexMap, Province};
+        use crate::nation::{Nation, NationColor};
+
+        let mut hex_map = HexMap::new(20, 20);
+        let cap = HexCoord::new(10, 10);
+        let bdr = HexCoord::new(11, 10);
+        let enm = HexCoord::new(12, 10);
+        for (coord, pid) in [(cap, 1u32), (bdr, 2), (enm, 10)] {
+            hex_map.set_tile(
+                coord,
+                crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(pid)),
+            );
+        }
+
+        let provinces = vec![
+            Province::new(ProvinceId(1), "Capital".into(), NationId(2), cap, vec![cap], 4),
+            Province::new(ProvinceId(2), "Border".into(), NationId(2), bdr, vec![bdr], 4),
+            Province::new(ProvinceId(10), "Enemy".into(), NationId(3), enm, vec![enm], 3),
+        ];
+
+        let mut ai = Nation::new(
+            NationId(2),
+            "AI".into(),
+            NationColor::Red,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
+        ai.add_province(ProvinceId(2));
+        for i in 0..5 {
+            ai.military.army.push(ArmyUnit::new(
+                UnitId(7400 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(1),
+            ));
+        }
+        let enemy = Nation::new(
+            NationId(3),
+            "Enemy".into(),
+            NationColor::Gray,
+            NationType::MinorNation,
+            ProvinceId(10),
+        );
+        let human = Nation::new(
+            NationId(1),
+            "Human".into(),
+            NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(99),
+        );
+        let mut diplomacy = crate::diplomacy::DiplomacyState::new();
+        diplomacy.declare_war(NationId(2), NationId(3));
+
+        let mut game = crate::test_game_state! {
+            turn: TurnNumber::new(1),
+            difficulty: Difficulty::Normal,
+            map_key: "test".to_string(),
+            hex_map: hex_map,
+            provinces: provinces,
+            nations: vec![human, ai, enemy],
+            human_player_nation: NationId(1),
+            events: Vec::new(),
+            game_data: crate::data::GameData::default(),
+            diplomacy: diplomacy,
+            pending_attacks: Vec::new(),
+            pending_moves: Vec::new(),
+            pending_landings: Vec::new(),
+            history: Vec::new(),
+            high_scores: Vec::new(),
+            newspaper_archive: Vec::new(),
+            battle_archive: Vec::new(),
+            political_archive: Vec::new(),
+            ai_debug: false,
+            observer_mode: false,
+            last_cash_flow: std::collections::HashMap::new(),
+            last_resource_flow: std::collections::HashMap::new(),
+            pending_ai_cash_spending: Vec::new(),
+            pending_ai_cash_income: Vec::new(),
+            next_unit_id: 6_000_000,
+        };
+
+        ai_distribute_field_army(&mut game, NationId(2), AiPersonality::Balanced);
+
+        // Capital is adjacent to Border directly — no hop needed. All
+        // moves go straight to Border.
+        let to_border = game
+            .transient
+            .pending_moves
+            .iter()
+            .filter(|(nid, _, dest)| *nid == NationId(2) && *dest == ProvinceId(2))
+            .count();
+        let other_dests: Vec<ProvinceId> = game
+            .transient
+            .pending_moves
+            .iter()
+            .filter(|(nid, _, dest)| *nid == NationId(2) && *dest != ProvinceId(2))
+            .map(|(_, _, dest)| *dest)
+            .collect();
+        assert!(
+            to_border > 0,
+            "expected direct moves to the border when no intermediate exists"
+        );
+        assert!(
+            other_dests.is_empty(),
+            "no spurious redirects when no intermediate exists; got {:?}",
+            other_dests
         );
     }
 
