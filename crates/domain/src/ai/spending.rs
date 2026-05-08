@@ -17,9 +17,7 @@ use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::turn::connected_provinces;
 use crate::types::*;
 
-#[cfg(feature = "lua")]
-use super::common::lua_or;
-use super::common::{AiPersonality, PersonalityConfig, get_personality};
+use super::common::{AiPersonality, PersonalityConfig, get_personality, lua_or};
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -1138,22 +1136,9 @@ fn score_warship(
 
     // Scale by the Lua naval weight if set, otherwise use the military weight.
     let personality = get_personality(game, nation_id);
-    let naval_weight = {
-        #[cfg(feature = "lua")]
-        {
-            game.game_data
-                .lua_engine
-                .as_ref()
-                .and_then(|e| super::lua_bridge::lua_get_config(e, personality))
-                .and_then(|c| c.spending_naval_weight)
-                .unwrap_or(weights.military_weight)
-        }
-        #[cfg(not(feature = "lua"))]
-        {
-            let _ = personality;
-            weights.military_weight
-        }
-    };
+    let naval_weight = super::lua_bridge::get_personality_config(game, personality)
+        .and_then(|c| c.spending_naval_weight)
+        .unwrap_or(weights.military_weight);
     let score = raw * naval_weight;
 
     // Warships cost materials, not treasury. Use zero so the treasury
@@ -2345,10 +2330,7 @@ fn load_weights(game: &GameState, personality: AiPersonality) -> SpendingWeights
     let defaults = PersonalityConfig::for_personality(personality);
     let mut w = SpendingWeights::from_config(&defaults);
 
-    #[cfg(feature = "lua")]
-    if let Some(engine) = &game.game_data.lua_engine
-        && let Some(cfg) = super::lua_bridge::lua_get_config(engine, personality)
-    {
+    if let Some(cfg) = super::lua_bridge::get_personality_config(game, personality) {
         w.military_weight = lua_or(
             cfg.spending_military_weight,
             defaults.spending_military_weight,
@@ -2368,8 +2350,6 @@ fn load_weights(game: &GameState, personality: AiPersonality) -> SpendingWeights
         w.min_threshold = lua_or(cfg.min_score_threshold, defaults.spending_min_threshold);
     }
 
-    // Suppress unused variable warning when lua feature is off
-    let _ = game;
     w
 }
 
@@ -2401,11 +2381,26 @@ pub(crate) fn ai_diplomatic_mop_up(game: &mut GameState, nation_id: NationId) {
                 Some(n) => n,
                 None => return,
             };
-            let wealthy = nation.economy.treasury.as_dollars() >= cfg.labor_wealthy_treasury_threshold;
-            let cap = priority_target_count(cfg, nation.diplomacy.ai_personality.unwrap_or(AiPersonality::Balanced)) as u32;
-            let existing: u32 = game.world.nations.iter()
+            let wealthy =
+                nation.economy.treasury.as_dollars() >= cfg.labor_wealthy_treasury_threshold;
+            let cap = priority_target_count(
+                cfg,
+                nation
+                    .diplomacy
+                    .ai_personality
+                    .unwrap_or(AiPersonality::Balanced),
+            ) as u32;
+            let existing: u32 = game
+                .world
+                .nations
+                .iter()
                 .filter(|n| !n.is_great_power() && !n.province_ids.is_empty())
-                .filter(|n| game.world.diplomacy.get_relation(nation_id, n.id).is_some_and(|r| r.has_consulate))
+                .filter(|n| {
+                    game.world
+                        .diplomacy
+                        .get_relation(nation_id, n.id)
+                        .is_some_and(|r| r.has_consulate)
+                })
                 .count() as u32;
             if !wealthy && existing >= cap {
                 false
@@ -2414,7 +2409,11 @@ pub(crate) fn ai_diplomatic_mop_up(game: &mut GameState, nation_id: NationId) {
                     !n.is_great_power()
                         && !n.province_ids.is_empty()
                         && !n.diplomacy.is_in_anarchy
-                        && game.world.diplomacy.get_relation(nation_id, n.id).is_none_or(|r| !r.has_consulate)
+                        && game
+                            .world
+                            .diplomacy
+                            .get_relation(nation_id, n.id)
+                            .is_none_or(|r| !r.has_consulate)
                 })
             }
         };

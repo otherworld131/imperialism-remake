@@ -203,8 +203,7 @@ pub(super) fn resolve_trade_session(
             // Per-turn own-province yield (local + remote, ungated by transport
             // — the buy-side is asking "what *can* my map supply", not "what
             // gets delivered this turn").
-            let (local, remote) =
-                crate::economy::current_collectable_resources(game, *gp_id);
+            let (local, remote) = crate::economy::current_collectable_resources(game, *gp_id);
             let mut own_yield: std::collections::BTreeMap<ResourceType, u32> =
                 std::collections::BTreeMap::new();
             for (r, q) in local.into_iter().chain(remote.into_iter()) {
@@ -649,7 +648,10 @@ pub(super) fn resolve_trade_session(
     // Cap + interval sourced from scripts/config/game.lua — unscaled improvement
     // let minors voluntarily join an empire in only ~5 years of passive trade.
     let trade_cap = game.game_data.game_config.trade_relation_improvement_cap;
-    let trade_per_resource = game.game_data.game_config.trade_relation_improvement_per_resource;
+    let trade_per_resource = game
+        .game_data
+        .game_config
+        .trade_relation_improvement_per_resource;
     let trade_interval = game.game_data.game_config.trade_relation_turn_interval;
     let apply_trade_improvement = trade_interval > 0 && game.turn.0.is_multiple_of(trade_interval);
     if apply_trade_improvement {

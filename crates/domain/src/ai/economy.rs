@@ -1009,18 +1009,9 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
     // ── Read infrastructure budget from Lua config ──────────────
     let personality = get_personality(game, nation_id);
 
-    #[cfg(feature = "lua")]
-    let lua_cfg = game
-        .game_data
-        .lua_engine
-        .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
-    #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
-
+    let lua_cfg = super::lua_bridge::get_personality_config(game, personality);
     let pc = PersonalityConfig::for_personality(personality);
     let base_infrastructure_budget: Money = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(budget) = lua_cfg.as_ref().map(|c| c.infrastructure_budget) {
             break 'val Money::dollars(budget);
         }
@@ -1029,7 +1020,6 @@ pub(crate) fn ai_build_map_infrastructure(game: &mut GameState, nation_id: Natio
 
     // Scale budget with treasury: spend more aggressively when cash-rich
     let scale_threshold: i64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg
             .as_ref()
             .and_then(|c| c.infra_budget_scale_threshold)
@@ -1241,15 +1231,9 @@ pub fn ai_manage_resources(
     let personality = get_personality(game, nation_id);
 
     // ── Read Lua config (feature-gated) ──────────────────────
-    #[cfg(feature = "lua")]
-    let lua_cfg = game
-        .game_data
-        .lua_engine
-        .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+    let lua_cfg = super::lua_bridge::get_personality_config(game, personality);
 
     let goods_sell_threshold: i64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg
             .as_ref()
             .and_then(|c| c.goods_sell_treasury_threshold)
@@ -1259,7 +1243,6 @@ pub fn ai_manage_resources(
         3000
     };
     let goods_reserve: u32 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.goods_reserve) {
             break 'val v;
         }
@@ -1271,7 +1254,6 @@ pub fn ai_manage_resources(
     // brings the treasury above `goods_sell_threshold` and the minor-bid
     // path (1 unit per minor per turn) can't drain the warehouse.
     let goods_fat_stockpile_threshold: u32 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg
             .as_ref()
             .and_then(|c| c.goods_fat_stockpile_threshold)
@@ -1413,16 +1395,10 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
     ai_build_infrastructure(game, nation_id);
 
     // ── Read Lua config (feature-gated) ──────────────────────
-    #[cfg(feature = "lua")]
-    let lua_cfg = game
-        .game_data
-        .lua_engine
-        .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+    let lua_cfg = super::lua_bridge::get_personality_config(game, personality);
 
     let pc_eco = PersonalityConfig::for_personality(personality);
     let expansion_threshold_multiplier: u32 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg
             .as_ref()
             .and_then(|c| c.expansion_threshold_multiplier)
@@ -1433,7 +1409,6 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
     };
 
     let use_tier_expansion: bool = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.use_tier_expansion) {
             break 'val v;
         }
@@ -1441,7 +1416,6 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
     };
 
     let high_treasury_threshold: i64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg
             .as_ref()
             .and_then(|c| c.high_treasury_expansion_threshold)
@@ -1525,7 +1499,6 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
 
     // Expand FoodProcessing when food surplus exceeds capacity * threshold.
     let food_threshold: u32 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg
             .as_ref()
             .and_then(|c| c.food_processing_expansion_threshold)
@@ -1740,13 +1713,8 @@ pub(crate) fn reserve_for_expansion(
 
 /// Lua-tunable read for the expansion-reserve multiplier (turns per expansion).
 pub(crate) fn expansions_per_turn_target(game: &GameState, personality: AiPersonality) -> u32 {
-    #[cfg(feature = "lua")]
     {
-        if let Some(cfg) = game
-            .game_data
-            .lua_engine
-            .as_ref()
-            .and_then(|e| super::lua_bridge::lua_get_config(e, personality))
+        if let Some(cfg) = super::lua_bridge::get_personality_config(game, personality)
             && let Some(v) = cfg.expansions_per_turn_target
         {
             return v;
@@ -1759,13 +1727,8 @@ pub(crate) fn expansions_per_turn_target(game: &GameState, personality: AiPerson
 /// Lua-tunable: minimum treasury (dollars) the AI keeps before placing
 /// buy-side trade bids. Card [3/6] cash-guard. Default $5,000.
 pub(crate) fn trade_buy_treasury_floor(game: &GameState, personality: AiPersonality) -> i64 {
-    #[cfg(feature = "lua")]
     {
-        if let Some(cfg) = game
-            .game_data
-            .lua_engine
-            .as_ref()
-            .and_then(|e| super::lua_bridge::lua_get_config(e, personality))
+        if let Some(cfg) = super::lua_bridge::get_personality_config(game, personality)
             && let Some(v) = cfg.trade_buy_treasury_floor
         {
             return v;
@@ -1779,13 +1742,8 @@ pub(crate) fn trade_buy_treasury_floor(game: &GameState, personality: AiPersonal
 /// queued-recruit demand. Card #465. Default 10 (pre-builds about 5 trained
 /// infantry units at 2 arms apiece).
 pub(crate) fn arms_sell_reserve(game: &GameState, personality: AiPersonality) -> u32 {
-    #[cfg(feature = "lua")]
     {
-        if let Some(cfg) = game
-            .game_data
-            .lua_engine
-            .as_ref()
-            .and_then(|e| super::lua_bridge::lua_get_config(e, personality))
+        if let Some(cfg) = super::lua_bridge::get_personality_config(game, personality)
             && let Some(v) = cfg.arms_sell_reserve
         {
             return v;
@@ -1800,13 +1758,8 @@ pub(crate) fn arms_sell_reserve(game: &GameState, personality: AiPersonality) ->
 /// nation aims to keep two turns' worth of every chain input in the
 /// warehouse, and bids on the world market to close any shortfall.
 pub(crate) fn trade_buy_buffer_turns(game: &GameState, personality: AiPersonality) -> u32 {
-    #[cfg(feature = "lua")]
     {
-        if let Some(cfg) = game
-            .game_data
-            .lua_engine
-            .as_ref()
-            .and_then(|e| super::lua_bridge::lua_get_config(e, personality))
+        if let Some(cfg) = super::lua_bridge::get_personality_config(game, personality)
             && let Some(v) = cfg.trade_buy_buffer_turns
         {
             return v;
@@ -1826,13 +1779,8 @@ pub(crate) fn expansion_reserve_buildings_factor(
     game: &GameState,
     personality: AiPersonality,
 ) -> f64 {
-    #[cfg(feature = "lua")]
     {
-        if let Some(cfg) = game
-            .game_data
-            .lua_engine
-            .as_ref()
-            .and_then(|e| super::lua_bridge::lua_get_config(e, personality))
+        if let Some(cfg) = super::lua_bridge::get_personality_config(game, personality)
             && let Some(v) = cfg.expansion_reserve_buildings_factor
         {
             return v;
@@ -1855,17 +1803,11 @@ pub(crate) fn expansion_reserve_buildings_factor(
 pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationId) {
     let personality = get_personality(game, nation_id);
 
-    #[cfg(feature = "lua")]
-    let lua_cfg = game
-        .game_data
-        .lua_engine
-        .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+    let lua_cfg = super::lua_bridge::get_personality_config(game, personality);
 
     // ── Chain split weights (Lua-tunable per personality) ────────────
     // Lumber gets split between furniture and paper.
     let lumber_furniture_weight: f64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.lumber_furniture_weight) {
             break 'val v;
         }
@@ -1873,14 +1815,12 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
     };
     // Steel gets split between hardware (peacetime) and armory (wartime).
     let steel_armory_weight_peace: f64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.steel_armory_weight_peace) {
             break 'val v;
         }
         0.2
     };
     let steel_armory_weight_war: f64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.steel_armory_weight_war) {
             break 'val v;
         }
@@ -1888,7 +1828,6 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
     };
     // Buffer multiplier for canned-food target relative to projected immigration.
     let canned_food_buffer: f64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.canned_food_buffer) {
             break 'val v;
         }
@@ -1898,7 +1837,6 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
     // labor next turn — without this, a transient shortage would zero the
     // target and leave the chain dormant even after inputs return.
     let min_chain_target: u32 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.min_chain_target) {
             break 'val v;
         }
@@ -1907,14 +1845,12 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
     // Workforce → paper-output scaling. One paper unit per N workers, capped
     // by `paper_target_max`. Default: 1 paper per 4 workers, max 40.
     let paper_workers_per_unit: u32 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.paper_workers_per_unit) {
             break 'val v;
         }
         4
     };
     let paper_target_max: u32 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.paper_target_max) {
             break 'val v;
         }
@@ -2183,22 +2119,15 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
     let personality = get_personality(game, nation_id);
 
     // ── Read Lua config (feature-gated) ──────────────────────
-    #[cfg(feature = "lua")]
-    let lua_cfg = game
-        .game_data
-        .lua_engine
-        .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+    let lua_cfg = super::lua_bridge::get_personality_config(game, personality);
 
     let trade_treasury_cap: i64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.trade_treasury_cap) {
             break 'val v;
         }
         20_000
     };
     let trade_resource_reserve: u32 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.trade_resource_reserve) {
             break 'val v;
         }
@@ -2213,8 +2142,7 @@ pub(crate) fn ai_trade(game: &mut GameState, nation_id: NationId) {
     // Hold back coal queued for the next merchant hull — Paddlewheeler
     // and Freighter both list coal_cost > 0, so unconditional auto-sell
     // would starve their construction even with the reserve elsewhere.
-    let (_, _, _, m_coal_reserve) =
-        super::naval::merchant_navy_material_reserve(game, nation_id);
+    let (_, _, _, m_coal_reserve) = super::naval::merchant_navy_material_reserve(game, nation_id);
     {
         let nation = match game.get_nation_mut(nation_id) {
             Some(n) => n,

@@ -34,6 +34,28 @@ Great Powers competing for world dominance through economics, diplomacy, and mil
 - **Lua** provides: hot-reloadable scripts during development, safe sandboxed modding, proven in games (Factorio, Civilization, WoW), trivial to embed via `mlua`, runs everywhere Rust runs including WASM
 - **Together**: engine performance where it matters + modder-friendly scripting where flexibility matters
 
+### How Lua reaches the WASM build (build-time bake)
+
+`mlua`'s vendored Lua 5.4 needs a C toolchain that doesn't compile to
+`wasm32-unknown-unknown`, so the WASM crate strips the `lua` feature.
+To keep "Lua holds the numbers" true on every platform, `crates/domain/build.rs`
+runs `mlua` natively at build time, executes every script under `scripts/`,
+and emits the resulting tables to `$OUT_DIR/lua_baked.json`. The
+`lua_bridge::baked` module (compiled only when `lua` is OFF) embeds that
+JSON via `include_str!` and deserializes it into the same `GameConfig` /
+`LuaAiConfig` structs the runtime Lua loader produces.
+
+Consequences worth remembering:
+- Editing a `scripts/*.lua` file changes the WASM build only after a Rust
+  rebuild (the `restart-web-server.sh` script already watches `scripts/`).
+- Modders distributing a binary cannot tune Lua post-install — neither
+  native nor WASM. Real runtime filesystem loading is a future card; the
+  current bake is the bridge.
+- AI personality *functions* (war/peace/treaty/tech decisions) are pure
+  Rust now (`crates/domain/src/ai/lua_bridge.rs`). The thresholds those
+  functions consult are tunables in `scripts/ai/*.lua`. Adding new
+  per-personality logic means adding Rust code, not Lua functions.
+
 ## Frontend / Backend Boundary
 
 The architecture enforces a **hard split** between frontend and backend. The backend is a
@@ -87,7 +109,7 @@ many possible consumers.
 | Production chain calculations | Domain | Rust |
 | Pathfinding (A*, connectivity) | Domain | Rust |
 | Tech tree definitions & logic | Domain | Lua scripts (loaded by Rust) |
-| AI decision-making | Domain | Lua scripts (hot-swappable per difficulty/personality) |
+| AI decision-making | Domain | Rust core; tunables in Lua (per personality) |
 | Balance parameters | Domain | RON/JSON data + Lua overrides |
 | Mod hooks (on_turn_start, on_combat_end, …) | Domain | Lua callbacks |
 | Scenario scripting (events, triggers) | Domain | Lua |

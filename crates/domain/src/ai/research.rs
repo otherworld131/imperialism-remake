@@ -61,8 +61,8 @@ pub(crate) fn ai_research_tech(
         return;
     }
 
-    // Attempt Lua override for tech selection
-    #[cfg(feature = "lua")]
+    // Personality-driven tech selection (formerly via Lua, now Rust-resident
+    // with knobs sourced from `LuaAiConfig.research_strategy`).
     {
         let lua_available = &available;
         // Drop the borrow on `available` (which borrows game.game_data) by

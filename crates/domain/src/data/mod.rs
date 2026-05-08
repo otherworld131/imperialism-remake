@@ -46,7 +46,8 @@ enum TestTechEffectDef {
 /// Global game-rule constants. Loaded from `scripts/config/game.lua` when the
 /// Lua feature is enabled; otherwise uses hardcoded defaults.
 /// These define fundamental mechanics, NOT personality preferences.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(default)]
 pub struct GameConfig {
     // Labor
     pub untrained_labor: u32,
@@ -313,6 +314,11 @@ pub struct GameConfig {
     pub minor_resource_withhold_chance: u32,
     // Price minor nations pay per unit when buying manufactured goods (materials/finished goods).
     pub minor_goods_buy_price: i64,
+    /// Free-form string written from `scripts/config/game.lua`. Surfaced to
+    /// the browser via `wasm_debug_marker()`. Edit the Lua value, rebuild
+    /// WASM, and read the new value from the JS console — proves the
+    /// Lua → WASM pipeline end-to-end without poking gameplay numbers.
+    pub debug_marker: String,
 }
 
 impl Default for GameConfig {
@@ -495,6 +501,7 @@ impl Default for GameConfig {
             ai_consulate_treasury_threshold: 2000,
             minor_resource_withhold_chance: 20,
             minor_goods_buy_price: 150,
+            debug_marker: "rust-default".to_string(),
         }
     }
 }
@@ -511,6 +518,12 @@ pub struct GameData {
     pub lua_engine: Option<LuaEngine>,
     /// Global game-rule constants from scripts/config/game.lua.
     pub game_config: GameConfig,
+    /// Per-personality config tables. On native, populated from Lua at
+    /// construction; on WASM, deserialized from the build-time blob.
+    /// Always present (no `cfg` gate) so call sites compile for both
+    /// targets without further `#[cfg]` thickets.
+    pub personality_configs:
+        HashMap<crate::ai::common::AiPersonality, crate::ai::lua_bridge::LuaAiConfig>,
 }
 
 impl Clone for GameData {
@@ -522,6 +535,7 @@ impl Clone for GameData {
             #[cfg(feature = "lua")]
             lua_engine: None,
             game_config: self.game_config.clone(),
+            personality_configs: self.personality_configs.clone(),
         }
     }
 }
@@ -546,12 +560,24 @@ impl GameData {
         unit_stats: HashMap<ArmyUnitType, UnitStats>,
         ship_stats: HashMap<ShipType, ShipStats>,
     ) -> Self {
-        #[allow(unused_mut)]
+        #[cfg(feature = "lua")]
         let mut game_config = GameConfig::default();
+        #[cfg(not(feature = "lua"))]
+        let game_config = baked_game_config();
         #[allow(unused_mut)]
         let mut unit_stats = unit_stats;
         #[allow(unused_mut)]
         let mut ship_stats = ship_stats;
+        #[cfg(feature = "lua")]
+        let mut personality_configs: HashMap<
+            crate::ai::common::AiPersonality,
+            crate::ai::lua_bridge::LuaAiConfig,
+        > = HashMap::new();
+        #[cfg(not(feature = "lua"))]
+        let personality_configs: HashMap<
+            crate::ai::common::AiPersonality,
+            crate::ai::lua_bridge::LuaAiConfig,
+        > = baked_personality_configs();
 
         #[cfg(feature = "lua")]
         let lua_engine = {
@@ -577,6 +603,7 @@ impl GameData {
                          Using hardcoded ship stats fallback."
                     );
                 }
+                personality_configs = load_all_personality_configs(e);
             }
             engine
         };
@@ -593,8 +620,41 @@ impl GameData {
             #[cfg(feature = "lua")]
             lua_engine,
             game_config,
+            personality_configs,
         }
     }
+}
+
+#[cfg(feature = "lua")]
+fn load_all_personality_configs(
+    engine: &LuaEngine,
+) -> HashMap<crate::ai::common::AiPersonality, crate::ai::lua_bridge::LuaAiConfig> {
+    use crate::ai::common::AiPersonality;
+    let mut out = HashMap::new();
+    for &p in &[
+        AiPersonality::Aggressive,
+        AiPersonality::Diplomatic,
+        AiPersonality::Economic,
+        AiPersonality::Balanced,
+    ] {
+        if let Some(cfg) = crate::ai::lua_bridge::lua_get_config(engine, p) {
+            out.insert(p, cfg);
+        }
+    }
+    out
+}
+
+/// Read the per-personality config table baked at build time. Used by the
+/// WASM build (lua feature off). Populated by the build script.
+#[cfg(not(feature = "lua"))]
+fn baked_personality_configs()
+-> HashMap<crate::ai::common::AiPersonality, crate::ai::lua_bridge::LuaAiConfig> {
+    crate::ai::lua_bridge::baked::personality_configs()
+}
+
+#[cfg(not(feature = "lua"))]
+fn baked_game_config() -> GameConfig {
+    crate::ai::lua_bridge::baked::game_config()
 }
 
 impl Default for GameData {
@@ -603,8 +663,10 @@ impl Default for GameData {
     /// Used as a placeholder during snapshot restore; infrastructure replaces
     /// `game_data` with the full data loaded from RON files after deserialization.
     fn default() -> Self {
-        #[allow(unused_mut)]
+        #[cfg(feature = "lua")]
         let mut game_config = GameConfig::default();
+        #[cfg(not(feature = "lua"))]
+        let game_config = baked_game_config();
         #[allow(unused_mut)]
         let mut tech_tree = TechTree::default(); // empty until Lua populates
 
@@ -612,6 +674,16 @@ impl Default for GameData {
         let mut unit_stats = default_unit_stats();
         #[allow(unused_mut)]
         let mut ship_stats = default_ship_stats();
+        #[cfg(feature = "lua")]
+        let mut personality_configs: HashMap<
+            crate::ai::common::AiPersonality,
+            crate::ai::lua_bridge::LuaAiConfig,
+        > = HashMap::new();
+        #[cfg(not(feature = "lua"))]
+        let personality_configs: HashMap<
+            crate::ai::common::AiPersonality,
+            crate::ai::lua_bridge::LuaAiConfig,
+        > = baked_personality_configs();
 
         #[cfg(feature = "lua")]
         let lua_engine = {
@@ -644,6 +716,7 @@ impl Default for GameData {
                          Using hardcoded ship stats fallback."
                     );
                 }
+                personality_configs = load_all_personality_configs(e);
             }
             engine
         };
@@ -658,6 +731,7 @@ impl Default for GameData {
             #[cfg(feature = "lua")]
             lua_engine,
             game_config,
+            personality_configs,
         }
     }
 }

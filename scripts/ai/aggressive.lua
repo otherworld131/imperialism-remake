@@ -4,8 +4,6 @@
 -- Trade priority: low, War threshold: low, Research: military techs first.
 
 aggressive = {
-    name = "Aggressive",
-
     -- Trade and diplomacy
     trade_priority = 0.3,       -- low trade focus
     alliance_preference = 0.2,  -- rarely seeks alliances
@@ -13,7 +11,6 @@ aggressive = {
     -- Military
     min_army_size = 5,          -- larger standing army
     max_army_size = 12,         -- builds more units
-    preferred_unit = "Artillery", -- favors artillery
 
     -- Economy
     infrastructure_budget = 1500, -- less spending on infrastructure
@@ -155,62 +152,24 @@ aggressive = {
     alliance_rival_penalty = 0.5,
     alliance_overcommit_penalty = 0.3,
     treaty_personality_bias = -0.3,
+
+    -- War-decision tunables.
+    -- Aggressive: low relations bar so frequent wars even without need/opp.
+    war_relations_threshold = -20,
+
+    -- Peace-proposal tunables.
+    -- Aggressive: only seek peace when truly desperate (win_likelihood < 0.15);
+    -- the duration-based branch is disabled by a very high min duration.
+    peace_loss_min_duration = 999,
+    peace_loss_max_win_likelihood = 0.6,
+    peace_desperate_win_likelihood = 0.15,
+
+    -- Treaty-response tunables.
+    -- Aggressive: never accepts alliances; accepts NAPs only when overpowered.
+    treaty_alliance_response_kind = "reject",
+    treaty_alliance_response_param = 0.0,
+    treaty_nap_response_kind = "power_below",
+    treaty_nap_response_param = 0.5,
 }
-
-function aggressive.evaluate_war(nation_id, target_id, relations, need_score, opportunity_score)
-    -- Use need/opportunity if available (new system)
-    if need_score and opportunity_score then
-        local score = (need_score or 0) + (opportunity_score or 0) * 0.8
-        if score > 0.3 then
-            return true
-        end
-    end
-    -- Fallback: low threshold for war
-    if relations < -20 then
-        return true
-    end
-    return false
-end
-
-function aggressive.pick_tech(available_techs)
-    -- Pick military tech first, then cheapest
-    for _, tech in ipairs(available_techs) do
-        for _, effect in ipairs(tech.effects or {}) do
-            if effect.type == "UnlockUnit" or effect.type == "UpgradeUnit" then
-                return tech
-            end
-        end
-    end
-    -- Fallback to cheapest
-    local cheapest = nil
-    local min_cost = math.huge
-    for _, tech in ipairs(available_techs) do
-        if tech.cost < min_cost then
-            min_cost = tech.cost
-            cheapest = tech
-        end
-    end
-    return cheapest
-end
-
-function aggressive.evaluate_peace(nation_id, enemy_id, win_likelihood, captured, lost, duration)
-    -- Aggressive AI only seeks peace when truly desperate
-    if win_likelihood < 0.15 then
-        return true
-    end
-    return nil  -- fall through to Rust logic
-end
-
-function aggressive.evaluate_treaty_response(nation_id, proposer_id, treaty_type, relationship, power_ratio)
-    -- Aggressive AI almost never accepts alliances
-    if treaty_type == "Alliance" then
-        return false
-    end
-    -- Only accepts NAPs when significantly outpowered
-    if treaty_type == "NonAggressionPact" and power_ratio < 0.5 then
-        return true
-    end
-    return nil  -- fall through to Rust logic
-end
 
 return aggressive

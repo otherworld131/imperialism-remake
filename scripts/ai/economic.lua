@@ -4,8 +4,6 @@
 -- Trade priority: high, War threshold: moderate, Research: most expensive tech.
 
 economic = {
-    name = "Economic",
-
     -- Trade and diplomacy
     trade_priority = 0.7,       -- strong trade focus
     alliance_preference = 0.6,  -- moderate alliance preference
@@ -13,7 +11,6 @@ economic = {
     -- Military
     min_army_size = 3,          -- moderate standing army
     max_army_size = 6,          -- moderate military
-    preferred_unit = nil,       -- no preference
 
     -- Economy
     infrastructure_budget = 3000, -- heavy infrastructure investment
@@ -155,50 +152,23 @@ economic = {
     alliance_rival_penalty = 0.4,
     alliance_overcommit_penalty = 0.2,
     treaty_personality_bias = 0.0,
+
+    -- War-decision tunables.
+    -- Economic: moderate relations bar — won't pick fights but won't get pushed around.
+    war_relations_threshold = -40,
+
+    -- Peace-proposal tunables.
+    -- Economic: trade-oriented; seeks peace once war becomes costly.
+    peace_loss_min_duration = 15,
+    peace_loss_max_win_likelihood = 0.6,
+    peace_desperate_win_likelihood = -1.0,
+
+    -- Treaty-response tunables.
+    -- Economic: accepts NAPs readily (good for trade stability), passes on alliances.
+    treaty_alliance_response_kind = "fall_through",
+    treaty_alliance_response_param = 0.0,
+    treaty_nap_response_kind = "relationship_at_least",
+    treaty_nap_response_param = -20.0,
 }
-
-function economic.evaluate_war(nation_id, target_id, relations, need_score, opportunity_score)
-    -- Use need/opportunity if available (new system)
-    if need_score and opportunity_score then
-        local score = (need_score or 0) + (opportunity_score or 0) * 0.4
-        if score > 0.6 then
-            return true
-        end
-    end
-    -- Fallback: moderate war threshold
-    if relations < -40 then
-        return true
-    end
-    return false
-end
-
-function economic.pick_tech(available_techs)
-    -- Pick most expensive tech (invest in the future)
-    local best = nil
-    local max_cost = -1
-    for _, tech in ipairs(available_techs) do
-        if tech.cost > max_cost then
-            max_cost = tech.cost
-            best = tech
-        end
-    end
-    return best
-end
-
-function economic.evaluate_peace(nation_id, enemy_id, win_likelihood, captured, lost, duration)
-    -- Economic AI values peace for trade: seeks it when war becomes costly
-    if duration >= 15 and captured <= lost and win_likelihood < 0.6 then
-        return true
-    end
-    return nil  -- fall through to Rust logic
-end
-
-function economic.evaluate_treaty_response(nation_id, proposer_id, treaty_type, relationship, power_ratio)
-    -- Economic AI accepts NAPs readily (good for trade stability)
-    if treaty_type == "NonAggressionPact" and relationship >= -20 then
-        return true
-    end
-    return nil  -- fall through to Rust logic
-end
 
 return economic

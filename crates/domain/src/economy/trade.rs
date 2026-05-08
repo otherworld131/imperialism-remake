@@ -1744,8 +1744,15 @@ mod tests {
             price_per_unit: base_price(ResourceType::Coal),
         }];
 
-        let bids =
-            generate_need_based_bids(&buyer, &nations, &offers, &[], 100, Money::dollars(5_000), 3);
+        let bids = generate_need_based_bids(
+            &buyer,
+            &nations,
+            &offers,
+            &[],
+            100,
+            Money::dollars(5_000),
+            3,
+        );
         assert!(bids.is_empty(), "well-stocked AI must not bid");
     }
 
@@ -1770,8 +1777,15 @@ mod tests {
             price_per_unit: base_price(ResourceType::Coal),
         }];
 
-        let bids =
-            generate_need_based_bids(&buyer, &nations, &offers, &[], 100, Money::dollars(5_000), 3);
+        let bids = generate_need_based_bids(
+            &buyer,
+            &nations,
+            &offers,
+            &[],
+            100,
+            Money::dollars(5_000),
+            3,
+        );
         assert!(bids.is_empty(), "must not spend below the treasury floor");
     }
 
@@ -1797,8 +1811,15 @@ mod tests {
             price_per_unit: base_price(ResourceType::Coal),
         }];
 
-        let bids =
-            generate_need_based_bids(&buyer, &nations, &offers, &[], 100, Money::dollars(5_000), 3);
+        let bids = generate_need_based_bids(
+            &buyer,
+            &nations,
+            &offers,
+            &[],
+            100,
+            Money::dollars(5_000),
+            3,
+        );
         let coal = bids
             .iter()
             .find(|b| b.resource == ResourceType::Coal)
@@ -1833,8 +1854,15 @@ mod tests {
             price_per_unit: base_price(ResourceType::Coal),
         }];
 
-        let bids =
-            generate_need_based_bids(&buyer, &nations, &offers, &[], 100, Money::dollars(5_000), 3);
+        let bids = generate_need_based_bids(
+            &buyer,
+            &nations,
+            &offers,
+            &[],
+            100,
+            Money::dollars(5_000),
+            3,
+        );
         assert!(
             bids.is_empty(),
             "auto_trade_with_minors=false must skip minor offers"
@@ -1863,8 +1891,15 @@ mod tests {
             price_per_unit: base_price(ResourceType::Coal),
         }];
 
-        let bids =
-            generate_need_based_bids(&buyer, &nations, &offers, &[], 100, Money::dollars(5_000), 3);
+        let bids = generate_need_based_bids(
+            &buyer,
+            &nations,
+            &offers,
+            &[],
+            100,
+            Money::dollars(5_000),
+            3,
+        );
         assert!(
             bids.iter().any(|b| b.resource == ResourceType::Coal),
             "auto_trade_with_minors=true must accept minor offers"

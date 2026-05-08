@@ -6,6 +6,11 @@
 -- To mod the game, change values here. For AI behavior tuning, see scripts/ai/*.lua.
 
 game_config = {
+    -- Free-form debug string. Surfaced to the browser via
+    -- `wasm.wasm_debug_marker()`. Edit this, rebuild WASM, and call the JS
+    -- function from the console to verify the Lua → WASM pipeline is live.
+    debug_marker = "lua-marker-2026-05-08-A",
+
     -- Labor output per worker type
     untrained_labor = 1,
     trained_labor = 2,

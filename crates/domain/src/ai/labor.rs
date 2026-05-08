@@ -406,22 +406,15 @@ pub(crate) fn ai_train_and_promote_workers(game: &mut GameState, nation_id: Nati
     let personality = super::common::get_personality(game, nation_id);
 
     // ── Read Lua config (feature-gated) ──────────────────────
-    #[cfg(feature = "lua")]
-    let lua_cfg = game
-        .game_data
-        .lua_engine
-        .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+    let lua_cfg = super::lua_bridge::get_personality_config(game, personality);
 
     let train_threshold: u32 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.worker_train_threshold) {
             break 'val v;
         }
         1
     };
     let promote_threshold: u32 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.worker_promote_threshold) {
             break 'val v;
         }

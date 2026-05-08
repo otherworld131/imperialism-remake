@@ -39,7 +39,10 @@ fn ai_difficulty_multiplier(game: &GameState, nation_id: NationId) -> f64 {
 /// higher tiers are fully satisfied.
 fn freight_priority_tier(r: ResourceType) -> u8 {
     match r {
-        ResourceType::Grain | ResourceType::Fruit | ResourceType::Livestock | ResourceType::Fish => 1,
+        ResourceType::Grain
+        | ResourceType::Fruit
+        | ResourceType::Livestock
+        | ResourceType::Fish => 1,
         ResourceType::Iron | ResourceType::Coal => 2,
         ResourceType::Timber => 3,
         // Cotton, Wool, Horses, Oil, Gold, Gems → tier 4.
@@ -491,7 +494,10 @@ mod tests {
         let livestock = total_demand(&demand, ResourceType::Livestock);
         // critical = min(4 meat need, 10 fish remote) = 4. slack = 10-4 = 6.
         // Total visible demand including slack soak = 10.
-        assert_eq!(fish, 10, "fish total demand should equal remote availability");
+        assert_eq!(
+            fish, 10,
+            "fish total demand should equal remote availability"
+        );
         assert_eq!(livestock, 0, "no livestock remote → no livestock demand");
     }
 

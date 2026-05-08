@@ -120,6 +120,16 @@ pub(crate) fn parse_terrain_mix(json: &str) -> TerrainMix {
     mix
 }
 
+/// Debug aid: returns the value of `game_config.debug_marker` from the
+/// build-time-baked Lua data. Edit `scripts/config/game.lua`'s
+/// `debug_marker = "..."` line, rebuild WASM, and call this from the JS
+/// console to confirm the Lua → WASM pipeline is live without poking
+/// gameplay numbers.
+#[wasm_bindgen]
+pub fn wasm_debug_marker() -> String {
+    load_embedded_game_data().game_config.debug_marker
+}
+
 /// Create a new game. Returns JSON string of the full game state.
 /// `flavor_key` seeds names/flags; pass an empty string to reuse `map_key`.
 /// `terrain_json` is an optional JSON object overriding fields of `TerrainMix`
@@ -4075,7 +4085,8 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
             } else {
                 partner_nation.map(|n| n.name.as_str()).unwrap_or("Unknown")
             };
-            let partner_is_great_power = partner_nation.map(|n| n.is_great_power()).unwrap_or(false);
+            let partner_is_great_power =
+                partner_nation.map(|n| n.is_great_power()).unwrap_or(false);
             // Use commodity_label when set (manufactured goods), fall back to resource name
             let commodity = if entry.commodity_label.is_empty() {
                 format!("{:?}", entry.resource)
@@ -4361,9 +4372,8 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
                         .map(|n| n.name.as_str())
                         .unwrap_or("Unknown")
                         .to_string();
-                    let seller_is_great_power = seller_nation
-                        .map(|n| n.is_great_power())
-                        .unwrap_or(false);
+                    let seller_is_great_power =
+                        seller_nation.map(|n| n.is_great_power()).unwrap_or(false);
                     let fills_json: Vec<serde_json::Value> = row
                         .fills
                         .iter()
@@ -4373,9 +4383,8 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
                                 .map(|n| n.name.as_str())
                                 .unwrap_or("Unknown")
                                 .to_string();
-                            let buyer_is_great_power = buyer_nation
-                                .map(|n| n.is_great_power())
-                                .unwrap_or(false);
+                            let buyer_is_great_power =
+                                buyer_nation.map(|n| n.is_great_power()).unwrap_or(false);
                             serde_json::json!({
                                 "buyer_id": fill.buyer.0,
                                 "buyer_name": buyer_name,

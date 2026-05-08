@@ -16,15 +16,7 @@ pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
         Money::dollars(game.game_data.game_config.ai_consulate_treasury_threshold);
 
     // ── Read Lua config (feature-gated) ──────────────────────
-    #[cfg(feature = "lua")]
-    let lua_cfg = game
-        .game_data
-        .lua_engine
-        .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
-    #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
-
+    let lua_cfg = super::lua_bridge::get_personality_config(game, personality);
     let defaults = PersonalityConfig::for_personality(personality);
     let max_per_turn = lua_or(
         lua_cfg.as_ref().and_then(|c| c.consulate_max_per_turn),
@@ -199,18 +191,9 @@ pub fn ai_manage_diplomacy(
     }
 
     // ── Read Lua config (feature-gated) ──────────────────────
-    #[cfg(feature = "lua")]
-    let lua_cfg = game
-        .game_data
-        .lua_engine
-        .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
-    #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
-
+    let lua_cfg = super::lua_bridge::get_personality_config(game, personality);
     // Determine behavior parameters based on personality (Lua overrides Rust defaults)
     let propose_pact_chance: bool = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.propose_pacts) {
             break 'val v;
         }
@@ -220,7 +203,6 @@ pub fn ai_manage_diplomacy(
         true
     };
     let propose_alliance_chance: bool = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.propose_alliances) {
             break 'val v;
         }
@@ -231,14 +213,12 @@ pub fn ai_manage_diplomacy(
     };
     let pc = PersonalityConfig::for_personality(personality);
     let grant_amount: i64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.grant_amount) {
             break 'val v;
         }
         pc.grant_amount_dollars as i64
     };
     let grant_every_n_turns: u32 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.grant_interval) {
             break 'val v;
         }
@@ -381,7 +361,6 @@ pub fn ai_manage_diplomacy(
     let mut alliance_decline_summary: Option<String> = None;
     if propose_alliance_chance && turn_number >= 10 {
         let max_alliances: usize = 'val: {
-            #[cfg(feature = "lua")]
             if let Some(v) = lua_cfg.as_ref().and_then(|c| c.max_alliances) {
                 break 'val v;
             }
@@ -645,18 +624,9 @@ pub fn ai_pre_election_strategy(
     }
 
     // ── Read Lua config (feature-gated) ──────────────────────
-    #[cfg(feature = "lua")]
-    let lua_cfg = game
-        .game_data
-        .lua_engine
-        .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
-    #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
-
+    let lua_cfg = super::lua_bridge::get_personality_config(game, personality);
     let pc = PersonalityConfig::for_personality(personality);
     let grant_amount: Money = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.grant_amount) {
             break 'val Money::dollars(v);
         }
@@ -702,7 +672,6 @@ pub fn ai_pre_election_strategy(
             Some(*mn_id),
         ));
     }
-
 }
 
 /// Minor Nation bonus trade: when a MN has an embassy with a GP and relationship > 50,

@@ -4,8 +4,6 @@
 -- Trade priority: medium, War threshold: moderate, Research: cheapest available.
 
 balanced = {
-    name = "Balanced",
-
     -- Trade and diplomacy
     trade_priority = 0.5,       -- moderate trade focus
     alliance_preference = 0.5,  -- moderate preference for alliances
@@ -13,7 +11,6 @@ balanced = {
     -- Military
     min_army_size = 3,          -- minimum standing army
     max_army_size = 7,          -- maximum before stopping recruitment
-    preferred_unit = nil,       -- no preference, builds what's needed
 
     -- Economy
     infrastructure_budget = 2000, -- max spend per turn on infrastructure
@@ -151,50 +148,32 @@ balanced = {
     alliance_rival_penalty = 0.4,
     alliance_overcommit_penalty = 0.2,
     treaty_personality_bias = 0.1,
+
+    -- War-decision tunables (former evaluate_war function body).
+    -- score = need + opportunity * opportunism_weight; war declared if
+    -- score > war_threshold OR relations < war_relations_threshold.
+    war_relations_threshold = -50,
+
+    -- Peace-proposal tunables (former evaluate_peace function body).
+    -- AI proposes peace if duration >= peace_loss_min_duration AND
+    -- captured <= lost AND win_likelihood < peace_loss_max_win_likelihood.
+    -- AND/OR (independent rule) if win_likelihood < peace_desperate_win_likelihood.
+    -- Set peace_loss_min_duration to a very high value to disable that branch.
+    -- Set peace_desperate_win_likelihood to a negative value to disable that branch.
+    peace_loss_min_duration = 20,
+    peace_loss_max_win_likelihood = 0.6,
+    peace_desperate_win_likelihood = -1.0,
+
+    -- Treaty-response tunables (former evaluate_treaty_response function body).
+    -- response_kind ∈ { "power_below", "relationship_at_least", "reject", "fall_through" }
+    --   "power_below"           → accept if power_ratio < param (param: f64)
+    --   "relationship_at_least" → accept if relationship >= param (param: i32)
+    --   "reject"                → always return false
+    --   "fall_through"          → return nil; Rust generic logic decides
+    treaty_alliance_response_kind = "power_below",
+    treaty_alliance_response_param = 0.8,
+    treaty_nap_response_kind = "fall_through",
+    treaty_nap_response_param = 0.0,
 }
-
-function balanced.evaluate_war(nation_id, target_id, relations, need_score, opportunity_score)
-    -- Use need/opportunity if available (new system)
-    if need_score and opportunity_score then
-        local score = (need_score or 0) + (opportunity_score or 0) * 0.5
-        if score > 0.5 then
-            return true
-        end
-    end
-    -- Fallback: declare war only if relations are poor
-    if relations < -50 then
-        return true
-    end
-    return false
-end
-
-function balanced.pick_tech(available_techs)
-    -- Pick cheapest tech
-    local cheapest = nil
-    local min_cost = math.huge
-    for _, tech in ipairs(available_techs) do
-        if tech.cost < min_cost then
-            min_cost = tech.cost
-            cheapest = tech
-        end
-    end
-    return cheapest
-end
-
-function balanced.evaluate_peace(nation_id, enemy_id, win_likelihood, captured, lost, duration)
-    -- Balanced AI seeks peace after 20+ turns with no net gains, but only if not clearly winning
-    if duration >= 20 and captured <= lost and win_likelihood < 0.6 then
-        return true
-    end
-    return nil  -- fall through to Rust logic
-end
-
-function balanced.evaluate_treaty_response(nation_id, proposer_id, treaty_type, relationship, power_ratio)
-    -- Balanced AI accepts alliances more readily when outpowered
-    if treaty_type == "Alliance" and power_ratio < 0.8 then
-        return true
-    end
-    return nil  -- fall through to Rust logic
-end
 
 return balanced

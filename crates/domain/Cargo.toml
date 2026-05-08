@@ -2,14 +2,20 @@
 name = "domain"
 version.workspace = true
 edition.workspace = true
+build = "build.rs"
 
 [dependencies]
 mlua = { version = "0.10", features = ["lua54", "send", "vendored"], optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+mlua = { version = "0.10", features = ["lua54", "vendored"] }
+serde_json = "1"
 
 [features]
 default = ["lua"]
-lua = ["mlua"]
+lua = ["dep:mlua"]
 
 [dev-dependencies]
 ron = "0.8"
-serde = { version = "1", features = ["derive"] }

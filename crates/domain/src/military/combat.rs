@@ -592,7 +592,11 @@ pub fn resolve_battle_with_config(
             attacker_would_bail
         };
         let prebattle_debug = RetreatDebug {
-            side: if attacker_bails { "attacker" } else { "defender" },
+            side: if attacker_bails {
+                "attacker"
+            } else {
+                "defender"
+            },
             stage: RetreatStage::PreBattle,
             measured_value: if attacker_bails {
                 attacker_ratio

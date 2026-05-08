@@ -3,7 +3,6 @@ pub mod common;
 mod diplomacy;
 pub(crate) mod economy;
 mod labor;
-#[cfg(feature = "lua")]
 pub(crate) mod lua_bridge;
 mod military;
 pub(crate) mod naval;

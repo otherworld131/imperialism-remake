@@ -4177,29 +4177,17 @@ fn build_battle_config(
 /// nation from its Lua personality config, falling back to neutral defaults
 /// when Lua is unavailable or the values are missing.
 fn retreat_thresholds_for(game: &GameState, nation_id: NationId) -> (f64, f64) {
-    #[cfg(feature = "lua")]
-    {
-        let personality = crate::ai::common::get_personality(game, nation_id);
-        let cfg = game
-            .game_data
-            .lua_engine
-            .as_ref()
-            .and_then(|e| crate::ai::lua_bridge::lua_get_config(e, personality));
-        let prebattle = cfg
-            .as_ref()
-            .and_then(|c| c.retreat_prebattle_ratio)
-            .unwrap_or(2.0);
-        let postbattle = cfg
-            .as_ref()
-            .and_then(|c| c.retreat_postbattle_fp_loss)
-            .unwrap_or(0.60);
-        (prebattle, postbattle)
-    }
-    #[cfg(not(feature = "lua"))]
-    {
-        let _ = (game, nation_id);
-        (2.0, 0.60)
-    }
+    let personality = crate::ai::common::get_personality(game, nation_id);
+    let cfg = crate::ai::lua_bridge::get_personality_config(game, personality);
+    let prebattle = cfg
+        .as_ref()
+        .and_then(|c| c.retreat_prebattle_ratio)
+        .unwrap_or(2.0);
+    let postbattle = cfg
+        .as_ref()
+        .and_then(|c| c.retreat_postbattle_fp_loss)
+        .unwrap_or(0.60);
+    (prebattle, postbattle)
 }
 
 /// Relocate retreating defender survivors across neighboring own-provinces.
@@ -4983,12 +4971,7 @@ fn run_pact_defense_cascade(
             // AI makes a strategic decision
             let personality = crate::ai::common::get_personality(game, gp_id);
 
-            #[cfg(feature = "lua")]
-            let lua_cfg = game
-                .game_data
-                .lua_engine
-                .as_ref()
-                .and_then(|e| crate::ai::lua_bridge::lua_get_config(e, personality));
+            let lua_cfg = crate::ai::lua_bridge::get_personality_config(game, personality);
 
             let accepts = crate::ai::assessment::evaluate_pact_defense(
                 game,
@@ -4996,7 +4979,6 @@ fn run_pact_defense_cascade(
                 attacker_id,
                 minor_id,
                 personality,
-                #[cfg(feature = "lua")]
                 lua_cfg.as_ref(),
             );
 
@@ -12030,7 +12012,6 @@ mod tests {
         let ai = NationId(2);
 
         // Disable Lua engine so evaluation uses pure Rust logic deterministically
-        #[cfg(feature = "lua")]
         {
             game.game_data.lua_engine = None;
         }
@@ -12082,10 +12063,15 @@ mod tests {
         let human = NationId(1);
         let ai = NationId(2);
 
-        // Disable Lua engine so evaluation uses pure Rust logic deterministically
-        #[cfg(feature = "lua")]
+        // Disable Lua engine AND personality configs so evaluation uses pure
+        // Rust logic deterministically. After the LuaAiConfig refactor,
+        // baked personality data lives in `personality_configs` independent
+        // of the engine — this test wants to exercise the score-based
+        // fallback in `evaluate_nap_proposal` without per-personality
+        // overrides, so we clear both.
         {
             game.game_data.lua_engine = None;
+            game.game_data.personality_configs.clear();
         }
 
         // Make AI aggressive and hostile
@@ -12137,7 +12123,6 @@ mod tests {
         let human = NationId(1);
         let ai = NationId(2);
 
-        #[cfg(feature = "lua")]
         {
             game.game_data.lua_engine = None;
         }
@@ -12183,7 +12168,6 @@ mod tests {
         let human = NationId(1);
         let ai = NationId(2);
 
-        #[cfg(feature = "lua")]
         {
             game.game_data.lua_engine = None;
         }
@@ -12217,7 +12201,6 @@ mod tests {
         let human = NationId(1);
         let ai = NationId(2);
 
-        #[cfg(feature = "lua")]
         {
             game.game_data.lua_engine = None;
         }

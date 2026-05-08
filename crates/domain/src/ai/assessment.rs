@@ -9,7 +9,6 @@ use crate::ai::common::{AiPersonality, PersonalityConfig};
 use crate::game_state::GameState;
 use crate::types::*;
 
-#[cfg(feature = "lua")]
 use crate::ai::lua_bridge::LuaAiConfig;
 
 // ── Structs ───────────────────────────────────────────────────────
@@ -91,7 +90,6 @@ impl Default for AssessmentWeights {
     }
 }
 
-#[cfg(feature = "lua")]
 fn weights_from_lua(cfg: Option<&LuaAiConfig>) -> AssessmentWeights {
     let d = AssessmentWeights::default();
     match cfg {
@@ -281,12 +279,9 @@ pub fn evaluate_coalition_strength(
     game: &GameState,
     nation_id: NationId,
     enemy_id: NationId,
-    #[cfg(feature = "lua")] lua_cfg: Option<&LuaAiConfig>,
+    lua_cfg: Option<&LuaAiConfig>,
 ) -> WarAssessment {
-    #[cfg(feature = "lua")]
     let w = weights_from_lua(lua_cfg);
-    #[cfg(not(feature = "lua"))]
-    let w = AssessmentWeights::default();
 
     let our_side = collect_war_coalition(game, nation_id, enemy_id);
     let enemy_side = collect_war_coalition(game, enemy_id, nation_id);
@@ -351,12 +346,9 @@ pub fn evaluate_hypothetical_war(
     game: &GameState,
     attacker: NationId,
     target: NationId,
-    #[cfg(feature = "lua")] lua_cfg: Option<&LuaAiConfig>,
+    lua_cfg: Option<&LuaAiConfig>,
 ) -> WarAssessment {
-    #[cfg(feature = "lua")]
     let w = weights_from_lua(lua_cfg);
-    #[cfg(not(feature = "lua"))]
-    let w = AssessmentWeights::default();
 
     let our_side = collect_hypothetical_coalition(game, attacker, target);
     // Use target coalition that includes pact-defense partners for minor nations
@@ -423,7 +415,7 @@ pub fn evaluate_pact_defense(
     attacker_id: NationId,
     _minor_id: NationId,
     personality: AiPersonality,
-    #[cfg(feature = "lua")] lua_cfg: Option<&LuaAiConfig>,
+    lua_cfg: Option<&LuaAiConfig>,
 ) -> bool {
     let cfg = &game.game_data.game_config;
 
@@ -449,10 +441,7 @@ pub fn evaluate_pact_defense(
         (rel_score as f64 / 100.0).clamp(0.0, 1.0) * cfg.pact_defense_relationship_weight;
 
     // Military factor: can the protector beat the attacker?
-    #[cfg(feature = "lua")]
     let assessment = evaluate_hypothetical_war(game, protector_id, attacker_id, lua_cfg);
-    #[cfg(not(feature = "lua"))]
-    let assessment = evaluate_hypothetical_war(game, protector_id, attacker_id);
     let military_factor = assessment.win_likelihood * cfg.pact_defense_military_weight;
 
     // Personality bias
@@ -483,7 +472,7 @@ pub fn evaluate_war_worthiness(
     enemy_id: NationId,
     personality: AiPersonality,
     win_likelihood: f64,
-    #[cfg(feature = "lua")] lua_cfg: Option<&LuaAiConfig>,
+    lua_cfg: Option<&LuaAiConfig>,
 ) -> WarWorthiness {
     use crate::events::HistoryEvent;
     // Find war start turn
@@ -528,7 +517,6 @@ pub fn evaluate_war_worthiness(
     let pc = PersonalityConfig::for_personality(personality);
 
     let won_enough_captures: usize = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.won_enough_captures) {
             break 'val v;
         }
@@ -536,7 +524,6 @@ pub fn evaluate_war_worthiness(
     };
 
     let lost_enough_losses: usize = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.lost_enough_losses) {
             break 'val v;
         }
@@ -544,7 +531,6 @@ pub fn evaluate_war_worthiness(
     };
 
     let lost_enough_likelihood: f64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.lost_enough_likelihood) {
             break 'val v;
         }
@@ -552,7 +538,6 @@ pub fn evaluate_war_worthiness(
     };
 
     let won_enough_marginal: f64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.won_enough_marginal) {
             break 'val v;
         }
@@ -597,10 +582,9 @@ pub fn evaluate_peace_proposal(
     from: NationId,
     to: NationId,
     personality: AiPersonality,
-    #[cfg(feature = "lua")] lua_cfg: Option<&LuaAiConfig>,
+    lua_cfg: Option<&LuaAiConfig>,
 ) -> bool {
     // Lua hook: let scripts override the decision
-    #[cfg(feature = "lua")]
     {
         let relationship = game
             .world
@@ -626,27 +610,19 @@ pub fn evaluate_peace_proposal(
     }
 
     // The receiver (to) evaluates whether to accept peace from (from)
-    let assessment = evaluate_coalition_strength(
-        game,
-        to,
-        from,
-        #[cfg(feature = "lua")]
-        lua_cfg,
-    );
+    let assessment = evaluate_coalition_strength(game, to, from, lua_cfg);
     let worthiness = evaluate_war_worthiness(
         game,
         to,
         from,
         personality,
         assessment.win_likelihood,
-        #[cfg(feature = "lua")]
         lua_cfg,
     );
 
     let pc = PersonalityConfig::for_personality(personality);
 
     let accept_threshold: f64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.peace_accept_threshold) {
             break 'val v;
         }
@@ -654,7 +630,6 @@ pub fn evaluate_peace_proposal(
     };
 
     let reject_threshold: f64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.peace_reject_threshold) {
             break 'val v;
         }
@@ -662,7 +637,6 @@ pub fn evaluate_peace_proposal(
     };
 
     let stalemate_duration: u32 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.peace_stalemate_duration) {
             break 'val v;
         }
@@ -711,10 +685,9 @@ pub fn evaluate_nap_proposal(
     from: NationId,
     to: NationId,
     personality: AiPersonality,
-    #[cfg(feature = "lua")] _lua_cfg: Option<&LuaAiConfig>,
+    _lua_cfg: Option<&LuaAiConfig>,
 ) -> bool {
     // Lua hook: let scripts override the decision
-    #[cfg(feature = "lua")]
     {
         let relationship = game
             .world
@@ -739,7 +712,6 @@ pub fn evaluate_nap_proposal(
     }
 
     let nap_threshold: f64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = _lua_cfg.as_ref().and_then(|c| c.nap_accept_threshold) {
             break 'val v;
         }
@@ -780,7 +752,6 @@ pub fn evaluate_nap_proposal(
 
     let pc = PersonalityConfig::for_personality(personality);
     let bias: f64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = _lua_cfg.as_ref().and_then(|c| c.treaty_personality_bias) {
             break 'val v;
         }
@@ -797,10 +768,9 @@ pub fn evaluate_alliance_proposal(
     from: NationId,
     to: NationId,
     personality: AiPersonality,
-    #[cfg(feature = "lua")] _lua_cfg: Option<&LuaAiConfig>,
+    _lua_cfg: Option<&LuaAiConfig>,
 ) -> bool {
     // Lua hook: let scripts override the decision
-    #[cfg(feature = "lua")]
     {
         let relationship = game
             .world
@@ -825,7 +795,6 @@ pub fn evaluate_alliance_proposal(
     }
 
     let alliance_threshold: f64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = _lua_cfg.as_ref().and_then(|c| c.alliance_accept_threshold) {
             break 'val v;
         }
@@ -886,7 +855,6 @@ pub fn evaluate_alliance_proposal(
 
     // Rival penalty — don't ally with top competitors
     let rival_penalty: f64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = _lua_cfg.as_ref().and_then(|c| c.alliance_rival_penalty) {
             break 'val v;
         }
@@ -907,7 +875,6 @@ pub fn evaluate_alliance_proposal(
 
     // Overcommitment penalty
     let overcommit_penalty: f64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = _lua_cfg
             .as_ref()
             .and_then(|c| c.alliance_overcommit_penalty)
@@ -923,7 +890,6 @@ pub fn evaluate_alliance_proposal(
 
     let pc = PersonalityConfig::for_personality(personality);
     let bias: f64 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = _lua_cfg.as_ref().and_then(|c| c.treaty_personality_bias) {
             break 'val v;
         }

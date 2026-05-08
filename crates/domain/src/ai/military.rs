@@ -42,15 +42,7 @@ pub(crate) fn ai_build_military(
 
     // ── Read Lua config (feature-gated) ──────────────────────
     // Must happen before the mutable borrow of game below.
-    #[cfg(feature = "lua")]
-    let lua_cfg = game
-        .game_data
-        .lua_engine
-        .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
-    #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
-
+    let lua_cfg = super::lua_bridge::get_personality_config(game, personality);
     let defaults = PersonalityConfig::for_personality(personality);
 
     let nation = match game.get_nation_mut(nation_id) {
@@ -193,7 +185,6 @@ pub(crate) fn ai_build_military(
         // Tier 3: advanced units with some variety
         // Cap total army size to prevent runaway military buildup
         let tier3_max: usize = 'val: {
-            #[cfg(feature = "lua")]
             if let Some(v) = lua_cfg.as_ref().and_then(|c| c.tier3_army_max) {
                 break 'val v;
             }
@@ -253,7 +244,6 @@ pub(crate) fn ai_build_military(
             // Tier 4: uncapped expansion when treasury is very high.
             // Nations with massive wealth keep building past tier3 cap.
             let tier4_treasury: Money = 'val: {
-                #[cfg(feature = "lua")]
                 if let Some(v) = lua_cfg.as_ref().and_then(|c| c.tier4_treasury) {
                     break 'val Money::dollars(v);
                 }
@@ -354,78 +344,46 @@ pub(crate) fn ai_declare_wars(
         let pc = PersonalityConfig::for_personality(personality);
 
         // ── Read Lua overrides (feature-gated) ─────────────────
-        #[cfg(feature = "lua")]
-        let lua_cfg = game
-            .game_data
-            .lua_engine
-            .as_ref()
-            .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
-        #[cfg(not(feature = "lua"))]
-        let _lua_cfg: Option<()> = None;
-
-        #[cfg(feature = "lua")]
+        let lua_cfg = super::lua_bridge::get_personality_config(game, personality);
         let war_cooldown = lua_cfg
             .as_ref()
             .and_then(|c| c.war_cooldown)
             .unwrap_or(pc.war_cooldown);
-        #[cfg(not(feature = "lua"))]
-        let war_cooldown = pc.war_cooldown;
 
-        #[cfg(feature = "lua")]
         let army_min_for_war = lua_cfg
             .as_ref()
             .and_then(|c| c.army_min_for_war)
             .unwrap_or(pc.army_min_for_war);
-        #[cfg(not(feature = "lua"))]
-        let army_min_for_war = pc.army_min_for_war;
-
-        #[cfg(feature = "lua")]
         let war_threshold = lua_cfg
             .as_ref()
             .and_then(|c| c.war_threshold)
             .unwrap_or(pc.war_threshold);
-        #[cfg(not(feature = "lua"))]
-        let war_threshold = pc.war_threshold;
 
-        #[cfg(feature = "lua")]
         let opportunism_weight = lua_cfg
             .as_ref()
             .and_then(|c| c.opportunism_weight)
             .unwrap_or(pc.opportunism_weight);
-        #[cfg(not(feature = "lua"))]
-        let opportunism_weight = pc.opportunism_weight;
-
         // Opportunity gate + resource-bonus tunables (Lua-overridable)
-        #[cfg(feature = "lua")]
         let min_opp_start = lua_cfg
             .as_ref()
             .and_then(|c| c.min_opportunity_start)
             .unwrap_or(pc.opp_start);
-        #[cfg(feature = "lua")]
         let min_opp_end = lua_cfg
             .as_ref()
             .and_then(|c| c.min_opportunity_end)
             .unwrap_or(pc.opp_end);
-        #[cfg(feature = "lua")]
         let opp_decay_turns = lua_cfg
             .as_ref()
             .and_then(|c| c.min_opportunity_decay_turns)
             .unwrap_or(pc.opp_decay_turns);
-        #[cfg(feature = "lua")]
         let resource_bonus_per_missing = lua_cfg
             .as_ref()
             .and_then(|c| c.resource_bonus_per_missing)
             .unwrap_or(pc.res_per_missing);
-        #[cfg(feature = "lua")]
         let resource_bonus_cap = lua_cfg
             .as_ref()
             .and_then(|c| c.resource_bonus_cap)
             .unwrap_or(pc.res_cap);
-        #[cfg(not(feature = "lua"))]
-        let (min_opp_start, min_opp_end, opp_decay_turns) =
-            (pc.opp_start, pc.opp_end, pc.opp_decay_turns);
-        #[cfg(not(feature = "lua"))]
-        let (resource_bonus_per_missing, resource_bonus_cap) = (pc.res_per_missing, pc.res_cap);
 
         // Linear decay of the opportunity gate. Turns are 1-based (turn 1 is
         // the first turn of the game), so subtract 1 to make turn 1 = start
@@ -639,14 +597,10 @@ pub(crate) fn ai_declare_wars(
                     .unwrap_or(0);
 
                 let pc_inner = PersonalityConfig::for_personality(personality);
-                #[cfg(feature = "lua")]
                 let min_artillery = lua_cfg
                     .as_ref()
                     .and_then(|c| c.min_artillery_for_minor_war)
                     .unwrap_or(pc_inner.min_artillery_for_minor_war);
-                #[cfg(not(feature = "lua"))]
-                let min_artillery = pc_inner.min_artillery_for_minor_war;
-
                 if artillery_count < min_artillery {
                     continue;
                 }
@@ -956,7 +910,6 @@ pub(crate) fn ai_declare_wars(
         }
 
         // ── 7. Lua check (feature-gated) ──────────────────────
-        #[cfg(feature = "lua")]
         {
             if let Some(rel) = game
                 .world
@@ -1123,13 +1076,8 @@ pub(crate) fn ai_military_strategy(
     // engage at less than 1:1 raw FP).
     let personality = get_personality(game, nation_id);
     let pc_tactical = PersonalityConfig::for_personality(personality);
-    #[cfg(feature = "lua")]
     let (attack_fp_vs_minor, attack_fp_vs_gp, rest_health_threshold, capital_save_for_last_penalty) = {
-        let cfg = game
-            .game_data
-            .lua_engine
-            .as_ref()
-            .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
+        let cfg = super::lua_bridge::get_personality_config(game, personality);
         (
             cfg.as_ref()
                 .and_then(|c| c.attack_fp_vs_minor)
@@ -1143,13 +1091,6 @@ pub(crate) fn ai_military_strategy(
                 .unwrap_or(pc_tactical.capital_save_for_last_penalty),
         )
     };
-    #[cfg(not(feature = "lua"))]
-    let (attack_fp_vs_minor, attack_fp_vs_gp, rest_health_threshold, capital_save_for_last_penalty) = (
-        0.8f64,
-        1.0f64,
-        50u8,
-        pc_tactical.capital_save_for_last_penalty,
-    );
 
     // Attack only when we actually have a meaningful combat force.
     if !enemies.is_empty() && combat_unit_count >= 4 {
@@ -1274,10 +1215,8 @@ pub(crate) fn ai_military_strategy(
                         .hex_map
                         .get_tile(prov.capital_tile)
                         .map(|tile| {
-                            let t = crate::military::terrain_defense_bonus(
-                                tile.terrain(),
-                                game_cfg,
-                            );
+                            let t =
+                                crate::military::terrain_defense_bonus(tile.terrain(), game_cfg);
                             let f = if tile.infrastructure.has_fort {
                                 crate::military::fort_defense_bonus(
                                     tile.infrastructure.fort_level,
@@ -1290,10 +1229,9 @@ pub(crate) fn ai_military_strategy(
                         })
                         .unwrap_or((0.0, 0.0));
                     let militia_entrenchment_fp = (garrison_size as f64) * 8.0;
-                    let their_local_fp = raw_defender_fp
-                        * (1.0 + terrain_bonus)
-                        * (1.0 + fort_bonus)
-                        + militia_entrenchment_fp;
+                    let their_local_fp =
+                        raw_defender_fp * (1.0 + terrain_bonus) * (1.0 + fort_bonus)
+                            + militia_entrenchment_fp;
 
                     // Our forward FP: effective_firepower of our movable
                     // units whose current position is in a province adjacent

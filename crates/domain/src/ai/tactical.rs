@@ -180,36 +180,20 @@ pub(crate) fn capital_threat_level(game: &GameState, nation_id: NationId) -> Cap
 ///        it up at the intermediate for the second free leg.
 fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personality: AiPersonality) {
     // ── Load Lua tunables (feature-gated) ───────────────────────────
-    #[cfg(feature = "lua")]
-    let lua_cfg = game
-        .game_data
-        .lua_engine
-        .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
-    #[cfg(not(feature = "lua"))]
-    let _ = personality;
-
-    #[cfg(feature = "lua")]
+    let lua_cfg = super::lua_bridge::get_personality_config(game, personality);
     let reserve_normal: usize = lua_cfg
         .as_ref()
         .and_then(|c| c.capital_reserve_normal)
         .unwrap_or(2);
-    #[cfg(not(feature = "lua"))]
-    let reserve_normal: usize = 2;
 
-    #[cfg(feature = "lua")]
     let reserve_threatened: usize = lua_cfg
         .as_ref()
         .and_then(|c| c.capital_reserve_threatened)
         .unwrap_or(6);
-    #[cfg(not(feature = "lua"))]
-    let reserve_threatened: usize = 6;
-
     // Phase 2: `max_redeploys_per_turn` is no longer enforced here. Distribution
     // moves as many units as needed in a single turn; per-turn movement will
     // be constrained by transport capacity in a future ticket. The Lua field
     // is left in `LuaAiConfig` for that future work.
-    #[cfg(feature = "lua")]
     let _ = lua_cfg.as_ref().and_then(|c| c.max_redeploys_per_turn);
 
     // ── Snapshot the nation ────────────────────────────────────────
@@ -726,19 +710,10 @@ fn ai_build_forts(
     }
 
     // ── Read Lua config (feature-gated) ──────────────────────
-    #[cfg(feature = "lua")]
-    let lua_cfg = game
-        .game_data
-        .lua_engine
-        .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
-    #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
-
+    let lua_cfg = super::lua_bridge::get_personality_config(game, personality);
     let pc = PersonalityConfig::for_personality(personality);
     // Choose which province to fort based on personality / Lua fort_strategy
     let fort_capital: bool = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg
             .as_ref()
             .and_then(|c| c.fort_strategy.as_deref().map(|s| s == "capital"))
@@ -868,18 +843,9 @@ fn ai_propose_peace(
     };
 
     // ── Read Lua config (feature-gated) ──────────────────────
-    #[cfg(feature = "lua")]
-    let lua_cfg = game
-        .game_data
-        .lua_engine
-        .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
-    #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
-
+    let lua_cfg = super::lua_bridge::get_personality_config(game, personality);
     let pc_peace = PersonalityConfig::for_personality(personality);
     let stalemate_duration: u32 = 'val: {
-        #[cfg(feature = "lua")]
         if let Some(v) = lua_cfg.as_ref().and_then(|c| c.peace_stalemate_duration) {
             break 'val v;
         }
@@ -936,20 +902,13 @@ fn ai_propose_peace(
         }
 
         // ── Assess the war ──────────────────────────────────
-        let assessment = evaluate_coalition_strength(
-            game,
-            nation_id,
-            enemy_id,
-            #[cfg(feature = "lua")]
-            lua_cfg.as_ref(),
-        );
+        let assessment = evaluate_coalition_strength(game, nation_id, enemy_id, lua_cfg.as_ref());
         let worthiness = evaluate_war_worthiness(
             game,
             nation_id,
             enemy_id,
             personality,
             assessment.win_likelihood,
-            #[cfg(feature = "lua")]
             lua_cfg.as_ref(),
         );
 
@@ -961,7 +920,6 @@ fn ai_propose_peace(
             .unwrap_or(0);
 
         let should_propose = 'decide: {
-            #[cfg(feature = "lua")]
             if let Some(lua_result) = super::lua_bridge::lua_evaluate_peace(
                 game,
                 personality,
@@ -1032,19 +990,14 @@ fn ai_propose_peace(
             // AI-to-AI: evaluate inline — get the receiver's personality and decide
             let receiver_personality = super::common::get_personality(game, enemy_id);
 
-            #[cfg(feature = "lua")]
-            let receiver_lua_cfg = game
-                .game_data
-                .lua_engine
-                .as_ref()
-                .and_then(|e| super::lua_bridge::lua_get_config(e, receiver_personality));
+            let receiver_lua_cfg =
+                super::lua_bridge::get_personality_config(game, receiver_personality);
 
             let accepted = evaluate_peace_proposal(
                 game,
                 nation_id,
                 enemy_id,
                 receiver_personality,
-                #[cfg(feature = "lua")]
                 receiver_lua_cfg.as_ref(),
             );
 
@@ -1819,7 +1772,14 @@ mod tests {
         );
 
         let provinces = vec![
-            Province::new(ProvinceId(1), "Capital".into(), NationId(2), cap, vec![cap], 4),
+            Province::new(
+                ProvinceId(1),
+                "Capital".into(),
+                NationId(2),
+                cap,
+                vec![cap],
+                4,
+            ),
             Province::new(
                 ProvinceId(2),
                 "Mid".into(),
@@ -1828,8 +1788,22 @@ mod tests {
                 vec![mid, mid_neighbour_of_cap, mid_neighbour_of_bdr],
                 4,
             ),
-            Province::new(ProvinceId(3), "Border".into(), NationId(2), bdr, vec![bdr], 4),
-            Province::new(ProvinceId(10), "Enemy".into(), NationId(3), enm, vec![enm], 3),
+            Province::new(
+                ProvinceId(3),
+                "Border".into(),
+                NationId(2),
+                bdr,
+                vec![bdr],
+                4,
+            ),
+            Province::new(
+                ProvinceId(10),
+                "Enemy".into(),
+                NationId(3),
+                enm,
+                vec![enm],
+                3,
+            ),
         ];
 
         let mut ai = Nation::new(
@@ -1941,9 +1915,30 @@ mod tests {
         }
 
         let provinces = vec![
-            Province::new(ProvinceId(1), "Capital".into(), NationId(2), cap, vec![cap], 4),
-            Province::new(ProvinceId(2), "Border".into(), NationId(2), bdr, vec![bdr], 4),
-            Province::new(ProvinceId(10), "Enemy".into(), NationId(3), enm, vec![enm], 3),
+            Province::new(
+                ProvinceId(1),
+                "Capital".into(),
+                NationId(2),
+                cap,
+                vec![cap],
+                4,
+            ),
+            Province::new(
+                ProvinceId(2),
+                "Border".into(),
+                NationId(2),
+                bdr,
+                vec![bdr],
+                4,
+            ),
+            Province::new(
+                ProvinceId(10),
+                "Enemy".into(),
+                NationId(3),
+                enm,
+                vec![enm],
+                3,
+            ),
         ];
 
         let mut ai = Nation::new(

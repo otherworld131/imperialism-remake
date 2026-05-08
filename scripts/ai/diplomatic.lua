@@ -4,8 +4,6 @@
 -- Trade priority: high, War threshold: high, Research: economic techs first.
 
 diplomatic = {
-    name = "Diplomatic",
-
     -- Trade and diplomacy
     trade_priority = 0.8,       -- high trade focus
     alliance_preference = 0.9,  -- strongly prefers alliances
@@ -13,7 +11,6 @@ diplomatic = {
     -- Military
     min_army_size = 2,          -- small standing army
     max_army_size = 4,          -- minimal military
-    preferred_unit = nil,       -- no preference
 
     -- Economy
     infrastructure_budget = 2500, -- invests in infrastructure
@@ -146,66 +143,24 @@ diplomatic = {
     alliance_rival_penalty = 0.3,
     alliance_overcommit_penalty = 0.1,
     treaty_personality_bias = 0.4,
+
+    -- War-decision tunables.
+    -- Diplomatic: very high relations bar; almost never declares war on relations alone.
+    war_relations_threshold = -80,
+
+    -- Peace-proposal tunables.
+    -- Diplomatic: eager to end wars after short stalemates AND auto-peace when behind.
+    peace_loss_min_duration = 10,
+    peace_loss_max_win_likelihood = 0.6,
+    peace_desperate_win_likelihood = 0.50,
+
+    -- Treaty-response tunables.
+    -- Diplomatic: very receptive — accepts alliances when relationship >= 0,
+    -- accepts NAPs from anyone not openly hostile.
+    treaty_alliance_response_kind = "relationship_at_least",
+    treaty_alliance_response_param = 0.0,
+    treaty_nap_response_kind = "relationship_at_least",
+    treaty_nap_response_param = -30.0,
 }
-
-function diplomatic.evaluate_war(nation_id, target_id, relations, need_score, opportunity_score)
-    -- Use need/opportunity if available (new system)
-    if need_score and opportunity_score then
-        local score = (need_score or 0) + (opportunity_score or 0) * 0.2
-        if score > 0.9 then
-            return true
-        end
-    end
-    -- Fallback: very reluctant to go to war
-    if relations < -80 then
-        return true
-    end
-    return false
-end
-
-function diplomatic.pick_tech(available_techs)
-    -- Pick economic/building tech first
-    for _, tech in ipairs(available_techs) do
-        for _, effect in ipairs(tech.effects or {}) do
-            if effect.type == "UnlockBuilding" or effect.type == "EnableTerrainImprovement" then
-                return tech
-            end
-        end
-    end
-    -- Fallback to cheapest
-    local cheapest = nil
-    local min_cost = math.huge
-    for _, tech in ipairs(available_techs) do
-        if tech.cost < min_cost then
-            min_cost = tech.cost
-            cheapest = tech
-        end
-    end
-    return cheapest
-end
-
-function diplomatic.evaluate_peace(nation_id, enemy_id, win_likelihood, captured, lost, duration)
-    -- Diplomatic AI is eager to end wars: propose peace after short stalemates
-    if duration >= 10 and captured <= lost and win_likelihood < 0.6 then
-        return true
-    end
-    -- Always propose peace if win_likelihood is below 50%
-    if win_likelihood < 0.50 then
-        return true
-    end
-    return nil  -- fall through to Rust logic
-end
-
-function diplomatic.evaluate_treaty_response(nation_id, proposer_id, treaty_type, relationship, power_ratio)
-    -- Diplomatic AI is very receptive to alliances
-    if treaty_type == "Alliance" and relationship >= 0 then
-        return true
-    end
-    -- Accept NAPs from anyone not hostile
-    if treaty_type == "NonAggressionPact" and relationship >= -30 then
-        return true
-    end
-    return nil  -- fall through to Rust logic
-end
 
 return diplomatic

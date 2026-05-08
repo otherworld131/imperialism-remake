@@ -430,15 +430,7 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
     let treasury = nation.economy.treasury;
 
     // ── Read Lua config (feature-gated) ──────────────────────
-    #[cfg(feature = "lua")]
-    let lua_cfg = game
-        .game_data
-        .lua_engine
-        .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, personality));
-    #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
-
+    let lua_cfg = super::lua_bridge::get_personality_config(game, personality);
     let pc = PersonalityConfig::for_personality(personality);
     // Ship cap depends on personality; wealthy nations always aim for 5.
     // The cap is overridden when projected per-turn import demand exceeds
@@ -449,7 +441,6 @@ pub(crate) fn ai_build_merchant_ships(game: &mut GameState, nation_id: NationId)
         5
     } else {
         'val: {
-            #[cfg(feature = "lua")]
             if let Some(v) = lua_cfg.as_ref().and_then(|c| c.max_merchant_ships) {
                 break 'val v;
             }
@@ -754,15 +745,7 @@ pub fn ai_naval_strategy(
     let _personality = get_personality(game, nation_id);
 
     // ── Read Lua config (feature-gated) ──────────────────────
-    #[cfg(feature = "lua")]
-    let lua_cfg = game
-        .game_data
-        .lua_engine
-        .as_ref()
-        .and_then(|e| super::lua_bridge::lua_get_config(e, _personality));
-    #[cfg(not(feature = "lua"))]
-    let _lua_cfg: Option<()> = None;
-
+    let lua_cfg = super::lua_bridge::get_personality_config(game, _personality);
     let nation = match game.get_nation(nation_id) {
         Some(n) => n,
         None => return,
@@ -844,24 +827,16 @@ pub fn ai_naval_strategy(
         // overcome (card #7).
 
         // Load min army size for naval invasion from Lua config
-        #[cfg(feature = "lua")]
         let min_army_for_invasion: usize = lua_cfg
             .as_ref()
             .and_then(|c| c.min_army_naval_invasion)
             .unwrap_or(4);
-        #[cfg(not(feature = "lua"))]
-        let min_army_for_invasion: usize = 4;
-
         // Lua-tunable "too hard" ratio: an adjacent enemy province counts as
         // a viable overland target if its defenders are <= army * ratio.
-        #[cfg(feature = "lua")]
         let adj_strength_ratio: f64 = lua_cfg
             .as_ref()
             .and_then(|c| c.naval_min_adjacent_strength_ratio)
             .unwrap_or(1.5);
-        #[cfg(not(feature = "lua"))]
-        let adj_strength_ratio: f64 = 1.5;
-
         // Only movable field-army units can embark for a naval invasion —
         // garrison militia are locked to their home province.
         let our_army_size = game
@@ -1530,8 +1505,7 @@ mod tests {
         ai.economy
             .buildings
             .push(Building::new(BuildingType::LumberMill, 5));
-        let (fabric, lumber, steel, coal) =
-            merchant_navy_material_reserve(&game, NationId(2));
+        let (fabric, lumber, steel, coal) = merchant_navy_material_reserve(&game, NationId(2));
         assert_eq!((fabric, lumber, steel, coal), (3, 7, 0, 0));
     }
 

@@ -2,10 +2,16 @@
 //!
 //! Loads personality scripts from `scripts/ai/` at compile time and provides
 //! functions to query Lua for tech selection, war evaluation, and config parameters.
-//! Falls back to Rust logic when Lua is unavailable or returns nil.
+//!
+//! When the `lua` feature is enabled (native builds), AI tunables come from
+//! the live Lua VM so a script edit + rebuild takes effect instantly. When
+//! it's off (WASM builds), the same tunables come from a build-time-baked
+//! blob (see the `baked` submodule below) — so the browser sees the same
+//! values as the CLI without needing to embed the Lua VM.
 
 use crate::events::TechId;
 use crate::game_state::GameState;
+#[cfg(feature = "lua")]
 use crate::scripting::LuaEngine;
 use crate::tech::tree::TechEffect;
 use crate::types::*;
@@ -13,18 +19,79 @@ use crate::types::*;
 use super::common::AiPersonality;
 
 // Embed scripts at compile time for sandboxing safety.
+#[cfg(feature = "lua")]
 const GAME_CONFIG_LUA: &str = include_str!("../../../../scripts/config/game.lua");
+#[cfg(feature = "lua")]
 const TECH_TREE_LUA: &str = include_str!("../../../../scripts/config/tech_tree.lua");
+#[cfg(feature = "lua")]
 const UNITS_LUA: &str = include_str!("../../../../scripts/config/units.lua");
+#[cfg(feature = "lua")]
 const SHIPS_LUA: &str = include_str!("../../../../scripts/config/ships.lua");
+#[cfg(feature = "lua")]
 const BALANCED_LUA: &str = include_str!("../../../../scripts/ai/balanced.lua");
+#[cfg(feature = "lua")]
 const AGGRESSIVE_LUA: &str = include_str!("../../../../scripts/ai/aggressive.lua");
+#[cfg(feature = "lua")]
 const DIPLOMATIC_LUA: &str = include_str!("../../../../scripts/ai/diplomatic.lua");
+#[cfg(feature = "lua")]
 const ECONOMIC_LUA: &str = include_str!("../../../../scripts/ai/economic.lua");
 
+#[cfg(feature = "lua")]
 use crate::data::GameConfig;
 
+/// Build-time-baked Lua data, used when the `lua` feature is OFF (WASM).
+///
+/// `crates/domain/build.rs` runs the Lua loaders natively at build time
+/// and emits `$OUT_DIR/lua_baked.json` containing the parsed
+/// `game_config` and per-personality config tables. We embed the JSON
+/// at compile time and deserialize it on first access. Field-level
+/// `#[serde(default)]` on `GameConfig` and `LuaAiConfig` ensures missing
+/// keys produce the same values the runtime Lua loader's `unwrap_or`
+/// defaults would.
+#[cfg(not(feature = "lua"))]
+pub mod baked {
+    use super::{AiPersonality, LuaAiConfig};
+    use crate::data::GameConfig;
+    use std::collections::HashMap;
+
+    const BAKED_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/lua_baked.json"));
+
+    #[derive(serde::Deserialize)]
+    struct BakedDocument {
+        game_config: GameConfig,
+        personality_configs: HashMap<AiPersonality, LuaAiConfig>,
+    }
+
+    fn parse_baked() -> BakedDocument {
+        // The build script wrote this; failing to parse it means the build
+        // is broken. Panic with a clear message — there is no recovery.
+        serde_json::from_str(BAKED_JSON).unwrap_or_else(|e| {
+            panic!(
+                "[domain] Failed to parse build-time-baked Lua JSON: {}. \
+                 This indicates a domain build.rs bug.",
+                e
+            )
+        })
+    }
+
+    pub fn game_config() -> GameConfig {
+        parse_baked().game_config
+    }
+
+    pub fn personality_configs() -> HashMap<AiPersonality, LuaAiConfig> {
+        // Apply the same sanitization the runtime Lua loader does, so
+        // out-of-range or NaN values in the baked JSON behave identically
+        // to the native side.
+        parse_baked()
+            .personality_configs
+            .into_iter()
+            .map(|(k, v)| (k, v.sanitize()))
+            .collect()
+    }
+}
+
 /// Load the game config from the Lua `game_config` global table.
+#[cfg(feature = "lua")]
 pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
     let lua = engine.lua();
     let table: mlua::Table = match lua.globals().get("game_config") {
@@ -70,7 +137,9 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
             .get("voluntary_incorporation_threshold")
             .unwrap_or(90),
         trade_relation_improvement_cap: table.get("trade_relation_improvement_cap").unwrap_or(15),
-        trade_relation_improvement_per_resource: table.get("trade_relation_improvement_per_resource").unwrap_or(2),
+        trade_relation_improvement_per_resource: table
+            .get("trade_relation_improvement_per_resource")
+            .unwrap_or(2),
         trade_relation_turn_interval: table.get("trade_relation_turn_interval").unwrap_or(3),
         starting_freight_cars: table.get("starting_freight_cars").unwrap_or(15),
         starting_engineers: table.get("starting_engineers").unwrap_or(1),
@@ -306,6 +375,9 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         // Minor nation trade behaviour
         minor_resource_withhold_chance: table.get("minor_resource_withhold_chance").unwrap_or(20),
         minor_goods_buy_price: table.get("minor_goods_buy_price").unwrap_or(150),
+        debug_marker: table
+            .get::<String>("debug_marker")
+            .unwrap_or_else(|_| "lua-key-missing".to_string()),
     };
     // Sanitize: ensure no zero-or-negative values for fields used as divisors/multipliers
     let sanitized_default_garrison = cfg.default_garrison_per_province.clamp(0, 20);
@@ -541,6 +613,7 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
 }
 
 /// Load game config and all personality scripts into the Lua VM.
+#[cfg(feature = "lua")]
 pub fn load_scripts(engine: &LuaEngine) -> Result<(), String> {
     engine.exec(GAME_CONFIG_LUA)?;
     engine.exec(TECH_TREE_LUA)?;
@@ -565,6 +638,7 @@ pub fn load_scripts(engine: &LuaEngine) -> Result<(), String> {
 ///
 /// `prerequisite_tech` is the only optional field — units without a tech
 /// gate omit it entirely.
+#[cfg(feature = "lua")]
 pub fn load_unit_stats(
     engine: &LuaEngine,
 ) -> Option<
@@ -717,6 +791,7 @@ pub fn load_unit_stats(
 ///
 /// Returns `None` on any parse error so callers can fall back to
 /// `default_ship_stats()`. Requires full coverage of all [`ShipType`] variants.
+#[cfg(feature = "lua")]
 pub fn load_ship_stats(
     engine: &LuaEngine,
 ) -> Option<
@@ -818,6 +893,7 @@ pub fn load_ship_stats(
 /// Returns `None` if the table is missing or malformed; callers fall back
 /// to the hardcoded Rust default. We log per-row parse failures so a typo
 /// in tech_tree.lua doesn't silently disable everything else.
+#[cfg(feature = "lua")]
 pub fn load_tech_tree(engine: &LuaEngine) -> Option<crate::tech::tree::TechTree> {
     use crate::economy::buildings::BuildingType;
     use crate::economy::civilians::CivilianType;
@@ -936,6 +1012,7 @@ pub fn load_tech_tree(engine: &LuaEngine) -> Option<crate::tech::tree::TechTree>
 
 /// Load all four personality scripts into the Lua VM (used by tests).
 #[cfg(test)]
+#[cfg(feature = "lua")]
 pub fn load_personality_scripts(engine: &LuaEngine) -> Result<(), String> {
     load_scripts(engine)
 }
@@ -943,7 +1020,12 @@ pub fn load_personality_scripts(engine: &LuaEngine) -> Result<(), String> {
 /// Config parameters read from Lua personality tables.
 /// Core fields always present (with defaults); extended fields are optional
 /// and fall back to hardcoded personality defaults when absent.
-#[derive(Debug, Clone)]
+///
+/// `Default` matches the `unwrap_or` defaults used by `lua_get_config`, so
+/// a missing key in the build-time-baked JSON deserializes to the same
+/// value the runtime Lua loader would produce.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(default)]
 pub struct LuaAiConfig {
     // Core (always populated with Lua defaults — used by research/labor subsystems and tests)
     #[allow(dead_code)]
@@ -1144,6 +1226,137 @@ pub struct LuaAiConfig {
     // spending weight in `ai_scored_spending`. If `None`, naval uses
     // `spending_military_weight`.
     pub spending_naval_weight: Option<f64>,
+
+    // Tunables for the AI decision functions ported from Lua.
+    // war_relations_threshold: declare war if relations < this value.
+    pub war_relations_threshold: Option<i32>,
+    // Peace-proposal: propose peace if duration >= peace_loss_min_duration AND
+    // captured <= lost AND win_likelihood < peace_loss_max_win_likelihood.
+    pub peace_loss_min_duration: Option<u32>,
+    pub peace_loss_max_win_likelihood: Option<f64>,
+    // Independent rule: propose peace if win_likelihood < this. Negative = disabled.
+    pub peace_desperate_win_likelihood: Option<f64>,
+    // Treaty-response policy. Kind ∈ { "power_below", "relationship_at_least",
+    // "reject", "fall_through" }. The accompanying param is parsed per kind.
+    pub treaty_alliance_response_kind: Option<String>,
+    pub treaty_alliance_response_param: Option<f64>,
+    pub treaty_nap_response_kind: Option<String>,
+    pub treaty_nap_response_param: Option<f64>,
+}
+
+impl Default for LuaAiConfig {
+    /// Defaults match the `unwrap_or` literals in `lua_get_config` so a
+    /// JSON document with missing keys deserializes identically to a
+    /// runtime Lua read with `nil` for those keys.
+    fn default() -> Self {
+        Self {
+            trade_priority: 0.5,
+            alliance_preference: 0.5,
+            min_army_size: 3,
+            max_army_size: 7,
+            infrastructure_budget: 2000,
+            research_strategy: "cheapest".to_string(),
+            worker_threshold: 5,
+            war_cooldown: None,
+            war_threshold: None,
+            army_min_for_war: None,
+            opportunism_weight: None,
+            min_artillery_for_minor_war: None,
+            min_opportunity_start: None,
+            min_opportunity_end: None,
+            min_opportunity_decay_turns: None,
+            resource_bonus_per_missing: None,
+            resource_bonus_cap: None,
+            tier1_army_max: None,
+            tier2_army_max: None,
+            tier3_army_max: None,
+            tier1_treasury: None,
+            tier2_treasury: None,
+            tier3_treasury: None,
+            tier4_treasury: None,
+            consulate_max_per_turn: None,
+            propose_pacts: None,
+            propose_alliances: None,
+            grant_amount: None,
+            grant_interval: None,
+            embassy_treasury_threshold: None,
+            max_alliances: None,
+            max_merchant_ships: None,
+            min_army_naval_invasion: None,
+            expansion_threshold_multiplier: None,
+            use_tier_expansion: None,
+            high_treasury_expansion_threshold: None,
+            trade_resource_reserve: None,
+            trade_treasury_cap: None,
+            trade_buy_treasury_floor: None,
+            trade_buy_buffer_turns: None,
+            arms_sell_reserve: None,
+            goods_sell_treasury_threshold: None,
+            goods_reserve: None,
+            goods_fat_stockpile_threshold: None,
+            food_processing_expansion_threshold: None,
+            infra_budget_scale_threshold: None,
+            lumber_furniture_weight: None,
+            steel_armory_weight_peace: None,
+            steel_armory_weight_war: None,
+            canned_food_buffer: None,
+            min_chain_target: None,
+            paper_workers_per_unit: None,
+            paper_target_max: None,
+            expansions_per_turn_target: None,
+            expansion_reserve_buildings_factor: None,
+            spending_military_weight: None,
+            spending_economy_weight: None,
+            spending_diplomacy_weight: None,
+            treasury_reserve: None,
+            min_score_threshold: None,
+            worker_train_threshold: None,
+            worker_promote_threshold: None,
+            peace_war_duration_threshold: None,
+            peace_province_loss_ratio: None,
+            fort_strategy: None,
+            coalition_mil_weight: None,
+            coalition_prov_weight: None,
+            coalition_econ_weight: None,
+            coalition_momentum_weight: None,
+            coalition_naval_weight: None,
+            coalition_sigmoid_steepness: None,
+            econ_score_treasury_divisor: None,
+            econ_score_buildings_multiplier: None,
+            econ_score_workers_multiplier: None,
+            peace_accept_threshold: None,
+            peace_reject_threshold: None,
+            peace_stalemate_duration: None,
+            won_enough_captures: None,
+            won_enough_marginal: None,
+            lost_enough_losses: None,
+            lost_enough_likelihood: None,
+            nap_accept_threshold: None,
+            alliance_accept_threshold: None,
+            alliance_rival_penalty: None,
+            alliance_overcommit_penalty: None,
+            treaty_personality_bias: None,
+            capital_reserve_normal: None,
+            capital_reserve_threatened: None,
+            max_redeploys_per_turn: None,
+            retreat_prebattle_ratio: None,
+            retreat_postbattle_fp_loss: None,
+            naval_min_adjacent_strength_ratio: None,
+            attack_fp_vs_minor: None,
+            attack_fp_vs_gp: None,
+            rest_health_threshold: None,
+            capital_save_for_last_penalty: None,
+            spending_naval_weight: None,
+            war_relations_threshold: None,
+            peace_loss_min_duration: None,
+            peace_loss_max_win_likelihood: None,
+            peace_desperate_win_likelihood: None,
+            treaty_alliance_response_kind: None,
+            treaty_alliance_response_param: None,
+            treaty_nap_response_kind: None,
+            treaty_nap_response_param: None,
+        }
+    }
 }
 
 /// Clamp an f64 to a finite range, replacing NaN/inf with the default.
@@ -1188,7 +1401,7 @@ fn sanitize_opt_string(val: Option<String>, allowed: &[&str]) -> Option<String> 
 
 impl LuaAiConfig {
     /// Validate and clamp all fields to sane ranges, replacing NaN/inf with None.
-    fn sanitize(mut self) -> Self {
+    pub(crate) fn sanitize(mut self) -> Self {
         // Core f64 fields
         self.trade_priority = sanitize_f64(self.trade_priority, 0.0, 1.0, 0.5);
         self.alliance_preference = sanitize_f64(self.alliance_preference, 0.0, 1.0, 0.5);
@@ -1386,10 +1599,44 @@ impl LuaAiConfig {
         // Trello card #112: naval spending weight override
         self.spending_naval_weight = sanitize_opt_f64(self.spending_naval_weight, 0.0, 10.0);
 
+        // Tunables for AI decision functions ported from Lua.
+        self.war_relations_threshold = self.war_relations_threshold.map(|v| v.clamp(-100, 100));
+        self.peace_loss_min_duration = sanitize_opt_u32(self.peace_loss_min_duration, 0, 10_000);
+        self.peace_loss_max_win_likelihood =
+            sanitize_opt_f64(self.peace_loss_max_win_likelihood, 0.0, 1.0);
+        // Allow negative as "disabled"; clamp to [-1.0, 1.0].
+        self.peace_desperate_win_likelihood =
+            sanitize_opt_f64(self.peace_desperate_win_likelihood, -1.0, 1.0);
+        self.treaty_alliance_response_kind = sanitize_opt_string(
+            self.treaty_alliance_response_kind,
+            &[
+                "power_below",
+                "relationship_at_least",
+                "reject",
+                "fall_through",
+            ],
+        );
+        self.treaty_nap_response_kind = sanitize_opt_string(
+            self.treaty_nap_response_kind,
+            &[
+                "power_below",
+                "relationship_at_least",
+                "reject",
+                "fall_through",
+            ],
+        );
+        // Params: f64 spans both relationship (i32) and power_ratio (f64);
+        // clamp generously so either domain fits without truncation.
+        self.treaty_alliance_response_param =
+            sanitize_opt_f64(self.treaty_alliance_response_param, -100.0, 100.0);
+        self.treaty_nap_response_param =
+            sanitize_opt_f64(self.treaty_nap_response_param, -100.0, 100.0);
+
         self
     }
 }
 
+#[cfg(feature = "lua")]
 fn personality_table_name(personality: AiPersonality) -> &'static str {
     match personality {
         AiPersonality::Aggressive => "aggressive",
@@ -1400,6 +1647,7 @@ fn personality_table_name(personality: AiPersonality) -> &'static str {
 }
 
 /// Read the config table for a personality from Lua.
+#[cfg(feature = "lua")]
 pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<LuaAiConfig> {
     let lua = engine.lua();
     let table_name = personality_table_name(personality);
@@ -1531,165 +1779,228 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             rest_health_threshold: table.get("rest_health_threshold").ok(),
             capital_save_for_last_penalty: table.get("capital_save_for_last_penalty").ok(),
             spending_naval_weight: table.get("spending_naval_weight").ok(),
+            // Tunables for AI decision functions ported from Lua.
+            war_relations_threshold: table.get("war_relations_threshold").ok(),
+            peace_loss_min_duration: table.get("peace_loss_min_duration").ok(),
+            peace_loss_max_win_likelihood: table.get("peace_loss_max_win_likelihood").ok(),
+            peace_desperate_win_likelihood: table.get("peace_desperate_win_likelihood").ok(),
+            treaty_alliance_response_kind: table.get("treaty_alliance_response_kind").ok(),
+            treaty_alliance_response_param: table.get("treaty_alliance_response_param").ok(),
+            treaty_nap_response_kind: table.get("treaty_nap_response_kind").ok(),
+            treaty_nap_response_param: table.get("treaty_nap_response_param").ok(),
         }
         .sanitize(),
     )
 }
 
-fn serialize_tech_effect(effect: &TechEffect) -> (String, String) {
-    match effect {
-        TechEffect::UnlockUnit(u) => ("UnlockUnit".to_string(), format!("{:?}", u)),
-        TechEffect::UnlockBuilding(b) => ("UnlockBuilding".to_string(), format!("{:?}", b)),
-        TechEffect::EnableTerrainImprovement { terrain, .. } => {
-            ("EnableTerrainImprovement".to_string(), terrain.clone())
-        }
-        TechEffect::EnableInfrastructure(s) => ("EnableInfrastructure".to_string(), s.clone()),
-        TechEffect::UnlockShip(s) => ("UnlockShip".to_string(), s.clone()),
-        TechEffect::UpgradeUnit { from, to } => {
-            ("UpgradeUnit".to_string(), format!("{:?}->{:?}", from, to))
-        }
-        TechEffect::EnableCivilian(c) => ("EnableCivilian".to_string(), format!("{:?}", c)),
-        TechEffect::LuaScript(s) => ("LuaScript".to_string(), s.clone()),
+/// Get the per-personality config for the given personality from this game.
+///
+/// On native (lua feature on) reads from the live Lua VM, so hot-tunable
+/// values take immediate effect. On WASM (lua feature off) reads from the
+/// baked-at-build-time blob installed into `game_data.personality_configs`.
+pub fn get_personality_config(game: &GameState, personality: AiPersonality) -> Option<LuaAiConfig> {
+    #[cfg(feature = "lua")]
+    if let Some(engine) = game.game_data.lua_engine.as_ref() {
+        return lua_get_config(engine, personality);
     }
+    game.game_data
+        .personality_configs
+        .get(&personality)
+        .cloned()
 }
 
-/// Call the Lua `<personality>.pick_tech(available_techs)` function.
-/// Returns the TechId selected by Lua, or None if Lua fails or returns nil.
+/// Pick the next tech to research for the given personality.
+///
+/// Replaces the old `<personality>.pick_tech` Lua function. Strategy is
+/// dispatched on the personality's `research_strategy` field (Lua-tunable):
+/// - `"cheapest"` (default): minimum-cost tech.
+/// - `"expensive"`: maximum-cost tech.
+/// - `"military"`: first tech with an `UnlockUnit` or `UpgradeUnit` effect,
+///   else the cheapest.
+/// - `"economic"`: first tech with an `UnlockBuilding` or
+///   `EnableTerrainImprovement` effect, else the cheapest.
 pub fn lua_pick_tech(
     game: &GameState,
     personality: AiPersonality,
     available: &[(TechId, Money, String, Vec<TechEffect>)],
 ) -> Option<TechId> {
-    let engine = game.game_data.lua_engine.as_ref()?;
-    let lua = engine.lua();
-    let table_name = personality_table_name(personality);
+    if available.is_empty() {
+        return None;
+    }
+    let cfg = get_personality_config(game, personality);
+    let strategy = cfg
+        .as_ref()
+        .map(|c| c.research_strategy.as_str())
+        .unwrap_or("cheapest");
 
-    // Build the Lua table of available techs
-    let techs_table = lua.create_table().ok()?;
-    for (i, (tech_id, cost, name, effects)) in available.iter().enumerate() {
-        let t = lua.create_table().ok()?;
-        t.set("id", tech_id.0).ok()?;
-        t.set("name", name.as_str()).ok()?;
-        t.set("cost", cost.cents()).ok()?;
-
-        let effects_table = lua.create_table().ok()?;
-        for (j, effect) in effects.iter().enumerate() {
-            let e = lua.create_table().ok()?;
-            let (etype, evalue) = serialize_tech_effect(effect);
-            e.set("type", etype).ok()?;
-            e.set("value", evalue).ok()?;
-            effects_table.set(j + 1, e).ok()?;
-        }
-        t.set("effects", effects_table).ok()?;
-        techs_table.set(i + 1, t).ok()?;
+    fn pick_cheapest(available: &[(TechId, Money, String, Vec<TechEffect>)]) -> Option<TechId> {
+        available
+            .iter()
+            .min_by_key(|(_, cost, _, _)| cost.cents())
+            .map(|(id, _, _, _)| *id)
     }
 
-    // Call <personality>.pick_tech(techs_table)
-    let personality_table: mlua::Table = lua.globals().get(table_name).ok()?;
-    let pick_tech: mlua::Function = personality_table.get("pick_tech").ok()?;
-    let result: mlua::Table = pick_tech.call(techs_table).ok()?;
-    let tech_id: u32 = result.get("id").ok()?;
-    Some(TechId(tech_id))
+    match strategy {
+        "expensive" => available
+            .iter()
+            .max_by_key(|(_, cost, _, _)| cost.cents())
+            .map(|(id, _, _, _)| *id),
+        "military" => available
+            .iter()
+            .find(|(_, _, _, effects)| {
+                effects.iter().any(|e| {
+                    matches!(
+                        e,
+                        TechEffect::UnlockUnit(_) | TechEffect::UpgradeUnit { .. }
+                    )
+                })
+            })
+            .map(|(id, _, _, _)| *id)
+            .or_else(|| pick_cheapest(available)),
+        "economic" => available
+            .iter()
+            .find(|(_, _, _, effects)| {
+                effects.iter().any(|e| {
+                    matches!(
+                        e,
+                        TechEffect::UnlockBuilding(_) | TechEffect::EnableTerrainImprovement { .. }
+                    )
+                })
+            })
+            .map(|(id, _, _, _)| *id)
+            .or_else(|| pick_cheapest(available)),
+        // "cheapest" and any unknown value
+        _ => pick_cheapest(available),
+    }
 }
 
-/// Call the Lua `<personality>.evaluate_war(nation_id, target_id, relations, need, opportunity)`.
-/// Returns Some(true/false) from Lua, or None if Lua fails.
-/// Extra params are silently ignored by Lua scripts that don't use them.
+/// Decide whether `personality` should declare war given relations, need,
+/// and opportunity scores. Returns `Some(true)` for "declare war ok",
+/// `Some(false)` for "veto". `None` is reserved for the case where no
+/// personality config is available (degenerate; treat as "veto" upstream
+/// to be conservative). Replaces the old `<personality>.evaluate_war`.
 pub fn lua_evaluate_war(
     game: &GameState,
     personality: AiPersonality,
-    nation_id: NationId,
-    target_id: NationId,
+    _nation_id: NationId,
+    _target_id: NationId,
     relations: i32,
     need_score: f64,
     opportunity_score: f64,
 ) -> Option<bool> {
-    let engine = game.game_data.lua_engine.as_ref()?;
-    let lua = engine.lua();
-    let table_name = personality_table_name(personality);
-
-    let personality_table: mlua::Table = lua.globals().get(table_name).ok()?;
-    let evaluate_war: mlua::Function = personality_table.get("evaluate_war").ok()?;
-    let result: bool = evaluate_war
-        .call::<bool>((
-            nation_id.0 as i64,
-            target_id.0 as i64,
-            relations,
-            need_score,
-            opportunity_score,
-        ))
-        .ok()?;
-    Some(result)
+    let cfg = get_personality_config(game, personality)?;
+    // need + opportunity * opportunism_weight > war_threshold → declare.
+    let opp_w = cfg.opportunism_weight.unwrap_or(0.5);
+    let war_t = cfg.war_threshold.unwrap_or(0.5);
+    let score = need_score + opportunity_score * opp_w;
+    if score > war_t {
+        return Some(true);
+    }
+    // Or relations are below the relations threshold → declare.
+    let rel_t = cfg.war_relations_threshold.unwrap_or(-50);
+    Some(relations < rel_t)
 }
 
-/// Call the Lua `<personality>.evaluate_peace(nation_id, enemy_id, win_likelihood, captured, lost, duration)`.
-/// Returns Some(true) to propose peace, Some(false) to not propose, or None to fall through.
+/// Decide whether `personality` should propose peace.
+///
+/// Returns:
+/// - `Some(true)`  → propose peace,
+/// - `Some(false)` → don't propose (Rust fall-through is the existing
+///   behavior the call site already implements),
+/// - `None`        → no personality config available.
+///
+/// Replaces the old `<personality>.evaluate_peace`. Logic:
+/// 1. If `duration >= peace_loss_min_duration` AND `captured <= lost` AND
+///    `win_likelihood < peace_loss_max_win_likelihood` → propose.
+/// 2. If `peace_desperate_win_likelihood` is set (>= 0) and
+///    `win_likelihood < peace_desperate_win_likelihood` → propose.
+///
+/// Otherwise return `Some(false)` so the caller falls through to its own
+/// Rust logic (worthiness checks, stalemate detection).
 #[allow(clippy::too_many_arguments)]
 pub fn lua_evaluate_peace(
     game: &GameState,
     personality: AiPersonality,
-    nation_id: NationId,
-    enemy_id: NationId,
+    _nation_id: NationId,
+    _enemy_id: NationId,
     win_likelihood: f64,
     captured: usize,
     lost: usize,
     duration: u32,
 ) -> Option<bool> {
-    let engine = game.game_data.lua_engine.as_ref()?;
-    let lua = engine.lua();
-    let table_name = personality_table_name(personality);
-
-    let personality_table: mlua::Table = lua.globals().get(table_name).ok()?;
-    let evaluate_peace: mlua::Function = personality_table.get("evaluate_peace").ok()?;
-    let result: mlua::Value = evaluate_peace
-        .call::<mlua::Value>((
-            nation_id.0 as i64,
-            enemy_id.0 as i64,
-            win_likelihood,
-            captured as i64,
-            lost as i64,
-            duration as i64,
-        ))
-        .ok()?;
-    match result {
-        mlua::Value::Boolean(b) => Some(b),
-        _ => None, // nil = fall through to Rust logic
+    let cfg = get_personality_config(game, personality)?;
+    let min_duration = cfg.peace_loss_min_duration.unwrap_or(20);
+    let max_wl = cfg.peace_loss_max_win_likelihood.unwrap_or(0.6);
+    if duration >= min_duration && captured <= lost && win_likelihood < max_wl {
+        return Some(true);
     }
+    let desperate = cfg.peace_desperate_win_likelihood.unwrap_or(-1.0);
+    if desperate >= 0.0 && win_likelihood < desperate {
+        return Some(true);
+    }
+    // Match the old Lua semantics: only propose explicitly; otherwise let
+    // Rust's worthiness/stalemate logic decide. Returning `None` would
+    // re-enable that fall-through, but the call sites already handle the
+    // `None` case the same as `Some(false)` (no Lua-driven peace).
+    None
 }
 
-/// Call the Lua `<personality>.evaluate_treaty_response(nation_id, proposer_id, treaty_type, relationship, power_ratio)`.
-/// Returns Some(true) to accept, Some(false) to reject, or None to fall through.
+/// Decide whether `personality` should accept a treaty proposal of the
+/// given type. Replaces `<personality>.evaluate_treaty_response`.
+///
+/// Returns:
+/// - `Some(true)`  → accept,
+/// - `Some(false)` → reject,
+/// - `None`        → fall through to the caller's own Rust logic (the
+///   existing behavior preserved here).
 pub fn lua_evaluate_treaty_response(
     game: &GameState,
     personality: AiPersonality,
-    nation_id: NationId,
-    proposer_id: NationId,
+    _nation_id: NationId,
+    _proposer_id: NationId,
     treaty_type_str: &str,
     relationship: i32,
     power_ratio: f64,
 ) -> Option<bool> {
-    let engine = game.game_data.lua_engine.as_ref()?;
-    let lua = engine.lua();
-    let table_name = personality_table_name(personality);
-
-    let personality_table: mlua::Table = lua.globals().get(table_name).ok()?;
-    let evaluate_treaty: mlua::Function = personality_table.get("evaluate_treaty_response").ok()?;
-    let result: mlua::Value = evaluate_treaty
-        .call::<mlua::Value>((
-            nation_id.0 as i64,
-            proposer_id.0 as i64,
-            treaty_type_str.to_string(),
-            relationship,
-            power_ratio,
-        ))
-        .ok()?;
-    match result {
-        mlua::Value::Boolean(b) => Some(b),
-        _ => None, // nil = fall through to Rust logic
+    let cfg = get_personality_config(game, personality)?;
+    let (kind, param) = match treaty_type_str {
+        "Alliance" => (
+            cfg.treaty_alliance_response_kind
+                .as_deref()
+                .unwrap_or("fall_through"),
+            cfg.treaty_alliance_response_param.unwrap_or(0.0),
+        ),
+        "NonAggressionPact" => (
+            cfg.treaty_nap_response_kind
+                .as_deref()
+                .unwrap_or("fall_through"),
+            cfg.treaty_nap_response_param.unwrap_or(0.0),
+        ),
+        _ => return None,
+    };
+    match kind {
+        "power_below" => {
+            if power_ratio < param {
+                Some(true)
+            } else {
+                None
+            }
+        }
+        "relationship_at_least" => {
+            // param is an i32 in spirit but stored as f64 in the Lua table.
+            if relationship as f64 >= param {
+                Some(true)
+            } else {
+                None
+            }
+        }
+        "reject" => Some(false),
+        // "fall_through" or unknown
+        _ => None,
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lua"))]
 mod tests {
     use super::*;
     use crate::scripting::LuaEngine;
@@ -1747,15 +2058,38 @@ mod tests {
         assert_eq!(config.infrastructure_budget, 3000);
     }
 
+    /// Drive the Rust-resident `lua_evaluate_war`/`lua_pick_tech` against a
+    /// per-personality `LuaAiConfig` via the AI test-helper game. The helper
+    /// builds a fresh GameState; we drop its `lua_engine` and inject `cfg`
+    /// into `personality_configs` so `get_personality_config` returns it.
+    fn game_with_personality_config(
+        personality: AiPersonality,
+        cfg: LuaAiConfig,
+    ) -> crate::game_state::GameState {
+        let mut game = crate::ai::common::test_helpers::test_game_with_ai();
+        game.game_data.lua_engine = None;
+        game.game_data.personality_configs.clear();
+        game.game_data.personality_configs.insert(personality, cfg);
+        game
+    }
+
     #[test]
     fn balanced_evaluate_war_low_relations() {
         let engine = engine_with_scripts();
-        let lua = engine.lua();
-        let table: mlua::Table = lua.globals().get("balanced").unwrap();
-        let func: mlua::Function = table.get("evaluate_war").unwrap();
-        let result: bool = func.call::<bool>((1i64, 2i64, -60i32)).unwrap();
-        assert!(
+        let cfg = lua_get_config(&engine, AiPersonality::Balanced).unwrap();
+        let game = game_with_personality_config(AiPersonality::Balanced, cfg);
+        let result = lua_evaluate_war(
+            &game,
+            AiPersonality::Balanced,
+            NationId(1),
+            NationId(2),
+            -60,
+            0.0,
+            0.0,
+        );
+        assert_eq!(
             result,
+            Some(true),
             "Balanced should declare war at relations -60 (< -50)"
         );
     }
@@ -1763,81 +2097,68 @@ mod tests {
     #[test]
     fn balanced_evaluate_war_ok_relations() {
         let engine = engine_with_scripts();
-        let lua = engine.lua();
-        let table: mlua::Table = lua.globals().get("balanced").unwrap();
-        let func: mlua::Function = table.get("evaluate_war").unwrap();
-        let result: bool = func.call::<bool>((1i64, 2i64, -30i32)).unwrap();
-        assert!(
-            !result,
+        let cfg = lua_get_config(&engine, AiPersonality::Balanced).unwrap();
+        let game = game_with_personality_config(AiPersonality::Balanced, cfg);
+        let result = lua_evaluate_war(
+            &game,
+            AiPersonality::Balanced,
+            NationId(1),
+            NationId(2),
+            -30,
+            0.0,
+            0.0,
+        );
+        assert_eq!(
+            result,
+            Some(false),
             "Balanced should not declare war at relations -30 (> -50)"
         );
     }
 
     #[test]
     fn aggressive_pick_tech_prefers_military() {
+        use crate::economy::buildings::BuildingType;
+        use crate::military::units::ArmyUnitType;
         let engine = engine_with_scripts();
-        let lua = engine.lua();
-
-        // Build a table with one military and one economic tech
-        let techs = lua.create_table().unwrap();
-
-        let t1 = lua.create_table().unwrap();
-        t1.set("id", 1).unwrap();
-        t1.set("name", "Seed Drill").unwrap();
-        t1.set("cost", 0).unwrap();
-        let effects1 = lua.create_table().unwrap();
-        let e1 = lua.create_table().unwrap();
-        e1.set("type", "EnableTerrainImprovement").unwrap();
-        e1.set("value", "Farm").unwrap();
-        effects1.set(1, e1).unwrap();
-        t1.set("effects", effects1).unwrap();
-        techs.set(1, t1).unwrap();
-
-        let t2 = lua.create_table().unwrap();
-        t2.set("id", 2).unwrap();
-        t2.set("name", "Rifled Muskets").unwrap();
-        t2.set("cost", 1000).unwrap();
-        let effects2 = lua.create_table().unwrap();
-        let e2 = lua.create_table().unwrap();
-        e2.set("type", "UnlockUnit").unwrap();
-        e2.set("value", "RifleInfantry").unwrap();
-        effects2.set(1, e2).unwrap();
-        t2.set("effects", effects2).unwrap();
-        techs.set(2, t2).unwrap();
-
-        let table: mlua::Table = lua.globals().get("aggressive").unwrap();
-        let func: mlua::Function = table.get("pick_tech").unwrap();
-        let result: mlua::Table = func.call(techs).unwrap();
-        let picked_id: u32 = result.get("id").unwrap();
-        assert_eq!(picked_id, 2, "Aggressive should pick military tech");
+        let cfg = lua_get_config(&engine, AiPersonality::Aggressive).unwrap();
+        let game = game_with_personality_config(AiPersonality::Aggressive, cfg);
+        let avail: Vec<(TechId, Money, String, Vec<TechEffect>)> = vec![
+            (
+                TechId(1),
+                Money::dollars(0),
+                "Seed Drill".into(),
+                vec![TechEffect::UnlockBuilding(BuildingType::FoodProcessing)],
+            ),
+            (
+                TechId(2),
+                Money::dollars(1000),
+                "Rifled Muskets".into(),
+                vec![TechEffect::UnlockUnit(ArmyUnitType::RifleInfantry)],
+            ),
+        ];
+        let picked = lua_pick_tech(&game, AiPersonality::Aggressive, &avail);
+        assert_eq!(
+            picked,
+            Some(TechId(2)),
+            "Aggressive should pick military tech"
+        );
     }
 
     #[test]
     fn economic_pick_tech_prefers_expensive() {
         let engine = engine_with_scripts();
-        let lua = engine.lua();
-
-        let techs = lua.create_table().unwrap();
-
-        let t1 = lua.create_table().unwrap();
-        t1.set("id", 1).unwrap();
-        t1.set("name", "Cheap Tech").unwrap();
-        t1.set("cost", 500).unwrap();
-        t1.set("effects", lua.create_table().unwrap()).unwrap();
-        techs.set(1, t1).unwrap();
-
-        let t2 = lua.create_table().unwrap();
-        t2.set("id", 2).unwrap();
-        t2.set("name", "Expensive Tech").unwrap();
-        t2.set("cost", 3000).unwrap();
-        t2.set("effects", lua.create_table().unwrap()).unwrap();
-        techs.set(2, t2).unwrap();
-
-        let table: mlua::Table = lua.globals().get("economic").unwrap();
-        let func: mlua::Function = table.get("pick_tech").unwrap();
-        let result: mlua::Table = func.call(techs).unwrap();
-        let picked_id: u32 = result.get("id").unwrap();
-        assert_eq!(picked_id, 2, "Economic should pick most expensive tech");
+        let cfg = lua_get_config(&engine, AiPersonality::Economic).unwrap();
+        let game = game_with_personality_config(AiPersonality::Economic, cfg);
+        let avail: Vec<(TechId, Money, String, Vec<TechEffect>)> = vec![
+            (TechId(1), Money::dollars(500), "Cheap".into(), vec![]),
+            (TechId(2), Money::dollars(3000), "Expensive".into(), vec![]),
+        ];
+        let picked = lua_pick_tech(&game, AiPersonality::Economic, &avail);
+        assert_eq!(
+            picked,
+            Some(TechId(2)),
+            "Economic should pick most expensive tech"
+        );
     }
 
     #[test]
@@ -1940,6 +2261,14 @@ mod tests {
             rest_health_threshold: None,
             capital_save_for_last_penalty: None,
             spending_naval_weight: None,
+            war_relations_threshold: None,
+            peace_loss_min_duration: None,
+            peace_loss_max_win_likelihood: None,
+            peace_desperate_win_likelihood: None,
+            treaty_alliance_response_kind: None,
+            treaty_alliance_response_param: None,
+            treaty_nap_response_kind: None,
+            treaty_nap_response_param: None,
         };
 
         let sanitized = cfg.sanitize();
@@ -2058,6 +2387,14 @@ mod tests {
             rest_health_threshold: None,
             capital_save_for_last_penalty: None,
             spending_naval_weight: None,
+            war_relations_threshold: None,
+            peace_loss_min_duration: None,
+            peace_loss_max_win_likelihood: None,
+            peace_desperate_win_likelihood: None,
+            treaty_alliance_response_kind: None,
+            treaty_alliance_response_param: None,
+            treaty_nap_response_kind: None,
+            treaty_nap_response_param: None,
         };
 
         let sanitized = cfg.sanitize();
@@ -2215,6 +2552,14 @@ mod tests {
             rest_health_threshold: None,
             capital_save_for_last_penalty: None,
             spending_naval_weight: None,
+            war_relations_threshold: None,
+            peace_loss_min_duration: None,
+            peace_loss_max_win_likelihood: None,
+            peace_desperate_win_likelihood: None,
+            treaty_alliance_response_kind: None,
+            treaty_alliance_response_param: None,
+            treaty_nap_response_kind: None,
+            treaty_nap_response_param: None,
         };
 
         let sanitized = cfg.sanitize();

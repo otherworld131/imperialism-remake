@@ -167,12 +167,7 @@ pub(super) fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut Tu
             let target_id = proposal.to;
             let personality = crate::ai::common::get_personality(game, target_id);
 
-            #[cfg(feature = "lua")]
-            let lua_cfg = game
-                .game_data
-                .lua_engine
-                .as_ref()
-                .and_then(|e| crate::ai::lua_bridge::lua_get_config(e, personality));
+            let lua_cfg = crate::ai::lua_bridge::get_personality_config(game, personality);
 
             let accepted = match proposal.proposal_type {
                 TreatyType::NonAggressionPact => crate::ai::assessment::evaluate_nap_proposal(
@@ -180,7 +175,6 @@ pub(super) fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut Tu
                     human,
                     target_id,
                     personality,
-                    #[cfg(feature = "lua")]
                     lua_cfg.as_ref(),
                 ),
                 TreatyType::Alliance => crate::ai::assessment::evaluate_alliance_proposal(
@@ -188,7 +182,6 @@ pub(super) fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut Tu
                     human,
                     target_id,
                     personality,
-                    #[cfg(feature = "lua")]
                     lua_cfg.as_ref(),
                 ),
                 TreatyType::PeaceTreaty => crate::ai::assessment::evaluate_peace_proposal(
@@ -196,7 +189,6 @@ pub(super) fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut Tu
                     human,
                     target_id,
                     personality,
-                    #[cfg(feature = "lua")]
                     lua_cfg.as_ref(),
                 ),
                 _ => false,
@@ -309,12 +301,7 @@ pub(super) fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut Tu
             let target_id = proposal.to;
             let personality = crate::ai::common::get_personality(game, target_id);
 
-            #[cfg(feature = "lua")]
-            let lua_cfg = game
-                .game_data
-                .lua_engine
-                .as_ref()
-                .and_then(|e| crate::ai::lua_bridge::lua_get_config(e, personality));
+            let lua_cfg = crate::ai::lua_bridge::get_personality_config(game, personality);
 
             let accepted = match proposal.proposal_type {
                 TreatyType::NonAggressionPact => crate::ai::assessment::evaluate_nap_proposal(
@@ -322,7 +309,6 @@ pub(super) fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut Tu
                     from_id,
                     target_id,
                     personality,
-                    #[cfg(feature = "lua")]
                     lua_cfg.as_ref(),
                 ),
                 TreatyType::Alliance => crate::ai::assessment::evaluate_alliance_proposal(
@@ -330,7 +316,6 @@ pub(super) fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut Tu
                     from_id,
                     target_id,
                     personality,
-                    #[cfg(feature = "lua")]
                     lua_cfg.as_ref(),
                 ),
                 TreatyType::PeaceTreaty => crate::ai::assessment::evaluate_peace_proposal(
@@ -338,7 +323,6 @@ pub(super) fn resolve_diplomatic_proposals(game: &mut GameState, report: &mut Tu
                     from_id,
                     target_id,
                     personality,
-                    #[cfg(feature = "lua")]
                     lua_cfg.as_ref(),
                 ),
                 _ => false,
