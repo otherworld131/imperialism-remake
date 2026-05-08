@@ -384,7 +384,7 @@ fn compute_aggregate(games: &[GameReport]) -> AggregateReport {
 
 // ── Batch run ────────────────────────────────────────────────────
 
-pub(crate) fn run_batch(n: u32, verbose_cashflow: bool) {
+pub(crate) fn run_batch(n: u32, verbose_cashflow: bool, max_turns: Option<u32>) {
     let ai_debug = std::env::args().any(|a| a == "--ai-debug");
     let snapshot_years: &[u32] = &[1815, 1830, 1845, 1860, 1875, 1890, 1915];
     let mut games_data: Vec<GameReport> = Vec::with_capacity(n as usize);
@@ -444,6 +444,11 @@ pub(crate) fn run_batch(n: u32, verbose_cashflow: bool) {
         let mut per_turn_cash_flow: Vec<PerTurnCashFlowEntry> = Vec::new();
 
         while !game.is_game_over() {
+            if let Some(limit) = max_turns
+                && game.turn.0 >= limit
+            {
+                break;
+            }
             let year = game.turn.year();
             let quarter = game.turn.quarter();
 

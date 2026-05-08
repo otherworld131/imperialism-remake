@@ -30,4 +30,9 @@ pub(crate) struct CliArgs {
     /// source/sink for every turn. Expect output size to grow ~15x per game.
     #[arg(long)]
     pub batch_verbose_cashflow: bool,
+
+    /// In batch mode, stop each game after this many turns instead of
+    /// running to 1915 game-over. Useful for fast smoke tests.
+    #[arg(long)]
+    pub batch_max_turns: Option<u32>,
 }

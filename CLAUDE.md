@@ -160,7 +160,7 @@ cargo run --release --bin imperialism -- [map_key] [nation_index]
 # Then open http://localhost:43173
 ```
 
-After implementing any plan that touches game logic, **always run a few batch games** (e.g. `--batch 3`) to verify the full game loop works end-to-end, not just unit tests.
+After implementing any plan that touches game logic, **run a short headless smoke test** to verify the full game loop works end-to-end, not just unit tests. Default to **`--batch 1 --batch-max-turns 20`** — one game, capped at 20 turns, finishes in well under a minute. A full 1-game run goes to 1915 (~70 turns) and 3 games take 3–6 minutes; only run that long form when you specifically need late-game state.
 
 After any changes to Rust code that affect the web frontend, use `./web/restart-web-server.sh --opt` to rebuild the WASM bridge (optimized) and restart the dev server. Use the unoptimized `./web/restart-web-server.sh` only for fast inner-loop iteration on UI/glue code.
 
@@ -212,7 +212,7 @@ Sections: `summary`, `trade`, `warehouse`, `materials`, `paper`,
 
 - `cargo build` must succeed with zero warnings at all times
 - `cargo test` must pass before any task is considered complete
-- After implementing a plan, run a few batch games (`--batch 3`) to smoke-test the full game loop
+- After implementing a plan, run a short smoke (`--batch 1 --batch-max-turns 20`) to confirm the full game loop still works; reserve `--batch 3` (no turn cap) for changes whose effects only show up late-game
 - `cargo clippy` — zero lints allowed
 - `cargo fmt --check` — enforced formatting
 - Domain crate depends only on `std` + `mlua` (Lua VM) — nothing else
@@ -277,4 +277,5 @@ All implementation checklists live in `plan/`:
 ## Workflow
 
 - After every implementation, run `/adversarial-review` before considering the task complete
+- **When the work is ready for the user to test in the browser**, run `./web/restart-web-server.sh --opt` to rebuild WASM (optimized) and restart the dev server, then tell the user it's up at http://localhost:43173. Do this proactively at the end of any change that touches Rust code reachable from the WASM bridge (domain, application, infrastructure, wasm-bridge, or AI/game-config Lua) — don't wait for the user to ask.
 - After committing and pushing, run `./web/restart-web-server.sh` to rebuild WASM and restart the dev server

@@ -24,7 +24,7 @@ fn main() {
             eprintln!("Error: --batch requires a positive number.");
             std::process::exit(1);
         }
-        batch::run_batch(n, args.batch_verbose_cashflow);
+        batch::run_batch(n, args.batch_verbose_cashflow, args.batch_max_turns);
         return;
     }
 
