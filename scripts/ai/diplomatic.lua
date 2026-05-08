@@ -108,12 +108,13 @@ diplomatic = {
     max_redeploys_per_turn = 3,
 
     -- Retreat (card #18)
-    retreat_prebattle_ratio = 1.5,    -- quick to retreat rather than lose units
+    retreat_prebattle_ratio = 2.0,    -- still cautious but won't bail on a fair fight
     retreat_postbattle_fp_loss = 0.50,
 
-    -- Attack acceptance (card #99 phase 2): cautious — needs ≥ local FP.
-    attack_fp_vs_minor = 1.0,
-    attack_fp_vs_gp = 1.2,
+    -- Attack acceptance (card #99 phase 2): cautious. Defender FP includes
+    -- terrain/fort/militia, so diplomatic AI needs a clean superiority.
+    attack_fp_vs_minor = 1.7,
+    attack_fp_vs_gp = 1.6,
 
     -- Rest-heal and capital-save (cards #8, #20)
     rest_health_threshold = 60,       -- diplomatic: very reluctant to fight with wounded units

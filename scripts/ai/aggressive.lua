@@ -116,13 +116,14 @@ aggressive = {
     max_redeploys_per_turn = 6,       -- push more units forward per turn
 
     -- Retreat (card #18)
-    retreat_prebattle_ratio = 3.0,    -- aggressive: less likely to decline a fight
+    retreat_prebattle_ratio = 4.0,    -- aggressive: only bail if defender FP is 4×+ our own
     retreat_postbattle_fp_loss = 0.70, -- fights harder before breaking
 
     -- Attack acceptance (card #99 phase 2): minimum ratio of our forward FP
-    -- to the defender's local FP required to attack. Lower = more aggressive.
-    attack_fp_vs_minor = 0.6,         -- attacks minors even at 60% of their FP
-    attack_fp_vs_gp = 0.8,            -- presses GPs even when slightly outgunned
+    -- to the defender's effective FP (terrain + fort + militia included).
+    -- Aggressive: ~3:2 vs minors, near parity vs GPs.
+    attack_fp_vs_minor = 1.3,
+    attack_fp_vs_gp = 1.1,
 
     -- Rest-heal and capital-save (cards #8, #20)
     rest_health_threshold = 30,       -- aggressive: only avoids combat when badly hurt

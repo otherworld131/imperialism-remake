@@ -113,12 +113,13 @@ balanced = {
     max_redeploys_per_turn = 4,       -- cap on units moved per turn to prevent thrash
 
     -- Retreat (card #18)
-    retreat_prebattle_ratio = 2.0,    -- opponent-to-own FP ratio that triggers pre-battle retreat
+    retreat_prebattle_ratio = 3.0,    -- opponent-to-own FP ratio that triggers pre-battle retreat
     retreat_postbattle_fp_loss = 0.60, -- fraction of FP lost at which a side retreats mid-battle
 
-    -- Attack acceptance (card #99 phase 2): FP-based.
-    attack_fp_vs_minor = 0.8,
-    attack_fp_vs_gp = 1.0,
+    -- Attack acceptance (card #99 phase 2): FP-based, defender FP includes
+    -- terrain/fort/militia. 1.5 = "3-vs-2" advantage required to commit.
+    attack_fp_vs_minor = 1.5,
+    attack_fp_vs_gp = 1.3,
 
     -- Rest-heal and capital-save (cards #8, #20)
     rest_health_threshold = 50,       -- skip wounded units at half health

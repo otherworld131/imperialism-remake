@@ -325,7 +325,8 @@ game_config = {
     -- Turn cadence at which each under-strength province spawns +1 militia.
     garrison_regen_interval_turns = 2,
     -- HP recovered per turn by a unit that neither moved nor fought (card #20).
-    rest_heal_amount = 10,
+    -- 35/turn brings a 0-HP unit back to full in ~3 turns of rest.
+    rest_heal_amount = 35,
 
     -- AI naval scoring coefficients (card #112).
     -- spending_naval_base: peacetime score floor (even without war, navy drips in).

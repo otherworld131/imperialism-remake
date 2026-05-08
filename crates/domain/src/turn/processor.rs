@@ -2959,6 +2959,14 @@ fn resolve_military_movement(
                 continue;
             }
 
+            // No-op move: destination equals the unit's current position. Drop
+            // it silently and DO NOT mark the unit as moved, so it heals this
+            // turn. AI redistribution can otherwise enqueue trivial reshuffles
+            // that keep a unit perpetually flagged as "moved".
+            if dest_province_id == src_pos {
+                continue;
+            }
+
             // Non-adjacent moves use the rail network: 5 freight cars per armament
             // point (manual p. 47).  Adjacent moves are free marches.
             let is_non_adjacent = {
@@ -4410,19 +4418,27 @@ fn heal_resting_units(
     moved_unit_ids: &HashSet<crate::map::UnitId>,
     fought_unit_ids: &HashSet<crate::map::UnitId>,
 ) {
+    use crate::military::units::HealBlock;
     let heal_amount = game.game_data.game_config.rest_heal_amount;
     for nation in &mut game.world.nations {
         for unit in &mut nation.military.army {
             if !unit.is_alive() {
                 continue;
             }
-            if moved_unit_ids.contains(&unit.id) || fought_unit_ids.contains(&unit.id) {
+            if moved_unit_ids.contains(&unit.id) {
+                unit.last_heal_block = Some(HealBlock::Moved);
+                continue;
+            }
+            if fought_unit_ids.contains(&unit.id) {
+                unit.last_heal_block = Some(HealBlock::Fought);
                 continue;
             }
             if unit.health >= 100 {
+                unit.last_heal_block = Some(HealBlock::FullHealth);
                 continue;
             }
             unit.heal(heal_amount);
+            unit.last_heal_block = None;
         }
     }
 }

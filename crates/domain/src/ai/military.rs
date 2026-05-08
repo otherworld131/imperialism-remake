@@ -1237,10 +1237,11 @@ pub(crate) fn ai_military_strategy(
                     }
 
                     let tile_count = prov.tiles.len();
-                    // Defender local FP (raw — matches the retreat decision
-                    // baseline). Militia contribute base FP 1 each;
-                    // GarrisonArtillery contributes its base FP 4. No 1.2×
-                    // defender multiplier, no +8 militia entrenchment bonus.
+                    // Defender local FP, scaled by the same fort/terrain/militia
+                    // bonuses the battle resolver applies. Without this, the
+                    // attack threshold compares naked FP and the AI commits to
+                    // fights it then immediately retreats from at the gate of
+                    // a forted, hilly capital.
                     let garrison_size = prov.garrison_count as usize;
                     let stationed_fp = enemy_stationed_fp
                         .iter()
@@ -1260,9 +1261,39 @@ pub(crate) fn ai_military_strategy(
                     let militia_base_fp = crate::military::units::ArmyUnitType::Minutemen
                         .stats()
                         .firepower as f64;
-                    let their_local_fp = stationed_fp
+                    let raw_defender_fp = stationed_fp
                         + garrison_artillery_fp
                         + (garrison_size as f64) * militia_base_fp;
+
+                    // Pull the capital-tile terrain + fort level the resolver
+                    // will use, then mirror the (1+terrain)*(1+fort) scaling
+                    // and add the +8/militia entrenchment FP.
+                    let game_cfg = &game.game_data.game_config;
+                    let (terrain_bonus, fort_bonus) = game
+                        .world
+                        .hex_map
+                        .get_tile(prov.capital_tile)
+                        .map(|tile| {
+                            let t = crate::military::terrain_defense_bonus(
+                                tile.terrain(),
+                                game_cfg,
+                            );
+                            let f = if tile.infrastructure.has_fort {
+                                crate::military::fort_defense_bonus(
+                                    tile.infrastructure.fort_level,
+                                    game_cfg,
+                                )
+                            } else {
+                                0.0
+                            };
+                            (t, f)
+                        })
+                        .unwrap_or((0.0, 0.0));
+                    let militia_entrenchment_fp = (garrison_size as f64) * 8.0;
+                    let their_local_fp = raw_defender_fp
+                        * (1.0 + terrain_bonus)
+                        * (1.0 + fort_bonus)
+                        + militia_entrenchment_fp;
 
                     // Our forward FP: effective_firepower of our movable
                     // units whose current position is in a province adjacent

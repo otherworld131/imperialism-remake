@@ -332,7 +332,9 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
                 let Some(nation) = game.get_nation(nation_id) else {
                     return;
                 };
-                let candidate_unit_ids: Vec<crate::map::UnitId> = nation
+                // Prefer healthiest units when redeploying so wounded units
+                // stay put and heal. Ties broken by unit id for determinism.
+                let mut candidates: Vec<(u8, crate::map::UnitId)> = nation
                     .military
                     .army
                     .iter()
@@ -341,8 +343,11 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
                             && u.position == src_pid
                             && !already_pending.contains(&u.id)
                     })
-                    .map(|u| u.id)
+                    .map(|u| (u.health, u.id))
                     .collect();
+                candidates.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.0.cmp(&b.1.0)));
+                let candidate_unit_ids: Vec<crate::map::UnitId> =
+                    candidates.into_iter().map(|(_, id)| id).collect();
                 for uid in candidate_unit_ids {
                     if pulled >= deficit {
                         break;
@@ -600,15 +605,18 @@ fn ai_distribute_field_army(game: &mut GameState, nation_id: NationId, personali
             let Some(nation) = game.get_nation(nation_id) else {
                 return;
             };
+            // Prefer healthiest unit at the source so wounded units stay put
+            // and heal. Ties broken by unit id for determinism.
             let candidate = nation
                 .military
                 .army
                 .iter()
-                .find(|u| {
+                .filter(|u| {
                     u.unit_type.can_move()
                         && u.position == src_pid
                         && !already_pending.contains(&u.id)
                 })
+                .max_by(|a, b| a.health.cmp(&b.health).then(b.id.0.cmp(&a.id.0)))
                 .map(|u| u.id);
             let Some(uid) = candidate else {
                 break; // nothing left to move from this source

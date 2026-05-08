@@ -112,12 +112,13 @@ economic = {
     max_redeploys_per_turn = 4,
 
     -- Retreat (card #18)
-    retreat_prebattle_ratio = 2.0,
+    retreat_prebattle_ratio = 2.5,
     retreat_postbattle_fp_loss = 0.55,
 
-    -- Attack acceptance (card #99 phase 2): FP-based.
-    attack_fp_vs_minor = 0.8,
-    attack_fp_vs_gp = 1.0,
+    -- Attack acceptance (card #99 phase 2): FP-based, defender FP includes
+    -- terrain/fort/militia. Economic plays a touch more cautiously.
+    attack_fp_vs_minor = 1.5,
+    attack_fp_vs_gp = 1.4,
 
     -- Rest-heal and capital-save (cards #8, #20)
     rest_health_threshold = 50,       -- skip wounded units at half health
