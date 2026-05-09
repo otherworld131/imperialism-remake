@@ -67,6 +67,7 @@ export interface SeaZone {
   center_q: number;
   center_r: number;
   hexes: { q: number; r: number }[];
+  adjacent_zone_ids: number[];
 }
 
 export interface Headline {
@@ -865,6 +866,22 @@ export async function engineerBuild(gameJson: string, civilianId: number, kind: 
 
 export async function recruitArmyUnit(gameJson: string, nationId: number, unitType: string): Promise<CommandResult> {
   return runCmd('wasm_recruit_army_unit', gameJson, nationId, unitType);
+}
+
+// ── Naval movement (Card #471) ───────────────────────────────────────
+
+/**
+ * Move every warship a nation has in `fromZoneId` into the adjacent
+ * `toZoneId`. The two zones must share a sea-zone adjacency edge and the
+ * fleet must have movement points remaining for this turn.
+ */
+export async function moveFleet(
+  gameJson: string,
+  nationId: number,
+  fromZoneId: number,
+  toZoneId: number,
+): Promise<CommandResult> {
+  return runCmd('wasm_move_fleet', gameJson, nationId, fromZoneId, toZoneId);
 }
 
 // ── Unit upgrades (Card #417) ────────────────────────────────────────

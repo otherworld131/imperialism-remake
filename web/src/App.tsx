@@ -6,6 +6,7 @@ import {
   getDiplomacyOverlay, getMilitaryOverlay,
   getUnitsInProvince, getCivilians, getShips, getValidMoveTargets, getBuildableUnits,
   queueUnitMove, cancelUnitMove, disbandUnit, deployCivilian, recallCivilian, engineerBuild,
+  moveFleet,
   type EngineerBuildKind,
   setPendingShips, setAutoTradeWithMinors, setPendingArmyRecruit,
   upgradeUnit, upgradeUnits,
@@ -197,6 +198,14 @@ function App() {
       setSelectedNavyKey(null);
     }
   }, [navyMarkers, selectedNavyKey]);
+  // When no fleet is selected, drop any ship selection tied to a previous
+  // fleet (card #471). Selection of a player fleet's ships is wired below,
+  // after `playerNationId` becomes available.
+  useEffect(() => {
+    if (!selectedNavyMarker) {
+      setSelectedShipIds([]);
+    }
+  }, [selectedNavyMarker]);
   const [gameState, setGameState] = useState<any>(null);
   const [selectedTile, setSelectedTile] = useState<TileData | null>(null);
   const [headlines, setHeadlines] = useState<Headline[]>([]);
@@ -295,6 +304,8 @@ function App() {
   const [shipsData, setShipsData] = useState<ShipsData | null>(null);
   const [buildable, setBuildable] = useState<BuildableUnits | null>(null);
   const [selectedUnitIds, setSelectedUnitIds] = useState<number[]>([]);
+  // Selected warships in the currently selected fleet (card #471).
+  const [selectedShipIds, setSelectedShipIds] = useState<number[]>([]);
   const [isDeployMode, setIsDeployMode] = useState(false);
   const [deployingCivilian, setDeployingCivilian] = useState<CivilianDetail | null>(null);
   const [deployableTiles, setDeployableTiles] = useState<Set<string>>(new Set());
@@ -753,6 +764,7 @@ function App() {
       if (e.code === 'Escape') {
         if (queuedDiplomacyAction) { setQueuedDiplomacyAction(null); }
         else if (selectedUnitIds.length > 0) { setSelectedUnitIds([]); }
+        else if (selectedNavyKey) { setSelectedNavyKey(null); }
         else if (pendingEngineerDeploy) { setPendingEngineerDeploy(null); }
         else if (isDeployMode) { setIsDeployMode(false); setDeployingCivilian(null); setDeployableTiles(new Set()); setProspectedTiles(new Set()); }
         else if (showProposals) setShowProposals(false);
@@ -772,7 +784,7 @@ function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeScreen, showProposals, handleEndTurn, dismissNewspaper, selectedUnitIds, isDeployMode, pendingEngineerDeploy, queuedDiplomacyAction]);
+  }, [activeScreen, showProposals, handleEndTurn, dismissNewspaper, selectedUnitIds, isDeployMode, pendingEngineerDeploy, queuedDiplomacyAction, selectedNavyKey]);
 
   // Fetch overlay data when map mode, active screen, or selected nation changes
   useEffect(() => {
@@ -829,6 +841,39 @@ function App() {
   }, [selectedUnitIds, gameJson, playerNationId]);
   const isMovementMode = selectedUnitIds.length > 0 && validMoveTargets !== null;
 
+  // ── Fleet movement (card #471) ─────────────────────────────────────
+  // When the player selects one of their own fleet markers, auto-select
+  // every warship in that fleet's sea zone — same UX as auto-selecting
+  // capital armies on capital click.
+  const isPlayerFleetSelected = !!(
+    selectedNavyMarker &&
+    selectedNavyMarker.kind === 'fleet' &&
+    selectedNavyMarker.nation_id === playerNationId
+  );
+  useEffect(() => {
+    if (!isPlayerFleetSelected || !shipsData || !selectedNavyMarker) return;
+    const zoneId = selectedNavyMarker.sea_zone_id ?? null;
+    const ids = shipsData.warships
+      .filter(s => s.sea_zone === zoneId)
+      .map(s => s.id);
+    setSelectedShipIds(ids);
+  }, [isPlayerFleetSelected, shipsData, selectedNavyMarker]);
+  // Adjacent sea hexes the player can click to send the selected fleet there.
+  const validFleetTargets: Set<string> = useMemo(() => {
+    const out = new Set<string>();
+    if (!isPlayerFleetSelected || !selectedNavyMarker || selectedShipIds.length === 0) return out;
+    const fromZoneId = selectedNavyMarker.sea_zone_id;
+    if (fromZoneId == null) return out;
+    const fromZone = seaZones.find(z => z.id === fromZoneId);
+    if (!fromZone) return out;
+    for (const adjId of fromZone.adjacent_zone_ids ?? []) {
+      const adj = seaZones.find(z => z.id === adjId);
+      if (!adj || adj.is_lake) continue;
+      for (const h of adj.hexes) out.add(`${h.q},${h.r}`);
+    }
+    return out;
+  }, [isPlayerFleetSelected, selectedNavyMarker, selectedShipIds, seaZones]);
+
   // Ref so handleTileClick can call handleDeployCivilian without a forward-reference in deps
   const handleDeployCivilianRef = useRef<(civ: CivilianDetail) => void>(() => {});
 
@@ -852,6 +897,34 @@ function App() {
       setQueuedDiplomacyAction(null);
       diploActionsRef.current?.(action, targetNationId);
       return;
+    }
+
+    // Fleet movement (card #471): if a player fleet is selected and the
+    // clicked sea hex sits inside one of the adjacent sea zones, move every
+    // warship in the source zone there. Stays scoped to player fleets — we
+    // intentionally do not wire foreign-fleet clicks to mutations.
+    if (isPlayerFleetSelected && selectedNavyMarker && validFleetTargets.size > 0) {
+      const tileKey = `${tile.q},${tile.r}`;
+      if (validFleetTargets.has(tileKey)) {
+        const fromZoneId = selectedNavyMarker.sea_zone_id;
+        const toZone = seaZones.find(z => z.hexes.some(h => h.q === tile.q && h.r === tile.r));
+        if (fromZoneId != null && toZone) {
+          await runMutation(async () => {
+            const cmd = await moveFleet(gameJson, playerNationId, fromZoneId, toZone.id);
+            if (cmd.ok && cmd.gameJson) {
+              await applyGameJson(cmd.gameJson);
+              // Drop the now-stale fleet selection — refresh re-resolves the
+              // marker by key, and the moved fleet sits at a new anchor.
+              setSelectedNavyKey(null);
+              setSelectedShipIds([]);
+            } else if (cmd.error) {
+              showError(`Fleet move failed: ${cmd.error}`);
+            }
+          });
+        }
+        return;
+      }
+      // Click on a non-target sea hex: fall through and clear selection below.
     }
 
     // Implicit movement mode: if units are selected and the clicked tile is a valid target, move them.
@@ -968,7 +1041,7 @@ function App() {
       setProvinceUnits(null);
       setSelectedUnitIds([]);
     }
-  }, [mapMode, gameJson, playerNationId, selectedUnitIds, validMoveTargets, isDeployMode, deployingCivilian, deployableTiles, applyGameJson, provinceUnits, selectedTile, showError, runMutation, queuedDiplomacyAction, activeScreen, diplomacyScreenData, diploActionsRef, mutationLockRef]);
+  }, [mapMode, gameJson, playerNationId, selectedUnitIds, validMoveTargets, isDeployMode, deployingCivilian, deployableTiles, applyGameJson, provinceUnits, selectedTile, showError, runMutation, queuedDiplomacyAction, activeScreen, diplomacyScreenData, diploActionsRef, mutationLockRef, isPlayerFleetSelected, selectedNavyMarker, validFleetTargets, seaZones]);
 
   const handleNavyMarkerClick = useCallback((marker: NavyMarker | null) => {
     if (!marker) {
@@ -1723,6 +1796,7 @@ function App() {
               selectedNavyKey={selectedNavyKey}
               onNavyMarkerClick={handleNavyMarkerClick}
               onNavyMarkerHover={handleNavyMarkerHover}
+              validFleetTargets={validFleetTargets}
               onTileHover={activeScreen === 'diplomacy' ? setHoveredDiploTile : undefined}
               renderTooltipModeExtras={renderTooltipModeExtras}
               governmentTitleByNationId={governmentTitleByNationId}
@@ -1837,6 +1911,7 @@ function App() {
           <TradeScreen
             trade={tradeData}
             nations={gameState?.nations || []}
+            merchants={shipsData?.merchants ?? []}
             onSetSubsidy={handleSetSubsidy}
             onSetSellOrder={handleSetSellOrder}
             onSetBuyOrder={handleSetBuyOrder}
@@ -2117,11 +2192,28 @@ function App() {
                 );
               })()}
 
-              {/* Naval Panel — shown at country capital */}
-              {shipsData && isPlayerCapital && (
+              {/* Naval Panel — shown at country capital, or when a player fleet
+                  marker is selected (card #471). When a fleet is selected the
+                  panel is interactive: ships can be toggled and the next click
+                  on an adjacent sea hex moves the fleet. */}
+              {shipsData && (isPlayerCapital || isPlayerFleetSelected) && (
                 <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 6 }}>
                   <NavalPanel
                     ships={shipsData}
+                    selectedNavyMarker={isPlayerFleetSelected ? selectedNavyMarker : null}
+                    selectedShipIds={isPlayerFleetSelected ? selectedShipIds : []}
+                    onToggleShip={isPlayerFleetSelected ? (id) => {
+                      setSelectedShipIds(prev =>
+                        prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+                      );
+                    } : undefined}
+                    onSelectAll={isPlayerFleetSelected && selectedNavyMarker ? () => {
+                      const zoneId = selectedNavyMarker.sea_zone_id ?? null;
+                      const all = shipsData.warships
+                        .filter(s => s.sea_zone === zoneId)
+                        .map(s => s.id);
+                      setSelectedShipIds(prev => (prev.length === all.length ? [] : all));
+                    } : undefined}
                   />
                 </div>
               )}

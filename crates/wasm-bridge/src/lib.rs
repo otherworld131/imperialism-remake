@@ -1062,6 +1062,8 @@ pub fn wasm_get_sea_zones(game_json: &str) -> String {
                 .map(|h| serde_json::json!({ "q": h.q, "r": h.r }))
                 .collect();
 
+            let adjacent: Vec<u32> = z.adjacent_zone_ids.iter().map(|id| id.0).collect();
+
             serde_json::json!({
                 "id": z.id.0,
                 "name": z.name,
@@ -1069,6 +1071,7 @@ pub fn wasm_get_sea_zones(game_json: &str) -> String {
                 "center_q": center_q,
                 "center_r": center_r,
                 "hexes": hexes,
+                "adjacent_zone_ids": adjacent,
             })
         })
         .collect();
@@ -2991,6 +2994,122 @@ pub fn wasm_assign_beachhead(game_json: &str, nation_id: u32, target_province_id
             ));
         }
     }
+
+    serialize_game(&game)
+}
+
+/// Move every warship a nation has in `from_zone_id` into the adjacent
+/// `to_zone_id`. Mirrors the session-API `MoveFleet` semantics so the web
+/// frontend can drive warship movement statelessly via the `(game_json) →
+/// game_json` mutation pattern used by the rest of the bridge.
+///
+/// Validation: both zones exist and are non-lake; they are adjacent; the
+/// nation has at least one warship in `from_zone_id`; the per-zone movement
+/// budget (initialised to the slowest ship's speed on first use) is non-zero.
+#[wasm_bindgen]
+pub fn wasm_move_fleet(
+    game_json: &str,
+    nation_id: u32,
+    from_zone_id: u32,
+    to_zone_id: u32,
+) -> String {
+    use domain::map::sea_zones::SeaZoneId;
+
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let nid = NationId(nation_id);
+    let from_z = SeaZoneId(from_zone_id);
+    let to_z = SeaZoneId(to_zone_id);
+
+    let from_zone_ok = game
+        .world
+        .sea_zones
+        .iter()
+        .any(|z| z.id == from_z && !z.is_lake);
+    let to_zone_ok = game
+        .world
+        .sea_zones
+        .iter()
+        .any(|z| z.id == to_z && !z.is_lake);
+    if !from_zone_ok || !to_zone_ok {
+        return "{\"error\":\"invalid sea zone\"}".to_string();
+    }
+    let adjacent = game
+        .world
+        .sea_zones
+        .iter()
+        .find(|z| z.id == from_z)
+        .is_some_and(|z| z.is_adjacent_to(to_z));
+    if !adjacent {
+        return "{\"error\":\"sea zones are not adjacent\"}".to_string();
+    }
+
+    let has_ships = game.get_nation(nid).is_some_and(|n| {
+        n.military
+            .warships
+            .iter()
+            .any(|s| s.sea_zone == Some(from_z))
+    });
+    if !has_ships {
+        return "{\"error\":\"no warships in that sea zone\"}".to_string();
+    }
+
+    let budget = match game.get_nation(nid) {
+        Some(n) => {
+            if let Some(&rem) = n.military.fleet_moves_remaining.get(&from_z) {
+                rem
+            } else {
+                n.military
+                    .warships
+                    .iter()
+                    .filter(|s| s.sea_zone == Some(from_z))
+                    .map(|s| game.game_data.ship_stats(s.ship_type).speed)
+                    .filter(|&sp| sp > 0)
+                    .min()
+                    .unwrap_or(0)
+            }
+        }
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
+    if budget == 0 {
+        return "{\"error\":\"fleet has no movement points remaining this turn\"}".to_string();
+    }
+
+    let remaining = budget - 1;
+    let dest_min_speed: Option<u32> = game.get_nation(nid).and_then(|n| {
+        n.military
+            .warships
+            .iter()
+            .filter(|s| s.sea_zone == Some(to_z))
+            .map(|s| game.game_data.ship_stats(s.ship_type).speed)
+            .filter(|&sp| sp > 0)
+            .min()
+    });
+
+    let nation = match game.get_nation_mut(nid) {
+        Some(n) => n,
+        None => return "{\"error\":\"nation not found\"}".to_string(),
+    };
+    let dest_budget = nation
+        .military
+        .fleet_moves_remaining
+        .get(&to_z)
+        .copied()
+        .unwrap_or_else(|| dest_min_speed.unwrap_or(u32::MAX));
+
+    for ship in &mut nation.military.warships {
+        if ship.sea_zone == Some(from_z) {
+            ship.sea_zone = Some(to_z);
+        }
+    }
+
+    nation.military.fleet_moves_remaining.remove(&from_z);
+    nation
+        .military
+        .fleet_moves_remaining
+        .insert(to_z, remaining.min(dest_budget));
 
     serialize_game(&game)
 }

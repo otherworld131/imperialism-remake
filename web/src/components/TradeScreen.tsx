@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import type { TradeData } from '../wasm';
+import type { TradeData, ShipDetail } from '../wasm';
 import { resourceLabel } from '../resourceEmoji';
 import Flag from './Flag';
 
@@ -12,6 +12,9 @@ interface NationLite {
 interface Props {
   trade: TradeData | null;
   nations?: NationLite[];
+  /** Player's merchant fleet (card #472). Drives the cargo tooltip; a missing
+   *  list just means no breakdown is shown. */
+  merchants?: ShipDetail[];
   onSetSubsidy: (nationId: number, amount: number) => void;
   onSetSellOrder: (commodity: string, commodityType: string, quantity: number) => void;
   onSetBuyOrder: (resource: string, quantity: number, maxPrice: number) => void;
@@ -58,7 +61,7 @@ const MARKET_COLS: { key: MarketSortKey; label: string }[] = [
   { key: 'price_per_unit', label: 'Price' },
 ];
 
-export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSellOrder, onSetBuyOrder, onSetAutoTradeWithMinors, onClose }: Props) {
+export default function TradeScreen({ trade, nations = [], merchants = [], onSetSubsidy, onSetSellOrder, onSetBuyOrder, onSetAutoTradeWithMinors, onClose }: Props) {
   const flagBySellerId: Record<number, string> = {};
   for (const n of nations) {
     if (n.flag_svg) flagBySellerId[n.id] = n.flag_svg;
@@ -232,7 +235,11 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
         <div style={styles.header}>
           <h2 style={styles.title}>Trade</h2>
           <div style={{ display: 'flex', gap: 20, alignItems: 'center' }}>
-            <span>Cargo: {total_cargo - remaining_cargo} / {total_cargo}</span>
+            <CargoSummary
+              used={total_cargo - remaining_cargo}
+              total={total_cargo}
+              merchants={merchants}
+            />
             <span>Imports: <span style={{ color: '#e63946' }}>${trade_balance.total_bought.toLocaleString()}</span></span>
             <span>Exports: <span style={{ color: '#2a9d8f' }}>${trade_balance.total_sold.toLocaleString()}</span></span>
             <span>Net: <span style={{ color: trade_balance.net >= 0 ? '#2a9d8f' : '#e63946' }}>${trade_balance.net.toLocaleString()}</span></span>
@@ -667,6 +674,54 @@ export default function TradeScreen({ trade, nations = [], onSetSubsidy, onSetSe
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Cargo readout in the trade screen header (card #472). Shows used / total
+ * tonnage next to a merchant-ship icon; hovering reveals a tooltip listing
+ * each merchant-ship type with its count.
+ */
+function CargoSummary({ used, total, merchants }: { used: number; total: number; merchants: ShipDetail[] }) {
+  const [open, setOpen] = useState(false);
+  const counts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of merchants) m.set(s.type, (m.get(s.type) ?? 0) + 1);
+    return Array.from(m.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [merchants]);
+
+  return (
+    <span
+      style={{ position: 'relative', cursor: merchants.length > 0 ? 'help' : 'default', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <span aria-hidden style={{ fontSize: 14 }}>{'⛵'}</span>
+      <span>Cargo: {used} / {total}</span>
+      {open && (
+        <div
+          role="tooltip"
+          style={{
+            position: 'absolute', top: '100%', left: 0, marginTop: 6,
+            background: '#0f0f23', border: '1px solid #5a5030', borderRadius: 4,
+            padding: '6px 10px', zIndex: 50, minWidth: 180, color: '#e0d8c0',
+            fontSize: 12, lineHeight: 1.6, boxShadow: '0 4px 10px rgba(0,0,0,0.5)',
+          }}
+        >
+          <div style={{ color: '#daa520', fontWeight: 'bold', marginBottom: 4 }}>
+            Merchant fleet ({merchants.length})
+          </div>
+          {counts.length === 0 ? (
+            <div style={{ color: '#888', fontStyle: 'italic' }}>No merchant ships</div>
+          ) : counts.map(([type, count]) => (
+            <div key={type} style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
+              <span>{type.replace(/([A-Z])/g, ' $1').trim()}</span>
+              <span style={{ color: '#aaa' }}>{count}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </span>
   );
 }
 

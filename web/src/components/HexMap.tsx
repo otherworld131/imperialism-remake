@@ -295,6 +295,9 @@ interface Props {
   pendingMoves?: PendingMoveArrow[];
   validMoveTargets?: ValidMoveTargets | null;
   isMovementMode?: boolean;
+  /** Sea hexes (q,r keys) the player can click to send the selected fleet there
+   *  (card #471). Highlighted with a blue tint. */
+  validFleetTargets?: Set<string>;
   isDeployMode?: boolean;
   deployableTiles?: Set<string>;
   /** Tiles where prospector has already searched — shown as red X during prospector deploy mode. */
@@ -361,7 +364,7 @@ export default function HexMap({
   tiles, mapMode, diplomacyOverlay, militaryOverlay,
   onMapModeChange, onTileClick, onTileHover, showHiddenResources = false, showAiCivilians = false,
   showResources = true, showTransportNetwork = true, showArmies = true,
-  pendingMoves = [], validMoveTargets, isMovementMode = false,
+  pendingMoves = [], validMoveTargets, isMovementMode = false, validFleetTargets,
   isDeployMode = false, deployableTiles, prospectedTiles, selectedCivilianId = null, disableFogOfWar = false,
   organicBorders = true,
   hideHexGrid = false,
@@ -2432,6 +2435,21 @@ export default function HexMap({
       }
     }
 
+    // ── Pass 8c: Fleet movement targets (card #471) ──────────
+    // Highlight every sea hex inside an adjacent sea zone with a blue tint
+    // so the player can see which way the selected fleet can sail.
+    if (validFleetTargets && validFleetTargets.size > 0) {
+      for (const tile of visibleTiles) {
+        if (tile.terrain !== 'Sea') continue;
+        const key = `${tile.q},${tile.r}`;
+        if (!validFleetTargets.has(key)) continue;
+        const [px, py] = hexToPixel(tile.q, tile.r);
+        drawHexagon(ctx, px, py, HEX_SIZE - 0.5);
+        ctx.fillStyle = 'rgba(64, 156, 255, 0.28)';
+        ctx.fill();
+      }
+    }
+
     // ── Pass 9: Movement range highlighting ───────────────────
     if (isMovementMode && validMoveTargets) {
       const provinceIdSet = new Map<number, 'friendly' | 'hostile'>();
@@ -2558,7 +2576,7 @@ export default function HexMap({
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     endRender();
   }, [tiles, tilePositions, showPoliticalColors, showHiddenResources, showAiCivilians, showResources, showTransportNetwork, showArmies, mapMode, nationFillMap,
-      isMovementMode, validMoveTargets, isDeployMode, deployableTiles, prospectedTiles, pendingMoves, nationLabels, disableFogOfWar,
+      isMovementMode, validMoveTargets, validFleetTargets, isDeployMode, deployableTiles, prospectedTiles, pendingMoves, nationLabels, disableFogOfWar,
       navyMarkers, seaZones, selectedNavyKey, mapGeometry, tileMap, diplomacyOverlay,
       hideHexGrid, highlightedNationId, classifiedEdges, maxArmyFP, mapDims,
       selectedTileKey, selectedCivilianId, blinkOn, showDiplomacyMarkers, provinceLabels, staticLayer]);
