@@ -16,7 +16,7 @@ The backend **broadly follows the forward dependency direction** mandated by hex
 | Lua sandbox | 🟢 Green | `os`, `io`, `loadfile`, `dofile`, `require`, `debug`, `load` all nilled |
 | Application view models exist | 🟢 Green | But bypassed by WASM bridge |
 | Frontend/backend seam | 🔴 Red | WASM bridge serializes raw `GameState` to JSON — no typed command/query API |
-| Domain purity (no infra leaks) | 🔴 Red | `serde`/`ron` are direct deps of domain crate; serde derives scattered across domain types |
+| Domain purity (no infra leaks) | 🟡 Yellow | `serde`/`ron`/`serde_json` are direct deps of the domain crate; serde derives scattered across domain types. `serde_json` is allowlisted for the WASM Lua-bake pipeline ([ADR-0006](adr/0006-rust-lua-boundary.md#dependency-policy)). |
 | Domain purity (Lua/Rust split) | 🔴 Red | Many tuning values remain in Rust, though some originally cited examples are test-only scaffolding and should not drive production priorities |
 | Clean code / complexity | 🔴 Red | `turn/processor.rs` is 14,672 lines; `resolve_combat()` is 962 lines; `GameState` is a 22-field mixed-responsibility aggregate root |
 | Determinism | 🔴 Red | `tests/simulation.rs::test_determinism` fails today, but the specific root cause is not yet established |
@@ -43,10 +43,10 @@ The backend **broadly follows the forward dependency direction** mandated by hex
 - **Violates:** "Calls into Application layer via typed commands & queries" (CLAUDE.md).
 - **Why it matters:** No validation layer, no clean seam. Frontend acts as an orchestrator of domain state.
 
-**L-3. Serde/ron are domain crate dependencies**
-- `crates/domain/Cargo.toml:7-8` declares `serde` and `ron` as direct (non-optional) dependencies.
-- **Violates:** "Domain crate depends only on `std` + `mlua`" (CLAUDE.md).
-- **Why it matters:** Infrastructure concern (serialization) has become a first-class citizen in the domain.
+**L-3. Serde/ron/serde_json are domain crate dependencies**
+- `crates/domain/Cargo.toml` declares `serde`, `serde_json`, and (in dev-deps) `ron` as direct dependencies. `serde_json` was added 2026-05-08 in commit 02fd044 to support the WASM Lua-bake pipeline; see [ADR-0006 § Dependency Policy](adr/0006-rust-lua-boundary.md#dependency-policy) for the rationale and the conditions under which the leak can be closed.
+- **Status:** Allowlisted by `tests/architecture.rs::domain_has_only_serde_dependency` (`{serde, ron, mlua, serde_json}`). The CLAUDE.md "std + mlua only" line is now phrased as "plus the narrow exceptions documented in ADR-0006".
+- **Why it still matters:** Infrastructure concerns (serialization) remain first-class citizens in the domain. The exception is bounded (one decode call site in `ai/lua_bridge.rs`); add a finding here if it spreads.
 
 **L-4. Serde derives embedded throughout domain types**
 - `crates/domain/src/game_state.rs:28-35` — `PoliticalSnapshot`, `GameState`
@@ -290,7 +290,7 @@ A second pass spot-checked the headline claims and reconciled this audit with th
 - `crates/domain/src/turn/processor.rs` is **14,672 lines** (confirmed).
 - `crates/domain/src/game_state.rs` is **1,534 lines** (confirmed).
 - `crates/wasm-bridge/src/lib.rs` is **5,662 lines** — even larger than implied by L-1/L-2; the seam problem is bigger than the audit calls out.
-- `crates/domain/Cargo.toml` declares `serde` and `ron` as direct (non-optional) deps (confirmed; lines 7–8). The CLAUDE.md "domain depends only on std + mlua" rule is genuinely violated.
+- `crates/domain/Cargo.toml` declares `serde`, `serde_json`, and `ron` (dev) as direct deps. The "std + mlua only" line in CLAUDE.md was reworded on 2026-05-09 to "plus the narrow exceptions documented in [ADR-0006](adr/0006-rust-lua-boundary.md#dependency-policy)" — the Lua-bake pipeline forces the `serde_json` exception. The architecture test allowlist in `tests/architecture.rs` matches the ADR.
 - No first-class `Reservation` type exists in the domain. The handful of `reserved` matches in the codebase are scattered field flags (in `processor.rs`, `types.rs`, `military/combat.rs`, `ai/diplomacy.rs`), not a coherent reservation layer. This corroborates the parallel economy-lessons note.
 
 ### Severity reframing

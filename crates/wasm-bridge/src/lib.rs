@@ -863,12 +863,26 @@ pub fn wasm_get_navy_markers(game_json: &str, disable_fog: bool) -> String {
                         (a, None, None)
                     }
                 } else {
-                    // No zone assigned — use legacy fleet_anchor
+                    // No zone assigned — use legacy fleet_anchor and back-fill
+                    // the sea-zone id by looking up which zone contains that
+                    // anchor. Without this back-fill, fleets created before
+                    // the AI assigns them a home zone (typical for the human
+                    // player at turn 1) ship with sea_zone_id=null, which
+                    // leaves the frontend unable to compute fleet-move
+                    // adjacency targets (card #471).
                     let Some(a) = fleet_anchor(nation, &game.world.hex_map, &game.world.provinces)
                     else {
                         continue;
                     };
-                    (a, None, None)
+                    let containing = game
+                        .world
+                        .sea_zones
+                        .iter()
+                        .find(|z| z.hexes.iter().any(|h| h.q == a.q && h.r == a.r));
+                    match containing {
+                        Some(z) => (a, Some(z.id.0), Some(z.name.clone())),
+                        None => (a, None, None),
+                    }
                 };
 
                 let is_human = nation.id == human_nation_id;
@@ -6366,6 +6380,18 @@ mod tests {
         let by_op = m["by_operation"].as_object().unwrap();
         assert_eq!(by_op.get("Patrol").and_then(|v| v.as_u64()), Some(2));
         assert_eq!(by_op.get("Escort").and_then(|v| v.as_u64()), Some(1));
+
+        // Card #471: even when the ship has no `sea_zone` assigned (typical
+        // for the human player at turn 1), the marker must back-fill
+        // `sea_zone_id` from whichever sea zone contains the anchor hex.
+        // Without this, the frontend cannot compute fleet-move adjacency
+        // targets and no destination hexes get highlighted.
+        assert!(
+            m.get("sea_zone_id")
+                .and_then(|v| v.as_u64())
+                .is_some(),
+            "fleet marker must carry a sea_zone_id even when the ship's sea_zone field is None"
+        );
     }
 
     #[test]

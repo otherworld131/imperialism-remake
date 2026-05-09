@@ -237,7 +237,7 @@ Sections: `summary`, `trade`, `warehouse`, `materials`, `paper`,
 - After implementing a plan, run a short smoke (`--batch 1 --batch-max-turns 20`) to confirm the full game loop still works; reserve `--batch 3` (no turn cap) for changes whose effects only show up late-game
 - `cargo clippy` — zero lints allowed
 - `cargo fmt --check` — enforced formatting
-- Domain crate depends only on `std` + `mlua` (Lua VM) — nothing else
+- Domain crate depends only on `std` + `mlua` (Lua VM) — plus the narrow exceptions `serde`, `ron`, and `serde_json` documented in [ADR-0006](docs/adr/0006-rust-lua-boundary.md#dependency-policy). The `tests/architecture.rs::domain_has_only_serde_dependency` fixture enforces the allowlist; if you need to add a dep, update the ADR and the test together.
 - Application crate depends only on domain
 - Frontend and infrastructure never leak into domain
 - Lua scripts are sandboxed — no file I/O, no network, no OS calls from Lua
