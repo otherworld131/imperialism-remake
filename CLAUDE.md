@@ -164,6 +164,12 @@ imperialism-remake/
 └── Cargo.toml                 # Workspace root
 ```
 
+## Git Workflow
+
+When working inside a git worktree instead of the main repository checkout,
+always start by creating a new branch from `origin/main` in that worktree
+before making code changes.
+
 ## Running Games
 
 ```bash

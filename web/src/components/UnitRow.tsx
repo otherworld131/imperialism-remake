@@ -73,6 +73,7 @@ export interface UnitRowProps {
   health: number;
   effective_firepower: number;
   destroyed?: boolean;
+  showFirepower?: boolean;
   style?: React.CSSProperties;
 }
 
@@ -81,7 +82,15 @@ export interface UnitRowProps {
  * Renders icon + name + medals + firepower on top, HP bar below.
  * When `destroyed` is true, renders dimmed with strikethrough and no HP bar.
  */
-export function UnitRow({ unit_type, medals, health, effective_firepower, destroyed, style }: UnitRowProps) {
+export function UnitRow({
+  unit_type,
+  medals,
+  health,
+  effective_firepower,
+  destroyed,
+  showFirepower = true,
+  style,
+}: UnitRowProps) {
   const icon = iconForUnitType(unit_type);
   const stars = '\u2605'.repeat(medals);
   const name = splitCamel(unit_type);
@@ -99,7 +108,7 @@ export function UnitRow({ unit_type, medals, health, effective_firepower, destro
           {icon} {name}
           {!destroyed && stars && <span style={{ color: '#ffd700', marginLeft: 4 }}>{stars}</span>}
         </span>
-        {!destroyed && (
+        {!destroyed && showFirepower && (
           <span style={{ fontSize: 11, color: '#999' }}>
             FP {effective_firepower.toFixed(1)}
           </span>

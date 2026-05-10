@@ -71,6 +71,7 @@ interface Props {
   nations?: NationLite[];
   onClose: () => void;
   showRetreatDebug?: boolean;
+  showFirepower?: boolean;
 }
 
 // ── Component ───────────────────────────────────────────────────
@@ -78,6 +79,7 @@ export default function BattleScreen({
   currentBattles, currentNavalBattles, archiveData, tiles,
   year, quarter, nations = [], onClose,
   showRetreatDebug,
+  showFirepower = true,
 }: Props) {
   const flagById: Record<number, string> = {};
   for (const n of nations) { if (n.flag_svg) flagById[n.id] = n.flag_svg; }
@@ -427,7 +429,7 @@ export default function BattleScreen({
                 {/* Right column: battle details */}
                 <div style={styles.rightCol}>
                   {selectedBattle && selectedBattle.type === 'land' && (
-                    <LandBattleDetails battle={selectedBattle} flagById={flagById} showRetreatDebug={showRetreatDebug} />
+                    <LandBattleDetails battle={selectedBattle} flagById={flagById} showRetreatDebug={showRetreatDebug} showFirepower={showFirepower} />
                   )}
                   {selectedBattle && selectedBattle.type === 'naval' && (
                     <NavalBattleDetails battle={selectedBattle} flagById={flagById} />
@@ -443,7 +445,17 @@ export default function BattleScreen({
 }
 
 // ── Land battle details sub-component ───────────────────────────
-function LandBattleDetails({ battle, flagById, showRetreatDebug }: { battle: LandBattleData; flagById: Record<number, string>; showRetreatDebug?: boolean }) {
+function LandBattleDetails({
+  battle,
+  flagById,
+  showRetreatDebug,
+  showFirepower,
+}: {
+  battle: LandBattleData;
+  flagById: Record<number, string>;
+  showRetreatDebug?: boolean;
+  showFirepower?: boolean;
+}) {
   const winnerName = battle.attacker_won ? battle.attacker : battle.defender;
   const winnerId = battle.attacker_won ? battle.attacker_id : battle.defender_id;
   const winnerFlag = flagById[winnerId];
@@ -518,6 +530,7 @@ function LandBattleDetails({ battle, flagById, showRetreatDebug }: { battle: Lan
             survivedCount={battle.attacker_survivors_count}
             survivors={battle.attacker_survivors}
             casualties={battle.attacker_casualties}
+            showFirepower={showFirepower}
           />
           <ForceColumn
             side={battle.defender}
@@ -527,6 +540,7 @@ function LandBattleDetails({ battle, flagById, showRetreatDebug }: { battle: Lan
             survivedCount={battle.defender_survivors_count}
             survivors={battle.defender_survivors}
             casualties={battle.defender_casualties}
+            showFirepower={showFirepower}
           />
         </div>
       </div>
@@ -614,7 +628,7 @@ function RetreatDebugBlock({ debug, battle }: { debug: RetreatDebug; battle: Lan
 
 // ── Per-side force column for LandBattleDetails ─────────────────
 function ForceColumn({
-  side, role, flag, initial, survivedCount, survivors, casualties,
+  side, role, flag, initial, survivedCount, survivors, casualties, showFirepower,
 }: {
   side: string;
   role: 'Attacker' | 'Defender';
@@ -623,6 +637,7 @@ function ForceColumn({
   survivedCount: number;
   survivors: BattleUnit[];
   casualties: string[];
+  showFirepower?: boolean;
 }) {
   return (
     <div style={styles.forceCol}>
@@ -642,6 +657,7 @@ function ForceColumn({
             medals={u.medals}
             health={u.health}
             effective_firepower={u.effective_firepower}
+            showFirepower={showFirepower}
           />
         ))}
         {casualties.map((t, i) => (
@@ -652,6 +668,7 @@ function ForceColumn({
             health={0}
             effective_firepower={0}
             destroyed
+            showFirepower={showFirepower}
           />
         ))}
         {survivors.length === 0 && casualties.length === 0 && (

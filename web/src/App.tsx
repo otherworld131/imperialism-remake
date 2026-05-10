@@ -220,6 +220,7 @@ function App() {
   const [disableFogOfWar, setDisableFogOfWar] = useState(false);
   const [showHealDebug, setShowHealDebug] = useState(false);
   const [showRetreatDebug, setShowRetreatDebug] = useState(false);
+  const [showBattleFirepower, setShowBattleFirepower] = useState(false);
   const [organicBorders, setOrganicBorders] = useState(true);
   const [hideHexGrid, setHideHexGrid] = useState(false);
   const [showResources, setShowResources] = useState(true);
@@ -228,6 +229,7 @@ function App() {
   const [uiFontSize, setUiFontSize] = useState(14);
   const [newsFilterCategory, setNewsFilterCategory] = useState<string>('all');
   const [newsFilterCountry, setNewsFilterCountry] = useState<string>('all');
+  const [newsFilterText, setNewsFilterText] = useState<string>('');
   const [mapMode, setMapMode] = useState<MapMode>('political');
   const [selectedNation, setSelectedNation] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<string>('');
@@ -344,12 +346,16 @@ function App() {
   const [skipUntilText, setSkipUntilText] = useState<string>('');
   const [skipUntilRunning, setSkipUntilRunning] = useState<boolean>(false);
   const isObserver = gameState?.observer_mode === true;
+  const applyModeUiDefaults = useCallback((observerMode: boolean) => {
+    setShowAiReasoning(false);
+    setShowAiNonActions(false);
+    setShowRetreatDebug(observerMode);
+    setShowBattleFirepower(observerMode);
+  }, []);
   useEffect(() => {
     if (isObserver) {
       setShowHiddenResources(true);
       setShowAiCivilians(true);
-      setShowAiReasoning(true);
-      setShowAiNonActions(true);
       setShowPersonalities(true);
       setDisableFogOfWar(true);
     }
@@ -505,6 +511,7 @@ function App() {
   const handleGameStart = async (json: string, params: GameStartParams) => {
     await runMutation(async () => {
       if (!(await applyGameJson(json))) return;
+      applyModeUiDefaults(params.observerMode);
       setGameStartParams(params);
       setOrganicBorders(params.organicBorders);
       setHideHexGrid(params.hideHexGrid);
@@ -544,6 +551,7 @@ function App() {
       const parsed = parseGameJson(json);
       if (parsed.error) { alert(parsed.error); return; }
       if (!(await applyGameJson(json))) return;
+      applyModeUiDefaults(p.observerMode);
       setGameStartParams({ ...p, nationIdx: idx });
       setActiveScreen('map');
       setProvinceUnits(null);
@@ -554,6 +562,7 @@ function App() {
       setHeadlines([]);
       setCurrentBattles([]);
       setCurrentNavalBattles([]);
+      setNewsFilterText('');
       setProposalData(null);
       setShowProposals(false);
       latestNewsArchiveRef.current = [];
@@ -565,7 +574,7 @@ function App() {
       setHoveredNavyKey(null);
       setStatusMessage('');
     });
-  }, [gameStartParams, gameState, observerGps, applyGameJson, runMutation]);
+  }, [gameStartParams, gameState, observerGps, applyGameJson, runMutation, applyModeUiDefaults]);
 
   const handleEndTurn = useCallback(async () => {
     await runMutation(async () => {
@@ -580,6 +589,7 @@ function App() {
         setHeadlines(result.report?.headlines || []);
         setCurrentBattles(result.report?.battles || []);
         setCurrentNavalBattles(result.report?.naval_battles || []);
+        setNewsFilterText('');
         const turnArchive = archivedTurn > 0
           ? [{
               turn: archivedTurn,
@@ -609,6 +619,7 @@ function App() {
 
   const dismissNewspaper = useCallback(() => {
     setActiveScreen('map');
+    setNewsFilterText('');
     if (proposalData && proposalData.proposals.length > 0) {
       setShowProposals(true);
     }
@@ -644,6 +655,7 @@ function App() {
         setHeadlines(allHeadlines);
         setCurrentBattles(lastBattles);
         setCurrentNavalBattles(lastNavalBattles);
+        setNewsFilterText('');
         latestNewsArchiveRef.current = [];
         setArchiveData([]);
         setArchiveLoadState('idle');
@@ -676,7 +688,7 @@ function App() {
       const MAX_TURNS = 1000;
       const batchSize = needle ? 1 : 50;
       let currentJson = gameJson;
-      const allHeadlines: typeof headlines = [];
+      let displayedHeadlines: typeof headlines = [];
       let lastBattlesSkip: typeof currentBattles = [];
       let lastNavalBattlesSkip: typeof currentNavalBattles = [];
       let matched = false;
@@ -693,7 +705,7 @@ function App() {
         setBusyMessage(`Processing ${turnToYearQ(currentTurn)}… (click to stop)`);
 
         for (const r of result.reports) {
-          allHeadlines.push(...r.headlines);
+          displayedHeadlines = r.headlines;
           lastBattlesSkip = r.battles;
           lastNavalBattlesSkip = r.naval_battles;
           if (needle) {
@@ -715,9 +727,12 @@ function App() {
       }
 
       if (!applyGameJsonLightweight(currentJson)) return;
-      setHeadlines(allHeadlines);
+      setHeadlines(displayedHeadlines);
       setCurrentBattles(lastBattlesSkip);
       setCurrentNavalBattles(lastNavalBattlesSkip);
+      setNewsFilterCategory('all');
+      setNewsFilterCountry('all');
+      setNewsFilterText(skipUntilText.trim());
       setActiveScreen('newspaper');
       latestNewsArchiveRef.current = [];
       setArchiveData([]);
@@ -1889,10 +1904,12 @@ function App() {
               countryOptions={countryOptions}
               newsFilterCategory={newsFilterCategory}
               newsFilterCountry={newsFilterCountry}
+              newsFilterText={newsFilterText}
               showAiReasoning={showAiReasoning}
               showAiNonActions={showAiNonActions}
               onCategoryChange={setNewsFilterCategory}
               onCountryChange={setNewsFilterCountry}
+              onTextChange={setNewsFilterText}
               onRequestArchive={loadNewspaperArchive}
               onDismiss={dismissNewspaper}
               onClose={() => setActiveScreen('map')}
@@ -1933,6 +1950,7 @@ function App() {
             nations={gameState?.nations || []}
             onClose={() => setActiveScreen('map')}
             showRetreatDebug={showRetreatDebug}
+            showFirepower={showBattleFirepower}
           />
         )}
         {activeScreen === 'legend' && (
@@ -2305,6 +2323,10 @@ function App() {
                 <label>
                   <input type="checkbox" checked={showRetreatDebug} onChange={e => setShowRetreatDebug(e.target.checked)} />
                   {' '}Show retreat math (battles)
+                </label>
+                <label>
+                  <input type="checkbox" checked={showBattleFirepower} onChange={e => setShowBattleFirepower(e.target.checked)} />
+                  {' '}Show firepower in battle screen
                 </label>
               </div>
 

@@ -62,10 +62,12 @@ interface Props {
   countryOptions: { id: number; name: string }[];
   newsFilterCategory: string;
   newsFilterCountry: string;
+  newsFilterText: string;
   showAiReasoning: boolean;
   showAiNonActions: boolean;
   onCategoryChange: (cat: string) => void;
   onCountryChange: (country: string) => void;
+  onTextChange: (text: string) => void;
   onRequestArchive: () => Promise<void>;
   onDismiss: () => void;
   onClose: () => void;
@@ -75,20 +77,14 @@ interface Props {
 export default function NewspaperScreen({
   playerName, year, quarter, turnNumber,
   headlines, archiveData, archiveLoadState, nations, countryOptions,
-  newsFilterCategory, newsFilterCountry,
+  newsFilterCategory, newsFilterCountry, newsFilterText,
   showAiReasoning, showAiNonActions,
-  onCategoryChange, onCountryChange,
+  onCategoryChange, onCountryChange, onTextChange,
   onRequestArchive,
   onDismiss, onClose, onShowMap,
 }: Props) {
   const [mode, setMode] = useState<'current' | 'archive'>('current');
   const [selectedArchiveTurn, setSelectedArchiveTurn] = useState<number | null>(null);
-  const [localCategory, setLocalCategory] = useState(newsFilterCategory);
-  const [localCountry, setLocalCountry] = useState(newsFilterCountry);
-  const [localText, setLocalText] = useState('');
-
-  const handleCategoryChange = (cat: string) => { setLocalCategory(cat); onCategoryChange(cat); };
-  const handleCountryChange = (country: string) => { setLocalCountry(country); onCountryChange(country); };
 
   const archiveByTurn = useMemo(
     () => new Map(archiveData.map(entry => [entry.turn, entry])),
@@ -103,16 +99,16 @@ export default function NewspaperScreen({
   const selectedArchive = selectedArchiveTurn === null ? null : archiveByTurn.get(selectedArchiveTurn) ?? null;
   const currentHeadlines = mode === 'current' ? headlines : selectedArchive?.headlines || [];
 
-  const q = localText.trim().toLowerCase();
+  const q = newsFilterText.trim().toLowerCase();
   const visible = useMemo(() => applyNewsFilters(currentHeadlines, {
     showNonActions: showAiNonActions,
-    category: localCategory,
-    country: localCountry,
+    category: newsFilterCategory,
+    country: newsFilterCountry,
   }).filter(h =>
     !q ||
     h.text.toLowerCase().includes(q) ||
     (h.reason || '').toLowerCase().includes(q)
-  ), [currentHeadlines, showAiNonActions, localCategory, localCountry, q]);
+  ), [currentHeadlines, showAiNonActions, newsFilterCategory, newsFilterCountry, q]);
   const playerNews = useMemo(
     () => visible.filter(h => h.text.includes(playerName)),
     [visible, playerName],
@@ -157,17 +153,17 @@ export default function NewspaperScreen({
             </button>
           </div>
           <div style={styles.filters}>
-            <select value={localCategory} onChange={e => handleCategoryChange(e.target.value)} style={styles.select}>
+            <select value={newsFilterCategory} onChange={e => onCategoryChange(e.target.value)} style={styles.select}>
               {NEWS_CATEGORY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
-            <select value={localCountry} onChange={e => handleCountryChange(e.target.value)} style={styles.select}>
+            <select value={newsFilterCountry} onChange={e => onCountryChange(e.target.value)} style={styles.select}>
               <option value="all">All countries</option>
               {countryOptions.map(n => <option key={n.id} value={String(n.id)}>{n.name}</option>)}
             </select>
             <input
               type="text"
-              value={localText}
-              onChange={e => setLocalText(e.target.value)}
+              value={newsFilterText}
+              onChange={e => onTextChange(e.target.value)}
               placeholder="Search…"
               style={styles.searchInput}
             />
