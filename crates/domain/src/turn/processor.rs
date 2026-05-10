@@ -3295,9 +3295,12 @@ fn resolve_combat(
                 None => continue,
             };
 
-        // Track unit IDs by cohort so post-battle relocation can send land
-        // survivors to the conquered province and keep naval survivors at origin.
+        // Track unit IDs by cohort so post-battle relocation can move every
+        // surviving attacker into the conquered province (both land cohort
+        // crossing the border and naval cohort going ashore).
         let land_unit_ids: HashSet<crate::map::UnitId> = land_cohort.iter().map(|u| u.id).collect();
+        let naval_cohort_ids_for_relocation: Vec<crate::map::UnitId> =
+            naval_cohort.iter().map(|u| u.id).collect();
         let has_naval_cohort = !naval_cohort.is_empty();
 
         let mut attacker_units: Vec<ArmyUnit> = land_cohort;
@@ -3374,8 +3377,20 @@ fn resolve_combat(
             }
             if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
                 attacker_nation.add_province(province_id);
-                // Relocate participating land units into the conquered province
-                if !is_naval_attack {
+                // Relocate participating units into the conquered province.
+                // Land attacks: any adjacent unit that hadn't moved gets
+                // pulled in. Naval attacks: the embarked naval cohort goes
+                // ashore (otherwise the freshly-taken province has no
+                // garrison and a same-turn counter-attack walks straight in).
+                if is_naval_attack {
+                    let naval_ids: HashSet<crate::map::UnitId> =
+                        naval_cohort_ids_for_relocation.iter().copied().collect();
+                    for unit in &mut attacker_nation.military.army {
+                        if naval_ids.contains(&unit.id) {
+                            unit.position = province_id;
+                        }
+                    }
+                } else {
                     for unit in &mut attacker_nation.military.army {
                         if !moved_unit_ids.contains(&unit.id)
                             && adjacent_attacker_pids.contains(&unit.position)
@@ -3581,15 +3596,18 @@ fn resolve_combat(
         };
 
         if result.attacker_won {
-            // Move surviving attacker units:
-            // - Land cohort survivors: move into the conquered province
-            // - Naval cohort survivors: stay at their origin province (return to port)
+            // Move surviving attacker units into the conquered province —
+            // both the land cohort that crossed the border and the naval
+            // cohort that landed (the troops are ashore; the ships head
+            // back to port empty). Without this, a pure-naval landing
+            // leaves the conquered province with zero defenders and a
+            // same-turn counter-attack walks straight in.
             {
                 let survivor_ids: HashSet<crate::map::UnitId> =
                     result.attacker_survivors.iter().map(|u| u.id).collect();
                 if let Some(attacker_nation) = game.get_nation_mut(attacker_id) {
                     for unit in &mut attacker_nation.military.army {
-                        if survivor_ids.contains(&unit.id) && land_unit_ids.contains(&unit.id) {
+                        if survivor_ids.contains(&unit.id) {
                             unit.position = province_id;
                         }
                     }
@@ -13740,10 +13758,10 @@ mod tests {
         );
     }
 
-    // ── Naval-landing origin-return test ─────────────────────
+    // ── Naval-landing post-victory placement test ────────────
 
     #[test]
-    fn naval_attackers_return_to_origin_after_victory() {
+    fn naval_attackers_occupy_conquered_province_after_victory() {
         use crate::map::UnitId;
         use crate::military::naval::NavalOperation;
         use crate::military::ships::{Ship, ShipType};
@@ -13751,7 +13769,9 @@ mod tests {
         // Fixture: Nation 1 owns P1 (coastal, far from target). Nation 2 owns P2 (coastal).
         // P1 and P2 are NOT adjacent — no land route. Nation 1 has a beachhead on P2
         // established on turn 4 (current turn = 5). Nation 1's units are at P1.
-        // After victory, they should stay at P1 (return to origin).
+        // After victory, the landing force should go ashore at the conquered
+        // P2 (otherwise the province has no defenders and a same-turn
+        // counter-attack walks straight in).
         let coord1 = HexCoord::new(0, 0);
         let coord2 = HexCoord::new(5, 0); // far from P1 — not adjacent
 
@@ -13856,7 +13876,7 @@ mod tests {
             "P2 should be conquered via naval landing"
         );
 
-        // Verify all surviving attacker units are at origin (P1), not conquered P2
+        // Verify the surviving naval cohort moved into the conquered P2.
         let attacker = game.get_nation(NationId(1)).unwrap();
         let units_in_p2 = attacker
             .military
@@ -13864,19 +13884,9 @@ mod tests {
             .iter()
             .filter(|u| u.position == ProvinceId(2))
             .count();
-        let units_in_p1 = attacker
-            .military
-            .army
-            .iter()
-            .filter(|u| u.position == ProvinceId(1))
-            .count();
-        assert_eq!(
-            units_in_p2, 0,
-            "Naval attackers should NOT be relocated to conquered P2"
-        );
         assert!(
-            units_in_p1 > 0,
-            "Naval attackers should remain at origin P1 after victory"
+            units_in_p2 > 0,
+            "Naval attackers should occupy conquered P2 after victory"
         );
     }
 
@@ -14166,18 +14176,19 @@ mod tests {
             land_in_p2
         );
 
-        // Naval cohort (from P1, IDs 100-102) should still be at P1 (origin)
-        let naval_still_at_port = attacker
+        // Naval cohort (from P1, IDs 100-102) should also occupy conquered P2
+        // (the troops are ashore; ships return to port empty).
+        let naval_in_p2 = attacker
             .military
             .army
             .iter()
             .filter(|u| u.id.0 >= 100 && u.id.0 < 103)
-            .filter(|u| u.position == ProvinceId(1))
+            .filter(|u| u.position == ProvinceId(2))
             .count();
         assert!(
-            naval_still_at_port > 0,
-            "Naval cohort survivors (from P1) should stay at origin P1, got {}",
-            naval_still_at_port
+            naval_in_p2 > 0,
+            "Naval cohort survivors (from P1) should occupy conquered P2, got {}",
+            naval_in_p2
         );
 
         // Inland unit (ID 300 at P4) must NOT have participated — still at P4
