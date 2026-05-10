@@ -141,6 +141,10 @@ pub struct TransientState {
     /// (nation, unit_id_raw, destination_province)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_moves: Vec<(NationId, u32, ProvinceId)>,
+    /// (nation, from_sea_zone_id, to_sea_zone_id) — queued fleet moves to
+    /// resolve at end of turn (card #471).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_fleet_moves: Vec<(NationId, u32, u32)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_landings: Vec<(NationId, ProvinceId, TurnNumber)>,
     /// Stored as Vec instead of HashMap to avoid non-string key issues.
@@ -338,6 +342,11 @@ impl From<&dgs::TransientState> for TransientState {
                 .iter()
                 .map(|(n, uid, p)| ((*n).into(), uid.0, (*p).into()))
                 .collect(),
+            pending_fleet_moves: v
+                .pending_fleet_moves
+                .iter()
+                .map(|(n, fz, tz)| ((*n).into(), fz.0, tz.0))
+                .collect(),
             pending_landings: v
                 .pending_landings
                 .iter()
@@ -359,6 +368,7 @@ impl From<&dgs::TransientState> for TransientState {
 impl From<TransientState> for dgs::TransientState {
     fn from(v: TransientState) -> Self {
         use domain::map::UnitId;
+        use domain::map::sea_zones::SeaZoneId;
         use domain::types::NationId as DN;
         use std::collections::HashMap;
         Self {
@@ -372,6 +382,11 @@ impl From<TransientState> for dgs::TransientState {
                 .pending_moves
                 .into_iter()
                 .map(|(n, uid, p)| (n.into(), UnitId(uid), p.into()))
+                .collect(),
+            pending_fleet_moves: v
+                .pending_fleet_moves
+                .into_iter()
+                .map(|(n, fz, tz)| (n.into(), SeaZoneId(fz), SeaZoneId(tz)))
                 .collect(),
             pending_landings: v
                 .pending_landings

@@ -2571,6 +2571,73 @@ export default function HexMap({
       ctx.lineJoin = 'miter';
     }
 
+    // ── Pass 10b: Pending fleet move arrows (card #471) ───────
+    // Drawn dashed-blue from the fleet marker to the destination zone
+    // centroid so the player sees the move that will execute at end-turn.
+    {
+      const fleetMoves = navyMarkers.filter(
+        m => m.kind === 'fleet' && m.pending_move_to_zone_id != null,
+      );
+      if (fleetMoves.length > 0) {
+        const seaZoneCentroidById = new Map<number, [number, number]>();
+        for (const z of seaZones) {
+          seaZoneCentroidById.set(z.id, hexToPixel(z.center_q, z.center_r));
+        }
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        for (const m of fleetMoves) {
+          const dest = seaZoneCentroidById.get(m.pending_move_to_zone_id!);
+          if (!dest) continue;
+          const [basePx, basePy] = hexToPixel(m.q, m.r);
+          const [dxo, dyo] = navyMarkerOffset(markerAnchorIndex.get(navyMarkerKey(m)) ?? 0);
+          const from: [number, number] = [basePx + dxo, basePy + dyo];
+
+          const angle = Math.atan2(dest[1] - from[1], dest[0] - from[0]);
+          const arrowLen = 16;
+          const arrowAngle = 0.45;
+          const shaftEndX = dest[0] - Math.cos(angle) * arrowLen * 0.55;
+          const shaftEndY = dest[1] - Math.sin(angle) * arrowLen * 0.55;
+
+          // Dashed blue shaft, with a dark outline for contrast.
+          ctx.setLineDash([6, 4]);
+          ctx.strokeStyle = 'rgba(0, 20, 60, 0.85)';
+          ctx.lineWidth = 6;
+          ctx.beginPath();
+          ctx.moveTo(from[0], from[1]);
+          ctx.lineTo(shaftEndX, shaftEndY);
+          ctx.stroke();
+          ctx.strokeStyle = 'rgba(96, 168, 255, 0.95)';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(from[0], from[1]);
+          ctx.lineTo(shaftEndX, shaftEndY);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Filled arrowhead (solid).
+          const tipX = dest[0];
+          const tipY = dest[1];
+          const leftX = tipX - arrowLen * Math.cos(angle - arrowAngle);
+          const leftY = tipY - arrowLen * Math.sin(angle - arrowAngle);
+          const rightX = tipX - arrowLen * Math.cos(angle + arrowAngle);
+          const rightY = tipY - arrowLen * Math.sin(angle + arrowAngle);
+          ctx.beginPath();
+          ctx.moveTo(tipX, tipY);
+          ctx.lineTo(leftX, leftY);
+          ctx.lineTo(rightX, rightY);
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(96, 168, 255, 0.95)';
+          ctx.strokeStyle = 'rgba(0, 20, 60, 0.9)';
+          ctx.lineWidth = 1.5;
+          ctx.fill();
+          ctx.stroke();
+        }
+        ctx.lineWidth = 1;
+        ctx.lineCap = 'butt';
+        ctx.lineJoin = 'miter';
+      }
+    }
+
     } // end wrap-copies loop
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);

@@ -408,6 +408,11 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
     // not move and did not participate in combat this turn recovers health.
     heal_resting_units(game, &moved_unit_ids, &fought_unit_ids);
 
+    // 7a3. Resolve pending fleet movements queued by the player (card #471).
+    // Apply each (nation, from_zone, to_zone) via the existing whole-zone
+    // mover so fleets engage in naval combat from their new position.
+    resolve_pending_fleet_moves(game);
+
     // 7b. Resolve naval combat (warship engagements between nations at war)
     resolve_naval_combat(game, &mut report);
 
@@ -5216,6 +5221,27 @@ pub fn continue_pact_defense_cascade(
         &attacker_name,
         report,
     );
+}
+
+/// Resolve fleet movements queued by the player (card #471).
+///
+/// Drains `transient.pending_fleet_moves` and applies each via the existing
+/// whole-zone mover. Invalid entries (zones gone, no ships, exhausted budget)
+/// are silently dropped — the wasm bridge already validates at queue time;
+/// this is the end-of-turn execution.
+fn resolve_pending_fleet_moves(game: &mut GameState) {
+    use crate::military::naval::move_warship_group_one_zone;
+
+    let queued: Vec<(
+        NationId,
+        crate::map::sea_zones::SeaZoneId,
+        crate::map::sea_zones::SeaZoneId,
+    )> = game.transient.pending_fleet_moves.drain(..).collect();
+    for (nid, from_z, to_z) in queued {
+        // Best-effort: ignore failures here, the player saw validation feedback
+        // when they queued the move.
+        let _ = move_warship_group_one_zone(game, nid, from_z, to_z);
+    }
 }
 
 /// Resolve naval combat between nations at war that share a sea zone.

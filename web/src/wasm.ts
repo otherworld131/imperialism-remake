@@ -58,6 +58,9 @@ export interface NavyMarker {
   visible: boolean;
   sea_zone_id?: number;
   sea_zone_name?: string;
+  /** Destination sea-zone id when a fleet move is queued from this marker
+   *  (card #471). Drained at end of turn by the domain processor. */
+  pending_move_to_zone_id?: number;
 }
 
 export interface SeaZone {
@@ -871,9 +874,11 @@ export async function recruitArmyUnit(gameJson: string, nationId: number, unitTy
 // ── Naval movement (Card #471) ───────────────────────────────────────
 
 /**
- * Move every warship a nation has in `fromZoneId` into the adjacent
- * `toZoneId`. The two zones must share a sea-zone adjacency edge and the
- * fleet must have movement points remaining for this turn.
+ * Queue a fleet move from `fromZoneId` to the adjacent `toZoneId` (card
+ * #471). The two zones must share a sea-zone adjacency edge. Resolution
+ * happens at end-of-turn via the domain processor — same shape as army
+ * `pending_moves`. Re-queueing from the same source zone replaces the
+ * previous entry.
  */
 export async function moveFleet(
   gameJson: string,
@@ -882,6 +887,18 @@ export async function moveFleet(
   toZoneId: number,
 ): Promise<CommandResult> {
   return runCmd('wasm_move_fleet', gameJson, nationId, fromZoneId, toZoneId);
+}
+
+/**
+ * Cancel a queued fleet move from `fromZoneId`. No-op if no such pending
+ * move exists.
+ */
+export async function cancelFleetMove(
+  gameJson: string,
+  nationId: number,
+  fromZoneId: number,
+): Promise<CommandResult> {
+  return runCmd('wasm_cancel_fleet_move', gameJson, nationId, fromZoneId);
 }
 
 // ── Unit upgrades (Card #417) ────────────────────────────────────────

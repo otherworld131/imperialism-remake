@@ -114,6 +114,7 @@ macro_rules! test_game_state {
                 events: $events,
                 pending_attacks: $pending_attacks,
                 pending_moves: $pending_moves,
+                pending_fleet_moves: Vec::new(),
                 pending_landings: $pending_landings,
                 pending_ai_cash_spending: $pending_ai_cash_spending,
                 pending_ai_cash_income: $pending_ai_cash_income,

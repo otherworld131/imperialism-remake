@@ -913,6 +913,19 @@ pub fn wasm_get_navy_markers(game_json: &str, disable_fog: bool) -> String {
                 ) {
                     if let Some(id) = sz_id {
                         marker["sea_zone_id"] = serde_json::Value::Number(id.into());
+                        // Card #471: surface the queued destination so the
+                        // frontend can draw a pending-move arrow from this
+                        // marker to the destination zone's centroid (mirrors
+                        // how army `pending_moves` are rendered).
+                        if let Some((_, _, to_z)) = game
+                            .transient
+                            .pending_fleet_moves
+                            .iter()
+                            .find(|(n, fz, _)| *n == nation.id && fz.0 == id)
+                        {
+                            marker["pending_move_to_zone_id"] =
+                                serde_json::Value::Number(to_z.0.into());
+                        }
                     }
                     if let Some(name) = sz_name {
                         marker["sea_zone_name"] = serde_json::Value::String(name);
@@ -1661,6 +1674,23 @@ pub fn wasm_get_ships(game_json: &str, nation_id: u32) -> String {
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
 
+    // Card #471: ships start with `sea_zone: None` and only get assigned when
+    // the AI runs its naval logic (or when the player issues a fleet command).
+    // For the player's first turn we still need to report a zone so the UI
+    // can group ships by fleet — fall back to the zone containing the
+    // deterministic fleet anchor.
+    let fallback_zone_id: Option<u32> = {
+        use domain::military::navy_placement::fleet_anchor;
+        fleet_anchor(nation, &game.world.hex_map, &game.world.provinces).and_then(|anchor| {
+            game.world
+                .sea_zones
+                .iter()
+                .find(|z| z.hexes.iter().any(|h| h.q == anchor.q && h.r == anchor.r))
+                .map(|z| z.id.0)
+        })
+    };
+    let resolved_zone = |s: &Ship| -> Option<u32> { s.sea_zone.map(|z| z.0).or(fallback_zone_id) };
+
     let merchants: Vec<serde_json::Value> = nation
         .military
         .merchant_fleet
@@ -1673,7 +1703,7 @@ pub fn wasm_get_ships(game_json: &str, nation_id: u32) -> String {
                 "hull": s.hull_remaining,
                 "hull_max": stats.hull,
                 "cargo": stats.cargo,
-                "sea_zone": s.sea_zone.map(|z| z.0),
+                "sea_zone": resolved_zone(s),
             })
         })
         .collect();
@@ -1690,7 +1720,7 @@ pub fn wasm_get_ships(game_json: &str, nation_id: u32) -> String {
                 "hull": s.hull_remaining,
                 "hull_max": stats.hull,
                 "firepower": stats.firepower,
-                "sea_zone": s.sea_zone.map(|z| z.0),
+                "sea_zone": resolved_zone(s),
             })
         })
         .collect();
@@ -3012,14 +3042,17 @@ pub fn wasm_assign_beachhead(game_json: &str, nation_id: u32, target_province_id
     serialize_game(&game)
 }
 
-/// Move every warship a nation has in `from_zone_id` into the adjacent
-/// `to_zone_id`. Mirrors the session-API `MoveFleet` semantics so the web
-/// frontend can drive warship movement statelessly via the `(game_json) →
-/// game_json` mutation pattern used by the rest of the bridge.
+/// Queue a fleet move (card #471). Validates that both sea zones exist, are
+/// non-lake and adjacent, and that the nation has at least one warship in
+/// `from_zone_id` (with the same fallback-zone back-fill that
+/// `wasm_get_navy_markers` and `wasm_get_ships` apply, so turn-1 moves work
+/// before the AI naval pass runs). On success the move is appended to
+/// `pending_fleet_moves` and the new game JSON is returned. The actual ship
+/// repositioning happens at end-of-turn in `resolve_pending_fleet_moves`,
+/// mirroring how army `pending_moves` are drained.
 ///
-/// Validation: both zones exist and are non-lake; they are adjacent; the
-/// nation has at least one warship in `from_zone_id`; the per-zone movement
-/// budget (initialised to the slowest ship's speed on first use) is non-zero.
+/// If a pending move for the same `(nation, from_zone)` already exists it is
+/// replaced — re-clicking a destination just retargets the queued move.
 #[wasm_bindgen]
 pub fn wasm_move_fleet(
     game_json: &str,
@@ -3060,6 +3093,31 @@ pub fn wasm_move_fleet(
         return "{\"error\":\"sea zones are not adjacent\"}".to_string();
     }
 
+    // Same back-fill the read-side queries do: if `from_z` matches the fleet
+    // anchor's containing zone, treat ships with `sea_zone: None` as living
+    // there. Persist the assignment so end-of-turn movement can find them.
+    let fallback_zone_id: Option<SeaZoneId> = {
+        use domain::military::navy_placement::fleet_anchor;
+        game.get_nation(nid).and_then(|n| {
+            fleet_anchor(n, &game.world.hex_map, &game.world.provinces).and_then(|anchor| {
+                game.world
+                    .sea_zones
+                    .iter()
+                    .find(|z| z.hexes.iter().any(|h| h.q == anchor.q && h.r == anchor.r))
+                    .map(|z| z.id)
+            })
+        })
+    };
+    if fallback_zone_id == Some(from_z) {
+        if let Some(nation) = game.get_nation_mut(nid) {
+            for ship in &mut nation.military.warships {
+                if ship.sea_zone.is_none() {
+                    ship.sea_zone = Some(from_z);
+                }
+            }
+        }
+    }
+
     let has_ships = game.get_nation(nid).is_some_and(|n| {
         n.military
             .warships
@@ -3070,61 +3128,31 @@ pub fn wasm_move_fleet(
         return "{\"error\":\"no warships in that sea zone\"}".to_string();
     }
 
-    let budget = match game.get_nation(nid) {
-        Some(n) => {
-            if let Some(&rem) = n.military.fleet_moves_remaining.get(&from_z) {
-                rem
-            } else {
-                n.military
-                    .warships
-                    .iter()
-                    .filter(|s| s.sea_zone == Some(from_z))
-                    .map(|s| game.game_data.ship_stats(s.ship_type).speed)
-                    .filter(|&sp| sp > 0)
-                    .min()
-                    .unwrap_or(0)
-            }
-        }
-        None => return "{\"error\":\"nation not found\"}".to_string(),
+    // Replace any existing queued move from the same source zone so the
+    // player can retarget without piling up stale entries.
+    game.transient
+        .pending_fleet_moves
+        .retain(|(n, fz, _)| *n != nid || *fz != from_z);
+    game.transient.pending_fleet_moves.push((nid, from_z, to_z));
+
+    serialize_game(&game)
+}
+
+/// Cancel a queued fleet move for `(nation, from_zone_id)` (card #471). No-op
+/// if no such pending move exists. Returns the new game JSON.
+#[wasm_bindgen]
+pub fn wasm_cancel_fleet_move(game_json: &str, nation_id: u32, from_zone_id: u32) -> String {
+    use domain::map::sea_zones::SeaZoneId;
+
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
     };
-    if budget == 0 {
-        return "{\"error\":\"fleet has no movement points remaining this turn\"}".to_string();
-    }
-
-    let remaining = budget - 1;
-    let dest_min_speed: Option<u32> = game.get_nation(nid).and_then(|n| {
-        n.military
-            .warships
-            .iter()
-            .filter(|s| s.sea_zone == Some(to_z))
-            .map(|s| game.game_data.ship_stats(s.ship_type).speed)
-            .filter(|&sp| sp > 0)
-            .min()
-    });
-
-    let nation = match game.get_nation_mut(nid) {
-        Some(n) => n,
-        None => return "{\"error\":\"nation not found\"}".to_string(),
-    };
-    let dest_budget = nation
-        .military
-        .fleet_moves_remaining
-        .get(&to_z)
-        .copied()
-        .unwrap_or_else(|| dest_min_speed.unwrap_or(u32::MAX));
-
-    for ship in &mut nation.military.warships {
-        if ship.sea_zone == Some(from_z) {
-            ship.sea_zone = Some(to_z);
-        }
-    }
-
-    nation.military.fleet_moves_remaining.remove(&from_z);
-    nation
-        .military
-        .fleet_moves_remaining
-        .insert(to_z, remaining.min(dest_budget));
-
+    let nid = NationId(nation_id);
+    let from_z = SeaZoneId(from_zone_id);
+    game.transient
+        .pending_fleet_moves
+        .retain(|(n, fz, _)| *n != nid || *fz != from_z);
     serialize_game(&game)
 }
 
@@ -6387,11 +6415,172 @@ mod tests {
         // Without this, the frontend cannot compute fleet-move adjacency
         // targets and no destination hexes get highlighted.
         assert!(
-            m.get("sea_zone_id")
-                .and_then(|v| v.as_u64())
-                .is_some(),
+            m.get("sea_zone_id").and_then(|v| v.as_u64()).is_some(),
             "fleet marker must carry a sea_zone_id even when the ship's sea_zone field is None"
         );
+    }
+
+    /// Card #471: `wasm_move_fleet` queues a move (it does not execute it
+    /// immediately), and the existing turn processor's
+    /// `resolve_pending_fleet_moves` is what actually relocates the
+    /// warships. Even at turn 1 — before the AI naval pass has assigned
+    /// ships a `sea_zone` — the bridge back-fills the fallback zone so the
+    /// move can be queued without "no warships in that sea zone".
+    #[test]
+    fn move_fleet_queues_and_resolves_at_end_of_turn() {
+        use domain::map::sea_zones::SeaZoneId;
+        let (game, json) = setup_navy_markers_game();
+        let human = game.human_player_nation;
+
+        // Sanity: the marker carries a back-filled zone id we can use as `from_z`.
+        let markers_json = wasm_get_navy_markers(&json, false);
+        let markers: Vec<serde_json::Value> = serde_json::from_str(&markers_json).unwrap();
+        let marker = markers
+            .iter()
+            .find(|m| m.get("nation_id").and_then(|v| v.as_u64()) == Some(human.0 as u64))
+            .expect("human fleet marker");
+        let from_zone_id = marker
+            .get("sea_zone_id")
+            .and_then(|v| v.as_u64())
+            .expect("back-filled sea_zone_id") as u32;
+
+        // Pick an adjacent non-lake zone as the destination.
+        let zones_json = wasm_get_sea_zones(&json);
+        let zones: Vec<serde_json::Value> = serde_json::from_str(&zones_json).unwrap();
+        let from_zone = zones
+            .iter()
+            .find(|z| z.get("id").and_then(|v| v.as_u64()) == Some(from_zone_id as u64))
+            .expect("from zone in payload");
+        let adj: Vec<u64> = from_zone
+            .get("adjacent_zone_ids")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_u64()).collect())
+            .unwrap_or_default();
+        let to_zone_id = adj
+            .into_iter()
+            .find(|&id| {
+                zones
+                    .iter()
+                    .find(|z| z.get("id").and_then(|v| v.as_u64()) == Some(id))
+                    .and_then(|z| z.get("is_lake").and_then(|v| v.as_bool()))
+                    == Some(false)
+            })
+            .expect("at least one non-lake adjacent zone") as u32;
+
+        // Queue the move.
+        let queued_json = wasm_move_fleet(&json, human.0, from_zone_id, to_zone_id);
+        assert!(
+            !queued_json.starts_with("{\"error\""),
+            "wasm_move_fleet should succeed for unzoned ships in the fallback zone, got: {queued_json}"
+        );
+
+        // Still queued — ships have NOT moved yet, but they have been
+        // back-filled into the source zone so the turn processor can find them.
+        let queued_game = deserialize_game(&queued_json).expect("re-deserialize");
+        let queued_nation = queued_game.get_nation(human).unwrap();
+        assert_eq!(
+            queued_game.transient.pending_fleet_moves.len(),
+            1,
+            "exactly one queued fleet move expected"
+        );
+        let pending = queued_game.transient.pending_fleet_moves[0];
+        assert_eq!(
+            pending,
+            (human, SeaZoneId(from_zone_id), SeaZoneId(to_zone_id))
+        );
+        let in_source = queued_nation
+            .military
+            .warships
+            .iter()
+            .filter(|s| s.sea_zone == Some(SeaZoneId(from_zone_id)))
+            .count();
+        assert_eq!(
+            in_source,
+            queued_nation.military.warships.len(),
+            "every warship should be back-filled into the source zone after queueing"
+        );
+
+        // Process a turn — the queued move resolves and ships end up in `to_z`.
+        let mut after_turn = deserialize_game(&queued_json).expect("re-deserialize for processing");
+        let _ = domain::turn::process_turn(&mut after_turn);
+        let nation = after_turn.get_nation(human).unwrap();
+        let in_dest = nation
+            .military
+            .warships
+            .iter()
+            .filter(|s| s.sea_zone == Some(SeaZoneId(to_zone_id)))
+            .count();
+        assert_eq!(
+            in_dest,
+            nation.military.warships.len(),
+            "all warships should be in the destination zone after end-turn processing"
+        );
+        assert!(
+            after_turn.transient.pending_fleet_moves.is_empty(),
+            "pending_fleet_moves should be drained at end of turn"
+        );
+    }
+
+    /// Card #471: re-queueing a move from the same source zone replaces the
+    /// existing entry rather than piling up stale ones.
+    #[test]
+    fn move_fleet_replaces_existing_pending_entry() {
+        use domain::map::sea_zones::SeaZoneId;
+        let (game, json) = setup_navy_markers_game();
+        let human = game.human_player_nation;
+
+        let markers_json = wasm_get_navy_markers(&json, false);
+        let markers: Vec<serde_json::Value> = serde_json::from_str(&markers_json).unwrap();
+        let from_zone_id = markers
+            .iter()
+            .find(|m| m.get("nation_id").and_then(|v| v.as_u64()) == Some(human.0 as u64))
+            .and_then(|m| m.get("sea_zone_id").and_then(|v| v.as_u64()))
+            .expect("back-filled sea_zone_id") as u32;
+
+        let zones_json = wasm_get_sea_zones(&json);
+        let zones: Vec<serde_json::Value> = serde_json::from_str(&zones_json).unwrap();
+        let from_zone = zones
+            .iter()
+            .find(|z| z.get("id").and_then(|v| v.as_u64()) == Some(from_zone_id as u64))
+            .expect("from zone");
+        let adj: Vec<u32> = from_zone
+            .get("adjacent_zone_ids")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_u64().map(|n| n as u32))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut non_lake: Vec<u32> = adj
+            .into_iter()
+            .filter(|&id| {
+                zones
+                    .iter()
+                    .find(|z| z.get("id").and_then(|v| v.as_u64()) == Some(id as u64))
+                    .and_then(|z| z.get("is_lake").and_then(|v| v.as_bool()))
+                    == Some(false)
+            })
+            .collect();
+        if non_lake.len() < 2 {
+            // Fallback: if the test world only exposes one adjacent non-lake
+            // zone, we still want to assert the replacement contract — re-queue
+            // to the same destination twice and assert one entry survives.
+            non_lake.push(non_lake[0]);
+        }
+        let to_a = non_lake[0];
+        let to_b = non_lake[1];
+
+        let after_a = wasm_move_fleet(&json, human.0, from_zone_id, to_a);
+        let after_b = wasm_move_fleet(&after_a, human.0, from_zone_id, to_b);
+        let final_game = deserialize_game(&after_b).expect("re-deserialize");
+        assert_eq!(
+            final_game.transient.pending_fleet_moves.len(),
+            1,
+            "queueing twice from the same source zone should keep exactly one entry"
+        );
+        let pending = final_game.transient.pending_fleet_moves[0];
+        assert_eq!(pending, (human, SeaZoneId(from_zone_id), SeaZoneId(to_b)));
     }
 
     #[test]

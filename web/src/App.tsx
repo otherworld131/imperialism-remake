@@ -6,7 +6,7 @@ import {
   getDiplomacyOverlay, getMilitaryOverlay,
   getUnitsInProvince, getCivilians, getShips, getValidMoveTargets, getBuildableUnits,
   queueUnitMove, cancelUnitMove, disbandUnit, deployCivilian, recallCivilian, engineerBuild,
-  moveFleet,
+  moveFleet, cancelFleetMove,
   type EngineerBuildKind,
   setPendingShips, setAutoTradeWithMinors, setPendingArmyRecruit,
   upgradeUnit, upgradeUnits,
@@ -859,9 +859,11 @@ function App() {
     setSelectedShipIds(ids);
   }, [isPlayerFleetSelected, shipsData, selectedNavyMarker]);
   // Adjacent sea hexes the player can click to send the selected fleet there.
+  // Driven by the selected marker (not by ship selection) so highlights render
+  // even when the auto-select effect hasn't completed yet.
   const validFleetTargets: Set<string> = useMemo(() => {
     const out = new Set<string>();
-    if (!isPlayerFleetSelected || !selectedNavyMarker || selectedShipIds.length === 0) return out;
+    if (!isPlayerFleetSelected || !selectedNavyMarker) return out;
     const fromZoneId = selectedNavyMarker.sea_zone_id;
     if (fromZoneId == null) return out;
     const fromZone = seaZones.find(z => z.id === fromZoneId);
@@ -872,7 +874,7 @@ function App() {
       for (const h of adj.hexes) out.add(`${h.q},${h.r}`);
     }
     return out;
-  }, [isPlayerFleetSelected, selectedNavyMarker, selectedShipIds, seaZones]);
+  }, [isPlayerFleetSelected, selectedNavyMarker, seaZones]);
 
   // Ref so handleTileClick can call handleDeployCivilian without a forward-reference in deps
   const handleDeployCivilianRef = useRef<(civ: CivilianDetail) => void>(() => {});
@@ -900,8 +902,9 @@ function App() {
     }
 
     // Fleet movement (card #471): if a player fleet is selected and the
-    // clicked sea hex sits inside one of the adjacent sea zones, move every
-    // warship in the source zone there. Stays scoped to player fleets — we
+    // clicked sea hex sits inside one of the adjacent sea zones, queue a
+    // fleet move to that zone. Resolution happens at end-of-turn — same
+    // shape as army `pending_moves`. Stays scoped to player fleets — we
     // intentionally do not wire foreign-fleet clicks to mutations.
     if (isPlayerFleetSelected && selectedNavyMarker && validFleetTargets.size > 0) {
       const tileKey = `${tile.q},${tile.r}`;
@@ -913,9 +916,9 @@ function App() {
             const cmd = await moveFleet(gameJson, playerNationId, fromZoneId, toZone.id);
             if (cmd.ok && cmd.gameJson) {
               await applyGameJson(cmd.gameJson);
-              // Drop the now-stale fleet selection — refresh re-resolves the
-              // marker by key, and the moved fleet sits at a new anchor.
-              setSelectedNavyKey(null);
+              // Keep the fleet selected so the player can see the queued
+              // move in the sidebar and retarget or cancel it before
+              // ending the turn.
               setSelectedShipIds([]);
             } else if (cmd.error) {
               showError(`Fleet move failed: ${cmd.error}`);
@@ -2194,14 +2197,29 @@ function App() {
 
               {/* Naval Panel — shown at country capital, or when a player fleet
                   marker is selected (card #471). When a fleet is selected the
-                  panel is interactive: ships can be toggled and the next click
-                  on an adjacent sea hex moves the fleet. */}
+                  panel is interactive: ships can be toggled and clicking an
+                  adjacent sea hex queues a fleet move (resolved at end of
+                  turn). The panel surfaces any pending move with a Cancel
+                  button, mirroring the army UnitPanel pattern. */}
               {shipsData && (isPlayerCapital || isPlayerFleetSelected) && (
                 <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 6 }}>
                   <NavalPanel
                     ships={shipsData}
                     selectedNavyMarker={isPlayerFleetSelected ? selectedNavyMarker : null}
                     selectedShipIds={isPlayerFleetSelected ? selectedShipIds : []}
+                    pendingMoveDestZone={(() => {
+                      if (!isPlayerFleetSelected || !selectedNavyMarker?.pending_move_to_zone_id) return null;
+                      const dest = seaZones.find(z => z.id === selectedNavyMarker.pending_move_to_zone_id);
+                      return dest ? { id: dest.id, name: dest.name } : null;
+                    })()}
+                    onCancelPendingMove={isPlayerFleetSelected && selectedNavyMarker?.sea_zone_id != null ? async () => {
+                      const fromZoneId = selectedNavyMarker.sea_zone_id!;
+                      await runMutation(async () => {
+                        const cmd = await cancelFleetMove(gameJson, playerNationId, fromZoneId);
+                        if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+                        else if (cmd.error) showError(`Cancel failed: ${cmd.error}`);
+                      });
+                    } : undefined}
                     onToggleShip={isPlayerFleetSelected ? (id) => {
                       setSelectedShipIds(prev =>
                         prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]

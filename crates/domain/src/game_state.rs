@@ -121,6 +121,15 @@ pub struct TransientState {
     pub pending_attacks: Vec<(NationId, ProvinceId)>,
     /// Pending unit movements to resolve this turn: (nation, unit_id, destination province).
     pub pending_moves: Vec<(NationId, crate::map::UnitId, ProvinceId)>,
+    /// Pending fleet movements to resolve at end of turn (card #471):
+    /// (nation, from_sea_zone, to_sea_zone). Drained by
+    /// `resolve_pending_fleet_moves` immediately before naval combat so the
+    /// fleet engages from its new position.
+    pub pending_fleet_moves: Vec<(
+        NationId,
+        crate::map::sea_zones::SeaZoneId,
+        crate::map::sea_zones::SeaZoneId,
+    )>,
     /// Active naval landing sites: (attacking_nation, target_province, turn_established).
     /// Established by assigning warships to Beachhead operation.
     /// Troops can attack the target province on **subsequent** turns only
