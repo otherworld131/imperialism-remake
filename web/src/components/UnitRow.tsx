@@ -1,11 +1,11 @@
 import React from 'react';
 
 const CATEGORY_ICONS: Record<string, string> = {
-  Infantry: '\u2694\uFE0F',   // ⚔️
+  Infantry: '⚔️',   // ⚔️
   Cavalry: '\u{1F40E}',       // 🐎
   Artillery: '\u{1F4A3}',     // 💣
-  Special: '\u2B50',           // ⭐
-  Garrison: '\u{1F6E1}\uFE0F', // 🛡️
+  Special: '⭐',           // ⭐
+  Garrison: '\u{1F6E1}️', // 🛡️
 };
 
 const UNIT_TYPE_CATEGORY: Record<string, string> = {
@@ -73,7 +73,21 @@ export interface UnitRowProps {
   health: number;
   effective_firepower: number;
   destroyed?: boolean;
+  /**
+   * Hide / show the FP value next to the unit name. Default `true` so the
+   * main-map sidebar is unchanged. The battle screen passes `false` when
+   * the user has the firepower toggle off, and `true` (with
+   * `initialFirepower` populated) when the debug toggle is on.
+   */
   showFirepower?: boolean;
+  /**
+   * When supplied, renders an "FP {init} → {final}" pair instead of just
+   * the current effective_firepower. Used by the battle screen's debug
+   * mode to show how a unit's contribution changed over the battle.
+   */
+  initialFirepower?: number;
+  /** Extra suffix rendered under the FP line (defender bonus breakdown). */
+  fpSuffix?: React.ReactNode;
   style?: React.CSSProperties;
 }
 
@@ -89,11 +103,24 @@ export function UnitRow({
   effective_firepower,
   destroyed,
   showFirepower = true,
+  initialFirepower,
+  fpSuffix,
   style,
 }: UnitRowProps) {
   const icon = iconForUnitType(unit_type);
-  const stars = '\u2605'.repeat(medals);
+  const stars = '★'.repeat(medals);
   const name = splitCamel(unit_type);
+  const fpEl = showFirepower ? (
+    initialFirepower !== undefined ? (
+      <span style={{ fontSize: 11, color: '#999' }}>
+        FP {initialFirepower.toFixed(1)} <span style={{ color: '#666' }}>→</span> {effective_firepower.toFixed(1)}
+      </span>
+    ) : (
+      <span style={{ fontSize: 11, color: '#999' }}>
+        FP {effective_firepower.toFixed(1)}
+      </span>
+    )
+  ) : null;
   return (
     <div style={{
       background: 'rgba(255,255,255,0.05)',
@@ -108,12 +135,13 @@ export function UnitRow({
           {icon} {name}
           {!destroyed && stars && <span style={{ color: '#ffd700', marginLeft: 4 }}>{stars}</span>}
         </span>
-        {!destroyed && showFirepower && (
-          <span style={{ fontSize: 11, color: '#999' }}>
-            FP {effective_firepower.toFixed(1)}
+        {!destroyed && fpEl}
+        {destroyed && showFirepower && initialFirepower !== undefined && (
+          <span style={{ fontSize: 11, color: '#a66' }}>
+            FP {initialFirepower.toFixed(1)} <span style={{ color: '#653' }}>→</span> 0
           </span>
         )}
-        {destroyed && (
+        {destroyed && !(showFirepower && initialFirepower !== undefined) && (
           <span style={{ fontSize: 10, color: '#a66' }}>Destroyed</span>
         )}
       </div>
@@ -123,6 +151,7 @@ export function UnitRow({
           <span style={{ fontSize: 10, color: '#888' }}>{health}%</span>
         </div>
       )}
+      {fpSuffix && <div style={{ marginTop: 3 }}>{fpSuffix}</div>}
     </div>
   );
 }

@@ -341,16 +341,33 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         pact_defense_threshold_economic: table
             .get("pact_defense_threshold_economic")
             .unwrap_or(0.5),
-        // D-5: combat terrain/fort bonuses and fp-loss ratios
-        terrain_defense_mountain: table.get("terrain_defense_mountain").unwrap_or(0.50),
-        terrain_defense_hills: table.get("terrain_defense_hills").unwrap_or(0.30),
-        terrain_defense_forest: table.get("terrain_defense_forest").unwrap_or(0.20),
-        terrain_defense_swamp: table.get("terrain_defense_swamp").unwrap_or(0.15),
-        fort_defense_level1: table.get("fort_defense_level1").unwrap_or(0.20),
-        fort_defense_level2: table.get("fort_defense_level2").unwrap_or(0.40),
-        fort_defense_level3: table.get("fort_defense_level3").unwrap_or(0.60),
+        // D-5: combat terrain/fort bonuses and fp-loss ratios. Card #478
+        // zeroed terrain and dropped the per-unit `defense` multiplier
+        // from the resolver — fort is now the only defender multiplier,
+        // scaling linearly to +75% at L3.
+        terrain_defense_mountain: table.get("terrain_defense_mountain").unwrap_or(0.0),
+        terrain_defense_hills: table.get("terrain_defense_hills").unwrap_or(0.0),
+        terrain_defense_forest: table.get("terrain_defense_forest").unwrap_or(0.0),
+        terrain_defense_swamp: table.get("terrain_defense_swamp").unwrap_or(0.0),
+        fort_defense_level1: table.get("fort_defense_level1").unwrap_or(0.25),
+        fort_defense_level2: table.get("fort_defense_level2").unwrap_or(0.50),
+        fort_defense_level3: table.get("fort_defense_level3").unwrap_or(0.75),
+        garrison_entrenchment_fp: table.get("garrison_entrenchment_fp").unwrap_or(3.0),
         battle_attacker_fp_loss_ratio: table.get("battle_attacker_fp_loss_ratio").unwrap_or(0.60),
         battle_defender_fp_loss_ratio: table.get("battle_defender_fp_loss_ratio").unwrap_or(2.0),
+        // Card #478: role-aware combat tunables
+        combat_first_strike_enabled: table.get("combat_first_strike_enabled").unwrap_or(true),
+        combat_first_strike_damage_multiplier: table
+            .get("combat_first_strike_damage_multiplier")
+            .unwrap_or(1.0),
+        combat_cavalry_charge_bonus: table.get("combat_cavalry_charge_bonus").unwrap_or(0.25),
+        combat_ai_strength_lanchester: table.get("combat_ai_strength_lanchester").unwrap_or(true),
+        combat_ai_strength_range_advantage_coeff: table
+            .get("combat_ai_strength_range_advantage_coeff")
+            .unwrap_or(0.10),
+        combat_ai_strength_range_advantage_cap: table
+            .get("combat_ai_strength_range_advantage_cap")
+            .unwrap_or(0.50),
         // D-6: labor/civilian hiring thresholds
         labor_workers_per_province_base: table.get("labor_workers_per_province_base").unwrap_or(2),
         labor_workers_per_province_wealthy: table
@@ -544,41 +561,48 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         } else {
             0.5
         },
-        // D-5: terrain/fort bonus and fp-loss sanitization
+        // D-5: terrain/fort bonus and fp-loss sanitization. Card #478 set
+        // terrain bonuses to 0 by default; we still clamp in case a mod
+        // tries to dial them back up.
         terrain_defense_mountain: if cfg.terrain_defense_mountain.is_finite() {
             cfg.terrain_defense_mountain.clamp(0.0, 2.0)
         } else {
-            0.50
+            0.0
         },
         terrain_defense_hills: if cfg.terrain_defense_hills.is_finite() {
             cfg.terrain_defense_hills.clamp(0.0, 2.0)
         } else {
-            0.30
+            0.0
         },
         terrain_defense_forest: if cfg.terrain_defense_forest.is_finite() {
             cfg.terrain_defense_forest.clamp(0.0, 2.0)
         } else {
-            0.20
+            0.0
         },
         terrain_defense_swamp: if cfg.terrain_defense_swamp.is_finite() {
             cfg.terrain_defense_swamp.clamp(0.0, 2.0)
         } else {
-            0.15
+            0.0
         },
         fort_defense_level1: if cfg.fort_defense_level1.is_finite() {
             cfg.fort_defense_level1.clamp(0.0, 2.0)
         } else {
-            0.20
+            0.25
         },
         fort_defense_level2: if cfg.fort_defense_level2.is_finite() {
             cfg.fort_defense_level2.clamp(0.0, 2.0)
         } else {
-            0.40
+            0.50
         },
         fort_defense_level3: if cfg.fort_defense_level3.is_finite() {
             cfg.fort_defense_level3.clamp(0.0, 2.0)
         } else {
-            0.60
+            0.75
+        },
+        garrison_entrenchment_fp: if cfg.garrison_entrenchment_fp.is_finite() {
+            cfg.garrison_entrenchment_fp.clamp(0.0, 100.0)
+        } else {
+            3.0
         },
         battle_attacker_fp_loss_ratio: if cfg.battle_attacker_fp_loss_ratio.is_finite() {
             cfg.battle_attacker_fp_loss_ratio.clamp(0.0, 10.0)
@@ -589,6 +613,36 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
             cfg.battle_defender_fp_loss_ratio.clamp(0.0, 10.0)
         } else {
             2.0
+        },
+        // Card #478 sanitization
+        combat_first_strike_damage_multiplier: if cfg
+            .combat_first_strike_damage_multiplier
+            .is_finite()
+        {
+            cfg.combat_first_strike_damage_multiplier.clamp(0.0, 5.0)
+        } else {
+            1.0
+        },
+        combat_cavalry_charge_bonus: if cfg.combat_cavalry_charge_bonus.is_finite() {
+            cfg.combat_cavalry_charge_bonus.clamp(0.0, 5.0)
+        } else {
+            0.25
+        },
+        combat_ai_strength_range_advantage_coeff: if cfg
+            .combat_ai_strength_range_advantage_coeff
+            .is_finite()
+        {
+            cfg.combat_ai_strength_range_advantage_coeff.clamp(0.0, 1.0)
+        } else {
+            0.10
+        },
+        combat_ai_strength_range_advantage_cap: if cfg
+            .combat_ai_strength_range_advantage_cap
+            .is_finite()
+        {
+            cfg.combat_ai_strength_range_advantage_cap.clamp(0.0, 5.0)
+        } else {
+            0.50
         },
         // D-6: labor/civilian thresholds
         labor_workers_per_province_base: cfg.labor_workers_per_province_base.clamp(1, 10),

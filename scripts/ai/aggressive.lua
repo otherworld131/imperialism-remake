@@ -5,19 +5,19 @@
 
 aggressive = {
     -- Trade and diplomacy
-    trade_priority = 0.3,       -- low trade focus
-    alliance_preference = 0.2,  -- rarely seeks alliances
+    trade_priority = 0.5,       -- synced to Rust default (was 0.3 in Lua)
+    alliance_preference = 0.5,  -- synced to Rust default (was 0.2 in Lua)
 
     -- Military
-    min_army_size = 5,          -- larger standing army
-    max_army_size = 12,         -- builds more units
+    min_army_size = 3,          -- synced to Rust default (was 5 in Lua)
+    max_army_size = 7,          -- synced to Rust default (was 12 in Lua)
 
     -- Economy
-    infrastructure_budget = 1500, -- less spending on infrastructure
-    worker_threshold = 3,       -- recruits workers sooner
+    infrastructure_budget = 2000, -- synced to Rust default (was 1500 in Lua)
+    worker_threshold = 5,       -- synced to Rust default (was 3 in Lua)
 
     -- Research
-    research_strategy = "military", -- prioritize military techs
+    research_strategy = "cheapest", -- synced to Rust default (was "military" in Lua)
 
     -- War (cooldown-based system)
     war_cooldown = 8,           -- turns between war declarations

@@ -6163,6 +6163,49 @@ fn serialize_battle(b: &BattleResult, game: &GameState) -> serde_json::Value {
             .collect()
     };
 
+    let serialize_unit_logs = |logs: &[domain::military::combat::BattleUnitLog]| -> Vec<serde_json::Value> {
+        logs.iter()
+            .map(|log| {
+                let breakdown = log.defender_breakdown.as_ref().map(|b| {
+                    serde_json::json!({
+                        "applied_firepower": b.applied_firepower,
+                        "fort_multiplier": b.fort_multiplier,
+                        "entrenchment_fp": b.entrenchment_fp,
+                        "initial_total_contribution": b.initial_total_contribution,
+                    })
+                });
+                serde_json::json!({
+                    "unit_type": format!("{:?}", log.unit_type),
+                    "medals_initial": log.medals_initial,
+                    "medals_final": log.medals_final,
+                    "initial_health": log.initial_health,
+                    "final_health": log.final_health,
+                    "initial_firepower": log.initial_firepower,
+                    "final_firepower": log.final_firepower,
+                    "defender_breakdown": breakdown,
+                })
+            })
+            .collect()
+    };
+
+    let round_logs: Vec<serde_json::Value> = b
+        .round_logs
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "round": r.round,
+                "first_strike_side": r.first_strike_side,
+                "atk_fp": r.atk_fp,
+                "def_fp": r.def_fp,
+                "atk_shots": r.atk_shots,
+                "def_shots": r.def_shots,
+                "atk_casualties": r.atk_casualties.iter().map(|c| format!("{:?}", c)).collect::<Vec<_>>(),
+                "def_casualties": r.def_casualties.iter().map(|c| format!("{:?}", c)).collect::<Vec<_>>(),
+                "retreat_triggered": r.retreat_triggered,
+            })
+        })
+        .collect();
+
     let retreat_debug = b.retreat_debug.as_ref().map(|d| {
         serde_json::json!({
             "side": d.side,
@@ -6212,6 +6255,11 @@ fn serialize_battle(b: &BattleResult, game: &GameState) -> serde_json::Value {
         "origin_province_names": origin_province_names,
         "is_naval_landing": b.is_naval_landing,
         "retreat_debug": retreat_debug,
+        // Card #478 follow-up: per-unit logs for the battle-screen
+        // "Show firepower" debug toggle.
+        "attacker_unit_logs": serialize_unit_logs(&b.attacker_unit_logs),
+        "defender_unit_logs": serialize_unit_logs(&b.defender_unit_logs),
+        "round_logs": round_logs,
     })
 }
 

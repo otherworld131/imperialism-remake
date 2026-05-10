@@ -1,6 +1,6 @@
 use crate::data::GameConfig;
 use crate::map::UnitId;
-use crate::military::units::{ArmyUnit, ArmyUnitType};
+use crate::military::units::{ArmyUnit, ArmyUnitType, UnitCategory};
 use crate::types::*;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -40,6 +40,12 @@ pub struct BattleConfig {
     /// Fraction of defender starting firepower lost to trigger mid-battle
     /// retreat by the defender.
     pub defender_postbattle_fp_loss: f64,
+    /// Current game turn — used to gate the per-unit Garrison entrenchment
+    /// kicker (card #478): a unit must satisfy `arrived_turn < current_turn`
+    /// before it earns its entrenchment FP. `0` means "no turn context";
+    /// legacy / test callers leave it 0, in which case the resolver falls
+    /// back to "all garrisons entrenched" so existing behaviour is stable.
+    pub current_turn: u32,
 }
 
 impl BattleConfig {
@@ -52,6 +58,7 @@ impl BattleConfig {
             defender_retreat_ratio: f64::INFINITY,
             attacker_postbattle_fp_loss: config.battle_attacker_fp_loss_ratio,
             defender_postbattle_fp_loss: config.battle_defender_fp_loss_ratio,
+            current_turn: 0,
         }
     }
 }
@@ -205,6 +212,91 @@ pub struct BattleResult {
     /// Debug-only: explains what triggered a retreat decision (or that the
     /// battle was fought to conclusion). Surfaced in the UI behind a toggle.
     pub retreat_debug: Option<RetreatDebug>,
+    /// Per-unit logs for each side captured at battle start, with final
+    /// state filled in post-resolution. Card #478 follow-up — surfaced
+    /// behind a battle-screen "Show firepower" debug toggle.
+    pub attacker_unit_logs: Vec<BattleUnitLog>,
+    pub defender_unit_logs: Vec<BattleUnitLog>,
+    /// Per-round trace (volley + rounds) shown behind the "Show firepower"
+    /// debug toggle. Empty when the battle short-circuited (empty side or
+    /// pre-battle retreat).
+    pub round_logs: Vec<BattleRoundLog>,
+}
+
+/// Per-unit defender bonus breakdown — captured at battle start so the UI
+/// can explain how a unit's raw FP turns into its contribution to
+/// `defender_initial_fp`. Card #478 follow-up.
+///
+/// Post-card-#478 model:
+/// `contribution = applied_fp × fort_multiplier + entrenchment_fp`.
+/// There's no `× def`, no `× (1 + terrain)`, and no per-unit terrain
+/// bonus any more — fort is the only multiplier.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DefenderBonusBreakdown {
+    /// Firepower used in the contribution calculation —
+    /// `effective_firepower` (FPN × medals × health).
+    pub applied_firepower: f64,
+    /// `(1 + effective_fort)` factor — already accounts for siege halving.
+    pub fort_multiplier: f64,
+    /// Flat raw FP added for entrenched Garrison defenders. 0 unless the
+    /// unit is Garrison-category and `arrived_turn < current_turn`.
+    pub entrenchment_fp: f64,
+    /// Total contribution this unit made to `defender_initial_fp`:
+    /// `applied_firepower × fort_multiplier + entrenchment_fp`.
+    pub initial_total_contribution: f64,
+}
+
+/// Per-unit log of how a unit entered and left the battle. Surfaced in
+/// `BattleResult` so the UI can render initial→final firepower for every
+/// unit (survivors + destroyed) and explain defender bonus inflation.
+#[derive(Debug, Clone)]
+pub struct BattleUnitLog {
+    pub unit_type: ArmyUnitType,
+    pub medals_initial: u8,
+    pub medals_final: u8,
+    pub initial_health: u8,
+    pub final_health: u8,
+    /// Effective firepower at battle start (FPN-based, scaled by initial
+    /// health and medals).
+    pub initial_firepower: f64,
+    /// Effective firepower at battle end (post damage). 0 for destroyed.
+    pub final_firepower: f64,
+    /// Defender-only: per-unit contribution to `defender_initial_fp`.
+    /// `None` for attackers.
+    pub defender_breakdown: Option<DefenderBonusBreakdown>,
+}
+
+/// Per-round trace of how the battle played out. Surfaced behind the
+/// battle-screen "Show firepower" toggle so the player can see the actual
+/// numbers the resolver crunched. `round = 0` is the optional first-strike
+/// volley; `round = 1..N` are the regular damage exchanges.
+///
+/// Post-rework: combat is per-shot 1v1 with concentrate-fire spill — each
+/// shooter picks one target in its preferred row and damages it by its FP,
+/// with overkill spilling to the next priority target. The log records the
+/// total FP fired and the number of shooters that fired.
+#[derive(Debug, Clone, Default)]
+pub struct BattleRoundLog {
+    /// 0 = first-strike volley, 1..=10 = combat round.
+    pub round: u32,
+    /// `Some("attacker"|"defender")` for the first-strike volley row;
+    /// `None` for normal rounds.
+    pub first_strike_side: Option<&'static str>,
+    /// Attacker side firepower fired this round (sum of per-shot FP, after
+    /// round-1 cavalry charge and General bonus). Volley rounds: only the
+    /// over-range shooters' FP.
+    pub atk_fp: f64,
+    pub def_fp: f64,
+    /// Number of attacker shooters that fired this round.
+    pub atk_shots: usize,
+    /// Number of defender shooters that fired this round.
+    pub def_shots: usize,
+    /// Casualties added during this round, on each side.
+    pub atk_casualties: Vec<ArmyUnitType>,
+    pub def_casualties: Vec<ArmyUnitType>,
+    /// Set when this round triggered a mid-battle retreat:
+    /// `Some("attacker"|"defender")`.
+    pub retreat_triggered: Option<&'static str>,
 }
 
 /// Stage at which a side decided to retreat.
@@ -267,76 +359,281 @@ fn general_bonus(units: &[ArmyUnit]) -> f64 {
 }
 
 /// Calculate total firepower for a list of units, including General bonus.
+/// Used for raw / unmodified summaries (e.g. retreat baseline). Does NOT
+/// apply role-aware modifiers — see `attacker_round_firepower` for those.
 fn total_firepower(units: &[ArmyUnit]) -> f64 {
     let base: f64 = units.iter().map(|u| u.effective_firepower()).sum();
     base * general_bonus(units)
 }
 
-/// Attacker firepower using FPM for cavalry charging into melee (range == 1,
-/// FPM > 0). All other units use the standard FPN path.
-fn attacker_total_firepower(units: &[ArmyUnit]) -> f64 {
-    let base: f64 = units.iter().map(|u| u.effective_firepower_charging()).sum();
+/// Per-shot attacker firepower for one shooter in a given round.
+///
+/// Includes round-aware modifiers from card #478:
+///   * Round 1 only: cavalry units get a `combat_cavalry_charge_bonus`
+///     multiplier ("first-round shock charge"). They also use FPM via
+///     `effective_firepower_charging` when charging at range 1.
+///
+/// The exposed-artillery melee penalty was dropped when combat moved to
+/// per-shot 1v1 targeting — front-line shooters can no longer reach
+/// artillery sitting behind a screen, so the "screen your guns" feel
+/// emerges naturally without a penalty multiplier.
+fn attacker_unit_round_fp(unit: &ArmyUnit, round: u32, cfg: &GameConfig) -> f64 {
+    let stats = unit.unit_type.stats();
+    let mut fp = if round == 1 {
+        unit.effective_firepower_charging()
+    } else {
+        unit.effective_firepower()
+    };
+    if round == 1 && stats.category == UnitCategory::Cavalry {
+        fp *= 1.0 + cfg.combat_cavalry_charge_bonus;
+    }
+    fp
+}
+
+/// Per-shot defender firepower for one shooter, including the side's fort
+/// multiplier and the per-unit Garrison entrenchment kicker.
+///
+/// `current_turn = 0` is the legacy / test escape hatch — entrenchment
+/// applies to every Garrison-category unit regardless of `arrived_turn`.
+fn defender_unit_shot_fp(
+    unit: &ArmyUnit,
+    fort_level: u8,
+    attacker_has_siege: bool,
+    current_turn: u32,
+    cfg: &GameConfig,
+) -> f64 {
+    let fort_factor = 1.0 + effective_fort_bonus(fort_level, attacker_has_siege, cfg);
+    let mut fp = unit.effective_firepower() * fort_factor;
+    if is_entrenched_garrison(unit, current_turn) {
+        fp += cfg.garrison_entrenchment_fp;
+    }
+    fp
+}
+
+/// Aggregate attacker firepower for one combat round (sum + General bonus).
+/// Used for retreat baselines and the side-total reported in the round log.
+fn attacker_round_firepower(units: &[ArmyUnit], round: u32, cfg: &GameConfig) -> f64 {
+    let base: f64 = units
+        .iter()
+        .filter(|u| u.is_alive())
+        .map(|u| attacker_unit_round_fp(u, round, cfg))
+        .sum();
     base * general_bonus(units)
 }
 
-/// Determine whether defensive terrain (or a fort) qualifies a unit's
-/// per-unit `defense_terrain_bonus`.
-fn qualifies_for_per_unit_terrain(terrain: Option<TerrainType>, fort_level: u8) -> bool {
-    if fort_level > 0 {
-        return true;
-    }
-    matches!(
-        terrain,
-        Some(TerrainType::Mountain | TerrainType::Hills | TerrainType::Forest | TerrainType::Swamp)
-    )
+/// Pre-battle / retreat-baseline attacker firepower: behaves as if round 1
+/// is about to start (charge bonus applied). Mirrors what the resolver
+/// will actually deal in the next round.
+fn attacker_total_firepower(units: &[ArmyUnit], cfg: &GameConfig) -> f64 {
+    attacker_round_firepower(units, 1, cfg)
 }
 
-/// Defender firepower using per-unit DEF stats.
-///
-/// Replaces the flat `* 1.2` multiplier with each unit's `defense` value as a
-/// raw multiplier (`fp * defense`). Per-unit `defense_terrain_bonus` is added
-/// to the terrain bonus for units in qualifying terrain (mountain / hills /
-/// forest / swamp) or in any fort.  The global fort bonus is then applied as a
-/// final multiplier across all units.
-///
-/// Does **not** include the Minutemen flat entrenchment bonus (+8 per unit) —
-/// the caller adds that separately.
+/// Aggregate defender firepower (sum + General bonus). Includes fort
+/// multiplier and per-unit Garrison entrenchment kicker.
 fn defender_total_firepower(
     units: &[ArmyUnit],
-    terrain: Option<TerrainType>,
+    _terrain: Option<TerrainType>,
     fort_level: u8,
     attacker_has_siege: bool,
+    current_turn: u32,
     config: &GameConfig,
 ) -> f64 {
-    let global_terrain = terrain
-        .map(|t| terrain_defense_bonus(t, config))
-        .unwrap_or(0.0);
-    let global_fort = effective_fort_bonus(fort_level, attacker_has_siege, config);
-    let per_unit_qualifies = qualifies_for_per_unit_terrain(terrain, fort_level);
-
     let base: f64 = units
         .iter()
-        .map(|u| {
-            let fp = u.effective_firepower();
-            let def = u.unit_type.stats().defense as f64;
-            let per_unit_bonus = if per_unit_qualifies {
-                u.unit_type.stats().defense_terrain_bonus as f64
-            } else {
-                0.0
-            };
-            fp * def * (1.0 + global_terrain + per_unit_bonus)
-        })
+        .filter(|u| u.is_alive())
+        .map(|u| defender_unit_shot_fp(u, fort_level, attacker_has_siege, current_turn, config))
         .sum();
-
-    base * (1.0 + global_fort) * general_bonus(units)
+    base * general_bonus(units)
 }
 
-/// Count Militia units in a force.
-fn militia_count(units: &[ArmyUnit]) -> usize {
+/// One shooter's contribution to a round of fire — the FP it deals plus
+/// whether it's an artillery shooter (which controls preferred-row
+/// targeting). The General bonus is already folded into `fp`.
+#[derive(Debug, Clone, Copy)]
+struct ShotPlan {
+    fp: f64,
+    is_artillery_shooter: bool,
+}
+
+/// Build per-shot plans for an attacker side in a given round. Includes
+/// the round-1 cavalry charge bonus (via `attacker_unit_round_fp`) and
+/// the side-level General bonus baked into each shot.
+fn build_attacker_shots(units: &[ArmyUnit], round: u32, cfg: &GameConfig) -> Vec<ShotPlan> {
+    let bonus = general_bonus(units);
     units
         .iter()
-        .filter(|u| u.unit_type == ArmyUnitType::Minutemen)
-        .count()
+        .filter(|u| u.is_alive())
+        .map(|u| ShotPlan {
+            fp: attacker_unit_round_fp(u, round, cfg) * bonus,
+            is_artillery_shooter: u.unit_type.stats().category == UnitCategory::Artillery,
+        })
+        .collect()
+}
+
+/// Build per-shot plans for the defender side. Each shot already has the
+/// fort multiplier and Garrison entrenchment kicker baked in (via
+/// `defender_unit_shot_fp`), plus the side-level General bonus.
+fn build_defender_shots(
+    units: &[ArmyUnit],
+    fort_level: u8,
+    attacker_has_siege: bool,
+    current_turn: u32,
+    cfg: &GameConfig,
+) -> Vec<ShotPlan> {
+    let bonus = general_bonus(units);
+    units
+        .iter()
+        .filter(|u| u.is_alive())
+        .map(|u| ShotPlan {
+            fp: defender_unit_shot_fp(u, fort_level, attacker_has_siege, current_turn, cfg)
+                * bonus,
+            is_artillery_shooter: u.unit_type.stats().category == UnitCategory::Artillery,
+        })
+        .collect()
+}
+
+/// Build first-strike volley shots — over-range units only, raw FPN
+/// (no charge bonus, no FPM swap), with the side's General bonus and
+/// the configured `damage_multiplier` baked in.
+fn build_volley_shots(
+    side_units: &[ArmyUnit],
+    opponent_max_range: u32,
+    damage_multiplier: f64,
+) -> Vec<ShotPlan> {
+    let bonus = general_bonus(side_units);
+    side_units
+        .iter()
+        .filter(|u| {
+            u.is_alive()
+                && u.unit_type.stats().range > opponent_max_range
+                && u.effective_firepower() > 0.0
+        })
+        .map(|u| ShotPlan {
+            fp: u.effective_firepower() * damage_multiplier * bonus,
+            is_artillery_shooter: u.unit_type.stats().category == UnitCategory::Artillery,
+        })
+        .collect()
+}
+
+/// Maximum range across living units, treating empty / range-0-only forces
+/// as 0. Used both for first-strike eligibility and for the AI estimator.
+fn max_range(units: &[ArmyUnit]) -> u32 {
+    units
+        .iter()
+        .filter(|u| u.is_alive())
+        .map(|u| u.unit_type.stats().range)
+        .max()
+        .unwrap_or(0)
+}
+
+/// Pick the next concentrate-fire target for a stream. `prefer_artillery`
+/// controls preferred row: front-line shooters pass `false` (target
+/// non-artillery first; fall through to artillery if no front-line is
+/// alive); artillery shooters pass `true` (target artillery first; fall
+/// through to front-line if no artillery is alive). Within the chosen
+/// row, `targeting` decides strongest- or weakest-first.
+fn pick_concentrate_fire_target(
+    targets: &[ArmyUnit],
+    prefer_artillery: bool,
+    targeting: TargetingPriority,
+) -> Option<usize> {
+    let is_arty =
+        |u: &ArmyUnit| u.unit_type.stats().category == UnitCategory::Artillery;
+    let preferred: Vec<usize> = targets
+        .iter()
+        .enumerate()
+        .filter(|(_, u)| u.is_alive() && is_arty(u) == prefer_artillery)
+        .map(|(i, _)| i)
+        .collect();
+    let pool: Vec<usize> = if !preferred.is_empty() {
+        preferred
+    } else {
+        targets
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| u.is_alive() && is_arty(u) != prefer_artillery)
+            .map(|(i, _)| i)
+            .collect()
+    };
+    if pool.is_empty() {
+        return None;
+    }
+    pool.into_iter()
+        .max_by(|&a, &b| {
+            let (af, bf) = (
+                targets[a].effective_firepower(),
+                targets[b].effective_firepower(),
+            );
+            match targeting {
+                TargetingPriority::StrongestFirst => af
+                    .partial_cmp(&bf)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                TargetingPriority::WeakestFirst => bf
+                    .partial_cmp(&af)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            }
+        })
+}
+
+/// Apply one stream of concentrate-fire damage. The stream pools the FP
+/// of all shooters that share a preferred row (front-line vs artillery),
+/// then drains it onto the highest-priority alive target — overkill
+/// spills to the next priority target until the pool empties or every
+/// target is dead.
+fn apply_concentrate_fire_stream(
+    targets: &mut Vec<ArmyUnit>,
+    total_fp: f64,
+    prefer_artillery: bool,
+    targeting: TargetingPriority,
+    casualties_out: &mut Vec<ArmyUnitType>,
+) {
+    if total_fp <= 0.0 {
+        return;
+    }
+    let mut remaining = total_fp;
+    while remaining >= 1.0 {
+        let Some(idx) = pick_concentrate_fire_target(targets, prefer_artillery, targeting)
+        else {
+            return;
+        };
+        let target = &mut targets[idx];
+        let hp = target.health as f64;
+        let dmg = remaining.min(hp).floor();
+        if dmg < 1.0 {
+            return;
+        }
+        target.take_damage(dmg as u8);
+        remaining -= dmg;
+        if !target.is_alive() {
+            casualties_out.push(target.unit_type);
+        }
+    }
+}
+
+/// Apply a full round of concentrate-fire from `shots` to `targets`.
+/// Front-line shooters pool their FP and drain onto enemy front-line
+/// (spilling to artillery); artillery shooters pool their FP and drain
+/// onto enemy artillery (spilling to front-line). The dead are dropped
+/// from `targets` after both streams resolve.
+fn apply_concentrate_fire_round(
+    shots: &[ShotPlan],
+    targets: &mut Vec<ArmyUnit>,
+    casualties_out: &mut Vec<ArmyUnitType>,
+    targeting: TargetingPriority,
+) {
+    let front_fp: f64 = shots
+        .iter()
+        .filter(|s| !s.is_artillery_shooter)
+        .map(|s| s.fp)
+        .sum();
+    let arty_fp: f64 = shots
+        .iter()
+        .filter(|s| s.is_artillery_shooter)
+        .map(|s| s.fp)
+        .sum();
+    apply_concentrate_fire_stream(targets, front_fp, false, targeting, casualties_out);
+    apply_concentrate_fire_stream(targets, arty_fp, true, targeting, casualties_out);
+    targets.retain(|u| u.is_alive());
 }
 
 /// Check if a force contains any siege artillery units.
@@ -420,6 +717,120 @@ pub fn resolve_battle_with_targeting(
     )
 }
 
+/// Build initial-state per-unit logs for one side before any damage is
+/// dealt. The values stored here are the **role-aware applied** firepower
+/// each unit contributes to its side total, so the per-unit rows the UI
+/// renders sum to `attacker_initial_fp` / the pre-fort defender base FP.
+///
+/// Attacker-side `initial_firepower` includes round-1 modifications:
+/// FPM swap for cavalry charging at melee range and +25% cavalry charge
+/// bonus.
+///
+/// Defender-side `initial_firepower` is the unit's effective FP. The
+/// fort multiplier and Garrison entrenchment kicker are exposed via
+/// `defender_breakdown` so the UI can show the full chain
+/// `applied_fp × fort_mult + entrenchment`.
+fn build_initial_unit_logs(
+    units: &[ArmyUnit],
+    role: BattleRoleLog,
+    fort_level: u8,
+    attacker_has_siege: bool,
+    current_turn: u32,
+    config: &GameConfig,
+) -> Vec<BattleUnitLog> {
+    let global_fort = effective_fort_bonus(fort_level, attacker_has_siege, config);
+    let fort_mult = 1.0 + global_fort;
+    units
+        .iter()
+        .map(|u| {
+            let applied_initial = match role {
+                BattleRoleLog::Attacker => attacker_unit_round_fp(u, 1, config),
+                BattleRoleLog::Defender => u.effective_firepower(),
+            };
+            let breakdown = match role {
+                BattleRoleLog::Defender => {
+                    let entrenchment = if is_entrenched_garrison(u, current_turn) {
+                        config.garrison_entrenchment_fp
+                    } else {
+                        0.0
+                    };
+                    let total = applied_initial * fort_mult + entrenchment;
+                    Some(DefenderBonusBreakdown {
+                        applied_firepower: applied_initial,
+                        fort_multiplier: fort_mult,
+                        entrenchment_fp: entrenchment,
+                        initial_total_contribution: total,
+                    })
+                }
+                BattleRoleLog::Attacker => None,
+            };
+            BattleUnitLog {
+                unit_type: u.unit_type,
+                medals_initial: u.medals,
+                medals_final: u.medals,
+                initial_health: u.health,
+                final_health: u.health,
+                initial_firepower: applied_initial,
+                final_firepower: applied_initial,
+                defender_breakdown: breakdown,
+            }
+        })
+        .collect()
+}
+
+/// Whether `u` is an entrenched garrison defender per card #478: garrison
+/// category, alive, and present at the province since at least the previous
+/// turn. `current_turn = 0` is the legacy / test-harness escape hatch — we
+/// treat all garrisons as entrenched in that case so old tests stay stable.
+fn is_entrenched_garrison(u: &ArmyUnit, current_turn: u32) -> bool {
+    if !u.is_alive() {
+        return false;
+    }
+    if u.unit_type.category() != UnitCategory::Garrison {
+        return false;
+    }
+    if current_turn == 0 {
+        return true;
+    }
+    u.arrived_turn < current_turn
+}
+
+#[derive(Copy, Clone)]
+enum BattleRoleLog {
+    Attacker,
+    Defender,
+}
+
+/// After resolution, walk the original logs and overwrite final state by
+/// matching against survivor unit IDs. `final_firepower` is recomputed
+/// with the same role-aware modifiers used at battle start (round-1 view
+/// for attackers, raw FP for defenders) so the per-unit initial→final
+/// pair the UI shows uses a consistent definition.
+fn finalize_unit_logs(
+    logs: &mut [BattleUnitLog],
+    initial_units: &[ArmyUnit],
+    survivors: &[ArmyUnit],
+    role: BattleRoleLog,
+    config: &GameConfig,
+) {
+    use std::collections::HashMap;
+    let surv_by_id: HashMap<crate::map::UnitId, &ArmyUnit> =
+        survivors.iter().map(|u| (u.id, u)).collect();
+    for (log, original) in logs.iter_mut().zip(initial_units.iter()) {
+        if let Some(s) = surv_by_id.get(&original.id) {
+            log.medals_final = s.medals;
+            log.final_health = s.health;
+            log.final_firepower = match role {
+                BattleRoleLog::Attacker => attacker_unit_round_fp(s, 1, config),
+                BattleRoleLog::Defender => s.effective_firepower(),
+            };
+        } else {
+            log.final_health = 0;
+            log.final_firepower = 0.0;
+        }
+    }
+}
+
 /// Resolve a battle with a full [`BattleConfig`], including retreat rules.
 ///
 /// Two retreat paths are supported:
@@ -448,7 +859,7 @@ pub fn resolve_battle_with_config(
 
     let attacker_initial_count = atk_units.len();
     let defender_initial_count = def_units.len();
-    let attacker_initial_fp = attacker_total_firepower(&atk_units);
+    let attacker_initial_fp = attacker_total_firepower(&atk_units, game_config);
     let attacker_has_siege = has_siege_artillery(&atk_units);
     let siege_reduced_fort = attacker_has_siege && fort_level > 0;
     let defender_initial_fp = defender_total_firepower(
@@ -456,8 +867,31 @@ pub fn resolve_battle_with_config(
         terrain,
         fort_level,
         attacker_has_siege,
+        config.current_turn,
         game_config,
-    ) + militia_count(&def_units) as f64 * 8.0;
+    );
+
+    // Initial roster snapshot, used to (a) populate per-unit logs for the
+    // battle-screen "Show firepower" debug view, and (b) match survivors
+    // back to their starting state once combat ends.
+    let attacker_initial_units = atk_units.clone();
+    let defender_initial_units = def_units.clone();
+    let mut attacker_unit_logs = build_initial_unit_logs(
+        &attacker_initial_units,
+        BattleRoleLog::Attacker,
+        fort_level,
+        attacker_has_siege,
+        config.current_turn,
+        game_config,
+    );
+    let mut defender_unit_logs = build_initial_unit_logs(
+        &defender_initial_units,
+        BattleRoleLog::Defender,
+        fort_level,
+        attacker_has_siege,
+        config.current_turn,
+        game_config,
+    );
 
     let mut attacker_casualties: Vec<ArmyUnitType> = Vec::new();
     let mut defender_casualties: Vec<ArmyUnitType> = Vec::new();
@@ -488,6 +922,9 @@ pub fn resolve_battle_with_config(
             attacker_origin_provinces: Vec::new(),
             is_naval_landing: false,
             retreat_debug: None,
+            attacker_unit_logs,
+            defender_unit_logs,
+            round_logs: Vec::new(),
         };
     }
 
@@ -517,6 +954,9 @@ pub fn resolve_battle_with_config(
             attacker_origin_provinces: Vec::new(),
             is_naval_landing: false,
             retreat_debug: None,
+            attacker_unit_logs,
+            defender_unit_logs,
+            round_logs: Vec::new(),
         };
     }
 
@@ -529,6 +969,8 @@ pub fn resolve_battle_with_config(
         for unit in &mut atk_units {
             unit.award_medal();
         }
+        finalize_unit_logs(&mut attacker_unit_logs, &attacker_initial_units, &atk_units, BattleRoleLog::Attacker, game_config);
+        finalize_unit_logs(&mut defender_unit_logs, &defender_initial_units, &def_units, BattleRoleLog::Defender, game_config);
         return BattleResult {
             attacker: attacker.nation,
             defender: defender.nation,
@@ -553,28 +995,45 @@ pub fn resolve_battle_with_config(
             attacker_origin_provinces: Vec::new(),
             is_naval_landing: false,
             retreat_debug: None,
+            attacker_unit_logs,
+            defender_unit_logs,
+            round_logs: Vec::new(),
         };
     }
 
-    // ── Pre-battle retreat (card #18) ───────────────────────────────
-    // Uses the same FPM-aware attacker firepower and DEF-based defender
-    // firepower (without the flat Minutemen bonus) for a consistent
-    // signal to pre-battle retreat logic.
-    let atk_fp_raw = attacker_total_firepower(&atk_units);
-    let def_fp_raw = defender_total_firepower(
-        &def_units,
+    // ── Pre-battle retreat (card #18 / #478) ────────────────────────
+    // Card #478: ratios now come from the AI strength estimator so they
+    // mirror what the resolver will actually do (charge bonus, artillery
+    // melee penalty, range advantage, Lanchester durability). Personality
+    // thresholds (`attacker_retreat_ratio` / `defender_retreat_ratio`)
+    // stay unchanged — they encode "how lopsided before I bail?", which
+    // is independent of how strength is measured.
+    use crate::military::strength::{BattleRole, StrengthCtx, force_strength};
+    let strength_ctx_atk = StrengthCtx {
         terrain,
         fort_level,
         attacker_has_siege,
-        game_config,
-    );
-    let attacker_ratio = if atk_fp_raw > 0.0 {
-        def_fp_raw / atk_fp_raw
+        opponent_max_range: max_range(&def_units),
+        distance: 1,
+        current_turn: config.current_turn,
+    };
+    let strength_ctx_def = StrengthCtx {
+        terrain,
+        fort_level,
+        attacker_has_siege,
+        opponent_max_range: max_range(&atk_units),
+        distance: 1,
+        current_turn: config.current_turn,
+    };
+    let atk_strength = force_strength(&atk_units, BattleRole::Attacker, &strength_ctx_atk, game_config);
+    let def_strength = force_strength(&def_units, BattleRole::Defender, &strength_ctx_def, game_config);
+    let attacker_ratio = if atk_strength > 0.0 {
+        def_strength / atk_strength
     } else {
         f64::INFINITY
     };
-    let defender_ratio = if def_fp_raw > 0.0 {
-        atk_fp_raw / def_fp_raw
+    let defender_ratio = if def_strength > 0.0 {
+        atk_strength / def_strength
     } else {
         f64::INFINITY
     };
@@ -614,6 +1073,7 @@ pub fn resolve_battle_with_config(
             defender_prebattle_threshold: config.defender_retreat_ratio,
             round: 0,
         };
+        // Pre-battle retreat: nobody took damage, so logs stay at initial.
         if attacker_bails {
             return BattleResult {
                 attacker: attacker.nation,
@@ -639,6 +1099,9 @@ pub fn resolve_battle_with_config(
                 attacker_origin_provinces: Vec::new(),
                 is_naval_landing: false,
                 retreat_debug: Some(prebattle_debug),
+                attacker_unit_logs,
+                defender_unit_logs,
+                round_logs: Vec::new(),
             };
         } else {
             // Defender evacuates; attacker takes the province unopposed.
@@ -666,6 +1129,9 @@ pub fn resolve_battle_with_config(
                 attacker_origin_provinces: Vec::new(),
                 is_naval_landing: false,
                 retreat_debug: Some(prebattle_debug),
+                attacker_unit_logs,
+                defender_unit_logs,
+                round_logs: Vec::new(),
             };
         }
     }
@@ -675,11 +1141,98 @@ pub fn resolve_battle_with_config(
     let mut defender_retreated = false;
     let mut midbattle_debug: Option<RetreatDebug> = None;
     let mut current_round: u32 = 0;
+    let mut round_logs: Vec<BattleRoundLog> = Vec::new();
     // Track damage dealt by each unit (keyed by UnitId) for medal eligibility
     let mut atk_damage_dealt: std::collections::HashMap<crate::map::UnitId, f64> =
         std::collections::HashMap::new();
     let mut def_damage_dealt: std::collections::HashMap<crate::map::UnitId, f64> =
         std::collections::HashMap::new();
+
+    // ── Range first-strike volley (card #478) ───────────────────────
+    // The longer-ranged side fires one *free* volley before round 1 from
+    // only its over-range units (range > opponent_max_range). The
+    // opponent's defensive multipliers (terrain, fort, per-unit DEF) still
+    // mitigate damage — a fortified target is still hard to bombard — but
+    // the attacker takes no return fire this volley.
+    //
+    // Alternatives (see scripts/config/game.lua): half-damage volley, or
+    // no volley but a +30% bombardment bonus every round for the longer-
+    // ranged side. We chose full volley capped to one shot.
+    if game_config.combat_first_strike_enabled {
+        let atk_max_r = max_range(&atk_units);
+        let def_max_r = max_range(&def_units);
+        let mult = game_config.combat_first_strike_damage_multiplier;
+        if atk_max_r > def_max_r {
+            let shots = build_volley_shots(&atk_units, def_max_r, mult);
+            if !shots.is_empty() && !def_units.is_empty() {
+                let volley_fp: f64 = shots.iter().map(|s| s.fp).sum();
+                let shot_count = shots.len();
+                let mut casualties: Vec<ArmyUnitType> = Vec::new();
+                apply_concentrate_fire_round(
+                    &shots,
+                    &mut def_units,
+                    &mut casualties,
+                    config.targeting,
+                );
+                for c in &casualties {
+                    defender_casualties.push(*c);
+                }
+                // Credit damage to over-range bombarders for medal eligibility.
+                for u in atk_units.iter().filter(|u| {
+                    u.is_alive()
+                        && u.unit_type.stats().range > def_max_r
+                        && u.effective_firepower() > 0.0
+                }) {
+                    *atk_damage_dealt.entry(u.id).or_insert(0.0) += u.effective_firepower();
+                }
+                round_logs.push(BattleRoundLog {
+                    round: 0,
+                    first_strike_side: Some("attacker"),
+                    atk_fp: volley_fp,
+                    def_fp: 0.0,
+                    atk_shots: shot_count,
+                    def_shots: 0,
+                    atk_casualties: Vec::new(),
+                    def_casualties: casualties,
+                    retreat_triggered: None,
+                });
+            }
+        } else if def_max_r > atk_max_r {
+            let shots = build_volley_shots(&def_units, atk_max_r, mult);
+            if !shots.is_empty() && !atk_units.is_empty() {
+                let volley_fp: f64 = shots.iter().map(|s| s.fp).sum();
+                let shot_count = shots.len();
+                let mut casualties: Vec<ArmyUnitType> = Vec::new();
+                apply_concentrate_fire_round(
+                    &shots,
+                    &mut atk_units,
+                    &mut casualties,
+                    config.targeting,
+                );
+                for c in &casualties {
+                    attacker_casualties.push(*c);
+                }
+                for u in def_units.iter().filter(|u| {
+                    u.is_alive()
+                        && u.unit_type.stats().range > atk_max_r
+                        && u.effective_firepower() > 0.0
+                }) {
+                    *def_damage_dealt.entry(u.id).or_insert(0.0) += u.effective_firepower();
+                }
+                round_logs.push(BattleRoundLog {
+                    round: 0,
+                    first_strike_side: Some("defender"),
+                    atk_fp: 0.0,
+                    def_fp: volley_fp,
+                    atk_shots: 0,
+                    def_shots: shot_count,
+                    atk_casualties: casualties,
+                    def_casualties: Vec::new(),
+                    retreat_triggered: None,
+                });
+            }
+        }
+    }
 
     for _ in 0..10 {
         if atk_units.is_empty() || def_units.is_empty() {
@@ -687,92 +1240,80 @@ pub fn resolve_battle_with_config(
         }
         current_round += 1;
 
-        // Calculate firepower for this round
-        let atk_fp = attacker_total_firepower(&atk_units);
-        let def_fp = defender_total_firepower(
+        // Build per-shot plans for both sides (concentrate-fire model).
+        // Each shot's FP already includes role-aware modifiers (round-1
+        // cavalry charge, fort multiplier, garrison entrenchment) and the
+        // side's General bonus.
+        let atk_shots = build_attacker_shots(&atk_units, current_round, game_config);
+        let def_shots = build_defender_shots(
             &def_units,
-            terrain,
             fort_level,
             attacker_has_siege,
+            config.current_turn,
             game_config,
-        ) + militia_count(&def_units) as f64 * 8.0;
+        );
+        let atk_fp: f64 = atk_shots.iter().map(|s| s.fp).sum();
+        let def_fp: f64 = def_shots.iter().map(|s| s.fp).sum();
+        let atk_shot_count = atk_shots.len();
+        let def_shot_count = def_shots.len();
 
-        // Attacker deals damage to defender units
+        // Attacker fires at defenders (front-line shooters target enemy
+        // front-line first, falling through to artillery; artillery
+        // shooters target enemy artillery first, falling through to
+        // front-line). Damage spills onto the next priority target if
+        // overkill.
+        let mut def_round_casualties: Vec<ArmyUnitType> = Vec::new();
         if !def_units.is_empty() {
-            let damage_per_unit = atk_fp / def_units.len() as f64;
-            // Sort defender units by targeting priority
-            match config.targeting {
-                TargetingPriority::WeakestFirst => {
-                    def_units.sort_by(|a, b| {
-                        a.effective_firepower()
-                            .partial_cmp(&b.effective_firepower())
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                }
-                TargetingPriority::StrongestFirst => {
-                    def_units.sort_by(|a, b| {
-                        b.effective_firepower()
-                            .partial_cmp(&a.effective_firepower())
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                }
-            }
-            for unit in &mut def_units {
-                unit.take_damage(damage_per_unit as u8);
-            }
-            // Track damage dealt by each attacker unit (proportional to their firepower)
+            apply_concentrate_fire_round(
+                &atk_shots,
+                &mut def_units,
+                &mut def_round_casualties,
+                config.targeting,
+            );
             if atk_fp > 0.0 {
                 for unit in atk_units.iter() {
                     *atk_damage_dealt.entry(unit.id).or_insert(0.0) += unit.effective_firepower();
                 }
             }
         }
+        for c in &def_round_casualties {
+            defender_casualties.push(*c);
+        }
 
-        // Defender deals damage to attacker units
+        // Defender returns fire — same model.
+        let mut atk_round_casualties: Vec<ArmyUnitType> = Vec::new();
         if !atk_units.is_empty() {
-            let damage_per_unit = def_fp / atk_units.len() as f64;
-            // Sort attacker units by targeting priority
-            match config.targeting {
-                TargetingPriority::WeakestFirst => {
-                    atk_units.sort_by(|a, b| {
-                        a.effective_firepower()
-                            .partial_cmp(&b.effective_firepower())
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                }
-                TargetingPriority::StrongestFirst => {
-                    atk_units.sort_by(|a, b| {
-                        b.effective_firepower()
-                            .partial_cmp(&a.effective_firepower())
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                }
-            }
-            for unit in &mut atk_units {
-                unit.take_damage(damage_per_unit as u8);
-            }
-            // Track damage dealt by each defender unit (proportional to their firepower)
+            apply_concentrate_fire_round(
+                &def_shots,
+                &mut atk_units,
+                &mut atk_round_casualties,
+                config.targeting,
+            );
             if def_fp > 0.0 {
                 for unit in def_units.iter() {
                     *def_damage_dealt.entry(unit.id).or_insert(0.0) += unit.effective_firepower();
                 }
             }
         }
-
-        // Remove destroyed units and record casualties
-        for unit in def_units.iter().filter(|u| !u.is_alive()) {
-            defender_casualties.push(unit.unit_type);
+        for c in &atk_round_casualties {
+            attacker_casualties.push(*c);
         }
-        def_units.retain(|u| u.is_alive());
 
-        for unit in atk_units.iter().filter(|u| !u.is_alive()) {
-            attacker_casualties.push(unit.unit_type);
-        }
-        atk_units.retain(|u| u.is_alive());
+        round_logs.push(BattleRoundLog {
+            round: current_round,
+            first_strike_side: None,
+            atk_fp,
+            def_fp,
+            atk_shots: atk_shot_count,
+            def_shots: def_shot_count,
+            atk_casualties: atk_round_casualties,
+            def_casualties: def_round_casualties,
+            retreat_triggered: None,
+        });
 
         // Check for attacker retreat
         if config.attacker_can_retreat && attacker_initial_fp > 0.0 && !atk_units.is_empty() {
-            let current_atk_fp = attacker_total_firepower(&atk_units);
+            let current_atk_fp = attacker_total_firepower(&atk_units, game_config);
             let fp_lost_ratio = 1.0 - (current_atk_fp / attacker_initial_fp);
             if fp_lost_ratio > config.attacker_postbattle_fp_loss {
                 retreated = true;
@@ -787,6 +1328,9 @@ pub fn resolve_battle_with_config(
                     defender_prebattle_threshold: config.defender_retreat_ratio,
                     round: current_round,
                 });
+                if let Some(last) = round_logs.last_mut() {
+                    last.retreat_triggered = Some("attacker");
+                }
                 // Retreating units suffer 10% additional damage on remaining health
                 for unit in &mut atk_units {
                     let retreat_damage = (unit.health as f64 * 0.10) as u8;
@@ -796,6 +1340,9 @@ pub fn resolve_battle_with_config(
                 }
                 for unit in atk_units.iter().filter(|u| !u.is_alive()) {
                     attacker_casualties.push(unit.unit_type);
+                    if let Some(last) = round_logs.last_mut() {
+                        last.atk_casualties.push(unit.unit_type);
+                    }
                 }
                 atk_units.retain(|u| u.is_alive());
                 break;
@@ -823,6 +1370,9 @@ pub fn resolve_battle_with_config(
                     defender_prebattle_threshold: config.defender_retreat_ratio,
                     round: current_round,
                 });
+                if let Some(last) = round_logs.last_mut() {
+                    last.retreat_triggered = Some("defender");
+                }
                 for unit in &mut def_units {
                     let retreat_damage = (unit.health as f64 * 0.10) as u8;
                     if retreat_damage > 0 {
@@ -831,6 +1381,9 @@ pub fn resolve_battle_with_config(
                 }
                 for unit in def_units.iter().filter(|u| !u.is_alive()) {
                     defender_casualties.push(unit.unit_type);
+                    if let Some(last) = round_logs.last_mut() {
+                        last.def_casualties.push(unit.unit_type);
+                    }
                 }
                 def_units.retain(|u| u.is_alive());
                 break;
@@ -875,6 +1428,9 @@ pub fn resolve_battle_with_config(
         }
     }
 
+    finalize_unit_logs(&mut attacker_unit_logs, &attacker_initial_units, &atk_units, BattleRoleLog::Attacker, game_config);
+    finalize_unit_logs(&mut defender_unit_logs, &defender_initial_units, &def_units, BattleRoleLog::Defender, game_config);
+
     BattleResult {
         attacker: attacker.nation,
         defender: defender.nation,
@@ -909,6 +1465,9 @@ pub fn resolve_battle_with_config(
             defender_prebattle_threshold: config.defender_retreat_ratio,
             round: current_round,
         })),
+        attacker_unit_logs,
+        defender_unit_logs,
+        round_logs,
     }
 }
 
@@ -1236,13 +1795,121 @@ mod tests {
         use super::terrain_defense_bonus;
         let cfg = GameConfig::default();
 
-        assert!((terrain_defense_bonus(TerrainType::Mountain, &cfg) - 0.50).abs() < f64::EPSILON);
-        assert!((terrain_defense_bonus(TerrainType::Hills, &cfg) - 0.30).abs() < f64::EPSILON);
-        assert!((terrain_defense_bonus(TerrainType::Forest, &cfg) - 0.20).abs() < f64::EPSILON);
-        assert!((terrain_defense_bonus(TerrainType::Swamp, &cfg) - 0.15).abs() < f64::EPSILON);
+        // Card #478 zeroed terrain bonuses. The lookup function still
+        // exists (for any mod that wants to dial them back up) but the
+        // shipped game config returns 0 for everything.
+        assert!((terrain_defense_bonus(TerrainType::Mountain, &cfg) - 0.0).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Hills, &cfg) - 0.0).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Forest, &cfg) - 0.0).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Swamp, &cfg) - 0.0).abs() < f64::EPSILON);
         assert!((terrain_defense_bonus(TerrainType::Grassland, &cfg) - 0.0).abs() < f64::EPSILON);
         assert!((terrain_defense_bonus(TerrainType::Desert, &cfg) - 0.0).abs() < f64::EPSILON);
         assert!((terrain_defense_bonus(TerrainType::Sea, &cfg) - 0.0).abs() < f64::EPSILON);
+    }
+
+    // ── Concentrate-fire targeting (per-shot 1v1 with row preference) ──
+
+    #[test]
+    fn front_line_shooters_fall_through_to_artillery_when_no_screen() {
+        // Defender is artillery-only — front-line attacker shooters must
+        // fall through and damage them.
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+        let attacker = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Regulars, atk_nation),
+                make_unit(2, ArmyUnitType::Regulars, atk_nation),
+            ],
+        );
+        let defender = make_force(
+            def_nation,
+            vec![make_unit(10, ArmyUnitType::LightArtillery, def_nation)],
+        );
+        let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 0);
+        assert!(result.attacker_won);
+        assert!(
+            result
+                .defender_casualties
+                .contains(&ArmyUnitType::LightArtillery),
+            "front-line attackers should reach the unscreened artillery"
+        );
+    }
+
+    #[test]
+    fn artillery_shooters_prioritize_enemy_artillery() {
+        // Attacker: artillery + screen. Defender: 1 artillery (back row)
+        // + 1 infantry (front row). Attacker artillery should target
+        // defender's artillery first.
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+        let attacker = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Regulars, atk_nation),
+                make_unit(2, ArmyUnitType::FieldArtillery, atk_nation),
+                make_unit(3, ArmyUnitType::FieldArtillery, atk_nation),
+            ],
+        );
+        let defender = make_force(
+            def_nation,
+            vec![
+                make_unit(10, ArmyUnitType::Regulars, def_nation),
+                make_unit(11, ArmyUnitType::LightArtillery, def_nation),
+            ],
+        );
+        let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 0);
+        let arty_idx = result
+            .defender_casualties
+            .iter()
+            .position(|t| *t == ArmyUnitType::LightArtillery);
+        let inf_idx = result
+            .defender_casualties
+            .iter()
+            .position(|t| *t == ArmyUnitType::Regulars);
+        if let (Some(a), Some(i)) = (arty_idx, inf_idx) {
+            assert!(
+                a <= i,
+                "attacker artillery should kill defender artillery before defender infantry falls"
+            );
+        }
+    }
+
+    #[test]
+    fn back_row_artillery_takes_no_damage_until_front_row_clears() {
+        // Defender: 1 Regulars + 1 LightArtillery. Front row clears first.
+        let atk_nation = NationId(1);
+        let def_nation = NationId(2);
+        let attacker = make_force(
+            atk_nation,
+            vec![
+                make_unit(1, ArmyUnitType::Guards, atk_nation),
+                make_unit(2, ArmyUnitType::Guards, atk_nation),
+                make_unit(3, ArmyUnitType::Guards, atk_nation),
+            ],
+        );
+        let defender = make_force(
+            def_nation,
+            vec![
+                make_unit(10, ArmyUnitType::Regulars, def_nation),
+                make_unit(11, ArmyUnitType::LightArtillery, def_nation),
+            ],
+        );
+        let result = resolve_battle(&attacker, &defender, ProvinceId(1), None, 0);
+        // The artillery should die only after the Regulars; with this big
+        // an attacker advantage it dies eventually, but the casualty list
+        // must record Regulars first.
+        let regulars_idx = result
+            .defender_casualties
+            .iter()
+            .position(|t| *t == ArmyUnitType::Regulars);
+        let arty_idx = result
+            .defender_casualties
+            .iter()
+            .position(|t| *t == ArmyUnitType::LightArtillery);
+        if let (Some(r), Some(a)) = (regulars_idx, arty_idx) {
+            assert!(r < a, "front-row Regulars should fall before back-row artillery");
+        }
     }
 
     // ── Fort defense bonus ──────────────────────────────────────
@@ -1252,10 +1919,11 @@ mod tests {
         use super::fort_defense_bonus;
         let cfg = GameConfig::default();
 
+        // Card #478 reset the curve to a clean linear 0/0.25/0.50/0.75.
         assert!((fort_defense_bonus(0, &cfg) - 0.0).abs() < f64::EPSILON);
-        assert!((fort_defense_bonus(1, &cfg) - 0.20).abs() < f64::EPSILON);
-        assert!((fort_defense_bonus(2, &cfg) - 0.40).abs() < f64::EPSILON);
-        assert!((fort_defense_bonus(3, &cfg) - 0.60).abs() < f64::EPSILON);
+        assert!((fort_defense_bonus(1, &cfg) - 0.25).abs() < f64::EPSILON);
+        assert!((fort_defense_bonus(2, &cfg) - 0.50).abs() < f64::EPSILON);
+        assert!((fort_defense_bonus(3, &cfg) - 0.75).abs() < f64::EPSILON);
         assert!((fort_defense_bonus(4, &cfg) - 0.0).abs() < f64::EPSILON); // out of range
     }
 
@@ -1558,18 +2226,18 @@ mod tests {
     fn effective_fort_bonus_without_siege() {
         // Without siege, fort bonus is unchanged
         let cfg = GameConfig::default();
-        assert!((effective_fort_bonus(1, false, &cfg) - 0.20).abs() < f64::EPSILON);
-        assert!((effective_fort_bonus(2, false, &cfg) - 0.40).abs() < f64::EPSILON);
-        assert!((effective_fort_bonus(3, false, &cfg) - 0.60).abs() < f64::EPSILON);
+        assert!((effective_fort_bonus(1, false, &cfg) - 0.25).abs() < f64::EPSILON);
+        assert!((effective_fort_bonus(2, false, &cfg) - 0.50).abs() < f64::EPSILON);
+        assert!((effective_fort_bonus(3, false, &cfg) - 0.75).abs() < f64::EPSILON);
     }
 
     #[test]
     fn effective_fort_bonus_with_siege_reduces_by_half() {
         // With siege, fort bonus is halved
         let cfg = GameConfig::default();
-        assert!((effective_fort_bonus(1, true, &cfg) - 0.10).abs() < f64::EPSILON);
-        assert!((effective_fort_bonus(2, true, &cfg) - 0.20).abs() < f64::EPSILON);
-        assert!((effective_fort_bonus(3, true, &cfg) - 0.30).abs() < f64::EPSILON);
+        assert!((effective_fort_bonus(1, true, &cfg) - 0.125).abs() < f64::EPSILON);
+        assert!((effective_fort_bonus(2, true, &cfg) - 0.25).abs() < f64::EPSILON);
+        assert!((effective_fort_bonus(3, true, &cfg) - 0.375).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -1858,24 +2526,19 @@ mod tests {
         guards.award_medal();
         assert!((guards.effective_firepower() - 25.5).abs() < f64::EPSILON);
 
-        // Terrain defense bonus applied to defender
+        // Card #478: terrain bonuses are zeroed; fort is the only
+        // defender multiplier left, on the linear curve 0/0.25/0.50/0.75.
         let cfg = GameConfig::default();
-        let terrain_bonus = terrain_defense_bonus(TerrainType::Mountain, &cfg);
-        assert!((terrain_bonus - 0.50).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Mountain, &cfg) - 0.0).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Hills, &cfg) - 0.0).abs() < f64::EPSILON);
+        assert!((terrain_defense_bonus(TerrainType::Forest, &cfg) - 0.0).abs() < f64::EPSILON);
 
-        let terrain_bonus_hills = terrain_defense_bonus(TerrainType::Hills, &cfg);
-        assert!((terrain_bonus_hills - 0.30).abs() < f64::EPSILON);
-
-        let terrain_bonus_forest = terrain_defense_bonus(TerrainType::Forest, &cfg);
-        assert!((terrain_bonus_forest - 0.20).abs() < f64::EPSILON);
-
-        // Fort defense bonus
         let fort_bonus = fort_defense_bonus(3, &cfg);
-        assert!((fort_bonus - 0.60).abs() < f64::EPSILON);
+        assert!((fort_bonus - 0.75).abs() < f64::EPSILON);
 
         // Siege artillery reduces fort bonus by 50%
         let effective = effective_fort_bonus(3, true, &cfg);
-        assert!((effective - 0.30).abs() < f64::EPSILON);
+        assert!((effective - 0.375).abs() < f64::EPSILON);
     }
 
     // ── Card #18: retreat mechanic tests ─────────────────────────
@@ -1907,6 +2570,7 @@ mod tests {
             defender_retreat_ratio: 2.0,
             attacker_postbattle_fp_loss: 0.60,
             defender_postbattle_fp_loss: 0.60,
+            current_turn: 0,
         };
         let result = resolve_battle_with_config(
             &attacker,
@@ -1959,6 +2623,7 @@ mod tests {
             defender_retreat_ratio: 2.0,
             attacker_postbattle_fp_loss: 0.60,
             defender_postbattle_fp_loss: 0.60,
+            current_turn: 0,
         };
         let result = resolve_battle_with_config(
             &attacker,
@@ -2007,6 +2672,7 @@ mod tests {
             defender_retreat_ratio: 2.0,
             attacker_postbattle_fp_loss: 0.60,
             defender_postbattle_fp_loss: 0.60,
+            current_turn: 0,
         };
         let result = resolve_battle_with_config(
             &attacker,
@@ -2054,6 +2720,7 @@ mod tests {
             defender_retreat_ratio: 2.0,
             attacker_postbattle_fp_loss: 0.60,
             defender_postbattle_fp_loss: 0.60,
+            current_turn: 0,
         };
         let result = resolve_battle_with_config(
             &attacker,
@@ -2102,6 +2769,7 @@ mod tests {
             defender_retreat_ratio: 2.0,
             attacker_postbattle_fp_loss: 0.60,
             defender_postbattle_fp_loss: 0.60,
+            current_turn: 0,
         };
         let result = resolve_battle_with_config(
             &attacker,
@@ -2303,25 +2971,25 @@ mod tests {
     }
 
     #[test]
-    fn per_unit_terrain_bonus_does_not_apply_on_plains() {
-        // On grassland (no terrain bonus), per-unit defense_terrain_bonus should be ignored.
+    fn terrain_no_longer_affects_defender_firepower() {
+        // Card #478 dropped the terrain multiplier entirely. The resolver
+        // should produce identical defender FP on grassland and forest.
         let cfg = GameConfig::default();
         let units = vec![ArmyUnit::new(
             crate::map::UnitId(1),
-            ArmyUnitType::SiegeArtillery, // defense_terrain_bonus = 11
+            ArmyUnitType::SiegeArtillery,
             NationId(1),
             ProvinceId(1),
         )];
 
-        // Grassland: per-unit bonus should NOT apply (qualifies_for_per_unit_terrain = false)
         let fp_plains =
-            defender_total_firepower(&units, Some(TerrainType::Grassland), 0, false, &cfg);
-        // Forest: per-unit bonus SHOULD apply
-        let fp_forest = defender_total_firepower(&units, Some(TerrainType::Forest), 0, false, &cfg);
+            defender_total_firepower(&units, Some(TerrainType::Grassland), 0, false, 0, &cfg);
+        let fp_forest =
+            defender_total_firepower(&units, Some(TerrainType::Forest), 0, false, 0, &cfg);
+        let fp_mountain =
+            defender_total_firepower(&units, Some(TerrainType::Mountain), 0, false, 0, &cfg);
 
-        assert!(
-            fp_forest > fp_plains,
-            "forest should give more defender FP than plains due to terrain bonus"
-        );
+        assert!((fp_forest - fp_plains).abs() < f64::EPSILON);
+        assert!((fp_mountain - fp_plains).abs() < f64::EPSILON);
     }
 }

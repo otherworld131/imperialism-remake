@@ -127,6 +127,53 @@ export interface BattleUnit {
   effective_firepower: number;
 }
 
+/**
+ * Per-defender-unit bonus breakdown — captured at battle start so the UI
+ * can explain how a unit's raw FP turns into its contribution to
+ * `defender_initial_fp`. Card #478 simplified model:
+ *   contribution = applied_firepower × fort_multiplier + entrenchment_fp
+ * `applied_firepower` already accounts for the role-aware artillery
+ * melee penalty. `null` for attacker logs.
+ */
+export interface DefenderBonusBreakdown {
+  applied_firepower: number;
+  fort_multiplier: number;
+  entrenchment_fp: number;
+  initial_total_contribution: number;
+}
+
+/** Per-unit log for a battle — survivors and destroyed alike. */
+export interface BattleUnitLog {
+  unit_type: string;
+  medals_initial: number;
+  medals_final: number;
+  initial_health: number;
+  final_health: number;
+  initial_firepower: number;
+  final_firepower: number;
+  defender_breakdown: DefenderBonusBreakdown | null;
+}
+
+/**
+ * Per-round trace of how the battle played out — surfaced in the battle
+ * screen behind "Show firepower". `round = 0` is the optional first-strike
+ * volley (one of the sides shoots, the other doesn't); `round = 1..N` are
+ * the regular damage exchanges.
+ */
+export interface BattleRoundLog {
+  round: number;
+  /** "attacker" / "defender" for the first-strike volley row, null otherwise. */
+  first_strike_side: 'attacker' | 'defender' | null;
+  atk_fp: number;
+  def_fp: number;
+  atk_shots: number;
+  def_shots: number;
+  atk_casualties: string[];
+  def_casualties: string[];
+  /** Set when this round triggered a mid-battle retreat. */
+  retreat_triggered: 'attacker' | 'defender' | null;
+}
+
 /** Debug-only: explains the retreat decision for a battle. */
 export interface RetreatDebug {
   /** "attacker", "defender", or "none" if no retreat fired. */
@@ -176,6 +223,11 @@ export interface LandBattleData {
   origin_province_names: string[];
   is_naval_landing: boolean;
   retreat_debug: RetreatDebug | null;
+  /** Per-unit logs captured at battle start, finalized post-resolution. */
+  attacker_unit_logs: BattleUnitLog[];
+  defender_unit_logs: BattleUnitLog[];
+  /** Per-round trace; empty for short-circuited battles. */
+  round_logs: BattleRoundLog[];
 }
 
 export interface NavalBattleData {

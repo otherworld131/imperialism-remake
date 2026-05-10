@@ -62,6 +62,11 @@ pub struct ArmyUnit {
     pub health: u8,
     pub medals: u8,
     pub movement_remaining: u32,
+    /// Card #478 entrenchment gate. `#[serde(default)]` so legacy saves
+    /// without this field load as `0` ("always been here") which means
+    /// already-entrenched in any battle this turn.
+    #[serde(default)]
+    pub arrived_turn: u32,
 }
 
 // ── Ships ─────────────────────────────────────────────────────────
@@ -268,6 +273,7 @@ impl From<&d::units::ArmyUnit> for ArmyUnit {
             health: v.health,
             medals: v.medals,
             movement_remaining: v.movement_remaining,
+            arrived_turn: v.arrived_turn,
         }
     }
 }
@@ -283,6 +289,7 @@ impl From<ArmyUnit> for d::units::ArmyUnit {
         unit.health = v.health;
         unit.medals = v.medals;
         unit.movement_remaining = v.movement_remaining;
+        unit.arrived_turn = v.arrived_turn;
         unit
     }
 }
@@ -475,6 +482,11 @@ impl From<BattleResult> for d::combat::BattleResult {
                 .collect(),
             is_naval_landing: v.is_naval_landing,
             retreat_debug: None,
+            // Per-unit debug logs are runtime-only (used by the battle screen);
+            // saves stay stable by dropping them.
+            attacker_unit_logs: Vec::new(),
+            defender_unit_logs: Vec::new(),
+            round_logs: Vec::new(),
         }
     }
 }

@@ -178,7 +178,7 @@ game_config = {
     -- `workers >= ceil(demand / coverage)`. Lower = more civilians (lots of
     -- 1-tile-each Farmers); higher = fewer, harder-working civilians. The
     -- original game has ~1–3 of each type per nation, so 8 is a closer match.
-    civilian_target_tiles_per_worker = 8,
+    civilian_target_tiles_per_worker = 3,
     -- Card #217 follow-up: replaces the single `civilian_coverage_per_unmet`
     -- with per-tile weights that depend on the tile's connectivity. An
     -- improvable tile only produces yield once collected, so a depot-
@@ -289,7 +289,7 @@ game_config = {
     -- Diplomatic relationship tuning
     -- Minor nations voluntarily join a Great Power's empire when their relation
     -- score reaches this value. Range is [-100, 100], so 95 = near-max trust.
-    voluntary_incorporation_threshold = 95,
+    voluntary_incorporation_threshold = 90,
     -- Per-turn cap on relationship improvement from trade with a consulate.
     -- The raw improvement is the number of distinct resources traded;
     -- capping prevents broad trade portfolios from trivially maxing relations.
@@ -300,7 +300,7 @@ game_config = {
     -- Only apply the trade relationship improvement once every N turns.
     -- Combined with the cap above, this controls how fast a GP can befriend
     -- a minor nation through passive trade alone. Set to 1 for every turn.
-    trade_relation_turn_interval = 1,
+    trade_relation_turn_interval = 3,
 
     -- Minor nation trade behaviour
     -- Chance (0–100) that a minor nation withholds one random resource offer each turn.
@@ -360,16 +360,80 @@ game_config = {
     pact_defense_threshold_economic = 0.5,
 
     -- D-5: Terrain and fort defense bonuses (fraction added to defender FP).
-    terrain_defense_mountain = 0.50,
-    terrain_defense_hills = 0.30,
-    terrain_defense_forest = 0.20,
-    terrain_defense_swamp = 0.15,
-    fort_defense_level1 = 0.20,
-    fort_defense_level2 = 0.40,
-    fort_defense_level3 = 0.60,
+    --
+    -- Card #478 follow-up: terrain bonuses are zeroed out and the per-unit
+    -- `defense` stat multiplier was dropped from the resolver. The only
+    -- defender multiplier left is the fort, which scales linearly to a
+    -- max of +75% at L3 (so a forted province roughly negates an attacker's
+    -- numeric edge, but no defensive setup is multiplicatively decisive).
+    terrain_defense_mountain = 0.0,
+    terrain_defense_hills = 0.0,
+    terrain_defense_forest = 0.0,
+    terrain_defense_swamp = 0.0,
+    fort_defense_level1 = 0.25,
+    fort_defense_level2 = 0.50,
+    fort_defense_level3 = 0.75,
+    -- Flat raw FP added per defending Garrison unit (Minutemen / Militia /
+    -- Conscript / GarrisonArtillery) that has been at the province for at
+    -- least one turn (`arrived_turn < current_turn`). Intent: established
+    -- garrisons "dig in" and gain a small entrenchment kicker that fresh
+    -- arrivals don't get yet. Was 8 (Minutemen-only) before card #478.
+    garrison_entrenchment_fp = 3.0,
     -- Fraction of starting FP lost that triggers a mid-battle retreat for each side.
     battle_attacker_fp_loss_ratio = 0.60,
     battle_defender_fp_loss_ratio = 2.0,
+
+    -- ── Role-aware combat (Trello card #478) ─────────────────────────
+    -- These knobs feed both the resolver and the AI strength estimator
+    -- so the AI's pre-attack guess matches what the resolver actually does.
+    --
+    -- combat_first_strike_enabled
+    --   When the longer-ranged side's max range exceeds the shorter-ranged
+    --   side's max range, that side fires one *free* volley before round 1
+    --   from only its over-range units. Captures the "artillery shoots
+    --   first" feel the original game implied via FPN/FPM split.
+    --   Alternatives we considered:
+    --     (b) free volley at 50% damage  — too forgiving for siege/RR guns
+    --     (c) no free volley but +30% bombardment dmg every round for the
+    --         longer-ranged side — closer to a hit-and-run feel, but
+    --         bleeds the headline "artillery gets to shoot first" effect.
+    --   We picked (a). One free volley per battle, capped to over-range
+    --   units (range > opponent_max_range), full damage.
+    combat_first_strike_enabled = true,
+    combat_first_strike_damage_multiplier = 1.0,
+
+    -- combat_cavalry_charge_bonus
+    --   Multiplies attacking-cavalry firepower in round 1 only.
+    --   Spec calls for ×1.25 vs non-cavalry targets, but the resolver pools
+    --   damage at the side level so we can't slice "vs non-cavalry only"
+    --   without per-target accounting. We apply the bonus unconditionally
+    --   in round 1 (one-shot charge) and document the per-target variant.
+    --   Alternative: every round it stays in melee — historically wrong,
+    --   a charge is a one-shot.
+    combat_cavalry_charge_bonus = 0.25,
+
+    -- "Screen your guns" emerges from the per-shot 1v1 targeting model:
+    -- front-line shooters target enemy front-line first and only fall through
+    -- to artillery once the screen is gone, so a stack with infantry up
+    -- front naturally protects its artillery without an explicit penalty.
+
+    -- combat_ai_strength_*  — AI estimator only, never used by the resolver.
+    --   The estimator computes per-unit "effective strength" as
+    --     s(u) = fp_phase(u) * sqrt(def_eff(u)) * range_factor(u) * health(u)
+    --   so that under Lanchester square-law dynamics a force's expected
+    --   contribution is linearly summable.
+    --   sqrt(defense): doubling defense ≈ √2× the strength contribution.
+    --   Alternative we considered: linear `def_eff(u)` (more intuitive when
+    --   reading numbers — "20 def is 5× as tough as 4 def" — but inflates
+    --   the apparent gap between Era-3 elite and Era-1 garrisons more than
+    --   battle outcomes warrant). We picked sqrt; flip the flag below to
+    --   compare empirically.
+    combat_ai_strength_lanchester = true,
+    --   range_advantage = 1 + coeff * max(0, my_range - enemy_max_range)
+    --   capped at +cap. Lets the AI value a 6-range Armour stack over a
+    --   1-range Conscript stack of equivalent FP.
+    combat_ai_strength_range_advantage_coeff = 0.10,
+    combat_ai_strength_range_advantage_cap = 0.50,
 
     -- D-6: AI worker/civilian hiring thresholds.
     -- Workers recruited per province for normal vs. wealthy nations.

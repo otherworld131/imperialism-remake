@@ -4175,6 +4175,7 @@ fn build_battle_config(
         defender_retreat_ratio: def_prebattle,
         attacker_postbattle_fp_loss: atk_postbattle,
         defender_postbattle_fp_loss: def_postbattle,
+        current_turn: game.turn.0,
     }
 }
 
@@ -4276,12 +4277,16 @@ fn place_defender_retreat(
         overflow_militia.push(*uid);
     }
 
+    let current_turn = game.turn.0;
     // Apply placements; destroy overflow militia and dying artillery.
     if let Some(nation) = game.get_nation_mut(defender_id) {
         for (uid, dest) in &placements {
             for u in &mut nation.military.army {
                 if u.id == *uid {
                     u.position = *dest;
+                    // Card #478: a unit that just relocated isn't
+                    // entrenched at its new province until next turn.
+                    u.arrived_turn = current_turn;
                 }
             }
         }
@@ -4375,6 +4380,7 @@ fn rebalance_militia_into(game: &mut GameState, new_owner: NationId, province: P
         let Some((src_pid, _)) = best else {
             break; // no neighbor has excess
         };
+        let current_turn = game.turn.0;
         // Move one militia from src_pid to province.
         let moved_id = {
             let Some(nm) = game.get_nation_mut(new_owner) else {
@@ -4388,6 +4394,7 @@ fn rebalance_militia_into(game: &mut GameState, new_owner: NationId, province: P
                 break;
             };
             unit.position = province;
+            unit.arrived_turn = current_turn;
             unit.id
         };
         let _ = moved_id;
@@ -4469,8 +4476,12 @@ fn regenerate_garrisons(game: &mut GameState) {
             spawns.push((owner, prov.id));
         }
     }
+    let current_turn = game.turn.0;
     for (owner, pid) in spawns {
-        let unit = crate::military::combat::spawn_militia_unit(&mut game.next_unit_id, owner, pid);
+        let mut unit = crate::military::combat::spawn_militia_unit(&mut game.next_unit_id, owner, pid);
+        // Card #478: freshly-spawned militia aren't entrenched until next
+        // turn (`arrived_turn < current_turn` only holds from turn N+1 on).
+        unit.arrived_turn = current_turn;
         if let Some(nation) = game.get_nation_mut(owner) {
             nation.military.army.push(unit);
         }
@@ -4808,6 +4819,7 @@ fn seed_released_minor_garrison(
     let target = game.game_data.game_config.minor_default_garrison as usize;
     let capital_id = game.get_nation(minor_id).map(|n| n.capital_province_id);
 
+    let current_turn = game.turn.0;
     for pid in provinces_to_restore {
         let current = game
             .get_nation(minor_id)
@@ -4816,11 +4828,12 @@ fn seed_released_minor_garrison(
         let missing = target.saturating_sub(current);
         if missing > 0 {
             for _ in 0..missing {
-                let unit = crate::military::combat::spawn_militia_unit(
+                let mut unit = crate::military::combat::spawn_militia_unit(
                     &mut game.next_unit_id,
                     minor_id,
                     *pid,
                 );
+                unit.arrived_turn = current_turn;
                 if let Some(minor) = game.get_nation_mut(minor_id) {
                     minor.military.army.push(unit);
                 }
@@ -8680,10 +8693,11 @@ mod tests {
         use crate::military::combat::fort_defense_bonus;
         let cfg = GameConfig::default();
 
+        // Card #478: linear curve 0/0.25/0.50/0.75.
         assert_eq!(fort_defense_bonus(0, &cfg), 0.0);
-        assert!((fort_defense_bonus(1, &cfg) - 0.20).abs() < f64::EPSILON);
-        assert!((fort_defense_bonus(2, &cfg) - 0.40).abs() < f64::EPSILON);
-        assert!((fort_defense_bonus(3, &cfg) - 0.60).abs() < f64::EPSILON);
+        assert!((fort_defense_bonus(1, &cfg) - 0.25).abs() < f64::EPSILON);
+        assert!((fort_defense_bonus(2, &cfg) - 0.50).abs() < f64::EPSILON);
+        assert!((fort_defense_bonus(3, &cfg) - 0.75).abs() < f64::EPSILON);
     }
 
     #[test]

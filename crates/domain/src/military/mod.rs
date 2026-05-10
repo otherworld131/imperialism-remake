@@ -6,7 +6,9 @@ pub mod combat;
 pub mod naval;
 pub mod navy_placement;
 pub mod ships;
+pub mod strength;
 pub mod units;
+pub use strength::{BattleRole, StrengthCtx, force_strength, unit_effective_strength};
 #[cfg(test)]
 pub use combat::create_garrison;
 pub use combat::{

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import type { TileData, LandBattleData, NavalBattleData, BattleData, ArchivedBattleTurn, BattleTile, BattleUnit, RetreatDebug } from '../wasm';
+import type { TileData, LandBattleData, NavalBattleData, BattleData, ArchivedBattleTurn, BattleTile, BattleUnit, BattleUnitLog, BattleRoundLog, RetreatDebug } from '../wasm';
 import { UnitRow } from './UnitRow';
 import { computeNationLabels } from '../lib/nationLabels';
 import Flag from './Flag';
@@ -429,7 +429,12 @@ export default function BattleScreen({
                 {/* Right column: battle details */}
                 <div style={styles.rightCol}>
                   {selectedBattle && selectedBattle.type === 'land' && (
-                    <LandBattleDetails battle={selectedBattle} flagById={flagById} showRetreatDebug={showRetreatDebug} showFirepower={showFirepower} />
+                    <LandBattleDetails
+                      battle={selectedBattle}
+                      flagById={flagById}
+                      showRetreatDebug={showRetreatDebug}
+                      showFirepower={showFirepower}
+                    />
                   )}
                   {selectedBattle && selectedBattle.type === 'naval' && (
                     <NavalBattleDetails battle={selectedBattle} flagById={flagById} />
@@ -530,6 +535,7 @@ function LandBattleDetails({
             survivedCount={battle.attacker_survivors_count}
             survivors={battle.attacker_survivors}
             casualties={battle.attacker_casualties}
+            unitLogs={battle.attacker_unit_logs}
             showFirepower={showFirepower}
           />
           <ForceColumn
@@ -540,10 +546,25 @@ function LandBattleDetails({
             survivedCount={battle.defender_survivors_count}
             survivors={battle.defender_survivors}
             casualties={battle.defender_casualties}
+            unitLogs={battle.defender_unit_logs}
             showFirepower={showFirepower}
           />
         </div>
       </div>
+
+      {showFirepower && (
+        <div style={styles.detailSection}>
+          <div style={styles.sectionTitle}>How combat is calculated</div>
+          <CombatExplanation battle={battle} />
+        </div>
+      )}
+
+      {showFirepower && battle.round_logs && battle.round_logs.length > 0 && (
+        <div style={styles.detailSection}>
+          <div style={styles.sectionTitle}>How the battle played out</div>
+          <RoundPlayout battle={battle} />
+        </div>
+      )}
 
       {/* Medal awards */}
       {battle.medal_awards.length > 0 && (
@@ -610,16 +631,18 @@ function RetreatDebugBlock({ debug, battle }: { debug: RetreatDebug; battle: Lan
           <span style={numStyle}>def {fmt(debug.defender_prebattle_ratio)}</span>{' '}
           <span style={labelStyle}>(thr {fmt(debug.defender_prebattle_threshold)})</span>
         </span>
-        <span style={labelStyle}>Initial FP:</span>
+        <span style={labelStyle}>Effective FP:</span>
         <span>
           <span style={numStyle}>atk {fmt(battle.attacker_initial_fp)}</span>
           {' · '}
           <span style={numStyle}>def {fmt(battle.defender_initial_fp)}</span>
-          {battle.terrain && (
-            <span style={labelStyle}>
-              {' '}(defender FP includes terrain {battle.terrain}{battle.fort_level > 0 ? `, fort L${battle.fort_level}` : ''})
-            </span>
-          )}
+          <div style={{ ...labelStyle, marginTop: 2 }}>
+            Includes per-unit DEF stat × (1 + terrain
+            {battle.terrain ? ` ${battle.terrain}` : ''}) × (1 + fort
+            {battle.fort_level > 0 ? ` L${battle.fort_level}` : ' L0'})
+            × general bonus, + 8 FP per defending militia (entrenchment).
+            That's why this is much larger than the sum of unit FP shown below.
+          </div>
         </span>
       </div>
     </div>
@@ -628,7 +651,7 @@ function RetreatDebugBlock({ debug, battle }: { debug: RetreatDebug; battle: Lan
 
 // ── Per-side force column for LandBattleDetails ─────────────────
 function ForceColumn({
-  side, role, flag, initial, survivedCount, survivors, casualties, showFirepower,
+  side, role, flag, initial, survivedCount, survivors, casualties, unitLogs, showFirepower,
 }: {
   side: string;
   role: 'Attacker' | 'Defender';
@@ -637,8 +660,16 @@ function ForceColumn({
   survivedCount: number;
   survivors: BattleUnit[];
   casualties: string[];
+  unitLogs?: BattleUnitLog[];
   showFirepower?: boolean;
 }) {
+  // When the firepower debug toggle is on AND we have per-unit logs, render
+  // every unit (alive + destroyed) from the logs in a single pass — that
+  // gives us initial→final FP and the defender bonus breakdown for each
+  // individual unit. When the toggle is off, fall back to the legacy
+  // survivors-then-casualties layout with FP hidden so the screen reads
+  // as a clean roster.
+  const useLogs = !!showFirepower && unitLogs && unitLogs.length > 0;
   return (
     <div style={styles.forceCol}>
       <div style={{ ...styles.forceHeader, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -650,27 +681,53 @@ function ForceColumn({
         {initial} engaged &middot; {survivedCount} survived &middot; {casualties.length} lost
       </div>
       <div style={{ marginTop: 4 }}>
-        {survivors.map((u, i) => (
-          <UnitRow
-            key={`s${i}`}
-            unit_type={u.unit_type}
-            medals={u.medals}
-            health={u.health}
-            effective_firepower={u.effective_firepower}
-            showFirepower={showFirepower}
-          />
-        ))}
-        {casualties.map((t, i) => (
-          <UnitRow
-            key={`c${i}`}
-            unit_type={t}
-            medals={0}
-            health={0}
-            effective_firepower={0}
-            destroyed
-            showFirepower={showFirepower}
-          />
-        ))}
+        {useLogs ? (
+          unitLogs!.map((log, i) => {
+            const destroyed = log.final_health === 0;
+            const suffix = log.defender_breakdown
+              ? <DefenderBreakdownLine breakdown={log.defender_breakdown} />
+              : (role === 'Attacker'
+                  ? <AttackerModifierLine log={log} />
+                  : undefined);
+            return (
+              <UnitRow
+                key={`l${i}`}
+                unit_type={log.unit_type}
+                medals={destroyed ? log.medals_initial : log.medals_final}
+                health={log.final_health}
+                effective_firepower={log.final_firepower}
+                initialFirepower={log.initial_firepower}
+                showFirepower={true}
+                fpSuffix={suffix}
+                destroyed={destroyed}
+              />
+            );
+          })
+        ) : (
+          <>
+            {survivors.map((u, i) => (
+              <UnitRow
+                key={`s${i}`}
+                unit_type={u.unit_type}
+                medals={u.medals}
+                health={u.health}
+                effective_firepower={u.effective_firepower}
+                showFirepower={!!showFirepower}
+              />
+            ))}
+            {casualties.map((t, i) => (
+              <UnitRow
+                key={`c${i}`}
+                unit_type={t}
+                medals={0}
+                health={0}
+                effective_firepower={0}
+                showFirepower={!!showFirepower}
+                destroyed
+              />
+            ))}
+          </>
+        )}
         {survivors.length === 0 && casualties.length === 0 && (
           <div style={{ color: '#888', fontStyle: 'italic', fontSize: 'var(--ui-font-size, 14px)' }}>No units recorded</div>
         )}
@@ -678,6 +735,320 @@ function ForceColumn({
     </div>
   );
 }
+
+// ── Attacker per-unit modifier annotation ───────────────────────
+// Tells the user *why* an attacker unit's FP looks the way it does.
+// FPN (raw firepower) lives in units.lua; the displayed `initial_firepower`
+// already includes role-aware modifiers (FPM swap and ×1.25 cavalry charge
+// in round 1).
+function AttackerModifierLine({ log }: { log: BattleUnitLog }) {
+  const cat = UNIT_TYPE_CATEGORY_FOR_HINTS[log.unit_type];
+  const labelStyle: React.CSSProperties = { color: '#888', fontSize: 10, fontStyle: 'italic' };
+  const parts: string[] = [];
+  if (cat === 'Cavalry') {
+    parts.push('round-1 FPM × 1.25 charge');
+  }
+  if (parts.length === 0) {
+    return null;
+  }
+  return <div style={labelStyle}>applied: {parts.join(', ')}</div>;
+}
+
+const UNIT_TYPE_CATEGORY_FOR_HINTS: Record<string, 'Garrison' | 'Infantry' | 'Cavalry' | 'Artillery' | 'Special'> = {
+  Minutemen: 'Garrison', Militia: 'Garrison', Conscript: 'Garrison', GarrisonArtillery: 'Garrison',
+  Skirmishers: 'Infantry', Sharpshooters: 'Infantry', Rangers: 'Infantry',
+  Regulars: 'Infantry', RifleInfantry: 'Infantry', Infantry: 'Infantry',
+  Grenadiers: 'Infantry', Guards: 'Infantry', MachineGunners: 'Infantry',
+  Hussars: 'Cavalry', Scouts: 'Cavalry', Carbineers: 'Cavalry', Mechanised: 'Cavalry',
+  Cuirassiers: 'Cavalry', Armour: 'Cavalry',
+  LightArtillery: 'Artillery', HorseArtillery: 'Artillery', FieldArtillery: 'Artillery',
+  MobileArtillery: 'Artillery', Artillery: 'Artillery', SiegeArtillery: 'Artillery',
+  RailroadGuns: 'Artillery',
+  Sapper: 'Special', CombatEngineer: 'Special', Commandos: 'Special', Saboteur: 'Special',
+  General: 'Special',
+};
+
+// ── Defender per-unit bonus breakdown ───────────────────────────
+function DefenderBreakdownLine({
+  breakdown,
+}: {
+  breakdown: NonNullable<BattleUnitLog['defender_breakdown']>;
+}) {
+  const fmt = (n: number) => n.toFixed(2);
+  const numStyle: React.CSSProperties = { color: '#ddd', fontFamily: 'monospace' };
+  const labelStyle: React.CSSProperties = { color: '#888' };
+  const total = breakdown.initial_total_contribution;
+  return (
+    <div style={{ fontSize: 10, color: '#aab', lineHeight: 1.35 }}>
+      <span style={labelStyle}>Defender contrib:</span>{' '}
+      <span style={numStyle}>{fmt(total)}</span>
+      <span style={labelStyle}> = fp </span>
+      <span style={numStyle}>{fmt(breakdown.applied_firepower)}</span>
+      <span style={labelStyle}> × fort </span>
+      <span style={numStyle}>{fmt(breakdown.fort_multiplier)}</span>
+      {breakdown.entrenchment_fp > 0 && (
+        <>
+          <span style={labelStyle}> + entrenchment </span>
+          <span style={numStyle}>{fmt(breakdown.entrenchment_fp)}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── 'How combat is calculated' walkthrough ──────────────────────
+// Numeric walkthrough using THIS battle's values — no formulas, the
+// formulas are visible per-unit above.
+function CombatExplanation({ battle }: { battle: LandBattleData }) {
+  const fmt = (n: number) => n.toFixed(2);
+  const labelStyle: React.CSSProperties = { color: '#aab' };
+  const numStyle: React.CSSProperties = { color: '#fff', fontFamily: 'monospace' };
+  const subStyle: React.CSSProperties = { color: '#888', fontSize: 11 };
+  const rowStyle: React.CSSProperties = {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(140px, auto) 1fr',
+    columnGap: 12, rowGap: 2, fontSize: 11,
+  };
+
+  const atkLogs = battle.attacker_unit_logs;
+  const defLogs = battle.defender_unit_logs;
+  const atkSum = atkLogs.reduce((s, u) => s + u.initial_firepower, 0);
+  const defSum = defLogs.reduce((s, u) => s + (u.defender_breakdown?.initial_total_contribution ?? u.initial_firepower), 0);
+  const atkGenBonus = atkSum > 0 ? battle.attacker_initial_fp / atkSum : 1;
+  const defGenBonus = defSum > 0 ? battle.defender_initial_fp / defSum : 1;
+
+  // Range first-strike: figure out max ranges from unit type stats.
+  const atkRanges = atkLogs.map(u => UNIT_RANGE[u.unit_type] ?? 0);
+  const defRanges = defLogs.map(u => UNIT_RANGE[u.unit_type] ?? 0);
+  const atkMaxR = atkRanges.length > 0 ? Math.max(...atkRanges) : 0;
+  const defMaxR = defRanges.length > 0 ? Math.max(...defRanges) : 0;
+  const firstStrikeSide = atkMaxR > defMaxR ? 'attacker' : defMaxR > atkMaxR ? 'defender' : null;
+  const firstStrikeOpp = firstStrikeSide === 'attacker' ? defMaxR : atkMaxR;
+  const firstStrikeUnits = firstStrikeSide === 'attacker'
+    ? atkLogs.filter(u => (UNIT_RANGE[u.unit_type] ?? 0) > defMaxR)
+    : firstStrikeSide === 'defender'
+      ? defLogs.filter(u => (UNIT_RANGE[u.unit_type] ?? 0) > atkMaxR)
+      : [];
+  const firstStrikeFp = firstStrikeUnits.reduce((s, u) => s + u.initial_firepower, 0);
+
+  return (
+    <div style={{ fontSize: 12, color: '#dcd6c4', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Attacker walkthrough */}
+      <div>
+        <div style={{ marginBottom: 4 }}>
+          <strong>Attacker initial FP:</strong>{' '}
+          <span style={numStyle}>{fmt(battle.attacker_initial_fp)}</span>{' '}
+          <span style={subStyle}>— each unit's contribution is its applied firepower (FPN × medals × health, plus FPM swap and ×1.25 charge for round-1 cavalry).</span>
+        </div>
+        <div style={rowStyle}>
+          {atkLogs.map((u, i) => (
+            <React.Fragment key={`a${i}`}>
+              <span style={labelStyle}>{splitTitle(u.unit_type)}:</span>
+              <span>
+                <span style={numStyle}>{fmt(u.initial_firepower)}</span>
+              </span>
+            </React.Fragment>
+          ))}
+          <span style={labelStyle}>Sum × general bonus:</span>
+          <span>
+            <span style={numStyle}>{fmt(atkSum)}</span>
+            <span style={subStyle}> × </span>
+            <span style={numStyle}>{fmt(atkGenBonus)}</span>
+            <span style={subStyle}> = </span>
+            <span style={numStyle}>{fmt(battle.attacker_initial_fp)}</span>
+          </span>
+        </div>
+      </div>
+
+      {/* Defender walkthrough */}
+      <div>
+        <div style={{ marginBottom: 4 }}>
+          <strong>Defender initial FP:</strong>{' '}
+          <span style={numStyle}>{fmt(battle.defender_initial_fp)}</span>{' '}
+          <span style={subStyle}>— each unit's contribution = applied_fp × fort + entrenchment (Garrison units in the province for ≥1 turn).</span>
+        </div>
+        <div style={rowStyle}>
+          {defLogs.map((u, i) => {
+            const b = u.defender_breakdown;
+            const contrib = b ? b.initial_total_contribution : u.initial_firepower;
+            return (
+              <React.Fragment key={`d${i}`}>
+                <span style={labelStyle}>{splitTitle(u.unit_type)}:</span>
+                <span>
+                  <span style={numStyle}>{fmt(contrib)}</span>
+                  {b && (
+                    <span style={subStyle}>
+                      {' '}({fmt(b.applied_firepower)} × {fmt(b.fort_multiplier)}
+                      {b.entrenchment_fp > 0 && ` + ${fmt(b.entrenchment_fp)}`})
+                    </span>
+                  )}
+                </span>
+              </React.Fragment>
+            );
+          })}
+          <span style={labelStyle}>Sum × general bonus:</span>
+          <span>
+            <span style={numStyle}>{fmt(defSum)}</span>
+            <span style={subStyle}> × </span>
+            <span style={numStyle}>{fmt(defGenBonus)}</span>
+            <span style={subStyle}> = </span>
+            <span style={numStyle}>{fmt(battle.defender_initial_fp)}</span>
+          </span>
+        </div>
+      </div>
+
+      {/* First-strike volley */}
+      <div>
+        <div style={{ marginBottom: 4 }}>
+          <strong>Range first-strike:</strong>{' '}
+          <span style={subStyle}>
+            attacker max range <span style={numStyle}>{atkMaxR}</span>{' '}
+            vs defender max range <span style={numStyle}>{defMaxR}</span>.
+          </span>
+        </div>
+        {firstStrikeSide === null ? (
+          <div style={subStyle}>No first-strike volley fired (ranges are equal).</div>
+        ) : (
+          <div style={subStyle}>
+            {firstStrikeSide === 'attacker' ? 'Attacker' : 'Defender'} fires one free volley before round 1
+            with {firstStrikeUnits.length} over-range unit{firstStrikeUnits.length === 1 ? '' : 's'}{' '}
+            (range &gt; <span style={numStyle}>{firstStrikeOpp}</span>),{' '}
+            volley FP <span style={numStyle}>{fmt(firstStrikeFp)}</span>.
+            {firstStrikeUnits.length === 0 && ' (none qualified.)'}
+          </div>
+        )}
+      </div>
+
+      {/* Round-by-round damage exchange */}
+      <div>
+        <strong>Damage exchange (each round):</strong>{' '}
+        <span style={subStyle}>
+          Each unit picks one enemy target and concentrates its firepower on it.
+          Front-line units (infantry / cavalry / garrison) target the enemy
+          front-line first, falling through to artillery only if the front-line
+          is wiped. Artillery targets enemy artillery first, falling through to
+          front-line. Damage spills to the next priority target on overkill, so
+          a stack always finishes off wounded units before the next one.
+          Up to 10 rounds; ends early on wipeout or FP-loss retreat.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function splitTitle(s: string): string {
+  return s.replace(/([A-Z])/g, ' $1').trim();
+}
+
+// ── 'How the battle played out' per-round table ─────────────────
+// Renders the BattleRoundLog trace from the resolver: optional first-strike
+// volley as round 0, then each combat round with side total FP, shots
+// fired, and casualties. Gated on the same `showFirepower` toggle as
+// CombatExplanation.
+function RoundPlayout({ battle }: { battle: LandBattleData }) {
+  const fmt = (n: number) => n.toFixed(2);
+  const numStyle: React.CSSProperties = { color: '#fff', fontFamily: 'monospace' };
+  const labelStyle: React.CSSProperties = { color: '#aab' };
+  const subStyle: React.CSSProperties = { color: '#888', fontSize: 11 };
+  const atkColor = '#9ecbff';
+  const defColor = '#ffb38a';
+
+  const renderCasualties = (cs: string[]) => {
+    if (cs.length === 0) return <span style={subStyle}>—</span>;
+    return <span style={numStyle}>{cs.map(splitTitle).join(', ')}</span>;
+  };
+
+  return (
+    <div style={{ fontSize: 12, color: '#dcd6c4', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={subStyle}>
+        Per-round trace from the resolver. Each shot picks one priority
+        target (front-line shooters target enemy front-line; artillery
+        targets enemy artillery) and damage spills to the next on overkill.
+      </div>
+      {battle.round_logs.map((r, i) => {
+        const isVolley = r.round === 0;
+        const title = isVolley
+          ? `First-strike volley — ${r.first_strike_side === 'attacker' ? 'attacker' : 'defender'} fires`
+          : `Round ${r.round}`;
+        return (
+          <div
+            key={i}
+            style={{
+              borderLeft: `3px solid ${isVolley ? '#d4a52a' : '#555'}`,
+              paddingLeft: 8,
+            }}
+          >
+            <div style={{ marginBottom: 4 }}>
+              <strong>{title}</strong>
+              {r.retreat_triggered && (
+                <span style={{ color: '#ffb38a', marginLeft: 6 }}>
+                  → {r.retreat_triggered} retreats (FP loss past threshold; +10% damage on the way out)
+                </span>
+              )}
+            </div>
+            {isVolley ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, auto) 1fr', columnGap: 12, rowGap: 2 }}>
+                <span style={labelStyle}>Volley FP:</span>
+                <span>
+                  <span style={numStyle}>
+                    {fmt(r.first_strike_side === 'attacker' ? r.atk_fp : r.def_fp)}
+                  </span>
+                  <span style={subStyle}> from </span>
+                  <span style={numStyle}>
+                    {r.first_strike_side === 'attacker' ? r.atk_shots : r.def_shots}
+                  </span>
+                  <span style={subStyle}> over-range shooter(s)</span>
+                </span>
+                <span style={labelStyle}>Casualties:</span>
+                <span>
+                  {r.first_strike_side === 'attacker'
+                    ? renderCasualties(r.def_casualties)
+                    : renderCasualties(r.atk_casualties)}
+                </span>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(110px, auto) 1fr', columnGap: 12, rowGap: 2 }}>
+                <span style={{ ...labelStyle, color: atkColor }}>Attacker fire:</span>
+                <span>
+                  <span style={numStyle}>{fmt(r.atk_fp)}</span>
+                  <span style={subStyle}> from </span>
+                  <span style={numStyle}>{r.atk_shots}</span>
+                  <span style={subStyle}> shooter{r.atk_shots === 1 ? '' : 's'}</span>
+                </span>
+                <span style={{ ...labelStyle, color: defColor }}>Defender fire:</span>
+                <span>
+                  <span style={numStyle}>{fmt(r.def_fp)}</span>
+                  <span style={subStyle}> from </span>
+                  <span style={numStyle}>{r.def_shots}</span>
+                  <span style={subStyle}> shooter{r.def_shots === 1 ? '' : 's'}</span>
+                </span>
+                <span style={labelStyle}>Atk casualties:</span>
+                <span>{renderCasualties(r.atk_casualties)}</span>
+                <span style={labelStyle}>Def casualties:</span>
+                <span>{renderCasualties(r.def_casualties)}</span>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Keep in sync with scripts/config/units.lua. Used only by CombatExplanation
+// to show range info; the resolver itself reads canonical stats from Rust.
+const UNIT_RANGE: Record<string, number> = {
+  Minutemen: 1, Militia: 2, Conscript: 2, GarrisonArtillery: 3,
+  Skirmishers: 1, Sharpshooters: 3, Rangers: 5,
+  Regulars: 1, RifleInfantry: 2, Infantry: 2,
+  Grenadiers: 1, Guards: 2, MachineGunners: 2,
+  Hussars: 1, Scouts: 1, Carbineers: 2, Mechanised: 4,
+  Cuirassiers: 1, Armour: 6,
+  LightArtillery: 3, HorseArtillery: 4, FieldArtillery: 5, MobileArtillery: 5,
+  Artillery: 4, SiegeArtillery: 6, RailroadGuns: 17,
+  Sapper: 1, CombatEngineer: 2, Commandos: 2, Saboteur: 1,
+  General: 0,
+};
 
 // ── Naval battle details sub-component ──────────────────────────
 function NavalBattleDetails({ battle, flagById }: { battle: NavalBattleData; flagById: Record<number, string> }) {

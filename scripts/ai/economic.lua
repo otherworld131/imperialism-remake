@@ -5,19 +5,19 @@
 
 economic = {
     -- Trade and diplomacy
-    trade_priority = 0.7,       -- strong trade focus
-    alliance_preference = 0.6,  -- moderate alliance preference
+    trade_priority = 0.5,       -- synced to Rust default (was 0.7 in Lua)
+    alliance_preference = 0.5,  -- synced to Rust default (was 0.6 in Lua)
 
     -- Military
-    min_army_size = 3,          -- moderate standing army
-    max_army_size = 6,          -- moderate military
+    min_army_size = 3,          -- matches Rust default
+    max_army_size = 7,          -- synced to Rust default (was 6 in Lua)
 
     -- Economy
-    infrastructure_budget = 3000, -- heavy infrastructure investment
-    worker_threshold = 3,       -- recruits workers aggressively
+    infrastructure_budget = 2000, -- synced to Rust default (was 3000 in Lua)
+    worker_threshold = 5,       -- synced to Rust default (was 3 in Lua)
 
     -- Research
-    research_strategy = "expensive", -- pick most expensive available tech
+    research_strategy = "cheapest", -- synced to Rust default (was "expensive" in Lua)
 
     -- War (cooldown-based system)
     war_cooldown = 15,          -- moderate cooldown

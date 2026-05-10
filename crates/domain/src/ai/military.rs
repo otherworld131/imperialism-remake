@@ -1178,77 +1178,32 @@ pub(crate) fn ai_military_strategy(
                     }
 
                     let tile_count = prov.tiles.len();
-                    // Defender local FP, scaled by the same fort/terrain/militia
-                    // bonuses the battle resolver applies. Without this, the
-                    // attack threshold compares naked FP and the AI commits to
-                    // fights it then immediately retreats from at the gate of
-                    // a forted, hilly capital.
-                    let garrison_size = prov.garrison_count as usize;
-                    let stationed_fp = enemy_stationed_fp
-                        .iter()
-                        .find(|(p, _)| *p == prov.id)
-                        .map(|(_, fp)| *fp)
-                        .unwrap_or(0.0);
-                    let garrison_artillery_fp = if game
-                        .get_nation(enemy_id)
-                        .is_some_and(|n| n.has_garrison_artillery_at(prov.id))
-                    {
-                        crate::military::units::ArmyUnitType::GarrisonArtillery
-                            .stats()
-                            .firepower as f64
-                    } else {
-                        0.0
-                    };
-                    let militia_base_fp = crate::military::units::ArmyUnitType::Minutemen
-                        .stats()
-                        .firepower as f64;
-                    let raw_defender_fp = stationed_fp
-                        + garrison_artillery_fp
-                        + (garrison_size as f64) * militia_base_fp;
-
-                    // Pull the capital-tile terrain + fort level the resolver
-                    // will use, then mirror the (1+terrain)*(1+fort) scaling
-                    // and add the +8/militia entrenchment FP.
                     let game_cfg = &game.game_data.game_config;
-                    let (terrain_bonus, fort_bonus) = game
-                        .world
-                        .hex_map
-                        .get_tile(prov.capital_tile)
-                        .map(|tile| {
-                            let t =
-                                crate::military::terrain_defense_bonus(tile.terrain(), game_cfg);
-                            let f = if tile.infrastructure.has_fort {
-                                crate::military::fort_defense_bonus(
-                                    tile.infrastructure.fort_level,
-                                    game_cfg,
-                                )
-                            } else {
-                                0.0
-                            };
-                            (t, f)
-                        })
-                        .unwrap_or((0.0, 0.0));
-                    let militia_entrenchment_fp = (garrison_size as f64) * 8.0;
-                    let their_local_fp =
-                        raw_defender_fp * (1.0 + terrain_bonus) * (1.0 + fort_bonus)
-                            + militia_entrenchment_fp;
 
-                    // Our forward FP: effective_firepower of our movable
-                    // units whose current position is in a province adjacent
-                    // to the target (land cohort). When a naval landing is
-                    // pending, we also add a naval cohort computed the same
-                    // way `resolve_combat` assembles it — units in coastal
+                    // Our forward cohort: movable units whose current position
+                    // is in a province adjacent to the target. When a naval
+                    // landing is pending, we also assemble the naval cohort
+                    // the same way `resolve_combat` does — units in coastal
                     // attacker-owned provinces (excluding already-adjacent
                     // ones) capped by beachhead capacity, highest FP first.
                     // Card #20: wounded units below `rest_health_threshold`
-                    // are excluded from the attack cohort so they stay in place
-                    // and heal via the end-of-turn rest-heal pass. The AI will
-                    // only commit fresh troops.
-                    let (our_land_fp, naval_candidates): (f64, Vec<(f64, ProvinceId)>) = game
+                    // are excluded so they stay in place and heal.
+                    //
+                    // Card #478: we now keep the actual `ArmyUnit` clones so
+                    // the strength estimator can apply role-aware multipliers
+                    // (charge bonus, artillery melee penalty, range advantage,
+                    // Lanchester durability). The `_their_local_fp` /
+                    // `_our_forward_fp` legacy values stay only as a
+                    // sanity-check / fallback signal and are no longer the
+                    // attack gate.
+                    let (mut land_units, naval_candidate_units): (
+                        Vec<crate::military::ArmyUnit>,
+                        Vec<crate::military::ArmyUnit>,
+                    ) = game
                         .get_nation(nation_id)
                         .map(|n| {
-                            let mut land_fp = 0.0;
-                            let mut naval: Vec<(f64, ProvinceId)> = Vec::new();
+                            let mut land = Vec::new();
+                            let mut naval = Vec::new();
                             for u in &n.military.army {
                                 if !u.unit_type.can_move() {
                                     continue;
@@ -1257,17 +1212,16 @@ pub(crate) fn ai_military_strategy(
                                     continue;
                                 }
                                 if adjacent_owned_pids.contains(&u.position) {
-                                    land_fp += u.effective_firepower();
+                                    land.push(u.clone());
                                 } else if has_landing {
-                                    naval.push((u.effective_firepower(), u.position));
+                                    naval.push(u.clone());
                                 }
                             }
-                            (land_fp, naval)
+                            (land, naval)
                         })
-                        .unwrap_or((0.0, Vec::new()));
+                        .unwrap_or((Vec::new(), Vec::new()));
 
-                    let our_naval_fp: f64 = if has_landing {
-                        // Filter to coastal ports and cap by beachhead size.
+                    if has_landing {
                         let coastal_attacker_pids: std::collections::HashSet<ProvinceId> =
                             attacker_province_ids
                                 .iter()
@@ -1293,28 +1247,113 @@ pub(crate) fn ai_military_strategy(
                                     )
                                 })
                                 .unwrap_or(0) as usize;
-                        let mut eligible: Vec<f64> = naval_candidates
+                        let mut eligible: Vec<crate::military::ArmyUnit> = naval_candidate_units
                             .into_iter()
-                            .filter(|(_, pos)| coastal_attacker_pids.contains(pos))
-                            .map(|(fp, _)| fp)
+                            .filter(|u| coastal_attacker_pids.contains(&u.position))
                             .collect();
-                        eligible
-                            .sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+                        eligible.sort_by(|a, b| {
+                            b.effective_firepower()
+                                .partial_cmp(&a.effective_firepower())
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
                         eligible.truncate(beachhead_cap);
-                        eligible.iter().sum()
-                    } else {
-                        0.0
+                        land_units.extend(eligible);
+                    }
+                    let our_units = land_units;
+
+                    // Defender cohort: every army unit currently posted at the
+                    // target province (field army + Minutemen + GarrisonArtillery).
+                    let their_units: Vec<crate::military::ArmyUnit> = game
+                        .get_nation(enemy_id)
+                        .map(|n| {
+                            n.military
+                                .army
+                                .iter()
+                                .filter(|u| u.position == prov.id)
+                                .cloned()
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    let attacker_has_siege = our_units.iter().any(|u| {
+                        matches!(
+                            u.unit_type,
+                            crate::military::ArmyUnitType::SiegeArtillery
+                                | crate::military::ArmyUnitType::RailroadGuns
+                        )
+                    });
+                    let prov_fort_level = game
+                        .world
+                        .hex_map
+                        .get_tile(prov.capital_tile)
+                        .map(|t| {
+                            if t.infrastructure.has_fort {
+                                t.infrastructure.fort_level
+                            } else {
+                                0
+                            }
+                        })
+                        .unwrap_or(0);
+                    let prov_terrain = game
+                        .world
+                        .hex_map
+                        .get_tile(prov.capital_tile)
+                        .map(|t| t.terrain());
+                    let our_max_r = our_units
+                        .iter()
+                        .filter(|u| u.is_alive())
+                        .map(|u| u.unit_type.stats().range)
+                        .max()
+                        .unwrap_or(0);
+                    let their_max_r = their_units
+                        .iter()
+                        .filter(|u| u.is_alive())
+                        .map(|u| u.unit_type.stats().range)
+                        .max()
+                        .unwrap_or(0);
+                    let attacker_ctx = crate::military::StrengthCtx {
+                        terrain: prov_terrain,
+                        fort_level: prov_fort_level,
+                        attacker_has_siege,
+                        opponent_max_range: their_max_r,
+                        distance: 1,
+                        current_turn: game.turn.0,
                     };
+                    let defender_ctx = crate::military::StrengthCtx {
+                        terrain: prov_terrain,
+                        fort_level: prov_fort_level,
+                        attacker_has_siege,
+                        opponent_max_range: our_max_r,
+                        distance: 1,
+                        current_turn: game.turn.0,
+                    };
+                    let our_strength = crate::military::force_strength(
+                        &our_units,
+                        crate::military::BattleRole::Attacker,
+                        &attacker_ctx,
+                        game_cfg,
+                    );
+                    let their_strength = crate::military::force_strength(
+                        &their_units,
+                        crate::military::BattleRole::Defender,
+                        &defender_ctx,
+                        game_cfg,
+                    );
 
-                    let our_forward_fp = our_land_fp + our_naval_fp;
-
-                    // FP-based attack acceptance (card #99 phase 2).
+                    // Card #478: strength-based attack acceptance. Replaces
+                    // the legacy fp×terrain×fort comparison with a role-aware
+                    // estimator that mirrors what the resolver actually does
+                    // (charge bonus, artillery melee penalty, range advantage,
+                    // Lanchester durability, garrison entrenchment).
+                    // `attack_fp_vs_*` thresholds are reused as strength ratios
+                    // since their tuning intent — "how decisive must my
+                    // advantage be?" — is unchanged.
                     let ratio = if enemy_is_gp {
                         attack_fp_vs_gp
                     } else {
                         attack_fp_vs_minor
                     };
-                    if our_forward_fp < their_local_fp * ratio {
+                    if our_strength < their_strength * ratio {
                         continue;
                     }
 

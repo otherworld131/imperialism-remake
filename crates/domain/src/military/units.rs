@@ -232,6 +232,16 @@ pub struct ArmyUnit {
     /// Why this unit didn't heal last turn. `None` means it either healed or
     /// the field hasn't been populated yet (e.g. turn 0). Debug-only.
     pub last_heal_block: Option<HealBlock>,
+    /// Turn at which the unit arrived at its current `position`. Used by
+    /// the entrenchment gate (card #478): a Garrison unit must satisfy
+    /// `arrived_turn < current_turn` before it earns the per-unit
+    /// `garrison_entrenchment_fp` defensive bonus.
+    ///
+    /// 0 is the "always been here" sentinel — game-start garrison spawns
+    /// keep this default so they're entrenched in any battle (turn ≥ 1).
+    /// Mid-game spawns (regenerate_garrisons) and retreat relocations
+    /// write the current turn so the unit isn't entrenched until next turn.
+    pub arrived_turn: u32,
 }
 
 /// Process-global registry populated by the Lua loader at GameData init
@@ -1063,6 +1073,7 @@ impl ArmyUnit {
             medals: 0,
             movement_remaining: stats.movement,
             last_heal_block: None,
+            arrived_turn: 0,
         }
     }
 
