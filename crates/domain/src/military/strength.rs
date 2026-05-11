@@ -88,11 +88,7 @@ fn fp_phase(unit: &ArmyUnit, role: BattleRole, distance: u32, cfg: &GameConfig) 
     let base = unit.effective_firepower();
     if distance >= 2 {
         // Bombardment: only units that can actually reach contribute.
-        if stats.range >= distance {
-            base
-        } else {
-            0.0
-        }
+        if stats.range >= distance { base } else { 0.0 }
     } else {
         // Melee at distance 1.
         let mut fp = if stats.category == UnitCategory::Cavalry
@@ -286,9 +282,6 @@ mod tests {
     fn empty_force_is_zero_strength() {
         let cfg = GameConfig::default();
         let ctx = StrengthCtx::neutral();
-        assert_eq!(
-            force_strength(&[], BattleRole::Attacker, &ctx, &cfg),
-            0.0
-        );
+        assert_eq!(force_strength(&[], BattleRole::Attacker, &ctx, &cfg), 0.0);
     }
 }

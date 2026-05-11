@@ -92,6 +92,7 @@ macro_rules! test_game_state {
             ai_debug: $ai_debug,
             observer_mode: $observer_mode,
             next_unit_id: $next_unit_id,
+            rng_state: $crate::game_state::DEFAULT_RNG_STATE,
             game_data: $game_data,
             world: $crate::game_state::WorldState {
                 map_key: $map_key,

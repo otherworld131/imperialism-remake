@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Current save file format version.
-pub const CURRENT_SAVE_VERSION: u32 = 3;
+pub const CURRENT_SAVE_VERSION: u32 = 4;
 
 /// Versioned save file wrapper around the game state.
 #[derive(Serialize, Deserialize)]
@@ -207,8 +207,29 @@ pub fn list_saves(dir: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
     use domain::game_state::new_game;
     use domain::types::Difficulty;
+
+    fn deterministic_signature(
+        game: &GameState,
+    ) -> BTreeMap<u32, (i64, usize, usize, usize, usize)> {
+        let mut out = BTreeMap::new();
+        for nation in &game.world.nations {
+            out.insert(
+                nation.id.0,
+                (
+                    nation.economy.treasury.as_dollars(),
+                    nation.province_count(),
+                    nation.military.army.len(),
+                    nation.military.warships.len(),
+                    nation.military.merchant_fleet.len(),
+                ),
+            );
+        }
+        out
+    }
 
     #[test]
     fn save_and_load_roundtrip() {
@@ -577,6 +598,40 @@ mod tests {
         assert!(path.exists());
         let loaded = load_game(&path).unwrap();
         assert_eq!(loaded.turn, game.turn);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn save_load_preserves_rng_replay_path() {
+        let mut continuous = new_game("rng_replay_path", Difficulty::Normal, 0);
+        let mut split = new_game("rng_replay_path", Difficulty::Normal, 0);
+        let split_turn = 4usize;
+        let total_turns = 8usize;
+
+        for _ in 0..split_turn {
+            domain::turn::process_turn(&mut continuous);
+            domain::turn::process_turn(&mut split);
+        }
+
+        let dir = std::env::temp_dir().join("imperialism_test_rng_replay");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rng_replay.json");
+        save_game(&split, &path).unwrap();
+        let mut split_loaded = load_game(&path).unwrap();
+
+        for _ in split_turn..total_turns {
+            domain::turn::process_turn(&mut continuous);
+            domain::turn::process_turn(&mut split_loaded);
+        }
+
+        assert_eq!(continuous.turn, split_loaded.turn);
+        assert_eq!(continuous.rng_state, split_loaded.rng_state);
+        assert_eq!(
+            deterministic_signature(&continuous),
+            deterministic_signature(&split_loaded)
+        );
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);

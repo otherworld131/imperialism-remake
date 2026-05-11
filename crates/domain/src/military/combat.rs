@@ -485,8 +485,7 @@ fn build_defender_shots(
         .iter()
         .filter(|u| u.is_alive())
         .map(|u| ShotPlan {
-            fp: defender_unit_shot_fp(u, fort_level, attacker_has_siege, current_turn, cfg)
-                * bonus,
+            fp: defender_unit_shot_fp(u, fort_level, attacker_has_siege, current_turn, cfg) * bonus,
             is_artillery_shooter: u.unit_type.stats().category == UnitCategory::Artillery,
         })
         .collect()
@@ -537,8 +536,7 @@ fn pick_concentrate_fire_target(
     prefer_artillery: bool,
     targeting: TargetingPriority,
 ) -> Option<usize> {
-    let is_arty =
-        |u: &ArmyUnit| u.unit_type.stats().category == UnitCategory::Artillery;
+    let is_arty = |u: &ArmyUnit| u.unit_type.stats().category == UnitCategory::Artillery;
     let preferred: Vec<usize> = targets
         .iter()
         .enumerate()
@@ -558,21 +556,20 @@ fn pick_concentrate_fire_target(
     if pool.is_empty() {
         return None;
     }
-    pool.into_iter()
-        .max_by(|&a, &b| {
-            let (af, bf) = (
-                targets[a].effective_firepower(),
-                targets[b].effective_firepower(),
-            );
-            match targeting {
-                TargetingPriority::StrongestFirst => af
-                    .partial_cmp(&bf)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-                TargetingPriority::WeakestFirst => bf
-                    .partial_cmp(&af)
-                    .unwrap_or(std::cmp::Ordering::Equal),
+    pool.into_iter().max_by(|&a, &b| {
+        let (af, bf) = (
+            targets[a].effective_firepower(),
+            targets[b].effective_firepower(),
+        );
+        match targeting {
+            TargetingPriority::StrongestFirst => {
+                af.partial_cmp(&bf).unwrap_or(std::cmp::Ordering::Equal)
             }
-        })
+            TargetingPriority::WeakestFirst => {
+                bf.partial_cmp(&af).unwrap_or(std::cmp::Ordering::Equal)
+            }
+        }
+    })
 }
 
 /// Apply one stream of concentrate-fire damage. The stream pools the FP
@@ -592,8 +589,7 @@ fn apply_concentrate_fire_stream(
     }
     let mut remaining = total_fp;
     while remaining >= 1.0 {
-        let Some(idx) = pick_concentrate_fire_target(targets, prefer_artillery, targeting)
-        else {
+        let Some(idx) = pick_concentrate_fire_target(targets, prefer_artillery, targeting) else {
             return;
         };
         let target = &mut targets[idx];
@@ -969,8 +965,20 @@ pub fn resolve_battle_with_config(
         for unit in &mut atk_units {
             unit.award_medal();
         }
-        finalize_unit_logs(&mut attacker_unit_logs, &attacker_initial_units, &atk_units, BattleRoleLog::Attacker, game_config);
-        finalize_unit_logs(&mut defender_unit_logs, &defender_initial_units, &def_units, BattleRoleLog::Defender, game_config);
+        finalize_unit_logs(
+            &mut attacker_unit_logs,
+            &attacker_initial_units,
+            &atk_units,
+            BattleRoleLog::Attacker,
+            game_config,
+        );
+        finalize_unit_logs(
+            &mut defender_unit_logs,
+            &defender_initial_units,
+            &def_units,
+            BattleRoleLog::Defender,
+            game_config,
+        );
         return BattleResult {
             attacker: attacker.nation,
             defender: defender.nation,
@@ -1025,8 +1033,18 @@ pub fn resolve_battle_with_config(
         distance: 1,
         current_turn: config.current_turn,
     };
-    let atk_strength = force_strength(&atk_units, BattleRole::Attacker, &strength_ctx_atk, game_config);
-    let def_strength = force_strength(&def_units, BattleRole::Defender, &strength_ctx_def, game_config);
+    let atk_strength = force_strength(
+        &atk_units,
+        BattleRole::Attacker,
+        &strength_ctx_atk,
+        game_config,
+    );
+    let def_strength = force_strength(
+        &def_units,
+        BattleRole::Defender,
+        &strength_ctx_def,
+        game_config,
+    );
     let attacker_ratio = if atk_strength > 0.0 {
         def_strength / atk_strength
     } else {
@@ -1428,8 +1446,20 @@ pub fn resolve_battle_with_config(
         }
     }
 
-    finalize_unit_logs(&mut attacker_unit_logs, &attacker_initial_units, &atk_units, BattleRoleLog::Attacker, game_config);
-    finalize_unit_logs(&mut defender_unit_logs, &defender_initial_units, &def_units, BattleRoleLog::Defender, game_config);
+    finalize_unit_logs(
+        &mut attacker_unit_logs,
+        &attacker_initial_units,
+        &atk_units,
+        BattleRoleLog::Attacker,
+        game_config,
+    );
+    finalize_unit_logs(
+        &mut defender_unit_logs,
+        &defender_initial_units,
+        &def_units,
+        BattleRoleLog::Defender,
+        game_config,
+    );
 
     BattleResult {
         attacker: attacker.nation,
@@ -1908,7 +1938,10 @@ mod tests {
             .iter()
             .position(|t| *t == ArmyUnitType::LightArtillery);
         if let (Some(r), Some(a)) = (regulars_idx, arty_idx) {
-            assert!(r < a, "front-row Regulars should fall before back-row artillery");
+            assert!(
+                r < a,
+                "front-row Regulars should fall before back-row artillery"
+            );
         }
     }
 

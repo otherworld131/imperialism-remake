@@ -257,14 +257,7 @@ pub(crate) fn ai_scored_spending(
                     None
                 };
                 let treasury_before = game.get_nation(nation_id).map(|n| n.economy.treasury);
-                execute_with_plan(
-                    game,
-                    nation_id,
-                    cat,
-                    actions,
-                    &connected,
-                    &depot_plans,
-                );
+                execute_with_plan(game, nation_id, cat, actions, &connected, &depot_plans);
                 let treasury_after = game.get_nation(nation_id).map(|n| n.economy.treasury);
                 let treasury_changed = treasury_before != treasury_after;
                 // For Military, only count as invested when a unit was actually
@@ -475,8 +468,10 @@ fn refresh_infra_commitments(
     if let Some(nation) = game.get_nation_mut(nation_id) {
         nation.diplomacy.ai_priority_state.committed_infra_target =
             kept_commitments.first().cloned();
-        nation.diplomacy.ai_priority_state.additional_committed_infra_targets =
-            kept_commitments.into_iter().skip(1).collect();
+        nation
+            .diplomacy
+            .ai_priority_state
+            .additional_committed_infra_targets = kept_commitments.into_iter().skip(1).collect();
     }
 
     plans
@@ -1790,7 +1785,10 @@ fn execute_infrastructure(
                 &cfg,
             );
         } else if game.ai_debug {
-            eprintln!("[AI:{}:infra] no depot plan and no stranded port target", nation_name);
+            eprintln!(
+                "[AI:{}:infra] no depot plan and no stranded port target",
+                nation_name
+            );
         }
         return;
     }

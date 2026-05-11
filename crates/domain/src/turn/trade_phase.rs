@@ -46,8 +46,7 @@ pub(super) fn resolve_trade_session(
     let current_turn = game.turn;
 
     // 1. Generate offers from Minor Nations (with optional random withholding)
-    let minor_offer_seed =
-        (current_turn.0 as u64).wrapping_mul(0x9e3779b97f4a7c15) ^ 0x6c62272e07bb0142;
+    let minor_offer_seed = game.next_rng_u64();
     let withhold_chance = game
         .game_data
         .game_config
@@ -279,8 +278,7 @@ pub(super) fn resolve_trade_session(
     // Each non-anarchic minor nation always wants to buy 1 unit of one manufactured
     // commodity (Material or Goods) per turn, chosen randomly but deterministically.
     {
-        let minor_bid_seed =
-            (current_turn.0 as u64).wrapping_mul(0xbf58476d1ce4e5b9) ^ 0x94d049bb133111eb;
+        let minor_bid_seed = game.next_rng_u64();
         let buy_price = Money::dollars(game.game_data.game_config.minor_goods_buy_price);
         let minor_bids =
             trade::generate_minor_nation_goods_bids(&game.world.nations, buy_price, minor_bid_seed);

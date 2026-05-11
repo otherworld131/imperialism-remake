@@ -167,6 +167,8 @@ pub struct GameState {
     pub observer_mode: bool,
     #[serde(default = "default_next_unit_id")]
     pub next_unit_id: u32,
+    #[serde(default = "default_rng_state")]
+    pub rng_state: u64,
     pub world: WorldState,
     #[serde(default)]
     pub archive: GameArchive,
@@ -176,6 +178,10 @@ pub struct GameState {
 
 fn default_next_unit_id() -> u32 {
     6_000_000
+}
+
+fn default_rng_state() -> u64 {
+    domain::game_state::DEFAULT_RNG_STATE
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -421,6 +427,7 @@ impl From<&dgs::GameState> for GameState {
             human_player_nation: v.human_player_nation.into(),
             observer_mode: v.observer_mode,
             next_unit_id: v.next_unit_id,
+            rng_state: v.rng_state,
             world: (&v.world).into(),
             archive: (&v.archive).into(),
             transient: (&v.transient).into(),
@@ -436,6 +443,7 @@ impl From<GameState> for dgs::GameState {
             ai_debug: false,
             observer_mode: v.observer_mode,
             next_unit_id: v.next_unit_id,
+            rng_state: v.rng_state,
             game_data: domain::data::GameData::default(),
             world: v.world.into(),
             archive: v.archive.into(),

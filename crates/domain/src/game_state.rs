@@ -15,6 +15,20 @@ use crate::nation::{Nation, NationColor};
 use crate::types::*;
 use std::collections::HashMap;
 
+pub const DEFAULT_RNG_STATE: u64 = 0x9E37_79B9_7F4A_7C15;
+
+fn normalize_rng_state(state: u64) -> u64 {
+    if state == 0 { DEFAULT_RNG_STATE } else { state }
+}
+
+fn derive_rng_seed(map_key: &str, personality_seed: u64) -> u64 {
+    let mut h: u64 = 5381;
+    for b in map_key.bytes() {
+        h = h.wrapping_mul(33).wrapping_add(b as u64);
+    }
+    normalize_rng_state(h ^ personality_seed ^ 0xC2B2_AE3D_27D4_EB4F)
+}
+
 /// A single entry in a political-map snapshot: (province, owner,
 /// incorporated_from). Stored as a tuple rather than a named struct to keep
 /// the archive payload small — the per-turn archive grows linearly with
@@ -191,6 +205,9 @@ pub struct GameState {
     pub observer_mode: bool,
     /// Monotonically-increasing counter used to allocate unique `UnitId`s.
     pub next_unit_id: u32,
+    /// Deterministic simulation RNG state. Persisted in saves and advanced by
+    /// every gameplay-random draw so post-load outcomes continue the same path.
+    pub rng_state: u64,
     /// All data-driven game definitions (tech tree, unit stats, etc.).
     /// Reconstructed on load — not serialized.
     pub game_data: GameData,
@@ -210,6 +227,16 @@ impl GameState {
         let id = self.next_unit_id;
         self.next_unit_id += 1;
         UnitId(id)
+    }
+
+    /// Draw the next deterministic RNG value and advance game RNG state.
+    pub fn next_rng_u64(&mut self) -> u64 {
+        let mut state = normalize_rng_state(self.rng_state);
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        self.rng_state = normalize_rng_state(state);
+        self.rng_state
     }
 
     /// Look up a nation by its ID.
@@ -991,6 +1018,7 @@ fn new_game_inner(
         ai_debug: false,
         observer_mode: false,
         next_unit_id: id_counter,
+        rng_state: derive_rng_seed(map_key, personality_seed),
         game_data,
         world: WorldState {
             map_key: map_key.to_string(),
@@ -1272,6 +1300,7 @@ mod tests {
             ai_debug: false,
             observer_mode: false,
             next_unit_id: 6_000_000,
+            rng_state: DEFAULT_RNG_STATE,
             game_data: GameData::default(),
             world: WorldState {
                 map_key: "europe".to_string(),

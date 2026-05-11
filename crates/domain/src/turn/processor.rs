@@ -4496,7 +4496,8 @@ fn regenerate_garrisons(game: &mut GameState) {
     }
     let current_turn = game.turn.0;
     for (owner, pid) in spawns {
-        let mut unit = crate::military::combat::spawn_militia_unit(&mut game.next_unit_id, owner, pid);
+        let mut unit =
+            crate::military::combat::spawn_militia_unit(&mut game.next_unit_id, owner, pid);
         // Card #478: freshly-spawned militia aren't entrenched until next
         // turn (`arrived_turn < current_turn` only holds from turn N+1 on).
         unit.arrived_turn = current_turn;

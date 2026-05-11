@@ -6163,30 +6163,31 @@ fn serialize_battle(b: &BattleResult, game: &GameState) -> serde_json::Value {
             .collect()
     };
 
-    let serialize_unit_logs = |logs: &[domain::military::combat::BattleUnitLog]| -> Vec<serde_json::Value> {
-        logs.iter()
-            .map(|log| {
-                let breakdown = log.defender_breakdown.as_ref().map(|b| {
+    let serialize_unit_logs =
+        |logs: &[domain::military::combat::BattleUnitLog]| -> Vec<serde_json::Value> {
+            logs.iter()
+                .map(|log| {
+                    let breakdown = log.defender_breakdown.as_ref().map(|b| {
+                        serde_json::json!({
+                            "applied_firepower": b.applied_firepower,
+                            "fort_multiplier": b.fort_multiplier,
+                            "entrenchment_fp": b.entrenchment_fp,
+                            "initial_total_contribution": b.initial_total_contribution,
+                        })
+                    });
                     serde_json::json!({
-                        "applied_firepower": b.applied_firepower,
-                        "fort_multiplier": b.fort_multiplier,
-                        "entrenchment_fp": b.entrenchment_fp,
-                        "initial_total_contribution": b.initial_total_contribution,
+                        "unit_type": format!("{:?}", log.unit_type),
+                        "medals_initial": log.medals_initial,
+                        "medals_final": log.medals_final,
+                        "initial_health": log.initial_health,
+                        "final_health": log.final_health,
+                        "initial_firepower": log.initial_firepower,
+                        "final_firepower": log.final_firepower,
+                        "defender_breakdown": breakdown,
                     })
-                });
-                serde_json::json!({
-                    "unit_type": format!("{:?}", log.unit_type),
-                    "medals_initial": log.medals_initial,
-                    "medals_final": log.medals_final,
-                    "initial_health": log.initial_health,
-                    "final_health": log.final_health,
-                    "initial_firepower": log.initial_firepower,
-                    "final_firepower": log.final_firepower,
-                    "defender_breakdown": breakdown,
                 })
-            })
-            .collect()
-    };
+                .collect()
+        };
 
     let round_logs: Vec<serde_json::Value> = b
         .round_logs

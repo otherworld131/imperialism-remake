@@ -648,9 +648,12 @@ fn plan_next_depot_with(
 }
 
 pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutcome {
-    let commitment = game
-        .get_nation(nation_id)
-        .and_then(|n| n.diplomacy.ai_priority_state.committed_infra_target.as_ref());
+    let commitment = game.get_nation(nation_id).and_then(|n| {
+        n.diplomacy
+            .ai_priority_state
+            .committed_infra_target
+            .as_ref()
+    });
     plan_next_depot_with(game, nation_id, commitment, &HashSet::new())
 }
 
