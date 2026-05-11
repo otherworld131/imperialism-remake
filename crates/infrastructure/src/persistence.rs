@@ -3,10 +3,32 @@ use domain::data::GameData;
 use domain::game_state::GameState;
 use domain_snapshot::game_state::GameState as SnapshotGameState;
 use serde::{Deserialize, Serialize};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 /// Current save file format version.
 pub const CURRENT_SAVE_VERSION: u32 = 4;
+
+const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+
+/// Compression options for save files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveCompression {
+    None,
+    Gzip,
+    Zstd,
+}
+
+impl SaveCompression {
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Gzip => ".gz",
+            Self::Zstd => ".zst",
+        }
+    }
+}
 
 /// Versioned save file wrapper around the game state.
 #[derive(Serialize, Deserialize)]
@@ -124,11 +146,57 @@ fn save_to_binary_bytes(save: &SaveFile) -> Result<Vec<u8>, PersistenceError> {
     Ok(out)
 }
 
-fn read_save_file_from_bytes(bytes: &[u8]) -> Result<SaveFile, PersistenceError> {
-    let decode_json = || serde_json::from_slice::<SaveFile>(bytes);
-    let decode_binary = || rmp_serde::from_slice::<SaveFile>(bytes);
+fn detect_compression(bytes: &[u8]) -> SaveCompression {
+    if bytes.starts_with(&GZIP_MAGIC) {
+        SaveCompression::Gzip
+    } else if bytes.starts_with(&ZSTD_MAGIC) {
+        SaveCompression::Zstd
+    } else {
+        SaveCompression::None
+    }
+}
 
-    let first_non_ws = bytes.iter().copied().find(|b| !b.is_ascii_whitespace());
+fn compress_bytes(bytes: &[u8], compression: SaveCompression) -> Result<Vec<u8>, PersistenceError> {
+    match compression {
+        SaveCompression::None => Ok(bytes.to_vec()),
+        SaveCompression::Gzip => {
+            let mut encoder =
+                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            encoder
+                .write_all(bytes)
+                .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+            encoder
+                .finish()
+                .map_err(|e| PersistenceError::Serialization(e.to_string()))
+        }
+        SaveCompression::Zstd => zstd::stream::encode_all(bytes, 0)
+            .map_err(|e| PersistenceError::Serialization(e.to_string())),
+    }
+}
+
+fn maybe_decompress_bytes(bytes: &[u8]) -> Result<Vec<u8>, PersistenceError> {
+    match detect_compression(bytes) {
+        SaveCompression::None => Ok(bytes.to_vec()),
+        SaveCompression::Gzip => {
+            let mut decoder = flate2::read::GzDecoder::new(bytes);
+            let mut decoded = Vec::new();
+            decoder
+                .read_to_end(&mut decoded)
+                .map_err(|_| PersistenceError::UnrecognizedFormat)?;
+            Ok(decoded)
+        }
+        SaveCompression::Zstd => {
+            zstd::stream::decode_all(bytes).map_err(|_| PersistenceError::UnrecognizedFormat)
+        }
+    }
+}
+
+fn read_save_file_from_bytes(bytes: &[u8]) -> Result<SaveFile, PersistenceError> {
+    let payload = maybe_decompress_bytes(bytes)?;
+    let decode_json = || serde_json::from_slice::<SaveFile>(&payload);
+    let decode_binary = || rmp_serde::from_slice::<SaveFile>(&payload);
+
+    let first_non_ws = payload.iter().copied().find(|b| !b.is_ascii_whitespace());
     let likely_json = matches!(first_non_ws, Some(b'{') | Some(b'['));
 
     let primary = if likely_json {
@@ -160,16 +228,34 @@ fn validate_save_version(save: &SaveFile) -> Result<(), PersistenceError> {
 
 /// Save a game state to a JSON file at the given path.
 pub fn save_game(game: &GameState, path: &Path) -> Result<(), PersistenceError> {
+    save_game_compressed(game, path, SaveCompression::None)
+}
+
+/// Save a game state to a JSON file with optional compression.
+pub fn save_game_compressed(
+    game: &GameState,
+    path: &Path,
+    compression: SaveCompression,
+) -> Result<(), PersistenceError> {
     let save = build_save_file(game);
-    let bytes = save_to_json_bytes(&save)?;
+    let bytes = compress_bytes(&save_to_json_bytes(&save)?, compression)?;
     std::fs::write(path, bytes)?;
     Ok(())
 }
 
-/// Save a game state to a binary bincode file at the given path.
+/// Save a game state to a binary MessagePack file at the given path.
 pub fn save_game_binary(game: &GameState, path: &Path) -> Result<(), PersistenceError> {
+    save_game_binary_compressed(game, path, SaveCompression::None)
+}
+
+/// Save a game state to a binary MessagePack file with optional compression.
+pub fn save_game_binary_compressed(
+    game: &GameState,
+    path: &Path,
+    compression: SaveCompression,
+) -> Result<(), PersistenceError> {
     let save = build_save_file(game);
-    let bytes = save_to_binary_bytes(&save)?;
+    let bytes = compress_bytes(&save_to_binary_bytes(&save)?, compression)?;
     std::fs::write(path, bytes)?;
     Ok(())
 }
@@ -226,7 +312,7 @@ pub fn delete_save(path: &Path) -> Result<(), PersistenceError> {
     Ok(())
 }
 
-/// List all save files (`.json` and `.bin`) in a directory, sorted by
+/// List all save files (`.json`, `.bin`, `.gz`, `.zst`) in a directory, sorted by
 /// modification time (newest first).
 pub fn list_saves(dir: &Path) -> Vec<PathBuf> {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
@@ -236,7 +322,7 @@ pub fn list_saves(dir: &Path) -> Vec<PathBuf> {
                     e.path()
                         .extension()
                         .and_then(|ext| ext.to_str())
-                        .is_some_and(|ext| ext == "json" || ext == "bin")
+                        .is_some_and(|ext| matches!(ext, "json" | "bin" | "gz" | "zst"))
                 })
                 .map(|e| e.path())
                 .collect()
@@ -377,6 +463,50 @@ mod tests {
         let path = dir.join("test_save.bin");
 
         save_game_binary(&game, &path).unwrap();
+        assert!(path.exists());
+
+        let loaded = load_game(&path).unwrap();
+        assert_eq!(loaded.turn, game.turn);
+        assert_eq!(loaded.difficulty, game.difficulty);
+        assert_eq!(loaded.world.map_key, game.world.map_key);
+        assert_eq!(loaded.human_player_nation, game.human_player_nation);
+        assert_eq!(loaded.rng_state, game.rng_state);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn save_and_load_gzip_json_roundtrip() {
+        let game = new_game("test_gzip", Difficulty::Normal, 0);
+
+        let dir = std::env::temp_dir().join("imperialism_test_saves_gzip");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test_save.json.gz");
+
+        save_game_compressed(&game, &path, SaveCompression::Gzip).unwrap();
+        assert!(path.exists());
+
+        let loaded = load_game(&path).unwrap();
+        assert_eq!(loaded.turn, game.turn);
+        assert_eq!(loaded.difficulty, game.difficulty);
+        assert_eq!(loaded.world.map_key, game.world.map_key);
+        assert_eq!(loaded.human_player_nation, game.human_player_nation);
+        assert_eq!(loaded.rng_state, game.rng_state);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn save_and_load_zstd_binary_roundtrip() {
+        let game = new_game("test_zstd", Difficulty::Hard, 0);
+
+        let dir = std::env::temp_dir().join("imperialism_test_saves_zstd");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test_save.bin.zst");
+
+        save_game_binary_compressed(&game, &path, SaveCompression::Zstd).unwrap();
         assert!(path.exists());
 
         let loaded = load_game(&path).unwrap();
@@ -581,26 +711,30 @@ mod tests {
     }
 
     #[test]
-    fn list_saves_returns_json_and_bin_files() {
+    fn list_saves_returns_supported_save_extensions() {
         let dir = std::env::temp_dir().join("imperialism_test_list_saves");
         std::fs::create_dir_all(&dir).unwrap();
 
         std::fs::write(dir.join("save1.json"), "{}").unwrap();
         std::fs::write(dir.join("save2.json"), "{}").unwrap();
         std::fs::write(dir.join("save3.bin"), [0u8, 1, 2]).unwrap();
+        std::fs::write(dir.join("save4.json.gz"), [0u8, 1, 2]).unwrap();
+        std::fs::write(dir.join("save5.bin.zst"), [0u8, 1, 2]).unwrap();
         std::fs::write(dir.join("notes.txt"), "not a save").unwrap();
 
         let saves = list_saves(&dir);
-        assert_eq!(saves.len(), 3, "Should find exactly 3 save files");
+        assert_eq!(saves.len(), 5, "Should find exactly 5 save files");
         assert!(saves.iter().all(|p| {
             p.extension()
                 .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext == "json" || ext == "bin")
+                .is_some_and(|ext| matches!(ext, "json" | "bin" | "gz" | "zst"))
         }));
 
         let _ = std::fs::remove_file(dir.join("save1.json"));
         let _ = std::fs::remove_file(dir.join("save2.json"));
         let _ = std::fs::remove_file(dir.join("save3.bin"));
+        let _ = std::fs::remove_file(dir.join("save4.json.gz"));
+        let _ = std::fs::remove_file(dir.join("save5.bin.zst"));
         let _ = std::fs::remove_file(dir.join("notes.txt"));
         let _ = std::fs::remove_dir(&dir);
     }
@@ -655,6 +789,24 @@ mod tests {
         let meta = read_save_metadata(&path).unwrap();
         assert_eq!(meta.version, CURRENT_SAVE_VERSION);
         assert_eq!(meta.difficulty, "Hard");
+        assert!(!meta.nation_name.is_empty());
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn read_save_metadata_supports_compressed_save() {
+        let game = new_game("test_compressed_meta", Difficulty::Easy, 0);
+
+        let dir = std::env::temp_dir().join("imperialism_test_saveinfo_compressed");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("saveinfo_test.bin.zst");
+
+        save_game_binary_compressed(&game, &path, SaveCompression::Zstd).unwrap();
+        let meta = read_save_metadata(&path).unwrap();
+        assert_eq!(meta.version, CURRENT_SAVE_VERSION);
+        assert_eq!(meta.difficulty, "Easy");
         assert!(!meta.nation_name.is_empty());
 
         let _ = std::fs::remove_file(&path);

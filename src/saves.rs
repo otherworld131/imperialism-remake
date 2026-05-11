@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use ::infrastructure::PersistenceError;
 use ::infrastructure::data_loader::load_embedded_game_data;
-use ::infrastructure::persistence;
+use ::infrastructure::persistence::{self, SaveCompression};
 use domain::game_state::GameState;
 
 #[derive(Debug)]
@@ -108,17 +108,34 @@ pub(crate) fn safe_save_path(filename: &str) -> Result<PathBuf, SaveError> {
 }
 
 pub(crate) fn atomic_save_game(game: &GameState, filename: &str) -> Result<(), SaveError> {
-    atomic_save_game_with_format(game, filename, false)
+    atomic_save_game_with_format(game, filename, false, SaveCompression::None)
 }
 
 pub(crate) fn atomic_save_game_binary(game: &GameState, filename: &str) -> Result<(), SaveError> {
-    atomic_save_game_with_format(game, filename, true)
+    atomic_save_game_with_format(game, filename, true, SaveCompression::None)
+}
+
+pub(crate) fn atomic_save_game_compressed(
+    game: &GameState,
+    filename: &str,
+    compression: SaveCompression,
+) -> Result<(), SaveError> {
+    atomic_save_game_with_format(game, filename, false, compression)
+}
+
+pub(crate) fn atomic_save_game_binary_compressed(
+    game: &GameState,
+    filename: &str,
+    compression: SaveCompression,
+) -> Result<(), SaveError> {
+    atomic_save_game_with_format(game, filename, true, compression)
 }
 
 fn atomic_save_game_with_format(
     game: &GameState,
     filename: &str,
     binary: bool,
+    compression: SaveCompression,
 ) -> Result<(), SaveError> {
     let dir = saves_dir();
     std::fs::create_dir_all(&dir)
@@ -131,9 +148,9 @@ fn atomic_save_game_with_format(
         std::fs::remove_file(&tmp_path).ok();
     }
     if binary {
-        persistence::save_game_binary(game, &tmp_path)?;
+        persistence::save_game_binary_compressed(game, &tmp_path, compression)?;
     } else {
-        persistence::save_game(game, &tmp_path)?;
+        persistence::save_game_compressed(game, &tmp_path, compression)?;
     }
     std::fs::rename(&tmp_path, &target).map_err(|e| SaveError::io("Failed to finalize save", e))?;
     Ok(())
@@ -184,6 +201,60 @@ pub(crate) fn save_current_game_binary(game: &GameState) {
     }
 }
 
+pub(crate) fn save_current_game_gzip(game: &GameState) {
+    let dir = saves_dir();
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        println!("  Failed to create saves directory: {}", e);
+        return;
+    }
+
+    print_save_list(&dir);
+
+    let filename = format!(
+        "save_{}_Q{}.json{}",
+        game.turn.year(),
+        game.turn.quarter(),
+        SaveCompression::Gzip.extension()
+    );
+    let path = dir.join(&filename);
+
+    match persistence::save_game_compressed(game, &path, SaveCompression::Gzip) {
+        Ok(()) => {
+            println!("  Gzip save written to: saves/{}", filename);
+        }
+        Err(e) => {
+            println!("  Failed to save: {}", e);
+        }
+    }
+}
+
+pub(crate) fn save_current_game_zstd(game: &GameState) {
+    let dir = saves_dir();
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        println!("  Failed to create saves directory: {}", e);
+        return;
+    }
+
+    print_save_list(&dir);
+
+    let filename = format!(
+        "save_{}_Q{}.bin{}",
+        game.turn.year(),
+        game.turn.quarter(),
+        SaveCompression::Zstd.extension()
+    );
+    let path = dir.join(&filename);
+
+    match persistence::save_game_binary_compressed(game, &path, SaveCompression::Zstd) {
+        Ok(()) => {
+            println!("  Zstd save written to: saves/{}", filename);
+        }
+        Err(e) => {
+            println!("  Failed to save: {}", e);
+        }
+    }
+}
+
 pub(crate) fn quicksave_game(game: &GameState) {
     match atomic_save_game(game, "quicksave.json") {
         Ok(()) => println!("  Quicksave complete."),
@@ -198,19 +269,37 @@ pub(crate) fn quicksave_game_binary(game: &GameState) {
     }
 }
 
+pub(crate) fn quicksave_game_gzip(game: &GameState) {
+    match atomic_save_game_compressed(game, "quicksave.json.gz", SaveCompression::Gzip) {
+        Ok(()) => println!("  Gzip quicksave complete."),
+        Err(e) => println!("  Gzip quicksave failed: {}", e),
+    }
+}
+
+pub(crate) fn quicksave_game_zstd(game: &GameState) {
+    match atomic_save_game_binary_compressed(game, "quicksave.bin.zst", SaveCompression::Zstd) {
+        Ok(()) => println!("  Zstd quicksave complete."),
+        Err(e) => println!("  Zstd quicksave failed: {}", e),
+    }
+}
+
 pub(crate) fn list_saved_games() {
     let dir = saves_dir();
     if !dir.exists() {
         println!("  No saved games found.");
         println!();
-        println!("  Use: load <filename> (e.g., \"load save_1820_Q1.json\" or \".bin\")");
+        println!(
+            "  Use: load <filename> (e.g., \"load save_1820_Q1.json\", \".bin\", \".json.gz\", \".bin.zst\")"
+        );
         return;
     }
 
     println!();
     print_save_list(&dir);
     println!();
-    println!("  Use: load <filename> (e.g., \"load save_1820_Q1.json\" or \".bin\")");
+    println!(
+        "  Use: load <filename> (e.g., \"load save_1820_Q1.json\", \".bin\", \".json.gz\", \".bin.zst\")"
+    );
 }
 
 pub(crate) fn print_save_list(dir: &std::path::Path) {
@@ -221,7 +310,7 @@ pub(crate) fn print_save_list(dir: &std::path::Path) {
                 e.path()
                     .extension()
                     .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| ext == "json" || ext == "bin")
+                    .is_some_and(|ext| matches!(ext, "json" | "bin" | "gz" | "zst"))
             })
             .collect(),
         Err(_) => return,

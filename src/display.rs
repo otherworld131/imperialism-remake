@@ -758,14 +758,20 @@ pub(crate) fn print_help() {
     println!("    history           — Show timeline of major events");
     println!("    save              — Save the current game (shows existing saves)");
     println!("    savebin           — Save the current game as bincode (.bin)");
+    println!("    savegz            — Save compressed JSON (.json.gz)");
+    println!("    savezst           — Save compressed binary (.bin.zst)");
     println!("    load              — List saved games");
     println!("    load <filename>   — Load a saved game");
     println!("    delete <filename> — Delete a saved game");
     println!("    saveinfo <file>   — Show save file metadata without loading");
     println!("    quicksave / qs    — Quick save to quicksave.json");
     println!("    quicksavebin/qsb  — Quick save to quicksave.bin");
+    println!("    quicksavegz/qsg   — Quick save to quicksave.json.gz");
+    println!("    quicksavezst/qsz  — Quick save to quicksave.bin.zst");
     println!("    quickload / ql    — Quick load from quicksave.json");
     println!("    quickloadbin/qlb  — Quick load from quicksave.bin");
+    println!("    quickloadgz/qlg   — Quick load from quicksave.json.gz");
+    println!("    quickloadzst/qlz  — Quick load from quicksave.bin.zst");
     println!("    help              — Show this help");
     println!("    quit              — Exit the game");
 }

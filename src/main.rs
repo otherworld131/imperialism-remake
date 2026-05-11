@@ -250,6 +250,12 @@ fn main() {
             "savebin" => {
                 saves::save_current_game_binary(&game);
             }
+            "savegz" => {
+                saves::save_current_game_gzip(&game);
+            }
+            "savezst" => {
+                saves::save_current_game_zstd(&game);
+            }
             "load" => {
                 saves::list_saved_games();
             }
@@ -281,6 +287,12 @@ fn main() {
             "quicksavebin" | "qsb" => {
                 saves::quicksave_game_binary(&game);
             }
+            "quicksavegz" | "qsg" => {
+                saves::quicksave_game_gzip(&game);
+            }
+            "quicksavezst" | "qsz" => {
+                saves::quicksave_game_zstd(&game);
+            }
             "quickload" | "ql" => match saves::load_saved_game("quicksave.json") {
                 Ok(loaded) => {
                     game = loaded;
@@ -301,6 +313,28 @@ fn main() {
                 }
                 Err(e) => {
                     println!("  Binary quickload failed: {}", e);
+                }
+            },
+            "quickloadgz" | "qlg" => match saves::load_saved_game("quicksave.json.gz") {
+                Ok(loaded) => {
+                    game = loaded;
+                    game.ai_debug = ai_debug;
+                    println!("  Gzip quickload successful.");
+                    display::print_status(&game);
+                }
+                Err(e) => {
+                    println!("  Gzip quickload failed: {}", e);
+                }
+            },
+            "quickloadzst" | "qlz" => match saves::load_saved_game("quicksave.bin.zst") {
+                Ok(loaded) => {
+                    game = loaded;
+                    game.ai_debug = ai_debug;
+                    println!("  Zstd quickload successful.");
+                    display::print_status(&game);
+                }
+                Err(e) => {
+                    println!("  Zstd quickload failed: {}", e);
                 }
             },
             _ if cmd.starts_with("research ") => {
