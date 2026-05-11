@@ -155,6 +155,15 @@ function turnToYearQ(turn: number): string {
 }
 
 const PROSPECTOR_TERRAIN = new Set(['Hills', 'Mountain', 'Swamp', 'Desert', 'Tundra']);
+const WEB_QUICKSAVE_KEY = 'imperialism.web.quicksave.v1';
+
+type WebQuickSave = {
+  version: 1;
+  savedAtIso: string;
+  turnNumber: number;
+  playerName: string;
+  gameJson: string;
+};
 
 function App() {
   const [loading, setLoading] = useState(true);
@@ -765,6 +774,75 @@ function App() {
       await applyGameJson(newJson);
     });
   }, [gameJson, applyGameJson, observerGps, runMutation]);
+
+  const handleWebSave = useCallback(() => {
+    try {
+      const turnNumber = gameState?.turn?.[0] ?? gameState?.turn ?? 1;
+      const player =
+        gameState?.nations?.find((n: any) => n.id === gameState?.human_player_nation) ?? null;
+      const record: WebQuickSave = {
+        version: 1,
+        savedAtIso: new Date().toISOString(),
+        turnNumber,
+        playerName: player?.name ?? 'Unknown',
+        gameJson,
+      };
+      localStorage.setItem(WEB_QUICKSAVE_KEY, JSON.stringify(record));
+      const year = 1815 + Math.floor((turnNumber - 1) / 4);
+      const quarter = ((turnNumber - 1) % 4) + 1;
+      alert(`Saved locally (${record.playerName}, ${year} Q${quarter}).`);
+    } catch (err) {
+      console.error('Failed to save in browser:', err);
+      showError('Save failed: browser storage unavailable.');
+    }
+  }, [gameJson, gameState, showError]);
+
+  const handleWebLoad = useCallback(async () => {
+    await runMutation(async () => {
+      const raw = localStorage.getItem(WEB_QUICKSAVE_KEY);
+      if (!raw) {
+        showError('No browser save found yet.');
+        return;
+      }
+      let parsed: WebQuickSave;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        showError('Saved data is unreadable.');
+        return;
+      }
+      if (parsed.version !== 1 || typeof parsed.gameJson !== 'string') {
+        showError('Saved data format is unsupported.');
+        return;
+      }
+      const currentTurn = gameState?.turn?.[0] ?? gameState?.turn ?? 1;
+      const currentYear = 1815 + Math.floor((currentTurn - 1) / 4);
+      const currentQuarter = ((currentTurn - 1) % 4) + 1;
+      if (
+        !confirm(
+          `Load browser save for ${parsed.playerName} (turn ${parsed.turnNumber})? This will replace the current game state (${currentYear} Q${currentQuarter}).`,
+        )
+      ) {
+        return;
+      }
+      setBusyMessage('Loading browser save…');
+      try {
+        if (!(await applyGameJson(parsed.gameJson))) return;
+        setActiveScreen('map');
+        setProvinceUnits(null);
+        setSelectedUnitIds([]);
+        setIsDeployMode(false);
+        setDeployingCivilian(null);
+        setDeployableTiles(new Set());
+        setProspectedTiles(new Set());
+        setSelectedTile(null);
+        setSelectedNavyKey(null);
+        setHoveredNavyKey(null);
+      } finally {
+        setBusyMessage(null);
+      }
+    });
+  }, [applyGameJson, gameState, runMutation, showError]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1757,6 +1835,20 @@ function App() {
             </button>
           </>
         )}
+        <button
+          onClick={handleWebSave}
+          style={styles.btn}
+          title="Save current game state in this browser"
+        >
+          Save
+        </button>
+        <button
+          onClick={handleWebLoad}
+          style={styles.btn}
+          title="Load the browser-saved game state"
+        >
+          Load
+        </button>
         <button onClick={handleEndTurn} style={styles.endTurnBtn}>End Turn</button>
         {gameStartParams && (
           <button onClick={handleRestart} style={styles.btn} title="Restart this map from turn 1">↻</button>
