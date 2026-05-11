@@ -45,6 +45,7 @@ export interface GameStartParams {
 
 interface Props {
   onStartGame: (gameJson: string, params: GameStartParams) => void;
+  onRequestLoadSavedGame?: () => void;
 }
 
 interface GpInfo {
@@ -62,7 +63,7 @@ function randomSeed(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
-export default function GameSetup({ onStartGame }: Props) {
+export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props) {
   const [scenarios, setScenarios] = useState<any[]>([]);
   const [selectedScenario, setSelectedScenario] = useState<string | null>(null);
   const [difficulty, setDifficulty] = useState(2);
@@ -460,6 +461,8 @@ export default function GameSetup({ onStartGame }: Props) {
           </div>
 
           <div style={s.footer}>
+            <button style={s.secondaryBtn} onClick={onRequestLoadSavedGame}>Load Save</button>
+            <div style={{ flex: 1 }} />
             <button style={s.startBtn} onClick={() => buildPreview()}>Preview Map</button>
           </div>
         </div>

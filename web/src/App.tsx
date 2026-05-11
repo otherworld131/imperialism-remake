@@ -25,7 +25,7 @@ import {
   getLedgerData,
   getAllGPLedgerData,
   getTechScreenData, queueTechResearch, cancelTechResearch,
-  parseGameJson,
+  parseGameJson, DEFAULT_MAP_GEN_CONFIG,
 } from './wasm';
 import type {
   TileData, NavyMarker, SeaZone, Headline, MapMode, DiplomacyOverlay, DiplomacyOverlayRelation, MilitaryOverlayEntry,
@@ -403,7 +403,7 @@ function App() {
   const [mapMode, setMapMode] = useState<MapMode>('political');
   const [selectedNation, setSelectedNation] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<string>('');
-  const [showSavePicker, setShowSavePicker] = useState(false);
+  const [savePickerContext, setSavePickerContext] = useState<'ingame' | 'setup' | null>(null);
   const [webSaveFiles, setWebSaveFiles] = useState<WebSaveFile[]>([]);
   const [diplomacyOverlay, setDiplomacyOverlay] = useState<DiplomacyOverlay | null>(null);
   const [militaryOverlay, setMilitaryOverlay] = useState<MilitaryOverlayEntry[] | null>(null);
@@ -1016,7 +1016,7 @@ function App() {
     }
     await migrateLegacyWebSavesIfNeeded();
     refreshWebSaveFiles();
-    setShowSavePicker(true);
+    setSavePickerContext('ingame');
   }, [refreshWebSaveFiles, showError]);
 
   const handleWebLoad = useCallback(async (saveFile: WebSaveFile) => {
@@ -1031,7 +1031,7 @@ function App() {
       ) {
         return;
       }
-      setShowSavePicker(false);
+      setSavePickerContext(null);
       setBusyMessage('Loading browser save…');
       try {
         const payload = await getSavePayload(saveFile.id);
@@ -1056,6 +1056,51 @@ function App() {
     });
   }, [applyGameJson, gameState, runMutation, showError]);
 
+  const handleOpenSetupLoadPicker = useCallback(async () => {
+    await migrateLegacyWebSavesIfNeeded();
+    refreshWebSaveFiles();
+    setSavePickerContext('setup');
+  }, [refreshWebSaveFiles]);
+
+  const handleWebLoadFromSetup = useCallback(async (saveFile: WebSaveFile) => {
+    setBusyMessage('Loading browser save…');
+    try {
+      const payload = await getSavePayload(saveFile.id);
+      if (!payload) {
+        showError(`Save "${saveFile.name}" is missing payload data.`);
+        return;
+      }
+      const state = parseGameJson(payload);
+      if (state?.error) {
+        showError(`Save "${saveFile.name}" is invalid.`);
+        return;
+      }
+      const diff = String(state?.difficulty ?? 'Normal');
+      const difficulty =
+        diff === 'Introductory' ? 0
+        : diff === 'Easy' ? 1
+        : diff === 'Hard' ? 3
+        : diff === 'NighOnImpossible' || diff === 'NOI' ? 4
+        : 2;
+      const params: GameStartParams = {
+        mapKey: state?.world?.map_key ?? 'imperialism',
+        observerMode: state?.observer_mode === true,
+        scenario: null,
+        difficulty,
+        nationIdx: 0,
+        mapGenConfig: {
+          ...DEFAULT_MAP_GEN_CONFIG,
+        },
+        organicBorders,
+        hideHexGrid,
+      };
+      setSavePickerContext(null);
+      await handleGameStart(payload, params);
+    } finally {
+      setBusyMessage(null);
+    }
+  }, [handleGameStart, hideHexGrid, organicBorders, showError]);
+
   const handleDeleteWebSave = useCallback(async (saveFile: WebSaveFile) => {
     if (!confirm(`Delete save "${saveFile.name}"?`)) return;
     try {
@@ -1063,6 +1108,7 @@ function App() {
       const next = readWebSaveFiles().filter(s => s.id !== saveFile.id);
       writeWebSaveFiles(next);
       refreshWebSaveFiles();
+      if (next.length === 0) setSavePickerContext(null);
     } catch (err) {
       console.error('Failed to delete save:', err);
       showError(`Failed to delete "${saveFile.name}".`);
@@ -1080,7 +1126,7 @@ function App() {
         }
       }
       if (e.code === 'Escape') {
-        if (showSavePicker) { setShowSavePicker(false); }
+        if (savePickerContext) { setSavePickerContext(null); }
         else if (queuedDiplomacyAction) { setQueuedDiplomacyAction(null); }
         else if (selectedUnitIds.length > 0) { setSelectedUnitIds([]); }
         else if (selectedNavyKey) { setSelectedNavyKey(null); }
@@ -1103,7 +1149,7 @@ function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeScreen, showProposals, showSavePicker, handleEndTurn, dismissNewspaper, selectedUnitIds, isDeployMode, pendingEngineerDeploy, queuedDiplomacyAction, selectedNavyKey]);
+  }, [activeScreen, showProposals, savePickerContext, handleEndTurn, dismissNewspaper, selectedUnitIds, isDeployMode, pendingEngineerDeploy, queuedDiplomacyAction, selectedNavyKey]);
 
   // Fetch overlay data when map mode, active screen, or selected nation changes
   useEffect(() => {
@@ -1966,7 +2012,66 @@ function App() {
       <p>Try refreshing the page. If the problem persists, check that WebAssembly is enabled in your browser.</p>
     </div>
   );
-  if (!gameStarted) return <GameSetup onStartGame={handleGameStart} />;
+  if (!gameStarted) return (
+    <>
+      <GameSetup
+        onStartGame={handleGameStart}
+        onRequestLoadSavedGame={handleOpenSetupLoadPicker}
+      />
+      <BusyOverlay
+        busy={busyMessage !== null}
+        message={busyMessage ?? undefined}
+        cancellable={false}
+      />
+      {savePickerContext && (
+        <div style={styles.modal}>
+          <div style={{ ...styles.modalContent, width: 680 }}>
+            <h2 style={{ marginTop: 0, color: '#daa520' }}>Load Save File</h2>
+            {webSaveFiles.length === 0 ? (
+              <p style={styles.hint}>No saved files yet. Use Save first.</p>
+            ) : (
+              <div style={{ maxHeight: '55vh', overflowY: 'auto' }}>
+                {webSaveFiles.map(saveFile => (
+                  <div
+                    key={saveFile.id}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 10,
+                      padding: '8px 10px',
+                      marginBottom: 8,
+                      border: '1px solid #3a3520',
+                      background: 'rgba(255,255,255,0.03)',
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 'bold', color: '#e0d8c0' }}>{saveFile.name}</div>
+                      <div style={{ fontSize: 12, color: '#9a9a9a' }}>
+                        {saveFile.playerName} · {turnToYearQ(saveFile.turnNumber)} · {new Date(saveFile.savedAtIso).toLocaleString()}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                      <button onClick={() => handleWebLoadFromSetup(saveFile)} style={styles.btn}>Load</button>
+                      <button
+                        onClick={() => handleDeleteWebSave(saveFile)}
+                        style={{ ...styles.btn, background: '#5a2620', borderColor: '#7b332b' }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+              <button onClick={() => setSavePickerContext(null)} style={styles.btn}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
 
   const player = gameState?.nations?.find((n: any) => n.id === gameState.human_player_nation);
   const turnNumber = gameState?.turn?.[0] ?? gameState?.turn ?? 1;
@@ -2692,7 +2797,7 @@ function App() {
         </div>
       )}
 
-      {showSavePicker && (
+      {savePickerContext === 'ingame' && (
         <div style={styles.modal}>
           <div style={{ ...styles.modalContent, width: 680 }}>
             <h2 style={{ marginTop: 0, color: '#daa520' }}>Load Save File</h2>
@@ -2734,7 +2839,7 @@ function App() {
               </div>
             )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
-              <button onClick={() => setShowSavePicker(false)} style={styles.btn}>Close</button>
+              <button onClick={() => setSavePickerContext(null)} style={styles.btn}>Close</button>
             </div>
           </div>
         </div>
