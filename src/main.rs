@@ -247,6 +247,9 @@ fn main() {
             "save" => {
                 saves::save_current_game(&game);
             }
+            "savebin" => {
+                saves::save_current_game_binary(&game);
+            }
             "load" => {
                 saves::list_saved_games();
             }
@@ -275,6 +278,9 @@ fn main() {
             "quicksave" | "qs" => {
                 saves::quicksave_game(&game);
             }
+            "quicksavebin" | "qsb" => {
+                saves::quicksave_game_binary(&game);
+            }
             "quickload" | "ql" => match saves::load_saved_game("quicksave.json") {
                 Ok(loaded) => {
                     game = loaded;
@@ -284,6 +290,17 @@ fn main() {
                 }
                 Err(e) => {
                     println!("  Quickload failed: {}", e);
+                }
+            },
+            "quickloadbin" | "qlb" => match saves::load_saved_game("quicksave.bin") {
+                Ok(loaded) => {
+                    game = loaded;
+                    game.ai_debug = ai_debug;
+                    println!("  Binary quickload successful.");
+                    display::print_status(&game);
+                }
+                Err(e) => {
+                    println!("  Binary quickload failed: {}", e);
                 }
             },
             _ if cmd.starts_with("research ") => {

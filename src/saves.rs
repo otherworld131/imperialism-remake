@@ -108,6 +108,18 @@ pub(crate) fn safe_save_path(filename: &str) -> Result<PathBuf, SaveError> {
 }
 
 pub(crate) fn atomic_save_game(game: &GameState, filename: &str) -> Result<(), SaveError> {
+    atomic_save_game_with_format(game, filename, false)
+}
+
+pub(crate) fn atomic_save_game_binary(game: &GameState, filename: &str) -> Result<(), SaveError> {
+    atomic_save_game_with_format(game, filename, true)
+}
+
+fn atomic_save_game_with_format(
+    game: &GameState,
+    filename: &str,
+    binary: bool,
+) -> Result<(), SaveError> {
     let dir = saves_dir();
     std::fs::create_dir_all(&dir)
         .map_err(|e| SaveError::io("Failed to create saves directory", e))?;
@@ -118,7 +130,11 @@ pub(crate) fn atomic_save_game(game: &GameState, filename: &str) -> Result<(), S
     {
         std::fs::remove_file(&tmp_path).ok();
     }
-    persistence::save_game(game, &tmp_path)?;
+    if binary {
+        persistence::save_game_binary(game, &tmp_path)?;
+    } else {
+        persistence::save_game(game, &tmp_path)?;
+    }
     std::fs::rename(&tmp_path, &target).map_err(|e| SaveError::io("Failed to finalize save", e))?;
     Ok(())
 }
@@ -146,10 +162,39 @@ pub(crate) fn save_current_game(game: &GameState) {
     }
 }
 
+pub(crate) fn save_current_game_binary(game: &GameState) {
+    let dir = saves_dir();
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        println!("  Failed to create saves directory: {}", e);
+        return;
+    }
+
+    print_save_list(&dir);
+
+    let filename = format!("save_{}_Q{}.bin", game.turn.year(), game.turn.quarter());
+    let path = dir.join(&filename);
+
+    match persistence::save_game_binary(game, &path) {
+        Ok(()) => {
+            println!("  Binary game save written to: saves/{}", filename);
+        }
+        Err(e) => {
+            println!("  Failed to save: {}", e);
+        }
+    }
+}
+
 pub(crate) fn quicksave_game(game: &GameState) {
     match atomic_save_game(game, "quicksave.json") {
         Ok(()) => println!("  Quicksave complete."),
         Err(e) => println!("  Quicksave failed: {}", e),
+    }
+}
+
+pub(crate) fn quicksave_game_binary(game: &GameState) {
+    match atomic_save_game_binary(game, "quicksave.bin") {
+        Ok(()) => println!("  Binary quicksave complete."),
+        Err(e) => println!("  Binary quicksave failed: {}", e),
     }
 }
 
@@ -158,21 +203,26 @@ pub(crate) fn list_saved_games() {
     if !dir.exists() {
         println!("  No saved games found.");
         println!();
-        println!("  Use: load <filename> (e.g., \"load save_1820_Q1.json\")");
+        println!("  Use: load <filename> (e.g., \"load save_1820_Q1.json\" or \".bin\")");
         return;
     }
 
     println!();
     print_save_list(&dir);
     println!();
-    println!("  Use: load <filename> (e.g., \"load save_1820_Q1.json\")");
+    println!("  Use: load <filename> (e.g., \"load save_1820_Q1.json\" or \".bin\")");
 }
 
 pub(crate) fn print_save_list(dir: &std::path::Path) {
     let mut entries: Vec<_> = match std::fs::read_dir(dir) {
         Ok(rd) => rd
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext == "json" || ext == "bin")
+            })
             .collect(),
         Err(_) => return,
     };

@@ -757,12 +757,15 @@ pub(crate) fn print_help() {
     println!("    overview          — Comprehensive empire overview");
     println!("    history           — Show timeline of major events");
     println!("    save              — Save the current game (shows existing saves)");
+    println!("    savebin           — Save the current game as bincode (.bin)");
     println!("    load              — List saved games");
     println!("    load <filename>   — Load a saved game");
     println!("    delete <filename> — Delete a saved game");
     println!("    saveinfo <file>   — Show save file metadata without loading");
     println!("    quicksave / qs    — Quick save to quicksave.json");
+    println!("    quicksavebin/qsb  — Quick save to quicksave.bin");
     println!("    quickload / ql    — Quick load from quicksave.json");
+    println!("    quickloadbin/qlb  — Quick load from quicksave.bin");
     println!("    help              — Show this help");
     println!("    quit              — Exit the game");
 }

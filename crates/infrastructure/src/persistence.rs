@@ -91,8 +91,7 @@ fn is_leap(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
-/// Save a game state to a JSON file at the given path.
-pub fn save_game(game: &GameState, path: &Path) -> Result<(), PersistenceError> {
+fn build_save_file(game: &GameState) -> SaveFile {
     let nation_name = game
         .get_nation(game.human_player_nation)
         .map(|n| n.name.clone())
@@ -102,17 +101,76 @@ pub fn save_game(game: &GameState, path: &Path) -> Result<(), PersistenceError> 
     let timestamp = current_timestamp();
 
     let snapshot: SnapshotGameState = game.into();
-    let save = SaveFile {
+    SaveFile {
         version: CURRENT_SAVE_VERSION,
         nation_name,
         turn_display,
         difficulty,
         timestamp,
         game: snapshot,
-    };
+    }
+}
+
+fn save_to_json_bytes(save: &SaveFile) -> Result<Vec<u8>, PersistenceError> {
     let json = serde_json::to_string_pretty(&save)
         .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
-    std::fs::write(path, json)?;
+    Ok(json.into_bytes())
+}
+
+fn save_to_binary_bytes(save: &SaveFile) -> Result<Vec<u8>, PersistenceError> {
+    let mut out = Vec::new();
+    save.serialize(&mut rmp_serde::Serializer::new(&mut out).with_struct_map())
+        .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+    Ok(out)
+}
+
+fn read_save_file_from_bytes(bytes: &[u8]) -> Result<SaveFile, PersistenceError> {
+    let decode_json = || serde_json::from_slice::<SaveFile>(bytes);
+    let decode_binary = || rmp_serde::from_slice::<SaveFile>(bytes);
+
+    let first_non_ws = bytes.iter().copied().find(|b| !b.is_ascii_whitespace());
+    let likely_json = matches!(first_non_ws, Some(b'{') | Some(b'['));
+
+    let primary = if likely_json {
+        decode_json().map_err(|_| PersistenceError::UnrecognizedFormat)
+    } else {
+        decode_binary().map_err(|_| PersistenceError::UnrecognizedFormat)
+    };
+    if let Ok(save) = primary {
+        return Ok(save);
+    }
+
+    let fallback = if likely_json {
+        decode_binary().map_err(|_| PersistenceError::UnrecognizedFormat)
+    } else {
+        decode_json().map_err(|_| PersistenceError::UnrecognizedFormat)
+    };
+    fallback.map_err(|_| PersistenceError::UnrecognizedFormat)
+}
+
+fn validate_save_version(save: &SaveFile) -> Result<(), PersistenceError> {
+    if save.version != CURRENT_SAVE_VERSION {
+        return Err(PersistenceError::UnsupportedVersion {
+            found: save.version,
+            max_supported: CURRENT_SAVE_VERSION,
+        });
+    }
+    Ok(())
+}
+
+/// Save a game state to a JSON file at the given path.
+pub fn save_game(game: &GameState, path: &Path) -> Result<(), PersistenceError> {
+    let save = build_save_file(game);
+    let bytes = save_to_json_bytes(&save)?;
+    std::fs::write(path, bytes)?;
+    Ok(())
+}
+
+/// Save a game state to a binary bincode file at the given path.
+pub fn save_game_binary(game: &GameState, path: &Path) -> Result<(), PersistenceError> {
+    let save = build_save_file(game);
+    let bytes = save_to_binary_bytes(&save)?;
+    std::fs::write(path, bytes)?;
     Ok(())
 }
 
@@ -131,38 +189,26 @@ pub fn load_game_with_data(
     path: &Path,
     game_data: GameData,
 ) -> Result<GameState, PersistenceError> {
-    let json = std::fs::read_to_string(path)?;
-
-    if let Ok(save) = serde_json::from_str::<SaveFile>(&json) {
-        if save.version != CURRENT_SAVE_VERSION {
-            return Err(PersistenceError::UnsupportedVersion {
-                found: save.version,
-                max_supported: CURRENT_SAVE_VERSION,
-            });
-        }
-        let mut game: GameState = save.game.into();
-        game.game_data = game_data;
-        return Ok(game);
-    }
-
-    Err(PersistenceError::UnrecognizedFormat)
+    let bytes = std::fs::read(path)?;
+    let save = read_save_file_from_bytes(&bytes)?;
+    validate_save_version(&save)?;
+    let mut game: GameState = save.game.into();
+    game.game_data = game_data;
+    Ok(game)
 }
 
 /// Read save file metadata without loading the full game state.
 /// Returns metadata or None if unreadable.
 pub fn read_save_metadata(path: &Path) -> Option<SaveFileMetadata> {
-    let json = std::fs::read_to_string(path).ok()?;
-    if let Ok(save) = serde_json::from_str::<SaveFile>(&json) {
-        Some(SaveFileMetadata {
-            version: save.version,
-            nation_name: save.nation_name,
-            turn_display: save.turn_display,
-            difficulty: save.difficulty,
-            timestamp: save.timestamp,
-        })
-    } else {
-        None
-    }
+    let bytes = std::fs::read(path).ok()?;
+    let save = read_save_file_from_bytes(&bytes).ok()?;
+    Some(SaveFileMetadata {
+        version: save.version,
+        nation_name: save.nation_name,
+        turn_display: save.turn_display,
+        difficulty: save.difficulty,
+        timestamp: save.timestamp,
+    })
 }
 
 /// Metadata extracted from a save file for display in the save browser.
@@ -180,12 +226,18 @@ pub fn delete_save(path: &Path) -> Result<(), PersistenceError> {
     Ok(())
 }
 
-/// List all save files (`.json`) in a directory, sorted by modification time (newest first).
+/// List all save files (`.json` and `.bin`) in a directory, sorted by
+/// modification time (newest first).
 pub fn list_saves(dir: &Path) -> Vec<PathBuf> {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
         .map(|rd| {
             rd.filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+                .filter(|e| {
+                    e.path()
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .is_some_and(|ext| ext == "json" || ext == "bin")
+                })
                 .map(|e| e.path())
                 .collect()
         })
@@ -311,6 +363,28 @@ mod tests {
             loaded_player.economy.treasury,
             domain::types::Money::dollars(7500)
         );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn save_and_load_binary_roundtrip() {
+        let game = new_game("test_binary", Difficulty::Normal, 0);
+
+        let dir = std::env::temp_dir().join("imperialism_test_saves_binary");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test_save.bin");
+
+        save_game_binary(&game, &path).unwrap();
+        assert!(path.exists());
+
+        let loaded = load_game(&path).unwrap();
+        assert_eq!(loaded.turn, game.turn);
+        assert_eq!(loaded.difficulty, game.difficulty);
+        assert_eq!(loaded.world.map_key, game.world.map_key);
+        assert_eq!(loaded.human_player_nation, game.human_player_nation);
+        assert_eq!(loaded.rng_state, game.rng_state);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
@@ -507,20 +581,26 @@ mod tests {
     }
 
     #[test]
-    fn list_saves_returns_json_files() {
+    fn list_saves_returns_json_and_bin_files() {
         let dir = std::env::temp_dir().join("imperialism_test_list_saves");
         std::fs::create_dir_all(&dir).unwrap();
 
         std::fs::write(dir.join("save1.json"), "{}").unwrap();
         std::fs::write(dir.join("save2.json"), "{}").unwrap();
+        std::fs::write(dir.join("save3.bin"), [0u8, 1, 2]).unwrap();
         std::fs::write(dir.join("notes.txt"), "not a save").unwrap();
 
         let saves = list_saves(&dir);
-        assert_eq!(saves.len(), 2, "Should find exactly 2 .json files");
-        assert!(saves.iter().all(|p| p.extension().unwrap() == "json"));
+        assert_eq!(saves.len(), 3, "Should find exactly 3 save files");
+        assert!(saves.iter().all(|p| {
+            p.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext == "json" || ext == "bin")
+        }));
 
         let _ = std::fs::remove_file(dir.join("save1.json"));
         let _ = std::fs::remove_file(dir.join("save2.json"));
+        let _ = std::fs::remove_file(dir.join("save3.bin"));
         let _ = std::fs::remove_file(dir.join("notes.txt"));
         let _ = std::fs::remove_dir(&dir);
     }
@@ -558,6 +638,24 @@ mod tests {
         assert!(meta.turn_display.contains("Q"));
         assert_eq!(meta.difficulty, "Hard");
         assert!(meta.timestamp.contains("T"));
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn read_save_metadata_supports_binary_save() {
+        let game = new_game("test_binary_meta", Difficulty::Hard, 0);
+
+        let dir = std::env::temp_dir().join("imperialism_test_saveinfo_binary");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("saveinfo_test.bin");
+
+        save_game_binary(&game, &path).unwrap();
+        let meta = read_save_metadata(&path).unwrap();
+        assert_eq!(meta.version, CURRENT_SAVE_VERSION);
+        assert_eq!(meta.difficulty, "Hard");
+        assert!(!meta.nation_name.is_empty());
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
