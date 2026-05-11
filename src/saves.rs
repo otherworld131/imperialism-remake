@@ -1,9 +1,12 @@
+use std::io::Write;
 use std::path::PathBuf;
 
 use ::infrastructure::PersistenceError;
 use ::infrastructure::data_loader::load_embedded_game_data;
 use ::infrastructure::persistence::{self, SaveCompression};
 use domain::game_state::GameState;
+
+const LOAD_PROGRESS_THRESHOLD_BYTES: u64 = 512 * 1024;
 
 #[derive(Debug)]
 pub(crate) enum SaveError {
@@ -383,7 +386,55 @@ pub(crate) fn print_save_list(dir: &std::path::Path) {
 
 pub(crate) fn load_saved_game(filename: &str) -> Result<GameState, SaveError> {
     let path = sanitize_save_filename(filename)?;
-    persistence::load_game_with_data(&path, load_embedded_game_data()).map_err(Into::into)
+    let should_show_progress = path
+        .metadata()
+        .map(|m| m.len() >= LOAD_PROGRESS_THRESHOLD_BYTES)
+        .unwrap_or(false);
+    if should_show_progress {
+        load_saved_game_with_progress(&path, filename)
+    } else {
+        persistence::load_game_with_data(&path, load_embedded_game_data()).map_err(Into::into)
+    }
+}
+
+fn load_saved_game_with_progress(
+    path: &std::path::Path,
+    filename: &str,
+) -> Result<GameState, SaveError> {
+    println!("  Loading save '{}':", filename);
+
+    print!("    [1/3] Reading metadata...");
+    std::io::stdout()
+        .flush()
+        .map_err(|e| SaveError::io("Failed to flush stdout", e))?;
+    let meta = persistence::read_save_metadata(path);
+    match meta {
+        Some(meta) => {
+            println!(
+                " done ({} {}, {}).",
+                meta.nation_name, meta.turn_display, meta.timestamp
+            );
+        }
+        None => {
+            println!(" done.");
+        }
+    }
+
+    print!("    [2/3] Loading game definitions...");
+    std::io::stdout()
+        .flush()
+        .map_err(|e| SaveError::io("Failed to flush stdout", e))?;
+    let game_data = load_embedded_game_data();
+    println!(" done.");
+
+    print!("    [3/3] Decoding save payload...");
+    std::io::stdout()
+        .flush()
+        .map_err(|e| SaveError::io("Failed to flush stdout", e))?;
+    let game = persistence::load_game_with_data(path, game_data)?;
+    println!(" done.");
+
+    Ok(game)
 }
 
 pub(crate) fn delete_saved_game(filename: &str) {
@@ -434,6 +485,8 @@ pub(crate) fn cmd_saveinfo(filename: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use domain::game_state::new_game;
+    use domain::types::Difficulty;
 
     #[test]
     fn rejects_path_traversal_with_dotdot() {
@@ -482,5 +535,29 @@ mod tests {
 
         let result = sanitize_save_filename("nonexistent_file_xyz.json");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_saved_game_supports_large_file_progress_path() {
+        let dir = saves_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let filename = "_test_large_progress.json";
+        let path = dir.join(filename);
+
+        let game = new_game("test", Difficulty::Normal, 0);
+        persistence::save_game(&game, &path).unwrap();
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        let padding = " ".repeat(LOAD_PROGRESS_THRESHOLD_BYTES as usize + 128);
+        file.write_all(padding.as_bytes()).unwrap();
+
+        let loaded = load_saved_game(filename).unwrap();
+        assert_eq!(loaded.turn, game.turn);
+        assert_eq!(loaded.rng_state, game.rng_state);
+
+        std::fs::remove_file(&path).unwrap();
     }
 }
