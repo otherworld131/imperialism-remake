@@ -343,6 +343,56 @@ impl PlanOutcome {
     }
 }
 
+fn log_depot_plan(game: &GameState, nation_id: NationId, label: &str, plan: Option<&DepotPlan>) {
+    if !game.ai_debug {
+        return;
+    }
+    let nation_name = game
+        .get_nation(nation_id)
+        .map(|n| n.name.as_str())
+        .unwrap_or("?");
+    match plan {
+        Some(plan) => {
+            let (province_id, province_name, incorporated_from, connected) = game
+                .world
+                .hex_map
+                .get_tile(plan.candidate)
+                .and_then(|t| t.province_id)
+                .and_then(|pid| {
+                    game.get_province(pid).map(|p| {
+                        (
+                            pid.0,
+                            p.name.as_str(),
+                            p.incorporated_from.map(|n| n.0),
+                            p.connected_to_capital,
+                        )
+                    })
+                })
+                .unwrap_or((u32::MAX, "?", None, false));
+            eprintln!(
+                "[AI:{}:infra-plan] {} candidate=({}, {}) province={}({}) incorporated_from={:?} connected={} origin=({}, {}) path_len={} path_cost=${} coverage={} net={:.1}",
+                nation_name,
+                label,
+                plan.candidate.q,
+                plan.candidate.r,
+                province_name,
+                province_id,
+                incorporated_from,
+                connected,
+                plan.origin_capital.q,
+                plan.origin_capital.r,
+                plan.path.len(),
+                plan.path_cost.as_dollars(),
+                plan.coverage_value,
+                plan.net_score
+            );
+        }
+        None => {
+            eprintln!("[AI:{}:infra-plan] {} none", nation_name, label);
+        }
+    }
+}
+
 /// Plan the next depot target for `nation_id` (card #132).
 ///
 /// Card-mandated behaviour:
@@ -362,7 +412,12 @@ impl PlanOutcome {
 ///
 /// Returns a `PlanOutcome` the spending loop uses to persist or clear the
 /// nation's `committed_infra_target` field.
-pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutcome {
+fn plan_next_depot_with(
+    game: &GameState,
+    nation_id: NationId,
+    commitment: Option<&crate::nation::CommittedInfraTarget>,
+    excluded_candidates: &HashSet<HexCoord>,
+) -> PlanOutcome {
     use crate::map::infrastructure::collectable_hexes;
     use crate::turn::connected_provinces;
 
@@ -409,12 +464,7 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
     }
 
     // ── Check existing commitment first ───────────────────────
-    if let Some(t) = nation
-        .diplomacy
-        .ai_priority_state
-        .committed_infra_target
-        .as_ref()
-    {
+    if let Some(t) = commitment {
         let cand_tile = game.world.hex_map.get_tile(t.candidate);
         let fulfilled = cand_tile.is_some_and(|tile| tile.infrastructure.has_depot);
         let candidate_ownership_ok = owned_hexes.contains(&t.candidate);
@@ -461,16 +511,44 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
                     cfg.infra_improvability_weight,
                 );
                 let net_score = net_score(coverage_value, path_cost, cfg);
-                return PlanOutcome::KeepCommitment(DepotPlan {
+                let plan = DepotPlan {
                     candidate: t.candidate,
                     path,
                     origin_capital: t.origin_capital,
                     path_cost,
                     coverage_value,
                     net_score,
-                });
+                };
+                log_depot_plan(game, nation_id, "keep_commitment", Some(&plan));
+                return PlanOutcome::KeepCommitment(plan);
+            }
+            if game.ai_debug {
+                let name = game
+                    .get_nation(nation_id)
+                    .map(|n| n.name.as_str())
+                    .unwrap_or("?");
+                eprintln!(
+                    "[AI:{}:infra-plan] clear_commitment unreachable candidate=({}, {}) origin=({}, {})",
+                    name, t.candidate.q, t.candidate.r, t.origin_capital.q, t.origin_capital.r
+                );
             }
             // else: fall through to re-plan (commitment is now unreachable)
+        } else if game.ai_debug {
+            let name = game
+                .get_nation(nation_id)
+                .map(|n| n.name.as_str())
+                .unwrap_or("?");
+            eprintln!(
+                "[AI:{}:infra-plan] clear_commitment fulfilled={} candidate_owned={} origin_ok={} candidate=({}, {}) origin=({}, {})",
+                name,
+                fulfilled,
+                candidate_ownership_ok,
+                origin_ok,
+                t.candidate.q,
+                t.candidate.r,
+                t.origin_capital.q,
+                t.origin_capital.r
+            );
         }
         // fulfilled / lost candidate / lost origin / unreachable → clear and re-plan
     }
@@ -499,6 +577,9 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
             Some(t) => t,
             None => continue,
         };
+        if excluded_candidates.contains(&candidate) {
+            continue;
+        }
         if !tile.terrain().is_land() || tile.infrastructure.has_depot {
             continue;
         }
@@ -562,7 +643,24 @@ pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutc
         }
     }
 
+    log_depot_plan(game, nation_id, "fresh_pick", best.as_ref());
     PlanOutcome::Fresh(best)
+}
+
+pub(super) fn plan_next_depot(game: &GameState, nation_id: NationId) -> PlanOutcome {
+    let commitment = game
+        .get_nation(nation_id)
+        .and_then(|n| n.diplomacy.ai_priority_state.committed_infra_target.as_ref());
+    plan_next_depot_with(game, nation_id, commitment, &HashSet::new())
+}
+
+pub(super) fn plan_next_depot_excluding(
+    game: &GameState,
+    nation_id: NationId,
+    commitment: Option<&crate::nation::CommittedInfraTarget>,
+    excluded_candidates: &HashSet<HexCoord>,
+) -> PlanOutcome {
+    plan_next_depot_with(game, nation_id, commitment, excluded_candidates)
 }
 
 /// Find the best coastal tile in an owned province that is completely

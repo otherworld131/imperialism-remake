@@ -92,9 +92,8 @@ pub(crate) fn ai_scored_spending(
     // engineer sees a stable target turn over turn. `KeepCommitment` means
     // the existing commitment is still valid; `Fresh` means we cleared it
     // and (optionally) picked a new target.
-    let first_outcome = super::economy::plan_next_depot(game, nation_id);
-    apply_plan_outcome(game, nation_id, &first_outcome);
-    let mut depot_plan: Option<super::economy::DepotPlan> = first_outcome.as_plan().cloned();
+    let mut depot_plans: Vec<super::economy::DepotPlan> =
+        refresh_infra_commitments(game, nation_id, weights.reserve);
     // Priority mode: peacetime nations always develop economy first (diplomacy
     // close second); military only takes priority if at war or falling behind
     // on army size relative to other GPs.
@@ -142,7 +141,7 @@ pub(crate) fn ai_scored_spending(
             game,
             nation_id,
             &weights,
-            depot_plan.as_ref(),
+            &depot_plans,
             infra_blocked_this_turn,
         ) {
             opt.score += backlog_bonus(
@@ -156,7 +155,7 @@ pub(crate) fn ai_scored_spending(
                 options.push(opt);
             }
         }
-        if let Some(mut opt) = score_hire_engineer(game, nation_id, &weights, depot_plan.as_ref()) {
+        if let Some(mut opt) = score_hire_engineer(game, nation_id, &weights, &depot_plans) {
             opt.score += backlog_bonus(
                 game,
                 nation_id,
@@ -177,7 +176,7 @@ pub(crate) fn ai_scored_spending(
         // collectable). Only kicks in when an idle engineer is on hand —
         // otherwise the depot can't be built anyway and we shouldn't starve
         // other categories.
-        let saving_for_depot = depot_plan.as_ref().is_some_and(|p| p.path.is_empty()) && {
+        let saving_for_depot = depot_plans.iter().any(|p| p.path.is_empty()) && {
             let nation = game.get_nation(nation_id);
             let any_idle_engineer = nation.is_some_and(|n| {
                 n.military.civilians.iter().any(|c| {
@@ -264,7 +263,7 @@ pub(crate) fn ai_scored_spending(
                     cat,
                     actions,
                     &connected,
-                    depot_plan.as_ref(),
+                    &depot_plans,
                 );
                 let treasury_after = game.get_nation(nation_id).map(|n| n.economy.treasury);
                 let treasury_changed = treasury_before != treasury_after;
@@ -284,9 +283,7 @@ pub(crate) fn ai_scored_spending(
                 // engineer's state, so recompute connectivity + plan cache.
                 if cat == SpendingCategory::Infrastructure {
                     connected = connected_provinces(game, nation_id);
-                    let outcome = super::economy::plan_next_depot(game, nation_id);
-                    apply_plan_outcome(game, nation_id, &outcome);
-                    depot_plan = outcome.as_plan().cloned();
+                    depot_plans = refresh_infra_commitments(game, nation_id, weights.reserve);
                     // If the engineer did not transition from idle to working
                     // AND the treasury wasn't spent (engineer hire), the
                     // execute was a silent no-op: the next hex is blocked,
@@ -305,6 +302,20 @@ pub(crate) fn ai_scored_spending(
                     let engineer_transitioned = engineer_working_count_before
                         .is_some_and(|before| engineer_working_count_after > before);
                     if !engineer_transitioned && !treasury_changed {
+                        if game.ai_debug {
+                            let name = game
+                                .get_nation(nation_id)
+                                .map(|n| n.name.as_str())
+                                .unwrap_or("?");
+                            eprintln!(
+                                "[AI:{}:infra] blocked_this_turn engineer_working_before={:?} engineer_working_after={} treasury_changed={} plan_present={}",
+                                name,
+                                engineer_working_count_before,
+                                engineer_working_count_after,
+                                treasury_changed,
+                                !depot_plans.is_empty()
+                            );
+                        }
                         infra_blocked_this_turn = true;
                     }
                 }
@@ -321,18 +332,28 @@ pub(crate) fn ai_scored_spending(
 /// loop. `KeepCommitment` is a no-op (the field is already set); `Fresh`
 /// either sets the new target or clears the field if nothing is worth
 /// building this turn.
+#[allow(dead_code)]
 fn apply_plan_outcome(
     game: &mut GameState,
     nation_id: NationId,
     outcome: &super::economy::PlanOutcome,
 ) {
     let current_turn = game.turn.0;
+    let ai_debug = game.ai_debug;
     let Some(nation) = game.get_nation_mut(nation_id) else {
         return;
+    };
+    let nation_name = if ai_debug {
+        nation.name.clone()
+    } else {
+        String::new()
     };
     match outcome {
         super::economy::PlanOutcome::KeepCommitment(_) => {
             // Commitment already set; leave it.
+            if ai_debug {
+                eprintln!("[AI:{}:infra-plan] commitment unchanged", nation_name);
+            }
         }
         super::economy::PlanOutcome::Fresh(Some(plan)) => {
             nation.diplomacy.ai_priority_state.committed_infra_target =
@@ -341,11 +362,163 @@ fn apply_plan_outcome(
                     origin_capital: plan.origin_capital,
                     turn_committed: current_turn,
                 });
+            if ai_debug {
+                eprintln!(
+                    "[AI:{}:infra-plan] commitment set candidate=({}, {}) origin=({}, {}) turn={}",
+                    nation_name,
+                    plan.candidate.q,
+                    plan.candidate.r,
+                    plan.origin_capital.q,
+                    plan.origin_capital.r,
+                    current_turn
+                );
+            }
         }
         super::economy::PlanOutcome::Fresh(None) => {
             nation.diplomacy.ai_priority_state.committed_infra_target = None;
+            if ai_debug {
+                eprintln!("[AI:{}:infra-plan] commitment cleared", nation_name);
+            }
         }
     }
+}
+
+fn desired_infra_commitments(game: &GameState, nation_id: NationId, reserve: Money) -> usize {
+    let Some(nation) = game.get_nation(nation_id) else {
+        return 0;
+    };
+    let engineer_count = nation
+        .military
+        .civilians
+        .iter()
+        .filter(|c| c.civilian_type == CivilianType::Engineer)
+        .count()
+        .max(1);
+    let treasury_headroom = nation
+        .economy
+        .treasury
+        .checked_sub(reserve)
+        .unwrap_or(Money::ZERO)
+        .as_dollars()
+        .max(0);
+    let affordable = ((treasury_headroom / 10_000).max(1)) as usize;
+    engineer_count.min(affordable)
+}
+
+fn refresh_infra_commitments(
+    game: &mut GameState,
+    nation_id: NationId,
+    reserve: Money,
+) -> Vec<super::economy::DepotPlan> {
+    let desired = desired_infra_commitments(game, nation_id, reserve);
+    if desired == 0 {
+        return Vec::new();
+    }
+
+    let commitments: Vec<crate::nation::CommittedInfraTarget> = game
+        .get_nation(nation_id)
+        .map(|nation| {
+            nation
+                .diplomacy
+                .ai_priority_state
+                .committed_infra_target
+                .iter()
+                .cloned()
+                .chain(
+                    nation
+                        .diplomacy
+                        .ai_priority_state
+                        .additional_committed_infra_targets
+                        .iter()
+                        .cloned(),
+                )
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut plans: Vec<super::economy::DepotPlan> = Vec::new();
+    let mut kept_commitments: Vec<crate::nation::CommittedInfraTarget> = Vec::new();
+    let mut excluded: HashSet<HexCoord> = HashSet::new();
+
+    for commitment in commitments.into_iter().take(desired) {
+        let outcome = super::economy::plan_next_depot_excluding(
+            game,
+            nation_id,
+            Some(&commitment),
+            &excluded,
+        );
+        if let Some(plan) = outcome.as_plan() {
+            excluded.insert(plan.candidate);
+            kept_commitments.push(crate::nation::CommittedInfraTarget {
+                candidate: plan.candidate,
+                origin_capital: plan.origin_capital,
+                turn_committed: commitment.turn_committed,
+            });
+            plans.push(plan.clone());
+        }
+    }
+
+    while plans.len() < desired {
+        let outcome = super::economy::plan_next_depot_excluding(game, nation_id, None, &excluded);
+        let Some(plan) = outcome.as_plan().cloned() else {
+            break;
+        };
+        excluded.insert(plan.candidate);
+        kept_commitments.push(crate::nation::CommittedInfraTarget {
+            candidate: plan.candidate,
+            origin_capital: plan.origin_capital,
+            turn_committed: game.turn.0,
+        });
+        plans.push(plan);
+    }
+
+    if let Some(nation) = game.get_nation_mut(nation_id) {
+        nation.diplomacy.ai_priority_state.committed_infra_target =
+            kept_commitments.first().cloned();
+        nation.diplomacy.ai_priority_state.additional_committed_infra_targets =
+            kept_commitments.into_iter().skip(1).collect();
+    }
+
+    plans
+}
+
+fn remove_infra_commitment(game: &mut GameState, nation_id: NationId, candidate: HexCoord) {
+    let Some(nation) = game.get_nation_mut(nation_id) else {
+        return;
+    };
+    if nation
+        .diplomacy
+        .ai_priority_state
+        .committed_infra_target
+        .as_ref()
+        .is_some_and(|t| t.candidate == candidate)
+    {
+        let replacement = nation
+            .diplomacy
+            .ai_priority_state
+            .additional_committed_infra_targets
+            .first()
+            .cloned();
+        nation.diplomacy.ai_priority_state.committed_infra_target = replacement;
+        if !nation
+            .diplomacy
+            .ai_priority_state
+            .additional_committed_infra_targets
+            .is_empty()
+        {
+            nation
+                .diplomacy
+                .ai_priority_state
+                .additional_committed_infra_targets
+                .remove(0);
+        }
+        return;
+    }
+    nation
+        .diplomacy
+        .ai_priority_state
+        .additional_committed_infra_targets
+        .retain(|t| t.candidate != candidate);
 }
 
 // ── Scoring functions ────────────────────────────────────────────
@@ -601,7 +774,7 @@ fn score_infrastructure(
     game: &GameState,
     nation_id: NationId,
     weights: &SpendingWeights,
-    plan: Option<&super::economy::DepotPlan>,
+    plans: &[super::economy::DepotPlan],
     infra_blocked: bool,
 ) -> Option<ScoredAction> {
     // Infrastructure already attempted this turn and failed to start a build
@@ -628,7 +801,7 @@ fn score_infrastructure(
 
     // No depot plan: check whether there's a stranded coastal province that
     // can only be reached by sea. If so, score a port build at that cost.
-    if plan.is_none() {
+    if plans.is_empty() {
         super::economy::find_stranded_port_target(game, nation_id)?;
         let port_cost = Money::dollars(cfg.port_cost);
         nation.economy.treasury.checked_sub(port_cost)?;
@@ -641,7 +814,7 @@ fn score_infrastructure(
     }
 
     // Planner picks the best depot candidate. No plan → no infrastructure need.
-    let plan = plan?;
+    let plan = plans.first()?;
 
     // Minimum cost the AI can afford right now to keep progressing: the
     // cheapest next hex on the path, or the depot cost if the path is empty.
@@ -1027,7 +1200,7 @@ fn score_hire_engineer(
     game: &GameState,
     nation_id: NationId,
     weights: &SpendingWeights,
-    plan: Option<&super::economy::DepotPlan>,
+    plans: &[super::economy::DepotPlan],
 ) -> Option<ScoredAction> {
     let nation = game.get_nation(nation_id)?;
     let cfg = &game.game_data.game_config;
@@ -1048,8 +1221,10 @@ fn score_hire_engineer(
     }
 
     // Need a plan to justify hiring more engineers (no work → no need).
-    let plan = plan?;
-    let path_len = plan.path.len() as f64;
+    let path_len = plans.iter().map(|p| p.path.len()).sum::<usize>() as f64;
+    if path_len == 0.0 {
+        return None;
+    }
 
     let raw = cfg.engineer_hire_base as f64 + path_len * cfg.engineer_hire_path_coeff as f64;
     let raw = raw.min(cfg.engineer_hire_cap as f64);
@@ -1165,11 +1340,11 @@ fn execute_with_plan(
     category: SpendingCategory,
     actions: &mut Vec<super::AiAction>,
     _connected: &HashSet<ProvinceId>,
-    plan: Option<&super::economy::DepotPlan>,
+    plans: &[super::economy::DepotPlan],
 ) {
     match category {
         SpendingCategory::Military => execute_military(game, nation_id, actions),
-        SpendingCategory::Infrastructure => execute_infrastructure(game, nation_id, plan),
+        SpendingCategory::Infrastructure => execute_infrastructure(game, nation_id, plans),
         // Consulate/Embassy are handled by ai_diplomatic_mop_up, not the scored loop.
         SpendingCategory::Consulate => execute_consulate(game, nation_id),
         SpendingCategory::Embassy => execute_embassy(game, nation_id),
@@ -1448,21 +1623,21 @@ fn execute_warship(game: &mut GameState, nation_id: NationId, actions: &mut Vec<
     }
 }
 
-/// AI infrastructure step: drive (or hire) an Engineer civilian along the
-/// plan returned by `plan_next_depot`.
-///
-/// - No Engineer → hire one and return (next turn will deploy).
-/// - Engineer working → let the turn processor tick it; do nothing.
-/// - Engineer stranded on an unowned hex (province lost) → recall to capital.
-/// - Engineer idle:
-///     * Let the planner pick the best (candidate, path). If no plan, return.
-///     * If path is empty, the candidate is already reachable — build the depot.
-///     * Otherwise lay one rail hex along the path, adjacent to the engineer's
-///       current position (or the first hex on the path if undeployed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EngineerTaskStart {
+    Started,
+    AssignedConflict,
+    NotOwned,
+    Unaffordable,
+    InvalidTarget,
+}
+
+/// AI infrastructure step: drive (or hire) an Engineer civilian along one of
+/// the currently committed depot plans.
 fn execute_infrastructure(
     game: &mut GameState,
     nation_id: NationId,
-    plan: Option<&super::economy::DepotPlan>,
+    plans: &[super::economy::DepotPlan],
 ) {
     let cfg = game.game_data.game_config.clone();
 
@@ -1474,6 +1649,11 @@ fn execute_infrastructure(
     let capital_tile = match game.get_province(capital_pid) {
         Some(p) => p.capital_tile,
         None => return,
+    };
+    let nation_name = if game.ai_debug {
+        nation.name.clone()
+    } else {
+        String::new()
     };
 
     // Pick an *idle* engineer so multiple engineers can build in parallel
@@ -1496,6 +1676,9 @@ fn execute_infrastructure(
         None if any_engineer_present => {
             // Have engineer(s) but none idle — nothing for us to start now.
             // (score_infrastructure should have prevented this; defensive.)
+            if game.ai_debug {
+                eprintln!("[AI:{}:infra] no idle engineer available", nation_name);
+            }
             return;
         }
         None => {
@@ -1532,6 +1715,9 @@ fn execute_infrastructure(
                 cost,
                 None,
             ));
+            if game.ai_debug {
+                eprintln!("[AI:{}:infra] hired engineer", nation_name);
+            }
             return;
         }
     };
@@ -1572,6 +1758,9 @@ fn execute_infrastructure(
                 civ.turns_remaining = 0;
                 civ.build_task = None;
             }
+            if game.ai_debug {
+                eprintln!("[AI:{}:infra] recalled stranded engineer", nation_name);
+            }
         }
     }
 
@@ -1582,57 +1771,27 @@ fn execute_infrastructure(
         return;
     }
 
-    // Use the cached plan from the spending loop. If `None`, check for
+    // Use the cached plans from the spending loop. If none exist, check for
     // stranded coastal provinces that are tech-blocked from rail.
-    let plan = match plan {
-        Some(p) => p,
-        None => {
-            if let Some(port_coord) = super::economy::find_stranded_port_target(game, nation_id) {
-                start_engineer_task(
-                    game,
-                    nation_id,
-                    engineer_idx,
-                    port_coord,
-                    BuildTask::Port,
-                    &cfg,
+    if plans.is_empty() {
+        if let Some(port_coord) = super::economy::find_stranded_port_target(game, nation_id) {
+            if game.ai_debug {
+                eprintln!(
+                    "[AI:{}:infra] no depot plan, trying stranded port at ({}, {})",
+                    nation_name, port_coord.q, port_coord.r
                 );
             }
-            return;
+            let _ = start_engineer_task(
+                game,
+                nation_id,
+                engineer_idx,
+                port_coord,
+                BuildTask::Port,
+                &cfg,
+            );
+        } else if game.ai_debug {
+            eprintln!("[AI:{}:infra] no depot plan and no stranded port target", nation_name);
         }
-    };
-
-    // Card #421: before committing to depot+rail, check whether building a
-    // port instead would connect the target province more cheaply / faster.
-    // Ports take 3 turns vs. (depot 2 turns + 1 turn per rail tile), so on
-    // distant coastal targets a port wins on both cost and elapsed time.
-    if let Some(port_coord) = find_port_alternative(game, nation_id, plan, &cfg) {
-        // F-003 review fix: clear the depot commitment so the planner
-        // re-plans next turn instead of trying to keep building rail to
-        // the same target the port now serves.
-        if let Some(nation) = game.get_nation_mut(nation_id) {
-            nation.diplomacy.ai_priority_state.committed_infra_target = None;
-        }
-        start_engineer_task(
-            game,
-            nation_id,
-            engineer_idx,
-            port_coord,
-            BuildTask::Port,
-            &cfg,
-        );
-        return;
-    }
-
-    // Path empty → candidate is already reachable, just build the depot there.
-    if plan.path.is_empty() {
-        start_engineer_task(
-            game,
-            nation_id,
-            engineer_idx,
-            plan.candidate,
-            BuildTask::Depot,
-            &cfg,
-        );
         return;
     }
 
@@ -1642,44 +1801,115 @@ fn execute_infrastructure(
         .and_then(|n| n.military.civilians[engineer_idx].position)
         .unwrap_or(capital_tile);
 
-    // Pick the next unbuilt, unassigned hex, preferring one adjacent to
-    // the engineer. Skipping assigned hexes lets a second engineer pick a
-    // different path tile when the first engineer is already mid-build on
-    // the closest one.
-    let unbuilt_unassigned = |c: HexCoord| -> bool {
-        game.world.hex_map.get_tile(c).is_some_and(|t| {
-            !t.infrastructure.has_railroad
-                && !t.infrastructure.has_depot
-                && t.assigned_civilian.is_none()
-        })
-    };
-    let build_coord = plan
-        .path
-        .iter()
-        .copied()
-        .find(|c| engineer_pos.neighbors().contains(c) && unbuilt_unassigned(*c))
-        .or_else(|| plan.path.iter().copied().find(|c| unbuilt_unassigned(*c)));
+    for plan in plans {
+        // Card #421: before committing to depot+rail, check whether building a
+        // port instead would connect the target province more cheaply / faster.
+        if let Some(port_coord) = find_port_alternative(game, nation_id, plan, &cfg) {
+            remove_infra_commitment(game, nation_id, plan.candidate);
+            if game.ai_debug {
+                eprintln!(
+                    "[AI:{}:infra] using port alternative at ({}, {}) instead of depot candidate=({}, {}) path_len={}",
+                    nation_name,
+                    port_coord.q,
+                    port_coord.r,
+                    plan.candidate.q,
+                    plan.candidate.r,
+                    plan.path.len()
+                );
+            }
+            if start_engineer_task(
+                game,
+                nation_id,
+                engineer_idx,
+                port_coord,
+                BuildTask::Port,
+                &cfg,
+            ) == EngineerTaskStart::Started
+            {
+                return;
+            }
+            continue;
+        }
 
-    // No unbuilt-unassigned rail hex left → the path is effectively done
-    // for this turn; jump to the depot. This also covers the multi-engineer
-    // case where another engineer has already claimed the only remaining hex.
-    match build_coord {
-        Some(coord) => start_engineer_task(
-            game,
-            nation_id,
-            engineer_idx,
-            coord,
-            BuildTask::Railroad,
-            &cfg,
-        ),
-        None => start_engineer_task(
-            game,
-            nation_id,
-            engineer_idx,
-            plan.candidate,
-            BuildTask::Depot,
-            &cfg,
-        ),
+        if plan.path.is_empty() {
+            if game.ai_debug {
+                eprintln!(
+                    "[AI:{}:infra] candidate already reached, starting depot at ({}, {})",
+                    nation_name, plan.candidate.q, plan.candidate.r
+                );
+            }
+            if start_engineer_task(
+                game,
+                nation_id,
+                engineer_idx,
+                plan.candidate,
+                BuildTask::Depot,
+                &cfg,
+            ) == EngineerTaskStart::Started
+            {
+                return;
+            }
+            continue;
+        }
+
+        let unbuilt_unassigned = |c: HexCoord| -> bool {
+            game.world.hex_map.get_tile(c).is_some_and(|t| {
+                !t.infrastructure.has_railroad
+                    && !t.infrastructure.has_depot
+                    && t.assigned_civilian.is_none()
+            })
+        };
+        let build_coord = plan
+            .path
+            .iter()
+            .copied()
+            .find(|c| engineer_pos.neighbors().contains(c) && unbuilt_unassigned(*c))
+            .or_else(|| plan.path.iter().copied().find(|c| unbuilt_unassigned(*c)));
+
+        let attempt = match build_coord {
+            Some(coord) => {
+                if game.ai_debug {
+                    eprintln!(
+                        "[AI:{}:infra] starting rail on ({}, {}) engineer_pos=({}, {}) candidate=({}, {}) path_len={}",
+                        nation_name,
+                        coord.q,
+                        coord.r,
+                        engineer_pos.q,
+                        engineer_pos.r,
+                        plan.candidate.q,
+                        plan.candidate.r,
+                        plan.path.len()
+                    );
+                }
+                start_engineer_task(
+                    game,
+                    nation_id,
+                    engineer_idx,
+                    coord,
+                    BuildTask::Railroad,
+                    &cfg,
+                )
+            }
+            None => {
+                if game.ai_debug {
+                    eprintln!(
+                        "[AI:{}:infra] no open rail hex on path, falling back to depot at ({}, {})",
+                        nation_name, plan.candidate.q, plan.candidate.r
+                    );
+                }
+                start_engineer_task(
+                    game,
+                    nation_id,
+                    engineer_idx,
+                    plan.candidate,
+                    BuildTask::Depot,
+                    &cfg,
+                )
+            }
+        };
+        if attempt == EngineerTaskStart::Started {
+            return;
+        }
     }
 }
 
@@ -1692,14 +1922,21 @@ fn start_engineer_task(
     coord: HexCoord,
     task: BuildTask,
     cfg: &crate::data::GameConfig,
-) {
+) -> EngineerTaskStart {
+    let nation_name = if game.ai_debug {
+        game.get_nation(nation_id)
+            .map(|n| n.name.clone())
+            .unwrap_or_else(|| "?".to_string())
+    } else {
+        String::new()
+    };
     // Clear old tile's assigned_civilian (if any).
     let (civ_id, old_pos) = match game.get_nation(nation_id) {
         Some(n) => (
             n.military.civilians[engineer_idx].id,
             n.military.civilians[engineer_idx].position,
         ),
-        None => return,
+        None => return EngineerTaskStart::InvalidTarget,
     };
     if let Some(old) = old_pos
         && let Some(tile) = game.world.hex_map.get_tile_mut(old)
@@ -1715,15 +1952,32 @@ fn start_engineer_task(
         .filter(|p| p.owner == nation_id)
         .any(|p| p.tiles.contains(&coord));
     if !owned {
-        return;
+        if game.ai_debug {
+            eprintln!(
+                "[AI:{}:infra] start_task {:?} at ({}, {}) failed: target not owned",
+                nation_name, task, coord.q, coord.r
+            );
+        }
+        return EngineerTaskStart::NotOwned;
     }
+    let current_assignee = game
+        .world
+        .hex_map
+        .get_tile(coord)
+        .and_then(|t| t.assigned_civilian);
     let target_ok = game
         .world
         .hex_map
         .get_tile(coord)
         .is_some_and(|t| t.assigned_civilian.is_none() || t.assigned_civilian == Some(civ_id));
     if !target_ok {
-        return;
+        if game.ai_debug {
+            eprintln!(
+                "[AI:{}:infra] start_task {:?} at ({}, {}) failed: assigned_civilian={:?} self={}",
+                nation_name, task, coord.q, coord.r, current_assignee, civ_id.0
+            );
+        }
+        return EngineerTaskStart::AssignedConflict;
     }
     // Only start a task the nation can afford at completion time. Treasury is
     // debited when the build finishes, so we guard at order time.
@@ -1731,11 +1985,11 @@ fn start_engineer_task(
         BuildTask::Railroad => {
             let terrain = match game.world.hex_map.get_tile(coord) {
                 Some(t) => t.terrain(),
-                None => return,
+                None => return EngineerTaskStart::InvalidTarget,
             };
             match crate::map::infrastructure::railroad_cost(terrain, cfg) {
                 Some(m) => m,
-                None => return, // e.g. sea — should not happen given earlier checks
+                None => return EngineerTaskStart::InvalidTarget, // e.g. sea
             }
         }
         BuildTask::Depot => Money::dollars(cfg.depot_cost),
@@ -1746,7 +2000,18 @@ fn start_engineer_task(
         .map(|n| n.economy.treasury)
         .unwrap_or(Money::ZERO);
     if treasury.checked_sub(cost).is_none() {
-        return;
+        if game.ai_debug {
+            eprintln!(
+                "[AI:{}:infra] start_task {:?} at ({}, {}) failed: treasury=${} cost=${}",
+                nation_name,
+                task,
+                coord.q,
+                coord.r,
+                treasury.as_dollars(),
+                cost.as_dollars()
+            );
+        }
+        return EngineerTaskStart::Unaffordable;
     }
     if let Some(tile) = game.world.hex_map.get_tile_mut(coord) {
         tile.assigned_civilian = Some(civ_id);
@@ -1756,6 +2021,18 @@ fn start_engineer_task(
         civ.deploy(coord);
         civ.start_build(task, cfg);
     }
+    if game.ai_debug {
+        eprintln!(
+            "[AI:{}:infra] start_task {:?} at ({}, {}) success civ_id={} cost=${}",
+            nation_name,
+            task,
+            coord.q,
+            coord.r,
+            civ_id.0,
+            cost.as_dollars()
+        );
+    }
+    EngineerTaskStart::Started
 }
 
 /// Card #421: decide whether a port is a better build target than the
@@ -2654,9 +2931,9 @@ mod tests {
         let (game, ai_id) = game_with_engineers(1, 1);
         let weights = load_weights(&game, super::super::common::AiPersonality::Balanced);
         let plan_outcome = super::super::economy::plan_next_depot(&game, ai_id);
-        let plan = plan_outcome.as_plan();
+        let plans: Vec<_> = plan_outcome.as_plan().cloned().into_iter().collect();
 
-        let scored = score_infrastructure(&game, ai_id, &weights, plan, false);
+        let scored = score_infrastructure(&game, ai_id, &weights, &plans, false);
         assert!(
             scored.is_some(),
             "score_infrastructure should fire while at least one engineer is idle, got None",
@@ -2670,9 +2947,9 @@ mod tests {
         let (game, ai_id) = game_with_engineers(0, 2);
         let weights = load_weights(&game, super::super::common::AiPersonality::Balanced);
         let plan_outcome = super::super::economy::plan_next_depot(&game, ai_id);
-        let plan = plan_outcome.as_plan();
+        let plans: Vec<_> = plan_outcome.as_plan().cloned().into_iter().collect();
 
-        let scored = score_infrastructure(&game, ai_id, &weights, plan, false);
+        let scored = score_infrastructure(&game, ai_id, &weights, &plans, false);
         assert!(
             scored.is_none(),
             "score_infrastructure must return None when no engineer is idle, got Some",

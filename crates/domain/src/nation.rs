@@ -881,6 +881,10 @@ pub struct AiPriorityState {
     /// the path becomes unreachable. Absence of a commitment means the
     /// planner is free to pick the best candidate this turn.
     pub committed_infra_target: Option<CommittedInfraTarget>,
+    /// Additional concurrent depot targets for extra engineers. These follow
+    /// the same commitment rules as `committed_infra_target` but let wealthy
+    /// nations spread multiple engineers across different annexed regions.
+    pub additional_committed_infra_targets: Vec<CommittedInfraTarget>,
 }
 
 /// A hard commitment to build a depot at `candidate`, routing rail from

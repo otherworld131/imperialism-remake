@@ -87,6 +87,8 @@ pub struct AiPriorityState {
     pub last_invest_turn: Vec<(SpendingCategory, u32)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub committed_infra_target: Option<CommittedInfraTarget>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_committed_infra_targets: Vec<CommittedInfraTarget>,
 }
 
 // ── NationDiplomacy ──────────────────────────────────────────────────
@@ -330,6 +332,11 @@ impl From<&dn::AiPriorityState> for AiPriorityState {
                 .map(|(k, val)| ((*k).into(), *val))
                 .collect(),
             committed_infra_target: v.committed_infra_target.as_ref().map(Into::into),
+            additional_committed_infra_targets: v
+                .additional_committed_infra_targets
+                .iter()
+                .map(Into::into)
+                .collect(),
         }
     }
 }
@@ -347,6 +354,11 @@ impl From<AiPriorityState> for dn::AiPriorityState {
                 .map(|(k, val)| (k.into(), val))
                 .collect(),
             committed_infra_target: v.committed_infra_target.map(Into::into),
+            additional_committed_infra_targets: v
+                .additional_committed_infra_targets
+                .into_iter()
+                .map(Into::into)
+                .collect(),
         }
     }
 }
