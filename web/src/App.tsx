@@ -156,7 +156,11 @@ function turnToYearQ(turn: number): string {
 
 const PROSPECTOR_TERRAIN = new Set(['Hills', 'Mountain', 'Swamp', 'Desert', 'Tundra']);
 const WEB_SAVE_FILES_KEY = 'imperialism.web.savefiles.v1';
+const WEB_SAVE_META_KEY = 'imperialism.web.savefiles.meta.v1';
 const WEB_QUICKSAVE_KEY = 'imperialism.web.quicksave.v1';
+const WEB_SAVE_DB_NAME = 'imperialism.web.saves.db.v1';
+const WEB_SAVE_DB_VERSION = 1;
+const WEB_SAVE_PAYLOAD_STORE = 'save_payloads';
 
 type WebSaveFile = {
   version: 1;
@@ -165,7 +169,6 @@ type WebSaveFile = {
   savedAtIso: string;
   turnNumber: number;
   playerName: string;
-  gameJson: string;
 };
 
 type LegacyWebQuickSave = {
@@ -178,38 +181,23 @@ type LegacyWebQuickSave = {
 
 function readWebSaveFiles(): WebSaveFile[] {
   try {
-    const raw = localStorage.getItem(WEB_SAVE_FILES_KEY);
-    if (!raw) {
-      // One-time migration path for the initial single-slot quicksave format.
-      const legacyRaw = localStorage.getItem(WEB_QUICKSAVE_KEY);
-      if (!legacyRaw) return [];
-      const legacy = JSON.parse(legacyRaw) as LegacyWebQuickSave;
-      if (legacy.version !== 1 || typeof legacy.gameJson !== 'string') return [];
-      const migrated: WebSaveFile[] = [{
-        version: 1,
-        id: 'migrated-quicksave',
-        name: 'quicksave',
-        savedAtIso: legacy.savedAtIso,
-        turnNumber: legacy.turnNumber,
-        playerName: legacy.playerName,
-        gameJson: legacy.gameJson,
-      }];
-      localStorage.setItem(WEB_SAVE_FILES_KEY, JSON.stringify(migrated));
-      localStorage.removeItem(WEB_QUICKSAVE_KEY);
-      return migrated;
-    }
+    const raw = localStorage.getItem(WEB_SAVE_META_KEY);
+    if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed
-      .filter((s: any) =>
-        s
-        && s.version === 1
-        && typeof s.id === 'string'
-        && typeof s.name === 'string'
-        && typeof s.savedAtIso === 'string'
-        && typeof s.turnNumber === 'number'
-        && typeof s.playerName === 'string'
-        && typeof s.gameJson === 'string')
+      .filter((s: unknown) => {
+        const save = s as Partial<WebSaveFile>;
+        return (
+          save
+          && save.version === 1
+          && typeof save.id === 'string'
+          && typeof save.name === 'string'
+          && typeof save.savedAtIso === 'string'
+          && typeof save.turnNumber === 'number'
+          && typeof save.playerName === 'string'
+        );
+      })
       .sort((a: WebSaveFile, b: WebSaveFile) => b.savedAtIso.localeCompare(a.savedAtIso));
   } catch {
     return [];
@@ -217,7 +205,125 @@ function readWebSaveFiles(): WebSaveFile[] {
 }
 
 function writeWebSaveFiles(files: WebSaveFile[]): void {
-  localStorage.setItem(WEB_SAVE_FILES_KEY, JSON.stringify(files));
+  localStorage.setItem(WEB_SAVE_META_KEY, JSON.stringify(files));
+}
+
+function openSaveDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(WEB_SAVE_DB_NAME, WEB_SAVE_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(WEB_SAVE_PAYLOAD_STORE)) {
+        db.createObjectStore(WEB_SAVE_PAYLOAD_STORE);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error('Failed to open IndexedDB'));
+  });
+}
+
+async function putSavePayload(id: string, gameJson: string): Promise<void> {
+  const db = await openSaveDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(WEB_SAVE_PAYLOAD_STORE, 'readwrite');
+    tx.objectStore(WEB_SAVE_PAYLOAD_STORE).put(gameJson, id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error('Failed to write save payload'));
+    tx.onabort = () => reject(tx.error ?? new Error('Save payload write aborted'));
+  });
+  db.close();
+}
+
+async function getSavePayload(id: string): Promise<string | null> {
+  const db = await openSaveDb();
+  const payload = await new Promise<string | null>((resolve, reject) => {
+    const tx = db.transaction(WEB_SAVE_PAYLOAD_STORE, 'readonly');
+    const request = tx.objectStore(WEB_SAVE_PAYLOAD_STORE).get(id);
+    request.onsuccess = () => {
+      const value = request.result;
+      resolve(typeof value === 'string' ? value : null);
+    };
+    request.onerror = () => reject(request.error ?? new Error('Failed to read save payload'));
+  });
+  db.close();
+  return payload;
+}
+
+async function deleteSavePayload(id: string): Promise<void> {
+  const db = await openSaveDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(WEB_SAVE_PAYLOAD_STORE, 'readwrite');
+    tx.objectStore(WEB_SAVE_PAYLOAD_STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error('Failed to delete save payload'));
+    tx.onabort = () => reject(tx.error ?? new Error('Save payload delete aborted'));
+  });
+  db.close();
+}
+
+async function migrateLegacyWebSavesIfNeeded(): Promise<void> {
+  if (localStorage.getItem(WEB_SAVE_META_KEY)) return;
+
+  const migrated: WebSaveFile[] = [];
+  try {
+    const oldRaw = localStorage.getItem(WEB_SAVE_FILES_KEY);
+    if (oldRaw) {
+      const oldParsed = JSON.parse(oldRaw);
+      if (Array.isArray(oldParsed)) {
+        for (const s of oldParsed) {
+          const save = s as Partial<WebSaveFile> & { gameJson?: unknown };
+          if (
+            save
+            && save.version === 1
+            && typeof save.id === 'string'
+            && typeof save.name === 'string'
+            && typeof save.savedAtIso === 'string'
+            && typeof save.turnNumber === 'number'
+            && typeof save.playerName === 'string'
+            && typeof save.gameJson === 'string'
+          ) {
+            await putSavePayload(save.id, save.gameJson);
+            migrated.push({
+              version: 1,
+              id: save.id,
+              name: save.name,
+              savedAtIso: save.savedAtIso,
+              turnNumber: save.turnNumber,
+              playerName: save.playerName,
+            });
+          }
+        }
+      }
+    }
+
+    if (migrated.length === 0) {
+      const legacyRaw = localStorage.getItem(WEB_QUICKSAVE_KEY);
+      if (legacyRaw) {
+        const legacy = JSON.parse(legacyRaw) as LegacyWebQuickSave;
+        if (legacy.version === 1 && typeof legacy.gameJson === 'string') {
+          const id = 'migrated-quicksave';
+          await putSavePayload(id, legacy.gameJson);
+          migrated.push({
+            version: 1,
+            id,
+            name: 'quicksave',
+            savedAtIso: legacy.savedAtIso,
+            turnNumber: legacy.turnNumber,
+            playerName: legacy.playerName,
+          });
+        }
+      }
+    }
+
+    if (migrated.length > 0) {
+      writeWebSaveFiles(migrated);
+    }
+  } finally {
+    // Remove legacy bulky keys after migration attempt to avoid future
+    // localStorage quota hits caused by old inlined payload copies.
+    localStorage.removeItem(WEB_SAVE_FILES_KEY);
+    localStorage.removeItem(WEB_QUICKSAVE_KEY);
+  }
 }
 
 function App() {
@@ -468,6 +574,13 @@ function App() {
     setWebSaveFiles(readWebSaveFiles());
   }, []);
 
+  useEffect(() => {
+    void (async () => {
+      await migrateLegacyWebSavesIfNeeded();
+      refreshWebSaveFiles();
+    })();
+  }, [refreshWebSaveFiles]);
+
   // Generation counter: every applyGameJson invocation bumps this; derived setState calls
   // that come back from earlier generations after await are discarded, so an overlapping
   // end-turn + diplomacy action cannot let a stale fetch overwrite newer state.
@@ -514,6 +627,7 @@ function App() {
       getTechScreenData(json),
     ]);
     if (!isCurrent()) return false;
+    currentGameJsonRef.current = json;
     setGameJson(json);
     setGameState(state);
     setTiles(mapData);
@@ -556,6 +670,7 @@ function App() {
       return false;
     }
     deferredDerivedRefreshRef.current = true;
+    currentGameJsonRef.current = json;
     setGameJson(json);
     setGameState(state);
     return true;
@@ -836,11 +951,21 @@ function App() {
     });
   }, [gameJson, applyGameJson, observerGps, runMutation]);
 
-  const handleWebSave = useCallback(() => {
+  const handleWebSave = useCallback(async () => {
+    if (mutationLockRef.current) {
+      showError('Please wait for turn/skip processing to finish before saving.');
+      return;
+    }
     try {
-      const turnNumber = gameState?.turn?.[0] ?? gameState?.turn ?? 1;
+      const snapshotJson = currentGameJsonRef.current || gameJson;
+      const snapshotState = parseGameJson(snapshotJson);
+      if (snapshotState?.error) {
+        showError('Save failed: invalid game state.');
+        return;
+      }
+      const turnNumber = snapshotState?.turn?.[0] ?? snapshotState?.turn ?? 1;
       const player =
-        gameState?.nations?.find((n: any) => n.id === gameState?.human_player_nation) ?? null;
+        snapshotState?.nations?.find((n: any) => n.id === snapshotState?.human_player_nation) ?? null;
       const year = 1815 + Math.floor((turnNumber - 1) / 4);
       const quarter = ((turnNumber - 1) % 4) + 1;
       const defaultName = `save_${year}_Q${quarter}`;
@@ -870,8 +995,8 @@ function App() {
         savedAtIso: new Date().toISOString(),
         turnNumber,
         playerName: player?.name ?? 'Unknown',
-        gameJson,
       };
+      await putSavePayload(record.id, snapshotJson);
       const next = [record, ...existing.filter(s => s.id !== record.id)].sort(
         (a, b) => b.savedAtIso.localeCompare(a.savedAtIso),
       );
@@ -880,14 +1005,19 @@ function App() {
       alert(`Saved "${record.name}" (${record.playerName}, ${year} Q${quarter}).`);
     } catch (err) {
       console.error('Failed to save in browser:', err);
-      showError('Save failed: browser storage unavailable.');
+      showError('Save failed: storage limit reached or unavailable.');
     }
-  }, [gameJson, gameState, refreshWebSaveFiles, showError]);
+  }, [gameJson, refreshWebSaveFiles, showError]);
 
-  const handleOpenWebLoadPicker = useCallback(() => {
+  const handleOpenWebLoadPicker = useCallback(async () => {
+    if (mutationLockRef.current) {
+      showError('Please wait for turn/skip processing to finish before loading.');
+      return;
+    }
+    await migrateLegacyWebSavesIfNeeded();
     refreshWebSaveFiles();
     setShowSavePicker(true);
-  }, [refreshWebSaveFiles]);
+  }, [refreshWebSaveFiles, showError]);
 
   const handleWebLoad = useCallback(async (saveFile: WebSaveFile) => {
     await runMutation(async () => {
@@ -904,7 +1034,12 @@ function App() {
       setShowSavePicker(false);
       setBusyMessage('Loading browser save…');
       try {
-        if (!(await applyGameJson(saveFile.gameJson))) return;
+        const payload = await getSavePayload(saveFile.id);
+        if (!payload) {
+          showError(`Save "${saveFile.name}" is missing payload data.`);
+          return;
+        }
+        if (!(await applyGameJson(payload))) return;
         setActiveScreen('map');
         setProvinceUnits(null);
         setSelectedUnitIds([]);
@@ -919,14 +1054,20 @@ function App() {
         setBusyMessage(null);
       }
     });
-  }, [applyGameJson, gameState, runMutation]);
+  }, [applyGameJson, gameState, runMutation, showError]);
 
-  const handleDeleteWebSave = useCallback((saveFile: WebSaveFile) => {
+  const handleDeleteWebSave = useCallback(async (saveFile: WebSaveFile) => {
     if (!confirm(`Delete save "${saveFile.name}"?`)) return;
-    const next = readWebSaveFiles().filter(s => s.id !== saveFile.id);
-    writeWebSaveFiles(next);
-    refreshWebSaveFiles();
-  }, [refreshWebSaveFiles]);
+    try {
+      await deleteSavePayload(saveFile.id);
+      const next = readWebSaveFiles().filter(s => s.id !== saveFile.id);
+      writeWebSaveFiles(next);
+      refreshWebSaveFiles();
+    } catch (err) {
+      console.error('Failed to delete save:', err);
+      showError(`Failed to delete "${saveFile.name}".`);
+    }
+  }, [refreshWebSaveFiles, showError]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
