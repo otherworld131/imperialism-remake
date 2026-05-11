@@ -155,15 +155,70 @@ function turnToYearQ(turn: number): string {
 }
 
 const PROSPECTOR_TERRAIN = new Set(['Hills', 'Mountain', 'Swamp', 'Desert', 'Tundra']);
+const WEB_SAVE_FILES_KEY = 'imperialism.web.savefiles.v1';
 const WEB_QUICKSAVE_KEY = 'imperialism.web.quicksave.v1';
 
-type WebQuickSave = {
+type WebSaveFile = {
+  version: 1;
+  id: string;
+  name: string;
+  savedAtIso: string;
+  turnNumber: number;
+  playerName: string;
+  gameJson: string;
+};
+
+type LegacyWebQuickSave = {
   version: 1;
   savedAtIso: string;
   turnNumber: number;
   playerName: string;
   gameJson: string;
 };
+
+function readWebSaveFiles(): WebSaveFile[] {
+  try {
+    const raw = localStorage.getItem(WEB_SAVE_FILES_KEY);
+    if (!raw) {
+      // One-time migration path for the initial single-slot quicksave format.
+      const legacyRaw = localStorage.getItem(WEB_QUICKSAVE_KEY);
+      if (!legacyRaw) return [];
+      const legacy = JSON.parse(legacyRaw) as LegacyWebQuickSave;
+      if (legacy.version !== 1 || typeof legacy.gameJson !== 'string') return [];
+      const migrated: WebSaveFile[] = [{
+        version: 1,
+        id: 'migrated-quicksave',
+        name: 'quicksave',
+        savedAtIso: legacy.savedAtIso,
+        turnNumber: legacy.turnNumber,
+        playerName: legacy.playerName,
+        gameJson: legacy.gameJson,
+      }];
+      localStorage.setItem(WEB_SAVE_FILES_KEY, JSON.stringify(migrated));
+      localStorage.removeItem(WEB_QUICKSAVE_KEY);
+      return migrated;
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((s: any) =>
+        s
+        && s.version === 1
+        && typeof s.id === 'string'
+        && typeof s.name === 'string'
+        && typeof s.savedAtIso === 'string'
+        && typeof s.turnNumber === 'number'
+        && typeof s.playerName === 'string'
+        && typeof s.gameJson === 'string')
+      .sort((a: WebSaveFile, b: WebSaveFile) => b.savedAtIso.localeCompare(a.savedAtIso));
+  } catch {
+    return [];
+  }
+}
+
+function writeWebSaveFiles(files: WebSaveFile[]): void {
+  localStorage.setItem(WEB_SAVE_FILES_KEY, JSON.stringify(files));
+}
 
 function App() {
   const [loading, setLoading] = useState(true);
@@ -242,6 +297,8 @@ function App() {
   const [mapMode, setMapMode] = useState<MapMode>('political');
   const [selectedNation, setSelectedNation] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<string>('');
+  const [showSavePicker, setShowSavePicker] = useState(false);
+  const [webSaveFiles, setWebSaveFiles] = useState<WebSaveFile[]>([]);
   const [diplomacyOverlay, setDiplomacyOverlay] = useState<DiplomacyOverlay | null>(null);
   const [militaryOverlay, setMilitaryOverlay] = useState<MilitaryOverlayEntry[] | null>(null);
   const [queuedDiplomacyAction, setQueuedDiplomacyAction] = useState<QueuedDiplomacyAction | null>(null);
@@ -405,6 +462,10 @@ function App() {
   const showError = useCallback((msg: string) => {
     setStatusMessage(msg);
     setTimeout(() => setStatusMessage(''), 4000);
+  }, []);
+
+  const refreshWebSaveFiles = useCallback(() => {
+    setWebSaveFiles(readWebSaveFiles());
   }, []);
 
   // Generation counter: every applyGameJson invocation bumps this; derived setState calls
@@ -780,54 +841,70 @@ function App() {
       const turnNumber = gameState?.turn?.[0] ?? gameState?.turn ?? 1;
       const player =
         gameState?.nations?.find((n: any) => n.id === gameState?.human_player_nation) ?? null;
-      const record: WebQuickSave = {
+      const year = 1815 + Math.floor((turnNumber - 1) / 4);
+      const quarter = ((turnNumber - 1) % 4) + 1;
+      const defaultName = `save_${year}_Q${quarter}`;
+      const requestedName = prompt('Save name:', defaultName);
+      if (requestedName == null) return;
+      const name = requestedName.trim();
+      if (!name) {
+        showError('Save canceled: filename cannot be empty.');
+        return;
+      }
+
+      const existing = readWebSaveFiles();
+      const overwriteTarget = existing.find(s => s.name === name);
+      if (
+        overwriteTarget
+        && !confirm(`A save named "${name}" already exists. Overwrite it?`)
+      ) {
+        return;
+      }
+
+      const record: WebSaveFile = {
         version: 1,
+        id:
+          overwriteTarget?.id
+          ?? `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+        name,
         savedAtIso: new Date().toISOString(),
         turnNumber,
         playerName: player?.name ?? 'Unknown',
         gameJson,
       };
-      localStorage.setItem(WEB_QUICKSAVE_KEY, JSON.stringify(record));
-      const year = 1815 + Math.floor((turnNumber - 1) / 4);
-      const quarter = ((turnNumber - 1) % 4) + 1;
-      alert(`Saved locally (${record.playerName}, ${year} Q${quarter}).`);
+      const next = [record, ...existing.filter(s => s.id !== record.id)].sort(
+        (a, b) => b.savedAtIso.localeCompare(a.savedAtIso),
+      );
+      writeWebSaveFiles(next);
+      refreshWebSaveFiles();
+      alert(`Saved "${record.name}" (${record.playerName}, ${year} Q${quarter}).`);
     } catch (err) {
       console.error('Failed to save in browser:', err);
       showError('Save failed: browser storage unavailable.');
     }
-  }, [gameJson, gameState, showError]);
+  }, [gameJson, gameState, refreshWebSaveFiles, showError]);
 
-  const handleWebLoad = useCallback(async () => {
+  const handleOpenWebLoadPicker = useCallback(() => {
+    refreshWebSaveFiles();
+    setShowSavePicker(true);
+  }, [refreshWebSaveFiles]);
+
+  const handleWebLoad = useCallback(async (saveFile: WebSaveFile) => {
     await runMutation(async () => {
-      const raw = localStorage.getItem(WEB_QUICKSAVE_KEY);
-      if (!raw) {
-        showError('No browser save found yet.');
-        return;
-      }
-      let parsed: WebQuickSave;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        showError('Saved data is unreadable.');
-        return;
-      }
-      if (parsed.version !== 1 || typeof parsed.gameJson !== 'string') {
-        showError('Saved data format is unsupported.');
-        return;
-      }
       const currentTurn = gameState?.turn?.[0] ?? gameState?.turn ?? 1;
       const currentYear = 1815 + Math.floor((currentTurn - 1) / 4);
       const currentQuarter = ((currentTurn - 1) % 4) + 1;
       if (
         !confirm(
-          `Load browser save for ${parsed.playerName} (turn ${parsed.turnNumber})? This will replace the current game state (${currentYear} Q${currentQuarter}).`,
+          `Load "${saveFile.name}" for ${saveFile.playerName} (${turnToYearQ(saveFile.turnNumber)})? This will replace the current game state (${currentYear} Q${currentQuarter}).`,
         )
       ) {
         return;
       }
+      setShowSavePicker(false);
       setBusyMessage('Loading browser save…');
       try {
-        if (!(await applyGameJson(parsed.gameJson))) return;
+        if (!(await applyGameJson(saveFile.gameJson))) return;
         setActiveScreen('map');
         setProvinceUnits(null);
         setSelectedUnitIds([]);
@@ -842,7 +919,14 @@ function App() {
         setBusyMessage(null);
       }
     });
-  }, [applyGameJson, gameState, runMutation, showError]);
+  }, [applyGameJson, gameState, runMutation]);
+
+  const handleDeleteWebSave = useCallback((saveFile: WebSaveFile) => {
+    if (!confirm(`Delete save "${saveFile.name}"?`)) return;
+    const next = readWebSaveFiles().filter(s => s.id !== saveFile.id);
+    writeWebSaveFiles(next);
+    refreshWebSaveFiles();
+  }, [refreshWebSaveFiles]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -855,7 +939,8 @@ function App() {
         }
       }
       if (e.code === 'Escape') {
-        if (queuedDiplomacyAction) { setQueuedDiplomacyAction(null); }
+        if (showSavePicker) { setShowSavePicker(false); }
+        else if (queuedDiplomacyAction) { setQueuedDiplomacyAction(null); }
         else if (selectedUnitIds.length > 0) { setSelectedUnitIds([]); }
         else if (selectedNavyKey) { setSelectedNavyKey(null); }
         else if (pendingEngineerDeploy) { setPendingEngineerDeploy(null); }
@@ -877,7 +962,7 @@ function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeScreen, showProposals, handleEndTurn, dismissNewspaper, selectedUnitIds, isDeployMode, pendingEngineerDeploy, queuedDiplomacyAction, selectedNavyKey]);
+  }, [activeScreen, showProposals, showSavePicker, handleEndTurn, dismissNewspaper, selectedUnitIds, isDeployMode, pendingEngineerDeploy, queuedDiplomacyAction, selectedNavyKey]);
 
   // Fetch overlay data when map mode, active screen, or selected nation changes
   useEffect(() => {
@@ -1843,9 +1928,9 @@ function App() {
           Save
         </button>
         <button
-          onClick={handleWebLoad}
+          onClick={handleOpenWebLoadPicker}
           style={styles.btn}
-          title="Load the browser-saved game state"
+          title="Load a saved game from browser storage"
         >
           Load
         </button>
@@ -2463,6 +2548,54 @@ function App() {
           boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
         }}>
           {statusMessage}
+        </div>
+      )}
+
+      {showSavePicker && (
+        <div style={styles.modal}>
+          <div style={{ ...styles.modalContent, width: 680 }}>
+            <h2 style={{ marginTop: 0, color: '#daa520' }}>Load Save File</h2>
+            {webSaveFiles.length === 0 ? (
+              <p style={styles.hint}>No saved files yet. Use Save first.</p>
+            ) : (
+              <div style={{ maxHeight: '55vh', overflowY: 'auto' }}>
+                {webSaveFiles.map(saveFile => (
+                  <div
+                    key={saveFile.id}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 10,
+                      padding: '8px 10px',
+                      marginBottom: 8,
+                      border: '1px solid #3a3520',
+                      background: 'rgba(255,255,255,0.03)',
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 'bold', color: '#e0d8c0' }}>{saveFile.name}</div>
+                      <div style={{ fontSize: 12, color: '#9a9a9a' }}>
+                        {saveFile.playerName} · {turnToYearQ(saveFile.turnNumber)} · {new Date(saveFile.savedAtIso).toLocaleString()}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                      <button onClick={() => handleWebLoad(saveFile)} style={styles.btn}>Load</button>
+                      <button
+                        onClick={() => handleDeleteWebSave(saveFile)}
+                        style={{ ...styles.btn, background: '#5a2620', borderColor: '#7b332b' }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+              <button onClick={() => setShowSavePicker(false)} style={styles.btn}>Close</button>
+            </div>
+          </div>
         </div>
       )}
 
