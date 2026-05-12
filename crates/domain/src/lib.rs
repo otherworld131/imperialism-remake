@@ -117,6 +117,7 @@ macro_rules! test_game_state {
                 pending_moves: $pending_moves,
                 pending_fleet_moves: Vec::new(),
                 pending_landings: $pending_landings,
+                pending_diplomacy_actions: Vec::new(),
                 pending_ai_cash_spending: $pending_ai_cash_spending,
                 pending_ai_cash_income: $pending_ai_cash_income,
                 pending_economy_orders: std::collections::HashMap::new(),

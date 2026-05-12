@@ -1505,6 +1505,14 @@ fn reject_if_target_in_anarchy(game: &GameState, target: NationId) -> Option<Str
     }
 }
 
+fn reject_if_great_power_target_for_consulate(game: &GameState, target: NationId) -> Option<String> {
+    if game.get_nation(target).is_some_and(|n| n.is_great_power()) {
+        Some("{\"error\":\"Consulates are for Minor Nations only.\"}".to_string())
+    } else {
+        None
+    }
+}
+
 /// Check if a nation has researched a tech by its display name.
 fn nation_has_tech(
     nation: &domain::nation::Nation,
@@ -4906,9 +4914,21 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
             // actual backend relation) rather than the anarchy-inflated
             // `display_at_war` so button availability never contradicts
             // what the command handlers will accept.
-            let can_build_consulate = !target_in_anarchy && !has_consulate && treasury >= 500;
+            let available_treasury = treasury - game.pending_diplomacy_reserved_dollars(nid);
+            let queued_consulate = game.has_pending_consulate(nid, n.id);
+            let queued_embassy = game.has_pending_embassy(nid, n.id);
+            let queued_war = game.has_pending_war(nid, n.id);
+            let can_build_consulate = !target_is_gp
+                && !target_in_anarchy
+                && !has_consulate
+                && !queued_consulate
+                && available_treasury >= 500;
             let can_build_embassy =
-                !target_in_anarchy && has_consulate && !has_embassy && treasury >= 5000;
+                !target_in_anarchy
+                    && has_consulate
+                    && !has_embassy
+                    && !queued_embassy
+                    && available_treasury >= 5000;
             let can_propose_nap = !target_in_anarchy
                 && has_embassy
                 && !raw_at_war
@@ -4924,7 +4944,10 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
                 && player_standing >= 30
                 && player_is_gp
                 && target_is_gp;
-            let can_declare_war = !target_in_anarchy && !raw_at_war;
+            let can_declare_war = !target_in_anarchy
+                && !raw_at_war
+                && !queued_war
+                && game.can_project_war_against(nid, n.id);
             let can_send_grant = !target_in_anarchy && !raw_at_war && treasury > 0;
             let can_break_treaty = !treaties.is_empty();
             let can_propose_peace = !target_in_anarchy && raw_at_war && !any_pending_peace;
@@ -4990,6 +5013,9 @@ pub fn wasm_diplomacy_build_consulate(
     if game.get_nation(target).is_none() {
         return "{\"error\":\"target nation not found\"}".to_string();
     }
+    if let Some(err) = reject_if_great_power_target_for_consulate(&game, target) {
+        return err;
+    }
     if let Some(err) = reject_if_target_in_anarchy(&game, target) {
         return err;
     }
@@ -5009,13 +5035,13 @@ pub fn wasm_diplomacy_build_consulate(
         return "{\"error\":\"not enough treasury\"}".to_string();
     }
 
-    let cost = match game.world.diplomacy.build_consulate(nid, target) {
-        Ok(c) => c,
-        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
-    };
-
-    if let Some(nation) = game.get_nation_mut(nid) {
-        nation.economy.treasury -= cost;
+    if let Err(e) = game.queue_direct_diplomacy_action(
+        domain::game_state::PendingDiplomacyAction::BuildConsulate {
+            player: nid,
+            target,
+        },
+    ) {
+        return format!("{{\"error\":\"{}\"}}", e);
     }
 
     serialize_game(&game)
@@ -5060,13 +5086,13 @@ pub fn wasm_diplomacy_build_embassy(
         return "{\"error\":\"not enough treasury\"}".to_string();
     }
 
-    let cost = match game.world.diplomacy.build_embassy(nid, target) {
-        Ok(c) => c,
-        Err(e) => return format!("{{\"error\":\"{}\"}}", e),
-    };
-
-    if let Some(nation) = game.get_nation_mut(nid) {
-        nation.economy.treasury -= cost;
+    if let Err(e) = game.queue_direct_diplomacy_action(
+        domain::game_state::PendingDiplomacyAction::BuildEmbassy {
+            player: nid,
+            target,
+        },
+    ) {
+        return format!("{{\"error\":\"{}\"}}", e);
     }
 
     serialize_game(&game)
@@ -5179,12 +5205,14 @@ pub fn wasm_diplomacy_declare_war(
         return err;
     }
 
-    if game.world.diplomacy.is_at_war(nid, target) {
-        return "{\"error\":\"already at war\"}".to_string();
+    if let Err(e) = game.queue_direct_diplomacy_action(
+        domain::game_state::PendingDiplomacyAction::DeclareWar {
+            from: nid,
+            to: target,
+        },
+    ) {
+        return format!("{{\"error\":\"{}\"}}", e);
     }
-
-    let turn = game.turn;
-    game.world.diplomacy.declare_war_at(nid, target, turn);
     serialize_game(&game)
 }
 
@@ -7460,6 +7488,9 @@ mod tests {
             attacker_retreated_to: Vec::new(),
             defender_retreated_to: Vec::new(),
             retreat_debug: None,
+            attacker_unit_logs: Vec::new(),
+            defender_unit_logs: Vec::new(),
+            round_logs: Vec::new(),
         };
 
         game.archive
@@ -7637,6 +7668,212 @@ mod tests {
             actions["can_propose_peace"].as_bool(),
             Some(false),
             "peace must not be gated by anarchy-inflated at_war"
+        );
+    }
+
+    #[test]
+    fn diplomacy_screen_hides_consulate_action_for_great_power_targets() {
+        let json = make_game_json();
+        let game = game_from_json(&json).unwrap();
+        let player_id = game.human_player_nation;
+        let target_id = game
+            .great_powers()
+            .iter()
+            .find(|n| n.id != player_id)
+            .expect("test game must have another great power")
+            .id;
+
+        let out = wasm_get_diplomacy_screen_data(&json, player_id.0);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let relations = parsed["relations"].as_array().unwrap();
+        let rel = relations
+            .iter()
+            .find(|r| r["nation_id"].as_u64() == Some(target_id.0 as u64))
+            .expect("great power relation present");
+
+        assert_eq!(
+            rel["actions"]["can_build_consulate"].as_bool(),
+            Some(false),
+            "great powers must never advertise the consulate action"
+        );
+    }
+
+    #[test]
+    fn wasm_build_consulate_rejects_great_power_target() {
+        let json = make_game_json();
+        let game = game_from_json(&json).unwrap();
+        let player_id = game.human_player_nation;
+        let target_id = game
+            .great_powers()
+            .iter()
+            .find(|n| n.id != player_id)
+            .expect("test game must have another great power")
+            .id;
+
+        let out = wasm_diplomacy_build_consulate(&json, player_id.0, target_id.0);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(
+            parsed["error"].as_str(),
+            Some("Consulates are for Minor Nations only.")
+        );
+    }
+
+    #[test]
+    fn wasm_build_consulate_queues_until_end_turn() {
+        let json = make_game_json();
+        let game = game_from_json(&json).unwrap();
+        let mut baseline = game_from_json(&json).unwrap();
+        let player_id = game.human_player_nation;
+        let target_id = game
+            .world
+            .nations
+            .iter()
+            .find(|n| n.id != player_id && !n.is_great_power() && !n.diplomacy.is_in_anarchy)
+            .expect("test game must have a valid minor-nation target")
+            .id;
+        let treasury_before = game
+            .get_nation(player_id)
+            .unwrap()
+            .economy
+            .treasury
+            .as_dollars();
+
+        let queued_json = wasm_diplomacy_build_consulate(&json, player_id.0, target_id.0);
+        let queued_game = game_from_json(&queued_json).unwrap();
+        assert!(
+            !queued_game.world.diplomacy.has_consulate(player_id, target_id),
+            "consulate should not exist until the turn resolves"
+        );
+        assert!(
+            queued_game.has_pending_consulate(player_id, target_id),
+            "consulate should be queued for end turn"
+        );
+        assert_eq!(
+            queued_game
+                .get_nation(player_id)
+                .unwrap()
+                .economy
+                .treasury
+                .as_dollars(),
+            treasury_before,
+            "treasury should not be charged before end turn"
+        );
+
+        let mut resolved_game = queued_game;
+        let _report = domain::turn::process_turn(&mut resolved_game);
+        let _baseline_report = domain::turn::process_turn(&mut baseline);
+        assert!(
+            resolved_game.world.diplomacy.has_consulate(player_id, target_id),
+            "queued consulate should resolve during turn processing"
+        );
+        assert!(
+            !resolved_game.has_pending_consulate(player_id, target_id),
+            "pending consulate should be cleared after resolution"
+        );
+        assert_eq!(
+            baseline
+                .get_nation(player_id)
+                .unwrap()
+                .economy
+                .treasury
+                .as_dollars()
+                - resolved_game
+                    .get_nation(player_id)
+                    .unwrap()
+                    .economy
+                    .treasury
+                    .as_dollars(),
+            resolved_game.game_data.game_config.consulate_cost,
+            "queued consulate should make the post-turn treasury exactly one consulate cost lower than baseline"
+        );
+    }
+
+    #[test]
+    fn diplomacy_screen_hides_declare_war_for_unreachable_targets() {
+        let json = make_game_json();
+        let game = game_from_json(&json).unwrap();
+        let player_id = game.human_player_nation;
+        let target_id = game
+            .world
+            .nations
+            .iter()
+            .find(|n| n.id != player_id && !game.can_project_war_against(player_id, n.id))
+            .expect("test game must have at least one unreachable target")
+            .id;
+
+        let out = wasm_get_diplomacy_screen_data(&json, player_id.0);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let relations = parsed["relations"].as_array().unwrap();
+        let rel = relations
+            .iter()
+            .find(|r| r["nation_id"].as_u64() == Some(target_id.0 as u64))
+            .expect("unreachable relation present");
+
+        assert_eq!(
+            rel["actions"]["can_declare_war"].as_bool(),
+            Some(false),
+            "unreachable targets must not advertise declare-war"
+        );
+    }
+
+    #[test]
+    fn wasm_declare_war_rejects_unreachable_target() {
+        let json = make_game_json();
+        let game = game_from_json(&json).unwrap();
+        let player_id = game.human_player_nation;
+        let target_id = game
+            .world
+            .nations
+            .iter()
+            .find(|n| n.id != player_id && !game.can_project_war_against(player_id, n.id))
+            .expect("test game must have at least one unreachable target")
+            .id;
+
+        let out = wasm_diplomacy_declare_war(&json, player_id.0, target_id.0);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(
+            parsed["error"].as_str(),
+            Some("target nation is unreachable by land or ocean")
+        );
+    }
+
+    #[test]
+    fn wasm_declare_war_queues_until_end_turn() {
+        let json = make_game_json();
+        let game = game_from_json(&json).unwrap();
+        let player_id = game.human_player_nation;
+        let target_id = game
+            .world
+            .nations
+            .iter()
+            .find(|n| {
+                n.id != player_id
+                    && !game.world.diplomacy.is_at_war(player_id, n.id)
+                    && game.can_project_war_against(player_id, n.id)
+            })
+            .expect("test game must have at least one reachable war target")
+            .id;
+
+        let queued_json = wasm_diplomacy_declare_war(&json, player_id.0, target_id.0);
+        let queued_game = game_from_json(&queued_json).unwrap();
+        assert!(
+            !queued_game.world.diplomacy.is_at_war(player_id, target_id),
+            "war should not begin until the turn resolves"
+        );
+        assert!(
+            queued_game.has_pending_war(player_id, target_id),
+            "war declaration should be queued for end turn"
+        );
+
+        let mut resolved_game = queued_game;
+        let _report = domain::turn::process_turn(&mut resolved_game);
+        assert!(
+            resolved_game.world.diplomacy.is_at_war(player_id, target_id),
+            "queued war declaration should resolve during turn processing"
+        );
+        assert!(
+            !resolved_game.has_pending_war(player_id, target_id),
+            "pending war declaration should be cleared after resolution"
         );
     }
 

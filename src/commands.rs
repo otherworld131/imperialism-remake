@@ -1132,29 +1132,18 @@ pub(crate) fn cmd_consulate(game: &mut GameState, query: &str) {
         return;
     }
 
-    match game.world.diplomacy.build_consulate(player_id, target_id) {
+    match game.queue_direct_diplomacy_action(domain::game_state::PendingDiplomacyAction::BuildConsulate {
+        player: player_id,
+        target: target_id,
+    }) {
         Ok(_) => {
-            let Some(player) = human_player_mut(game) else {
-                return;
-            };
-            player.economy.treasury -= cost;
             println!(
                 "  {}",
                 crate::display::color_green(&format!(
-                    "Trade consulate established with {}! (cost: {}, treasury now: {})",
-                    target_name, cost, player.economy.treasury
+                    "Trade consulate queued with {}. It will take effect at end of turn (cost: {}).",
+                    target_name, cost
                 ))
             );
-
-            // Record history event
-            let turn = game.turn;
-            game.archive.history.push((
-                turn,
-                domain::events::HistoryEvent::ConsulateBuilt {
-                    player: player_id,
-                    target: target_id,
-                },
-            ));
         }
         Err(e) => {
             println!("  Cannot build consulate: {}", e);
@@ -1200,29 +1189,18 @@ pub(crate) fn cmd_embassy(game: &mut GameState, query: &str) {
         return;
     }
 
-    match game.world.diplomacy.build_embassy(player_id, target_id) {
+    match game.queue_direct_diplomacy_action(domain::game_state::PendingDiplomacyAction::BuildEmbassy {
+        player: player_id,
+        target: target_id,
+    }) {
         Ok(_) => {
-            let Some(player) = human_player_mut(game) else {
-                return;
-            };
-            player.economy.treasury -= cost;
             println!(
                 "  {}",
                 crate::display::color_green(&format!(
-                    "Embassy established with {}! (cost: {}, treasury now: {})",
-                    target_name, cost, player.economy.treasury
+                    "Embassy queued with {}. It will take effect at end of turn (cost: {}).",
+                    target_name, cost
                 ))
             );
-
-            // Record history event
-            let turn = game.turn;
-            game.archive.history.push((
-                turn,
-                domain::events::HistoryEvent::EmbassyBuilt {
-                    player: player_id,
-                    target: target_id,
-                },
-            ));
         }
         Err(e) => {
             println!("  Cannot build embassy: {}", e);
@@ -1262,35 +1240,37 @@ pub(crate) fn cmd_war(game: &mut GameState, query: &str) {
         println!("  You are already at war with {}.", target_name);
         return;
     }
-
-    let turn = game.turn;
-    game.world
-        .diplomacy
-        .declare_war_at(player_id, target_id, turn);
-    println!();
-    println!("  ╔════════════════════════════════════════╗");
-    println!("  ║  DECLARATION OF WAR                    ║");
-    println!("  ╚════════════════════════════════════════╝");
-    println!(
-        "  {}",
-        crate::display::color_red(&format!(
-            "Your Excellency has declared WAR upon {}!",
+    if !game.can_project_war_against(player_id, target_id) {
+        println!(
+            "  {} cannot be reached by land or ocean from your current territory.",
             target_name
-        ))
-    );
-    println!("  May Providence favor our cause.");
-    println!();
+        );
+        return;
+    }
 
-    // Record history event
-    let turn = game.turn;
-    game.archive.history.push((
-        turn,
-        domain::events::HistoryEvent::WarDeclared {
-            attacker: player_id,
-            defender: target_id,
-            protectee: None,
-        },
-    ));
+    match game.queue_direct_diplomacy_action(domain::game_state::PendingDiplomacyAction::DeclareWar {
+        from: player_id,
+        to: target_id,
+    }) {
+        Ok(_) => {
+            println!();
+            println!("  ╔════════════════════════════════════════╗");
+            println!("  ║  DECLARATION OF WAR                    ║");
+            println!("  ╚════════════════════════════════════════╝");
+            println!(
+                "  {}",
+                crate::display::color_red(&format!(
+                    "War against {} has been queued for end of turn.",
+                    target_name
+                ))
+            );
+            println!("  The declaration takes effect when the turn resolves.");
+            println!();
+        }
+        Err(e) => {
+            println!("  Cannot declare war: {}", e);
+        }
+    }
 }
 
 pub(crate) fn cmd_peace(game: &mut GameState, query: &str) {

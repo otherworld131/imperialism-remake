@@ -13,7 +13,7 @@ use crate::military::naval::NavalBattleResult;
 use crate::military::ships::{Ship, ShipType};
 use crate::nation::{Nation, NationColor};
 use crate::types::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 pub const DEFAULT_RNG_STATE: u64 = 0x9E37_79B9_7F4A_7C15;
 
@@ -149,6 +149,9 @@ pub struct TransientState {
     /// Troops can attack the target province on **subsequent** turns only
     /// (not the same turn the landing was established).
     pub pending_landings: Vec<(NationId, ProvinceId, TurnNumber)>,
+    /// Player-issued direct diplomacy actions that resolve on end turn rather
+    /// than immediately. Treaty proposals already use `pending_proposals`.
+    pub pending_diplomacy_actions: Vec<PendingDiplomacyAction>,
     /// Transient collector for AI-side treasury mutations. Drained into
     /// `TurnReport.ai_cash_spending` at end of turn (not saved).
     pub pending_ai_cash_spending: Vec<(NationId, CashSink, Money, Option<NationId>)>,
@@ -185,6 +188,29 @@ pub struct TransientState {
         crate::economy::ledger::ResourceIn,
         u32,
     )>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingDiplomacyAction {
+    BuildConsulate { player: NationId, target: NationId },
+    BuildEmbassy { player: NationId, target: NationId },
+    DeclareWar { from: NationId, to: NationId },
+}
+
+impl PendingDiplomacyAction {
+    pub fn actor(&self) -> NationId {
+        match self {
+            Self::BuildConsulate { player, .. } | Self::BuildEmbassy { player, .. } => *player,
+            Self::DeclareWar { from, .. } => *from,
+        }
+    }
+
+    pub fn target(&self) -> NationId {
+        match self {
+            Self::BuildConsulate { target, .. } | Self::BuildEmbassy { target, .. } => *target,
+            Self::DeclareWar { to, .. } => *to,
+        }
+    }
 }
 
 /// Top-level aggregate root representing the complete state of a game.
@@ -257,6 +283,232 @@ impl GameState {
     /// Look up a province by its ID (mutable).
     pub fn get_province_mut(&mut self, id: ProvinceId) -> Option<&mut Province> {
         self.world.provinces.iter_mut().find(|p| p.id == id)
+    }
+
+    pub fn pending_diplomacy_reserved_dollars(&self, actor: NationId) -> i64 {
+        self.transient
+            .pending_diplomacy_actions
+            .iter()
+            .filter(|action| action.actor() == actor)
+            .map(|action| match action {
+                PendingDiplomacyAction::BuildConsulate { .. } => {
+                    self.game_data.game_config.consulate_cost
+                }
+                PendingDiplomacyAction::BuildEmbassy { .. } => self.game_data.game_config.embassy_cost,
+                PendingDiplomacyAction::DeclareWar { .. } => 0,
+            })
+            .sum()
+    }
+
+    pub fn has_pending_consulate(&self, player: NationId, target: NationId) -> bool {
+        self.transient.pending_diplomacy_actions.iter().any(|action| {
+            matches!(
+                action,
+                PendingDiplomacyAction::BuildConsulate { player: p, target: t }
+                    if *p == player && *t == target
+            )
+        })
+    }
+
+    pub fn has_pending_embassy(&self, player: NationId, target: NationId) -> bool {
+        self.transient.pending_diplomacy_actions.iter().any(|action| {
+            matches!(
+                action,
+                PendingDiplomacyAction::BuildEmbassy { player: p, target: t }
+                    if *p == player && *t == target
+            )
+        })
+    }
+
+    pub fn has_pending_war(&self, from: NationId, to: NationId) -> bool {
+        self.transient.pending_diplomacy_actions.iter().any(|action| {
+            matches!(
+                action,
+                PendingDiplomacyAction::DeclareWar { from: a, to: b }
+                    if *a == from && *b == to
+            )
+        })
+    }
+
+    pub fn queue_direct_diplomacy_action(
+        &mut self,
+        action: PendingDiplomacyAction,
+    ) -> Result<(), String> {
+        let actor = action.actor();
+        let target = action.target();
+        if actor == target {
+            return Err("cannot target self".to_string());
+        }
+        let Some(actor_nation) = self.get_nation(actor) else {
+            return Err("nation not found".to_string());
+        };
+        let Some(target_nation) = self.get_nation(target) else {
+            return Err("target nation not found".to_string());
+        };
+        if target_nation.diplomacy.is_in_anarchy {
+            return Err("target nation is in anarchy".to_string());
+        }
+
+        match action {
+            PendingDiplomacyAction::BuildConsulate { player, target } => {
+                if target_nation.is_great_power() {
+                    return Err("Consulates are for Minor Nations only.".to_string());
+                }
+                if self.world.diplomacy.has_consulate(player, target) {
+                    return Err("illegal move: Consulate already established".to_string());
+                }
+                if self.has_pending_consulate(player, target) {
+                    return Err("Consulate already queued for end turn".to_string());
+                }
+                let available = actor_nation.economy.treasury.as_dollars()
+                    - self.pending_diplomacy_reserved_dollars(player);
+                if available < self.game_data.game_config.consulate_cost {
+                    return Err("not enough treasury".to_string());
+                }
+            }
+            PendingDiplomacyAction::BuildEmbassy { player, target } => {
+                if target_nation.is_great_power() {
+                    return Err(
+                        "Great Powers already use embassy-based diplomacy.".to_string()
+                    );
+                }
+                if !self.world.diplomacy.has_consulate(player, target) {
+                    return Err(
+                        "illegal move: Must build consulate before embassy".to_string()
+                    );
+                }
+                if self.world.diplomacy.has_embassy(player, target) {
+                    return Err("illegal move: Embassy already established".to_string());
+                }
+                if self.has_pending_embassy(player, target) {
+                    return Err("Embassy already queued for end turn".to_string());
+                }
+                let available = actor_nation.economy.treasury.as_dollars()
+                    - self.pending_diplomacy_reserved_dollars(player);
+                if available < self.game_data.game_config.embassy_cost {
+                    return Err("not enough treasury".to_string());
+                }
+            }
+            PendingDiplomacyAction::DeclareWar { from, to } => {
+                if self.world.diplomacy.is_at_war(from, to) {
+                    return Err("already at war".to_string());
+                }
+                if self.has_pending_war(from, to) {
+                    return Err("War declaration already queued for end turn".to_string());
+                }
+                if !self.can_project_war_against(from, to) {
+                    return Err("target nation is unreachable by land or ocean".to_string());
+                }
+            }
+        }
+
+        self.transient.pending_diplomacy_actions.push(action);
+        Ok(())
+    }
+
+    /// Whether `attacker` can realistically start a war against `defender`
+    /// under the current map geometry: either they share a land border, or
+    /// both have access to connected non-lake sea zones that permit an ocean
+    /// approach to the defender's coast.
+    pub fn can_project_war_against(&self, attacker: NationId, defender: NationId) -> bool {
+        if attacker == defender {
+            return false;
+        }
+
+        self.nations_share_land_border(attacker, defender)
+            || self.nations_share_ocean_access(attacker, defender)
+    }
+
+    fn nations_share_land_border(&self, attacker: NationId, defender: NationId) -> bool {
+        let Some(attacker_nation) = self.get_nation(attacker) else {
+            return false;
+        };
+
+        self.world.provinces.iter().any(|enemy_province| {
+            enemy_province.owner == defender
+                && attacker_nation.province_ids.iter().any(|&our_pid| {
+                    self.get_province(our_pid).is_some_and(|our_province| {
+                        crate::map::provinces_are_adjacent(
+                            &self.world.hex_map,
+                            our_province,
+                            enemy_province,
+                        )
+                    })
+                })
+        })
+    }
+
+    fn nations_share_ocean_access(&self, attacker: NationId, defender: NationId) -> bool {
+        let attacker_zones = self.nation_ocean_zones(attacker);
+        if attacker_zones.is_empty() {
+            return false;
+        }
+        let defender_zones = self.nation_ocean_zones(defender);
+        if defender_zones.is_empty() {
+            return false;
+        }
+
+        let mut frontier: VecDeque<_> = attacker_zones.iter().copied().collect();
+        let mut visited = attacker_zones;
+
+        while let Some(zone_id) = frontier.pop_front() {
+            if defender_zones.contains(&zone_id) {
+                return true;
+            }
+
+            let Some(zone) = self
+                .world
+                .sea_zones
+                .iter()
+                .find(|z| z.id == zone_id && !z.is_lake)
+            else {
+                continue;
+            };
+
+            for &adjacent in &zone.adjacent_zone_ids {
+                if visited.contains(&adjacent) {
+                    continue;
+                }
+                let adjacent_is_ocean = self
+                    .world
+                    .sea_zones
+                    .iter()
+                    .any(|z| z.id == adjacent && !z.is_lake);
+                if adjacent_is_ocean {
+                    visited.insert(adjacent);
+                    frontier.push_back(adjacent);
+                }
+            }
+        }
+
+        false
+    }
+
+    fn nation_ocean_zones(
+        &self,
+        nation_id: NationId,
+    ) -> HashSet<crate::map::sea_zones::SeaZoneId> {
+        let mut zones = HashSet::new();
+        let Some(nation) = self.get_nation(nation_id) else {
+            return zones;
+        };
+
+        for pid in &nation.province_ids {
+            let Some(province) = self.get_province(*pid) else {
+                continue;
+            };
+            if !province.ocean_coastal {
+                continue;
+            }
+
+            for zone in &self.world.sea_zones {
+                if !zone.is_lake && zone.coastal_provinces.contains(pid) {
+                    zones.insert(zone.id);
+                }
+            }
+        }
+
+        zones
     }
 
     /// Display string for difficulty.

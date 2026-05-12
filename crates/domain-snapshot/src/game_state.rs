@@ -147,12 +147,22 @@ pub struct TransientState {
     pub pending_fleet_moves: Vec<(NationId, u32, u32)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_landings: Vec<(NationId, ProvinceId, TurnNumber)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_diplomacy_actions: Vec<PendingDiplomacyAction>,
     /// Stored as Vec instead of HashMap to avoid non-string key issues.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub last_cash_flow: Vec<(NationId, CashFlow)>,
     /// Stored as Vec instead of HashMap to avoid non-string key issues.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub last_resource_flow: Vec<(NationId, ResourceFlow)>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PendingDiplomacyAction {
+    BuildConsulate { player: NationId, target: NationId },
+    BuildEmbassy { player: NationId, target: NationId },
+    DeclareWar { from: NationId, to: NationId },
 }
 
 // ── GameState ────────────────────────────────────────────────────────
@@ -358,6 +368,30 @@ impl From<&dgs::TransientState> for TransientState {
                 .iter()
                 .map(|(n, p, t)| ((*n).into(), (*p).into(), (*t).into()))
                 .collect(),
+            pending_diplomacy_actions: v
+                .pending_diplomacy_actions
+                .iter()
+                .map(|a| match a {
+                    dgs::PendingDiplomacyAction::BuildConsulate { player, target } => {
+                        PendingDiplomacyAction::BuildConsulate {
+                            player: (*player).into(),
+                            target: (*target).into(),
+                        }
+                    }
+                    dgs::PendingDiplomacyAction::BuildEmbassy { player, target } => {
+                        PendingDiplomacyAction::BuildEmbassy {
+                            player: (*player).into(),
+                            target: (*target).into(),
+                        }
+                    }
+                    dgs::PendingDiplomacyAction::DeclareWar { from, to } => {
+                        PendingDiplomacyAction::DeclareWar {
+                            from: (*from).into(),
+                            to: (*to).into(),
+                        }
+                    }
+                })
+                .collect(),
             last_cash_flow: v
                 .last_cash_flow
                 .iter()
@@ -398,6 +432,30 @@ impl From<TransientState> for dgs::TransientState {
                 .pending_landings
                 .into_iter()
                 .map(|(n, p, t)| (n.into(), p.into(), t.into()))
+                .collect(),
+            pending_diplomacy_actions: v
+                .pending_diplomacy_actions
+                .into_iter()
+                .map(|a| match a {
+                    PendingDiplomacyAction::BuildConsulate { player, target } => {
+                        dgs::PendingDiplomacyAction::BuildConsulate {
+                            player: player.into(),
+                            target: target.into(),
+                        }
+                    }
+                    PendingDiplomacyAction::BuildEmbassy { player, target } => {
+                        dgs::PendingDiplomacyAction::BuildEmbassy {
+                            player: player.into(),
+                            target: target.into(),
+                        }
+                    }
+                    PendingDiplomacyAction::DeclareWar { from, to } => {
+                        dgs::PendingDiplomacyAction::DeclareWar {
+                            from: from.into(),
+                            to: to.into(),
+                        }
+                    }
+                })
                 .collect(),
             pending_ai_cash_spending: Vec::new(),
             pending_ai_cash_income: Vec::new(),

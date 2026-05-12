@@ -866,14 +866,10 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         DiplomacyBuildConsulate { player, target } => {
             let player = NationId(player);
             let target = NationId(target);
-            match game.world.diplomacy.build_consulate(player, target) {
-                Ok(_) => {
-                    let cost = Money::dollars(game.game_data.game_config.consulate_cost as i64);
-                    if let Some(n) = game.get_nation_mut(player) {
-                        n.economy.treasury -= cost;
-                    }
-                    CommandResult::success()
-                }
+            match game.queue_direct_diplomacy_action(
+                domain::game_state::PendingDiplomacyAction::BuildConsulate { player, target },
+            ) {
+                Ok(_) => CommandResult::success(),
                 Err(e) => CommandResult::error(e),
             }
         }
@@ -881,14 +877,10 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         DiplomacyBuildEmbassy { player, target } => {
             let player = NationId(player);
             let target = NationId(target);
-            match game.world.diplomacy.build_embassy(player, target) {
-                Ok(_) => {
-                    let cost = Money::dollars(game.game_data.game_config.embassy_cost as i64);
-                    if let Some(n) = game.get_nation_mut(player) {
-                        n.economy.treasury -= cost;
-                    }
-                    CommandResult::success()
-                }
+            match game.queue_direct_diplomacy_action(
+                domain::game_state::PendingDiplomacyAction::BuildEmbassy { player, target },
+            ) {
+                Ok(_) => CommandResult::success(),
                 Err(e) => CommandResult::error(e),
             }
         }
@@ -896,7 +888,12 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         DiplomacyProposeNap { from, to } => {
             let from = NationId(from);
             let to = NationId(to);
-            match game.world.diplomacy.propose_pact(from, to) {
+            match game.world.diplomacy.propose_treaty(
+                from,
+                to,
+                domain::events::TreatyType::NonAggressionPact,
+                game.turn,
+            ) {
                 Ok(_) => CommandResult::success(),
                 Err(e) => CommandResult::error(e),
             }
@@ -905,7 +902,12 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         DiplomacyProposeAlliance { from, to } => {
             let from = NationId(from);
             let to = NationId(to);
-            match game.world.diplomacy.propose_alliance(from, to) {
+            match game.world.diplomacy.propose_treaty(
+                from,
+                to,
+                domain::events::TreatyType::Alliance,
+                game.turn,
+            ) {
                 Ok(_) => CommandResult::success(),
                 Err(e) => CommandResult::error(e),
             }
@@ -914,8 +916,12 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
         DiplomacyDeclareWar { from, to } => {
             let from = NationId(from);
             let to = NationId(to);
-            game.world.diplomacy.declare_war(from, to);
-            CommandResult::success()
+            match game.queue_direct_diplomacy_action(
+                domain::game_state::PendingDiplomacyAction::DeclareWar { from, to },
+            ) {
+                Ok(_) => CommandResult::success(),
+                Err(e) => CommandResult::error(e),
+            }
         }
 
         DiplomacySendGrant {
@@ -1547,6 +1553,195 @@ mod tests {
                 .player_sell_orders
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn build_consulate_rejects_great_power_target() {
+        let mut game = setup();
+        let player = game.human_player_nation;
+        let target = game
+            .great_powers()
+            .iter()
+            .find(|n| n.id != player)
+            .expect("test game must have another great power")
+            .id;
+
+        let result = apply_command(
+            &mut game,
+            FrontendCommand::DiplomacyBuildConsulate {
+                player: player.0,
+                target: target.0,
+            },
+        );
+        assert!(!result.ok, "great power targets must be rejected");
+        assert_eq!(
+            result.message.as_deref(),
+            Some("Consulates are for Minor Nations only.")
+        );
+    }
+
+    #[test]
+    fn declare_war_rejects_unreachable_target() {
+        let mut game = setup();
+        let player = game.human_player_nation;
+        let target = game
+            .world
+            .nations
+            .iter()
+            .find(|n| n.id != player && !game.can_project_war_against(player, n.id))
+            .expect("test game must have at least one unreachable target")
+            .id;
+
+        let result = apply_command(
+            &mut game,
+            FrontendCommand::DiplomacyDeclareWar {
+                from: player.0,
+                to: target.0,
+            },
+        );
+        assert!(!result.ok, "unreachable war declarations must be rejected");
+        assert_eq!(
+            result.message.as_deref(),
+            Some("target nation is unreachable by land or ocean")
+        );
+    }
+
+    #[test]
+    fn build_consulate_queues_until_process_turn() {
+        let mut game = setup();
+        let mut baseline = setup();
+        let player = game.human_player_nation;
+        let target = game
+            .world
+            .nations
+            .iter()
+            .find(|n| n.id != player && !n.is_great_power() && !n.diplomacy.is_in_anarchy)
+            .expect("test game must have a valid minor-nation target")
+            .id;
+        let treasury_before = game.get_nation(player).unwrap().economy.treasury.as_dollars();
+
+        let result = apply_command(
+            &mut game,
+            FrontendCommand::DiplomacyBuildConsulate {
+                player: player.0,
+                target: target.0,
+            },
+        );
+        assert!(result.ok, "{:?}", result.message);
+        assert!(
+            !game.world.diplomacy.has_consulate(player, target),
+            "consulate should not exist until end-turn processing"
+        );
+        assert!(
+            game.has_pending_consulate(player, target),
+            "consulate should be queued"
+        );
+        assert_eq!(
+            game.get_nation(player).unwrap().economy.treasury.as_dollars(),
+            treasury_before,
+            "treasury should not be charged before the turn resolves"
+        );
+
+        let _report = process_turn(&mut game);
+        let _baseline_report = process_turn(&mut baseline);
+
+        assert!(
+            game.world.diplomacy.has_consulate(player, target),
+            "queued consulate should resolve during turn processing"
+        );
+        assert!(
+            !game.has_pending_consulate(player, target),
+            "pending consulate should be cleared after resolution"
+        );
+        assert_eq!(
+            baseline
+                .get_nation(player)
+                .unwrap()
+                .economy
+                .treasury
+                .as_dollars()
+                - game.get_nation(player).unwrap().economy.treasury.as_dollars(),
+            game.game_data.game_config.consulate_cost,
+            "queued consulate should make the post-turn treasury exactly one consulate cost lower than baseline"
+        );
+    }
+
+    #[test]
+    fn declare_war_queues_until_process_turn() {
+        let mut game = setup();
+        let player = game.human_player_nation;
+        let target = game
+            .world
+            .nations
+            .iter()
+            .find(|n| {
+                n.id != player
+                    && !game.world.diplomacy.is_at_war(player, n.id)
+                    && game.can_project_war_against(player, n.id)
+            })
+            .expect("test game must have at least one reachable war target")
+            .id;
+
+        let result = apply_command(
+            &mut game,
+            FrontendCommand::DiplomacyDeclareWar {
+                from: player.0,
+                to: target.0,
+            },
+        );
+        assert!(result.ok, "{:?}", result.message);
+        assert!(
+            !game.world.diplomacy.is_at_war(player, target),
+            "war should not begin until end-turn processing"
+        );
+        assert!(game.has_pending_war(player, target), "war should be queued");
+
+        let _report = process_turn(&mut game);
+
+        assert!(
+            game.world.diplomacy.is_at_war(player, target),
+            "queued war declaration should resolve during turn processing"
+        );
+        assert!(
+            !game.has_pending_war(player, target),
+            "pending war declaration should be cleared after resolution"
+        );
+    }
+
+    #[test]
+    fn propose_alliance_stays_pending_until_acceptance() {
+        use domain::events::TreatyType;
+
+        let mut game = setup();
+        let player = game.human_player_nation;
+        let target = game
+            .great_powers()
+            .iter()
+            .find(|n| n.id != player)
+            .expect("test game must have another great power")
+            .id;
+
+        let result = apply_command(
+            &mut game,
+            FrontendCommand::DiplomacyProposeAlliance {
+                from: player.0,
+                to: target.0,
+            },
+        );
+        assert!(result.ok, "{:?}", result.message);
+        assert!(
+            !game.world.diplomacy.has_treaty(player, target, TreatyType::Alliance),
+            "alliance should not apply immediately"
+        );
+        assert_eq!(
+            game.world.diplomacy.pending_proposals.len(),
+            1,
+            "alliance should be queued as a pending proposal"
+        );
+        assert_eq!(
+            game.world.diplomacy.pending_proposals[0].proposal_type,
+            TreatyType::Alliance
         );
     }
 

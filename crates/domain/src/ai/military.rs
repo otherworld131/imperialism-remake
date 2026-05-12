@@ -571,6 +571,12 @@ pub(crate) fn ai_declare_wars(
             {
                 continue;
             }
+            // Card #476: do not start wars we cannot prosecute. A target is
+            // eligible only if we share a land border or can reach its ocean
+            // coast through connected non-lake sea zones.
+            if !game.can_project_war_against(ai_id, target_id) {
+                continue;
+            }
             // Anti-dogpile: skip if another AI targeted this nation this round
             if targeted_this_round.contains(&target_id) {
                 continue;
@@ -954,6 +960,9 @@ pub(crate) fn ai_declare_wars(
         // Find the target's weakest province (fewest tiles). Trello card #8:
         // Final guard: target must still own at least one province
         if game.world.provinces.iter().all(|p| p.owner != target_id) {
+            continue;
+        }
+        if !game.can_project_war_against(ai_id, target_id) {
             continue;
         }
 
@@ -1779,6 +1788,57 @@ mod tests {
     }
 
     #[test]
+    fn ai_not_at_war_does_not_report_second_front_reason() {
+        let mut game = test_game_with_ai_and_minor();
+        game.turn = TurnNumber::new(10);
+        game.get_nation_mut(NationId(2))
+            .unwrap()
+            .diplomacy
+            .ai_personality = Some(AiPersonality::Balanced);
+
+        let mut actions = Vec::new();
+        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
+
+        assert!(
+            !game.world.diplomacy.is_at_war_with_anyone(NationId(2)),
+            "fixture must keep the AI out of war"
+        );
+        assert!(
+            actions
+                .iter()
+                .all(|a| a.reason != "already at war — cannot open a second front"),
+            "AI that is not at war must not emit the second-front reason"
+        );
+    }
+
+    #[test]
+    fn ai_at_war_reports_second_front_reason() {
+        let mut game = test_game_with_ai_and_minor();
+        game.turn = TurnNumber::new(10);
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
+        for i in 0..5 {
+            ai.military.army.push(ArmyUnit::new(
+                UnitId(5100 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        game.world.diplomacy.declare_war(NationId(2), NationId(3));
+
+        let mut actions = Vec::new();
+        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
+
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.reason == "already at war — cannot open a second front"),
+            "AI that is already at war should surface the second-front reason"
+        );
+    }
+
+    #[test]
     fn ai_respects_war_cooldown() {
         let mut game = test_game_with_ai_and_minor();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
@@ -2344,11 +2404,19 @@ mod tests {
             ProvinceId(3),
             "GP3 Land".to_string(),
             NationId(3),
-            HexCoord::new(6, 6),
-            vec![HexCoord::new(6, 6)],
+            HexCoord::new(4, 3),
+            vec![HexCoord::new(4, 3)],
             2,
         );
         game.world.provinces.push(province3);
+        game.world.hex_map.set_tile(
+            HexCoord::new(3, 3),
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2)),
+        );
+        game.world.hex_map.set_tile(
+            HexCoord::new(4, 3),
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(3)),
+        );
 
         let mut gp3 = Nation::new(
             NationId(3),
@@ -2421,6 +2489,61 @@ mod tests {
         assert!(
             !at_war_with_human,
             "AI should prefer the unarmed weak GP over a heavily-defended human GP"
+        );
+    }
+
+    #[test]
+    fn ai_does_not_declare_war_on_unreachable_great_power() {
+        let mut game = test_game_with_ai();
+        use crate::hex::HexCoord;
+        use crate::map::Province;
+        use crate::nation::{Nation, NationColor};
+        use crate::types::NationType;
+
+        let province3 = Province::new(
+            ProvinceId(3),
+            "FarGP".to_string(),
+            NationId(3),
+            HexCoord::new(6, 6),
+            vec![HexCoord::new(6, 6)],
+            2,
+        );
+        game.world.provinces.push(province3);
+
+        let mut gp3 = Nation::new(
+            NationId(3),
+            "FarGP".to_string(),
+            NationColor::Gray,
+            NationType::GreatPower,
+            ProvinceId(3),
+        );
+        gp3.economy.treasury = Money::dollars(1000);
+        game.world.nations.push(gp3);
+
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
+        for i in 0..12 {
+            ai.military.army.push(ArmyUnit::new(
+                UnitId(6000 + i),
+                ArmyUnitType::Regulars,
+                NationId(2),
+                ProvinceId(2),
+            ));
+        }
+        game.turn = TurnNumber::new(10);
+
+        let mut actions = Vec::new();
+        ai_declare_wars(&mut game, &[NationId(2)], &mut actions);
+
+        let at_war_with_far_gp = game
+            .world
+            .diplomacy
+            .get_relation(NationId(2), NationId(3))
+            .map(|r| r.at_war)
+            .unwrap_or(false);
+        assert!(
+            !at_war_with_far_gp,
+            "AI must not declare war on a great power it cannot reach"
         );
     }
 

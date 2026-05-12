@@ -897,7 +897,30 @@ fn ai_propose_peace(
                             .get_province(*prov_id)
                             .is_some_and(|p| p.owner == enemy_id)
                 });
-        if has_pending_attack {
+        let has_pending_landing =
+            game.transient
+                .pending_landings
+                .iter()
+                .any(|(attacker, prov_id, _)| {
+                    *attacker == nation_id
+                        && game
+                            .get_province(*prov_id)
+                            .is_some_and(|p| p.owner == enemy_id)
+                });
+        let has_active_beachhead = game
+            .get_nation(nation_id)
+            .is_some_and(|nation| {
+                nation.military.warships.iter().any(|ship| {
+                    matches!(
+                        ship.operation,
+                        Some(crate::military::naval::NavalOperation::Beachhead(target_pid))
+                            if game
+                                .get_province(target_pid)
+                                .is_some_and(|p| p.owner == enemy_id)
+                    )
+                })
+            });
+        if has_pending_attack || has_pending_landing || has_active_beachhead {
             continue;
         }
 
@@ -2753,6 +2776,110 @@ mod tests {
         assert!(
             !actions.iter().any(|a| !a.is_non_action),
             "AI should not sue for peace when not losing (non-actions allowed); actions: {:?}",
+            actions
+        );
+    }
+
+    #[test]
+    fn ai_does_not_propose_peace_with_pending_landing_against_enemy() {
+        let mut game = test_game_with_ai_and_minor();
+        game.turn = TurnNumber::new(20);
+
+        use crate::events::HistoryEvent;
+        game.archive.history.push((
+            TurnNumber::new(1),
+            HistoryEvent::WarDeclared {
+                attacker: NationId(2),
+                defender: NationId(3),
+                protectee: None,
+            },
+        ));
+        game.archive.history.push((
+            TurnNumber::new(10),
+            HistoryEvent::ProvinceConquered {
+                conqueror: NationId(3),
+                loser: NationId(2),
+                province: ProvinceId(2),
+            },
+        ));
+
+        game.world.diplomacy.declare_war(NationId(2), NationId(3));
+        game.transient
+            .pending_landings
+            .push((NationId(2), ProvinceId(3), TurnNumber::new(20)));
+
+        let mut actions = Vec::new();
+        ai_propose_peace(
+            &mut game,
+            NationId(2),
+            AiPersonality::Balanced,
+            &mut actions,
+        );
+
+        assert!(
+            game.world.diplomacy.is_at_war(NationId(2), NationId(3)),
+            "AI must not sue for peace while a landing against that enemy is pending"
+        );
+        assert!(
+            !actions.iter().any(|a| a.text.contains("peace")),
+            "peace should not be proposed while a landing is pending; actions: {:?}",
+            actions
+        );
+    }
+
+    #[test]
+    fn ai_does_not_propose_peace_with_active_beachhead_assignment() {
+        let mut game = test_game_with_ai_and_minor();
+        game.turn = TurnNumber::new(20);
+
+        use crate::events::HistoryEvent;
+        game.archive.history.push((
+            TurnNumber::new(1),
+            HistoryEvent::WarDeclared {
+                attacker: NationId(2),
+                defender: NationId(3),
+                protectee: None,
+            },
+        ));
+        game.archive.history.push((
+            TurnNumber::new(10),
+            HistoryEvent::ProvinceConquered {
+                conqueror: NationId(3),
+                loser: NationId(2),
+                province: ProvinceId(2),
+            },
+        ));
+
+        game.world.diplomacy.declare_war(NationId(2), NationId(3));
+        let mut beachhead_ship = crate::military::ships::Ship::new(
+            UnitId(9900),
+            crate::military::ships::ShipType::Frigate,
+            NationId(2),
+            35,
+        );
+        beachhead_ship.operation =
+            Some(crate::military::naval::NavalOperation::Beachhead(ProvinceId(3)));
+        game.get_nation_mut(NationId(2))
+            .unwrap()
+            .military
+            .warships
+            .push(beachhead_ship);
+
+        let mut actions = Vec::new();
+        ai_propose_peace(
+            &mut game,
+            NationId(2),
+            AiPersonality::Balanced,
+            &mut actions,
+        );
+
+        assert!(
+            game.world.diplomacy.is_at_war(NationId(2), NationId(3)),
+            "AI must not sue for peace while a beachhead assignment is active"
+        );
+        assert!(
+            !actions.iter().any(|a| a.text.contains("peace")),
+            "peace should not be proposed while a beachhead assignment exists; actions: {:?}",
             actions
         );
     }

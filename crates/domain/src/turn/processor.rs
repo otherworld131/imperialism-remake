@@ -11,7 +11,9 @@ use crate::economy::production::{
 };
 use crate::economy::trade::TradeTransaction;
 use crate::events::*;
-use crate::game_state::{GameState, PoliticalSnapshot, PoliticalSnapshotEntry};
+use crate::game_state::{
+    GameState, PendingDiplomacyAction, PoliticalSnapshot, PoliticalSnapshotEntry,
+};
 use crate::map::SettlementLevel;
 use crate::map::infrastructure::is_province_connected_multi_filtered;
 use crate::military::battle_outcome::{BattleParams, compute_battle_outcome};
@@ -341,7 +343,12 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
             .insert(nation.id, nation.economy.treasury);
     }
 
-    // 0. AI decisions for computer-controlled Great Powers
+    // 0. Player-issued direct diplomacy actions resolve on end turn rather
+    // than immediately. Apply them before AI decisions so the new quarter's
+    // diplomacy state is coherent for the rest of turn processing.
+    resolve_pending_direct_diplomacy_actions(game, &mut report);
+
+    // 1. AI decisions for computer-controlled Great Powers
     let ai_actions = run_ai_turns(game);
     report.ai_actions = ai_actions;
 
@@ -509,6 +516,92 @@ pub fn process_turn(game: &mut GameState) -> TurnReport {
         .push(DomainEvent::TurnStarted(TurnStarted { turn: game.turn }));
 
     report
+}
+
+fn resolve_pending_direct_diplomacy_actions(game: &mut GameState, report: &mut TurnReport) {
+    let queued = std::mem::take(&mut game.transient.pending_diplomacy_actions);
+    for action in queued {
+        match action {
+            PendingDiplomacyAction::BuildConsulate { player, target } => {
+                let cost = Money::dollars(game.game_data.game_config.consulate_cost);
+                if game.world.diplomacy.build_consulate(player, target).is_ok() {
+                    if let Some(nation) = game.get_nation_mut(player) {
+                        nation.economy.treasury -= cost;
+                    }
+                    let target_name = game
+                        .get_nation(target)
+                        .map(|n| n.name.clone())
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    report.newspaper_headlines.push(
+                        Headline::new(
+                            format!("Trade consulate built with {}", target_name),
+                            HeadlineCategory::Diplomacy,
+                        )
+                        .for_nations(&[player, target]),
+                    );
+                    game.archive.history.push((
+                        game.turn,
+                        HistoryEvent::ConsulateBuilt { player, target },
+                    ));
+                }
+            }
+            PendingDiplomacyAction::BuildEmbassy { player, target } => {
+                let cost = Money::dollars(game.game_data.game_config.embassy_cost);
+                if game.world.diplomacy.build_embassy(player, target).is_ok() {
+                    if let Some(nation) = game.get_nation_mut(player) {
+                        nation.economy.treasury -= cost;
+                    }
+                    let target_name = game
+                        .get_nation(target)
+                        .map(|n| n.name.clone())
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    report.newspaper_headlines.push(
+                        Headline::new(
+                            format!("Embassy established with {}", target_name),
+                            HeadlineCategory::Diplomacy,
+                        )
+                        .for_nations(&[player, target]),
+                    );
+                    game.archive.history.push((
+                        game.turn,
+                        HistoryEvent::EmbassyBuilt { player, target },
+                    ));
+                }
+            }
+            PendingDiplomacyAction::DeclareWar { from, to } => {
+                if !game.world.diplomacy.is_at_war(from, to) {
+                    game.world.diplomacy.declare_war_at(from, to, game.turn);
+                    report.events.push(DomainEvent::WarDeclared(crate::events::WarDeclared {
+                        attacker: from,
+                        defender: to,
+                    }));
+                    let attacker_name = game
+                        .get_nation(from)
+                        .map(|n| n.name.clone())
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    let defender_name = game
+                        .get_nation(to)
+                        .map(|n| n.name.clone())
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    report.newspaper_headlines.push(
+                        Headline::new(
+                            format!("{attacker_name} declared war on {defender_name}"),
+                            HeadlineCategory::Diplomacy,
+                        )
+                        .for_nations(&[from, to]),
+                    );
+                    game.archive.history.push((
+                        game.turn,
+                        HistoryEvent::WarDeclared {
+                            attacker: from,
+                            defender: to,
+                            protectee: None,
+                        },
+                    ));
+                }
+            }
+        }
+    }
 }
 
 fn run_pre_immigration_phases(game: &mut GameState, report: &mut TurnReport) {
