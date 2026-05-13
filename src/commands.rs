@@ -1132,10 +1132,12 @@ pub(crate) fn cmd_consulate(game: &mut GameState, query: &str) {
         return;
     }
 
-    match game.queue_direct_diplomacy_action(domain::game_state::PendingDiplomacyAction::BuildConsulate {
-        player: player_id,
-        target: target_id,
-    }) {
+    match game.queue_direct_diplomacy_action(
+        domain::game_state::PendingDiplomacyAction::BuildConsulate {
+            player: player_id,
+            target: target_id,
+        },
+    ) {
         Ok(_) => {
             println!(
                 "  {}",
@@ -1189,10 +1191,12 @@ pub(crate) fn cmd_embassy(game: &mut GameState, query: &str) {
         return;
     }
 
-    match game.queue_direct_diplomacy_action(domain::game_state::PendingDiplomacyAction::BuildEmbassy {
-        player: player_id,
-        target: target_id,
-    }) {
+    match game.queue_direct_diplomacy_action(
+        domain::game_state::PendingDiplomacyAction::BuildEmbassy {
+            player: player_id,
+            target: target_id,
+        },
+    ) {
         Ok(_) => {
             println!(
                 "  {}",
@@ -1248,10 +1252,12 @@ pub(crate) fn cmd_war(game: &mut GameState, query: &str) {
         return;
     }
 
-    match game.queue_direct_diplomacy_action(domain::game_state::PendingDiplomacyAction::DeclareWar {
-        from: player_id,
-        to: target_id,
-    }) {
+    match game.queue_direct_diplomacy_action(
+        domain::game_state::PendingDiplomacyAction::DeclareWar {
+            from: player_id,
+            to: target_id,
+        },
+    ) {
         Ok(_) => {
             println!();
             println!("  ╔════════════════════════════════════════╗");

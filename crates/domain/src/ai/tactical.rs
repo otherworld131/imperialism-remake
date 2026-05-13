@@ -907,19 +907,17 @@ fn ai_propose_peace(
                             .get_province(*prov_id)
                             .is_some_and(|p| p.owner == enemy_id)
                 });
-        let has_active_beachhead = game
-            .get_nation(nation_id)
-            .is_some_and(|nation| {
-                nation.military.warships.iter().any(|ship| {
-                    matches!(
-                        ship.operation,
-                        Some(crate::military::naval::NavalOperation::Beachhead(target_pid))
-                            if game
-                                .get_province(target_pid)
-                                .is_some_and(|p| p.owner == enemy_id)
-                    )
-                })
-            });
+        let has_active_beachhead = game.get_nation(nation_id).is_some_and(|nation| {
+            nation.military.warships.iter().any(|ship| {
+                matches!(
+                    ship.operation,
+                    Some(crate::military::naval::NavalOperation::Beachhead(target_pid))
+                        if game
+                            .get_province(target_pid)
+                            .is_some_and(|p| p.owner == enemy_id)
+                )
+            })
+        });
         if has_pending_attack || has_pending_landing || has_active_beachhead {
             continue;
         }
@@ -2857,8 +2855,9 @@ mod tests {
             NationId(2),
             35,
         );
-        beachhead_ship.operation =
-            Some(crate::military::naval::NavalOperation::Beachhead(ProvinceId(3)));
+        beachhead_ship.operation = Some(crate::military::naval::NavalOperation::Beachhead(
+            ProvinceId(3),
+        ));
         game.get_nation_mut(NationId(2))
             .unwrap()
             .military
