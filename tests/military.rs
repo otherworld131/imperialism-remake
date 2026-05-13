@@ -317,7 +317,7 @@ fn build_frigate_deducts_resources_and_adds_ship() {
     let nation = game.get_nation_mut(player).unwrap();
     nation.add_material(MaterialType::Fabric, 5);
     nation.add_material(MaterialType::Lumber, 10);
-    nation.add_material(MaterialType::Arms, 5);
+    nation.add_goods(GoodsType::Arms, 5);
     let initial_warships = nation.military.warships.len();
 
     // Build a Frigate (simulated — deduct materials, add ship)
@@ -326,7 +326,7 @@ fn build_frigate_deducts_resources_and_adds_ship() {
     let arms_cost = 2;
     nation.consume_material(MaterialType::Fabric, fabric_cost);
     nation.consume_material(MaterialType::Lumber, lumber_cost);
-    nation.consume_material(MaterialType::Arms, arms_cost);
+    nation.consume_goods(GoodsType::Arms, arms_cost);
     nation.military.warships.push(Ship::new(
         UnitId(9999),
         ShipType::Frigate,
@@ -340,7 +340,7 @@ fn build_frigate_deducts_resources_and_adds_ship() {
     // So totals are: Fabric 5+5=10-2=8, Lumber 20+10=30-5=25, Arms 0+5-2=3
     assert_eq!(nation.material_amount(MaterialType::Fabric), 8); // (5 starting + 5 given) - 2
     assert_eq!(nation.material_amount(MaterialType::Lumber), 25); // (20 starting + 10 given) - 5
-    assert_eq!(nation.material_amount(MaterialType::Arms), 3); // 5 - 2
+    assert_eq!(nation.goods_amount(GoodsType::Arms), 3); // 5 - 2
 }
 
 // ── Data validation: all unit types have valid stats (plan 11) ────

@@ -255,16 +255,20 @@ fn take_snapshot(
                     - *starting_provinces.get(&nation.id).unwrap_or(&0) as i32,
                 fabric: nation.material_amount(domain::types::MaterialType::Fabric),
                 lumber: nation.material_amount(domain::types::MaterialType::Lumber),
-                arms: nation.material_amount(domain::types::MaterialType::Arms),
+                arms: nation.goods_amount(domain::types::GoodsType::Arms),
                 steel: nation.material_amount(domain::types::MaterialType::Steel),
                 materials: {
                     use domain::types::MaterialType::*;
                     let mut m = BTreeMap::new();
-                    for mat in [Lumber, Steel, Fabric, Paper, Arms, CannedFood] {
+                    for mat in [Lumber, Steel, Fabric, Paper, CannedFood] {
                         let qty = nation.material_amount(mat);
                         if qty > 0 {
                             m.insert(format!("{mat:?}"), qty);
                         }
+                    }
+                    let arms_qty = nation.goods_amount(domain::types::GoodsType::Arms);
+                    if arms_qty > 0 {
+                        m.insert("Arms".to_string(), arms_qty);
                     }
                     m
                 },

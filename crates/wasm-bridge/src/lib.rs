@@ -1966,7 +1966,7 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
 
-    let mut arms_available = nation.material_amount(MaterialType::Arms);
+    let mut arms_available = nation.goods_amount(GoodsType::Arms);
     let mut treasury = nation.economy.treasury;
     let mut horses_available = nation.resource_amount(domain::types::ResourceType::Horses);
     let mut oil_available = nation.resource_amount(domain::types::ResourceType::Oil);
@@ -2222,7 +2222,7 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
 
             let has_fabric = nation.material_amount(MaterialType::Fabric) >= stats.fabric_cost;
             let has_lumber = nation.material_amount(MaterialType::Lumber) >= stats.lumber_cost;
-            let has_arms = nation.material_amount(MaterialType::Arms) >= stats.arms_cost;
+            let has_arms = nation.goods_amount(GoodsType::Arms) >= stats.arms_cost;
             let has_steel = nation.material_amount(MaterialType::Steel) >= stats.steel_cost;
             let has_coal = nation.resource_amount(ResourceType::Coal) >= stats.coal_cost;
             let can_afford = has_fabric && has_lumber && has_arms && has_steel && has_coal;
@@ -2238,7 +2238,7 @@ pub fn wasm_get_buildable_units(game_json: &str, nation_id: u32) -> String {
                 99
             };
             let max_by_arms = if stats.arms_cost > 0 {
-                nation.material_amount(MaterialType::Arms) / stats.arms_cost
+                nation.goods_amount(GoodsType::Arms) / stats.arms_cost
             } else {
                 99
             };
@@ -3014,7 +3014,7 @@ pub fn wasm_build_ship(game_json: &str, nation_id: u32, ship_type_str: &str) -> 
         if nation.material_amount(MaterialType::Lumber) < stats.lumber_cost {
             return "{\"error\":\"not enough lumber\"}".to_string();
         }
-        if nation.material_amount(MaterialType::Arms) < stats.arms_cost {
+        if nation.goods_amount(GoodsType::Arms) < stats.arms_cost {
             return "{\"error\":\"not enough arms\"}".to_string();
         }
         if nation.material_amount(MaterialType::Steel) < stats.steel_cost {
@@ -3314,7 +3314,7 @@ fn parse_material_type(name: &str) -> Option<MaterialType> {
         "Steel" => Some(MaterialType::Steel),
         "Fabric" => Some(MaterialType::Fabric),
         "Paper" => Some(MaterialType::Paper),
-        "Arms" => Some(MaterialType::Arms),
+        "Arms" => Some(GoodsType::Arms),
         "CannedFood" | "Canned Food" => Some(MaterialType::CannedFood),
         _ => None,
     }
@@ -4673,7 +4673,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         MaterialType::Steel,
         MaterialType::Fabric,
         MaterialType::Paper,
-        MaterialType::Arms,
+        GoodsType::Arms,
         MaterialType::CannedFood,
     ];
     let sellable_materials: Vec<serde_json::Value> = all_materials

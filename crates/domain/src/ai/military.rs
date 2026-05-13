@@ -1518,7 +1518,7 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.treasury = Money::dollars(3000);
-        ai.add_material(MaterialType::Arms, 5);
+        ai.add_goods(GoodsType::Arms, 5);
         ai.economy.labor.untrained = 5;
         // AI starts with 0 FIELD army units (only starting garrison militia).
         // Give the human one rival field unit so the threat-gated military
@@ -1603,7 +1603,7 @@ mod tests {
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         // Give large treasury so AI can spend on both infrastructure and military
         ai.economy.treasury = Money::dollars(50000);
-        ai.add_material(MaterialType::Arms, 10);
+        ai.add_goods(GoodsType::Arms, 10);
         ai.economy.labor.untrained = 10;
         ai.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         // Give AI enough provinces that 3 army isn't enough (deficit scoring)
@@ -1639,7 +1639,7 @@ mod tests {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.treasury = Money::dollars(20000);
-        ai.add_material(MaterialType::Arms, 10);
+        ai.add_goods(GoodsType::Arms, 10);
         ai.economy.labor.untrained = 10;
         ai.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         // Give AI many provinces so it needs a large army

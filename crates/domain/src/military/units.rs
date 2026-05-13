@@ -1187,8 +1187,6 @@ pub fn upgrade_player_unit(
     nation_id: NationId,
     unit_id: UnitId,
 ) -> Result<(ArmyUnitType, ArmyUnitType, Money), DomainError> {
-    use crate::types::MaterialType;
-
     let nation = game
         .get_nation(nation_id)
         .ok_or(DomainError::NationNotFound(nation_id))?;
@@ -1226,7 +1224,7 @@ pub fn upgrade_player_unit(
         .stats()
         .arms_required
         .saturating_sub(from_type.stats().arms_required);
-    if arms_delta > 0 && nation.material_amount(MaterialType::Arms) < arms_delta {
+    if arms_delta > 0 && nation.goods_amount(GoodsType::Arms) < arms_delta {
         return Err(DomainError::illegal("insufficient arms for upgrade"));
     }
 
@@ -1235,7 +1233,7 @@ pub fn upgrade_player_unit(
         .ok_or(DomainError::NationNotFound(nation_id))?;
     nation.economy.treasury -= cost;
     if arms_delta > 0 {
-        nation.consume_material(MaterialType::Arms, arms_delta);
+        nation.consume_goods(GoodsType::Arms, arms_delta);
     }
     let unit = &mut nation.military.army[pos];
     unit.unit_type = to_type;

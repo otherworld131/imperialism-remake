@@ -1045,7 +1045,7 @@ impl Nation {
             available >= 1
         };
         self.economy.treasury >= stats.cost
-            && self.material_amount(MaterialType::Arms) >= stats.arms_required
+            && self.goods_amount(GoodsType::Arms) >= stats.arms_required
             && (!stats.requires_horse || self.resource_amount(ResourceType::Horses) >= 1)
             && (stats.fuel_required == 0
                 || self.resource_amount(ResourceType::Oil) >= stats.fuel_required)
@@ -1059,7 +1059,7 @@ impl Nation {
     pub fn deduct_recruit_resources(&mut self, unit_type: ArmyUnitType) {
         let stats = unit_type.stats();
         self.economy.treasury -= stats.cost;
-        self.consume_material(MaterialType::Arms, stats.arms_required);
+        self.consume_goods(GoodsType::Arms, stats.arms_required);
         if stats.requires_horse {
             self.remove_resource(ResourceType::Horses, 1);
         }
@@ -1788,12 +1788,12 @@ mod tests {
     #[test]
     fn economy_consume_returns_false_when_insufficient() {
         let mut n = sample_great_power();
-        n.economy.add(Commodity::Material(MaterialType::Arms), 2);
+        n.economy.add(Commodity::Goods(GoodsType::Arms), 2);
         assert!(
             !n.economy
-                .consume(Commodity::Material(MaterialType::Arms), 5)
+                .consume(Commodity::Goods(GoodsType::Arms), 5)
         );
-        assert_eq!(n.economy.amount(Commodity::Material(MaterialType::Arms)), 2);
+        assert_eq!(n.economy.amount(Commodity::Goods(GoodsType::Arms)), 2);
     }
 
     #[test]
@@ -1988,7 +1988,7 @@ mod tests {
     fn recruit_ready_nation() -> Nation {
         let mut n = sample_great_power();
         n.economy.treasury = Money::dollars(200);
-        n.add_material(MaterialType::Arms, 2);
+        n.add_goods(GoodsType::Arms, 2);
         n.economy.labor.untrained = 2;
         n.economy.labor.trained = 2;
         n.economy.labor.expert = 2;
@@ -2058,7 +2058,7 @@ mod tests {
     fn can_recruit_unit_fails_when_trained_labor_exhausted() {
         let mut n = recruit_ready_nation();
         n.economy.treasury = Money::dollars(10_000);
-        n.add_material(MaterialType::Arms, 10);
+        n.add_goods(GoodsType::Arms, 10);
         n.economy.labor.trained = 0;
         assert!(!n.can_recruit_unit(ArmyUnitType::RifleInfantry));
     }
@@ -2074,7 +2074,7 @@ mod tests {
     fn can_recruit_unit_fails_when_fuel_unavailable() {
         let mut n = recruit_ready_nation();
         n.economy.treasury = Money::dollars(10_000);
-        n.add_material(MaterialType::Arms, 10);
+        n.add_goods(GoodsType::Arms, 10);
         n.economy.labor.expert = 5;
         n.economy.warehouse.clear();
         assert!(!n.can_recruit_unit(ArmyUnitType::Mechanised));
@@ -2085,10 +2085,10 @@ mod tests {
         let mut n = recruit_ready_nation();
         n.economy.labor.untrained = 0;
         let treasury_before = n.economy.treasury;
-        let arms_before = n.material_amount(MaterialType::Arms);
+        let arms_before = n.goods_amount(GoodsType::Arms);
         assert!(!n.can_recruit_unit(ArmyUnitType::Regulars));
         assert_eq!(n.economy.treasury, treasury_before);
-        assert_eq!(n.material_amount(MaterialType::Arms), arms_before);
+        assert_eq!(n.goods_amount(GoodsType::Arms), arms_before);
     }
 
     #[test]
@@ -2099,7 +2099,7 @@ mod tests {
         n.deduct_recruit_resources(ArmyUnitType::Regulars);
         assert_eq!(n.economy.treasury, treasury_before - stats.cost);
         assert_eq!(
-            n.material_amount(MaterialType::Arms),
+            n.goods_amount(GoodsType::Arms),
             2 - stats.arms_required
         );
         assert_eq!(n.economy.labor.untrained, 1);
@@ -2109,7 +2109,7 @@ mod tests {
     fn deduct_recruit_resources_consumes_horse_when_required() {
         let mut n = recruit_ready_nation();
         n.economy.treasury = Money::dollars(10_000);
-        n.add_material(MaterialType::Arms, 5);
+        n.add_goods(GoodsType::Arms, 5);
         let horses_before = n.resource_amount(ResourceType::Horses);
         n.deduct_recruit_resources(ArmyUnitType::Hussars);
         assert_eq!(n.resource_amount(ResourceType::Horses), horses_before - 1);

@@ -74,7 +74,6 @@ pub fn material_price(material: MaterialType, cfg: &crate::data::GameConfig) -> 
         MaterialType::Steel => Money::dollars(cfg.steel_price),
         MaterialType::Fabric => Money::dollars(cfg.fabric_price),
         MaterialType::Paper => Money::dollars(cfg.paper_price),
-        MaterialType::Arms => Money::dollars(cfg.arms_price),
         MaterialType::CannedFood => Money::dollars(cfg.canned_food_price),
     }
 }
@@ -85,6 +84,7 @@ pub fn goods_price(goods: GoodsType, cfg: &crate::data::GameConfig) -> Money {
         GoodsType::Furniture => Money::dollars(cfg.furniture_price),
         GoodsType::Clothing => Money::dollars(cfg.clothing_price),
         GoodsType::Hardware => Money::dollars(cfg.hardware_price),
+        GoodsType::Arms => Money::dollars(cfg.arms_price),
     }
 }
 
@@ -492,11 +492,11 @@ pub fn generate_minor_nation_goods_bids(
         ManufacturedCommodity::Material(MaterialType::Steel),
         ManufacturedCommodity::Material(MaterialType::Fabric),
         ManufacturedCommodity::Material(MaterialType::Paper),
-        ManufacturedCommodity::Material(MaterialType::Arms),
         ManufacturedCommodity::Material(MaterialType::CannedFood),
         ManufacturedCommodity::Goods(GoodsType::Furniture),
         ManufacturedCommodity::Goods(GoodsType::Clothing),
         ManufacturedCommodity::Goods(GoodsType::Hardware),
+        ManufacturedCommodity::Goods(GoodsType::Arms),
     ];
 
     let mut bids = Vec::new();

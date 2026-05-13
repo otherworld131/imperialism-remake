@@ -226,8 +226,8 @@ pub fn calculate_armory_production(
 ) -> ProductionResult {
     if armory_cap == 0 || steel_per_arm == 0 || labor_per_arm == 0 {
         return ProductionResult {
-            materials_produced: vec![(MaterialType::Arms, 0)],
-            goods_produced: vec![],
+            materials_produced: vec![],
+            goods_produced: vec![(GoodsType::Arms, 0)],
             resources_consumed: vec![],
             materials_consumed: vec![(MaterialType::Steel, 0)],
             labor_used: 0,
@@ -238,8 +238,8 @@ pub fn calculate_armory_production(
     let arms = armory_cap.min(resource_limited).min(labor_limited);
     let steel_consumed = arms * steel_per_arm;
     ProductionResult {
-        materials_produced: vec![(MaterialType::Arms, arms)],
-        goods_produced: vec![],
+        materials_produced: vec![],
+        goods_produced: vec![(GoodsType::Arms, arms)],
         resources_consumed: vec![],
         materials_consumed: vec![(MaterialType::Steel, steel_consumed)],
         labor_used: arms * labor_per_arm,

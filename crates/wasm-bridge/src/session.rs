@@ -608,7 +608,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
                 };
                 let ok = nation.material_amount(MaterialType::Fabric) >= stats.fabric_cost
                     && nation.material_amount(MaterialType::Lumber) >= stats.lumber_cost
-                    && nation.material_amount(MaterialType::Arms) >= stats.arms_cost
+                    && nation.goods_amount(GoodsType::Arms) >= stats.arms_cost
                     && nation.material_amount(MaterialType::Steel) >= stats.steel_cost
                     && nation.resource_amount(ResourceType::Coal) >= stats.coal_cost;
                 if !ok {
@@ -626,7 +626,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
                     nation.consume_material(MaterialType::Lumber, stats.lumber_cost);
                 }
                 if stats.arms_cost > 0 {
-                    nation.consume_material(MaterialType::Arms, stats.arms_cost);
+                    nation.consume_goods(GoodsType::Arms, stats.arms_cost);
                 }
                 if stats.steel_cost > 0 {
                     nation.consume_material(MaterialType::Steel, stats.steel_cost);
@@ -1294,7 +1294,7 @@ mod tests {
         let n = game.get_nation_mut(nid).unwrap();
         n.add_material(MaterialType::Fabric, 2);
         n.add_material(MaterialType::Lumber, 5);
-        n.add_material(MaterialType::Arms, 2);
+        n.add_goods(GoodsType::Arms, 2);
     }
 
     fn give_trader_materials(

@@ -956,6 +956,12 @@ fn finalize_resource_flow(game: &mut GameState, report: &mut TurnReport) {
             flow.add_inflow(Stockpile::Material(material), source, amount);
         }
     }
+    let ai_goods_in = std::mem::take(&mut game.transient.pending_ai_goods_inflows);
+    for (nid, good, source, amount) in ai_goods_in {
+        if let Some(flow) = flows.get_mut(&nid) {
+            flow.add_inflow(Stockpile::Goods(good), source, amount);
+        }
+    }
 
     // ── Material/Goods stockpile flows from structured tracking ──
     let sf = &report.stockpile_flows;
@@ -2031,7 +2037,7 @@ fn process_pending_ships(game: &mut GameState) {
                 if let Some(n) = game.get_nation_mut(nation_id) {
                     n.consume_material(MaterialType::Fabric, stats.fabric_cost);
                     n.consume_material(MaterialType::Lumber, stats.lumber_cost);
-                    n.consume_material(MaterialType::Arms, stats.arms_cost);
+                    n.consume_goods(GoodsType::Arms, stats.arms_cost);
                     n.consume_material(MaterialType::Steel, stats.steel_cost);
                     n.remove_resource(ResourceType::Coal, stats.coal_cost);
                 }
@@ -2387,13 +2393,13 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
                     *entry = entry.saturating_sub(*amount);
                 }
             }
-            for (material, amount) in &result.materials_produced {
+            for (goods, amount) in &result.goods_produced {
                 if *amount > 0 {
-                    *nation.economy.materials.entry(*material).or_insert(0) += *amount;
+                    *nation.economy.goods.entry(*goods).or_insert(0) += *amount;
                     report
                         .production_output
-                        .push((nation_id, format!("{:?}", material), *amount));
-                    if let MaterialType::Arms = material {
+                        .push((nation_id, format!("{:?}", goods), *amount));
+                    if let GoodsType::Arms = goods {
                         nation.military.total_arms_built =
                             nation.military.total_arms_built.saturating_add(*amount);
                     }

@@ -126,6 +126,7 @@ macro_rules! test_game_state {
                 pending_ai_material_outflows: Vec::new(),
                 pending_ai_goods_outflows: Vec::new(),
                 pending_ai_material_inflows: Vec::new(),
+                pending_ai_goods_inflows: Vec::new(),
             },
         }
     };

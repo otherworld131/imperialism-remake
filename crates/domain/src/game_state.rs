@@ -184,11 +184,18 @@ pub struct TransientState {
         crate::economy::ledger::ResourceOut,
         u32,
     )>,
-    /// Transient collector for AI-side material *inflows* (e.g. AI Steel→Arms
-    /// conversion in `ai/naval.rs`). Drained at end of turn (not saved).
+    /// Transient collector for AI-side material *inflows*. Drained at end of turn (not saved).
     pub pending_ai_material_inflows: Vec<(
         NationId,
         crate::types::MaterialType,
+        crate::economy::ledger::ResourceIn,
+        u32,
+    )>,
+    /// Transient collector for AI-side goods *inflows* (e.g. AI Steel→Arms
+    /// conversion in `ai/naval.rs`, since Arms is a Good). Drained at end of turn (not saved).
+    pub pending_ai_goods_inflows: Vec<(
+        NationId,
+        crate::types::GoodsType,
         crate::economy::ledger::ResourceIn,
         u32,
     )>,

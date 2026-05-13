@@ -256,7 +256,6 @@ pub enum MaterialType {
     Steel,
     Fabric,
     Paper,
-    Arms,
     CannedFood,
 }
 
@@ -277,7 +276,6 @@ impl std::str::FromStr for MaterialType {
             "Steel" => Ok(Self::Steel),
             "Fabric" => Ok(Self::Fabric),
             "Paper" => Ok(Self::Paper),
-            "Arms" => Ok(Self::Arms),
             "CannedFood" => Ok(Self::CannedFood),
             other => Err(format!("unknown material type: {}", other)),
         }
@@ -289,6 +287,7 @@ pub enum GoodsType {
     Furniture,
     Clothing,
     Hardware,
+    Arms,
 }
 
 impl std::str::FromStr for GoodsType {
@@ -298,6 +297,7 @@ impl std::str::FromStr for GoodsType {
             "Furniture" => Ok(Self::Furniture),
             "Clothing" => Ok(Self::Clothing),
             "Hardware" => Ok(Self::Hardware),
+            "Arms" => Ok(Self::Arms),
             other => Err(format!("unknown goods type: {}", other)),
         }
     }

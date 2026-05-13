@@ -63,7 +63,6 @@ pub enum MaterialType {
     Fabric,
     Paper,
     CannedFood,
-    Arms,
 }
 
 #[derive(
@@ -73,6 +72,7 @@ pub enum GoodsType {
     Furniture,
     Hardware,
     Clothing,
+    Arms,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -206,7 +206,6 @@ impl From<d::MaterialType> for MaterialType {
             d::MaterialType::Fabric => Self::Fabric,
             d::MaterialType::Paper => Self::Paper,
             d::MaterialType::CannedFood => Self::CannedFood,
-            d::MaterialType::Arms => Self::Arms,
         }
     }
 }
@@ -218,7 +217,6 @@ impl From<MaterialType> for d::MaterialType {
             MaterialType::Fabric => Self::Fabric,
             MaterialType::Paper => Self::Paper,
             MaterialType::CannedFood => Self::CannedFood,
-            MaterialType::Arms => Self::Arms,
         }
     }
 }
@@ -229,6 +227,7 @@ impl From<d::GoodsType> for GoodsType {
             d::GoodsType::Furniture => Self::Furniture,
             d::GoodsType::Hardware => Self::Hardware,
             d::GoodsType::Clothing => Self::Clothing,
+            d::GoodsType::Arms => Self::Arms,
         }
     }
 }
@@ -238,6 +237,7 @@ impl From<GoodsType> for d::GoodsType {
             GoodsType::Furniture => Self::Furniture,
             GoodsType::Hardware => Self::Hardware,
             GoodsType::Clothing => Self::Clothing,
+            GoodsType::Arms => Self::Arms,
         }
     }
 }

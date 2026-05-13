@@ -208,7 +208,6 @@ pub(crate) fn print_warehouse(game: &GameState) {
         MaterialType::Steel,
         MaterialType::Fabric,
         MaterialType::Paper,
-        MaterialType::Arms,
         MaterialType::CannedFood,
     ];
     println!("    Materials:");
@@ -225,6 +224,7 @@ pub(crate) fn print_warehouse(game: &GameState) {
         GoodsType::Furniture,
         GoodsType::Clothing,
         GoodsType::Hardware,
+        GoodsType::Arms,
     ];
     println!("    Finished Goods:");
     for g in &goods {

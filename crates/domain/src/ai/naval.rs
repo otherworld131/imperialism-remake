@@ -212,7 +212,7 @@ fn best_buildable_warship(game: &GameState, nation_id: NationId) -> Option<ShipT
     let lumber_have = nation
         .material_amount(MaterialType::Lumber)
         .saturating_sub(m_lumber);
-    let arms_have = nation.material_amount(MaterialType::Arms);
+    let arms_have = nation.goods_amount(GoodsType::Arms);
     let steel_have = nation
         .material_amount(MaterialType::Steel)
         .saturating_sub(m_steel);
@@ -287,7 +287,7 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
         None => return false,
     };
 
-    let arms_have = nation.material_amount(MaterialType::Arms);
+    let arms_have = nation.goods_amount(GoodsType::Arms);
     let steel_have = nation.material_amount(MaterialType::Steel);
 
     // Produce arms from steel if we're short.
@@ -316,16 +316,16 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
             return false;
         };
         nation.consume_material(MaterialType::Steel, arms_to_produce);
-        nation.add_material(MaterialType::Arms, arms_to_produce);
+        nation.add_goods(GoodsType::Arms, arms_to_produce);
         game.transient.pending_ai_material_outflows.push((
             nation_id,
             MaterialType::Steel,
             crate::economy::ledger::ResourceOut::FactoryConsumed,
             arms_to_produce,
         ));
-        game.transient.pending_ai_material_inflows.push((
+        game.transient.pending_ai_goods_inflows.push((
             nation_id,
-            MaterialType::Arms,
+            GoodsType::Arms,
             crate::economy::ledger::ResourceIn::FactoryOutput,
             arms_to_produce,
         ));
@@ -345,7 +345,7 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
     let lumber_have = nation
         .material_amount(MaterialType::Lumber)
         .saturating_sub(m_lumber);
-    let arms_have = nation.material_amount(MaterialType::Arms);
+    let arms_have = nation.goods_amount(GoodsType::Arms);
     let steel_have = nation
         .material_amount(MaterialType::Steel)
         .saturating_sub(m_steel);
@@ -366,7 +366,7 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
         };
         nation.consume_material(MaterialType::Fabric, fabric_need);
         nation.consume_material(MaterialType::Lumber, lumber_need);
-        nation.consume_material(MaterialType::Arms, arms_need);
+        nation.consume_goods(GoodsType::Arms, arms_need);
         if steel_need > 0 {
             nation.consume_material(MaterialType::Steel, steel_need);
         }
@@ -393,9 +393,9 @@ pub(crate) fn build_one_warship(game: &mut GameState, nation_id: NationId) -> bo
             ));
         }
         if arms_need > 0 {
-            game.transient.pending_ai_material_outflows.push((
+            game.transient.pending_ai_goods_outflows.push((
                 nation_id,
-                MaterialType::Arms,
+                GoodsType::Arms,
                 out,
                 arms_need,
             ));
@@ -989,7 +989,7 @@ mod tests {
         ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         ai.add_material(MaterialType::Fabric, 4);
         ai.add_material(MaterialType::Lumber, 10);
-        ai.add_material(MaterialType::Arms, 4);
+        ai.add_goods(GoodsType::Arms, 4);
 
         assert!(build_one_warship(&mut game, NationId(2)));
         assert_eq!(
@@ -1049,7 +1049,7 @@ mod tests {
         ai.economy.treasury = Money::dollars(5_000);
         ai.add_material(MaterialType::Fabric, 15); // 5 × 3
         ai.add_material(MaterialType::Lumber, 40); // 5 × 8
-        ai.add_material(MaterialType::Arms, 25); // 5 × 5
+        ai.add_goods(GoodsType::Arms, 25); // 5 × 5
 
         for _ in 0..5 {
             assert!(build_one_warship(&mut game, NationId(2)));
@@ -1068,7 +1068,7 @@ mod tests {
         ai.diplomacy.ai_personality = Some(AiPersonality::Balanced);
         ai.add_material(MaterialType::Fabric, 4);
         ai.add_material(MaterialType::Lumber, 10);
-        ai.add_material(MaterialType::Arms, 1); // have 1, need 2
+        ai.add_goods(GoodsType::Arms, 1); // have 1, need 2
         ai.add_material(MaterialType::Steel, 1); // can produce 1 more
 
         assert!(build_one_warship(&mut game, NationId(2)));
@@ -1182,7 +1182,7 @@ mod tests {
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.add_material(MaterialType::Fabric, 4);
         ai.add_material(MaterialType::Lumber, 10);
-        ai.add_material(MaterialType::Arms, 4);
+        ai.add_goods(GoodsType::Arms, 4);
         // Verify AI has no warships initially
         assert_eq!(ai.warship_count(), 0);
 
@@ -1451,7 +1451,7 @@ mod tests {
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.add_material(MaterialType::Fabric, 10);
         ai.add_material(MaterialType::Lumber, 20);
-        ai.add_material(MaterialType::Arms, 10);
+        ai.add_goods(GoodsType::Arms, 10);
 
         let mut actions = Vec::new();
         ai_naval_strategy(&mut game, NationId(2), &mut actions);

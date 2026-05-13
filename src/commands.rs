@@ -593,7 +593,7 @@ pub(crate) fn cmd_build_warship(game: &mut GameState, query: &str) {
 
     let fabric_have = player.material_amount(MaterialType::Fabric);
     let lumber_have = player.material_amount(MaterialType::Lumber);
-    let arms_have = player.material_amount(MaterialType::Arms);
+    let arms_have = player.goods_amount(GoodsType::Arms);
 
     if fabric_have < fabric_needed || lumber_have < lumber_needed || arms_have < arms_needed {
         println!(
@@ -619,7 +619,7 @@ pub(crate) fn cmd_build_warship(game: &mut GameState, query: &str) {
         };
         player.consume_material(MaterialType::Fabric, fabric_needed);
         player.consume_material(MaterialType::Lumber, lumber_needed);
-        player.consume_material(MaterialType::Arms, arms_needed);
+        player.consume_goods(GoodsType::Arms, arms_needed);
         player.military.warships.push(ship);
     }
 
@@ -658,11 +658,11 @@ pub(crate) fn cmd_produce_arms(game: &mut GameState) {
         return;
     };
     player.consume_material(MaterialType::Steel, 1);
-    player.add_material(MaterialType::Arms, 1);
+    player.add_goods(GoodsType::Arms, 1);
 
     println!(
         "  Produced 1 arms from 1 steel. Arms: {}, Steel: {}",
-        player.material_amount(MaterialType::Arms),
+        player.goods_amount(GoodsType::Arms),
         player.material_amount(MaterialType::Steel)
     );
 }

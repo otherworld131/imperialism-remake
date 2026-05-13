@@ -350,7 +350,6 @@ pub(super) fn resolve_trade_session(
                         let reserve = match m {
                             MaterialType::Lumber => human_lumber_reserve,
                             MaterialType::Steel => human_steel_reserve,
-                            MaterialType::Arms => human_arms_reserve_total,
                             _ => 0,
                         };
                         stock.saturating_sub(reserve) >= bid.quantity
@@ -358,7 +357,14 @@ pub(super) fn resolve_trade_session(
                     .unwrap_or(false),
                 trade::ManufacturedCommodity::Goods(g) => game
                     .get_nation(human_id)
-                    .map(|n| n.economy.goods.get(&g).copied().unwrap_or(0) >= bid.quantity)
+                    .map(|n| {
+                        let stock = n.economy.goods.get(&g).copied().unwrap_or(0);
+                        let reserve = match g {
+                            GoodsType::Arms => human_arms_reserve_total,
+                            _ => 0,
+                        };
+                        stock.saturating_sub(reserve) >= bid.quantity
+                    })
                     .unwrap_or(false),
             };
 
@@ -503,7 +509,6 @@ pub(super) fn resolve_trade_session(
                                         steel_reserve.saturating_add(m_steel_reserve)
                                     }
                                     MaterialType::Fabric => m_fabric_reserve,
-                                    MaterialType::Arms => arms_reserve_total,
                                     _ => 0,
                                 };
                                 stock.saturating_sub(reserve) >= bid.quantity
@@ -511,7 +516,14 @@ pub(super) fn resolve_trade_session(
                             .unwrap_or(false),
                         trade::ManufacturedCommodity::Goods(g) => game
                             .get_nation(*gp_id)
-                            .map(|n| n.economy.goods.get(&g).copied().unwrap_or(0) >= bid.quantity)
+                            .map(|n| {
+                                let stock = n.economy.goods.get(&g).copied().unwrap_or(0);
+                                let reserve = match g {
+                                    GoodsType::Arms => arms_reserve_total,
+                                    _ => 0,
+                                };
+                                stock.saturating_sub(reserve) >= bid.quantity
+                            })
                             .unwrap_or(false),
                     };
                     if gp_has_stock {

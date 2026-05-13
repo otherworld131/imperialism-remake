@@ -1509,7 +1509,7 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
 
         let cost = unit_type.stats().cost;
         let arms_need = unit_type.stats().arms_required;
-        let arms_have = nation.material_amount(MaterialType::Arms);
+        let arms_have = nation.goods_amount(GoodsType::Arms);
         let steel_have = nation.material_amount(MaterialType::Steel);
         // Produce arms from steel if we're short, mirroring build_one_warship.
         // Hold back the AI's expansion-reserve steel so unit recruitment never
@@ -1558,7 +1558,7 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
     if arms_to_produce > 0 && non_arms_ok {
         if let Some(nation) = game.get_nation_mut(nation_id) {
             nation.consume_material(MaterialType::Steel, arms_to_produce);
-            nation.add_material(MaterialType::Arms, arms_to_produce);
+            nation.add_goods(GoodsType::Arms, arms_to_produce);
         }
         game.transient.pending_ai_material_outflows.push((
             nation_id,
@@ -1566,9 +1566,9 @@ fn execute_military(game: &mut GameState, nation_id: NationId, actions: &mut Vec
             crate::economy::ledger::ResourceOut::FactoryConsumed,
             arms_to_produce,
         ));
-        game.transient.pending_ai_material_inflows.push((
+        game.transient.pending_ai_goods_inflows.push((
             nation_id,
-            MaterialType::Arms,
+            GoodsType::Arms,
             crate::economy::ledger::ResourceIn::FactoryOutput,
             arms_to_produce,
         ));

@@ -519,6 +519,7 @@ impl From<TransientState> for dgs::TransientState {
             pending_ai_material_outflows: Vec::new(),
             pending_ai_goods_outflows: Vec::new(),
             pending_ai_material_inflows: Vec::new(),
+            pending_ai_goods_inflows: Vec::new(),
         }
     }
 }
