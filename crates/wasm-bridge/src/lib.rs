@@ -3314,7 +3314,6 @@ fn parse_material_type(name: &str) -> Option<MaterialType> {
         "Steel" => Some(MaterialType::Steel),
         "Fabric" => Some(MaterialType::Fabric),
         "Paper" => Some(MaterialType::Paper),
-        "Arms" => Some(GoodsType::Arms),
         "CannedFood" | "Canned Food" => Some(MaterialType::CannedFood),
         _ => None,
     }
@@ -3325,6 +3324,7 @@ fn parse_goods_type(name: &str) -> Option<GoodsType> {
         "Furniture" => Some(GoodsType::Furniture),
         "Clothing" => Some(GoodsType::Clothing),
         "Hardware" => Some(GoodsType::Hardware),
+        "Arms" => Some(GoodsType::Arms),
         _ => None,
     }
 }
@@ -4673,7 +4673,6 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         MaterialType::Steel,
         MaterialType::Fabric,
         MaterialType::Paper,
-        GoodsType::Arms,
         MaterialType::CannedFood,
     ];
     let sellable_materials: Vec<serde_json::Value> = all_materials
@@ -4696,6 +4695,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         GoodsType::Furniture,
         GoodsType::Clothing,
         GoodsType::Hardware,
+        GoodsType::Arms,
     ];
     let sellable_goods: Vec<serde_json::Value> = all_goods
         .iter()
