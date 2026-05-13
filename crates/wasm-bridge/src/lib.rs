@@ -4742,10 +4742,14 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
                 .iter()
                 .map(|row| {
                     let seller_nation = game.get_nation(row.seller);
-                    let seller_name = seller_nation
-                        .map(|n| n.name.as_str())
-                        .unwrap_or("Unknown")
-                        .to_string();
+                    let seller_name = if row.seller.0 == 0 {
+                        "World Market".to_string()
+                    } else {
+                        seller_nation
+                            .map(|n| n.name.as_str())
+                            .unwrap_or("Unknown")
+                            .to_string()
+                    };
                     let seller_is_great_power =
                         seller_nation.map(|n| n.is_great_power()).unwrap_or(false);
                     let fills_json: Vec<serde_json::Value> = row
@@ -4753,10 +4757,14 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
                         .iter()
                         .map(|fill| {
                             let buyer_nation = game.get_nation(fill.buyer);
-                            let buyer_name = buyer_nation
-                                .map(|n| n.name.as_str())
-                                .unwrap_or("Unknown")
-                                .to_string();
+                            let buyer_name = if fill.buyer.0 == 0 {
+                                "World Market".to_string()
+                            } else {
+                                buyer_nation
+                                    .map(|n| n.name.as_str())
+                                    .unwrap_or("Unknown")
+                                    .to_string()
+                            };
                             let buyer_is_great_power =
                                 buyer_nation.map(|n| n.is_great_power()).unwrap_or(false);
                             serde_json::json!({
@@ -4769,11 +4777,16 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
                         })
                         .collect();
                     let sold: u32 = row.fills.iter().map(|f| f.quantity).sum();
+                    let commodity_label = if row.commodity_label.is_empty() {
+                        format!("{:?}", row.resource)
+                    } else {
+                        row.commodity_label.clone()
+                    };
                     serde_json::json!({
                         "seller_id": row.seller.0,
                         "seller_name": seller_name,
                         "seller_is_great_power": seller_is_great_power,
-                        "resource": format!("{:?}", row.resource),
+                        "resource": commodity_label,
                         "offered": row.offered,
                         "sold": sold,
                         "price_per_unit": row.price_per_unit.as_dollars(),

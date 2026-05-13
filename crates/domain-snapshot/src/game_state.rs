@@ -18,6 +18,8 @@ pub struct MarketTurnRecord {
 pub struct MarketOfferRecord {
     pub seller: NationId,
     pub resource: ResourceType,
+    #[serde(default)]
+    pub commodity_label: String,
     pub offered: u32,
     pub price_per_unit: Money,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -52,6 +54,7 @@ impl From<&dgs::MarketOfferRecord> for MarketOfferRecord {
         Self {
             seller: v.seller.into(),
             resource: v.resource.into(),
+            commodity_label: v.commodity_label.clone(),
             offered: v.offered,
             price_per_unit: v.price_per_unit.into(),
             fills: v.fills.iter().map(Into::into).collect(),
@@ -64,6 +67,7 @@ impl From<MarketOfferRecord> for dgs::MarketOfferRecord {
         Self {
             seller: v.seller.into(),
             resource: v.resource.into(),
+            commodity_label: v.commodity_label,
             offered: v.offered,
             price_per_unit: v.price_per_unit.into(),
             fills: v.fills.into_iter().map(Into::into).collect(),

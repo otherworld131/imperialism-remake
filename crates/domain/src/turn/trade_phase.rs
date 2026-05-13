@@ -78,7 +78,10 @@ pub(super) fn resolve_trade_session(
         }
     }
 
-    // 1c. Auto-sell player's material/goods sell orders (world market demand)
+    // 1c. Auto-sell player's material/goods sell orders (world market demand).
+    // Also build market-archive rows for these world-market sales so the
+    // Historical Market tab surfaces them alongside resource trades.
+    let mut extra_market_rows: Vec<crate::game_state::MarketOfferRecord> = Vec::new();
     let mut player_goods_revenue = Money::ZERO;
     if let Some(human) = game.get_nation(human_id) {
         let sell_orders: Vec<trade::PlayerSellOrder> = human.diplomacy.player_sell_orders.clone();
@@ -147,14 +150,31 @@ pub(super) fn resolve_trade_session(
                 }
                 // Record auto-sale in trade history with world-market sentinel partner (NationId(0))
                 if *qty > 0 {
+                    let price_per_unit = if *qty > 0 {
+                        Money::dollars(revenue.as_dollars() / *qty as i64)
+                    } else {
+                        Money::ZERO
+                    };
                     human.archives.trade_history.push(trade::TradeHistoryEntry {
                         turn: current_turn,
                         partner: NationId(0),
                         resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
-                        commodity_label,
+                        commodity_label: commodity_label.clone(),
                         quantity: *qty,
                         total_cost: *revenue,
                         bought: false,
+                    });
+                    extra_market_rows.push(crate::game_state::MarketOfferRecord {
+                        seller: human_id,
+                        resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
+                        commodity_label,
+                        offered: *qty,
+                        price_per_unit,
+                        fills: vec![crate::game_state::MarketFillRecord {
+                            buyer: NationId(0),
+                            quantity: *qty,
+                            price_per_unit,
+                        }],
                     });
                 }
             }
@@ -408,6 +428,18 @@ pub(super) fn resolve_trade_session(
                 // represents abstracted demand, not a real treasury deduction.
                 // Record the revenue so cash-flow reconciliation accounts for it.
                 report.goods_auto_sale_revenue.push((human_id, revenue));
+                extra_market_rows.push(crate::game_state::MarketOfferRecord {
+                    seller: human_id,
+                    resource: ResourceType::Timber,
+                    commodity_label: commodity_label.clone(),
+                    offered: bid.quantity,
+                    price_per_unit: buy_price,
+                    fills: vec![crate::game_state::MarketFillRecord {
+                        buyer: bid.buyer,
+                        quantity: bid.quantity,
+                        price_per_unit: buy_price,
+                    }],
+                });
                 filled = true;
             }
 
@@ -523,7 +555,7 @@ pub(super) fn resolve_trade_session(
                                 turn: current_turn,
                                 partner: *gp_id,
                                 resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
-                                commodity_label,
+                                commodity_label: commodity_label.clone(),
                                 quantity: bid.quantity,
                                 total_cost: revenue,
                                 bought: true,
@@ -534,6 +566,18 @@ pub(super) fn resolve_trade_session(
                         game.transient
                             .pending_ai_cash_income
                             .push((*gp_id, revenue));
+                        extra_market_rows.push(crate::game_state::MarketOfferRecord {
+                            seller: *gp_id,
+                            resource: ResourceType::Timber,
+                            commodity_label,
+                            offered: bid.quantity,
+                            price_per_unit: buy_price,
+                            fills: vec![crate::game_state::MarketFillRecord {
+                                buyer: bid.buyer,
+                                quantity: bid.quantity,
+                                price_per_unit: buy_price,
+                            }],
+                        });
                         break;
                     }
                 }
@@ -708,6 +752,7 @@ pub(super) fn resolve_trade_session(
                 .or_insert_with(|| MarketOfferRecord {
                     seller: offer.seller,
                     resource: offer.resource,
+                    commodity_label: format!("{:?}", offer.resource),
                     offered: 0,
                     price_per_unit: offer.price_per_unit,
                     fills: Vec::new(),
@@ -721,6 +766,7 @@ pub(super) fn resolve_trade_session(
                 .or_insert_with(|| MarketOfferRecord {
                     seller: txn.seller,
                     resource: txn.resource,
+                    commodity_label: format!("{:?}", txn.resource),
                     offered: 0,
                     price_per_unit: txn.price_per_unit,
                     fills: Vec::new(),
@@ -735,10 +781,10 @@ pub(super) fn resolve_trade_session(
                 });
             }
         }
-        if !offer_rows.is_empty() {
-            let record = MarketTurnRecord {
-                offers: offer_rows.into_values().collect(),
-            };
+        let mut all_rows: Vec<MarketOfferRecord> = offer_rows.into_values().collect();
+        all_rows.extend(extra_market_rows);
+        if !all_rows.is_empty() {
+            let record = MarketTurnRecord { offers: all_rows };
             game.archive.market_archive.push((current_turn, record));
             // Bound to MARKET_ARCHIVE_DEPTH most recent turns.
             let len = game.archive.market_archive.len();

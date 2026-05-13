@@ -110,6 +110,10 @@ pub struct MarketTurnRecord {
 pub struct MarketOfferRecord {
     pub seller: NationId,
     pub resource: ResourceType,
+    /// Human-readable label for the traded commodity. For resource trades this
+    /// matches `resource` printed as a string. For material/goods rows it holds
+    /// the material or goods name (e.g. "Lumber", "Arms").
+    pub commodity_label: String,
     /// Quantity originally posted on the market this turn.
     pub offered: u32,
     /// Asking price per unit at the time of posting (informational).

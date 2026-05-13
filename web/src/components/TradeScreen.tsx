@@ -25,7 +25,7 @@ interface Props {
 type TradeTab = 'orders' | 'historical_country' | 'historical_market';
 type OfferSortKey = 'resource' | 'seller_name' | 'quantity' | 'price' | 'is_great_power';
 const OFFER_COLS: { key: OfferSortKey; label: string }[] = [
-  { key: 'resource', label: 'Resource' },
+  { key: 'resource', label: 'Item' },
   { key: 'seller_name', label: 'Seller' },
   { key: 'quantity', label: 'Avail' },
   { key: 'price', label: 'Price' },
@@ -34,7 +34,7 @@ const OFFER_COLS: { key: OfferSortKey; label: string }[] = [
 type HistSortKey = 'turn' | 'resource' | 'quantity' | 'total_cost' | 'partner_name' | 'bought' | 'partner_is_great_power';
 const HIST_COLS_SPLIT: { key: HistSortKey; label: string }[] = [
   { key: 'turn', label: 'Turn' },
-  { key: 'resource', label: 'Resource' },
+  { key: 'resource', label: 'Item' },
   { key: 'bought', label: 'B/S' },
   { key: 'quantity', label: 'Qty' },
   { key: 'total_cost', label: 'Cost' },
@@ -44,7 +44,7 @@ const HIST_COLS_SPLIT: { key: HistSortKey; label: string }[] = [
 type AggSortKey = 'turn' | 'resource' | 'partner_name' | 'bought' | 'sold' | 'boughtCost' | 'soldCost';
 const HIST_COLS_AGG: { key: AggSortKey; label: string }[] = [
   { key: 'turn', label: 'Turn' },
-  { key: 'resource', label: 'Resource' },
+  { key: 'resource', label: 'Item' },
   { key: 'partner_name', label: 'Partner' },
   { key: 'bought', label: 'Bought' },
   { key: 'boughtCost', label: 'Cost' },
@@ -54,7 +54,7 @@ const HIST_COLS_AGG: { key: AggSortKey; label: string }[] = [
 
 type MarketSortKey = 'resource' | 'seller_name' | 'offered' | 'sold' | 'price_per_unit';
 const MARKET_COLS: { key: MarketSortKey; label: string }[] = [
-  { key: 'resource', label: 'Resource' },
+  { key: 'resource', label: 'Item' },
   { key: 'seller_name', label: 'Seller' },
   { key: 'offered', label: 'Offered' },
   { key: 'sold', label: 'Sold' },
