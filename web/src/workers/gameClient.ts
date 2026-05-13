@@ -3,7 +3,7 @@
 
 type Pending = { resolve: (v: any) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> };
 
-const CALL_TIMEOUT_MS = 30_000;
+const DEFAULT_CALL_TIMEOUT_MS = 30_000;
 
 let worker: Worker;
 const pending = new Map<number, Pending>();
@@ -42,13 +42,17 @@ function createWorker() {
 createWorker();
 
 export function call<T = any>(fn: string, ...args: any[]): Promise<T> {
+  return callWithTimeout<T>(fn, DEFAULT_CALL_TIMEOUT_MS, ...args);
+}
+
+export function callWithTimeout<T = any>(fn: string, timeoutMs: number, ...args: any[]): Promise<T> {
   const id = nextId++;
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       if (pending.delete(id)) {
-        reject(new Error(`worker call timed out after ${CALL_TIMEOUT_MS}ms: ${fn}`));
+        reject(new Error(`worker call timed out after ${timeoutMs}ms: ${fn}`));
       }
-    }, CALL_TIMEOUT_MS);
+    }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
     worker.postMessage({ id, fn, args });
   });
