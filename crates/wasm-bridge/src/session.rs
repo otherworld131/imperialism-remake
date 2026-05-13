@@ -819,9 +819,9 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
             price_cents,
         } => {
             let nation_id = NationId(nation_id);
-            let r: ResourceType = match commodity.parse::<ResourceType>() {
-                Ok(r) => r,
-                Err(_) => return CommandResult::error("unknown resource"),
+            let c = match parse_commodity(&commodity) {
+                Some(c) => c,
+                None => return CommandResult::error("unknown commodity"),
             };
             let max_price = Money::from_cents(price_cents as i64);
             let nation = match game.get_nation_mut(nation_id) {
@@ -831,12 +831,12 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
             nation
                 .diplomacy
                 .player_buy_orders
-                .retain(|o| o.resource != r);
+                .retain(|o| o.commodity != c);
             nation
                 .diplomacy
                 .player_buy_orders
                 .push(domain::economy::trade::PlayerBuyOrder {
-                    resource: r,
+                    commodity: c,
                     quantity,
                     max_price_per_unit: max_price,
                 });

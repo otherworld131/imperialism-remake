@@ -470,10 +470,13 @@ fn reserve_trade_phase(game: &mut GameState) -> Vec<NationReservation> {
         if *gp_id == human_id {
             if let Some(human) = game.get_nation(*gp_id) {
                 for order in &human.diplomacy.player_buy_orders {
-                    if order.quantity > 0 {
+                    if order.quantity == 0 {
+                        continue;
+                    }
+                    if let trade::Commodity::Resource(r) = order.commodity {
                         all_bids.push(trade::TradeBid {
                             buyer: *gp_id,
-                            resource: order.resource,
+                            resource: r,
                             quantity: order.quantity,
                             max_price_per_unit: order.max_price_per_unit,
                         });

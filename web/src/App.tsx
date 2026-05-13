@@ -1855,9 +1855,9 @@ function App() {
     });
   }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
 
-  const handleSetBuyOrder = useCallback(async (resource: string, quantity: number, maxPrice: number) => {
+  const handleSetBuyOrder = useCallback(async (commodityType: string, commodityName: string, quantity: number, maxPrice: number) => {
     await runMutation(async () => {
-      const cmd = await setPlayerBuyOrder(gameJson, playerNationId, resource, quantity, maxPrice);
+      const cmd = await setPlayerBuyOrder(gameJson, playerNationId, commodityType, commodityName, quantity, maxPrice);
       if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
       else if (cmd.error) showError(`Buy order failed: ${cmd.error}`);
     });

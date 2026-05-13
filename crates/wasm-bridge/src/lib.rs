@@ -4589,8 +4589,15 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         .player_buy_orders
         .iter()
         .map(|o| {
+            let (commodity_type, name) = match o.commodity {
+                domain::economy::trade::Commodity::Resource(r) => ("resource", format!("{r:?}")),
+                domain::economy::trade::Commodity::Material(m) => ("material", format!("{m:?}")),
+                domain::economy::trade::Commodity::Goods(g) => ("goods", format!("{g:?}")),
+            };
             serde_json::json!({
-                "resource": format!("{:?}", o.resource),
+                "commodity_type": commodity_type,
+                "commodity_name": name,
+                "resource": name, // backwards-compat alias for resource-typed orders
                 "quantity": o.quantity,
                 "max_price": o.max_price_per_unit.as_dollars(),
             })
@@ -4691,6 +4698,16 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         })
         .collect();
 
+    let buyable_materials: Vec<serde_json::Value> = all_materials
+        .iter()
+        .map(|&m| {
+            serde_json::json!({
+                "name": format!("{}", m),
+                "price": domain::economy::trade::material_price(m, cfg).as_dollars(),
+            })
+        })
+        .collect();
+
     let all_goods = [
         GoodsType::Furniture,
         GoodsType::Clothing,
@@ -4710,6 +4727,16 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
             } else {
                 None
             }
+        })
+        .collect();
+
+    let buyable_goods: Vec<serde_json::Value> = all_goods
+        .iter()
+        .map(|&g| {
+            serde_json::json!({
+                "name": format!("{:?}", g),
+                "price": domain::economy::trade::goods_price(g, cfg).as_dollars(),
+            })
         })
         .collect();
 
@@ -4821,6 +4848,8 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
         "sellable_resources": sellable_resources,
         "sellable_materials": sellable_materials,
         "sellable_goods": sellable_goods,
+        "buyable_materials": buyable_materials,
+        "buyable_goods": buyable_goods,
         "auto_trade_with_minors": nation.economy.auto_trade_with_minors,
     })
     .to_string()
@@ -4946,12 +4975,15 @@ pub fn wasm_set_player_sell_order(
     serialize_game(&game)
 }
 
-/// Set a player buy order for a resource from minor nations.
+/// Set a player buy order for any commodity. Resources are filled from the
+/// offer pool (minor nations + GPs); materials/goods are filled at world-market
+/// base price symmetric with the auto-sell pipeline.
 #[wasm_bindgen]
 pub fn wasm_set_player_buy_order(
     game_json: &str,
     nation_id: u32,
-    resource: &str,
+    commodity_type: &str,
+    commodity_name: &str,
     quantity: u32,
     max_price: i64,
 ) -> String {
@@ -4961,15 +4993,16 @@ pub fn wasm_set_player_buy_order(
     };
     let nid = NationId(nation_id);
 
-    let resource_type = match parse_resource_type(resource) {
-        Some(r) => r,
-        None => return r#"{"error":"invalid resource type"}"#.to_string(),
+    let commodity = match parse_commodity(commodity_type, commodity_name) {
+        Some(c) => c,
+        None => return r#"{"error":"invalid commodity"}"#.to_string(),
     };
 
     let total_cargo: u32 = match game.get_nation(nid) {
         Some(n) => n.total_cargo_capacity(&game.game_data),
         None => return r#"{"error":"nation not found"}"#.to_string(),
     };
+    let cfg = game.game_data.game_config.clone();
 
     let nation = match game.get_nation_mut(nid) {
         Some(n) => n,
@@ -4986,7 +5019,7 @@ pub fn wasm_set_player_buy_order(
                 .diplomacy
                 .player_buy_orders
                 .iter()
-                .filter(|o| o.resource != resource_type)
+                .filter(|o| o.commodity != commodity)
                 .map(|o| o.quantity),
         )
         .sum();
@@ -4994,25 +5027,25 @@ pub fn wasm_set_player_buy_order(
         return r#"{"error":"exceeds cargo capacity"}"#.to_string();
     }
 
-    // Default max_price to 120% of base price if not specified
+    // Default max_price to 120% of base/world price if not specified
     let max_price_per_unit = if max_price > 0 {
         Money::dollars(max_price)
     } else {
-        let bp = base_price(resource_type);
+        let bp = domain::economy::trade::commodity_price(commodity, &cfg);
         Money::dollars(bp.as_dollars() * 120 / 100)
     };
 
-    // Upsert: remove existing for this resource, add new if qty > 0
+    // Upsert: remove existing for this commodity, add new if qty > 0
     nation
         .diplomacy
         .player_buy_orders
-        .retain(|o| o.resource != resource_type);
+        .retain(|o| o.commodity != commodity);
     if quantity > 0 {
         nation
             .diplomacy
             .player_buy_orders
             .push(domain::economy::trade::PlayerBuyOrder {
-                resource: resource_type,
+                commodity,
                 quantity,
                 max_price_per_unit,
             });

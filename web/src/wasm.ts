@@ -1295,7 +1295,9 @@ export interface PlayerSellOrder {
 }
 
 export interface PlayerBuyOrder {
-  resource: string;
+  commodity_type: string;
+  commodity_name: string;
+  resource: string; // alias of commodity_name for backwards-compat
   quantity: number;
   max_price: number;
 }
@@ -1330,6 +1332,8 @@ export interface TradeData {
   sellable_resources: SellableItem[];
   sellable_materials: SellableItem[];
   sellable_goods: SellableItem[];
+  buyable_materials: { name: string; price: number }[];
+  buyable_goods: { name: string; price: number }[];
   auto_trade_with_minors: boolean;
 }
 
@@ -1347,8 +1351,8 @@ export async function setPlayerSellOrder(gameJson: string, nationId: number, com
   return runCmd('wasm_set_player_sell_order', gameJson, nationId, commodityType, commodityName, quantity);
 }
 
-export async function setPlayerBuyOrder(gameJson: string, nationId: number, resource: string, quantity: number, maxPrice: number): Promise<CommandResult> {
-  return runCmd('wasm_set_player_buy_order', gameJson, nationId, resource, quantity, BigInt(maxPrice));
+export async function setPlayerBuyOrder(gameJson: string, nationId: number, commodityType: string, commodityName: string, quantity: number, maxPrice: number): Promise<CommandResult> {
+  return runCmd('wasm_set_player_buy_order', gameJson, nationId, commodityType, commodityName, quantity, BigInt(maxPrice));
 }
 
 // ── Diplomacy Screen types & functions ──────────────────────────────

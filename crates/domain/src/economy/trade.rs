@@ -104,10 +104,12 @@ pub struct PlayerSellOrder {
     pub quantity: u32,
 }
 
-/// A player's order to buy a resource from minor nations.
+/// A player's order to buy a commodity. Resource buys are filled from the
+/// offer pool (minor nations + GPs); material/goods buys are filled from the
+/// world market at base price (symmetric with auto-sell).
 #[derive(Debug, Clone)]
 pub struct PlayerBuyOrder {
-    pub resource: ResourceType,
+    pub commodity: Commodity,
     pub quantity: u32,
     pub max_price_per_unit: Money,
 }

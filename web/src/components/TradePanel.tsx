@@ -6,7 +6,7 @@ interface Props {
   trade: TradeData;
   onSetSubsidy: (targetNationId: number, amount: number) => void;
   onSetSellOrder: (commodityType: string, commodityName: string, quantity: number) => void;
-  onSetBuyOrder: (resource: string, quantity: number, maxPrice: number) => void;
+  onSetBuyOrder: (commodityType: string, commodityName: string, quantity: number, maxPrice: number) => void;
 }
 
 export default function TradePanel({ trade, onSetSubsidy, onSetSellOrder, onSetBuyOrder }: Props) {
@@ -14,6 +14,7 @@ export default function TradePanel({ trade, onSetSubsidy, onSetSellOrder, onSetB
     trade_history, subsidies, trade_balance, total_cargo,
     remaining_cargo, minor_nations, player_sell_orders, player_buy_orders,
     available_offers, sellable_resources, sellable_materials, sellable_goods,
+    buyable_materials, buyable_goods,
   } = trade;
 
   const [expandedMN, setExpandedMN] = useState<number | null>(null);
@@ -33,9 +34,13 @@ export default function TradePanel({ trade, onSetSubsidy, onSetSellOrder, onSetB
   const sellQtyMap: Record<string, number> = {};
   for (const o of player_sell_orders) sellQtyMap[`${o.commodity_type}:${o.commodity_name}`] = o.quantity;
 
-  // Current buy order quantities by resource
+  // Current buy order quantities by commodity key
   const buyQtyMap: Record<string, number> = {};
-  for (const o of player_buy_orders) buyQtyMap[o.resource] = o.quantity;
+  for (const o of player_buy_orders) {
+    const ct = o.commodity_type ?? 'resource';
+    const cn = o.commodity_name ?? o.resource;
+    buyQtyMap[`${ct}:${cn}`] = o.quantity;
+  }
 
   return (
     <div style={{ fontSize: 13 }}>
@@ -92,37 +97,60 @@ export default function TradePanel({ trade, onSetSubsidy, onSetSellOrder, onSetB
       {/* ── BUY ORDERS ── */}
       <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginBottom: 8 }}>
         <div style={{ fontWeight: 'bold', marginBottom: 4, fontSize: 12 }}>Buy</div>
-        {Object.keys(offersByResource).length === 0 ? (
-          <div style={{ color: '#888', fontStyle: 'italic', fontSize: 11 }}>No resources available from minor nations</div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 36px 36px auto', gap: '1px 4px', fontSize: 11 }}>
-            <span style={colHeaderStyle}>Resource</span>
-            <span style={colHeaderStyle}>Avail</span>
-            <span style={colHeaderStyle}>Price</span>
-            <span style={colHeaderStyle}></span>
-            {Object.entries(offersByResource).map(([resource, offers]) => {
-              const totalAvail = offers.reduce((s, o) => s + o.quantity, 0);
-              const avgPrice = Math.round(offers.reduce((s, o) => s + o.price * o.quantity, 0) / totalAvail);
-              const currentQty = buyQtyMap[resource] ?? 0;
-              return (
-                <React.Fragment key={resource}>
-                  <span>{resourceLabel(resource)}</span>
-                  <span style={{ color: '#aaa' }}>{totalAvail}</span>
-                  <span style={{ color: '#daa520' }}>${avgPrice}</span>
-                  <button
-                    onClick={() => setBuyModalResource(resource)}
-                    style={{
-                      ...smallBtn,
-                      background: currentQty > 0 ? '#daa520' : '#3a3520',
-                      color: currentQty > 0 ? '#000' : '#e0d8c0',
-                    }}
-                  >
-                    {currentQty > 0 ? `${currentQty} ordered` : 'Buy'}
-                  </button>
-                </React.Fragment>
-              );
-            })}
+        {/* Resources from minor nations (offer-pool) */}
+        {Object.keys(offersByResource).length > 0 && (
+          <div style={{ marginBottom: 4 }}>
+            <div style={{ fontSize: 10, color: '#888', textTransform: 'uppercase', marginBottom: 2 }}>Resources</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 36px 36px auto', gap: '1px 4px', fontSize: 11 }}>
+              {Object.entries(offersByResource).map(([resource, offers]) => {
+                const totalAvail = offers.reduce((s, o) => s + o.quantity, 0);
+                const avgPrice = Math.round(offers.reduce((s, o) => s + o.price * o.quantity, 0) / totalAvail);
+                const currentQty = buyQtyMap[`resource:${resource}`] ?? 0;
+                return (
+                  <React.Fragment key={resource}>
+                    <span>{resourceLabel(resource)}</span>
+                    <span style={{ color: '#aaa' }}>{totalAvail}</span>
+                    <span style={{ color: '#daa520' }}>${avgPrice}</span>
+                    <button
+                      onClick={() => setBuyModalResource(resource)}
+                      style={{
+                        ...smallBtn,
+                        background: currentQty > 0 ? '#daa520' : '#3a3520',
+                        color: currentQty > 0 ? '#000' : '#e0d8c0',
+                      }}
+                    >
+                      {currentQty > 0 ? `${currentQty} ordered` : 'Buy'}
+                    </button>
+                  </React.Fragment>
+                );
+              })}
+            </div>
           </div>
+        )}
+        {/* Materials from world market */}
+        {buyable_materials.length > 0 && (
+          <BuySection
+            label="Materials (world market)"
+            items={buyable_materials}
+            commodityType="material"
+            buyQtyMap={buyQtyMap}
+            remainingCargo={remaining_cargo}
+            onSetBuyOrder={onSetBuyOrder}
+          />
+        )}
+        {/* Goods from world market */}
+        {buyable_goods.length > 0 && (
+          <BuySection
+            label="Goods (world market)"
+            items={buyable_goods}
+            commodityType="goods"
+            buyQtyMap={buyQtyMap}
+            remainingCargo={remaining_cargo}
+            onSetBuyOrder={onSetBuyOrder}
+          />
+        )}
+        {Object.keys(offersByResource).length === 0 && buyable_materials.length === 0 && buyable_goods.length === 0 && (
+          <div style={{ color: '#888', fontStyle: 'italic', fontSize: 11 }}>Nothing available to buy</div>
         )}
       </div>
 
@@ -208,15 +236,61 @@ export default function TradePanel({ trade, onSetSubsidy, onSetSellOrder, onSetB
         <BuyModal
           resource={buyModalResource}
           offers={offersByResource[buyModalResource] ?? []}
-          currentQty={buyQtyMap[buyModalResource] ?? 0}
-          remainingCargo={remaining_cargo + (buyQtyMap[buyModalResource] ?? 0)}
+          currentQty={buyQtyMap[`resource:${buyModalResource}`] ?? 0}
+          remainingCargo={remaining_cargo + (buyQtyMap[`resource:${buyModalResource}`] ?? 0)}
           onConfirm={(qty, maxPrice) => {
-            onSetBuyOrder(buyModalResource, qty, maxPrice);
+            onSetBuyOrder('resource', buyModalResource, qty, maxPrice);
             setBuyModalResource(null);
           }}
           onCancel={() => setBuyModalResource(null)}
         />
       )}
+    </div>
+  );
+}
+
+// ── BuySection component (world-market buy controls for materials/goods) ──
+
+function BuySection({ label, items, commodityType, buyQtyMap, remainingCargo, onSetBuyOrder }: {
+  label: string;
+  items: { name: string; price: number }[];
+  commodityType: string;
+  buyQtyMap: Record<string, number>;
+  remainingCargo: number;
+  onSetBuyOrder: (commodityType: string, commodityName: string, quantity: number, maxPrice: number) => void;
+}) {
+  return (
+    <div style={{ marginBottom: 4 }}>
+      <div style={{ fontSize: 10, color: '#888', textTransform: 'uppercase', marginBottom: 2 }}>{label}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 36px 60px', gap: '1px 4px', fontSize: 11 }}>
+        {items.map(item => {
+          const key = `${commodityType}:${item.name}`;
+          const currentQty = buyQtyMap[key] ?? 0;
+          // Default max price = 120% of world price (let wasm-bridge round it for us, but UI also caps)
+          const maxPrice = Math.round(item.price * 1.2);
+          return (
+            <React.Fragment key={item.name}>
+              <span>{resourceLabel(item.name)}</span>
+              <span style={{ color: '#daa520' }}>${item.price}</span>
+              <span style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                <button
+                  style={tinyBtn}
+                  onClick={() => onSetBuyOrder(commodityType, item.name, Math.max(0, currentQty - 1), maxPrice)}
+                  disabled={currentQty === 0}
+                >-</button>
+                <span style={{ minWidth: 14, textAlign: 'center', color: currentQty > 0 ? '#daa520' : '#888' }}>
+                  {currentQty}
+                </span>
+                <button
+                  style={tinyBtn}
+                  onClick={() => onSetBuyOrder(commodityType, item.name, currentQty + 1, maxPrice)}
+                  disabled={remainingCargo <= 0}
+                >+</button>
+              </span>
+            </React.Fragment>
+          );
+        })}
+      </div>
     </div>
   );
 }

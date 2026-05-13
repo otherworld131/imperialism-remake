@@ -181,6 +181,71 @@ pub(super) fn resolve_trade_session(
         }
     }
 
+    // 1d. Auto-buy player's material/goods buy orders from the world market.
+    // Symmetric with 1c: pays world-market price, treasury-gated, capped at
+    // the player's max_price_per_unit. Resource orders fall through to the
+    // offer pool in step 2.
+    if let Some(human) = game.get_nation(human_id) {
+        let buy_orders: Vec<trade::PlayerBuyOrder> = human.diplomacy.player_buy_orders.clone();
+        for order in &buy_orders {
+            let (commodity_label, unit_price) = match order.commodity {
+                trade::Commodity::Material(m) => (format!("{m:?}"), trade::material_price(m, &cfg)),
+                trade::Commodity::Goods(g) => (format!("{g:?}"), trade::goods_price(g, &cfg)),
+                trade::Commodity::Resource(_) => continue, // handled in step 2
+            };
+            if order.quantity == 0 || unit_price > order.max_price_per_unit {
+                continue;
+            }
+            let treasury = game
+                .get_nation(human_id)
+                .map(|n| n.economy.treasury)
+                .unwrap_or(Money::ZERO);
+            let affordable_qty = if unit_price.as_dollars() > 0 {
+                (treasury.as_dollars() / unit_price.as_dollars()).max(0) as u32
+            } else {
+                order.quantity
+            };
+            let qty = order.quantity.min(affordable_qty);
+            if qty == 0 {
+                continue;
+            }
+            let total_cost = Money::dollars(unit_price.as_dollars() * qty as i64);
+            if let Some(buyer) = game.get_nation_mut(human_id) {
+                buyer.economy.treasury -= total_cost;
+                match order.commodity {
+                    trade::Commodity::Material(m) => {
+                        *buyer.economy.materials.entry(m).or_insert(0) += qty;
+                    }
+                    trade::Commodity::Goods(g) => {
+                        *buyer.economy.goods.entry(g).or_insert(0) += qty;
+                    }
+                    trade::Commodity::Resource(_) => {}
+                }
+                buyer.archives.trade_history.push(trade::TradeHistoryEntry {
+                    turn: current_turn,
+                    partner: NationId(0),
+                    resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
+                    commodity_label: commodity_label.clone(),
+                    quantity: qty,
+                    total_cost,
+                    bought: true,
+                });
+            }
+            extra_market_rows.push(crate::game_state::MarketOfferRecord {
+                seller: NationId(0),
+                resource: ResourceType::Timber,
+                commodity_label,
+                offered: qty,
+                price_per_unit: unit_price,
+                fills: vec![crate::game_state::MarketFillRecord {
+                    buyer: human_id,
+                    quantity: qty,
+                    price_per_unit: unit_price,
+                }],
+            });
+        }
+    }
+
     // 2. Generate bids: AI GPs use need-based auto-bids; the human-controlled
     //    GP uses manual buy orders. In observer mode the human seat is a
     //    viewpoint only — its nation is AI-controlled, so it must also use
@@ -189,13 +254,18 @@ pub(super) fn resolve_trade_session(
 
     for gp_id in &gp_ids {
         if *gp_id == human_id && !game.observer_mode {
-            // Use player's manual buy orders instead of auto-generated bids
+            // Use player's manual buy orders instead of auto-generated bids.
+            // Resource buys go through the offer pool; material/goods buys
+            // are fulfilled separately from the world market.
             if let Some(human) = game.get_nation(*gp_id) {
                 for order in &human.diplomacy.player_buy_orders {
-                    if order.quantity > 0 {
+                    if order.quantity == 0 {
+                        continue;
+                    }
+                    if let trade::Commodity::Resource(r) = order.commodity {
                         all_bids.push(trade::TradeBid {
                             buyer: *gp_id,
-                            resource: order.resource,
+                            resource: r,
                             quantity: order.quantity,
                             max_price_per_unit: order.max_price_per_unit,
                         });
