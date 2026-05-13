@@ -456,11 +456,20 @@ pub fn wasm_process_turn(game_json: &str) -> String {
 
 /// Compute the set of hexes visible to the human player under fog-of-war.
 ///
-/// A hex is visible if (a) it belongs to one of the player's provinces,
-/// (b) it belongs to a province that shares any hex edge with the player's
-/// territory, or (c) it's a non-province hex (sea, empty) directly adjacent
-/// to the player. Returns an empty set when `disable_fog` is true (callers
-/// should special-case that).
+/// A hex is visible if:
+/// (a) it belongs to one of the player's provinces, or a province hosting one
+///     of the player's army units ("occupied" provinces);
+/// (b) it belongs to a province sharing a hex edge with an occupied province;
+/// (c) it's a non-province hex directly adjacent to an occupied province;
+/// (d) it lies in a sea zone that touches an occupied province (the whole zone
+///     is revealed, not just the strip next to the coast);
+/// (e) it lies in the sea zone where one of the player's ships currently sits,
+///     or in any sea zone bordering that one; or
+/// (f) it belongs to a coastal province of the sea zone where one of the
+///     player's ships currently sits.
+///
+/// Returns an empty set when `disable_fog` is true (callers should
+/// special-case that).
 fn compute_visible_hexes(
     game: &GameState,
     disable_fog: bool,
@@ -472,10 +481,26 @@ fn compute_visible_hexes(
     let mut visible: std::collections::HashSet<domain::hex::HexCoord> =
         std::collections::HashSet::new();
 
-    let mut border_ring: std::collections::HashSet<domain::hex::HexCoord> =
+    // "Occupied" = owned OR hosting one of our army units. A unit posted in a
+    // foreign province (allied transit, captured-but-not-incorporated, etc.)
+    // grants the same reconnaissance as a homeland province.
+    let mut occupied_provinces: std::collections::HashSet<ProvinceId> =
         std::collections::HashSet::new();
     for province in &game.world.provinces {
         if province.owner == human_nation_id {
+            occupied_provinces.insert(province.id);
+        }
+    }
+    if let Some(human) = game.get_nation(human_nation_id) {
+        for unit in &human.military.army {
+            occupied_provinces.insert(unit.position);
+        }
+    }
+
+    let mut border_ring: std::collections::HashSet<domain::hex::HexCoord> =
+        std::collections::HashSet::new();
+    for province in &game.world.provinces {
+        if occupied_provinces.contains(&province.id) {
             for &coord in &province.tiles {
                 visible.insert(coord);
                 for nb in coord.neighbors() {
@@ -486,7 +511,7 @@ fn compute_visible_hexes(
     }
 
     for province in &game.world.provinces {
-        if province.owner == human_nation_id {
+        if occupied_provinces.contains(&province.id) {
             continue;
         }
         if province.tiles.iter().any(|t| border_ring.contains(t)) {
@@ -498,6 +523,73 @@ fn compute_visible_hexes(
 
     for coord in &border_ring {
         visible.insert(*coord);
+    }
+
+    // Collect the set of sea zones to fully reveal.
+    //   - any zone bordering an occupied province (point 2);
+    //   - any zone holding one of our ships, plus that zone's own neighbours
+    //     (point 1: line-of-sight extends one step from the ship's *current*
+    //     zone — not from every zone it could move into).
+    let mut visible_zones: std::collections::HashSet<domain::map::sea_zones::SeaZoneId> =
+        std::collections::HashSet::new();
+
+    for zone in &game.world.sea_zones {
+        if zone
+            .coastal_provinces
+            .iter()
+            .any(|pid| occupied_provinces.contains(pid))
+        {
+            visible_zones.insert(zone.id);
+        }
+    }
+
+    let mut occupied_zones: std::collections::HashSet<domain::map::sea_zones::SeaZoneId> =
+        std::collections::HashSet::new();
+    if let Some(human) = game.get_nation(human_nation_id) {
+        for ship in human
+            .military
+            .warships
+            .iter()
+            .chain(human.military.merchant_fleet.iter())
+        {
+            if let Some(z) = ship.sea_zone {
+                occupied_zones.insert(z);
+            }
+        }
+    }
+
+    // Coastal provinces of zones currently holding one of our ships become
+    // fully visible — the ship can see the shore it's parked next to. We do
+    // *not* extend this to adjacent zones' coastal provinces: a ship one
+    // zone away from a foreign coast shouldn't reveal that coast outright.
+    let mut visible_coastal: std::collections::HashSet<ProvinceId> =
+        std::collections::HashSet::new();
+    for zone in &game.world.sea_zones {
+        if !occupied_zones.contains(&zone.id) {
+            continue;
+        }
+        visible_zones.insert(zone.id);
+        for &adj in &zone.adjacent_zone_ids {
+            visible_zones.insert(adj);
+        }
+        for pid in &zone.coastal_provinces {
+            visible_coastal.insert(*pid);
+        }
+    }
+
+    for zone in &game.world.sea_zones {
+        if visible_zones.contains(&zone.id) {
+            for &hex in &zone.hexes {
+                visible.insert(hex);
+            }
+        }
+    }
+    for province in &game.world.provinces {
+        if visible_coastal.contains(&province.id) {
+            for &coord in &province.tiles {
+                visible.insert(coord);
+            }
+        }
     }
 
     visible
@@ -1412,10 +1504,11 @@ pub fn wasm_get_diplomacy_overlay(game_json: &str, nation_id: u32) -> String {
             let has_pending_war = game.has_pending_war(selected_nid, n.id);
             let pending_grant_amount_dollars =
                 pending_grant_amount_dollars(&game, selected_nid, n.id);
-            let pending_break_treaties: Vec<String> = pending_break_treaties(&game, selected_nid, n.id)
-                .into_iter()
-                .map(|t| format!("{:?}", t))
-                .collect();
+            let pending_break_treaties: Vec<String> =
+                pending_break_treaties(&game, selected_nid, n.id)
+                    .into_iter()
+                    .map(|t| format!("{:?}", t))
+                    .collect();
             let has_pending_nap = game.world.diplomacy.pending_proposals.iter().any(|p| {
                 p.proposal_type == TreatyType::NonAggressionPact
                     && p.from == selected_nid
@@ -3283,11 +3376,7 @@ fn parse_treaty_type(name: &str) -> Option<TreatyType> {
     }
 }
 
-fn pending_break_treaties(
-    game: &GameState,
-    from: NationId,
-    to: NationId,
-) -> Vec<TreatyType> {
+fn pending_break_treaties(game: &GameState, from: NationId, to: NationId) -> Vec<TreatyType> {
     game.transient
         .pending_diplomacy_actions
         .iter()
@@ -8289,7 +8378,11 @@ mod tests {
             .diplomacy
             .propose_alliance(player_id, target_id)
             .unwrap();
-        assert!(game.world.diplomacy.has_treaty(player_id, target_id, TreatyType::Alliance));
+        assert!(
+            game.world
+                .diplomacy
+                .has_treaty(player_id, target_id, TreatyType::Alliance)
+        );
 
         let queued_json = wasm_diplomacy_break_treaty(
             &serialize_game(&game),
@@ -8492,7 +8585,10 @@ mod tests {
             .find(|n| n.id != player_id && !n.is_great_power() && !n.diplomacy.is_in_anarchy)
             .expect("test game must have a valid minor target")
             .id;
-        game.world.diplomacy.build_consulate(player_id, target).unwrap();
+        game.world
+            .diplomacy
+            .build_consulate(player_id, target)
+            .unwrap();
 
         let queued = wasm_diplomacy_build_embassy(&serialize_game(&game), player_id.0, target.0);
         let before = wasm_get_diplomacy_overlay(&queued, player_id.0);
