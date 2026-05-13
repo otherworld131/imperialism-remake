@@ -131,6 +131,7 @@ pub enum FrontendCommand {
     DiplomacyBreakTreaty {
         from: u32,
         to: u32,
+        treaty_type: String,
     },
     DiplomacyProposePeace {
         from: u32,

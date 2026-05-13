@@ -79,7 +79,17 @@ export default function DiplomacyBottomBar({
 
   const a = rel?.actions;
   const isAnarchy = rel?.is_in_anarchy ?? false;
-  const hasPending = rel && (rel.has_pending_nap || rel.has_pending_alliance || rel.has_pending_peace);
+  const pendingLabels = rel ? [
+    rel.has_pending_consulate ? 'Consulate' : null,
+    rel.has_pending_embassy ? 'Embassy' : null,
+    rel.has_pending_nap ? 'NAP' : null,
+    rel.has_pending_alliance ? 'Alliance' : null,
+    rel.has_pending_peace ? 'Peace' : null,
+    rel.pending_grant_amount_dollars != null ? `Grant $${rel.pending_grant_amount_dollars}` : null,
+    ...rel.pending_break_treaties.map(t => `Break ${t}`),
+    rel.has_pending_war ? 'War' : null,
+  ].filter((label): label is string => Boolean(label)) : [];
+  const hasPending = pendingLabels.length > 0;
 
   return (
     <div style={{
@@ -125,7 +135,7 @@ export default function DiplomacyBottomBar({
                 background: 'rgba(218,165,32,0.25)', color: '#daa520',
                 border: '1px solid #daa520',
               }}>
-                ⏳ Pending {rel.has_pending_nap ? 'NAP' : rel.has_pending_alliance ? 'Alliance' : 'Peace'}
+                ⏳ Pending {pendingLabels.join(', ')}
               </span>
             )}
             {isAnarchy && <span style={{ fontSize: 11, color: '#a0a', fontStyle: 'italic' }}>In anarchy</span>}

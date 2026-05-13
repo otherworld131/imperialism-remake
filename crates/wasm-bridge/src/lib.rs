@@ -1407,6 +1407,26 @@ pub fn wasm_get_diplomacy_overlay(game_json: &str, nation_id: u32) -> String {
                 .unwrap_or_default();
             let has_consulate = rel.map(|r| r.has_consulate).unwrap_or(false);
             let has_embassy = rel.map(|r| r.has_embassy).unwrap_or(false);
+            let has_pending_consulate = game.has_pending_consulate(selected_nid, n.id);
+            let has_pending_embassy = game.has_pending_embassy(selected_nid, n.id);
+            let has_pending_war = game.has_pending_war(selected_nid, n.id);
+            let pending_grant_amount_dollars =
+                pending_grant_amount_dollars(&game, selected_nid, n.id);
+            let pending_break_treaties: Vec<String> = pending_break_treaties(&game, selected_nid, n.id)
+                .into_iter()
+                .map(|t| format!("{:?}", t))
+                .collect();
+            let has_pending_nap = game.world.diplomacy.pending_proposals.iter().any(|p| {
+                p.proposal_type == TreatyType::NonAggressionPact
+                    && p.from == selected_nid
+                    && p.to == n.id
+            });
+            let has_pending_alliance = game.world.diplomacy.pending_proposals.iter().any(|p| {
+                p.proposal_type == TreatyType::Alliance && p.from == selected_nid && p.to == n.id
+            });
+            let has_pending_peace = game.world.diplomacy.pending_proposals.iter().any(|p| {
+                p.proposal_type == TreatyType::PeaceTreaty && p.from == selected_nid && p.to == n.id
+            });
 
             serde_json::json!({
                 "nation_name": n.name,
@@ -1418,6 +1438,14 @@ pub fn wasm_get_diplomacy_overlay(game_json: &str, nation_id: u32) -> String {
                 "treaties": treaties,
                 "has_consulate": has_consulate,
                 "has_embassy": has_embassy,
+                "has_pending_consulate": has_pending_consulate,
+                "has_pending_embassy": has_pending_embassy,
+                "has_pending_war": has_pending_war,
+                "pending_grant_amount_dollars": pending_grant_amount_dollars,
+                "pending_break_treaties": pending_break_treaties,
+                "has_pending_nap": has_pending_nap,
+                "has_pending_alliance": has_pending_alliance,
+                "has_pending_peace": has_pending_peace,
             })
         })
         .collect();
@@ -1505,7 +1533,10 @@ fn reject_if_target_in_anarchy(game: &GameState, target: NationId) -> Option<Str
     }
 }
 
-fn reject_if_great_power_target_for_consulate(game: &GameState, target: NationId) -> Option<String> {
+fn reject_if_great_power_target_for_consulate(
+    game: &GameState,
+    target: NationId,
+) -> Option<String> {
     if game.get_nation(target).is_some_and(|n| n.is_great_power()) {
         Some("{\"error\":\"Consulates are for Minor Nations only.\"}".to_string())
     } else {
@@ -3252,6 +3283,91 @@ fn parse_treaty_type(name: &str) -> Option<TreatyType> {
     }
 }
 
+fn pending_break_treaties(
+    game: &GameState,
+    from: NationId,
+    to: NationId,
+) -> Vec<TreatyType> {
+    game.transient
+        .pending_diplomacy_actions
+        .iter()
+        .filter_map(|action| match action {
+            domain::game_state::PendingDiplomacyAction::BreakTreaty {
+                from: a,
+                to: b,
+                treaty_type,
+            } if *a == from && *b == to => Some(*treaty_type),
+            _ => None,
+        })
+        .collect()
+}
+
+fn pending_grant_amount_dollars(game: &GameState, from: NationId, to: NationId) -> Option<i64> {
+    game.transient
+        .pending_diplomacy_actions
+        .iter()
+        .find_map(|action| match action {
+            domain::game_state::PendingDiplomacyAction::SendGrant {
+                from: a,
+                to: b,
+                amount,
+            } if *a == from && *b == to => Some(amount.as_dollars()),
+            _ => None,
+        })
+}
+
+fn dismiss_pending_direct_diplomacy_action(
+    game: &mut GameState,
+    from: NationId,
+    to: NationId,
+    action_key: &str,
+) -> bool {
+    let original_len = game.transient.pending_diplomacy_actions.len();
+    game.transient.pending_diplomacy_actions.retain(|action| {
+        let matches = match action {
+            domain::game_state::PendingDiplomacyAction::BuildConsulate { player, target } => {
+                action_key == "consulate" && *player == from && *target == to
+            }
+            domain::game_state::PendingDiplomacyAction::BuildEmbassy { player, target } => {
+                action_key == "embassy" && *player == from && *target == to
+            }
+            domain::game_state::PendingDiplomacyAction::DeclareWar { from: a, to: b } => {
+                action_key == "war" && *a == from && *b == to
+            }
+            domain::game_state::PendingDiplomacyAction::SendGrant {
+                from: a,
+                to: b,
+                amount,
+            } => {
+                if *a != from || *b != to {
+                    false
+                } else {
+                    action_key
+                        .strip_prefix("grant:")
+                        .and_then(|value| value.parse::<i64>().ok())
+                        .is_some_and(|queued_amount| amount.as_dollars() == queued_amount)
+                }
+            }
+            domain::game_state::PendingDiplomacyAction::BreakTreaty {
+                from: a,
+                to: b,
+                treaty_type,
+            } => {
+                if *a != from || *b != to {
+                    false
+                } else {
+                    action_key
+                        .strip_prefix("break_treaty:")
+                        .and_then(parse_treaty_type)
+                        .is_some_and(|queued_type| queued_type == *treaty_type)
+                }
+            }
+        };
+        !matches
+    });
+    game.transient.pending_diplomacy_actions.len() != original_len
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // FEATURE 1: Transport Screen
 // ══════════════════════════════════════════════════════════════════════
@@ -4892,21 +5008,18 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
                 p.proposal_type == TreatyType::PeaceTreaty && p.from == nid && p.to == n.id
             });
 
-            // Any pending proposal in either direction (for action gating, matches backend)
-            let any_pending_nap = has_pending_nap
-                || game.world.diplomacy.pending_proposals.iter().any(|p| {
-                    p.proposal_type == TreatyType::NonAggressionPact
-                        && p.from == n.id
-                        && p.to == nid
-                });
-            let any_pending_alliance = has_pending_alliance
-                || game.world.diplomacy.pending_proposals.iter().any(|p| {
+            // Incoming proposals of the same type still gate new proposals in
+            // the opposite direction. Outgoing proposals are replaceable.
+            let incoming_pending_nap = game.world.diplomacy.pending_proposals.iter().any(|p| {
+                p.proposal_type == TreatyType::NonAggressionPact && p.from == n.id && p.to == nid
+            });
+            let incoming_pending_alliance =
+                game.world.diplomacy.pending_proposals.iter().any(|p| {
                     p.proposal_type == TreatyType::Alliance && p.from == n.id && p.to == nid
                 });
-            let any_pending_peace = has_pending_peace
-                || game.world.diplomacy.pending_proposals.iter().any(|p| {
-                    p.proposal_type == TreatyType::PeaceTreaty && p.from == n.id && p.to == nid
-                });
+            let incoming_pending_peace = game.world.diplomacy.pending_proposals.iter().any(|p| {
+                p.proposal_type == TreatyType::PeaceTreaty && p.from == n.id && p.to == nid
+            });
 
             // Pre-compute available actions. No diplomatic interaction is
             // possible with a nation in anarchy (card #81); every action is
@@ -4918,29 +5031,39 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
             let queued_consulate = game.has_pending_consulate(nid, n.id);
             let queued_embassy = game.has_pending_embassy(nid, n.id);
             let queued_war = game.has_pending_war(nid, n.id);
+            let queued_grant_amount_dollars = pending_grant_amount_dollars(&game, nid, n.id);
+            let queued_break_treaties = pending_break_treaties(&game, nid, n.id);
+            let pending_break_treaty_labels: Vec<String> = queued_break_treaties
+                .iter()
+                .map(|t| format!("{:?}", t))
+                .collect();
+            let breakable_treaties: Vec<String> = treaties
+                .iter()
+                .filter(|t| !pending_break_treaty_labels.contains(*t))
+                .cloned()
+                .collect();
             let can_build_consulate = !target_is_gp
                 && !target_in_anarchy
                 && !has_consulate
                 && !queued_consulate
                 && available_treasury >= 500;
-            let can_build_embassy =
-                !target_in_anarchy
-                    && has_consulate
-                    && !has_embassy
-                    && !queued_embassy
-                    && available_treasury >= 5000;
+            let can_build_embassy = !target_in_anarchy
+                && has_consulate
+                && !has_embassy
+                && !queued_embassy
+                && available_treasury >= 5000;
             let can_propose_nap = !target_in_anarchy
                 && has_embassy
                 && !raw_at_war
                 && !has_nap
                 && !has_alliance
-                && !any_pending_nap
+                && !incoming_pending_nap
                 && player_standing >= 30;
             let can_propose_alliance = !target_in_anarchy
                 && has_embassy
                 && !raw_at_war
                 && !has_alliance
-                && !any_pending_alliance
+                && !incoming_pending_alliance
                 && player_standing >= 30
                 && player_is_gp
                 && target_is_gp;
@@ -4948,9 +5071,12 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
                 && !raw_at_war
                 && !queued_war
                 && game.can_project_war_against(nid, n.id);
-            let can_send_grant = !target_in_anarchy && !raw_at_war && treasury > 0;
-            let can_break_treaty = !treaties.is_empty();
-            let can_propose_peace = !target_in_anarchy && raw_at_war && !any_pending_peace;
+            let can_send_grant = !target_in_anarchy
+                && !raw_at_war
+                && queued_grant_amount_dollars.is_none()
+                && available_treasury >= 500;
+            let can_break_treaty = !breakable_treaties.is_empty();
+            let can_propose_peace = !target_in_anarchy && raw_at_war && !incoming_pending_peace;
 
             serde_json::json!({
                 "nation_id": n.id.0,
@@ -4963,6 +5089,11 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
                 "treaties": treaties,
                 "has_consulate": has_consulate,
                 "has_embassy": has_embassy,
+                "has_pending_consulate": queued_consulate,
+                "has_pending_embassy": queued_embassy,
+                "has_pending_war": queued_war,
+                "pending_grant_amount_dollars": queued_grant_amount_dollars,
+                "pending_break_treaties": pending_break_treaty_labels,
                 "has_pending_nap": has_pending_nap,
                 "has_pending_alliance": has_pending_alliance,
                 "has_pending_peace": has_pending_peace,
@@ -4977,7 +5108,7 @@ pub fn wasm_get_diplomacy_screen_data(game_json: &str, nation_id: u32) -> String
                     "can_declare_war": can_declare_war,
                     "can_send_grant": can_send_grant,
                     "can_break_treaty": can_break_treaty,
-                    "breakable_treaties": treaties,
+                    "breakable_treaties": breakable_treaties,
                     "can_propose_peace": can_propose_peace,
                 },
             })
@@ -5205,12 +5336,12 @@ pub fn wasm_diplomacy_declare_war(
         return err;
     }
 
-    if let Err(e) = game.queue_direct_diplomacy_action(
-        domain::game_state::PendingDiplomacyAction::DeclareWar {
+    if let Err(e) =
+        game.queue_direct_diplomacy_action(domain::game_state::PendingDiplomacyAction::DeclareWar {
             from: nid,
             to: target,
-        },
-    ) {
+        })
+    {
         return format!("{{\"error\":\"{}\"}}", e);
     }
     serialize_game(&game)
@@ -5239,32 +5370,15 @@ pub fn wasm_diplomacy_send_grant(
     }
 
     let money = Money::dollars(amount);
-
-    // Validate target exists
-    if game.get_nation(target).is_none() {
-        return "{\"error\":\"target nation not found\"}".to_string();
-    }
-    if let Some(err) = reject_if_target_in_anarchy(&game, target) {
-        return err;
-    }
-
-    // Check treasury
+    if let Err(e) =
+        game.queue_direct_diplomacy_action(domain::game_state::PendingDiplomacyAction::SendGrant {
+            from: nid,
+            to: target,
+            amount: money,
+        })
     {
-        let nation = match game.get_nation(nid) {
-            Some(n) => n,
-            None => return "{\"error\":\"nation not found\"}".to_string(),
-        };
-        if nation.economy.treasury.as_dollars() < amount {
-            return "{\"error\":\"not enough treasury\"}".to_string();
-        }
+        return format!("{{\"error\":\"{}\"}}", e);
     }
-
-    // Deduct from treasury
-    if let Some(nation) = game.get_nation_mut(nid) {
-        nation.economy.treasury -= money;
-    }
-
-    game.world.diplomacy.send_grant(nid, target, money);
     serialize_game(&game)
 }
 
@@ -5295,7 +5409,15 @@ pub fn wasm_diplomacy_break_treaty(
         None => return "{\"error\":\"unknown treaty type\"}".to_string(),
     };
 
-    game.world.diplomacy.break_treaty(nid, target, tt);
+    if let Err(e) = game.queue_direct_diplomacy_action(
+        domain::game_state::PendingDiplomacyAction::BreakTreaty {
+            from: nid,
+            to: target,
+            treaty_type: tt,
+        },
+    ) {
+        return format!("{{\"error\":\"{}\"}}", e);
+    }
     serialize_game(&game)
 }
 
@@ -5328,6 +5450,90 @@ pub fn wasm_diplomacy_propose_peace(
     match game.world.diplomacy.propose_peace(nid, target, turn) {
         Ok(()) => {}
         Err(e) => return format!("{{\"error\":\"{}\"}}", e),
+    }
+
+    serialize_game(&game)
+}
+
+/// Dismiss any outgoing treaty proposal (NAP / Alliance / Peace) from the
+/// requesting nation to the target nation.
+#[wasm_bindgen]
+pub fn wasm_diplomacy_dismiss_outgoing_proposal(
+    game_json: &str,
+    nation_id: u32,
+    target_nation_id: u32,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let from = NationId(nation_id);
+    let to = NationId(target_nation_id);
+
+    if from == to {
+        return "{\"error\":\"cannot target self\"}".to_string();
+    }
+    if game.get_nation(from).is_none() {
+        return "{\"error\":\"nation not found\"}".to_string();
+    }
+    if game.get_nation(to).is_none() {
+        return "{\"error\":\"target nation not found\"}".to_string();
+    }
+
+    if !game
+        .world
+        .diplomacy
+        .dismiss_outgoing_treaty_proposal(from, to)
+    {
+        return "{\"error\":\"no outgoing proposal to dismiss\"}".to_string();
+    }
+
+    serialize_game(&game)
+}
+
+/// Dismiss a specific pending diplomacy action or outgoing treaty proposal.
+#[wasm_bindgen]
+pub fn wasm_diplomacy_dismiss_pending_action(
+    game_json: &str,
+    nation_id: u32,
+    target_nation_id: u32,
+    action_key: &str,
+) -> String {
+    let mut game = match deserialize_game(game_json) {
+        Ok(g) => g,
+        Err(e) => return e,
+    };
+    let from = NationId(nation_id);
+    let to = NationId(target_nation_id);
+
+    if from == to {
+        return "{\"error\":\"cannot target self\"}".to_string();
+    }
+    if game.get_nation(from).is_none() {
+        return "{\"error\":\"nation not found\"}".to_string();
+    }
+    if game.get_nation(to).is_none() {
+        return "{\"error\":\"target nation not found\"}".to_string();
+    }
+
+    let dismissed = match action_key {
+        "nap" => game
+            .world
+            .diplomacy
+            .dismiss_outgoing_treaty_proposal(from, to),
+        "alliance" => game
+            .world
+            .diplomacy
+            .dismiss_outgoing_treaty_proposal(from, to),
+        "peace" => game
+            .world
+            .diplomacy
+            .dismiss_outgoing_treaty_proposal(from, to),
+        _ => dismiss_pending_direct_diplomacy_action(&mut game, from, to, action_key),
+    };
+
+    if !dismissed {
+        return "{\"error\":\"no pending diplomacy action to dismiss\"}".to_string();
     }
 
     serialize_game(&game)
@@ -5839,13 +6045,13 @@ pub fn wasm_get_all_gp_ledger_data(game_json: &str) -> String {
                 .archives
                 .cash_income_totals
                 .iter()
-                .map(|(k, v)| (format!("{:?}", k), serde_json::json!(*v)))
+                .map(|(k, v)| (k.label().to_string(), serde_json::json!(*v)))
                 .collect();
             let cumulative_expense: serde_json::Map<String, serde_json::Value> = nation
                 .archives
                 .cash_expense_totals
                 .iter()
-                .map(|(k, v)| (format!("{:?}", k), serde_json::json!(*v)))
+                .map(|(k, v)| (k.label().to_string(), serde_json::json!(*v)))
                 .collect();
 
             // Resource-flow (last turn) — best-effort visibility, NOT reconciled.
@@ -7741,7 +7947,10 @@ mod tests {
         let queued_json = wasm_diplomacy_build_consulate(&json, player_id.0, target_id.0);
         let queued_game = game_from_json(&queued_json).unwrap();
         assert!(
-            !queued_game.world.diplomacy.has_consulate(player_id, target_id),
+            !queued_game
+                .world
+                .diplomacy
+                .has_consulate(player_id, target_id),
             "consulate should not exist until the turn resolves"
         );
         assert!(
@@ -7763,7 +7972,10 @@ mod tests {
         let _report = domain::turn::process_turn(&mut resolved_game);
         let _baseline_report = domain::turn::process_turn(&mut baseline);
         assert!(
-            resolved_game.world.diplomacy.has_consulate(player_id, target_id),
+            resolved_game
+                .world
+                .diplomacy
+                .has_consulate(player_id, target_id),
             "queued consulate should resolve during turn processing"
         );
         assert!(
@@ -7868,12 +8080,473 @@ mod tests {
         let mut resolved_game = queued_game;
         let _report = domain::turn::process_turn(&mut resolved_game);
         assert!(
-            resolved_game.world.diplomacy.is_at_war(player_id, target_id),
+            resolved_game
+                .world
+                .diplomacy
+                .is_at_war(player_id, target_id),
             "queued war declaration should resolve during turn processing"
         );
         assert!(
             !resolved_game.has_pending_war(player_id, target_id),
             "pending war declaration should be cleared after resolution"
+        );
+    }
+
+    #[test]
+    fn diplomacy_overlay_shows_queued_consulate_and_war_markers() {
+        let json = make_game_json();
+        let mut game = game_from_json(&json).unwrap();
+        let player_id = game.human_player_nation;
+        let consulate_target = game
+            .world
+            .nations
+            .iter()
+            .find(|n| n.id != player_id && !n.is_great_power() && !n.diplomacy.is_in_anarchy)
+            .expect("test game must have a valid minor target")
+            .id;
+        let war_target = game
+            .world
+            .nations
+            .iter()
+            .find(|n| n.id != player_id && game.can_project_war_against(player_id, n.id))
+            .expect("test game must have a reachable war target")
+            .id;
+
+        game.queue_direct_diplomacy_action(
+            domain::game_state::PendingDiplomacyAction::BuildConsulate {
+                player: player_id,
+                target: consulate_target,
+            },
+        )
+        .unwrap();
+        game.queue_direct_diplomacy_action(
+            domain::game_state::PendingDiplomacyAction::DeclareWar {
+                from: player_id,
+                to: war_target,
+            },
+        )
+        .unwrap();
+
+        let overlay = wasm_get_diplomacy_overlay(&serialize_game(&game), player_id.0);
+        let parsed: serde_json::Value = serde_json::from_str(&overlay).unwrap();
+        let rels = parsed["relations"].as_array().unwrap();
+        let cons_rel = rels
+            .iter()
+            .find(|r| r["nation_id"].as_u64() == Some(consulate_target.0 as u64))
+            .unwrap();
+        let war_rel = rels
+            .iter()
+            .find(|r| r["nation_id"].as_u64() == Some(war_target.0 as u64))
+            .unwrap();
+        assert_eq!(cons_rel["has_pending_consulate"].as_bool(), Some(true));
+        assert_eq!(war_rel["has_pending_war"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn wasm_send_grant_queues_until_end_turn() {
+        let json = make_game_json();
+        let game = game_from_json(&json).unwrap();
+        let mut baseline = game_from_json(&json).unwrap();
+        let player_id = game.human_player_nation;
+        let target_id = game
+            .world
+            .nations
+            .iter()
+            .find(|n| {
+                n.id != player_id
+                    && !n.diplomacy.is_in_anarchy
+                    && !game.world.diplomacy.is_at_war(player_id, n.id)
+            })
+            .expect("test game must have a valid grant target")
+            .id;
+        let treasury_before = game
+            .get_nation(player_id)
+            .unwrap()
+            .economy
+            .treasury
+            .as_dollars();
+        let target_treasury_before = game
+            .get_nation(target_id)
+            .unwrap()
+            .economy
+            .treasury
+            .as_dollars();
+        let score_before = game
+            .world
+            .diplomacy
+            .get_relation(player_id, target_id)
+            .map(|r| r.score)
+            .unwrap_or(0);
+
+        let queued_json = wasm_diplomacy_send_grant(&json, player_id.0, target_id.0, 1000);
+        let queued_game = game_from_json(&queued_json).unwrap();
+        assert_eq!(
+            queued_game
+                .get_nation(player_id)
+                .unwrap()
+                .economy
+                .treasury
+                .as_dollars(),
+            treasury_before,
+            "grant should not deduct treasury before end turn"
+        );
+        assert_eq!(
+            queued_game
+                .get_nation(target_id)
+                .unwrap()
+                .economy
+                .treasury
+                .as_dollars(),
+            target_treasury_before,
+            "grant should not credit the target before end turn"
+        );
+        assert_eq!(
+            queued_game
+                .world
+                .diplomacy
+                .get_relation(player_id, target_id)
+                .map(|r| r.score)
+                .unwrap_or(0),
+            score_before,
+            "grant should not change diplomatic score before end turn"
+        );
+
+        let overlay = wasm_get_diplomacy_overlay(&queued_json, player_id.0);
+        let parsed: serde_json::Value = serde_json::from_str(&overlay).unwrap();
+        let rel = parsed["relations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["nation_id"].as_u64() == Some(target_id.0 as u64))
+            .unwrap();
+        assert_eq!(rel["pending_grant_amount_dollars"].as_i64(), Some(1000));
+
+        let mut resolved_game = queued_game;
+        let _report = domain::turn::process_turn(&mut resolved_game);
+        let _baseline_report = domain::turn::process_turn(&mut baseline);
+        assert_eq!(
+            baseline
+                .get_nation(player_id)
+                .unwrap()
+                .economy
+                .treasury
+                .as_dollars()
+                - resolved_game
+                    .get_nation(player_id)
+                    .unwrap()
+                    .economy
+                    .treasury
+                    .as_dollars(),
+            1000,
+            "grant should deduct the sender at end turn"
+        );
+        assert_eq!(
+            resolved_game
+                .get_nation(target_id)
+                .unwrap()
+                .economy
+                .treasury
+                .as_dollars()
+                - baseline
+                    .get_nation(target_id)
+                    .unwrap()
+                    .economy
+                    .treasury
+                    .as_dollars(),
+            1000,
+            "grant should credit the target at end turn"
+        );
+        assert_eq!(
+            resolved_game
+                .world
+                .diplomacy
+                .get_relation(player_id, target_id)
+                .map(|r| r.score)
+                .unwrap_or(0)
+                - baseline
+                    .world
+                    .diplomacy
+                    .get_relation(player_id, target_id)
+                    .map(|r| r.score)
+                    .unwrap_or(0),
+            10,
+            "$1000 grant should improve relations by +10 when resolved"
+        );
+    }
+
+    #[test]
+    fn wasm_break_treaty_queues_until_end_turn() {
+        let json = make_game_json();
+        let mut game = game_from_json(&json).unwrap();
+        let player_id = game.human_player_nation;
+        let target_id = game
+            .great_powers()
+            .iter()
+            .find(|n| n.id != player_id)
+            .expect("test game must have another great power")
+            .id;
+        game.world
+            .diplomacy
+            .propose_alliance(player_id, target_id)
+            .unwrap();
+        assert!(game.world.diplomacy.has_treaty(player_id, target_id, TreatyType::Alliance));
+
+        let queued_json = wasm_diplomacy_break_treaty(
+            &serialize_game(&game),
+            player_id.0,
+            target_id.0,
+            "Alliance",
+        );
+        let queued_game = game_from_json(&queued_json).unwrap();
+        assert!(
+            queued_game
+                .world
+                .diplomacy
+                .has_treaty(player_id, target_id, TreatyType::Alliance),
+            "treaty should remain active until the turn resolves"
+        );
+        assert!(
+            queued_game.has_pending_break_treaty(player_id, target_id, TreatyType::Alliance),
+            "treaty break should be queued for end turn"
+        );
+
+        let overlay = wasm_get_diplomacy_overlay(&queued_json, player_id.0);
+        let parsed: serde_json::Value = serde_json::from_str(&overlay).unwrap();
+        let rel = parsed["relations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["nation_id"].as_u64() == Some(target_id.0 as u64))
+            .unwrap();
+        assert_eq!(
+            rel["pending_break_treaties"].as_array().unwrap()[0].as_str(),
+            Some("Alliance")
+        );
+
+        let mut resolved_game = queued_game;
+        let _report = domain::turn::process_turn(&mut resolved_game);
+        assert!(
+            !resolved_game
+                .world
+                .diplomacy
+                .has_treaty(player_id, target_id, TreatyType::Alliance),
+            "queued treaty break should resolve during turn processing"
+        );
+    }
+
+    #[test]
+    fn at_war_with_one_nation_does_not_block_treaty_proposals_to_others() {
+        let json = make_game_json();
+        let mut game = game_from_json(&json).unwrap();
+        let player_id = game.human_player_nation;
+        let war_target = game
+            .world
+            .nations
+            .iter()
+            .find(|n| n.id != player_id)
+            .expect("test game must have another nation")
+            .id;
+        let treaty_target = game
+            .world
+            .nations
+            .iter()
+            .find(|n| n.id != player_id && n.id != war_target && !n.diplomacy.is_in_anarchy)
+            .expect("test game must have a third nation")
+            .id;
+
+        game.world.diplomacy.declare_war(player_id, war_target);
+        game.world
+            .diplomacy
+            .get_relation_mut(player_id, treaty_target)
+            .expect("relation to treaty target exists")
+            .has_embassy = true;
+
+        let out = wasm_get_diplomacy_screen_data(&serialize_game(&game), player_id.0);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let rels = parsed["relations"].as_array().unwrap();
+        let rel = rels
+            .iter()
+            .find(|r| r["nation_id"].as_u64() == Some(treaty_target.0 as u64))
+            .unwrap();
+        assert_eq!(
+            rel["actions"]["can_propose_nap"].as_bool(),
+            Some(true),
+            "war with one nation must not globally block treaty proposals"
+        );
+    }
+
+    #[test]
+    fn pending_treaty_proposal_is_replaced_and_marker_moves_to_new_target() {
+        let json = make_game_json();
+        let game = game_from_json(&json).unwrap();
+        let player_id = game.human_player_nation;
+
+        let mut gp_targets: Vec<NationId> = game
+            .great_powers()
+            .iter()
+            .filter(|n| n.id != player_id)
+            .map(|n| n.id)
+            .collect();
+        gp_targets.truncate(2);
+        assert!(
+            gp_targets.len() == 2,
+            "test game must provide two GP diplomacy targets"
+        );
+        let target_a = gp_targets[0];
+        let target_b = gp_targets[1];
+
+        let json = wasm_diplomacy_propose_nap(&json, player_id.0, target_a.0);
+        let after_first = game_from_json(&json).unwrap();
+        assert!(
+            after_first
+                .world
+                .diplomacy
+                .pending_proposals
+                .iter()
+                .any(|p| {
+                    p.from == player_id
+                        && p.to == target_a
+                        && p.proposal_type == TreatyType::NonAggressionPact
+                }),
+            "first outgoing proposal should exist"
+        );
+
+        let json = wasm_diplomacy_propose_nap(&json, player_id.0, target_b.0);
+        let after_second = game_from_json(&json).unwrap();
+        let outgoing: Vec<_> = after_second
+            .world
+            .diplomacy
+            .pending_proposals
+            .iter()
+            .filter(|p| p.from == player_id && p.proposal_type == TreatyType::NonAggressionPact)
+            .collect();
+        assert_eq!(
+            outgoing.len(),
+            1,
+            "only one outgoing treaty proposal should remain after replacement"
+        );
+        assert_eq!(
+            outgoing[0].to, target_b,
+            "new proposal should replace the previous target"
+        );
+
+        let screen = wasm_get_diplomacy_screen_data(&json, player_id.0);
+        let parsed: serde_json::Value = serde_json::from_str(&screen).unwrap();
+        let rels = parsed["relations"].as_array().unwrap();
+        let a = rels
+            .iter()
+            .find(|r| r["nation_id"].as_u64() == Some(target_a.0 as u64))
+            .unwrap();
+        let b = rels
+            .iter()
+            .find(|r| r["nation_id"].as_u64() == Some(target_b.0 as u64))
+            .unwrap();
+        assert_eq!(a["has_pending_nap"].as_bool(), Some(false));
+        assert_eq!(b["has_pending_nap"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn wasm_dismiss_outgoing_proposal_removes_pending_marker() {
+        let json = make_game_json();
+        let game = game_from_json(&json).unwrap();
+        let player_id = game.human_player_nation;
+        let target = game
+            .great_powers()
+            .iter()
+            .find(|n| n.id != player_id)
+            .expect("test game must have at least one GP diplomacy target")
+            .id;
+
+        let proposed = wasm_diplomacy_propose_nap(&json, player_id.0, target.0);
+        let before = wasm_get_diplomacy_overlay(&proposed, player_id.0);
+        let before_parsed: serde_json::Value = serde_json::from_str(&before).unwrap();
+        let before_rel = before_parsed["relations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["nation_id"].as_u64() == Some(target.0 as u64))
+            .unwrap();
+        assert_eq!(before_rel["has_pending_nap"].as_bool(), Some(true));
+
+        let dismissed = wasm_diplomacy_dismiss_outgoing_proposal(&proposed, player_id.0, target.0);
+        let after = wasm_get_diplomacy_overlay(&dismissed, player_id.0);
+        let after_parsed: serde_json::Value = serde_json::from_str(&after).unwrap();
+        let after_rel = after_parsed["relations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["nation_id"].as_u64() == Some(target.0 as u64))
+            .unwrap();
+        assert_eq!(after_rel["has_pending_nap"].as_bool(), Some(false));
+    }
+
+    #[test]
+    fn wasm_dismiss_pending_action_removes_pending_embassy_marker() {
+        let json = make_game_json();
+        let mut game = game_from_json(&json).unwrap();
+        let player_id = game.human_player_nation;
+        let target = game
+            .world
+            .nations
+            .iter()
+            .find(|n| n.id != player_id && !n.is_great_power() && !n.diplomacy.is_in_anarchy)
+            .expect("test game must have a valid minor target")
+            .id;
+        game.world.diplomacy.build_consulate(player_id, target).unwrap();
+
+        let queued = wasm_diplomacy_build_embassy(&serialize_game(&game), player_id.0, target.0);
+        let before = wasm_get_diplomacy_overlay(&queued, player_id.0);
+        let before_parsed: serde_json::Value = serde_json::from_str(&before).unwrap();
+        let before_rel = before_parsed["relations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["nation_id"].as_u64() == Some(target.0 as u64))
+            .unwrap();
+        assert_eq!(before_rel["has_pending_embassy"].as_bool(), Some(true));
+
+        let dismissed =
+            wasm_diplomacy_dismiss_pending_action(&queued, player_id.0, target.0, "embassy");
+        let after = wasm_get_diplomacy_overlay(&dismissed, player_id.0);
+        let after_parsed: serde_json::Value = serde_json::from_str(&after).unwrap();
+        let after_rel = after_parsed["relations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["nation_id"].as_u64() == Some(target.0 as u64))
+            .unwrap();
+        assert_eq!(after_rel["has_pending_embassy"].as_bool(), Some(false));
+    }
+
+    #[test]
+    fn gp_ledger_cumulative_expenses_use_human_labels() {
+        let mut game = new_game("default", Difficulty::Normal, 0);
+        let ai_gp = game
+            .great_powers()
+            .iter()
+            .find(|n| n.id != game.human_player_nation)
+            .expect("test game must have at least one AI GP")
+            .id;
+        game.get_nation_mut(ai_gp)
+            .unwrap()
+            .archives
+            .cash_expense_totals
+            .insert(domain::economy::ledger::CashSink::AiGrant, 12345);
+
+        let out = wasm_get_all_gp_ledger_data(&serialize_game(&game));
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let entries = parsed.as_array().unwrap();
+        let ai_entry = entries
+            .iter()
+            .find(|e| e["nation_id"].as_u64() == Some(ai_gp.0 as u64))
+            .unwrap();
+        assert_eq!(
+            ai_entry["cumulative"]["expense_totals"]["AI: grant"].as_i64(),
+            Some(12345)
+        );
+        assert!(
+            ai_entry["cumulative"]["expense_totals"]["AiGrant"].is_null(),
+            "debug enum keys should not leak into UI payloads"
         );
     }
 

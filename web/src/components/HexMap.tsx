@@ -320,6 +320,8 @@ interface Props {
   lockZoom?: boolean;
   /** When true, render consulate/embassy emoji markers on nation label centroids. */
   showDiplomacyMarkers?: boolean;
+  /** Called when a pending diplomacy marker is clicked on the map. */
+  onPendingTreatyMarkerClick?: (nationId: number, actionKey: string) => void;
   /** When true, the map-mode dropup only offers Terrain and Political. */
   limitedMapModes?: boolean;
   /** When true, the cursor changes to crosshair to signal the user should click a nation. */
@@ -376,6 +378,7 @@ export default function HexMap({
   selectedTileKey = null,
   lockZoom = false,
   showDiplomacyMarkers = false,
+  onPendingTreatyMarkerClick,
   limitedMapModes = false,
   isDiplomacyTargetMode = false,
   isDiplomacyTargetInvalid = false,
@@ -2190,7 +2193,7 @@ export default function HexMap({
       }
     }
 
-    // ── Pass 5b: Diplomatic presence icons (consulate/embassy) ──
+    // ── Pass 5b: Diplomatic icons (presence + pending treaty) ──
     // Anchored below the nation label centroid (not the capital tile) so the
     // emoji appears directly under the country name as the card requires.
     if (showDiplomacyMarkers && diplomacyOverlay) {
@@ -2199,8 +2202,8 @@ export default function HexMap({
         diploByNation.set(rel.nation_name, rel);
       }
 
-      // Use a large emoji size so the icon is clearly prominent on the map.
-      const emojiSize = Math.max(18, HEX_SIZE * 1.2);
+      // Keep diplomacy markers large enough to stay visible at diplomacy zoom.
+      const emojiSize = Math.max(36, HEX_SIZE * 2.4);
       ctx.font = `${emojiSize}px sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
@@ -2208,14 +2211,16 @@ export default function HexMap({
       for (const label of nationLabels) {
         const rel = diploByNation.get(label.name);
         if (!rel) continue;
-        if (!rel.has_consulate && !rel.has_embassy) continue;
+        const { icons } = diplomacyIconsForRelation(rel);
+        if (icons.length === 0) continue;
 
-        // Place emoji just below the nation name label centroid.
+        // Place icons just below the nation name label centroid.
         const fontSize = Math.max(12, Math.min(28, Math.sqrt(label.size) * 3));
-        const iy = label.cy + fontSize * 0.6;
-
-        const emoji = rel.has_embassy ? '\u{1F3DB}️' : '\u{1F4DC}'; // 🏛️ embassy, 📜 consulate
-        ctx.fillText(emoji, label.cx, iy);
+        const baseY = label.cy + fontSize * 0.6;
+        for (let i = 0; i < icons.length; i++) {
+          const y = baseY + i * emojiSize * 0.95;
+          ctx.fillText(icons[i].glyph, label.cx, y);
+        }
       }
       ctx.textBaseline = 'middle';
     }
@@ -2798,6 +2803,80 @@ export default function HexMap({
     return null;
   };
 
+  const diplomacyIconsForRelation = (
+    rel: DiplomacyOverlay['relations'][number],
+  ): { icons: { glyph: string; actionKey: string | null }[] } => {
+    const icons: { glyph: string; actionKey: string | null }[] = [];
+    if (rel.has_pending_embassy) {
+      icons.push({ glyph: '\u{1F3DB}\uFE0F', actionKey: 'embassy' }); // 🏛️ embassy
+    } else if (rel.has_embassy) {
+      icons.push({ glyph: '\u{1F3DB}\uFE0F', actionKey: null }); // 🏛️ embassy
+    } else if (rel.has_pending_consulate) {
+      icons.push({ glyph: '\u{1F4DC}', actionKey: 'consulate' }); // 📜 consulate
+    } else if (rel.has_consulate) {
+      icons.push({ glyph: '\u{1F4DC}', actionKey: null }); // 📜 consulate
+    }
+
+    if (rel.has_pending_nap || rel.has_pending_alliance || rel.has_pending_peace) {
+      icons.push({
+        glyph: rel.has_pending_peace
+          ? '\u{1F54A}' // 🕊
+          : rel.has_pending_alliance
+            ? '\u{1F6E1}\uFE0F' // 🛡️
+            : '\u{1F91D}', // 🤝
+        actionKey: rel.has_pending_peace ? 'peace' : rel.has_pending_alliance ? 'alliance' : 'nap',
+      });
+    }
+
+    if (rel.pending_grant_amount_dollars != null) {
+      icons.push({
+        glyph: '\u{1F4B0}', // 💰
+        actionKey: `grant:${rel.pending_grant_amount_dollars}`,
+      });
+    }
+
+    for (const treatyType of rel.pending_break_treaties) {
+      icons.push({
+        glyph: '\u2702\uFE0F', // ✂️
+        actionKey: `break_treaty:${treatyType}`,
+      });
+    }
+
+    if (rel.has_pending_war) {
+      icons.push({ glyph: '\u2694\uFE0F', actionKey: 'war' }); // ⚔️
+    }
+
+    return { icons };
+  };
+
+  const pendingTreatyMarkerNationAtPoint = (mx: number, my: number): { nationId: number; actionKey: string } | null => {
+    if (!showDiplomacyMarkers || !diplomacyOverlay) return null;
+    const diploByNation = new Map<string, typeof diplomacyOverlay.relations[0]>();
+    for (const rel of diplomacyOverlay.relations) {
+      diploByNation.set(rel.nation_name, rel);
+    }
+    const emojiSize = Math.max(36, HEX_SIZE * 2.4);
+    const r2 = (emojiSize * 0.8) * (emojiSize * 0.8);
+    for (const label of nationLabels) {
+      const rel = diploByNation.get(label.name);
+      if (!rel) continue;
+      const { icons } = diplomacyIconsForRelation(rel);
+      const fontSize = Math.max(12, Math.min(28, Math.sqrt(label.size) * 3));
+      const baseY = label.cy + fontSize * 0.6;
+      for (let i = 0; i < icons.length; i++) {
+        const actionKey = icons[i].actionKey;
+        if (!actionKey) continue;
+        const pendingY = baseY + i * emojiSize * 0.95;
+        const dx = mx - label.cx;
+        const dy = my - pendingY;
+        if (dx * dx + dy * dy <= r2) {
+          return { nationId: rel.nation_id, actionKey };
+        }
+      }
+    }
+    return null;
+  };
+
   const handleMouseMove = (e: React.MouseEvent) => {
     if (dragging) {
       // Write the new offset to the ref and schedule a single frame; do not
@@ -2985,6 +3064,11 @@ export default function HexMap({
     const marker = markerAtPoint(mx, my);
     if (marker) {
       if (onNavyMarkerClick) onNavyMarkerClick(marker);
+      return;
+    }
+    const pendingMarker = pendingTreatyMarkerNationAtPoint(mx, my);
+    if (pendingMarker != null && onPendingTreatyMarkerClick) {
+      onPendingTreatyMarkerClick(pendingMarker.nationId, pendingMarker.actionKey);
       return;
     }
     if (onNavyMarkerClick) onNavyMarkerClick(null);

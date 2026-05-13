@@ -18,20 +18,27 @@ export default function ProposalModal({ proposals, onAccept, onReject, onClose }
         </div>
 
         <div style={{ padding: '12px 16px', maxHeight: '60vh', overflowY: 'auto' }}>
-          {proposals.map(p => (
-            <div key={p.index} style={proposalRowStyle}>
-              <div style={{ marginBottom: 6 }}>
-                <span style={{ fontWeight: 'bold', color: '#e0d8c0' }}>{p.display_text}</span>
-                <span style={{ fontSize: 11, color: '#888', marginLeft: 8 }}>
-                  (expires in {p.turns_until_expiry} turn{p.turns_until_expiry !== 1 ? 's' : ''})
-                </span>
+          {proposals.map(p => {
+            const isWarDeclaration = p.proposal_type === 'WarDeclaration';
+            return (
+              <div key={p.index} style={proposalRowStyle}>
+                <div style={{ marginBottom: 6 }}>
+                  <span style={{ fontWeight: 'bold', color: '#e0d8c0' }}>{p.display_text}</span>
+                  <span style={{ fontSize: 11, color: '#888', marginLeft: 8 }}>
+                    (expires in {p.turns_until_expiry} turn{p.turns_until_expiry !== 1 ? 's' : ''})
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => onAccept(p.index)} style={acceptBtnStyle}>
+                    {isWarDeclaration ? 'Acknowledge' : 'Accept'}
+                  </button>
+                  {!isWarDeclaration && (
+                    <button onClick={() => onReject(p.index)} style={rejectBtnStyle}>Reject</button>
+                  )}
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={() => onAccept(p.index)} style={acceptBtnStyle}>Accept</button>
-                <button onClick={() => onReject(p.index)} style={rejectBtnStyle}>Reject</button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <div style={{ padding: '8px 16px', borderTop: '1px solid #3a3520', textAlign: 'right' }}>

@@ -139,7 +139,15 @@ function NationRow({
       </div>
 
       {/* Treaty badges + pending proposal indicators */}
-      {(rel.treaties.length > 0 || rel.has_pending_nap || rel.has_pending_alliance || rel.has_pending_peace) && (
+      {(rel.treaties.length > 0
+        || rel.has_pending_consulate
+        || rel.has_pending_embassy
+        || rel.has_pending_war
+        || rel.pending_grant_amount_dollars != null
+        || rel.pending_break_treaties.length > 0
+        || rel.has_pending_nap
+        || rel.has_pending_alliance
+        || rel.has_pending_peace) && (
         <div style={{ display: 'flex', gap: 3, marginTop: 3, flexWrap: 'wrap' }}>
           {rel.treaties.map(t => (
             <span key={t} style={{
@@ -147,6 +155,12 @@ function NationRow({
               borderRadius: 2, padding: '0 3px',
             }}>{t}</span>
           ))}
+          {rel.has_pending_consulate && (
+            <span style={{ fontSize: 9, background: 'rgba(122,122,170,0.15)', color: '#aac', borderRadius: 2, padding: '0 3px', fontStyle: 'italic' }}>Consulate Pending</span>
+          )}
+          {rel.has_pending_embassy && (
+            <span style={{ fontSize: 9, background: 'rgba(122,122,170,0.15)', color: '#aac', borderRadius: 2, padding: '0 3px', fontStyle: 'italic' }}>Embassy Pending</span>
+          )}
           {rel.has_pending_nap && (
             <span style={{ fontSize: 9, background: 'rgba(74,170,170,0.15)', color: '#4aa', borderRadius: 2, padding: '0 3px', fontStyle: 'italic' }}>NAP Proposed</span>
           )}
@@ -155,6 +169,15 @@ function NationRow({
           )}
           {rel.has_pending_peace && (
             <span style={{ fontSize: 9, background: 'rgba(170,170,74,0.15)', color: '#aa4', borderRadius: 2, padding: '0 3px', fontStyle: 'italic' }}>Peace Proposed</span>
+          )}
+          {rel.pending_grant_amount_dollars != null && (
+            <span style={{ fontSize: 9, background: 'rgba(74,122,170,0.15)', color: '#7ad', borderRadius: 2, padding: '0 3px', fontStyle: 'italic' }}>Grant ${rel.pending_grant_amount_dollars} Pending</span>
+          )}
+          {rel.pending_break_treaties.map(t => (
+            <span key={`pending-break-${t}`} style={{ fontSize: 9, background: 'rgba(170,122,74,0.15)', color: '#da8', borderRadius: 2, padding: '0 3px', fontStyle: 'italic' }}>Break {t} Pending</span>
+          ))}
+          {rel.has_pending_war && (
+            <span style={{ fontSize: 9, background: 'rgba(170,74,74,0.15)', color: '#d77', borderRadius: 2, padding: '0 3px', fontStyle: 'italic' }}>War Pending</span>
           )}
         </div>
       )}

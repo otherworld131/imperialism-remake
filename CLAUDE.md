@@ -8,6 +8,9 @@ Great Powers competing for world dominance through economics, diplomacy, and mil
 
 ## Guiding Principles
 
+> [!IMPORTANT]
+> All player actions resolve over the end turn. Nothing should take effect immediately when clicked from the UI. If an action appears to apply instantly, treat that as a bug and fix the queue / end-turn resolution path instead of patching around it in the frontend.
+
 | Principle | Detail |
 |-----------|--------|
 | **Architecture** | Hexagonal / Clean / Ports-and-Adapters — hard boundary between frontend and backend |

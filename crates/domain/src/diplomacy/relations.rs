@@ -135,6 +135,32 @@ fn ordered_key(a: NationId, b: NationId) -> (NationId, NationId) {
 }
 
 impl DiplomacyState {
+    fn is_treaty_proposal_kind(t: TreatyType) -> bool {
+        matches!(
+            t,
+            TreatyType::NonAggressionPact | TreatyType::Alliance | TreatyType::PeaceTreaty
+        )
+    }
+
+    /// Remove all outgoing treaty proposals (NAP / Alliance / Peace) from
+    /// one nation. Returns how many proposals were removed.
+    fn clear_outgoing_treaty_proposals(&mut self, from: NationId) -> usize {
+        let before = self.pending_proposals.len();
+        self.pending_proposals
+            .retain(|p| !(p.from == from && Self::is_treaty_proposal_kind(p.proposal_type)));
+        before.saturating_sub(self.pending_proposals.len())
+    }
+
+    /// Dismiss an outgoing treaty proposal from `from` to `to`. Returns true
+    /// when a proposal was removed.
+    pub fn dismiss_outgoing_treaty_proposal(&mut self, from: NationId, to: NationId) -> bool {
+        let before = self.pending_proposals.len();
+        self.pending_proposals.retain(|p| {
+            !(p.from == from && p.to == to && Self::is_treaty_proposal_kind(p.proposal_type))
+        });
+        before != self.pending_proposals.len()
+    }
+
     fn has_pending_separate_peace_break(&self, a: NationId, b: NationId) -> bool {
         self.pending_separate_peace_breaks.iter().any(|broken| {
             (broken.peacemaker == a && broken.former_ally == b)
@@ -510,14 +536,17 @@ impl DiplomacyState {
         if !self.is_at_war(from, to) {
             return Err(DomainError::illegal("Not at war"));
         }
-        // No duplicate pending peace proposals between these two nations
-        let already_pending = self.pending_proposals.iter().any(|p| {
-            p.proposal_type == TreatyType::PeaceTreaty
-                && ((p.from == from && p.to == to) || (p.from == to && p.to == from))
-        });
-        if already_pending {
+        // Do not create duplicate peace proposals in the opposite direction.
+        let already_pending_incoming = self
+            .pending_proposals
+            .iter()
+            .any(|p| p.proposal_type == TreatyType::PeaceTreaty && p.from == to && p.to == from);
+        if already_pending_incoming {
             return Err(DomainError::illegal("Peace proposal already pending"));
         }
+        // Card #445: only one outgoing treaty proposal at a time; proposing a
+        // new one replaces any previous outgoing proposal by this nation.
+        self.clear_outgoing_treaty_proposals(from);
         self.pending_proposals.push(DiplomaticProposal {
             from,
             to,
@@ -601,14 +630,18 @@ impl DiplomacyState {
             _ => unreachable!(),
         }
 
-        // No duplicate pending proposals of same type
-        let already_pending = self.pending_proposals.iter().any(|p| {
-            p.proposal_type == treaty_type
-                && ((p.from == from && p.to == to) || (p.from == to && p.to == from))
-        });
-        if already_pending {
+        // Do not create duplicate proposals of the same type in the opposite
+        // direction. Outgoing duplicates are replaced below.
+        let already_pending_incoming = self
+            .pending_proposals
+            .iter()
+            .any(|p| p.proposal_type == treaty_type && p.from == to && p.to == from);
+        if already_pending_incoming {
             return Err(DomainError::illegal("Proposal already pending"));
         }
+        // Card #445: only one outgoing treaty proposal at a time; proposing a
+        // new one replaces any previous outgoing proposal by this nation.
+        self.clear_outgoing_treaty_proposals(from);
         self.pending_proposals.push(DiplomaticProposal {
             from,
             to,
@@ -1338,15 +1371,46 @@ mod tests {
     }
 
     #[test]
-    fn propose_treaty_nap_rejects_duplicate() {
+    fn propose_treaty_nap_replaces_existing_outgoing() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2), NationId(3)];
+        state.initialize_great_powers(&gps);
+
+        state
+            .propose_treaty(
+                NationId(1),
+                NationId(3),
+                TreatyType::Alliance,
+                TurnNumber::new(1),
+            )
+            .unwrap();
+        state
+            .propose_treaty(
+                NationId(1),
+                NationId(2),
+                TreatyType::NonAggressionPact,
+                TurnNumber::new(1),
+            )
+            .unwrap();
+        assert_eq!(state.pending_proposals.len(), 1);
+        assert_eq!(
+            state.pending_proposals[0].proposal_type,
+            TreatyType::NonAggressionPact
+        );
+        assert_eq!(state.pending_proposals[0].from, NationId(1));
+        assert_eq!(state.pending_proposals[0].to, NationId(2));
+    }
+
+    #[test]
+    fn propose_treaty_rejects_when_incoming_same_type_exists() {
         let mut state = DiplomacyState::new();
         let gps = vec![NationId(1), NationId(2)];
         state.initialize_great_powers(&gps);
 
         state
             .propose_treaty(
-                NationId(1),
                 NationId(2),
+                NationId(1),
                 TreatyType::NonAggressionPact,
                 TurnNumber::new(1),
             )
@@ -1359,6 +1423,34 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already pending"));
+    }
+
+    #[test]
+    fn dismiss_outgoing_treaty_proposal_removes_targeted_proposal() {
+        let mut state = DiplomacyState::new();
+        let gps = vec![NationId(1), NationId(2), NationId(3)];
+        state.initialize_great_powers(&gps);
+        state
+            .propose_treaty(
+                NationId(1),
+                NationId(2),
+                TreatyType::Alliance,
+                TurnNumber::new(1),
+            )
+            .unwrap();
+        state
+            .propose_treaty(
+                NationId(3),
+                NationId(1),
+                TreatyType::NonAggressionPact,
+                TurnNumber::new(1),
+            )
+            .unwrap();
+
+        assert!(state.dismiss_outgoing_treaty_proposal(NationId(1), NationId(2)));
+        assert_eq!(state.pending_proposals.len(), 1);
+        assert_eq!(state.pending_proposals[0].from, NationId(3));
+        assert_eq!(state.pending_proposals[0].to, NationId(1));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { call } from './workers/gameClient';
+import { call, callWithTimeout } from './workers/gameClient';
 
 // initWasm is a no-op retained for API compatibility. The dedicated worker
 // initializes the wasm module lazily on its first RPC call.
@@ -402,6 +402,14 @@ export interface DiplomacyOverlayRelation {
   treaties: string[];
   has_consulate: boolean;
   has_embassy: boolean;
+  has_pending_consulate: boolean;
+  has_pending_embassy: boolean;
+  has_pending_war: boolean;
+  pending_grant_amount_dollars: number | null;
+  pending_break_treaties: string[];
+  has_pending_nap: boolean;
+  has_pending_alliance: boolean;
+  has_pending_peace: boolean;
 }
 
 export interface DiplomacyOverlay {
@@ -786,7 +794,9 @@ export interface BulkTurnResult {
 }
 
 export async function processTurns(gameJson: string, count: number): Promise<BulkTurnResult> {
-  return JSON.parse(await call<string>('wasm_process_turns', gameJson, count));
+  // Each turn includes full AI/economy resolution; a batch of up to 50 turns
+  // easily exceeds the default 30s call timeout, so allow up to 5 minutes.
+  return JSON.parse(await callWithTimeout<string>('wasm_process_turns', 300_000, gameJson, count));
 }
 
 export async function getDiplomacyOverlay(gameJson: string, nationId: number): Promise<DiplomacyOverlay | null> {
@@ -1368,6 +1378,11 @@ export interface DiplomacyScreenRelation {
   treaties: string[];
   has_consulate: boolean;
   has_embassy: boolean;
+  has_pending_consulate: boolean;
+  has_pending_embassy: boolean;
+  has_pending_war: boolean;
+  pending_grant_amount_dollars: number | null;
+  pending_break_treaties: string[];
   has_pending_nap: boolean;
   has_pending_alliance: boolean;
   has_pending_peace: boolean;
@@ -1417,6 +1432,14 @@ export async function diplomacyBreakTreaty(gameJson: string, nationId: number, t
 
 export async function diplomacyProposePeace(gameJson: string, nationId: number, targetId: number): Promise<CommandResult> {
   return runCmd('wasm_diplomacy_propose_peace', gameJson, nationId, targetId);
+}
+
+export async function diplomacyDismissOutgoingProposal(gameJson: string, nationId: number, targetId: number): Promise<CommandResult> {
+  return runCmd('wasm_diplomacy_dismiss_outgoing_proposal', gameJson, nationId, targetId);
+}
+
+export async function diplomacyDismissPendingAction(gameJson: string, nationId: number, targetId: number, actionKey: string): Promise<CommandResult> {
+  return runCmd('wasm_diplomacy_dismiss_pending_action', gameJson, nationId, targetId, actionKey);
 }
 
 // ── Proposal Modal types & functions ────────────────────────────────

@@ -539,10 +539,9 @@ fn resolve_pending_direct_diplomacy_actions(game: &mut GameState, report: &mut T
                         )
                         .for_nations(&[player, target]),
                     );
-                    game.archive.history.push((
-                        game.turn,
-                        HistoryEvent::ConsulateBuilt { player, target },
-                    ));
+                    game.archive
+                        .history
+                        .push((game.turn, HistoryEvent::ConsulateBuilt { player, target }));
                 }
             }
             PendingDiplomacyAction::BuildEmbassy { player, target } => {
@@ -562,19 +561,20 @@ fn resolve_pending_direct_diplomacy_actions(game: &mut GameState, report: &mut T
                         )
                         .for_nations(&[player, target]),
                     );
-                    game.archive.history.push((
-                        game.turn,
-                        HistoryEvent::EmbassyBuilt { player, target },
-                    ));
+                    game.archive
+                        .history
+                        .push((game.turn, HistoryEvent::EmbassyBuilt { player, target }));
                 }
             }
             PendingDiplomacyAction::DeclareWar { from, to } => {
                 if !game.world.diplomacy.is_at_war(from, to) {
                     game.world.diplomacy.declare_war_at(from, to, game.turn);
-                    report.events.push(DomainEvent::WarDeclared(crate::events::WarDeclared {
-                        attacker: from,
-                        defender: to,
-                    }));
+                    report
+                        .events
+                        .push(DomainEvent::WarDeclared(crate::events::WarDeclared {
+                            attacker: from,
+                            defender: to,
+                        }));
                     let attacker_name = game
                         .get_nation(from)
                         .map(|n| n.name.clone())
@@ -599,6 +599,70 @@ fn resolve_pending_direct_diplomacy_actions(game: &mut GameState, report: &mut T
                         },
                     ));
                 }
+            }
+            PendingDiplomacyAction::SendGrant { from, to, amount } => {
+                if game.world.diplomacy.is_at_war(from, to) {
+                    continue;
+                }
+                let Some(sender) = game.get_nation(from) else {
+                    continue;
+                };
+                if sender.economy.treasury < amount {
+                    continue;
+                }
+                if let Some(nation) = game.get_nation_mut(from) {
+                    nation.economy.treasury -= amount;
+                }
+                if let Some(nation) = game.get_nation_mut(to) {
+                    nation.economy.treasury += amount;
+                }
+                game.world.diplomacy.send_grant(from, to, amount);
+                let from_name = game
+                    .get_nation(from)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_else(|| "Unknown".to_string());
+                let to_name = game
+                    .get_nation(to)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_else(|| "Unknown".to_string());
+                report.newspaper_headlines.push(
+                    Headline::new(
+                        format!(
+                            "{from_name} sent a ${} grant to {to_name}",
+                            amount.as_dollars()
+                        ),
+                        HeadlineCategory::Diplomacy,
+                    )
+                    .for_nations(&[from, to]),
+                );
+            }
+            PendingDiplomacyAction::BreakTreaty {
+                from,
+                to,
+                treaty_type,
+            } => {
+                if !game.world.diplomacy.has_treaty(from, to, treaty_type) {
+                    continue;
+                }
+                game.world.diplomacy.break_treaty(from, to, treaty_type);
+                let from_name = game
+                    .get_nation(from)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_else(|| "Unknown".to_string());
+                let to_name = game
+                    .get_nation(to)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_else(|| "Unknown".to_string());
+                report.newspaper_headlines.push(
+                    Headline::new(
+                        format!(
+                            "{from_name} broke {:?} with {to_name}",
+                            treaty_type
+                        ),
+                        HeadlineCategory::Diplomacy,
+                    )
+                    .for_nations(&[from, to]),
+                );
             }
         }
     }

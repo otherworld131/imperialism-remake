@@ -932,29 +932,34 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
             let from = NationId(from);
             let to = NationId(to);
             let amount = Money::dollars(amount_dollars as i64);
-            if let Some(n) = game.get_nation_mut(from) {
-                if n.economy.treasury < amount {
-                    return CommandResult::error("insufficient funds");
-                }
-                n.economy.treasury -= amount;
+            match game.queue_direct_diplomacy_action(
+                domain::game_state::PendingDiplomacyAction::SendGrant { from, to, amount },
+            ) {
+                Ok(_) => CommandResult::success(),
+                Err(e) => CommandResult::error(e),
             }
-            if let Some(n) = game.get_nation_mut(to) {
-                n.economy.treasury += amount;
-            }
-            CommandResult::success()
         }
 
-        DiplomacyBreakTreaty { from, to } => {
+        DiplomacyBreakTreaty {
+            from,
+            to,
+            treaty_type,
+        } => {
             let from = NationId(from);
             let to = NationId(to);
-            use domain::events::TreatyType;
-            game.world
-                .diplomacy
-                .break_treaty(from, to, TreatyType::Alliance);
-            game.world
-                .diplomacy
-                .break_treaty(from, to, TreatyType::NonAggressionPact);
-            CommandResult::success()
+            let Some(treaty_type) = crate::parse_treaty_type(&treaty_type) else {
+                return CommandResult::error("unknown treaty type");
+            };
+            match game.queue_direct_diplomacy_action(
+                domain::game_state::PendingDiplomacyAction::BreakTreaty {
+                    from,
+                    to,
+                    treaty_type,
+                },
+            ) {
+                Ok(_) => CommandResult::success(),
+                Err(e) => CommandResult::error(e),
+            }
         }
 
         DiplomacyProposePeace { from, to } => {
@@ -1619,7 +1624,12 @@ mod tests {
             .find(|n| n.id != player && !n.is_great_power() && !n.diplomacy.is_in_anarchy)
             .expect("test game must have a valid minor-nation target")
             .id;
-        let treasury_before = game.get_nation(player).unwrap().economy.treasury.as_dollars();
+        let treasury_before = game
+            .get_nation(player)
+            .unwrap()
+            .economy
+            .treasury
+            .as_dollars();
 
         let result = apply_command(
             &mut game,
@@ -1638,7 +1648,11 @@ mod tests {
             "consulate should be queued"
         );
         assert_eq!(
-            game.get_nation(player).unwrap().economy.treasury.as_dollars(),
+            game.get_nation(player)
+                .unwrap()
+                .economy
+                .treasury
+                .as_dollars(),
             treasury_before,
             "treasury should not be charged before the turn resolves"
         );
@@ -1661,7 +1675,12 @@ mod tests {
                 .economy
                 .treasury
                 .as_dollars()
-                - game.get_nation(player).unwrap().economy.treasury.as_dollars(),
+                - game
+                    .get_nation(player)
+                    .unwrap()
+                    .economy
+                    .treasury
+                    .as_dollars(),
             game.game_data.game_config.consulate_cost,
             "queued consulate should make the post-turn treasury exactly one consulate cost lower than baseline"
         );
@@ -1731,7 +1750,10 @@ mod tests {
         );
         assert!(result.ok, "{:?}", result.message);
         assert!(
-            !game.world.diplomacy.has_treaty(player, target, TreatyType::Alliance),
+            !game
+                .world
+                .diplomacy
+                .has_treaty(player, target, TreatyType::Alliance),
             "alliance should not apply immediately"
         );
         assert_eq!(

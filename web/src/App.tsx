@@ -17,7 +17,7 @@ import {
   getDiplomacyScreenData,
   diplomacyBuildConsulate, diplomacyBuildEmbassy, diplomacyProposeNap,
   diplomacyProposeAlliance, diplomacyDeclareWar, diplomacySendGrant,
-  diplomacyBreakTreaty, diplomacyProposePeace,
+  diplomacyBreakTreaty, diplomacyProposePeace, diplomacyDismissPendingAction, diplomacyDismissOutgoingProposal,
   getPendingProposals, acceptProposal, rejectProposal,
   getNewspaperArchive, getNewspaperArchiveSince,
   getPoliticalSnapshot,
@@ -786,10 +786,29 @@ function App() {
         latestNewsArchiveRef.current = [...latestNewsArchiveRef.current, ...turnArchive];
         setArchiveData([]);
         setArchiveLoadState('idle');
-        // Check for pending proposals
+        // Check for pending proposals (auto-ack war declarations).
         const newState = parseGameJson(newJson);
         const nid = newState.human_player_nation;
-        const proposals = await getPendingProposals(newJson, nid);
+        let proposalJson = newJson;
+        let proposals = await getPendingProposals(proposalJson, nid);
+        const warDecls = proposals?.proposals.filter(p => p.proposal_type === 'WarDeclaration') ?? [];
+        if (warDecls.length > 0) {
+          const declBy = [...new Set(warDecls.map(p => p.from_nation_name))];
+          for (const p of [...warDecls].sort((a, b) => b.index - a.index)) {
+            const cmd = await acceptProposal(proposalJson, nid, p.index);
+            if (!cmd.ok || !cmd.gameJson) {
+              if (cmd.error) showError(`War notice acknowledgement failed: ${cmd.error}`);
+              break;
+            }
+            proposalJson = cmd.gameJson;
+          }
+          const refreshed = await getPendingProposals(proposalJson, nid);
+          proposals = refreshed;
+          if (proposalJson !== newJson) {
+            if (!applyGameJsonLightweight(proposalJson)) return;
+          }
+          showError(`War declared by ${declBy.join(', ')}. Declaration acknowledged automatically.`);
+        }
         setProposalData(proposals);
         // Clear interaction state
         setProvinceUnits(null);
@@ -800,7 +819,7 @@ function App() {
         setBusyMessage(null);
       }
     });
-  }, [gameJson, gameState, applyGameJsonLightweight, runMutation]);
+  }, [gameJson, gameState, applyGameJsonLightweight, runMutation, showError]);
 
   const dismissNewspaper = useCallback(() => {
     setActiveScreen('map');
@@ -1861,6 +1880,18 @@ function App() {
   const handleDiploDeclareWar = useCallback((tid: number) => makeDiploHandler(diplomacyDeclareWar, 'Declare War')(tid), [makeDiploHandler]);
   const handleDiploProposePeace = useCallback((tid: number) => makeDiploHandler(diplomacyProposePeace, 'Peace')(tid), [makeDiploHandler]);
 
+  const handleDismissPendingAction = useCallback(async (targetId: number, actionKey: string) => {
+    await runMutation(async () => {
+      const cmd = actionKey === 'nap' || actionKey === 'alliance' || actionKey === 'peace'
+        ? await diplomacyDismissOutgoingProposal(gameJson, playerNationId, targetId)
+        : await diplomacyDismissPendingAction(gameJson, playerNationId, targetId, actionKey);
+      if (cmd.ok && cmd.gameJson) await applyGameJson(cmd.gameJson);
+      else if (cmd.error && !cmd.error.includes('no pending diplomacy action') && !cmd.error.includes('no outgoing proposal')) {
+        showError(`Dismiss proposal failed: ${cmd.error}`);
+      }
+    });
+  }, [gameJson, playerNationId, applyGameJson, showError, runMutation]);
+
   const handleDiploSendGrant = useCallback(async (targetId: number, amount: number) => {
     await runMutation(async () => {
       const cmd = await diplomacySendGrant(gameJson, playerNationId, targetId, amount);
@@ -2244,6 +2275,7 @@ function App() {
               selectedTileKey={selectedTile ? `${selectedTile.q},${selectedTile.r}` : null}
               lockZoom={activeScreen === 'diplomacy'}
               showDiplomacyMarkers={mapMode === 'diplomatic'}
+              onPendingTreatyMarkerClick={activeScreen === 'diplomacy' ? handleDismissPendingAction : undefined}
               isDiplomacyTargetMode={activeScreen === 'diplomacy' && queuedDiplomacyAction != null}
               isDiplomacyTargetInvalid={
                 activeScreen === 'diplomacy'

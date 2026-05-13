@@ -1,6 +1,6 @@
 use crate::diplomacy::DiplomacyState;
 use crate::economy::{CashFlow, MarketState, ResourceFlow};
-use crate::events::{Headline, HistoryEvent};
+use crate::events::{Headline, HistoryEvent, TreatyType};
 use crate::map::{HexMap, Province};
 use crate::military::{BattleResult, NavalBattleResult};
 use crate::nation::Nation;
@@ -163,6 +163,16 @@ pub enum PendingDiplomacyAction {
     BuildConsulate { player: NationId, target: NationId },
     BuildEmbassy { player: NationId, target: NationId },
     DeclareWar { from: NationId, to: NationId },
+    SendGrant {
+        from: NationId,
+        to: NationId,
+        amount: Money,
+    },
+    BreakTreaty {
+        from: NationId,
+        to: NationId,
+        treaty_type: TreatyType,
+    },
 }
 
 // ── GameState ────────────────────────────────────────────────────────
@@ -390,6 +400,22 @@ impl From<&dgs::TransientState> for TransientState {
                             to: (*to).into(),
                         }
                     }
+                    dgs::PendingDiplomacyAction::SendGrant { from, to, amount } => {
+                        PendingDiplomacyAction::SendGrant {
+                            from: (*from).into(),
+                            to: (*to).into(),
+                            amount: (*amount).into(),
+                        }
+                    }
+                    dgs::PendingDiplomacyAction::BreakTreaty {
+                        from,
+                        to,
+                        treaty_type,
+                    } => PendingDiplomacyAction::BreakTreaty {
+                        from: (*from).into(),
+                        to: (*to).into(),
+                        treaty_type: (*treaty_type).into(),
+                    },
                 })
                 .collect(),
             last_cash_flow: v
@@ -455,6 +481,22 @@ impl From<TransientState> for dgs::TransientState {
                             to: to.into(),
                         }
                     }
+                    PendingDiplomacyAction::SendGrant { from, to, amount } => {
+                        dgs::PendingDiplomacyAction::SendGrant {
+                            from: from.into(),
+                            to: to.into(),
+                            amount: amount.into(),
+                        }
+                    }
+                    PendingDiplomacyAction::BreakTreaty {
+                        from,
+                        to,
+                        treaty_type,
+                    } => dgs::PendingDiplomacyAction::BreakTreaty {
+                        from: from.into(),
+                        to: to.into(),
+                        treaty_type: treaty_type.into(),
+                    },
                 })
                 .collect(),
             pending_ai_cash_spending: Vec::new(),

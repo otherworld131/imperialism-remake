@@ -6,7 +6,7 @@ use crate::economy::civilians::{Civilian, CivilianType};
 use crate::economy::ledger::{CashFlow, CashSink, ResourceFlow};
 use crate::economy::market::MarketState;
 use crate::economy::observability::PendingEconomyOrder;
-use crate::events::{DomainEvent, Headline, HistoryEvent};
+use crate::events::{DomainEvent, Headline, HistoryEvent, TreatyType};
 use crate::map::{HexMap, Province, SeaZone, UnitId};
 use crate::military::combat::BattleResult;
 use crate::military::naval::NavalBattleResult;
@@ -195,20 +195,34 @@ pub enum PendingDiplomacyAction {
     BuildConsulate { player: NationId, target: NationId },
     BuildEmbassy { player: NationId, target: NationId },
     DeclareWar { from: NationId, to: NationId },
+    SendGrant {
+        from: NationId,
+        to: NationId,
+        amount: Money,
+    },
+    BreakTreaty {
+        from: NationId,
+        to: NationId,
+        treaty_type: TreatyType,
+    },
 }
 
 impl PendingDiplomacyAction {
     pub fn actor(&self) -> NationId {
         match self {
             Self::BuildConsulate { player, .. } | Self::BuildEmbassy { player, .. } => *player,
-            Self::DeclareWar { from, .. } => *from,
+            Self::DeclareWar { from, .. }
+            | Self::SendGrant { from, .. }
+            | Self::BreakTreaty { from, .. } => *from,
         }
     }
 
     pub fn target(&self) -> NationId {
         match self {
             Self::BuildConsulate { target, .. } | Self::BuildEmbassy { target, .. } => *target,
-            Self::DeclareWar { to, .. } => *to,
+            Self::DeclareWar { to, .. }
+            | Self::SendGrant { to, .. }
+            | Self::BreakTreaty { to, .. } => *to,
         }
     }
 }
@@ -294,40 +308,87 @@ impl GameState {
                 PendingDiplomacyAction::BuildConsulate { .. } => {
                     self.game_data.game_config.consulate_cost
                 }
-                PendingDiplomacyAction::BuildEmbassy { .. } => self.game_data.game_config.embassy_cost,
+                PendingDiplomacyAction::BuildEmbassy { .. } => {
+                    self.game_data.game_config.embassy_cost
+                }
                 PendingDiplomacyAction::DeclareWar { .. } => 0,
+                PendingDiplomacyAction::SendGrant { amount, .. } => amount.as_dollars(),
+                PendingDiplomacyAction::BreakTreaty { .. } => 0,
             })
             .sum()
     }
 
     pub fn has_pending_consulate(&self, player: NationId, target: NationId) -> bool {
-        self.transient.pending_diplomacy_actions.iter().any(|action| {
-            matches!(
-                action,
-                PendingDiplomacyAction::BuildConsulate { player: p, target: t }
-                    if *p == player && *t == target
-            )
-        })
+        self.transient
+            .pending_diplomacy_actions
+            .iter()
+            .any(|action| {
+                matches!(
+                    action,
+                    PendingDiplomacyAction::BuildConsulate { player: p, target: t }
+                        if *p == player && *t == target
+                )
+            })
     }
 
     pub fn has_pending_embassy(&self, player: NationId, target: NationId) -> bool {
-        self.transient.pending_diplomacy_actions.iter().any(|action| {
-            matches!(
-                action,
-                PendingDiplomacyAction::BuildEmbassy { player: p, target: t }
-                    if *p == player && *t == target
-            )
-        })
+        self.transient
+            .pending_diplomacy_actions
+            .iter()
+            .any(|action| {
+                matches!(
+                    action,
+                    PendingDiplomacyAction::BuildEmbassy { player: p, target: t }
+                        if *p == player && *t == target
+                )
+            })
     }
 
     pub fn has_pending_war(&self, from: NationId, to: NationId) -> bool {
-        self.transient.pending_diplomacy_actions.iter().any(|action| {
-            matches!(
-                action,
-                PendingDiplomacyAction::DeclareWar { from: a, to: b }
-                    if *a == from && *b == to
-            )
-        })
+        self.transient
+            .pending_diplomacy_actions
+            .iter()
+            .any(|action| {
+                matches!(
+                    action,
+                    PendingDiplomacyAction::DeclareWar { from: a, to: b }
+                        if *a == from && *b == to
+                )
+            })
+    }
+
+    pub fn has_pending_grant(&self, from: NationId, to: NationId) -> bool {
+        self.transient
+            .pending_diplomacy_actions
+            .iter()
+            .any(|action| {
+                matches!(
+                    action,
+                    PendingDiplomacyAction::SendGrant { from: a, to: b, .. }
+                        if *a == from && *b == to
+                )
+            })
+    }
+
+    pub fn has_pending_break_treaty(
+        &self,
+        from: NationId,
+        to: NationId,
+        treaty_type: TreatyType,
+    ) -> bool {
+        self.transient
+            .pending_diplomacy_actions
+            .iter()
+            .any(|action| {
+                matches!(
+                    action,
+                    PendingDiplomacyAction::BreakTreaty {
+                        from: a,
+                        to: b,
+                        treaty_type: pending,
+                    } if *a == from && *b == to && *pending == treaty_type
+                )
+            })
     }
 
     pub fn queue_direct_diplomacy_action(
@@ -368,14 +429,10 @@ impl GameState {
             }
             PendingDiplomacyAction::BuildEmbassy { player, target } => {
                 if target_nation.is_great_power() {
-                    return Err(
-                        "Great Powers already use embassy-based diplomacy.".to_string()
-                    );
+                    return Err("Great Powers already use embassy-based diplomacy.".to_string());
                 }
                 if !self.world.diplomacy.has_consulate(player, target) {
-                    return Err(
-                        "illegal move: Must build consulate before embassy".to_string()
-                    );
+                    return Err("illegal move: Must build consulate before embassy".to_string());
                 }
                 if self.world.diplomacy.has_embassy(player, target) {
                     return Err("illegal move: Embassy already established".to_string());
@@ -398,6 +455,34 @@ impl GameState {
                 }
                 if !self.can_project_war_against(from, to) {
                     return Err("target nation is unreachable by land or ocean".to_string());
+                }
+            }
+            PendingDiplomacyAction::SendGrant { from, to, amount } => {
+                if amount.as_dollars() <= 0 {
+                    return Err("grant amount must be positive".to_string());
+                }
+                if self.world.diplomacy.is_at_war(from, to) {
+                    return Err("cannot send grants while at war".to_string());
+                }
+                if self.has_pending_grant(from, to) {
+                    return Err("Grant already queued for end turn".to_string());
+                }
+                let available =
+                    actor_nation.economy.treasury.as_dollars() - self.pending_diplomacy_reserved_dollars(from);
+                if available < amount.as_dollars() {
+                    return Err("not enough treasury".to_string());
+                }
+            }
+            PendingDiplomacyAction::BreakTreaty {
+                from,
+                to,
+                treaty_type,
+            } => {
+                if !self.world.diplomacy.has_treaty(from, to, treaty_type) {
+                    return Err("treaty is not active".to_string());
+                }
+                if self.has_pending_break_treaty(from, to, treaty_type) {
+                    return Err("Treaty break already queued for end turn".to_string());
                 }
             }
         }
@@ -484,10 +569,7 @@ impl GameState {
         false
     }
 
-    fn nation_ocean_zones(
-        &self,
-        nation_id: NationId,
-    ) -> HashSet<crate::map::sea_zones::SeaZoneId> {
+    fn nation_ocean_zones(&self, nation_id: NationId) -> HashSet<crate::map::sea_zones::SeaZoneId> {
         let mut zones = HashSet::new();
         let Some(nation) = self.get_nation(nation_id) else {
             return zones;
