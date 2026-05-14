@@ -67,49 +67,22 @@ impl std::fmt::Display for Commodity {
     }
 }
 
-/// Price for a material using Lua-configurable GameConfig values.
-pub fn material_price(material: MaterialType, cfg: &crate::data::GameConfig) -> Money {
-    match material {
-        MaterialType::Lumber => Money::dollars(cfg.lumber_price),
-        MaterialType::Steel => Money::dollars(cfg.steel_price),
-        MaterialType::Fabric => Money::dollars(cfg.fabric_price),
-        MaterialType::Paper => Money::dollars(cfg.paper_price),
-        MaterialType::CannedFood => Money::dollars(cfg.canned_food_price),
-    }
-}
-
-/// Price for a finished good using Lua-configurable GameConfig values.
-pub fn goods_price(goods: GoodsType, cfg: &crate::data::GameConfig) -> Money {
-    match goods {
-        GoodsType::Furniture => Money::dollars(cfg.furniture_price),
-        GoodsType::Clothing => Money::dollars(cfg.clothing_price),
-        GoodsType::Hardware => Money::dollars(cfg.hardware_price),
-        GoodsType::Arms => Money::dollars(cfg.arms_price),
-    }
-}
-
-/// Price for any commodity type using Lua-configurable GameConfig values.
-pub fn commodity_price(commodity: Commodity, cfg: &crate::data::GameConfig) -> Money {
-    match commodity {
-        Commodity::Resource(r) => base_price(r),
-        Commodity::Material(m) => material_price(m, cfg),
-        Commodity::Goods(g) => goods_price(g, cfg),
-    }
-}
-
-/// A player's order to sell a commodity on the world market.
+/// A player's order to sell a resource into the trade-offer pool.
+///
+/// The player's offer competes alongside Minor Nation offers; any GP (or
+/// minor) with a matching bid can buy. No fallback "world market" exists —
+/// unmatched offers are discarded at end-of-turn.
 #[derive(Debug, Clone)]
 pub struct PlayerSellOrder {
-    pub commodity: Commodity,
+    pub resource: ResourceType,
     pub quantity: u32,
 }
 
-/// A player's order to buy a commodity. Resource buys are filled from the
-/// offer pool (minor nations + GPs); material/goods buys are filled from the
-/// world market at base price (symmetric with auto-sell).
+/// A player's order to buy a resource via the bid pool. Filled from Minor
+/// Nation offers and GP-placed offers; unmatched bids are discarded.
 #[derive(Debug, Clone)]
 pub struct PlayerBuyOrder {
-    pub commodity: Commodity,
+    pub resource: ResourceType,
     pub quantity: u32,
     pub max_price_per_unit: Money,
 }
@@ -477,19 +450,11 @@ pub enum ManufacturedCommodity {
     Goods(crate::types::GoodsType),
 }
 
-/// Generate buy bids from Minor Nations for one manufactured commodity each turn.
-///
-/// Each non-anarchic minor nation always wants to purchase exactly 1 unit of one
-/// randomly chosen manufactured good (Material or GoodsType) per turn.  The
-/// `price_per_unit` they are willing to pay is `buy_price`.  `seed` drives the
-/// PRNG so results are deterministic for a given turn.
-pub fn generate_minor_nation_goods_bids(
-    nations: &[Nation],
-    buy_price: Money,
-    seed: u64,
-) -> Vec<MinorGoodsBid> {
+/// The full set of manufactured commodities Great Powers can produce and offer
+/// for sale to minor nations each turn.
+pub const ALL_MANUFACTURED: &[ManufacturedCommodity] = {
     use crate::types::{GoodsType, MaterialType};
-    const ALL_MANUFACTURED: &[ManufacturedCommodity] = &[
+    &[
         ManufacturedCommodity::Material(MaterialType::Lumber),
         ManufacturedCommodity::Material(MaterialType::Steel),
         ManufacturedCommodity::Material(MaterialType::Fabric),
@@ -499,47 +464,16 @@ pub fn generate_minor_nation_goods_bids(
         ManufacturedCommodity::Goods(GoodsType::Clothing),
         ManufacturedCommodity::Goods(GoodsType::Hardware),
         ManufacturedCommodity::Goods(GoodsType::Arms),
-    ];
+    ]
+};
 
-    let mut bids = Vec::new();
-    let mut rng_state = seed.max(1);
-
-    for nation in nations {
-        if nation.is_great_power()
-            || nation.diplomacy.is_in_anarchy
-            || nation.diplomacy.integrated_by.is_some()
-        {
-            continue;
-        }
-
-        // xorshift64 step — pick one manufactured commodity for this minor
-        rng_state ^= rng_state << 13;
-        rng_state ^= rng_state >> 7;
-        rng_state ^= rng_state << 17;
-        let idx = ((rng_state >> 32) as usize) % ALL_MANUFACTURED.len();
-        let commodity = ALL_MANUFACTURED[idx];
-
-        // Minor nations bid as a resource bid only for Resource-typed goods;
-        // for Material/Goods we record the purchase as a goods-sale-style
-        // event on the seller side.  Since TradeBid is resource-only we model
-        // the manufactured-good purchase as a special one-unit resource phantom.
-        // Instead, we add it to the bids using a dedicated field; for now we
-        // record the desire as a minor-goods-bid separate from the resource pool.
-        bids.push(MinorGoodsBid {
-            buyer: nation.id,
-            commodity,
-            quantity: 1,
-            price_per_unit: buy_price,
-        });
-    }
-
-    bids
-}
-
-/// A bid from a minor nation to purchase one unit of a manufactured commodity.
+/// An offer from a Great Power to sell a manufactured commodity to minor
+/// nations at the fixed `minor_goods_buy_price`. Quantity is the seller's
+/// surplus above its reserve for that commodity. Filled by the first willing
+/// minor nation (sorted by relationship, with a per-minor skip chance).
 #[derive(Debug, Clone)]
-pub struct MinorGoodsBid {
-    pub buyer: NationId,
+pub struct ManufacturedOffer {
+    pub seller: NationId,
     pub commodity: ManufacturedCommodity,
     pub quantity: u32,
     pub price_per_unit: Money,
@@ -1562,82 +1496,6 @@ mod tests {
         );
     }
 
-    // ── generate_minor_nation_goods_bids ───────────────────────
-
-    #[test]
-    fn goods_bids_one_per_minor_nation() {
-        let nations = vec![make_minor_nation(1)];
-        let minor_count = nations
-            .iter()
-            .filter(|n| !n.is_great_power() && !n.diplomacy.is_in_anarchy)
-            .count();
-        let bids = generate_minor_nation_goods_bids(&nations, Money::dollars(150), 999);
-        assert_eq!(bids.len(), minor_count);
-    }
-
-    #[test]
-    fn goods_bids_use_specified_price() {
-        let nations = vec![make_minor_nation(1)];
-        let bids = generate_minor_nation_goods_bids(&nations, Money::dollars(200), 1);
-        for bid in &bids {
-            assert_eq!(bid.price_per_unit, Money::dollars(200));
-            assert_eq!(bid.quantity, 1);
-        }
-    }
-
-    #[test]
-    fn goods_bids_are_deterministic() {
-        let nations = vec![make_minor_nation(1)];
-        let a = generate_minor_nation_goods_bids(&nations, Money::dollars(150), 77777);
-        let b = generate_minor_nation_goods_bids(&nations, Money::dollars(150), 77777);
-        assert_eq!(a.len(), b.len());
-        for (x, y) in a.iter().zip(b.iter()) {
-            assert_eq!(x.buyer, y.buyer);
-            assert_eq!(x.commodity, y.commodity);
-        }
-    }
-
-    #[test]
-    fn goods_bids_differ_with_different_seeds() {
-        let nations = make_nations_with_many_minors();
-        let a = generate_minor_nation_goods_bids(&nations, Money::dollars(150), 1);
-        let b = generate_minor_nation_goods_bids(&nations, Money::dollars(150), 999999);
-        // With enough minor nations, at least some commodities should differ
-        let same = a
-            .iter()
-            .zip(b.iter())
-            .filter(|(x, y)| x.commodity == y.commodity)
-            .count();
-        assert!(
-            same < a.len(),
-            "Expected at least some commodities to differ with different seeds"
-        );
-    }
-
-    #[test]
-    fn anarchic_minor_nations_excluded_from_bids() {
-        let mut nations = vec![make_minor_nation(1)];
-        for n in &mut nations {
-            if !n.is_great_power() {
-                n.diplomacy.is_in_anarchy = true;
-                break;
-            }
-        }
-        let bids = generate_minor_nation_goods_bids(&nations, Money::dollars(150), 1);
-        assert_eq!(bids.len(), 0);
-    }
-
-    #[test]
-    fn integrated_minor_nations_excluded_from_bids() {
-        let mut nations = vec![make_minor_nation(1), make_minor_nation(2)];
-        // Mark minor 1 as integrated (absorbed by another nation)
-        nations[0].diplomacy.integrated_by = Some(NationId(99));
-        let bids = generate_minor_nation_goods_bids(&nations, Money::dollars(150), 1);
-        // Only minor 2 should bid
-        assert_eq!(bids.len(), 1);
-        assert_eq!(bids[0].buyer, NationId(2));
-    }
-
     fn make_minor_nation(id: u32) -> crate::nation::Nation {
         use crate::nation::{Nation, NationColor};
         Nation::new(
@@ -1647,10 +1505,6 @@ mod tests {
             NationType::MinorNation,
             ProvinceId(id),
         )
-    }
-
-    fn make_nations_with_many_minors() -> Vec<crate::nation::Nation> {
-        (1..=15).map(make_minor_nation).collect()
     }
 
     // ── TradeHistoryEntry ──────────────────────────────────────

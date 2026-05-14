@@ -240,17 +240,6 @@ pub struct GameConfig {
     pub priority_minor_targets_balanced: u32,
     pub priority_minor_targets_economic: u32,
     pub priority_minor_targets_diplomatic: u32,
-    // Trade prices — materials (first-level processed)
-    pub lumber_price: i64,
-    pub steel_price: i64,
-    pub fabric_price: i64,
-    pub paper_price: i64,
-    pub arms_price: i64,
-    pub canned_food_price: i64,
-    // Trade prices — finished goods (second-level processed)
-    pub furniture_price: i64,
-    pub clothing_price: i64,
-    pub hardware_price: i64,
     // AI trade behaviour
     pub ai_consulate_target: u32,
     pub ai_consulate_priority_score: f64,
@@ -327,6 +316,8 @@ pub struct GameConfig {
     pub minor_resource_withhold_chance: u32,
     // Price minor nations pay per unit when buying manufactured goods (materials/finished goods).
     pub minor_goods_buy_price: i64,
+    // Chance (0–100) that an individual minor nation skips a given manufactured-goods offer this turn.
+    pub minor_goods_skip_chance: u32,
     /// Free-form string written from `scripts/config/game.lua`. Surfaced to
     /// the browser via `wasm_debug_marker()`. Edit the Lua value, rebuild
     /// WASM, and read the new value from the JS console — proves the
@@ -460,15 +451,6 @@ impl Default for GameConfig {
             priority_minor_targets_balanced: 4,
             priority_minor_targets_economic: 4,
             priority_minor_targets_diplomatic: 5,
-            lumber_price: 150,
-            steel_price: 200,
-            fabric_price: 150,
-            paper_price: 100,
-            arms_price: 300,
-            canned_food_price: 100,
-            furniture_price: 400,
-            clothing_price: 400,
-            hardware_price: 500,
             ai_consulate_target: 4,
             ai_consulate_priority_score: 30.0,
             ai_consulate_beyond_target_score: 3.0,
@@ -521,6 +503,7 @@ impl Default for GameConfig {
             ai_consulate_treasury_threshold: 2000,
             minor_resource_withhold_chance: 20,
             minor_goods_buy_price: 150,
+            minor_goods_skip_chance: 20,
             debug_marker: "rust-default".to_string(),
         }
     }

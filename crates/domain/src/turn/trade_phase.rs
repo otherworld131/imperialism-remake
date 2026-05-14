@@ -11,7 +11,6 @@ pub(super) fn resolve_trade_session(
     blockade_capacity: &std::collections::HashMap<NationId, u32>,
 ) {
     let human_id = game.human_player_nation;
-    let cfg = game.game_data.game_config.clone();
 
     // 0. Deduct subsidy costs from Great Powers (skip anarchic nations)
     let gp_ids: Vec<NationId> = game
@@ -64,187 +63,18 @@ pub(super) fn resolve_trade_session(
     if let Some(human) = game.get_nation(human_id) {
         let sell_orders: Vec<trade::PlayerSellOrder> = human.diplomacy.player_sell_orders.clone();
         for order in &sell_orders {
-            if let trade::Commodity::Resource(r) = order.commodity
-                && human.resource_amount(r) >= order.quantity
-                && order.quantity > 0
-            {
+            if human.resource_amount(order.resource) >= order.quantity && order.quantity > 0 {
                 offers.push(trade::TradeOffer {
                     seller: human_id,
-                    resource: r,
+                    resource: order.resource,
                     quantity: order.quantity,
-                    price_per_unit: trade::base_price(r),
+                    price_per_unit: trade::base_price(order.resource),
                 });
             }
         }
     }
-
-    // 1c. Auto-sell player's material/goods sell orders (world market demand).
-    // Also build market-archive rows for these world-market sales so the
-    // Historical Market tab surfaces them alongside resource trades.
+    // Extra market-archive rows from non-bid-pool flows (minor goods bids).
     let mut extra_market_rows: Vec<crate::game_state::MarketOfferRecord> = Vec::new();
-    let mut player_goods_revenue = Money::ZERO;
-    if let Some(human) = game.get_nation(human_id) {
-        let sell_orders: Vec<trade::PlayerSellOrder> = human.diplomacy.player_sell_orders.clone();
-        let mut goods_sold: Vec<(trade::Commodity, u32, Money)> = Vec::new();
-
-        for order in &sell_orders {
-            match order.commodity {
-                trade::Commodity::Material(m) => {
-                    let stock = human.economy.materials.get(&m).copied().unwrap_or(0);
-                    let qty = order.quantity.min(stock);
-                    if qty > 0 {
-                        let price = trade::material_price(m, &cfg);
-                        let revenue = Money::dollars(price.as_dollars() * qty as i64);
-                        player_goods_revenue += revenue;
-                        goods_sold.push((order.commodity, qty, revenue));
-                    }
-                }
-                trade::Commodity::Goods(g) => {
-                    let stock = human.economy.goods.get(&g).copied().unwrap_or(0);
-                    let qty = order.quantity.min(stock);
-                    if qty > 0 {
-                        let price = trade::goods_price(g, &cfg);
-                        let revenue = Money::dollars(price.as_dollars() * qty as i64);
-                        player_goods_revenue += revenue;
-                        goods_sold.push((order.commodity, qty, revenue));
-                    }
-                }
-                trade::Commodity::Resource(_) => {} // handled in 1b via offer pool
-            }
-        }
-        // Apply material/goods sales
-        if let Some(human) = game.get_nation_mut(human_id) {
-            human.economy.treasury += player_goods_revenue;
-            human.archives.goods_sales_revenue_dollars += player_goods_revenue.as_dollars();
-            if player_goods_revenue != Money::ZERO {
-                report
-                    .goods_auto_sale_revenue
-                    .push((human_id, player_goods_revenue));
-            }
-            for (commodity, qty, revenue) in &goods_sold {
-                let commodity_label = match commodity {
-                    trade::Commodity::Material(m) => format!("{m:?}"),
-                    trade::Commodity::Goods(g) => format!("{g:?}"),
-                    trade::Commodity::Resource(r) => format!("{r:?}"),
-                };
-                match commodity {
-                    trade::Commodity::Material(m) => {
-                        if let Some(stock) = human.economy.materials.get_mut(m) {
-                            *stock = stock.saturating_sub(*qty);
-                        }
-                        report
-                            .stockpile_flows
-                            .auto_sold_materials
-                            .push((human_id, *m, *qty));
-                    }
-                    trade::Commodity::Goods(g) => {
-                        if let Some(stock) = human.economy.goods.get_mut(g) {
-                            *stock = stock.saturating_sub(*qty);
-                        }
-                        report
-                            .stockpile_flows
-                            .auto_sold_goods
-                            .push((human_id, *g, *qty));
-                    }
-                    trade::Commodity::Resource(_) => {}
-                }
-                // Record auto-sale in trade history with world-market sentinel partner (NationId(0))
-                if *qty > 0 {
-                    let price_per_unit = if *qty > 0 {
-                        Money::dollars(revenue.as_dollars() / *qty as i64)
-                    } else {
-                        Money::ZERO
-                    };
-                    human.archives.trade_history.push(trade::TradeHistoryEntry {
-                        turn: current_turn,
-                        partner: NationId(0),
-                        resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
-                        commodity_label: commodity_label.clone(),
-                        quantity: *qty,
-                        total_cost: *revenue,
-                        bought: false,
-                    });
-                    extra_market_rows.push(crate::game_state::MarketOfferRecord {
-                        seller: human_id,
-                        resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
-                        commodity_label,
-                        offered: *qty,
-                        price_per_unit,
-                        fills: vec![crate::game_state::MarketFillRecord {
-                            buyer: NationId(0),
-                            quantity: *qty,
-                            price_per_unit,
-                        }],
-                    });
-                }
-            }
-        }
-    }
-
-    // 1d. Auto-buy player's material/goods buy orders from the world market.
-    // Symmetric with 1c: pays world-market price, treasury-gated, capped at
-    // the player's max_price_per_unit. Resource orders fall through to the
-    // offer pool in step 2.
-    if let Some(human) = game.get_nation(human_id) {
-        let buy_orders: Vec<trade::PlayerBuyOrder> = human.diplomacy.player_buy_orders.clone();
-        for order in &buy_orders {
-            let (commodity_label, unit_price) = match order.commodity {
-                trade::Commodity::Material(m) => (format!("{m:?}"), trade::material_price(m, &cfg)),
-                trade::Commodity::Goods(g) => (format!("{g:?}"), trade::goods_price(g, &cfg)),
-                trade::Commodity::Resource(_) => continue, // handled in step 2
-            };
-            if order.quantity == 0 || unit_price > order.max_price_per_unit {
-                continue;
-            }
-            let treasury = game
-                .get_nation(human_id)
-                .map(|n| n.economy.treasury)
-                .unwrap_or(Money::ZERO);
-            let affordable_qty = if unit_price.as_dollars() > 0 {
-                (treasury.as_dollars() / unit_price.as_dollars()).max(0) as u32
-            } else {
-                order.quantity
-            };
-            let qty = order.quantity.min(affordable_qty);
-            if qty == 0 {
-                continue;
-            }
-            let total_cost = Money::dollars(unit_price.as_dollars() * qty as i64);
-            if let Some(buyer) = game.get_nation_mut(human_id) {
-                buyer.economy.treasury -= total_cost;
-                match order.commodity {
-                    trade::Commodity::Material(m) => {
-                        *buyer.economy.materials.entry(m).or_insert(0) += qty;
-                    }
-                    trade::Commodity::Goods(g) => {
-                        *buyer.economy.goods.entry(g).or_insert(0) += qty;
-                    }
-                    trade::Commodity::Resource(_) => {}
-                }
-                buyer.archives.trade_history.push(trade::TradeHistoryEntry {
-                    turn: current_turn,
-                    partner: NationId(0),
-                    resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
-                    commodity_label: commodity_label.clone(),
-                    quantity: qty,
-                    total_cost,
-                    bought: true,
-                });
-            }
-            extra_market_rows.push(crate::game_state::MarketOfferRecord {
-                seller: NationId(0),
-                resource: ResourceType::Timber,
-                commodity_label,
-                offered: qty,
-                price_per_unit: unit_price,
-                fills: vec![crate::game_state::MarketFillRecord {
-                    buyer: human_id,
-                    quantity: qty,
-                    price_per_unit: unit_price,
-                }],
-            });
-        }
-    }
 
     // 2. Generate bids: AI GPs use need-based auto-bids; the human-controlled
     //    GP uses manual buy orders. In observer mode the human seat is a
@@ -255,21 +85,17 @@ pub(super) fn resolve_trade_session(
     for gp_id in &gp_ids {
         if *gp_id == human_id && !game.observer_mode {
             // Use player's manual buy orders instead of auto-generated bids.
-            // Resource buys go through the offer pool; material/goods buys
-            // are fulfilled separately from the world market.
             if let Some(human) = game.get_nation(*gp_id) {
                 for order in &human.diplomacy.player_buy_orders {
                     if order.quantity == 0 {
                         continue;
                     }
-                    if let trade::Commodity::Resource(r) = order.commodity {
-                        all_bids.push(trade::TradeBid {
-                            buyer: *gp_id,
-                            resource: r,
-                            quantity: order.quantity,
-                            max_price_per_unit: order.max_price_per_unit,
-                        });
-                    }
+                    all_bids.push(trade::TradeBid {
+                        buyer: *gp_id,
+                        resource: order.resource,
+                        quantity: order.quantity,
+                        max_price_per_unit: order.max_price_per_unit,
+                    });
                 }
             }
             continue;
@@ -364,306 +190,238 @@ pub(super) fn resolve_trade_session(
         }
     }
 
-    // 2b. Generate minor nation goods bids and resolve them against GP stockpiles.
-    // Each non-anarchic minor nation always wants to buy 1 unit of one manufactured
-    // commodity (Material or Goods) per turn, chosen randomly but deterministically.
+    // 2b. Each GP offers its manufactured-commodity surplus (stock - reserve)
+    // to minor nations at the fixed `minor_goods_buy_price`. Minors are tried
+    // in order of descending relationship with the seller; each minor has a
+    // `minor_goods_skip_chance` chance of declining a given offer this turn.
+    // If every minor skips, the offer goes unfilled and the surplus stays in
+    // the GP's stockpile until next turn.
     {
-        let minor_bid_seed = game.next_rng_u64();
+        let mut rng_state = game.next_rng_u64().max(1);
         let buy_price = Money::dollars(game.game_data.game_config.minor_goods_buy_price);
-        let minor_bids =
-            trade::generate_minor_nation_goods_bids(&game.world.nations, buy_price, minor_bid_seed);
+        let skip_chance = game.game_data.game_config.minor_goods_skip_chance.min(100);
 
-        for bid in &minor_bids {
-            // Try to fill from human player first, then AI GPs
-            let mut filled = false;
+        // Eligible minor buyers: non-anarchic, non-integrated minor nations.
+        let minor_ids: Vec<NationId> = game
+            .world
+            .nations
+            .iter()
+            .filter(|n| {
+                !n.is_great_power()
+                    && !n.diplomacy.is_in_anarchy
+                    && n.diplomacy.integrated_by.is_none()
+            })
+            .map(|n| n.id)
+            .collect();
 
-            // Check human player stock. Apply the same expansion reserve we
-            // give AI GPs so auto-trade with minors doesn't drain lumber/steel
-            // that the player needs for industrial expansion. The player can
-            // still sell manually via the trade screen, and they can disable
-            // this auto-trade entirely via `auto_trade_with_minors`.
-            let (human_lumber_reserve, human_steel_reserve) = {
-                // The human doesn't have a personality, so use the Balanced
-                // tunables — they're the most conservative across all four
-                // personality presets.
-                let per_turn = crate::ai::economy::expansions_per_turn_target(
-                    game,
-                    crate::ai::common::AiPersonality::Balanced,
-                );
-                let buildings_factor = crate::ai::economy::expansion_reserve_buildings_factor(
-                    game,
-                    crate::ai::common::AiPersonality::Balanced,
-                );
-                crate::ai::economy::reserve_for_expansion(
-                    game,
-                    human_id,
-                    per_turn,
-                    buildings_factor,
-                )
+        // Build (seller, commodity, quantity) offers from every GP's surplus.
+        // Deterministic ordering: by GP id, then commodity enum order.
+        let mut offers: Vec<trade::ManufacturedOffer> = Vec::new();
+        for gp_id in &gp_ids {
+            let personality = crate::ai::common::get_personality(game, *gp_id);
+            // Human doesn't have a personality — use Balanced as the most
+            // conservative preset for human reserves.
+            let reserve_personality = if *gp_id == human_id {
+                crate::ai::common::AiPersonality::Balanced
+            } else {
+                personality
             };
-            // Card #465: also reserve arms for the human's queued recruits.
-            let human_arms_reserve_total: u32 = {
+            let per_turn =
+                crate::ai::economy::expansions_per_turn_target(game, reserve_personality);
+            let buildings_factor =
+                crate::ai::economy::expansion_reserve_buildings_factor(game, reserve_personality);
+            let (lumber_reserve, steel_reserve) =
+                crate::ai::economy::reserve_for_expansion(game, *gp_id, per_turn, buildings_factor);
+            let (m_fabric_reserve, m_lumber_reserve, m_steel_reserve, _m_coal) =
+                crate::ai::naval::merchant_navy_material_reserve(game, *gp_id);
+            let arms_reserve_total: u32 = {
                 let pending = game
-                    .get_nation(human_id)
+                    .get_nation(*gp_id)
                     .map(|n| n.pending_recruits_arms_cost())
                     .unwrap_or(0);
                 pending.saturating_add(crate::ai::economy::arms_sell_reserve(
                     game,
-                    crate::ai::common::AiPersonality::Balanced,
+                    reserve_personality,
                 ))
             };
-            let has_stock = match bid.commodity {
-                trade::ManufacturedCommodity::Material(m) => game
-                    .get_nation(human_id)
-                    .map(|n| {
-                        let stock = n.economy.materials.get(&m).copied().unwrap_or(0);
-                        let reserve = match m {
-                            MaterialType::Lumber => human_lumber_reserve,
-                            MaterialType::Steel => human_steel_reserve,
-                            _ => 0,
-                        };
-                        stock.saturating_sub(reserve) >= bid.quantity
-                    })
-                    .unwrap_or(false),
-                trade::ManufacturedCommodity::Goods(g) => game
-                    .get_nation(human_id)
-                    .map(|n| {
-                        let stock = n.economy.goods.get(&g).copied().unwrap_or(0);
-                        let reserve = match g {
-                            GoodsType::Arms => human_arms_reserve_total,
-                            _ => 0,
-                        };
-                        stock.saturating_sub(reserve) >= bid.quantity
-                    })
-                    .unwrap_or(false),
-            };
 
-            let player_allows_auto_trade = game
-                .get_nation(human_id)
-                .map(|n| n.economy.auto_trade_with_minors)
-                .unwrap_or(true);
-
-            if has_stock && player_allows_auto_trade {
-                let revenue = Money::dollars(buy_price.as_dollars() * bid.quantity as i64);
-                let commodity_label = match bid.commodity {
-                    trade::ManufacturedCommodity::Material(m) => format!("{m:?}"),
-                    trade::ManufacturedCommodity::Goods(g) => format!("{g:?}"),
-                };
-                if let Some(seller) = game.get_nation_mut(human_id) {
-                    seller.economy.treasury += revenue;
-                    match bid.commodity {
-                        trade::ManufacturedCommodity::Material(m) => {
-                            if let Some(s) = seller.economy.materials.get_mut(&m) {
-                                *s = s.saturating_sub(bid.quantity);
-                            }
-                            report.stockpile_flows.auto_sold_materials.push((
-                                human_id,
-                                m,
-                                bid.quantity,
-                            ));
-                        }
-                        trade::ManufacturedCommodity::Goods(g) => {
-                            if let Some(s) = seller.economy.goods.get_mut(&g) {
-                                *s = s.saturating_sub(bid.quantity);
-                            }
-                            report.stockpile_flows.auto_sold_goods.push((
-                                human_id,
-                                g,
-                                bid.quantity,
-                            ));
-                        }
-                    }
-                    seller.archives.goods_sales_revenue_dollars += revenue.as_dollars();
-                    // Record in trade history: player sold manufactured goods to minor nation
-                    seller
-                        .archives
-                        .trade_history
-                        .push(trade::TradeHistoryEntry {
-                            turn: current_turn,
-                            partner: bid.buyer,
-                            resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
-                            commodity_label: commodity_label.clone(),
-                            quantity: bid.quantity,
-                            total_cost: revenue,
-                            bought: false,
-                        });
+            // The human player can disable auto-trade with minors entirely.
+            if *gp_id == human_id {
+                let allow = game
+                    .get_nation(human_id)
+                    .map(|n| n.economy.auto_trade_with_minors)
+                    .unwrap_or(true);
+                if !allow {
+                    continue;
                 }
-                // Record buyer-side entry for the minor nation (bought=true)
-                if let Some(buyer) = game.get_nation_mut(bid.buyer) {
-                    buyer.archives.trade_history.push(trade::TradeHistoryEntry {
-                        turn: current_turn,
-                        partner: human_id,
-                        resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
-                        commodity_label: commodity_label.clone(),
-                        quantity: bid.quantity,
-                        total_cost: revenue,
-                        bought: true,
+            }
+
+            let nation = match game.get_nation(*gp_id) {
+                Some(n) => n,
+                None => continue,
+            };
+            // Hold back the goods queued immigration this turn will consume.
+            let cfg_immig = &game.game_data.game_config;
+            let pending_immig = nation.economy.pending_immigration;
+            let immig_canned_food_reserve =
+                pending_immig.saturating_mul(cfg_immig.immigration_canned_food.max(0) as u32);
+            let immig_clothing_reserve =
+                pending_immig.saturating_mul(cfg_immig.immigration_clothing.max(0) as u32);
+            for &commodity in trade::ALL_MANUFACTURED {
+                let (stock, reserve) = match commodity {
+                    trade::ManufacturedCommodity::Material(m) => {
+                        let stock = nation.economy.materials.get(&m).copied().unwrap_or(0);
+                        let reserve = match m {
+                            MaterialType::Lumber => lumber_reserve.saturating_add(m_lumber_reserve),
+                            MaterialType::Steel => steel_reserve.saturating_add(m_steel_reserve),
+                            MaterialType::Fabric => m_fabric_reserve,
+                            MaterialType::CannedFood => immig_canned_food_reserve,
+                            _ => 0,
+                        };
+                        (stock, reserve)
+                    }
+                    trade::ManufacturedCommodity::Goods(g) => {
+                        let stock = nation.economy.goods.get(&g).copied().unwrap_or(0);
+                        let reserve = match g {
+                            GoodsType::Arms => arms_reserve_total,
+                            GoodsType::Clothing => immig_clothing_reserve,
+                            _ => 0,
+                        };
+                        (stock, reserve)
+                    }
+                };
+                let surplus = stock.saturating_sub(reserve);
+                if surplus > 0 {
+                    offers.push(trade::ManufacturedOffer {
+                        seller: *gp_id,
+                        commodity,
+                        quantity: surplus,
+                        price_per_unit: buy_price,
                     });
                 }
-                // Minor nation buyers don't have tracked cash flows — payment
-                // represents abstracted demand, not a real treasury deduction.
-                // Record the revenue so cash-flow reconciliation accounts for it.
-                report.goods_auto_sale_revenue.push((human_id, revenue));
-                extra_market_rows.push(crate::game_state::MarketOfferRecord {
-                    seller: human_id,
-                    resource: ResourceType::Timber,
-                    commodity_label: commodity_label.clone(),
-                    offered: bid.quantity,
-                    price_per_unit: buy_price,
-                    fills: vec![crate::game_state::MarketFillRecord {
-                        buyer: bid.buyer,
-                        quantity: bid.quantity,
-                        price_per_unit: buy_price,
-                    }],
-                });
-                filled = true;
             }
+        }
 
-            if !filled {
-                // Try AI GP sellers (skip human, already checked).
-                // AI GPs hold back lumber+steel for industrial expansion — see
-                // `crate::ai::economy::reserve_for_expansion`. The auto-bid
-                // resolver must respect that reserve, otherwise minor nations
-                // can drain the entire steel/lumber stockpile every turn and
-                // the AI never has materials available for `expand_building`
-                // to pay for the next mill/factory tier.
-                for gp_id in &gp_ids {
-                    if *gp_id == human_id {
-                        continue;
-                    }
-                    let (lumber_reserve, steel_reserve) = {
-                        let personality = crate::ai::common::get_personality(game, *gp_id);
-                        let per_turn =
-                            crate::ai::economy::expansions_per_turn_target(game, personality);
-                        let buildings_factor =
-                            crate::ai::economy::expansion_reserve_buildings_factor(
-                                game,
-                                personality,
-                            );
-                        crate::ai::economy::reserve_for_expansion(
-                            game,
-                            *gp_id,
-                            per_turn,
-                            buildings_factor,
-                        )
-                    };
-                    // Hold back materials queued for the next merchant hull
-                    // so minor-nation auto-trade can't drain the merchant
-                    // navy's lumber/fabric/steel reservation.
-                    let (m_fabric_reserve, m_lumber_reserve, m_steel_reserve, _m_coal) =
-                        crate::ai::naval::merchant_navy_material_reserve(game, *gp_id);
-                    // Trello card #465: don't sell arms unless stockpile
-                    // covers every queued army recruit plus a per-personality
-                    // reserve. Otherwise the AI can't actually field troops.
-                    let arms_reserve_total: u32 = {
-                        let personality = crate::ai::common::get_personality(game, *gp_id);
-                        let pending = game
-                            .get_nation(*gp_id)
-                            .map(|n| n.pending_recruits_arms_cost())
-                            .unwrap_or(0);
-                        pending.saturating_add(crate::ai::economy::arms_sell_reserve(
-                            game,
-                            personality,
-                        ))
-                    };
-                    let gp_has_stock = match bid.commodity {
-                        trade::ManufacturedCommodity::Material(m) => game
-                            .get_nation(*gp_id)
-                            .map(|n| {
-                                let stock = n.economy.materials.get(&m).copied().unwrap_or(0);
-                                let reserve = match m {
-                                    MaterialType::Lumber => {
-                                        lumber_reserve.saturating_add(m_lumber_reserve)
-                                    }
-                                    MaterialType::Steel => {
-                                        steel_reserve.saturating_add(m_steel_reserve)
-                                    }
-                                    MaterialType::Fabric => m_fabric_reserve,
-                                    _ => 0,
-                                };
-                                stock.saturating_sub(reserve) >= bid.quantity
-                            })
-                            .unwrap_or(false),
-                        trade::ManufacturedCommodity::Goods(g) => game
-                            .get_nation(*gp_id)
-                            .map(|n| {
-                                let stock = n.economy.goods.get(&g).copied().unwrap_or(0);
-                                let reserve = match g {
-                                    GoodsType::Arms => arms_reserve_total,
-                                    _ => 0,
-                                };
-                                stock.saturating_sub(reserve) >= bid.quantity
-                            })
-                            .unwrap_or(false),
-                    };
-                    if gp_has_stock {
-                        let revenue = Money::dollars(buy_price.as_dollars() * bid.quantity as i64);
-                        let commodity_label = match bid.commodity {
-                            trade::ManufacturedCommodity::Material(m) => format!("{m:?}"),
-                            trade::ManufacturedCommodity::Goods(g) => format!("{g:?}"),
-                        };
-                        if let Some(seller) = game.get_nation_mut(*gp_id) {
-                            seller.economy.treasury += revenue;
-                            match bid.commodity {
-                                trade::ManufacturedCommodity::Material(m) => {
-                                    if let Some(s) = seller.economy.materials.get_mut(&m) {
-                                        *s = s.saturating_sub(bid.quantity);
-                                    }
-                                }
-                                trade::ManufacturedCommodity::Goods(g) => {
-                                    if let Some(s) = seller.economy.goods.get_mut(&g) {
-                                        *s = s.saturating_sub(bid.quantity);
-                                    }
-                                }
-                            }
-                            seller.archives.goods_sales_revenue_dollars += revenue.as_dollars();
-                            // Record in trade history: AI GP sold manufactured goods to minor nation
-                            seller
-                                .archives
-                                .trade_history
-                                .push(trade::TradeHistoryEntry {
-                                    turn: current_turn,
-                                    partner: bid.buyer,
-                                    resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
-                                    commodity_label: commodity_label.clone(),
-                                    quantity: bid.quantity,
-                                    total_cost: revenue,
-                                    bought: false,
-                                });
-                        }
-                        // Record buyer-side entry for the minor nation (bought=true)
-                        if let Some(buyer) = game.get_nation_mut(bid.buyer) {
-                            buyer.archives.trade_history.push(trade::TradeHistoryEntry {
-                                turn: current_turn,
-                                partner: *gp_id,
-                                resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
-                                commodity_label: commodity_label.clone(),
-                                quantity: bid.quantity,
-                                total_cost: revenue,
-                                bought: true,
-                            });
-                        }
-                        // Minor nation buyers don't have tracked cash flows.
-                        // Route through pending_ai_cash_income so finalize_cash_flow picks it up.
-                        game.transient
-                            .pending_ai_cash_income
-                            .push((*gp_id, revenue));
-                        extra_market_rows.push(crate::game_state::MarketOfferRecord {
-                            seller: *gp_id,
-                            resource: ResourceType::Timber,
-                            commodity_label,
-                            offered: bid.quantity,
-                            price_per_unit: buy_price,
-                            fills: vec![crate::game_state::MarketFillRecord {
-                                buyer: bid.buyer,
-                                quantity: bid.quantity,
-                                price_per_unit: buy_price,
-                            }],
-                        });
-                        break;
-                    }
+        // Resolve each offer: try minors in relationship-desc order, each
+        // rolls a skip; first non-skipper takes the whole offer.
+        for offer in &offers {
+            // Sort minors by relationship score to the seller (desc). Ties
+            // broken by NationId for stable determinism.
+            let mut ordered_minors: Vec<(NationId, i32)> = minor_ids
+                .iter()
+                .map(|&mid| {
+                    let score = game
+                        .world
+                        .diplomacy
+                        .get_relation(offer.seller, mid)
+                        .map(|r| r.score)
+                        .unwrap_or(0);
+                    (mid, score)
+                })
+                .collect();
+            ordered_minors.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.0.cmp(&b.0.0)));
+
+            let mut taker: Option<NationId> = None;
+            for (mid, _score) in &ordered_minors {
+                // xorshift64 step for deterministic skip roll.
+                rng_state ^= rng_state << 13;
+                rng_state ^= rng_state >> 7;
+                rng_state ^= rng_state << 17;
+                let roll = (rng_state >> 32) as u32 % 100;
+                if roll >= skip_chance {
+                    taker = Some(*mid);
+                    break;
                 }
             }
+
+            let buyer_id = match taker {
+                Some(id) => id,
+                None => continue, // every minor skipped — offer expires
+            };
+
+            let revenue = Money::dollars(offer.price_per_unit.as_dollars() * offer.quantity as i64);
+            let commodity_label = match offer.commodity {
+                trade::ManufacturedCommodity::Material(m) => format!("{m:?}"),
+                trade::ManufacturedCommodity::Goods(g) => format!("{g:?}"),
+            };
+
+            if let Some(seller) = game.get_nation_mut(offer.seller) {
+                seller.economy.treasury += revenue;
+                match offer.commodity {
+                    trade::ManufacturedCommodity::Material(m) => {
+                        if let Some(s) = seller.economy.materials.get_mut(&m) {
+                            *s = s.saturating_sub(offer.quantity);
+                        }
+                        if offer.seller == human_id {
+                            report.stockpile_flows.auto_sold_materials.push((
+                                offer.seller,
+                                m,
+                                offer.quantity,
+                            ));
+                        }
+                    }
+                    trade::ManufacturedCommodity::Goods(g) => {
+                        if let Some(s) = seller.economy.goods.get_mut(&g) {
+                            *s = s.saturating_sub(offer.quantity);
+                        }
+                        if offer.seller == human_id {
+                            report.stockpile_flows.auto_sold_goods.push((
+                                offer.seller,
+                                g,
+                                offer.quantity,
+                            ));
+                        }
+                    }
+                }
+                seller.archives.goods_sales_revenue_dollars += revenue.as_dollars();
+                seller
+                    .archives
+                    .trade_history
+                    .push(trade::TradeHistoryEntry {
+                        turn: current_turn,
+                        partner: buyer_id,
+                        resource: ResourceType::Timber, // sentinel; commodity_label carries the real name
+                        commodity_label: commodity_label.clone(),
+                        quantity: offer.quantity,
+                        total_cost: revenue,
+                        bought: false,
+                    });
+            }
+            if let Some(buyer) = game.get_nation_mut(buyer_id) {
+                buyer.archives.trade_history.push(trade::TradeHistoryEntry {
+                    turn: current_turn,
+                    partner: offer.seller,
+                    resource: ResourceType::Timber,
+                    commodity_label: commodity_label.clone(),
+                    quantity: offer.quantity,
+                    total_cost: revenue,
+                    bought: true,
+                });
+            }
+            // Cash-flow accounting differs for human vs AI:
+            //   - Human's treasury delta is captured by goods_auto_sale_revenue
+            //     (read by finalize_cash_flow).
+            //   - AI GPs route through pending_ai_cash_income so the same
+            //     finalize step counts the inflow without double-applying it.
+            if offer.seller == human_id {
+                report.goods_auto_sale_revenue.push((offer.seller, revenue));
+            } else {
+                game.transient
+                    .pending_ai_cash_income
+                    .push((offer.seller, revenue));
+            }
+            extra_market_rows.push(crate::game_state::MarketOfferRecord {
+                seller: offer.seller,
+                resource: ResourceType::Timber,
+                commodity_label,
+                offered: offer.quantity,
+                price_per_unit: offer.price_per_unit,
+                fills: vec![crate::game_state::MarketFillRecord {
+                    buyer: buyer_id,
+                    quantity: offer.quantity,
+                    price_per_unit: offer.price_per_unit,
+                }],
+            });
         }
     }
 
@@ -796,10 +554,6 @@ pub(super) fn resolve_trade_session(
     for txn in &transactions {
         *spent.entry(txn.buyer).or_insert(Money::ZERO) += txn.total_cost;
         *earned.entry(txn.seller).or_insert(Money::ZERO) += txn.total_cost;
-    }
-    // Include player's auto-sold materials/goods revenue
-    if player_goods_revenue != Money::ZERO {
-        *earned.entry(human_id).or_insert(Money::ZERO) += player_goods_revenue;
     }
     let all_ids: std::collections::HashSet<NationId> =
         spent.keys().chain(earned.keys()).copied().collect();

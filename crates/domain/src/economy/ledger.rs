@@ -408,8 +408,6 @@ pub enum ResourceOut {
     FoodProcessedInput,
     /// Sent out via trade sales.
     TradeExport,
-    /// Auto-sold to world market (player-owned materials/goods).
-    AutoSoldToMarket,
     /// Consumed by immigration (canned food + clothing + furniture).
     ImmigrationConsumed,
     /// Consumed by AI construction/build paths (mill expansion, freight cars,
@@ -428,7 +426,6 @@ impl ResourceOut {
             Self::FactoryConsumed => "Factory consumed",
             Self::FoodProcessedInput => "Food processing",
             Self::TradeExport => "Trade export",
-            Self::AutoSoldToMarket => "Sold to market",
             Self::ImmigrationConsumed => "Immigration consumed",
             Self::ConstructionConsumed => "Construction consumed",
         }
@@ -437,7 +434,7 @@ impl ResourceOut {
     pub const fn category(self) -> FlowCategory {
         match self {
             // Market outflows.
-            Self::TradeExport | Self::AutoSoldToMarket => FlowCategory::Trade,
+            Self::TradeExport => FlowCategory::Trade,
             // Used up by the economy (or lost outright).
             Self::DisconnectedLoss
             | Self::TransportOverflow

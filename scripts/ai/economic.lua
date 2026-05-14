@@ -61,18 +61,13 @@ economic = {
     expansion_threshold_multiplier = 1,
     use_tier_expansion = true,
     high_treasury_expansion_threshold = 12000,
-    trade_resource_reserve = 15,
-    trade_treasury_cap = 25000,
     -- Card [3/6]: industrialist treats imports as strategic; lower floor so
     -- buy-side bids stay funded even when treasury dips.
     trade_buy_treasury_floor = 2000,
     trade_buy_buffer_turns = 2,
     -- Card #465: industrialist tolerates small army; small reserve.
     arms_sell_reserve = 6,
-    goods_sell_treasury_threshold = 2000,
-    goods_reserve = 3,
     -- Industrialist tolerates slightly larger stockpiles before dumping.
-    goods_fat_stockpile_threshold = 40,
     food_processing_expansion_threshold = 2,
     infra_budget_scale_threshold = 15000,
 

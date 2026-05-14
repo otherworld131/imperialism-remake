@@ -210,7 +210,6 @@ pub enum ResourceOut {
     FactoryConsumed,
     FoodProcessedInput,
     TradeExport,
-    AutoSoldToMarket,
     ImmigrationConsumed,
     ConstructionConsumed,
 }
@@ -296,13 +295,13 @@ pub enum Commodity {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerSellOrder {
-    pub commodity: Commodity,
+    pub resource: ResourceType,
     pub quantity: u32,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerBuyOrder {
-    pub commodity: Commodity,
+    pub resource: ResourceType,
     pub quantity: u32,
     pub max_price_per_unit: Money,
 }
@@ -882,7 +881,6 @@ impl From<d::ledger::ResourceOut> for ResourceOut {
             D::FactoryConsumed => Self::FactoryConsumed,
             D::FoodProcessedInput => Self::FoodProcessedInput,
             D::TradeExport => Self::TradeExport,
-            D::AutoSoldToMarket => Self::AutoSoldToMarket,
             D::ImmigrationConsumed => Self::ImmigrationConsumed,
             D::ConstructionConsumed => Self::ConstructionConsumed,
         }
@@ -899,7 +897,6 @@ impl From<ResourceOut> for d::ledger::ResourceOut {
             ResourceOut::FactoryConsumed => D::FactoryConsumed,
             ResourceOut::FoodProcessedInput => D::FoodProcessedInput,
             ResourceOut::TradeExport => D::TradeExport,
-            ResourceOut::AutoSoldToMarket => D::AutoSoldToMarket,
             ResourceOut::ImmigrationConsumed => D::ImmigrationConsumed,
             ResourceOut::ConstructionConsumed => D::ConstructionConsumed,
         }
@@ -1103,7 +1100,7 @@ impl From<Commodity> for d::trade::Commodity {
 impl From<&d::trade::PlayerSellOrder> for PlayerSellOrder {
     fn from(v: &d::trade::PlayerSellOrder) -> Self {
         Self {
-            commodity: v.commodity.into(),
+            resource: v.resource.into(),
             quantity: v.quantity,
         }
     }
@@ -1111,7 +1108,7 @@ impl From<&d::trade::PlayerSellOrder> for PlayerSellOrder {
 impl From<PlayerSellOrder> for d::trade::PlayerSellOrder {
     fn from(v: PlayerSellOrder) -> Self {
         Self {
-            commodity: v.commodity.into(),
+            resource: v.resource.into(),
             quantity: v.quantity,
         }
     }
@@ -1120,7 +1117,7 @@ impl From<PlayerSellOrder> for d::trade::PlayerSellOrder {
 impl From<&d::trade::PlayerBuyOrder> for PlayerBuyOrder {
     fn from(v: &d::trade::PlayerBuyOrder) -> Self {
         Self {
-            commodity: v.commodity.into(),
+            resource: v.resource.into(),
             quantity: v.quantity,
             max_price_per_unit: v.max_price_per_unit.into(),
         }
@@ -1129,7 +1126,7 @@ impl From<&d::trade::PlayerBuyOrder> for PlayerBuyOrder {
 impl From<PlayerBuyOrder> for d::trade::PlayerBuyOrder {
     fn from(v: PlayerBuyOrder) -> Self {
         Self {
-            commodity: v.commodity.into(),
+            resource: v.resource.into(),
             quantity: v.quantity,
             max_price_per_unit: v.max_price_per_unit.into(),
         }

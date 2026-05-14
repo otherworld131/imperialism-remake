@@ -264,19 +264,6 @@ game_config = {
     priority_minor_targets_economic = 4,
     priority_minor_targets_diplomatic = 5,
 
-    -- Trade prices: materials (first-level processed)
-    lumber_price = 150,
-    steel_price = 200,
-    fabric_price = 150,
-    paper_price = 100,
-    arms_price = 300,
-    canned_food_price = 100,
-
-    -- Trade prices: finished goods (second-level processed)
-    furniture_price = 400,
-    clothing_price = 400,
-    hardware_price = 500,
-
     -- Diplomacy costs
     consulate_cost = 500,
     embassy_cost = 5000,
@@ -308,6 +295,11 @@ game_config = {
     minor_resource_withhold_chance = 20,
     -- Price ($/unit) minor nations pay when purchasing manufactured goods each turn.
     minor_goods_buy_price = 150,
+    -- Chance (0–100) that an individual minor nation declines to buy a given
+    -- manufactured-goods offer from a GP this turn. Minors are tried in order
+    -- of descending relationship with the seller; if every minor skips, the
+    -- offer goes unfilled and the surplus stays in the GP's stockpile.
+    minor_goods_skip_chance = 20,
 
     -- AI trade behaviour
     ai_consulate_target = 4,                  -- AI GPs aim for this many consulates in minor nations

@@ -61,16 +61,11 @@ diplomatic = {
     expansion_threshold_multiplier = 2,
     use_tier_expansion = true,
     high_treasury_expansion_threshold = 15000,
-    trade_resource_reserve = 10,
-    trade_treasury_cap = 20000,
     -- Card [3/6]: diplomatic favors steady trade with neighbors; same buffer.
     trade_buy_treasury_floor = 1500,
     trade_buy_buffer_turns = 2,
     -- Card #465: diplomatic keeps a small army; small reserve.
     arms_sell_reserve = 8,
-    goods_sell_treasury_threshold = 3000,
-    goods_reserve = 2,
-    goods_fat_stockpile_threshold = 30,
     food_processing_expansion_threshold = 2,
     infra_budget_scale_threshold = 15000,
 

@@ -180,15 +180,14 @@ pub fn get_trade_screen(game: &GameState) -> Result<TradeScreenData, Application
 
     let cargo_capacity = nation.total_cargo_capacity(&game.game_data);
     // Cargo is consumed only by resource trades in the normal trade session.
-    // Exclude world-market auto-sells (partner=NationId(0)) and manufactured-goods entries
-    // (sentinel entries where commodity_label differs from the resource's Debug name).
+    // Manufactured-goods sentinel entries (commodity_label differs from the
+    // resource's Debug name) ride the minor-bid path and don't consume cargo.
     let cargo_used: u32 = nation
         .archives
         .trade_history
         .iter()
         .filter(|th| th.turn.0 <= game.turn.0 && game.turn.0.saturating_sub(th.turn.0) <= 1)
         .filter(|th| th.partner != nation.id)
-        .filter(|th| th.partner.0 != 0)
         .filter(|th| th.commodity_label == format!("{:?}", th.resource))
         .map(|th| th.quantity)
         .sum::<u32>()

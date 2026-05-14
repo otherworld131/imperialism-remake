@@ -62,19 +62,14 @@ balanced = {
     expansion_threshold_multiplier = 2,
     use_tier_expansion = true,
     high_treasury_expansion_threshold = 15000,
-    trade_resource_reserve = 10,
-    trade_treasury_cap = 20000,
     -- Card [3/6]: buy-side trade. Floor lowered so early-game nations can
     -- still bid on critical chain inputs they don't produce locally.
     trade_buy_treasury_floor = 1500,
     trade_buy_buffer_turns = 2,
     -- Card #465: hold back at least this many arms above queued-recruit demand.
     arms_sell_reserve = 12,
-    goods_sell_treasury_threshold = 3000,
-    goods_reserve = 2,
     -- Fat-stockpile dump: drain finished goods above 30 units regardless of
     -- treasury so the warehouse doesn't bloat once trade goes positive.
-    goods_fat_stockpile_threshold = 30,
     food_processing_expansion_threshold = 2,
     infra_budget_scale_threshold = 20000,
 

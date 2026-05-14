@@ -64,18 +64,13 @@ aggressive = {
     expansion_threshold_multiplier = 2,
     use_tier_expansion = true,
     high_treasury_expansion_threshold = 20000,
-    trade_resource_reserve = 8,
-    trade_treasury_cap = 15000,
     -- Card [3/6]: aggressive accepts a thinner cash safety net but still
     -- buffers 2 turns so wartime steel/arms output isn't input-starved.
     trade_buy_treasury_floor = 1500,
     trade_buy_buffer_turns = 2,
     -- Card #465: militarist hoards arms — large reserve.
     arms_sell_reserve = 30,
-    goods_sell_treasury_threshold = 4000,
-    goods_reserve = 1,
     -- Aggressive likes liquidity for war — drain harder.
-    goods_fat_stockpile_threshold = 20,
     food_processing_expansion_threshold = 3,
     infra_budget_scale_threshold = 25000,
 

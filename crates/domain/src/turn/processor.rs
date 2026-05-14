@@ -1048,18 +1048,14 @@ fn finalize_resource_flow(game: &mut GameState, report: &mut TurnReport) {
         if let Some(flow) = flows.get_mut(nid) {
             flow.add_outflow(
                 Stockpile::Material(*material),
-                ResourceOut::AutoSoldToMarket,
+                ResourceOut::TradeExport,
                 *amount,
             );
         }
     }
     for (nid, good, amount) in &sf.auto_sold_goods {
         if let Some(flow) = flows.get_mut(nid) {
-            flow.add_outflow(
-                Stockpile::Goods(*good),
-                ResourceOut::AutoSoldToMarket,
-                *amount,
-            );
+            flow.add_outflow(Stockpile::Goods(*good), ResourceOut::TradeExport, *amount);
         }
     }
     for (nid, material, amount) in &sf.immigration_consumed_materials {
@@ -1269,8 +1265,7 @@ pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
                 && tile.resource_deposit().is_none()
                 && tile.improvement_level() == 0
             {
-                let tile_collectable =
-                    collectable.map(|s| s.contains(tile_coord)).unwrap_or(false);
+                let tile_collectable = collectable.map(|s| s.contains(tile_coord)).unwrap_or(false);
                 if is_connected && tile_collectable {
                     production_data.push((province.owner, ResourceType::Grain, 1));
                 }

@@ -498,14 +498,12 @@ fn reserve_trade_phase(game: &mut GameState) -> Vec<NationReservation> {
                     if order.quantity == 0 {
                         continue;
                     }
-                    if let trade::Commodity::Resource(r) = order.commodity {
-                        all_bids.push(trade::TradeBid {
-                            buyer: *gp_id,
-                            resource: r,
-                            quantity: order.quantity,
-                            max_price_per_unit: order.max_price_per_unit,
-                        });
-                    }
+                    all_bids.push(trade::TradeBid {
+                        buyer: *gp_id,
+                        resource: order.resource,
+                        quantity: order.quantity,
+                        max_price_per_unit: order.max_price_per_unit,
+                    });
                 }
             }
             continue;
@@ -548,28 +546,12 @@ fn reserve_trade_phase(game: &mut GameState) -> Vec<NationReservation> {
         };
         let reserve_requests: Vec<(Commodity, u32)> = sell_orders
             .iter()
-            .filter_map(|order| match order.commodity {
-                Commodity::Resource(resource) => {
-                    if order.quantity > 0 && nation_ro.resource_amount(resource) >= order.quantity {
-                        Some((Commodity::Resource(resource), order.quantity))
-                    } else {
-                        None
-                    }
-                }
-                Commodity::Material(material) => {
-                    let stock = nation_ro
-                        .economy
-                        .materials
-                        .get(&material)
-                        .copied()
-                        .unwrap_or(0);
-                    let qty = stock.min(order.quantity);
-                    (qty > 0).then_some((Commodity::Material(material), qty))
-                }
-                Commodity::Goods(goods) => {
-                    let stock = nation_ro.economy.goods.get(&goods).copied().unwrap_or(0);
-                    let qty = stock.min(order.quantity);
-                    (qty > 0).then_some((Commodity::Goods(goods), qty))
+            .filter_map(|order| {
+                if order.quantity > 0 && nation_ro.resource_amount(order.resource) >= order.quantity
+                {
+                    Some((Commodity::Resource(order.resource), order.quantity))
+                } else {
+                    None
                 }
             })
             .collect();

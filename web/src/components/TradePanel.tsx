@@ -13,8 +13,7 @@ export default function TradePanel({ trade, onSetSubsidy, onSetSellOrder, onSetB
   const {
     trade_history, subsidies, trade_balance, total_cargo,
     remaining_cargo, minor_nations, player_sell_orders, player_buy_orders,
-    available_offers, sellable_resources, sellable_materials, sellable_goods,
-    buyable_materials, buyable_goods,
+    available_offers, sellable_resources,
   } = trade;
 
   const [expandedMN, setExpandedMN] = useState<number | null>(null);
@@ -67,29 +66,7 @@ export default function TradePanel({ trade, onSetSubsidy, onSetSellOrder, onSetB
             onSetSellOrder={onSetSellOrder}
           />
         )}
-        {/* Materials */}
-        {sellable_materials.length > 0 && (
-          <SellSection
-            label="Materials"
-            items={sellable_materials}
-            commodityType="material"
-            sellQtyMap={sellQtyMap}
-            remainingCargo={remaining_cargo}
-            onSetSellOrder={onSetSellOrder}
-          />
-        )}
-        {/* Goods */}
-        {sellable_goods.length > 0 && (
-          <SellSection
-            label="Goods"
-            items={sellable_goods}
-            commodityType="goods"
-            sellQtyMap={sellQtyMap}
-            remainingCargo={remaining_cargo}
-            onSetSellOrder={onSetSellOrder}
-          />
-        )}
-        {sellable_resources.length === 0 && sellable_materials.length === 0 && sellable_goods.length === 0 && (
+        {sellable_resources.length === 0 && (
           <div style={{ color: '#888', fontStyle: 'italic', fontSize: 11 }}>No commodities to sell</div>
         )}
       </div>
@@ -127,29 +104,7 @@ export default function TradePanel({ trade, onSetSubsidy, onSetSellOrder, onSetB
             </div>
           </div>
         )}
-        {/* Materials from world market */}
-        {buyable_materials.length > 0 && (
-          <BuySection
-            label="Materials (world market)"
-            items={buyable_materials}
-            commodityType="material"
-            buyQtyMap={buyQtyMap}
-            remainingCargo={remaining_cargo}
-            onSetBuyOrder={onSetBuyOrder}
-          />
-        )}
-        {/* Goods from world market */}
-        {buyable_goods.length > 0 && (
-          <BuySection
-            label="Goods (world market)"
-            items={buyable_goods}
-            commodityType="goods"
-            buyQtyMap={buyQtyMap}
-            remainingCargo={remaining_cargo}
-            onSetBuyOrder={onSetBuyOrder}
-          />
-        )}
-        {Object.keys(offersByResource).length === 0 && buyable_materials.length === 0 && buyable_goods.length === 0 && (
+        {Object.keys(offersByResource).length === 0 && (
           <div style={{ color: '#888', fontStyle: 'italic', fontSize: 11 }}>Nothing available to buy</div>
         )}
       </div>
@@ -245,52 +200,6 @@ export default function TradePanel({ trade, onSetSubsidy, onSetSellOrder, onSetB
           onCancel={() => setBuyModalResource(null)}
         />
       )}
-    </div>
-  );
-}
-
-// ── BuySection component (world-market buy controls for materials/goods) ──
-
-function BuySection({ label, items, commodityType, buyQtyMap, remainingCargo, onSetBuyOrder }: {
-  label: string;
-  items: { name: string; price: number }[];
-  commodityType: string;
-  buyQtyMap: Record<string, number>;
-  remainingCargo: number;
-  onSetBuyOrder: (commodityType: string, commodityName: string, quantity: number, maxPrice: number) => void;
-}) {
-  return (
-    <div style={{ marginBottom: 4 }}>
-      <div style={{ fontSize: 10, color: '#888', textTransform: 'uppercase', marginBottom: 2 }}>{label}</div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 36px 60px', gap: '1px 4px', fontSize: 11 }}>
-        {items.map(item => {
-          const key = `${commodityType}:${item.name}`;
-          const currentQty = buyQtyMap[key] ?? 0;
-          // Default max price = 120% of world price (let wasm-bridge round it for us, but UI also caps)
-          const maxPrice = Math.round(item.price * 1.2);
-          return (
-            <React.Fragment key={item.name}>
-              <span>{resourceLabel(item.name)}</span>
-              <span style={{ color: '#daa520' }}>${item.price}</span>
-              <span style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-                <button
-                  style={tinyBtn}
-                  onClick={() => onSetBuyOrder(commodityType, item.name, Math.max(0, currentQty - 1), maxPrice)}
-                  disabled={currentQty === 0}
-                >-</button>
-                <span style={{ minWidth: 14, textAlign: 'center', color: currentQty > 0 ? '#daa520' : '#888' }}>
-                  {currentQty}
-                </span>
-                <button
-                  style={tinyBtn}
-                  onClick={() => onSetBuyOrder(commodityType, item.name, currentQty + 1, maxPrice)}
-                  disabled={remainingCargo <= 0}
-                >+</button>
-              </span>
-            </React.Fragment>
-          );
-        })}
-      </div>
     </div>
   );
 }

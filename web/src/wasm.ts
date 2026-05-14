@@ -1330,10 +1330,6 @@ export interface TradeData {
   player_buy_orders: PlayerBuyOrder[];
   available_offers: AvailableOffer[];
   sellable_resources: SellableItem[];
-  sellable_materials: SellableItem[];
-  sellable_goods: SellableItem[];
-  buyable_materials: { name: string; price: number }[];
-  buyable_goods: { name: string; price: number }[];
   auto_trade_with_minors: boolean;
 }
 

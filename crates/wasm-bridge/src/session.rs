@@ -214,20 +214,10 @@ pub fn wasm_session_query(query_json: &str) -> String {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Parse a commodity name string into a `Commodity`, trying Resource, Material,
-/// and Goods in order. Accepts plain names like "Timber", "Steel", "Cloth".
-fn parse_commodity(name: &str) -> Option<domain::economy::trade::Commodity> {
-    use domain::economy::trade::Commodity;
-    if let Ok(r) = name.parse::<domain::types::ResourceType>() {
-        return Some(Commodity::Resource(r));
-    }
-    if let Ok(m) = name.parse::<domain::types::MaterialType>() {
-        return Some(Commodity::Material(m));
-    }
-    if let Ok(g) = name.parse::<domain::types::GoodsType>() {
-        return Some(Commodity::Goods(g));
-    }
-    None
+/// Parse a resource name string for player sell/buy orders. Materials and
+/// goods are not tradeable via player orders (the world market was removed).
+fn parse_player_order_resource(name: &str) -> Option<domain::types::ResourceType> {
+    name.parse::<domain::types::ResourceType>().ok()
 }
 
 // ── Naval helpers ────────────────────────────────────────────────────────────
@@ -790,9 +780,9 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
             price_cents: _,
         } => {
             let nation_id = NationId(nation_id);
-            let c = match parse_commodity(&commodity) {
-                Some(c) => c,
-                None => return CommandResult::error("unknown commodity"),
+            let r = match parse_player_order_resource(&commodity) {
+                Some(r) => r,
+                None => return CommandResult::error("only resources can be sold"),
             };
             let nation = match game.get_nation_mut(nation_id) {
                 Some(n) => n,
@@ -801,12 +791,12 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
             nation
                 .diplomacy
                 .player_sell_orders
-                .retain(|o| o.commodity != c);
+                .retain(|o| o.resource != r);
             nation
                 .diplomacy
                 .player_sell_orders
                 .push(domain::economy::trade::PlayerSellOrder {
-                    commodity: c,
+                    resource: r,
                     quantity,
                 });
             CommandResult::success()
@@ -819,9 +809,9 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
             price_cents,
         } => {
             let nation_id = NationId(nation_id);
-            let c = match parse_commodity(&commodity) {
-                Some(c) => c,
-                None => return CommandResult::error("unknown commodity"),
+            let r = match parse_player_order_resource(&commodity) {
+                Some(r) => r,
+                None => return CommandResult::error("only resources can be bought"),
             };
             let max_price = Money::from_cents(price_cents as i64);
             let nation = match game.get_nation_mut(nation_id) {
@@ -831,12 +821,12 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
             nation
                 .diplomacy
                 .player_buy_orders
-                .retain(|o| o.commodity != c);
+                .retain(|o| o.resource != r);
             nation
                 .diplomacy
                 .player_buy_orders
                 .push(domain::economy::trade::PlayerBuyOrder {
-                    commodity: c,
+                    resource: r,
                     quantity,
                     max_price_per_unit: max_price,
                 });

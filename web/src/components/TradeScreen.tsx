@@ -168,7 +168,7 @@ export default function TradeScreen({ trade, nations = [], merchants = [], onSet
           turn: h.turn,
           resource: h.resource,
           partner_id: h.partner_id ?? 0,
-          partner_name: h.partner_name ?? 'World Market',
+          partner_name: h.partner_name ?? 'Unknown',
           partner_is_great_power: !!h.partner_is_great_power,
           bought: 0, sold: 0, boughtCost: 0, soldCost: 0,
         };
@@ -226,7 +226,7 @@ export default function TradeScreen({ trade, nations = [], merchants = [], onSet
     );
   }
 
-  const { sellable_resources, sellable_materials, sellable_goods, available_offers, trade_balance, trade_history, subsidies, minor_nations, total_cargo, remaining_cargo } = trade;
+  const { sellable_resources, available_offers, trade_balance, trade_history, subsidies, minor_nations, total_cargo, remaining_cargo } = trade;
 
   return (
     <div style={styles.overlay}>
@@ -284,8 +284,6 @@ export default function TradeScreen({ trade, nations = [], merchants = [], onSet
 
                 {[
                   { label: 'Resources', items: sellable_resources, type: 'Resource' },
-                  { label: 'Materials', items: sellable_materials, type: 'Material' },
-                  { label: 'Goods', items: sellable_goods, type: 'Goods' },
                 ].map(section => (
                   <div key={section.label} style={{ marginBottom: 16 }}>
                     <div style={styles.subLabel}>{section.label}</div>

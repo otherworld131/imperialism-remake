@@ -14,7 +14,6 @@ mod transport;
 
 pub use common::{AiPersonality, personality_for_nation_index};
 pub use diplomacy::{ai_manage_diplomacy, ai_pre_election_strategy, minor_nation_bonus_trade};
-pub use economy::ai_manage_resources;
 pub use naval::ai_naval_strategy;
 pub use snapshot::NationEconomySnapshot;
 pub use spending::{SpendingCategory, pick_priority_minor_targets, priority_target_count};
@@ -98,14 +97,12 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<AiAction> {
         // slider at u32::MAX (which spreads labor evenly and starves
         // resource-light chains like steel).
         economy::ai_set_production_targets(game, *nation_id);
-        economy::ai_manage_resources(game, *nation_id, &mut actions);
         labor::ai_recruit_workers(game, *nation_id);
         // Need-based spending: replaces independent military, infrastructure,
         // consulate, embassy, and civilian hiring decisions
         spending::ai_scored_spending(game, *nation_id, &mut actions);
         spending::ai_diplomatic_mop_up(game, *nation_id);
         labor::ai_deploy_civilians(game, *nation_id);
-        economy::ai_trade(game, *nation_id);
         economy::ai_build_transport_proactive(game, *nation_id);
         // AI freight allocation: cover worker food + every active mill / cannery's
         // raw inputs. Without this the transport system delivers nothing remote

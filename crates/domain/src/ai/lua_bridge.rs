@@ -292,15 +292,6 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         priority_minor_targets_diplomatic: table
             .get("priority_minor_targets_diplomatic")
             .unwrap_or(5),
-        lumber_price: table.get("lumber_price").unwrap_or(150),
-        steel_price: table.get("steel_price").unwrap_or(200),
-        fabric_price: table.get("fabric_price").unwrap_or(150),
-        paper_price: table.get("paper_price").unwrap_or(100),
-        arms_price: table.get("arms_price").unwrap_or(300),
-        canned_food_price: table.get("canned_food_price").unwrap_or(100),
-        furniture_price: table.get("furniture_price").unwrap_or(400),
-        clothing_price: table.get("clothing_price").unwrap_or(400),
-        hardware_price: table.get("hardware_price").unwrap_or(500),
         ai_consulate_target: table.get("ai_consulate_target").unwrap_or(4),
         ai_consulate_priority_score: table.get("ai_consulate_priority_score").unwrap_or(30.0),
         ai_consulate_beyond_target_score: table
@@ -392,6 +383,7 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         // Minor nation trade behaviour
         minor_resource_withhold_chance: table.get("minor_resource_withhold_chance").unwrap_or(20),
         minor_goods_buy_price: table.get("minor_goods_buy_price").unwrap_or(150),
+        minor_goods_skip_chance: table.get("minor_goods_skip_chance").unwrap_or(20),
         debug_marker: table
             .get::<String>("debug_marker")
             .unwrap_or_else(|_| "lua-key-missing".to_string()),
@@ -454,15 +446,6 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         build_turns_railroad: cfg.build_turns_railroad.max(1),
         build_turns_depot: cfg.build_turns_depot.max(1),
         build_turns_port: cfg.build_turns_port.max(1),
-        lumber_price: cfg.lumber_price.clamp(1, 1_000_000),
-        steel_price: cfg.steel_price.clamp(1, 1_000_000),
-        fabric_price: cfg.fabric_price.clamp(1, 1_000_000),
-        paper_price: cfg.paper_price.clamp(1, 1_000_000),
-        arms_price: cfg.arms_price.clamp(1, 1_000_000),
-        canned_food_price: cfg.canned_food_price.clamp(1, 1_000_000),
-        furniture_price: cfg.furniture_price.clamp(1, 1_000_000),
-        clothing_price: cfg.clothing_price.clamp(1, 1_000_000),
-        hardware_price: cfg.hardware_price.clamp(1, 1_000_000),
         ai_consulate_target: cfg.ai_consulate_target.clamp(0, 20),
         ai_consulate_priority_score: if cfg.ai_consulate_priority_score.is_finite() {
             cfg.ai_consulate_priority_score.clamp(0.0, 1000.0)
@@ -662,6 +645,7 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         // Minor nation trade tunables
         minor_resource_withhold_chance: cfg.minor_resource_withhold_chance.min(100),
         minor_goods_buy_price: cfg.minor_goods_buy_price.clamp(1, 1_000_000),
+        minor_goods_skip_chance: cfg.minor_goods_skip_chance.min(100),
         ..cfg
     }
 }
@@ -1139,8 +1123,6 @@ pub struct LuaAiConfig {
     pub expansion_threshold_multiplier: Option<u32>,
     pub use_tier_expansion: Option<bool>,
     pub high_treasury_expansion_threshold: Option<i64>,
-    pub trade_resource_reserve: Option<u32>,
-    pub trade_treasury_cap: Option<i64>,
     /// Card [3/6] — buy-side trade. Treasury floor; AI never bids below this.
     pub trade_buy_treasury_floor: Option<i64>,
     /// Card [3/6] — buy-side trade. How many turns of input to buffer per
@@ -1151,14 +1133,6 @@ pub struct LuaAiConfig {
     /// favor sustained army growth; smaller values let the AI liquidate
     /// arms when the warehouse swells.
     pub arms_sell_reserve: Option<u32>,
-    pub goods_sell_treasury_threshold: Option<i64>,
-    pub goods_reserve: Option<u32>,
-    /// Per-goods-type stockpile size above which the AI auto-dumps to the
-    /// world market regardless of treasury level. Without this the AI hoards
-    /// finished goods once trade brings the treasury above
-    /// `goods_sell_treasury_threshold`, since the minor-bid path only drains
-    /// 1 unit per minor per turn.
-    pub goods_fat_stockpile_threshold: Option<u32>,
     pub food_processing_expansion_threshold: Option<u32>,
     pub infra_budget_scale_threshold: Option<i64>,
 
@@ -1345,14 +1319,9 @@ impl Default for LuaAiConfig {
             expansion_threshold_multiplier: None,
             use_tier_expansion: None,
             high_treasury_expansion_threshold: None,
-            trade_resource_reserve: None,
-            trade_treasury_cap: None,
             trade_buy_treasury_floor: None,
             trade_buy_buffer_turns: None,
             arms_sell_reserve: None,
-            goods_sell_treasury_threshold: None,
-            goods_reserve: None,
-            goods_fat_stockpile_threshold: None,
             food_processing_expansion_threshold: None,
             infra_budget_scale_threshold: None,
             lumber_furniture_weight: None,
@@ -1524,7 +1493,6 @@ impl LuaAiConfig {
         // Economy
         self.expansion_threshold_multiplier =
             sanitize_opt_u32(self.expansion_threshold_multiplier, 1, 20);
-        self.trade_resource_reserve = sanitize_opt_u32(self.trade_resource_reserve, 0, 100);
         // Card [3/6]: buy-side trade tunables.
         self.trade_buy_buffer_turns = sanitize_opt_u32(self.trade_buy_buffer_turns, 0, 20);
         self.trade_buy_treasury_floor =
@@ -1532,9 +1500,6 @@ impl LuaAiConfig {
         // Card #465: arms_sell_reserve. 0..=200 — large values would freeze
         // the auto-sale path entirely.
         self.arms_sell_reserve = sanitize_opt_u32(self.arms_sell_reserve, 0, 200);
-        self.goods_reserve = sanitize_opt_u32(self.goods_reserve, 0, 100);
-        self.goods_fat_stockpile_threshold =
-            sanitize_opt_u32(self.goods_fat_stockpile_threshold, 0, 1_000);
         self.food_processing_expansion_threshold =
             sanitize_opt_u32(self.food_processing_expansion_threshold, 0, 1000);
         // Card [2/6]: production-chain target weights
@@ -1565,9 +1530,6 @@ impl LuaAiConfig {
         self.treasury_reserve = sanitize_opt_i64(self.treasury_reserve, 0, 10_000_000);
         self.high_treasury_expansion_threshold =
             sanitize_opt_i64(self.high_treasury_expansion_threshold, 0, 10_000_000);
-        self.trade_treasury_cap = sanitize_opt_i64(self.trade_treasury_cap, 0, 10_000_000);
-        self.goods_sell_treasury_threshold =
-            sanitize_opt_i64(self.goods_sell_treasury_threshold, 0, 10_000_000);
         self.infra_budget_scale_threshold =
             sanitize_opt_i64(self.infra_budget_scale_threshold, 0, 10_000_000);
 
@@ -1762,14 +1724,9 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             expansion_threshold_multiplier: table.get("expansion_threshold_multiplier").ok(),
             use_tier_expansion: table.get("use_tier_expansion").ok(),
             high_treasury_expansion_threshold: table.get("high_treasury_expansion_threshold").ok(),
-            trade_resource_reserve: table.get("trade_resource_reserve").ok(),
-            trade_treasury_cap: table.get("trade_treasury_cap").ok(),
             trade_buy_treasury_floor: table.get("trade_buy_treasury_floor").ok(),
             trade_buy_buffer_turns: table.get("trade_buy_buffer_turns").ok(),
             arms_sell_reserve: table.get("arms_sell_reserve").ok(),
-            goods_sell_treasury_threshold: table.get("goods_sell_treasury_threshold").ok(),
-            goods_reserve: table.get("goods_reserve").ok(),
-            goods_fat_stockpile_threshold: table.get("goods_fat_stockpile_threshold").ok(),
             food_processing_expansion_threshold: table
                 .get("food_processing_expansion_threshold")
                 .ok(),
@@ -2263,14 +2220,9 @@ mod tests {
             expansion_threshold_multiplier: None,
             use_tier_expansion: None,
             high_treasury_expansion_threshold: None,
-            trade_resource_reserve: None,
-            trade_treasury_cap: None,
             trade_buy_treasury_floor: None,
             trade_buy_buffer_turns: None,
             arms_sell_reserve: None,
-            goods_sell_treasury_threshold: None,
-            goods_reserve: None,
-            goods_fat_stockpile_threshold: None,
             food_processing_expansion_threshold: None,
             infra_budget_scale_threshold: None,
             lumber_furniture_weight: None,
@@ -2390,14 +2342,9 @@ mod tests {
             expansion_threshold_multiplier: None,
             use_tier_expansion: None,
             high_treasury_expansion_threshold: None,
-            trade_resource_reserve: None,
-            trade_treasury_cap: None,
             trade_buy_treasury_floor: None,
             trade_buy_buffer_turns: None,
             arms_sell_reserve: None,
-            goods_sell_treasury_threshold: None,
-            goods_reserve: None,
-            goods_fat_stockpile_threshold: None,
             food_processing_expansion_threshold: None,
             infra_budget_scale_threshold: None,
             lumber_furniture_weight: None,
@@ -2556,14 +2503,9 @@ mod tests {
             expansion_threshold_multiplier: None,
             use_tier_expansion: None,
             high_treasury_expansion_threshold: None,
-            trade_resource_reserve: None,
-            trade_treasury_cap: None,
             trade_buy_treasury_floor: None,
             trade_buy_buffer_turns: None,
             arms_sell_reserve: None,
-            goods_sell_treasury_threshold: None,
-            goods_reserve: None,
-            goods_fat_stockpile_threshold: None,
             food_processing_expansion_threshold: None,
             infra_budget_scale_threshold: None,
             lumber_furniture_weight: None,

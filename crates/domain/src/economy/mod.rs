@@ -22,7 +22,6 @@ pub use observability::BlockReason;
 pub use production::{ProductionChain, ProductionResult};
 pub use trade::{
     Commodity, PlayerBuyOrder, PlayerSellOrder, TradeBid, TradeOffer, TradeTransaction,
-    commodity_price,
 };
 pub use transport::{
     FreightDemand, LogisticsState, TransportSystem, compute_demand_forecast,

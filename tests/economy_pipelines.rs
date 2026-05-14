@@ -754,3 +754,25 @@ fn reserved_inventory_empty_after_release_all() {
     );
     assert_eq!(nation.economy.reserved_treasury_amount(), Money::ZERO);
 }
+
+/// World Market removed: every trade-history partner must be a real nation
+/// in the world (no sentinel partners). All sales now route through real
+/// partners (minor nations via GP manufactured offers, GP↔GP via the bid pool).
+#[test]
+fn no_world_market_sentinel_in_trade_history() {
+    let mut game = new_game("test", Difficulty::Normal, 0);
+    for _ in 0..10 {
+        process_turn(&mut game);
+    }
+    let valid_ids: std::collections::HashSet<_> = game.world.nations.iter().map(|n| n.id).collect();
+    for nation in game.world.nations.iter() {
+        for entry in &nation.archives.trade_history {
+            assert!(
+                valid_ids.contains(&entry.partner),
+                "trade-history entry for {} has unknown partner: {:?}",
+                nation.name,
+                entry
+            );
+        }
+    }
+}
