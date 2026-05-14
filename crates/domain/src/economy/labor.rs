@@ -5,6 +5,19 @@ pub enum WorkerType {
     Expert,
 }
 
+/// Imperialism-1 per-turn worker meal demand split across slots.
+///
+/// Derived from observed game behaviour: 7 workers → 4 grain + 2 fruit + 1 meat;
+/// 8 → 4+2+2; 10 → 5+3+2; 12 → 6+3+3. The closed form is
+/// `grain = ⌈w/2⌉`, `meat = ⌊w/4⌋`, `fruit = w − grain − meat`. Totals exactly
+/// `w` food units across the three slots (one unit per worker on average).
+pub fn worker_food_demand(workers: u32) -> (u32, u32, u32) {
+    let grain = workers.div_ceil(2);
+    let meat = workers / 4;
+    let fruit = workers - grain - meat;
+    (grain, fruit, meat)
+}
+
 /// Per-turn penalty applied to a tier (famine, plague, unrest, etc.).
 /// Reduces effective labor output but doesn't remove workers from the pool.
 #[derive(Debug, Clone)]

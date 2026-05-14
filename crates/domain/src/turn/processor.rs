@@ -655,10 +655,7 @@ fn resolve_pending_direct_diplomacy_actions(game: &mut GameState, report: &mut T
                     .unwrap_or_else(|| "Unknown".to_string());
                 report.newspaper_headlines.push(
                     Headline::new(
-                        format!(
-                            "{from_name} broke {:?} with {to_name}",
-                            treaty_type
-                        ),
+                        format!("{from_name} broke {:?} with {to_name}", treaty_type),
                         HeadlineCategory::Diplomacy,
                     )
                     .for_nations(&[from, to]),
@@ -2188,8 +2185,10 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
             .map(|b| b.effective_capacity())
             .unwrap_or(0);
 
-        // Honor chain_targets: proportional labor allocation + feed percentages
-        let targets = nation.economy.chain_targets.clone();
+        // Honor chain_targets: proportional labor allocation + feed percentages.
+        // Mutable because the opportunistic cannery top-up may raise
+        // `canned_food_factory` before feed caps are applied.
+        let mut targets = nation.economy.chain_targets.clone();
         let armory_cap = nation
             .economy
             .buildings
@@ -2211,7 +2210,7 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
             .find(|b| b.building_type == BuildingType::FoodProcessing)
             .map(|b| b.effective_capacity())
             .unwrap_or(0);
-        let labor = super::economy_phase::allocate_labor(
+        let mut labor = super::economy_phase::allocate_labor(
             total_labor,
             &targets,
             super::economy_phase::BuildingCapacities {
@@ -2226,6 +2225,34 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
                 canned_food: canned_food_cap,
             },
         );
+
+        // Opportunistic cannery top-up: idle workers + surplus raw food
+        // turn into extra canned food, regardless of the AI's strategic
+        // target. Compute the input bottleneck after composite-meal
+        // reservation, then ask the helper to expand both labor budget and
+        // output target.
+        if canned_food_cap > 0 {
+            let workers = nation.economy.labor.total_workers();
+            let grain_surplus = nation
+                .resource_amount(ResourceType::Grain)
+                .saturating_sub(workers);
+            let fruit_surplus = nation
+                .resource_amount(ResourceType::Fruit)
+                .saturating_sub(workers);
+            let meat_surplus = nation
+                .resource_amount(ResourceType::Livestock)
+                .saturating_add(nation.resource_amount(ResourceType::Fish))
+                .saturating_sub(workers);
+            let bottleneck = grain_surplus.min(fruit_surplus).min(meat_surplus);
+            super::economy_phase::cannery_opportunistic_topup(
+                &mut labor,
+                &mut targets,
+                total_labor,
+                canned_food_cap,
+                bottleneck,
+            );
+        }
+
         let fed_resources = super::economy_phase::apply_feed_to_resources(&resources, &targets);
 
         // ── Mills: resources → materials ──
@@ -2454,52 +2481,30 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
 
         // ── Cannery: 1 Grain + 1 Fruit + 1 (Fish OR Livestock) → 1 CannedFood ──
         if canned_food_cap > 0 {
-            // Reserve raw food for worker consumption first: workers eat after
-            // production, so canning everything available would starve them.
-            // Workers eat from grain → fruit → livestock → fish → canned, in
-            // priority order. The cannery only sees the surplus beyond worker
-            // need (after subtracting existing canned stock that workers can
-            // fall back on).
+            // Workers eat an Imperialism-1 ration each turn (grain = ⌈w/2⌉,
+            // fruit = ⌊balance⌋, meat = ⌊w/4⌋). Canned food substitutes for any
+            // single missing food unit, but raw food fills slots first. Reserve
+            // the worker-meal demand before the cannery sees inputs so the
+            // workforce can't be starved by canning.
             let workers = nation.economy.labor.total_workers();
-            let canned_in_stock = nation.material_amount(MaterialType::CannedFood);
-            let raw_food_reserved_for_workers = workers.saturating_sub(canned_in_stock);
+            let (grain_need, fruit_need, meat_need) =
+                crate::economy::labor::worker_food_demand(workers);
+            let livestock_held = nation.resource_amount(ResourceType::Livestock);
+            let livestock_for_meals = meat_need.min(livestock_held);
+            let fish_for_meals = meat_need.saturating_sub(livestock_for_meals);
             let current_resources: Vec<(ResourceType, u32)> = nation
                 .economy
                 .warehouse
                 .iter()
                 .map(|(r, q)| {
-                    let surplus = if matches!(
-                        *r,
-                        ResourceType::Grain
-                            | ResourceType::Fruit
-                            | ResourceType::Fish
-                            | ResourceType::Livestock
-                    ) {
-                        // Subtract this resource's share of worker food, in
-                        // priority order. Grain reserves first up to total
-                        // need, then fruit covers the residual, then livestock,
-                        // then fish — matching food_consumption ordering.
-                        let already_reserved = match *r {
-                            ResourceType::Grain => 0,
-                            ResourceType::Fruit => nation.resource_amount(ResourceType::Grain),
-                            ResourceType::Livestock => {
-                                nation.resource_amount(ResourceType::Grain)
-                                    + nation.resource_amount(ResourceType::Fruit)
-                            }
-                            ResourceType::Fish => {
-                                nation.resource_amount(ResourceType::Grain)
-                                    + nation.resource_amount(ResourceType::Fruit)
-                                    + nation.resource_amount(ResourceType::Livestock)
-                            }
-                            _ => 0,
-                        };
-                        let still_needed =
-                            raw_food_reserved_for_workers.saturating_sub(already_reserved);
-                        q.saturating_sub(still_needed.min(*q))
-                    } else {
-                        *q
+                    let reserved = match *r {
+                        ResourceType::Grain => grain_need,
+                        ResourceType::Fruit => fruit_need,
+                        ResourceType::Livestock => livestock_for_meals,
+                        ResourceType::Fish => fish_for_meals,
+                        _ => 0,
                     };
-                    (*r, surplus)
+                    (*r, q.saturating_sub(reserved.min(*q)))
                 })
                 .collect();
             let fed_for_cannery =
@@ -2716,9 +2721,12 @@ fn resolve_town_production(game: &mut GameState, report: &mut TurnReport) {
 
 /// Consume food for each nation based on population.
 ///
-/// Each worker (untrained + trained + expert) needs 1 food per turn.
-/// Food priority: Grain first, then Fruit, then Livestock, then CannedFood as fallback.
-/// If not enough food: 1 worker dies per missing food unit, up to 2 max per turn.
+/// Per turn the workforce demands `grain = ⌈w/2⌉`, `meat = ⌊w/4⌋`,
+/// `fruit = w − grain − meat` (Imperialism-1 ratio; see `worker_food_demand`).
+/// Each slot is drawn from its own stockpile (meat: livestock first, then fish).
+/// Any unmet food unit is then covered 1-for-1 by `CannedFood`; whatever still
+/// can't be sourced starves one worker per missing unit, capped by
+/// `starvation_cap`.
 fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
     let ai_debug = game.ai_debug;
     for nation in &mut game.world.nations {
@@ -2731,35 +2739,42 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
         }
         let nation_id = nation.id;
 
-        let grain = nation.resource_amount(ResourceType::Grain);
-        let fruit = nation.resource_amount(ResourceType::Fruit);
-        let livestock = nation.resource_amount(ResourceType::Livestock);
-        let fish = nation.resource_amount(ResourceType::Fish);
-        let canned = nation.material_amount(MaterialType::CannedFood);
-        let total_food = grain + fruit + livestock + fish + canned;
+        let grain_held = nation.resource_amount(ResourceType::Grain);
+        let fruit_held = nation.resource_amount(ResourceType::Fruit);
+        let livestock_held = nation.resource_amount(ResourceType::Livestock);
+        let fish_held = nation.resource_amount(ResourceType::Fish);
+        let canned_held = nation.material_amount(MaterialType::CannedFood);
+
+        let (grain_need, fruit_need, meat_need) =
+            crate::economy::labor::worker_food_demand(population);
+
+        let grain_consumed = grain_held.min(grain_need);
+        let fruit_consumed = fruit_held.min(fruit_need);
+        let livestock_consumed = livestock_held.min(meat_need);
+        let fish_consumed = fish_held.min(meat_need - livestock_consumed);
+        let meat_consumed = livestock_consumed + fish_consumed;
+
+        let deficit = (grain_need - grain_consumed)
+            + (fruit_need - fruit_consumed)
+            + (meat_need - meat_consumed);
 
         if ai_debug && nation.is_great_power() {
             eprintln!(
-                "[FOOD:{}] workers={}, grain={}, fruit={}, livestock={}, fish={}, canned={}, total={}, deficit={}",
+                "[FOOD:{}] w={} need=g{}/f{}/m{} held=g{}/f{}/l{}/F{}/c{} deficit={}",
                 nation.name,
                 population,
-                grain,
-                fruit,
-                livestock,
-                fish,
-                canned,
-                total_food,
-                population.saturating_sub(total_food)
+                grain_need,
+                fruit_need,
+                meat_need,
+                grain_held,
+                fruit_held,
+                livestock_held,
+                fish_held,
+                canned_held,
+                deficit,
             );
         }
 
-        let food_needed = population;
-        let food_to_consume = food_needed.min(total_food);
-
-        // Consume food in priority order: Grain → Fruit → Livestock → CannedFood
-        let mut remaining = food_to_consume;
-
-        let grain_consumed = grain.min(remaining);
         if grain_consumed > 0 {
             nation.remove_resource(ResourceType::Grain, grain_consumed);
             report.stockpile_flows.worker_food_consumed.push((
@@ -2768,9 +2783,6 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
                 grain_consumed,
             ));
         }
-        remaining -= grain_consumed;
-
-        let fruit_consumed = fruit.min(remaining);
         if fruit_consumed > 0 {
             nation.remove_resource(ResourceType::Fruit, fruit_consumed);
             report.stockpile_flows.worker_food_consumed.push((
@@ -2779,9 +2791,6 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
                 fruit_consumed,
             ));
         }
-        remaining -= fruit_consumed;
-
-        let livestock_consumed = livestock.min(remaining);
         if livestock_consumed > 0 {
             nation.remove_resource(ResourceType::Livestock, livestock_consumed);
             report.stockpile_flows.worker_food_consumed.push((
@@ -2790,9 +2799,6 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
                 livestock_consumed,
             ));
         }
-        remaining -= livestock_consumed;
-
-        let fish_consumed = fish.min(remaining);
         if fish_consumed > 0 {
             nation.remove_resource(ResourceType::Fish, fish_consumed);
             report.stockpile_flows.worker_food_consumed.push((
@@ -2801,10 +2807,10 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
                 fish_consumed,
             ));
         }
-        remaining -= fish_consumed;
 
-        // CannedFood as fallback when raw food is insufficient
-        let canned_consumed = canned.min(remaining);
+        // CannedFood fallback: one canned unit substitutes for any one missing
+        // raw food unit (covers any slot).
+        let canned_consumed = canned_held.min(deficit);
         if canned_consumed > 0 {
             nation.consume_material(MaterialType::CannedFood, canned_consumed);
             report
@@ -2813,15 +2819,17 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
                 .push((nation_id, canned_consumed));
         }
 
-        if food_to_consume > 0 {
-            report.food_consumed.push((nation.id, food_to_consume));
+        let total_food_consumed = grain_consumed + fruit_consumed + meat_consumed + canned_consumed;
+        if total_food_consumed > 0 {
+            report.food_consumed.push((nation_id, total_food_consumed));
         }
 
-        // Starvation: workers die if not enough food (raw + canned)
-        if total_food < food_needed {
-            let deficit = food_needed - total_food;
-            let workers_lost = deficit.min(game.game_data.game_config.starvation_cap);
-
+        // Starvation: each still-missing food unit kills one worker.
+        let unsated = deficit - canned_consumed;
+        if unsated > 0 {
+            let workers_lost = unsated
+                .min(population)
+                .min(game.game_data.game_config.starvation_cap);
             let mut actual_lost = 0;
             for _ in 0..workers_lost {
                 if nation.economy.labor.remove_worker() {
@@ -2829,7 +2837,7 @@ fn food_consumption(game: &mut GameState, report: &mut TurnReport) {
                 }
             }
             if actual_lost > 0 {
-                report.starvation.push((nation.id, actual_lost));
+                report.starvation.push((nation_id, actual_lost));
             }
         }
     }
@@ -7275,17 +7283,22 @@ mod tests {
     // ── Food consumption ──────────────────────────────────────
 
     #[test]
-    fn food_consumption_eats_per_worker() {
+    fn food_consumption_imperial_ration_per_worker() {
         let mut game = test_game_state();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
+        // Ration for 8 workers: 4 grain + 2 fruit + 2 meat.
         nation.add_resource(ResourceType::Grain, 10);
-        nation.economy.labor.untrained = 3; // 3 workers need 3 food
+        nation.add_resource(ResourceType::Fruit, 10);
+        nation.add_resource(ResourceType::Livestock, 10);
+        nation.economy.labor.untrained = 8;
 
         let report = process_turn(&mut game);
 
-        // Started with 10, gained 1 from farm = 11, consumed 3 (1 per worker) = 8
+        // Started with 10 grain, gained 1 from farm = 11, consumed 4 → 7.
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.resource_amount(ResourceType::Grain), 8);
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 7);
+        assert_eq!(nation.resource_amount(ResourceType::Fruit), 8);
+        assert_eq!(nation.resource_amount(ResourceType::Livestock), 8);
 
         let consumed: u32 = report
             .food_consumed
@@ -7293,26 +7306,29 @@ mod tests {
             .filter(|(nid, _)| *nid == NationId(1))
             .map(|(_, q)| *q)
             .sum();
-        assert_eq!(consumed, 3);
+        assert_eq!(consumed, 8);
     }
 
     #[test]
-    fn food_consumption_uses_fruit_and_livestock() {
+    fn food_consumption_meat_slot_prefers_livestock_then_fish() {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
         nation.economy.labor = LaborPool::new();
-        nation.economy.labor.untrained = 5; // 5 workers need 5 food
-        nation.add_resource(ResourceType::Grain, 2);
-        nation.add_resource(ResourceType::Fruit, 2);
-        nation.add_resource(ResourceType::Livestock, 3);
+        nation.economy.labor.untrained = 12;
+        // Ration for 12 workers: 6 grain + 3 fruit + 3 meat.
+        // Livestock=2 fills first, fish=1 covers the remaining meat slot.
+        nation.add_resource(ResourceType::Grain, 6);
+        nation.add_resource(ResourceType::Fruit, 3);
+        nation.add_resource(ResourceType::Livestock, 2);
+        nation.add_resource(ResourceType::Fish, 4);
 
         let report = process_turn(&mut game);
 
-        // Consume grain first (2), then fruit (2), then livestock (1) = 5 total
         let nation = game.get_nation(NationId(1)).unwrap();
         assert_eq!(nation.resource_amount(ResourceType::Grain), 0);
         assert_eq!(nation.resource_amount(ResourceType::Fruit), 0);
-        assert_eq!(nation.resource_amount(ResourceType::Livestock), 2);
+        assert_eq!(nation.resource_amount(ResourceType::Livestock), 0);
+        assert_eq!(nation.resource_amount(ResourceType::Fish), 3);
 
         let consumed: u32 = report
             .food_consumed
@@ -7320,7 +7336,44 @@ mod tests {
             .filter(|(nid, _)| *nid == NationId(1))
             .map(|(_, q)| *q)
             .sum();
-        assert_eq!(consumed, 5);
+        assert_eq!(consumed, 12);
+    }
+
+    #[test]
+    fn food_consumption_partial_ration_starves_with_canned_fallback() {
+        // Per-slot shortages are made up 1-for-1 by canned food; any still-
+        // missing food unit kills one worker (capped per turn).
+        let mut game = test_game_state_with_production();
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.economy.labor = LaborPool::new();
+        nation.economy.labor.untrained = 8;
+        // Ration for 8 workers: 4 grain + 2 fruit + 2 meat = 8 food units.
+        // Provide grain in full, no fruit, no meat → 4-unit deficit.
+        // Canned food covers 2 units; the remaining 2-unit deficit starves
+        // 2 workers.
+        nation.add_resource(ResourceType::Grain, 4);
+        nation.add_material(MaterialType::CannedFood, 2);
+
+        let report = process_turn(&mut game);
+
+        let starved: u32 = report
+            .starvation
+            .iter()
+            .filter(|(nid, _)| *nid == NationId(1))
+            .map(|(_, q)| *q)
+            .sum();
+        assert_eq!(
+            starved, 2,
+            "two workers starve after canned fallback exhausted"
+        );
+        assert_eq!(
+            game.get_nation(NationId(1))
+                .unwrap()
+                .economy
+                .labor
+                .total_workers(),
+            6
+        );
     }
 
     #[test]
@@ -7425,8 +7478,10 @@ mod tests {
 
     #[test]
     fn cannery_does_not_starve_workers_at_unlimited_default() {
-        // Regression for F-002: with the default unlimited target, the cannery
-        // must not consume grain/fruit/fish that workers need to eat this turn.
+        // Regression: with no AI target set, the cannery must not consume raw
+        // food that workers need for composite meals. Workers eat after the
+        // cannery, but the cannery's reservation (workers per food slot) is
+        // exactly what `food_consumption` needs.
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
         nation.economy.chain_targets.timber_mill = 0;
@@ -7435,32 +7490,35 @@ mod tests {
         nation.economy.chain_targets.lumber_factory = 0;
         nation.economy.chain_targets.steel_factory = 0;
         nation.economy.chain_targets.garment_factory = 0;
-        // 5 expert workers = 5 food/turn. Cannery cap 10 (oversized vs supply).
+        // 8 expert workers need an Imperialism ration of 4 grain + 2 fruit + 2 meat.
+        nation.economy.labor = LaborPool::new();
+        nation.economy.labor.expert = 8;
         nation
             .economy
             .buildings
             .push(Building::new(BuildingType::FoodProcessing, 10));
-        // 4 of each raw input — total 12 food, enough for 5 workers + canning surplus.
-        // Workers reserve 5 grain (only 4 grain available, then 1 fruit). Canning
-        // sees 0 grain + 3 fruit + 4 fish → bottleneck is grain → 0 canned.
-        // No starvation: workers eat 4 grain + 1 fruit = 5 food.
+        // Exactly enough food for the workers — no surplus to can.
         nation.add_resource(ResourceType::Grain, 4);
-        nation.add_resource(ResourceType::Fruit, 4);
-        nation.add_resource(ResourceType::Fish, 4);
+        nation.add_resource(ResourceType::Fruit, 2);
+        nation.add_resource(ResourceType::Fish, 2);
 
         let report = process_turn(&mut game);
 
-        // No starvation
         let starved: u32 = report
             .starvation
             .iter()
             .filter(|(nid, _)| *nid == NationId(1))
             .map(|(_, q)| *q)
             .sum();
-        assert_eq!(starved, 0, "Default cannery target must not starve workers");
+        assert_eq!(
+            starved, 0,
+            "cannery must not consume workers' composite meal"
+        );
 
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.economy.labor.total_workers(), 5);
+        assert_eq!(nation.economy.labor.total_workers(), 8);
+        // Cannery saw zero surplus, so no canned food was produced.
+        assert_eq!(nation.material_amount(MaterialType::CannedFood), 0);
     }
 
     // ── Building tick ─────────────────────────────────────────
@@ -7807,7 +7865,11 @@ mod tests {
         let nation = game.get_nation_mut(NationId(1)).unwrap();
 
         nation.economy.pending_immigration = 1;
+        // Composite meals for existing workers so canned food survives for
+        // the immigrant; canned + clothing are the immigration inputs.
         nation.add_resource(ResourceType::Grain, 10);
+        nation.add_resource(ResourceType::Fruit, 10);
+        nation.add_resource(ResourceType::Livestock, 10);
         nation.add_material(MaterialType::CannedFood, 2);
         nation.add_goods(GoodsType::Clothing, 2);
 
@@ -8126,8 +8188,10 @@ mod tests {
         let nation = game.get_nation_mut(NationId(1)).unwrap();
         nation.economy.treasury = Money::dollars(8500);
         nation.economy.labor.untrained = 5;
-        // Add enough food so workers don't starve
+        // Add enough food so workers don't starve (composite meals require all three)
         nation.add_resource(ResourceType::Grain, 10);
+        nation.add_resource(ResourceType::Fruit, 10);
+        nation.add_resource(ResourceType::Livestock, 10);
 
         let report = process_turn(&mut game);
         let summary = report.format_summary_line(&game);
@@ -8822,6 +8886,8 @@ mod tests {
         nation.add_material(MaterialType::CannedFood, 1);
         nation.add_resource(ResourceType::Cotton, 4);
         nation.add_resource(ResourceType::Grain, 10);
+        nation.add_resource(ResourceType::Fruit, 10);
+        nation.add_resource(ResourceType::Livestock, 10);
         for i in 2..=5 {
             nation.add_province(ProvinceId(i));
         }
@@ -10266,6 +10332,8 @@ mod tests {
         let nation = game.get_nation_mut(NationId(1)).unwrap();
 
         nation.add_resource(ResourceType::Grain, 10);
+        nation.add_resource(ResourceType::Fruit, 10);
+        nation.add_resource(ResourceType::Livestock, 10);
         nation.economy.pending_immigration = 1;
         nation.add_material(MaterialType::CannedFood, 2);
         nation.add_goods(GoodsType::Clothing, 2);

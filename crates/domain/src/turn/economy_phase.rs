@@ -174,10 +174,10 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
         let paper_cap = building_capacity(nation, BuildingType::PaperFactory);
         let canned_food_cap = building_capacity(nation, BuildingType::FoodProcessing);
 
-        let targets = nation.economy.chain_targets.clone();
+        let mut targets = nation.economy.chain_targets.clone();
 
         // Distribute labor proportionally across active steps using labor weights.
-        let labor_budgets = allocate_labor(
+        let mut labor_budgets = allocate_labor(
             total_labor,
             &targets,
             BuildingCapacities {
@@ -192,6 +192,31 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
                 canned_food: canned_food_cap,
             },
         );
+
+        // Opportunistic cannery top-up — keep forecast aligned with the
+        // matching logic in `turn::processor`. Compute the input bottleneck
+        // after composite-meal worker reservation.
+        if canned_food_cap > 0 {
+            let workers = nation.economy.labor.total_workers();
+            let (grain_need, fruit_need, meat_need) =
+                crate::economy::labor::worker_food_demand(workers);
+            let grain = nation.resource_amount(ResourceType::Grain);
+            let fruit = nation.resource_amount(ResourceType::Fruit);
+            let meat = nation
+                .resource_amount(ResourceType::Livestock)
+                .saturating_add(nation.resource_amount(ResourceType::Fish));
+            let bottleneck = grain
+                .saturating_sub(grain_need)
+                .min(fruit.saturating_sub(fruit_need))
+                .min(meat.saturating_sub(meat_need));
+            cannery_opportunistic_topup(
+                &mut labor_budgets,
+                &mut targets,
+                total_labor,
+                canned_food_cap,
+                bottleneck,
+            );
+        }
 
         // Apply feed% to resources before passing to mill production functions.
         let fed_resources = apply_feed_to_resources(&resources, &targets);
@@ -764,6 +789,54 @@ pub fn allocate_labor(
         armory: floors[6],
         paper_factory: floors[7],
         canned_food_factory: floors[8],
+    }
+}
+
+/// Opportunistically grow the cannery's labor budget and output target
+/// using any labor that `allocate_labor` didn't spend on its desired
+/// targets. The cannery can always absorb spare workers as long as there's
+/// matching raw food (composite meal: 1 grain + 1 fruit + 1 meat per
+/// canned unit), so an otherwise-idle worker turning surplus food into
+/// canned food is pure upside — canned food is itself a fallback meal for
+/// next turn.
+///
+/// `cannery_input_bottleneck` is the maximum canned-food output achievable
+/// given current raw food after worker meals are reserved. `canned_food_cap`
+/// is the cannery building capacity. Together they bound the top-up.
+///
+/// Bumps `targets.canned_food_factory` so downstream feed/cap logic
+/// (`apply_feed_to_resources`) admits the raw food needed for the larger
+/// output.
+pub fn cannery_opportunistic_topup(
+    budgets: &mut LaborBudgets,
+    targets: &mut crate::nation::ChainOutputTargets,
+    total_labor: u32,
+    canned_food_cap: u32,
+    cannery_input_bottleneck: u32,
+) {
+    if canned_food_cap == 0 || cannery_input_bottleneck == 0 {
+        return;
+    }
+    let used = budgets
+        .timber_mill
+        .saturating_add(budgets.metal_mill)
+        .saturating_add(budgets.textile_mill)
+        .saturating_add(budgets.lumber_factory)
+        .saturating_add(budgets.steel_factory)
+        .saturating_add(budgets.garment_factory)
+        .saturating_add(budgets.armory)
+        .saturating_add(budgets.paper_factory)
+        .saturating_add(budgets.canned_food_factory);
+    let spare_labor = total_labor.saturating_sub(used);
+    if spare_labor < 2 {
+        return;
+    }
+    let current_output = budgets.canned_food_factory / 2;
+    let output_ceiling = canned_food_cap.min(cannery_input_bottleneck);
+    let extra_output = (spare_labor / 2).min(output_ceiling.saturating_sub(current_output));
+    if extra_output > 0 {
+        budgets.canned_food_factory = budgets.canned_food_factory.saturating_add(extra_output * 2);
+        targets.canned_food_factory = targets.canned_food_factory.saturating_add(extra_output);
     }
 }
 

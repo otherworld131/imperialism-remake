@@ -192,49 +192,22 @@ fn compute_remote_demand(
     let mut critical: BTreeMap<ResourceType, u32> = BTreeMap::new();
 
     // ── Worker food demand (tier 1 critical) ──
-    // Workers eat from grain → fruit → livestock → fish in priority order.
-    // We project the total food need across whichever of the four foods are
-    // remotely collectable, weighted by current warehouse share so the freight
-    // mix tracks what the map actually yields.
+    // Workers eat an Imperialism-1 ration each turn:
+    // grain = ⌈w/2⌉, meat = ⌊w/4⌋, fruit = w − grain − meat. The meat slot
+    // apportions across livestock and fish below based on remote availability.
     let workers = nation.economy.labor.total_workers();
     let food_per_worker = game_data.game_config.food_per_worker;
-    let food_need = workers.saturating_mul(food_per_worker);
-    if food_need > 0 {
-        let food_types = [
-            ResourceType::Grain,
-            ResourceType::Fruit,
-            ResourceType::Livestock,
-            ResourceType::Fish,
-        ];
-        let remote_food: Vec<(ResourceType, u32)> = food_types
-            .iter()
-            .filter_map(|r| {
-                remote_items
-                    .iter()
-                    .find(|(rr, _)| rr == r)
-                    .map(|(rr, q)| (*rr, *q))
-            })
-            .filter(|(_, q)| *q > 0)
-            .collect();
-        if !remote_food.is_empty() {
-            // Distribute food need proportionally to remote availability.
-            let total_avail: u32 = remote_food.iter().map(|(_, q)| *q).sum();
-            if total_avail > 0 {
-                let mut assigned = 0u32;
-                let mut last: Option<ResourceType> = None;
-                for (r, avail) in &remote_food {
-                    let share = ((*avail as u64) * (food_need as u64) / total_avail as u64) as u32;
-                    *critical.entry(*r).or_insert(0) += share;
-                    assigned = assigned.saturating_add(share);
-                    last = Some(*r);
-                }
-                if let Some(r) = last
-                    && assigned < food_need
-                {
-                    *critical.entry(r).or_insert(0) += food_need - assigned;
-                }
-            }
+    let mut worker_meat_demand: u32 = 0;
+    if workers > 0 && food_per_worker > 0 {
+        let (grain_need, fruit_need, meat_need) =
+            crate::economy::labor::worker_food_demand(workers);
+        if grain_need > 0 {
+            *critical.entry(ResourceType::Grain).or_insert(0) += grain_need;
         }
+        if fruit_need > 0 {
+            *critical.entry(ResourceType::Fruit).or_insert(0) += fruit_need;
+        }
+        worker_meat_demand = meat_need;
     }
 
     // ── Mill / cannery raw-input demand (tier 2/3/4 critical) ──
@@ -280,10 +253,10 @@ fn compute_remote_demand(
         &mut critical,
     );
 
-    // Apportion cannery meat (single cap pool) across fish/livestock by remote
-    // availability.
+    // Apportion meat demand (worker meals + cannery input) across
+    // fish/livestock by remote availability.
     apportion_pool_to_pair(
-        cannery_meat_demand,
+        worker_meat_demand.saturating_add(cannery_meat_demand),
         ResourceType::Fish,
         ResourceType::Livestock,
         remote_items,

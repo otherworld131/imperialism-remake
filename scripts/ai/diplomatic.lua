@@ -79,6 +79,7 @@ diplomatic = {
     steel_armory_weight_peace = 0.15,
     steel_armory_weight_war = 0.6,
     canned_food_buffer = 1.7,
+    canned_food_stockpile_target = 12,
     min_chain_target = 1,
     expansions_per_turn_target = 2,
     expansion_reserve_buildings_factor = 0.5,

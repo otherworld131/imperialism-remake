@@ -203,9 +203,18 @@ pub struct TransientState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingDiplomacyAction {
-    BuildConsulate { player: NationId, target: NationId },
-    BuildEmbassy { player: NationId, target: NationId },
-    DeclareWar { from: NationId, to: NationId },
+    BuildConsulate {
+        player: NationId,
+        target: NationId,
+    },
+    BuildEmbassy {
+        player: NationId,
+        target: NationId,
+    },
+    DeclareWar {
+        from: NationId,
+        to: NationId,
+    },
     SendGrant {
         from: NationId,
         to: NationId,
@@ -478,8 +487,8 @@ impl GameState {
                 if self.has_pending_grant(from, to) {
                     return Err("Grant already queued for end turn".to_string());
                 }
-                let available =
-                    actor_nation.economy.treasury.as_dollars() - self.pending_diplomacy_reserved_dollars(from);
+                let available = actor_nation.economy.treasury.as_dollars()
+                    - self.pending_diplomacy_reserved_dollars(from);
                 if available < amount.as_dollars() {
                     return Err("not enough treasury".to_string());
                 }

@@ -245,8 +245,10 @@ pub fn amphibious_force_size(ships: &[Ship], data: &crate::data::GameData) -> u3
 ///
 /// Returns a list of `(ResourceType, demand_qty)` representing the expected
 /// consumption of each resource next turn, based on:
-/// - Food: `total_workers × food_per_worker` split across held food resources
-///   (Grain/Fruit/Livestock), or defaulting to Grain if none are held.
+/// - Food: workers eat a composite meal (1 grain + 1 fruit + 1 meat per
+///   worker per turn), so every worker drives demand for one of each food
+///   type. Meat demand is split between livestock and fish — livestock first
+///   up to what's already held, then fish covers the rest.
 /// - Mill inputs: raw-resource consumption at full building capacity.
 pub fn compute_demand_forecast(
     nation: &crate::nation::Nation,
@@ -255,25 +257,29 @@ pub fn compute_demand_forecast(
     use crate::economy::buildings::BuildingType;
     let mut demand: BTreeMap<ResourceType, u32> = BTreeMap::new();
 
-    // Food demand: workers × food_per_worker shown on one canonical food resource.
-    // Priority matches actual consumption order: Grain → Fruit → Livestock → Fish.
-    // Using the first held type so the UI shows a single clear demand signal.
+    // Worker meal demand (Imperialism-1 ratio): grain = ⌈w/2⌉,
+    // meat = ⌊w/4⌋, fruit = w − grain − meat. Canned food is a fallback only
+    // and is not counted in the raw-food forecast — transport plans for the
+    // primary diet.
     let total_workers = nation.economy.labor.total_workers();
-    let food_per_worker = game_data.game_config.food_per_worker;
-    if total_workers > 0 && food_per_worker > 0 {
-        let food_demand = total_workers.saturating_mul(food_per_worker);
-        let food_types = [
-            ResourceType::Grain,
-            ResourceType::Fruit,
-            ResourceType::Livestock,
-            ResourceType::Fish,
-        ];
-        let canonical = food_types
-            .iter()
-            .copied()
-            .find(|&r| nation.resource_amount(r) > 0)
-            .unwrap_or(ResourceType::Grain);
-        *demand.entry(canonical).or_insert(0) += food_demand;
+    if total_workers > 0 && game_data.game_config.food_per_worker > 0 {
+        let (grain_need, fruit_need, meat_need) =
+            crate::economy::labor::worker_food_demand(total_workers);
+        if grain_need > 0 {
+            *demand.entry(ResourceType::Grain).or_insert(0) += grain_need;
+        }
+        if fruit_need > 0 {
+            *demand.entry(ResourceType::Fruit).or_insert(0) += fruit_need;
+        }
+        let livestock_held = nation.resource_amount(ResourceType::Livestock);
+        let livestock_demand = meat_need.min(livestock_held);
+        let fish_demand = meat_need - livestock_demand;
+        if livestock_demand > 0 {
+            *demand.entry(ResourceType::Livestock).or_insert(0) += livestock_demand;
+        }
+        if fish_demand > 0 {
+            *demand.entry(ResourceType::Fish).or_insert(0) += fish_demand;
+        }
     }
 
     // Mill demand: raw-resource consumption at full building capacity.
@@ -851,57 +857,57 @@ mod tests {
     }
 
     #[test]
-    fn demand_forecast_uses_fish_when_only_fish_held() {
+    fn demand_forecast_imperial_ration_demands_all_three_slots() {
         let mut nation = make_test_nation();
         let data = crate::data::GameData::default();
-        // Add a worker so food demand is nonzero.
-        nation.economy.labor.untrained = 1;
-        // Give Fish only (no Grain/Fruit/Livestock).
-        nation.add_resource(ResourceType::Fish, 10);
+        // 8 workers → ⌈8/2⌉=4 grain, ⌊8/4⌋=2 meat, 8-4-2=2 fruit.
+        nation.economy.labor.untrained = 8;
+        // No livestock held, so the entire meat slot falls to fish.
         let forecast = compute_demand_forecast(&nation, &data);
-        let fish_demand = forecast
-            .iter()
-            .find(|(r, _)| *r == ResourceType::Fish)
-            .map(|(_, q)| *q);
-        let grain_demand = forecast
+        let grain = forecast
             .iter()
             .find(|(r, _)| *r == ResourceType::Grain)
             .map(|(_, q)| *q);
-        assert!(
-            fish_demand.is_some(),
-            "fish demand should appear when only fish is held"
-        );
-        assert!(
-            grain_demand.is_none(),
-            "grain demand should not appear when fish is canonical food"
-        );
+        let fruit = forecast
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Fruit)
+            .map(|(_, q)| *q);
+        let fish = forecast
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Fish)
+            .map(|(_, q)| *q);
+        let livestock = forecast
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Livestock)
+            .map(|(_, q)| *q);
+        assert_eq!(grain, Some(4));
+        assert_eq!(fruit, Some(2));
+        assert_eq!(fish, Some(2));
+        assert_eq!(livestock, None);
     }
 
     #[test]
-    fn demand_forecast_grain_takes_priority_over_fish() {
+    fn demand_forecast_livestock_consumed_first_for_meat_slot() {
         let mut nation = make_test_nation();
         let data = crate::data::GameData::default();
-        nation.economy.labor.untrained = 1;
-        // Grain takes priority over Fish.
-        nation.add_resource(ResourceType::Grain, 5);
-        nation.add_resource(ResourceType::Fish, 5);
+        // 12 workers → meat slot = 3 units. Livestock=1 fills first; fish=2 covers the rest.
+        nation.economy.labor.untrained = 12;
+        nation.add_resource(ResourceType::Livestock, 1);
         let forecast = compute_demand_forecast(&nation, &data);
-        let grain_demand = forecast
+        let livestock = forecast
             .iter()
-            .find(|(r, _)| *r == ResourceType::Grain)
+            .find(|(r, _)| *r == ResourceType::Livestock)
             .map(|(_, q)| *q);
-        let fish_demand = forecast
+        let fish = forecast
             .iter()
             .find(|(r, _)| *r == ResourceType::Fish)
             .map(|(_, q)| *q);
-        assert!(
-            grain_demand.is_some(),
-            "grain is canonical when both grain and fish held"
+        assert_eq!(
+            livestock,
+            Some(1),
+            "livestock fills meat slot up to held amount"
         );
-        assert!(
-            fish_demand.is_none(),
-            "fish demand should not appear when grain is canonical"
-        );
+        assert_eq!(fish, Some(2), "fish covers the remaining meat demand");
     }
 
     // ── Regression test: barges have no effect (matching original game) ──

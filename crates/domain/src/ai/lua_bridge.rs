@@ -1171,6 +1171,11 @@ pub struct LuaAiConfig {
     pub steel_armory_weight_war: Option<f64>,
     /// Multiplier on projected immigration demand for canned-food target.
     pub canned_food_buffer: Option<f64>,
+    /// Flat target stockpile (in units) of canned food the AI plans to keep
+    /// on hand. Canned food is a fallback meal for workers without raw food,
+    /// so a small fixed buffer is enough; the rest is opportunistic surplus
+    /// converted from spare raw food on idle labor.
+    pub canned_food_stockpile_target: Option<u32>,
     /// Floor target for any chain whose building exists, so transient input
     /// shortages don't permanently zero a chain's slider.
     pub min_chain_target: Option<u32>,
@@ -1354,6 +1359,7 @@ impl Default for LuaAiConfig {
             steel_armory_weight_peace: None,
             steel_armory_weight_war: None,
             canned_food_buffer: None,
+            canned_food_stockpile_target: None,
             min_chain_target: None,
             paper_workers_per_unit: None,
             paper_target_max: None,
@@ -1536,6 +1542,8 @@ impl LuaAiConfig {
         self.steel_armory_weight_peace = sanitize_opt_f64(self.steel_armory_weight_peace, 0.0, 1.0);
         self.steel_armory_weight_war = sanitize_opt_f64(self.steel_armory_weight_war, 0.0, 1.0);
         self.canned_food_buffer = sanitize_opt_f64(self.canned_food_buffer, 0.0, 10.0);
+        self.canned_food_stockpile_target =
+            sanitize_opt_u32(self.canned_food_stockpile_target, 0, 1_000);
         // `min_chain_target` is the anti-oscillation floor for unrunnable
         // chains. Capped tightly so a non-default Lua value can't reintroduce
         // the inflated-target bug fixed in round 1 of the adversarial review.
@@ -1771,6 +1779,7 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             steel_armory_weight_peace: table.get("steel_armory_weight_peace").ok(),
             steel_armory_weight_war: table.get("steel_armory_weight_war").ok(),
             canned_food_buffer: table.get("canned_food_buffer").ok(),
+            canned_food_stockpile_target: table.get::<u32>("canned_food_stockpile_target").ok(),
             min_chain_target: table.get::<u32>("min_chain_target").ok(),
             paper_workers_per_unit: table.get::<u32>("paper_workers_per_unit").ok(),
             paper_target_max: table.get::<u32>("paper_target_max").ok(),
@@ -2268,6 +2277,7 @@ mod tests {
             steel_armory_weight_peace: None,
             steel_armory_weight_war: None,
             canned_food_buffer: None,
+            canned_food_stockpile_target: None,
             min_chain_target: None,
             paper_workers_per_unit: None,
             paper_target_max: None,
@@ -2394,6 +2404,7 @@ mod tests {
             steel_armory_weight_peace: None,
             steel_armory_weight_war: None,
             canned_food_buffer: None,
+            canned_food_stockpile_target: None,
             min_chain_target: None,
             paper_workers_per_unit: None,
             paper_target_max: None,
@@ -2559,6 +2570,7 @@ mod tests {
             steel_armory_weight_peace: None,
             steel_armory_weight_war: None,
             canned_food_buffer: None,
+            canned_food_stockpile_target: None,
             min_chain_target: None,
             paper_workers_per_unit: None,
             paper_target_max: None,

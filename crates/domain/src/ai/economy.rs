@@ -1934,6 +1934,19 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
         }
         1.5
     };
+    // Flat strategic stockpile of canned food. Workers eat composite raw
+    // meals first; canned is a fallback unit-per-worker so a small fixed
+    // buffer is enough. Spare labor opportunistically tops this up via the
+    // second pass in `allocate_labor`.
+    let canned_food_stockpile_target: u32 = 'val: {
+        if let Some(v) = lua_cfg
+            .as_ref()
+            .and_then(|c| c.canned_food_stockpile_target)
+        {
+            break 'val v;
+        }
+        10
+    };
     // Floor target so a chain that ran out of inputs this turn still asks for
     // labor next turn — without this, a transient shortage would zero the
     // target and leave the chain dormant even after inputs return.
@@ -2114,37 +2127,27 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
         min_chain_target,
     );
 
-    // Canned food: size demand to feed the existing worker population (not
-    // just the immigration queue) and mirror the worker-food reservation the
-    // cannery sees at runtime in `turn::processor`. Without this, a nation
-    // with abundant raw food but a small immigration queue asks for a single
-    // unit of canned food while warehouses overflow.
+    // Canned food: workers eat composite raw meals first; canned food is a
+    // fallback. Target a flat strategic stockpile (per Lua) plus an
+    // immigration runway. The cannery's input ceiling mirrors the
+    // composite reservation in `turn::processor`: each food slot reserves
+    // `workers` of raw food for next turn's meals, independent of canned
+    // stock.
     let grain = snap.resource(ResourceType::Grain);
     let fruit = snap.resource(ResourceType::Fruit);
     let livestock = snap.resource(ResourceType::Livestock);
     let fish = snap.resource(ResourceType::Fish);
     let canned_in_stock = snap.material(MaterialType::CannedFood);
-    let worker_food_need = snap.total_workers.saturating_sub(canned_in_stock);
 
-    // Worker food reservation order matches `food_consumption`:
-    // grain → fruit → livestock → fish. The cannery only sees the surplus
-    // beyond worker need.
-    let after_grain = worker_food_need.saturating_sub(grain);
-    let after_fruit = after_grain.saturating_sub(fruit);
-    let after_livestock = after_fruit.saturating_sub(livestock);
-    let grain_surplus = grain.saturating_sub(worker_food_need.min(grain));
-    let fruit_surplus = fruit.saturating_sub(after_grain.min(fruit));
-    let livestock_surplus = livestock.saturating_sub(after_fruit.min(livestock));
-    let fish_surplus = fish.saturating_sub(after_livestock.min(fish));
-    let cannery_input_cap = grain_surplus
-        .min(fruit_surplus)
-        .min(livestock_surplus.saturating_add(fish_surplus));
+    let workers = snap.total_workers;
+    let grain_surplus = grain.saturating_sub(workers);
+    let fruit_surplus = fruit.saturating_sub(workers);
+    let meat_held = livestock.saturating_add(fish);
+    let meat_surplus = meat_held.saturating_sub(workers);
+    let cannery_input_cap = grain_surplus.min(fruit_surplus).min(meat_surplus);
 
     let immigration_demand = ((pending_immigration as f64) * canned_food_buffer).ceil() as u32;
-    // Build a stockpile sized to feed every existing worker plus the
-    // immigration runway, minus what's already in stock. Floor at 1 so a
-    // chain with momentarily zero need still keeps its labor slot.
-    let stockpile_target = snap.total_workers.saturating_add(immigration_demand);
+    let stockpile_target = canned_food_stockpile_target.saturating_add(immigration_demand);
     let canned_food_demand = stockpile_target.saturating_sub(canned_in_stock).max(1);
     let canned_food_runnable = canned_food_demand.min(cannery_input_cap);
     let canned_food_target = factory_target(

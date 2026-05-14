@@ -1789,10 +1789,7 @@ mod tests {
     fn economy_consume_returns_false_when_insufficient() {
         let mut n = sample_great_power();
         n.economy.add(Commodity::Goods(GoodsType::Arms), 2);
-        assert!(
-            !n.economy
-                .consume(Commodity::Goods(GoodsType::Arms), 5)
-        );
+        assert!(!n.economy.consume(Commodity::Goods(GoodsType::Arms), 5));
         assert_eq!(n.economy.amount(Commodity::Goods(GoodsType::Arms)), 2);
     }
 
@@ -2098,10 +2095,7 @@ mod tests {
         let stats = ArmyUnitType::Regulars.stats();
         n.deduct_recruit_resources(ArmyUnitType::Regulars);
         assert_eq!(n.economy.treasury, treasury_before - stats.cost);
-        assert_eq!(
-            n.goods_amount(GoodsType::Arms),
-            2 - stats.arms_required
-        );
+        assert_eq!(n.goods_amount(GoodsType::Arms), 2 - stats.arms_required);
         assert_eq!(n.economy.labor.untrained, 1);
     }
 

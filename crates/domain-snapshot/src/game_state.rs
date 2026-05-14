@@ -164,9 +164,18 @@ pub struct TransientState {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PendingDiplomacyAction {
-    BuildConsulate { player: NationId, target: NationId },
-    BuildEmbassy { player: NationId, target: NationId },
-    DeclareWar { from: NationId, to: NationId },
+    BuildConsulate {
+        player: NationId,
+        target: NationId,
+    },
+    BuildEmbassy {
+        player: NationId,
+        target: NationId,
+    },
+    DeclareWar {
+        from: NationId,
+        to: NationId,
+    },
     SendGrant {
         from: NationId,
         to: NationId,

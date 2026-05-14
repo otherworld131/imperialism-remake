@@ -617,6 +617,23 @@ pub fn projected_resource_needs(nation: &Nation) -> std::collections::BTreeMap<R
         *needs.entry(ResourceType::Livestock).or_insert(0) += livestock;
     }
 
+    // Direct worker meals (Imperialism-1 ratio): grain = ⌈w/2⌉,
+    // meat = ⌊w/4⌋, fruit = w − grain − meat. Without this, the AI sells food
+    // the workforce will starve on. Protein is fungible — mirror runtime
+    // draw order (livestock first, then fish) for the per-resource floor.
+    let workers = nation.economy.labor.total_workers();
+    if workers > 0 {
+        let (grain_need, fruit_need, meat_need) =
+            crate::economy::labor::worker_food_demand(workers);
+        *needs.entry(ResourceType::Grain).or_insert(0) += grain_need;
+        *needs.entry(ResourceType::Fruit).or_insert(0) += fruit_need;
+        let livestock_held = nation.resource_amount(ResourceType::Livestock);
+        let livestock_need = meat_need.min(livestock_held);
+        let fish_need = meat_need - livestock_need;
+        *needs.entry(ResourceType::Livestock).or_insert(0) += livestock_need;
+        *needs.entry(ResourceType::Fish).or_insert(0) += fish_need;
+    }
+
     needs
 }
 

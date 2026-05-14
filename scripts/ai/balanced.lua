@@ -83,6 +83,7 @@ balanced = {
     steel_armory_weight_peace = 0.2,       -- 20% of steel → armory in peacetime
     steel_armory_weight_war = 0.7,         -- 70% of steel → armory at war
     canned_food_buffer = 1.5,              -- canned food target = 1.5× immigration queue
+    canned_food_stockpile_target = 10,     -- flat canned stockpile target; raw composite meals come first
     min_chain_target = 1,                  -- floor so transient shortages don't zero a chain
     expansions_per_turn_target = 2,        -- reserve lumber+steel for ≥2 simultaneous expansions
     expansion_reserve_buildings_factor = 0.5, -- + ceil(expandable_buildings × 0.5) extra slots
