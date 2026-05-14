@@ -1261,6 +1261,23 @@ pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
                     ));
                 }
             }
+
+            // Card #483: bare Grassland tiles (no resource deposit, no
+            // improvement) passively yield 1 Grain when reachable from a
+            // connected depot or the country capital. Matches Imperialism 1
+            // behavior — connecting a hex matters before you can afford to
+            // improve it.
+            if let Some(tile) = game.world.hex_map.get_tile(*tile_coord)
+                && tile.terrain() == TerrainType::Grassland
+                && tile.resource_deposit().is_none()
+                && tile.improvement_level() == 0
+            {
+                let tile_collectable =
+                    collectable.map(|s| s.contains(tile_coord)).unwrap_or(false);
+                if is_connected && tile_collectable {
+                    production_data.push((province.owner, ResourceType::Grain, 1));
+                }
+            }
         }
 
         // Card #418: ports and coastal country capitals haul Fish out of the
