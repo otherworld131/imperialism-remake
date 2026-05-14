@@ -3342,6 +3342,28 @@ fn parse_commodity(
     }
 }
 
+/// Industry-panel buildings: expandable production sites whose tier
+/// progression actually changes what they output. Fixed-capacity
+/// infrastructure (Armory, Capitol, FoodProcessing, Railyard, Shipyard,
+/// TradeSchool, University, Warehouse) is excluded — they don't gain
+/// throughput from being "expanded" and shouldn't carry an Expand button.
+fn is_expandable_industry_building(bt: BuildingType) -> bool {
+    matches!(
+        bt,
+        BuildingType::LumberMill
+            | BuildingType::SteelMill
+            | BuildingType::TextileMill
+            | BuildingType::FurnitureFactory
+            | BuildingType::HardwareFactory
+            | BuildingType::ClothingFactory
+            | BuildingType::PaperFactory
+            | BuildingType::OilRefinery
+            | BuildingType::PowerPlant
+            | BuildingType::AdvancedTextileMill
+            | BuildingType::ChemicalPlant
+    )
+}
+
 fn parse_building_type(name: &str) -> Option<BuildingType> {
     match name {
         "Armory" => Some(BuildingType::Armory),
@@ -3696,11 +3718,16 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
 
-    // Buildings
+    // Buildings — Industry panel only lists the expandable production
+    // buildings (mills, factories, late-game plants). Fixed-capacity
+    // infrastructure (Armory, Capitol, FoodProcessing, Railyard, Shipyard,
+    // TradeSchool, University, Warehouse) is omitted because the UI's
+    // Expand button has no meaningful effect on what they produce.
     let buildings_json: Vec<serde_json::Value> = nation
         .economy
         .buildings
         .iter()
+        .filter(|b| is_expandable_industry_building(b.building_type))
         .map(|b| {
             let next_cap = b.next_capacity();
             let (exp_lumber, exp_steel) =
@@ -3750,11 +3777,12 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
     let available_lumber_mat = nation.material_amount(MaterialType::Lumber);
     let available_steel_mat = nation.material_amount(MaterialType::Steel);
 
-    // Can-expand map
+    // Can-expand map — matches the filtered Industry buildings list.
     let can_expand: serde_json::Value = nation
         .economy
         .buildings
         .iter()
+        .filter(|b| is_expandable_industry_building(b.building_type))
         .map(|b| {
             let next_cap = b.next_capacity();
             let (exp_lumber, exp_steel) =

@@ -2114,19 +2114,38 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
         min_chain_target,
     );
 
-    // Canned food: target = min(projected demand, cannery input bottleneck).
-    // The cannery consumes 1 grain + 1 fruit + 1 fish/livestock per canned
-    // food unit, so the runnable output equals the smallest of the three.
+    // Canned food: size demand to feed the existing worker population (not
+    // just the immigration queue) and mirror the worker-food reservation the
+    // cannery sees at runtime in `turn::processor`. Without this, a nation
+    // with abundant raw food but a small immigration queue asks for a single
+    // unit of canned food while warehouses overflow.
     let grain = snap.resource(ResourceType::Grain);
     let fruit = snap.resource(ResourceType::Fruit);
-    let fish_or_livestock = snap
-        .resource(ResourceType::Fish)
-        .saturating_add(snap.resource(ResourceType::Livestock));
-    let cannery_input_cap = grain.min(fruit).min(fish_or_livestock);
+    let livestock = snap.resource(ResourceType::Livestock);
+    let fish = snap.resource(ResourceType::Fish);
+    let canned_in_stock = snap.material(MaterialType::CannedFood);
+    let worker_food_need = snap.total_workers.saturating_sub(canned_in_stock);
+
+    // Worker food reservation order matches `food_consumption`:
+    // grain → fruit → livestock → fish. The cannery only sees the surplus
+    // beyond worker need.
+    let after_grain = worker_food_need.saturating_sub(grain);
+    let after_fruit = after_grain.saturating_sub(fruit);
+    let after_livestock = after_fruit.saturating_sub(livestock);
+    let grain_surplus = grain.saturating_sub(worker_food_need.min(grain));
+    let fruit_surplus = fruit.saturating_sub(after_grain.min(fruit));
+    let livestock_surplus = livestock.saturating_sub(after_fruit.min(livestock));
+    let fish_surplus = fish.saturating_sub(after_livestock.min(fish));
+    let cannery_input_cap = grain_surplus
+        .min(fruit_surplus)
+        .min(livestock_surplus.saturating_add(fish_surplus));
+
     let immigration_demand = ((pending_immigration as f64) * canned_food_buffer).ceil() as u32;
-    // Always allow at least 1 unit of demand so workers can be fed even when
-    // the immigration queue is empty.
-    let canned_food_demand = immigration_demand.max(1);
+    // Build a stockpile sized to feed every existing worker plus the
+    // immigration runway, minus what's already in stock. Floor at 1 so a
+    // chain with momentarily zero need still keeps its labor slot.
+    let stockpile_target = snap.total_workers.saturating_add(immigration_demand);
+    let canned_food_demand = stockpile_target.saturating_sub(canned_in_stock).max(1);
     let canned_food_runnable = canned_food_demand.min(cannery_input_cap);
     let canned_food_target = factory_target(
         canned_food_runnable,
@@ -3875,6 +3894,33 @@ mod tests {
         assert_eq!(
             ai.economy.chain_targets.canned_food_factory, 2,
             "canned_food target must clamp to scarcest ingredient (grain=2)"
+        );
+    }
+
+    #[test]
+    fn ai_set_production_targets_cannery_sizes_for_existing_workers() {
+        // Even with no immigration queued, an established workforce should
+        // pull canned-food demand up to feed itself — not collapse to the
+        // `min_chain_target` floor while raw food sits idle.
+        let mut game = test_game_with_ai();
+        let ai_id = NationId(2);
+        let ai = game.get_nation_mut(ai_id).unwrap();
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::FoodProcessing, 50));
+        ai.economy.labor.untrained = 20;
+        ai.economy.pending_immigration = 0;
+        ai.add_resource(ResourceType::Grain, 30);
+        ai.add_resource(ResourceType::Fruit, 30);
+        ai.add_resource(ResourceType::Livestock, 30);
+
+        ai_set_production_targets(&mut game, ai_id);
+
+        let ai = game.get_nation(ai_id).unwrap();
+        assert!(
+            ai.economy.chain_targets.canned_food_factory >= 10,
+            "expected demand to scale with existing workers (got {})",
+            ai.economy.chain_targets.canned_food_factory
         );
     }
 
