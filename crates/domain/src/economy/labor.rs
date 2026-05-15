@@ -18,6 +18,40 @@ pub fn worker_food_demand(workers: u32) -> (u32, u32, u32) {
     (grain, fruit, meat)
 }
 
+/// Maximum canned-food units a cannery can produce this turn given raw stocks,
+/// after reserving worker-meal rations.
+///
+/// Mirrors the composite-meal reservation in `turn::processor`: each canned-food
+/// unit already on hand displaces one worker-meal, so the reserve scales down
+/// proportionally. Returns the per-slot bottleneck across grain, fruit, and
+/// (fish + livestock).
+pub fn cannery_input_cap(
+    grain: u32,
+    fruit: u32,
+    fish: u32,
+    livestock: u32,
+    canned_in_stock: u32,
+    workers: u32,
+) -> u32 {
+    let meat_held = fish.saturating_add(livestock);
+    if workers == 0 {
+        return grain.min(fruit).min(meat_held);
+    }
+    let (grain_per_meal, fruit_per_meal, meat_per_meal) = worker_food_demand(workers);
+    let workers_on_raw = workers.saturating_sub(canned_in_stock);
+    let scale = |amt: u32| -> u32 {
+        let w = workers as u64;
+        (amt as u64 * workers_on_raw as u64).div_ceil(w) as u32
+    };
+    let grain_reserve = scale(grain_per_meal);
+    let fruit_reserve = scale(fruit_per_meal);
+    let meat_reserve = scale(meat_per_meal);
+    let grain_surplus = grain.saturating_sub(grain_reserve);
+    let fruit_surplus = fruit.saturating_sub(fruit_reserve);
+    let meat_surplus = meat_held.saturating_sub(meat_reserve);
+    grain_surplus.min(fruit_surplus).min(meat_surplus)
+}
+
 /// Per-turn penalty applied to a tier (famine, plague, unrest, etc.).
 /// Reduces effective labor output but doesn't remove workers from the pool.
 #[derive(Debug, Clone)]

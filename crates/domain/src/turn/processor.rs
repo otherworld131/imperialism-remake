@@ -2228,17 +2228,14 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
         // output target.
         if canned_food_cap > 0 {
             let workers = nation.economy.labor.total_workers();
-            let grain_surplus = nation
-                .resource_amount(ResourceType::Grain)
-                .saturating_sub(workers);
-            let fruit_surplus = nation
-                .resource_amount(ResourceType::Fruit)
-                .saturating_sub(workers);
-            let meat_surplus = nation
-                .resource_amount(ResourceType::Livestock)
-                .saturating_add(nation.resource_amount(ResourceType::Fish))
-                .saturating_sub(workers);
-            let bottleneck = grain_surplus.min(fruit_surplus).min(meat_surplus);
+            let bottleneck = crate::economy::labor::cannery_input_cap(
+                nation.resource_amount(ResourceType::Grain),
+                nation.resource_amount(ResourceType::Fruit),
+                nation.resource_amount(ResourceType::Fish),
+                nation.resource_amount(ResourceType::Livestock),
+                nation.material_amount(MaterialType::CannedFood),
+                workers,
+            );
             super::economy_phase::cannery_opportunistic_topup(
                 &mut labor,
                 &mut targets,

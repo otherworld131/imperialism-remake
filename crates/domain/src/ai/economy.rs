@@ -1990,11 +1990,14 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
     let canned_in_stock = snap.material(MaterialType::CannedFood);
 
     let workers = snap.total_workers;
-    let grain_surplus = grain.saturating_sub(workers);
-    let fruit_surplus = fruit.saturating_sub(workers);
-    let meat_held = livestock.saturating_add(fish);
-    let meat_surplus = meat_held.saturating_sub(workers);
-    let cannery_input_cap = grain_surplus.min(fruit_surplus).min(meat_surplus);
+    let cannery_input_cap = crate::economy::labor::cannery_input_cap(
+        grain,
+        fruit,
+        fish,
+        livestock,
+        canned_in_stock,
+        workers,
+    );
 
     let immigration_demand = ((pending_immigration as f64) * canned_food_buffer).ceil() as u32;
     let stockpile_target = canned_food_stockpile_target.saturating_add(immigration_demand);
