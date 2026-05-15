@@ -604,6 +604,10 @@ fn collect_transport_rows(game: &domain::game_state::GameState) -> Vec<serde_jso
                 .collect();
             let workers =
                 n.economy.labor.untrained + n.economy.labor.trained + n.economy.labor.expert;
+            let (local, remote) = domain::economy::current_collectable_resources(game, n.id);
+            let fmt_collection = |v: &[(domain::types::ResourceType, u32)]| -> Vec<(String, u32)> {
+                v.iter().map(|(r, q)| (format!("{:?}", r), *q)).collect()
+            };
             serde_json::json!({
                 "id": n.id.0,
                 "name": n.name,
@@ -623,6 +627,8 @@ fn collect_transport_rows(game: &domain::game_state::GameState) -> Vec<serde_jso
                     "cannery": cannery_cap,
                 },
                 "freight_allocations": allocations,
+                "local_collection": fmt_collection(&local),
+                "remote_collection": fmt_collection(&remote),
             })
         })
         .collect()

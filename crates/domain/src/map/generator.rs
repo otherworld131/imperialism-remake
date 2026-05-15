@@ -1213,38 +1213,103 @@ fn score_nation_center(coord: HexCoord, hex_map: &HexMap) -> u32 {
     score
 }
 
-/// Score a tile as a potential capital location.
-/// Prefers coastal tiles with nearby food.
-fn score_capital_candidate(coord: HexCoord, hex_map: &super::hex_map::HexMap) -> u32 {
-    let mut score: u32 = 0;
-
-    // Coastal bonus: adjacent to sea tile
-    let is_coastal = coord.neighbors().iter().any(|n| {
-        hex_map
-            .get_tile(*n)
-            .map(|t| t.terrain() == TerrainType::Sea)
-            .unwrap_or(false)
-    });
-    if is_coastal {
-        score += 20;
-    }
-
-    // Food tiles within 2 hexes
-    for nearby in coord.range(2) {
-        if let Some(tile) = hex_map.get_tile(nearby)
-            && is_food_terrain(tile)
-        {
-            score += 5;
+/// Per-food-slot yield (grain, fruit, meat) a tile would produce inside the
+/// capital harvest area, assuming the level-1 development head-start applied
+/// at game init. Matches the rules used by the live turn processor:
+///   * Grain / Fruit / Livestock at level 1 yield 2 in their respective slot.
+///   * Bare Grassland tiles passively yield 1 Grain (Card #483).
+///   * Everything else contributes nothing.
+fn level1_food_yield(coord: HexCoord, hex_map: &super::hex_map::HexMap) -> (u32, u32, u32) {
+    let Some(tile) = hex_map.get_tile(coord) else {
+        return (0, 0, 0);
+    };
+    if let Some(res) = tile.resource_deposit() {
+        match res {
+            ResourceType::Grain => (2, 0, 0),
+            ResourceType::Fruit => (0, 2, 0),
+            ResourceType::Livestock => (0, 0, 2),
+            _ => (0, 0, 0),
         }
+    } else if tile.terrain() == TerrainType::Grassland {
+        (1, 0, 0)
+    } else {
+        (0, 0, 0)
+    }
+}
+
+/// Maximum number of workers that can be fed by a balanced composite-meal
+/// supply of (grain, fruit, meat), matching `worker_food_demand`:
+///   grain need = ⌈w/2⌉   → w ≤ 2·grain
+///   meat  need = ⌊w/4⌋   → w ≤ 4·meat + 3
+///   fruit need = w − grain − meat = ⌊(w+2)/4⌋ → w ≤ 4·fruit + 1
+fn max_workers_supportable(grain: u32, fruit: u32, meat: u32) -> u32 {
+    let w_grain = grain.saturating_mul(2);
+    let w_fruit = fruit.saturating_mul(4).saturating_add(1);
+    let w_meat = meat.saturating_mul(4).saturating_add(3);
+    w_grain.min(w_fruit).min(w_meat)
+}
+
+/// Score a tile as a potential capital location.
+///
+/// Picks the hex that supports the largest population. Workers eat balanced
+/// composite meals (grain/fruit/meat in fixed proportions per
+/// `worker_food_demand`), so the metric is the number of workers actually
+/// feedable from the (grain, fruit, meat) supply at level-1 development
+/// across capital + 6 neighbours — not raw total food.
+///
+/// Coastal capitals get the automatic port-fish yield (1 per adjacent ocean
+/// hex, capped at 3); fish substitutes for livestock in the meat slot.
+/// Coastal access and a non-barren landing site are small tiebreakers
+/// between hexes with equal worker capacity.
+fn score_capital_candidate(coord: HexCoord, hex_map: &super::hex_map::HexMap) -> u32 {
+    let Some(capital_tile) = hex_map.get_tile(coord) else {
+        return 0;
+    };
+    // A capital cannot stand on water or peaks.
+    if matches!(
+        capital_tile.terrain(),
+        TerrainType::Sea | TerrainType::Mountain
+    ) {
+        return 0;
     }
 
-    // Penalty for being on undesirable terrain without resources
-    if let Some(tile) = hex_map.get_tile(coord)
-        && matches!(
-            tile.terrain(),
-            TerrainType::Desert | TerrainType::Tundra | TerrainType::Swamp | TerrainType::Mountain
-        )
-        && tile.resource_deposit().is_none()
+    // Sum per-slot yields across the 7-tile capital harvest area at level 1.
+    let (mut grain, mut fruit, mut meat) = level1_food_yield(coord, hex_map);
+    let neighbors = coord.neighbors();
+    for n in &neighbors {
+        let (g, f, m) = level1_food_yield(*n, hex_map);
+        grain += g;
+        fruit += f;
+        meat += m;
+    }
+
+    // Coastal capitals also fish — 1 Fish per adjacent ocean hex, capped at 3.
+    // Fish folds into the meat slot (livestock-first consumption, then fish).
+    let ocean_neighbors = neighbors
+        .iter()
+        .filter(|n| {
+            hex_map
+                .get_tile(**n)
+                .map(|t| t.terrain() == TerrainType::Sea)
+                .unwrap_or(false)
+        })
+        .count() as u32;
+    let fish = ocean_neighbors.min(3);
+    meat += fish;
+
+    // Primary signal: workers supportable by the balanced food supply.
+    // Tiebreakers: coastal access (port path), and a small penalty for
+    // siting the capital on otherwise barren tiles (Desert/Tundra/Swamp)
+    // with no resource of their own.
+    let workers = max_workers_supportable(grain, fruit, meat);
+    let mut score = workers * 100;
+    if ocean_neighbors > 0 {
+        score += 10;
+    }
+    if matches!(
+        capital_tile.terrain(),
+        TerrainType::Desert | TerrainType::Tundra | TerrainType::Swamp
+    ) && capital_tile.resource_deposit().is_none()
     {
         score = score.saturating_sub(15);
     }

@@ -397,6 +397,14 @@ pub fn current_collectable_resources(
             };
             if let Some(y) = tile.calculate_yield() {
                 add_yield(coord, y.resource, y.quantity);
+            } else if tile.terrain() == TerrainType::Grassland
+                && tile.resource_deposit().is_none()
+                && tile.improvement_level() == 0
+            {
+                // Card #483: bare Grassland passively yields 1 Grain when
+                // reachable. `collectable` already enforces reachability via
+                // the capital or a connected depot, so no further check.
+                add_yield(coord, ResourceType::Grain, 1);
             }
 
             let is_port = tile.infrastructure.has_port;

@@ -1204,10 +1204,10 @@ fn new_game_inner(
             id_counter += 1;
         }
 
-        // Starting merchant fleet: 2 Traders + 1 Indiaman per Great Power so
-        // first-turn cargo capacity (2×2 + 4 = 8) supports a meaningful
-        // import bid for nations missing critical raw resources.
-        for k in 0..2u32 {
+        // Starting merchant fleet: 4 Traders + 3 Indiaman per Great Power so
+        // first-turn trade capacity (4×2 + 3×4 = 20) supports a real import
+        // programme rather than a token bid.
+        for k in 0..4u32 {
             let trader = Ship::with_data(
                 UnitId(1_500_000 + (i as u32) * 10 + k),
                 ShipType::Trader,
@@ -1216,13 +1216,15 @@ fn new_game_inner(
             );
             nation.military.merchant_fleet.push(trader);
         }
-        let indiaman = Ship::with_data(
-            UnitId(1_500_000 + (i as u32) * 10 + 9),
-            ShipType::Indiaman,
-            setup.nation_id,
-            &game_data,
-        );
-        nation.military.merchant_fleet.push(indiaman);
+        for k in 0..3u32 {
+            let indiaman = Ship::with_data(
+                UnitId(1_500_000 + (i as u32) * 10 + 7 + k),
+                ShipType::Indiaman,
+                setup.nation_id,
+                &game_data,
+            );
+            nation.military.merchant_fleet.push(indiaman);
+        }
 
         // Starting warship: 1 Frigate for each Great Power
         let frigate = Ship::with_data(
@@ -1450,6 +1452,41 @@ fn new_game_inner(
             if let Some(tile) = game_state.world.hex_map.get_tile_mut(cap_tile) {
                 tile.infrastructure.has_fort = true;
                 tile.infrastructure.fort_level = 1;
+            }
+        }
+    }
+
+    // Develop the capital tile and its 6 neighbours to level 1 for every nation.
+    // Tiles with no developable resource are silently skipped (improve() is a
+    // no-op when max_improvement_level is 0). Hidden deposits get revealed so
+    // they actually become productive on turn 1.
+    let nation_capital_tiles: Vec<crate::hex::HexCoord> = game_state
+        .world
+        .nations
+        .iter()
+        .filter_map(|n| {
+            game_state
+                .world
+                .provinces
+                .iter()
+                .find(|p| p.id == n.capital_province_id)
+                .map(|p| p.capital_tile)
+        })
+        .collect();
+    for cap_tile in nation_capital_tiles {
+        let mut targets: Vec<crate::hex::HexCoord> = Vec::with_capacity(7);
+        targets.push(cap_tile);
+        targets.extend_from_slice(&cap_tile.neighbors());
+        for coord in targets {
+            if let Some(tile) = game_state.world.hex_map.get_tile_mut(coord) {
+                if let Some(res) = tile.resource_deposit() {
+                    if res.requires_prospecting() && !tile.is_prospected() {
+                        tile.reveal_deposit(res);
+                    }
+                }
+                if tile.improvement_level() == 0 {
+                    tile.improve();
+                }
             }
         }
     }
@@ -2557,12 +2594,16 @@ mod tests {
         let capital_pid = human.capital_province_id;
         let province = gs.get_province(capital_pid).unwrap();
 
-        // Check that any tiles with deposits in the capital province
-        // have improvement_level >= 1 (meaning they were auto-prospected).
+        // Check that any tile with a hidden deposit in the capital province
+        // has improvement_level >= 1 (meaning it was auto-prospected). Surface
+        // resources are out of scope — auto-prospect only reveals/develops
+        // hidden minerals.
         for tile_coord in &province.tiles {
             if let Some(tile) = gs.world.hex_map.get_tile(*tile_coord)
                 && tile.terrain().can_have_deposits()
-                && tile.resource_deposit().is_some()
+                && tile
+                    .resource_deposit()
+                    .is_some_and(|r| r.requires_prospecting())
             {
                 assert!(
                     tile.improvement_level() >= 1,
@@ -2580,10 +2621,19 @@ mod tests {
         let human = gs.get_nation(gs.human_player_nation).unwrap();
         let capital_pid = human.capital_province_id;
         let province = gs.get_province(capital_pid).unwrap();
+        let capital_tile = province.capital_tile;
+        let mut capital_area: std::collections::HashSet<_> =
+            capital_tile.neighbors().into_iter().collect();
+        capital_area.insert(capital_tile);
 
         // On Hard, tiles with deposits should NOT be auto-prospected
         // (improvement_level should still be 0 for prospectable terrain).
+        // The capital head-start (capital + 6 neighbours developed to L1)
+        // applies on all difficulties, so exclude that 7-tile area.
         for tile_coord in &province.tiles {
+            if capital_area.contains(tile_coord) {
+                continue;
+            }
             if let Some(tile) = gs.world.hex_map.get_tile(*tile_coord)
                 && tile.terrain().can_have_deposits()
             {
