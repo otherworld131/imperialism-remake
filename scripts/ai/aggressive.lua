@@ -68,6 +68,7 @@ aggressive = {
     -- buffers 2 turns so wartime steel/arms output isn't input-starved.
     trade_buy_treasury_floor = 1500,
     trade_buy_buffer_turns = 2,
+    transport_slack_buffer_turns = 30, -- stop hauling slack once warehouse holds 30 turns of per-turn consumption
     -- Card #465: militarist hoards arms — large reserve.
     arms_sell_reserve = 30,
     -- Aggressive likes liquidity for war — drain harder.

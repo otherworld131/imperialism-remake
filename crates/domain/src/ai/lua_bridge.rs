@@ -1128,6 +1128,14 @@ pub struct LuaAiConfig {
     /// Card [3/6] — buy-side trade. How many turns of input to buffer per
     /// resource. AI bids to top up to `per_turn_demand × buffer_turns`.
     pub trade_buy_buffer_turns: Option<u32>,
+    /// How many turns of consumption to keep in the warehouse before the
+    /// freight allocator stops hauling more of a resource as slack. Applies
+    /// only to resources with active per-turn demand (worker food + mill /
+    /// cannery inputs); rare strategic resources without demand (gold, gems,
+    /// horses, oil) are unaffected. Caps deadweight stockpiling of grain /
+    /// fruit / iron / coal when the warehouse already holds many turns of
+    /// supply, freeing freight cars for chains that still need them.
+    pub transport_slack_buffer_turns: Option<u32>,
     /// Card #465 — Arms reservation. Minimum arms held back from any
     /// auto-sale path on top of the queued-recruit demand. Larger values
     /// favor sustained army growth; smaller values let the AI liquidate
@@ -1321,6 +1329,7 @@ impl Default for LuaAiConfig {
             high_treasury_expansion_threshold: None,
             trade_buy_treasury_floor: None,
             trade_buy_buffer_turns: None,
+            transport_slack_buffer_turns: None,
             arms_sell_reserve: None,
             food_processing_expansion_threshold: None,
             infra_budget_scale_threshold: None,
@@ -1495,6 +1504,10 @@ impl LuaAiConfig {
             sanitize_opt_u32(self.expansion_threshold_multiplier, 1, 20);
         // Card [3/6]: buy-side trade tunables.
         self.trade_buy_buffer_turns = sanitize_opt_u32(self.trade_buy_buffer_turns, 0, 20);
+        // Transport slack cap. 0 disables slack entirely; very large values
+        // restore unbounded stockpile hauling. Default range is generous.
+        self.transport_slack_buffer_turns =
+            sanitize_opt_u32(self.transport_slack_buffer_turns, 0, 500);
         self.trade_buy_treasury_floor =
             sanitize_opt_i64(self.trade_buy_treasury_floor, 0, 10_000_000);
         // Card #465: arms_sell_reserve. 0..=200 — large values would freeze
@@ -1726,6 +1739,7 @@ pub fn lua_get_config(engine: &LuaEngine, personality: AiPersonality) -> Option<
             high_treasury_expansion_threshold: table.get("high_treasury_expansion_threshold").ok(),
             trade_buy_treasury_floor: table.get("trade_buy_treasury_floor").ok(),
             trade_buy_buffer_turns: table.get("trade_buy_buffer_turns").ok(),
+            transport_slack_buffer_turns: table.get::<u32>("transport_slack_buffer_turns").ok(),
             arms_sell_reserve: table.get("arms_sell_reserve").ok(),
             food_processing_expansion_threshold: table
                 .get("food_processing_expansion_threshold")
@@ -2222,6 +2236,7 @@ mod tests {
             high_treasury_expansion_threshold: None,
             trade_buy_treasury_floor: None,
             trade_buy_buffer_turns: None,
+            transport_slack_buffer_turns: None,
             arms_sell_reserve: None,
             food_processing_expansion_threshold: None,
             infra_budget_scale_threshold: None,
@@ -2344,6 +2359,7 @@ mod tests {
             high_treasury_expansion_threshold: None,
             trade_buy_treasury_floor: None,
             trade_buy_buffer_turns: None,
+            transport_slack_buffer_turns: None,
             arms_sell_reserve: None,
             food_processing_expansion_threshold: None,
             infra_budget_scale_threshold: None,
@@ -2505,6 +2521,7 @@ mod tests {
             high_treasury_expansion_threshold: None,
             trade_buy_treasury_floor: None,
             trade_buy_buffer_turns: None,
+            transport_slack_buffer_turns: None,
             arms_sell_reserve: None,
             food_processing_expansion_threshold: None,
             infra_budget_scale_threshold: None,

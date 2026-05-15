@@ -94,7 +94,8 @@ pub fn ai_allocate_transport(game: &mut GameState, nation_id: NationId) {
         return;
     }
 
-    let (_local, mut remote_items) = crate::economy::current_collectable_resources(game, nation_id);
+    let (local_items, mut remote_items) =
+        crate::economy::current_collectable_resources(game, nation_id);
     // Mirror `resolve_transport` (processor.rs:1252): AI difficulty multipliers
     // scale up remote yields. Apply the same multiplier here so demand caps and
     // delivery-time availability agree.
@@ -112,7 +113,14 @@ pub fn ai_allocate_transport(game: &mut GameState, nation_id: NationId) {
     }
 
     let nation = game.get_nation(nation_id).expect("nation present");
-    let demand = compute_remote_demand(nation, &game.game_data, &remote_items);
+    let slack_buffer_turns = transport_slack_buffer_turns(game, nation_id);
+    let demand = compute_remote_demand(
+        nation,
+        &game.game_data,
+        &local_items,
+        &remote_items,
+        slack_buffer_turns,
+    );
 
     let allocations = distribute_freight(total_capacity, &demand);
 
@@ -184,12 +192,34 @@ struct FreightDemand {
 /// the nation actually consumes per turn; slack is the surplus on the map
 /// that we haul if there's leftover capacity after every higher tier's
 /// critical demand is met.
+/// Per-personality Lua tunable. Default 30 turns: warehouse stocks beyond
+/// `slack_buffer_turns × per_turn_consumption` get no further slack hauling,
+/// freeing freight cars for chains that still need them.
+fn transport_slack_buffer_turns(game: &GameState, nation_id: NationId) -> u32 {
+    let personality = super::common::get_personality(game, nation_id);
+    if let Some(cfg) = super::lua_bridge::get_personality_config(game, personality)
+        && let Some(v) = cfg.transport_slack_buffer_turns
+    {
+        return v;
+    }
+    30
+}
+
 fn compute_remote_demand(
     nation: &crate::nation::Nation,
     game_data: &crate::data::GameData,
+    local_items: &[(ResourceType, u32)],
     remote_items: &[(ResourceType, u32)],
+    slack_buffer_turns: u32,
 ) -> Vec<(ResourceType, FreightDemand)> {
     let mut critical: BTreeMap<ResourceType, u32> = BTreeMap::new();
+    let local_supply = |r: ResourceType| -> u32 {
+        local_items
+            .iter()
+            .find(|(rr, _)| *rr == r)
+            .map(|(_, q)| *q)
+            .unwrap_or(0)
+    };
 
     // ── Worker food demand (tier 1 critical) ──
     // Workers eat an Imperialism-1 ration each turn:
@@ -211,52 +241,76 @@ fn compute_remote_demand(
     }
 
     // ── Mill / cannery raw-input demand (tier 2/3/4 critical) ──
-    let mut textile_fiber_demand: u32 = 0;
-    let mut cannery_meat_demand: u32 = 0;
+    //
+    // Drive freight demand by the AI's *planned production* this turn — i.e.
+    // `chain_targets` — capped at the building's effective capacity. Using raw
+    // capacity instead would request raw materials for runs the AI never
+    // actually staffs (e.g. a cap-58 cannery the AI runs at 1/58 because labor
+    // is scarce). That over-request hogs tier-1 freight on grain/fruit and
+    // starves Timber/Cotton (the symptom in the 1865 Testpresh save).
+    let mut lumber_mill_cap: u32 = 0;
+    let mut steel_mill_cap: u32 = 0;
+    let mut textile_mill_cap: u32 = 0;
+    let mut cannery_cap: u32 = 0;
     for building in &nation.economy.buildings {
         let cap = building.effective_capacity();
         if cap == 0 {
             continue;
         }
         match building.building_type {
-            BuildingType::LumberMill => {
-                *critical.entry(ResourceType::Timber).or_insert(0) += cap.saturating_mul(2);
-            }
-            BuildingType::SteelMill => {
-                *critical.entry(ResourceType::Coal).or_insert(0) += cap;
-                *critical.entry(ResourceType::Iron).or_insert(0) += cap;
-            }
+            BuildingType::LumberMill => lumber_mill_cap = lumber_mill_cap.saturating_add(cap),
+            BuildingType::SteelMill => steel_mill_cap = steel_mill_cap.saturating_add(cap),
             BuildingType::TextileMill | BuildingType::AdvancedTextileMill => {
-                // Cotton + wool feed a single fiber pool (`2 × cap` total).
-                // Apportion across cotton/wool by remote availability below.
-                textile_fiber_demand = textile_fiber_demand.saturating_add(cap.saturating_mul(2));
+                textile_mill_cap = textile_mill_cap.saturating_add(cap);
             }
-            BuildingType::FoodProcessing => {
-                // Cannery: 1 grain + 1 fruit + 1 (fish OR livestock) per unit.
-                *critical.entry(ResourceType::Grain).or_insert(0) += cap;
-                *critical.entry(ResourceType::Fruit).or_insert(0) += cap;
-                // Meat slot is a single pool of size `cap`, split below across
-                // fish/livestock by remote availability.
-                cannery_meat_demand = cannery_meat_demand.saturating_add(cap);
-            }
+            BuildingType::FoodProcessing => cannery_cap = cannery_cap.saturating_add(cap),
             _ => {}
         }
     }
+    let targets = &nation.economy.chain_targets;
+    let lumber_run = lumber_mill_cap.min(targets.timber_mill);
+    let steel_run = steel_mill_cap.min(targets.metal_mill);
+    let textile_run = textile_mill_cap.min(targets.textile_mill);
+    let cannery_run = cannery_cap.min(targets.canned_food_factory);
+    if lumber_run > 0 {
+        *critical.entry(ResourceType::Timber).or_insert(0) += lumber_run.saturating_mul(2);
+    }
+    if steel_run > 0 {
+        *critical.entry(ResourceType::Coal).or_insert(0) += steel_run;
+        *critical.entry(ResourceType::Iron).or_insert(0) += steel_run;
+    }
+    // Cotton + wool feed a single fiber pool (`2 × run` total) — apportioned
+    // across cotton/wool by remote availability below.
+    let textile_fiber_demand = textile_run.saturating_mul(2);
+    // Cannery: 1 grain + 1 fruit + 1 (fish OR livestock) per unit. Meat slot
+    // joins the worker-meat pool below.
+    if cannery_run > 0 {
+        *critical.entry(ResourceType::Grain).or_insert(0) += cannery_run;
+        *critical.entry(ResourceType::Fruit).or_insert(0) += cannery_run;
+    }
+    let cannery_meat_demand = cannery_run;
 
-    // Apportion textile fiber (single 2×cap pool) across cotton/wool by remote
-    // availability. If only one is remote, all demand goes to it.
+    // For paired pools (fiber = cotton/wool, meat = fish/livestock) subtract
+    // local supply from the *pool total* before apportioning. Doing the
+    // subtraction per-resource later would still see phantom demand on the
+    // side the pool got apportioned to even when local supply on the OTHER
+    // side already satisfies the meal/mill — leading to over-transport.
+    let local_fiber =
+        local_supply(ResourceType::Cotton).saturating_add(local_supply(ResourceType::Wool));
     apportion_pool_to_pair(
-        textile_fiber_demand,
+        textile_fiber_demand.saturating_sub(local_fiber),
         ResourceType::Cotton,
         ResourceType::Wool,
         remote_items,
         &mut critical,
     );
 
-    // Apportion meat demand (worker meals + cannery input) across
-    // fish/livestock by remote availability.
+    let local_meat =
+        local_supply(ResourceType::Livestock).saturating_add(local_supply(ResourceType::Fish));
     apportion_pool_to_pair(
-        worker_meat_demand.saturating_add(cannery_meat_demand),
+        worker_meat_demand
+            .saturating_add(cannery_meat_demand)
+            .saturating_sub(local_meat),
         ResourceType::Fish,
         ResourceType::Livestock,
         remote_items,
@@ -265,8 +319,13 @@ fn compute_remote_demand(
 
     // Build the (resource, FreightDemand) list in priority order. For each
     // resource:
-    //   critical = min(computed need, remote availability)
+    //   net_need = max(0, computed need − local supply this turn)
+    //   critical = min(net_need, remote availability)
     //   slack    = remote availability - critical
+    // Subtracting local supply prevents over-transport: food (and mill inputs)
+    // already produced near the capital flow in for free, so freight cars only
+    // need to cover the shortfall. This frees tier-2/3 capacity for industrial
+    // chains that would otherwise be starved by an inflated tier-1 critical.
     // Slack-only entries (no active chain need but remote yield exists) still
     // get a tier-4 slack allocation so surplus map yield is hauled into the
     // warehouse when capacity allows.
@@ -282,8 +341,35 @@ fn compute_remote_demand(
             continue;
         }
         let need = critical.get(&r).copied().unwrap_or(0);
-        let crit = need.min(avail);
-        let slack = avail.saturating_sub(crit);
+        // Pool resources (fiber: Cotton/Wool, meat: Fish/Livestock) had local
+        // supply subtracted at the pool stage above; subtracting again here
+        // would double-count. For everything else, net out local supply 1-for-1.
+        let already_netted = matches!(
+            r,
+            ResourceType::Cotton
+                | ResourceType::Wool
+                | ResourceType::Fish
+                | ResourceType::Livestock
+        );
+        let net_need = if already_netted {
+            need
+        } else {
+            need.saturating_sub(local_supply(r))
+        };
+        let crit = net_need.min(avail);
+        let raw_slack = avail.saturating_sub(crit);
+        // Slack cap: stop hauling once the warehouse already holds
+        // `slack_buffer_turns × per_turn_consumption`. Only applies to
+        // resources with active per-turn demand; rare strategic resources
+        // (gold, gems, horses, oil) have `need == 0` and are unaffected.
+        let slack = if need == 0 {
+            raw_slack
+        } else {
+            let stock = nation.resource_amount(r);
+            let target_stock = need.saturating_mul(slack_buffer_turns);
+            let headroom = target_stock.saturating_sub(stock);
+            raw_slack.min(headroom)
+        };
         out.push((
             r,
             FreightDemand {
@@ -431,7 +517,7 @@ mod tests {
             (ResourceType::Iron, 10),
             (ResourceType::Timber, 10),
         ];
-        let demand = compute_remote_demand(&nation, &data, &remote);
+        let demand = compute_remote_demand(&nation, &data, &[], &remote, u32::MAX);
         let coal = demand.iter().find(|(r, _)| *r == ResourceType::Coal);
         let iron = demand.iter().find(|(r, _)| *r == ResourceType::Iron);
         // SteelMill cap=4 → 4 critical coal + 4 critical iron (cap=4 each input).
@@ -462,7 +548,7 @@ mod tests {
             (ResourceType::Fish, 10),
             // No livestock available remotely.
         ];
-        let demand = compute_remote_demand(&nation, &data, &remote);
+        let demand = compute_remote_demand(&nation, &data, &[], &remote, u32::MAX);
         let fish = total_demand(&demand, ResourceType::Fish);
         let livestock = total_demand(&demand, ResourceType::Livestock);
         // critical = min(4 meat need, 10 fish remote) = 4. slack = 10-4 = 6.
@@ -484,7 +570,7 @@ mod tests {
             .buildings
             .push(Building::new(BuildingType::TextileMill, 3));
         let remote = vec![(ResourceType::Cotton, 4), (ResourceType::Wool, 4)];
-        let demand = compute_remote_demand(&nation, &data, &remote);
+        let demand = compute_remote_demand(&nation, &data, &[], &remote, u32::MAX);
         let cotton = total_demand(&demand, ResourceType::Cotton);
         let wool = total_demand(&demand, ResourceType::Wool);
         // Total demand (critical + slack) = remote availability when slack is
@@ -509,7 +595,7 @@ mod tests {
             (ResourceType::Fruit, 10),
             (ResourceType::Fish, 10),
         ];
-        let demand = compute_remote_demand(&nation, &data, &remote);
+        let demand = compute_remote_demand(&nation, &data, &[], &remote, u32::MAX);
         for r in [ResourceType::Grain, ResourceType::Fruit, ResourceType::Fish] {
             assert!(
                 total_demand(&demand, r) > 0,
@@ -529,7 +615,7 @@ mod tests {
             .buildings
             .push(Building::new(BuildingType::LumberMill, 4));
         let remote = vec![(ResourceType::Timber, 3)];
-        let demand = compute_remote_demand(&nation, &data, &remote);
+        let demand = compute_remote_demand(&nation, &data, &[], &remote, u32::MAX);
         let timber = total_demand(&demand, ResourceType::Timber);
         assert_eq!(timber, 3, "demand must be capped by remote availability");
         let entry = demand
@@ -549,7 +635,7 @@ mod tests {
         let nation = make_test_nation();
         let data = crate::data::GameData::default();
         let remote = vec![(ResourceType::Coal, 5)];
-        let demand = compute_remote_demand(&nation, &data, &remote);
+        let demand = compute_remote_demand(&nation, &data, &[], &remote, u32::MAX);
         let entry = demand
             .iter()
             .find(|(r, _)| *r == ResourceType::Coal)
@@ -776,5 +862,187 @@ mod tests {
         ] {
             assert_eq!(freight_priority_tier(r), 4, "{:?} must be tier 4", r);
         }
+    }
+
+    #[test]
+    fn local_supply_offsets_worker_food_critical() {
+        // 8 workers eat 4 grain + 2 fruit + 2 meat per turn. If local
+        // (capital-adjacent) yield already covers 3 grain + 2 fruit, freight
+        // only needs to ship the 1-grain shortfall (and 2 meat).
+        let mut nation = make_test_nation();
+        nation.economy.labor.untrained = 8;
+        let data = crate::data::GameData::default();
+        let local = vec![(ResourceType::Grain, 3), (ResourceType::Fruit, 2)];
+        let remote = vec![
+            (ResourceType::Grain, 10),
+            (ResourceType::Fruit, 10),
+            (ResourceType::Fish, 10),
+        ];
+        let demand = compute_remote_demand(&nation, &data, &local, &remote, u32::MAX);
+        let grain_crit = demand
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Grain)
+            .map(|(_, fd)| fd.critical)
+            .unwrap_or(0);
+        let fruit_crit = demand
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Fruit)
+            .map(|(_, fd)| fd.critical)
+            .unwrap_or(0);
+        assert_eq!(grain_crit, 1, "grain critical = 4 need − 3 local");
+        assert_eq!(fruit_crit, 0, "fruit critical = 2 need − 2 local");
+    }
+
+    #[test]
+    fn local_meat_supply_zeroes_paired_meat_critical() {
+        // 12 workers eat 6 grain + 3 fruit + 3 meat. Local livestock = 3
+        // covers the entire meat slot — no freight should be booked for fish
+        // or livestock even if both are remotely available.
+        let mut nation = make_test_nation();
+        nation.economy.labor.untrained = 12;
+        let data = crate::data::GameData::default();
+        let local = vec![(ResourceType::Livestock, 3)];
+        let remote = vec![
+            (ResourceType::Grain, 20),
+            (ResourceType::Fruit, 20),
+            (ResourceType::Fish, 10),
+            (ResourceType::Livestock, 10),
+        ];
+        let demand = compute_remote_demand(&nation, &data, &local, &remote, u32::MAX);
+        let fish_crit = demand
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Fish)
+            .map(|(_, fd)| fd.critical)
+            .unwrap_or(0);
+        let livestock_crit = demand
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Livestock)
+            .map(|(_, fd)| fd.critical)
+            .unwrap_or(0);
+        assert_eq!(fish_crit, 0);
+        assert_eq!(livestock_crit, 0);
+    }
+
+    #[test]
+    fn local_supply_does_not_inflate_remote_slack_above_avail() {
+        // Local Grain = 10 (huge surplus); remote Grain = 4. Workers need 4.
+        // Critical should be 0 (local covers it). Slack should be 4 (remote
+        // availability), not negative or inflated.
+        let mut nation = make_test_nation();
+        nation.economy.labor.untrained = 8;
+        let data = crate::data::GameData::default();
+        let local = vec![(ResourceType::Grain, 10), (ResourceType::Fruit, 10)];
+        let remote = vec![(ResourceType::Grain, 4)];
+        let demand = compute_remote_demand(&nation, &data, &local, &remote, u32::MAX);
+        let grain = demand
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Grain)
+            .unwrap()
+            .1;
+        assert_eq!(grain.critical, 0);
+        assert_eq!(grain.slack, 4);
+    }
+
+    #[test]
+    fn worker_growth_increases_food_critical() {
+        // Same map setup, just more workers → more grain freight demand.
+        let data = crate::data::GameData::default();
+        let remote = vec![(ResourceType::Grain, 50), (ResourceType::Fruit, 50)];
+        let local: Vec<(ResourceType, u32)> = vec![];
+
+        let mut small = make_test_nation();
+        small.economy.labor.untrained = 4;
+        let demand_small = compute_remote_demand(&small, &data, &local, &remote, u32::MAX);
+        let grain_small = demand_small
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Grain)
+            .unwrap()
+            .1
+            .critical;
+
+        let mut big = make_test_nation();
+        big.economy.labor.untrained = 20;
+        let demand_big = compute_remote_demand(&big, &data, &local, &remote, u32::MAX);
+        let grain_big = demand_big
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Grain)
+            .unwrap()
+            .1
+            .critical;
+
+        // 4 workers → grain = ⌈4/2⌉ = 2; 20 workers → grain = ⌈20/2⌉ = 10.
+        assert_eq!(grain_small, 2);
+        assert_eq!(grain_big, 10);
+    }
+
+    #[test]
+    fn cannery_chain_target_caps_freight_demand_below_capacity() {
+        // Regression: 1865 Testpresh save had a cap-58 cannery running at 1/58
+        // because labor was scarce. With capacity-based demand the AI booked 58
+        // freight cars of grain/fruit/meat, draining tier-2/3 freight. The fix:
+        // use `chain_targets.canned_food_factory` (the planned run, here = 1)
+        // instead of capacity (58) to size critical freight demand.
+        let mut nation = make_test_nation();
+        let data = crate::data::GameData::default();
+        nation
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::FoodProcessing, 58));
+        nation.economy.chain_targets.canned_food_factory = 1;
+        let remote = vec![
+            (ResourceType::Grain, 100),
+            (ResourceType::Fruit, 100),
+            (ResourceType::Fish, 100),
+        ];
+        let demand = compute_remote_demand(&nation, &data, &[], &remote, u32::MAX);
+        let grain = demand
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Grain)
+            .unwrap()
+            .1;
+        let fruit = demand
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Fruit)
+            .unwrap()
+            .1;
+        let fish = demand
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Fish)
+            .unwrap()
+            .1;
+        // Cannery contributes only 1 unit of each input — not 58.
+        assert_eq!(grain.critical, 1, "grain critical = cannery target = 1");
+        assert_eq!(fruit.critical, 1, "fruit critical = cannery target = 1");
+        assert_eq!(
+            fish.critical, 1,
+            "meat slot = cannery target = 1 (no workers)"
+        );
+    }
+
+    #[test]
+    fn steel_mill_chain_target_caps_freight_demand_below_capacity() {
+        // Same regression for the metal chain: cap-10 SteelMill running at 3/10
+        // should ask for 3 coal + 3 iron, not 10 + 10.
+        let mut nation = make_test_nation();
+        let data = crate::data::GameData::default();
+        nation
+            .economy
+            .buildings
+            .push(Building::new(BuildingType::SteelMill, 10));
+        nation.economy.chain_targets.metal_mill = 3;
+        let remote = vec![(ResourceType::Coal, 50), (ResourceType::Iron, 50)];
+        let demand = compute_remote_demand(&nation, &data, &[], &remote, u32::MAX);
+        let coal = demand
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Coal)
+            .unwrap()
+            .1;
+        let iron = demand
+            .iter()
+            .find(|(r, _)| *r == ResourceType::Iron)
+            .unwrap()
+            .1;
+        assert_eq!(coal.critical, 3);
+        assert_eq!(iron.critical, 3);
     }
 }

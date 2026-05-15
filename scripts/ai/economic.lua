@@ -65,6 +65,7 @@ economic = {
     -- buy-side bids stay funded even when treasury dips.
     trade_buy_treasury_floor = 2000,
     trade_buy_buffer_turns = 2,
+    transport_slack_buffer_turns = 30, -- stop hauling slack once warehouse holds 30 turns of per-turn consumption
     -- Card #465: industrialist tolerates small army; small reserve.
     arms_sell_reserve = 6,
     -- Industrialist tolerates slightly larger stockpiles before dumping.

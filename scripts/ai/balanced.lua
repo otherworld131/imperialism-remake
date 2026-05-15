@@ -66,6 +66,7 @@ balanced = {
     -- still bid on critical chain inputs they don't produce locally.
     trade_buy_treasury_floor = 1500,
     trade_buy_buffer_turns = 2,
+    transport_slack_buffer_turns = 30, -- stop hauling slack once warehouse holds 30 turns of per-turn consumption
     -- Card #465: hold back at least this many arms above queued-recruit demand.
     arms_sell_reserve = 12,
     -- Fat-stockpile dump: drain finished goods above 30 units regardless of

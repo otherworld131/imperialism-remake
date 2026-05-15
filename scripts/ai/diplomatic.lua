@@ -64,6 +64,7 @@ diplomatic = {
     -- Card [3/6]: diplomatic favors steady trade with neighbors; same buffer.
     trade_buy_treasury_floor = 1500,
     trade_buy_buffer_turns = 2,
+    transport_slack_buffer_turns = 30, -- stop hauling slack once warehouse holds 30 turns of per-turn consumption
     -- Card #465: diplomatic keeps a small army; small reserve.
     arms_sell_reserve = 8,
     food_processing_expansion_threshold = 2,
