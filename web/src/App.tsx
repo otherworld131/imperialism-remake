@@ -1120,6 +1120,71 @@ function App() {
     }
   }, [handleGameStart, hideHexGrid, organicBorders, showError]);
 
+  const handleDownloadWebSave = useCallback(async (saveFile: WebSaveFile) => {
+    try {
+      const rawPayload = await getSavePayload(saveFile.id);
+      if (rawPayload == null) {
+        showError(`Save "${saveFile.name}" has no payload to download.`);
+        return;
+      }
+      // Web saves are bare GameState snapshots. The desktop/CLI loader expects
+      // a versioned SaveFile envelope. Wrap on the way out so a downloaded save
+      // round-trips through the CLI's persistence loader.
+      let envelope: string;
+      try {
+        const parsed = JSON.parse(rawPayload);
+        const difficulty = typeof parsed?.difficulty === 'string' ? parsed.difficulty : 'Normal';
+        envelope = JSON.stringify({
+          version: 4,
+          nation_name: saveFile.playerName,
+          turn_display: turnToYearQ(saveFile.turnNumber),
+          difficulty,
+          timestamp: saveFile.savedAtIso,
+          game: parsed,
+        }, null, 2);
+      } catch {
+        envelope = rawPayload;
+      }
+      const safeName = saveFile.name.replace(/[^A-Za-z0-9._-]+/g, '_') || 'save';
+      const suggested = `${safeName}.json`;
+      const picker = (window as unknown as {
+        showSaveFilePicker?: (opts: unknown) => Promise<{
+          createWritable: () => Promise<{
+            write: (data: string) => Promise<void>;
+            close: () => Promise<void>;
+          }>;
+        }>;
+      }).showSaveFilePicker;
+      if (typeof picker === 'function') {
+        try {
+          const handle = await picker({
+            suggestedName: suggested,
+            types: [{ description: 'Imperialism save', accept: { 'application/json': ['.json'] } }],
+          });
+          const writable = await handle.createWritable();
+          await writable.write(envelope);
+          await writable.close();
+          return;
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') return;
+          // Fall through to anchor-download fallback on other errors.
+        }
+      }
+      const blob = new Blob([envelope], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = suggested;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to download save:', err);
+      showError(`Failed to download "${saveFile.name}".`);
+    }
+  }, [showError]);
+
   const handleDeleteWebSave = useCallback(async (saveFile: WebSaveFile) => {
     if (!confirm(`Delete save "${saveFile.name}"?`)) return;
     try {
@@ -2084,6 +2149,7 @@ function App() {
                     </div>
                     <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                       <button onClick={() => handleWebLoadFromSetup(saveFile)} style={styles.btn}>Load</button>
+                      <button onClick={() => handleDownloadWebSave(saveFile)} style={styles.btn}>Download</button>
                       <button
                         onClick={() => handleDeleteWebSave(saveFile)}
                         style={{ ...styles.btn, background: '#5a2620', borderColor: '#7b332b' }}
@@ -2859,6 +2925,7 @@ function App() {
                     </div>
                     <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                       <button onClick={() => handleWebLoad(saveFile)} style={styles.btn}>Load</button>
+                      <button onClick={() => handleDownloadWebSave(saveFile)} style={styles.btn}>Download</button>
                       <button
                         onClick={() => handleDeleteWebSave(saveFile)}
                         style={{ ...styles.btn, background: '#5a2620', borderColor: '#7b332b' }}
