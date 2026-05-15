@@ -30,6 +30,36 @@ fn main() {
 
     let ai_debug = args.ai_debug;
 
+    // Diagnostic mode: load (or new), run AI for one turn, dump transport state, exit.
+    if args.dump_transport {
+        let mut game = match args.load.as_deref() {
+            Some(filename) => match saves::load_saved_game(filename) {
+                Ok(g) => g,
+                Err(e) => {
+                    eprintln!("Failed to load save '{}': {}", filename, e);
+                    std::process::exit(1);
+                }
+            },
+            None => {
+                let map_key = args.map_key.as_deref().unwrap_or("imperialism");
+                let nation_index = args.nation_index.unwrap_or(0);
+                application::new_game_with_data(
+                    map_key,
+                    Difficulty::Normal,
+                    nation_index,
+                    load_embedded_game_data(),
+                )
+            }
+        };
+        apply_flavor(&mut game, "");
+        game.ai_debug = ai_debug;
+        if args.force_observer {
+            game.observer_mode = true;
+        }
+        dump_transport_diagnostic(&mut game, args.auto_turns);
+        return;
+    }
+
     println!("╔══════════════════════════════════════════════╗");
     println!("║         IMPERIALISM REMAKE v0.1.0            ║");
     println!("╚══════════════════════════════════════════════╝");
@@ -75,6 +105,19 @@ fn main() {
             load_embedded_game_data(),
         )
     };
+
+    if let Some(filename) = args.load.as_deref() {
+        match saves::load_saved_game(filename) {
+            Ok(loaded) => {
+                game = loaded;
+                println!("  Loaded save: {}", filename);
+            }
+            Err(e) => {
+                eprintln!("Failed to load save '{}': {}", filename, e);
+                std::process::exit(1);
+            }
+        }
+    }
 
     apply_flavor(&mut game, "");
     game.ai_debug = ai_debug;
@@ -501,4 +544,86 @@ fn main() {
             }
         }
     }
+}
+
+/// Dump per-Great-Power transport state as JSON, then exit.
+///
+/// Runs `process_turn` once so the AI's freight-allocation pass observes the
+/// loaded save (otherwise we'd just be printing back whatever was already on
+/// disk). Output is one JSON object on stdout for easy `jq` consumption.
+fn dump_transport_diagnostic(game: &mut domain::game_state::GameState, auto_turns: u32) {
+    let human_id = game.human_player_nation;
+    let observer_mode = game.observer_mode;
+
+    let before = collect_transport_rows(game);
+
+    for _ in 0..auto_turns {
+        let _ = process_turn(game);
+    }
+
+    let after = collect_transport_rows(game);
+
+    let json = serde_json::json!({
+        "human_player_nation": human_id.0,
+        "observer_mode": observer_mode,
+        "turn_after": format!("{} Q{}", game.turn.year(), game.turn.quarter()),
+        "turns_advanced": auto_turns,
+        "before": before,
+        "after": after,
+    });
+    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+}
+
+fn collect_transport_rows(game: &domain::game_state::GameState) -> Vec<serde_json::Value> {
+    use domain::economy::buildings::BuildingType;
+    let human_id = game.human_player_nation;
+    game.world
+        .nations
+        .iter()
+        .filter(|n| n.is_great_power())
+        .map(|n| {
+            let (mut lumber_cap, mut steel_cap, mut textile_cap, mut cannery_cap) = (0u32, 0, 0, 0);
+            for b in &n.economy.buildings {
+                let c = b.effective_capacity();
+                match b.building_type {
+                    BuildingType::LumberMill => lumber_cap += c,
+                    BuildingType::SteelMill => steel_cap += c,
+                    BuildingType::TextileMill | BuildingType::AdvancedTextileMill => {
+                        textile_cap += c
+                    }
+                    BuildingType::FoodProcessing => cannery_cap += c,
+                    _ => {}
+                }
+            }
+            let allocations: Vec<(String, u32)> = n
+                .military
+                .transport
+                .allocations
+                .iter()
+                .map(|(r, q)| (format!("{:?}", r), *q))
+                .collect();
+            let workers =
+                n.economy.labor.untrained + n.economy.labor.trained + n.economy.labor.expert;
+            serde_json::json!({
+                "id": n.id.0,
+                "name": n.name,
+                "is_human": n.id == human_id,
+                "workers": workers,
+                "freight_cars": n.military.transport.freight_cars,
+                "chain_targets": {
+                    "timber_mill": n.economy.chain_targets.timber_mill,
+                    "metal_mill": n.economy.chain_targets.metal_mill,
+                    "textile_mill": n.economy.chain_targets.textile_mill,
+                    "canned_food_factory": n.economy.chain_targets.canned_food_factory,
+                },
+                "building_cap": {
+                    "lumber_mill": lumber_cap,
+                    "steel_mill": steel_cap,
+                    "textile_mill": textile_cap,
+                    "cannery": cannery_cap,
+                },
+                "freight_allocations": allocations,
+            })
+        })
+        .collect()
 }

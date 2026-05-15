@@ -35,4 +35,23 @@ pub(crate) struct CliArgs {
     /// running to 1915 game-over. Useful for fast smoke tests.
     #[arg(long)]
     pub batch_max_turns: Option<u32>,
+
+    /// Load a save file from saves/ at startup instead of starting a new game.
+    #[arg(long)]
+    pub load: Option<String>,
+
+    /// Diagnostic: after loading (or starting), run AI once and dump per-GP
+    /// transport state as JSON to stdout, then exit. Skips the REPL.
+    #[arg(long)]
+    pub dump_transport: bool,
+
+    /// With --dump-transport, force observer_mode=true so AI runs on every
+    /// Great Power (including the saved human player's nation).
+    #[arg(long)]
+    pub force_observer: bool,
+
+    /// With --dump-transport, advance this many turns before dumping (lets us
+    /// inspect AI behavior at late game without needing a saved file).
+    #[arg(long, default_value_t = 1)]
+    pub auto_turns: u32,
 }
