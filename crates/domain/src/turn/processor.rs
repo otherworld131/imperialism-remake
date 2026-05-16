@@ -7566,8 +7566,12 @@ mod tests {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
         nation.add_resource(ResourceType::Timber, 20);
-        // Feed the workers so they survive 3 turns (5 experts eat 5 food/turn)
+        // Feed the workers so they survive 3 turns. 5 experts ration as
+        // (grain=3, fruit=1, meat=1) per turn — all three slots must be
+        // covered or starvation kicks in (see `worker_food_demand`).
         nation.add_resource(ResourceType::Grain, 20);
+        nation.add_resource(ResourceType::Fruit, 20);
+        nation.add_resource(ResourceType::Livestock, 20);
 
         // Run 3 turns
         for _ in 0..3 {

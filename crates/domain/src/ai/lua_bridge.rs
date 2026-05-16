@@ -104,6 +104,7 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         expert_labor: table.get("expert_labor").unwrap_or(4),
         labor_per_production: table.get("labor_per_production").unwrap_or(2),
         civilian_costs_expert: table.get("civilian_costs_expert").unwrap_or(true),
+        chain_labor_gate_ratio: table.get("chain_labor_gate_ratio").unwrap_or(0.66),
         train_to_trained_paper_cost: table.get("train_to_trained_paper_cost").unwrap_or(1),
         train_to_trained_labor_cost: table.get("train_to_trained_labor_cost").unwrap_or(4),
         train_to_expert_paper_cost: table.get("train_to_expert_paper_cost").unwrap_or(2),

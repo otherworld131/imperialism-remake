@@ -936,6 +936,49 @@ impl Nation {
         self.province_ids.len()
     }
 
+    /// Labor required to fully staff the six core industrial chain buildings
+    /// at their current `effective_capacity`:
+    /// LumberMill, FurnitureFactory, SteelMill, HardwareFactory, TextileMill,
+    /// ClothingFactory. Each unit of capacity costs `labor_per_production`.
+    pub fn required_chain_labor(&self, cfg: &crate::data::GameConfig) -> u32 {
+        const CHAIN: [BuildingType; 6] = [
+            BuildingType::LumberMill,
+            BuildingType::FurnitureFactory,
+            BuildingType::SteelMill,
+            BuildingType::HardwareFactory,
+            BuildingType::TextileMill,
+            BuildingType::ClothingFactory,
+        ];
+        let lpp = cfg.labor_per_production;
+        self.economy
+            .buildings
+            .iter()
+            .filter(|b| CHAIN.contains(&b.building_type))
+            .map(|b| b.effective_capacity() * lpp)
+            .sum()
+    }
+
+    /// Whether the nation's current workforce can theoretically staff at
+    /// least `chain_labor_gate_ratio` of its industrial chain. Compares
+    /// `total_worker_labor` (untrained·1 + trained·2 + expert·4, using the
+    /// Lua multipliers) against `chain_labor_gate_ratio × required_chain_labor`.
+    ///
+    /// When `required_chain_labor` is zero (no chain buildings yet), the gate
+    /// trivially passes.
+    pub fn chain_labor_gate_passes(&self, cfg: &crate::data::GameConfig) -> bool {
+        let required = self.required_chain_labor(cfg);
+        if required == 0 {
+            return true;
+        }
+        let worker_labor = self.economy.labor.total_labor_units_with(
+            cfg.untrained_labor,
+            cfg.trained_labor,
+            cfg.expert_labor,
+        ) as f64;
+        let threshold = cfg.chain_labor_gate_ratio.max(0.0) * required as f64;
+        worker_labor >= threshold
+    }
+
     /// How many immigrants this nation may recruit this turn based on provinces
     /// and Capitol level.
     pub fn immigration_turn_capacity(&self, cfg: &crate::data::GameConfig) -> u32 {
@@ -1653,6 +1696,66 @@ mod tests {
             .push(Building::new(BuildingType::LumberMill, 2));
         assert!(n.has_building(BuildingType::LumberMill));
         assert!(!n.has_building(BuildingType::SteelMill));
+    }
+
+    // ── Chain labor gate ─────────────────────────────────────────
+
+    fn add_chain_buildings_tier_two(n: &mut Nation) {
+        use BuildingType::*;
+        for bt in [
+            LumberMill,
+            FurnitureFactory,
+            SteelMill,
+            HardwareFactory,
+            TextileMill,
+            ClothingFactory,
+        ] {
+            n.economy.buildings.push(Building::new(bt, 2));
+        }
+    }
+
+    #[test]
+    fn required_chain_labor_sums_six_buildings_at_capacity() {
+        let cfg = crate::data::GameConfig::default();
+        let mut n = sample_great_power();
+        add_chain_buildings_tier_two(&mut n);
+        // 6 buildings × capacity 2 × labor_per_production 2 = 24
+        assert_eq!(n.required_chain_labor(&cfg), 24);
+    }
+
+    #[test]
+    fn required_chain_labor_zero_when_no_chain_buildings() {
+        let cfg = crate::data::GameConfig::default();
+        let n = sample_great_power();
+        assert_eq!(n.required_chain_labor(&cfg), 0);
+    }
+
+    #[test]
+    fn chain_labor_gate_passes_when_no_chain_buildings() {
+        let cfg = crate::data::GameConfig::default();
+        let n = sample_great_power();
+        // Empty workforce, but required is also zero — trivially passes.
+        assert!(n.chain_labor_gate_passes(&cfg));
+    }
+
+    #[test]
+    fn chain_labor_gate_blocks_undermanned_industrial_base() {
+        let cfg = crate::data::GameConfig::default();
+        let mut n = sample_great_power();
+        add_chain_buildings_tier_two(&mut n);
+        // 7 untrained = 7 labor; required = 24; threshold = 0.66 × 24 ≈ 15.84.
+        n.economy.labor.untrained = 7;
+        assert!(!n.chain_labor_gate_passes(&cfg));
+    }
+
+    #[test]
+    fn chain_labor_gate_passes_when_workforce_meets_two_thirds() {
+        let cfg = crate::data::GameConfig::default();
+        let mut n = sample_great_power();
+        add_chain_buildings_tier_two(&mut n);
+        // 5 expert × 4 = 20 labor; required = 24; threshold ≈ 15.84.
+        n.economy.labor.expert = 5;
+        assert!(n.chain_labor_gate_passes(&cfg));
     }
 
     #[test]

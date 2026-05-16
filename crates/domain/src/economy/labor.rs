@@ -166,10 +166,7 @@ impl LaborPool {
 
     /// Total labor units available using default multipliers (untrained=1, trained=2, expert=4).
     pub fn total_labor_units(&self) -> u32 {
-        // DEBUG (do not revert until requested): match the hardcoded 200-unit
-        // production-phase override so the UI shows what the engine actually uses.
-        let _ = self.untrained + self.trained * 2 + self.expert * 4;
-        200
+        self.untrained + self.trained * 2 + self.expert * 4
     }
 
     /// Total labor units with custom multipliers from game config.
@@ -179,12 +176,9 @@ impl LaborPool {
         trained_mult: u32,
         expert_mult: u32,
     ) -> u32 {
-        // DEBUG (do not revert until requested): match the hardcoded 200-unit
-        // override applied at the production-phase call sites.
-        let _ = self.untrained * untrained_mult
+        self.untrained * untrained_mult
             + self.trained * trained_mult
-            + self.expert * expert_mult;
-        200
+            + self.expert * expert_mult
     }
 
     /// Train one untrained worker, converting them to trained.

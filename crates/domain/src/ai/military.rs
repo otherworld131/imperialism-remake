@@ -1519,7 +1519,10 @@ mod tests {
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.treasury = Money::dollars(3000);
         ai.add_goods(GoodsType::Arms, 5);
-        ai.economy.labor.untrained = 5;
+        // Need enough workforce to pass the chain-labor gate
+        // (`ai_manage_economy` bootstraps 6 chain buildings = 18 labor needed
+        // at 0.66 ratio = 12). 20 untrained = 20 labor clears it.
+        ai.economy.labor.untrained = 20;
         // AI starts with 0 FIELD army units (only starting garrison militia).
         // Give the human one rival field unit so the threat-gated military
         // scoring (added with the turn-1 spending fix) has a real rival to
@@ -1604,7 +1607,9 @@ mod tests {
         // Give large treasury so AI can spend on both infrastructure and military
         ai.economy.treasury = Money::dollars(50000);
         ai.add_goods(GoodsType::Arms, 10);
-        ai.economy.labor.untrained = 10;
+        // Pass chain-labor gate (6 buildings × cap 2 × 2 labor = 18 required,
+        // × 0.66 ratio ≈ 12).
+        ai.economy.labor.untrained = 20;
         ai.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         // Give AI enough provinces that 3 army isn't enough (deficit scoring)
         for i in 10..15 {
@@ -1640,7 +1645,9 @@ mod tests {
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.treasury = Money::dollars(20000);
         ai.add_goods(GoodsType::Arms, 10);
-        ai.economy.labor.untrained = 10;
+        // Pass chain-labor gate (6 buildings × cap 2 × 2 labor = 18 required,
+        // × 0.66 ratio ≈ 12).
+        ai.economy.labor.untrained = 20;
         ai.diplomacy.ai_personality = Some(AiPersonality::Aggressive);
         // Give AI many provinces so it needs a large army
         for i in 10..20 {

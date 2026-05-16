@@ -55,6 +55,11 @@ pub struct GameConfig {
     pub expert_labor: u32,
     pub labor_per_production: u32,
     pub civilian_costs_expert: bool,
+    /// Minimum ratio of `total_worker_labor / required_chain_labor` that must
+    /// hold before the AI is allowed to hire a civilian unit or recruit an
+    /// army unit. Prevents bleeding the workforce into non-productive roles
+    /// when the industrial base is already too thin to staff its mills.
+    pub chain_labor_gate_ratio: f64,
     // Worker training costs
     pub train_to_trained_paper_cost: u32,
     pub train_to_trained_labor_cost: u32,
@@ -333,6 +338,7 @@ impl Default for GameConfig {
             expert_labor: 4,
             labor_per_production: 2,
             civilian_costs_expert: true,
+            chain_labor_gate_ratio: 0.66,
             train_to_trained_paper_cost: 1,
             train_to_trained_labor_cost: 4,
             train_to_expert_paper_cost: 2,

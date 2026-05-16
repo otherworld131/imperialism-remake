@@ -21,6 +21,14 @@ game_config = {
 
     -- Building a civilian unit permanently removes one expert worker
     civilian_costs_expert = true,
+
+    -- Gate AI civilian hires and army recruitment on workforce capacity.
+    -- Required labor = Σ over { LumberMill, FurnitureFactory, SteelMill,
+    -- HardwareFactory, TextileMill, ClothingFactory } of
+    --   effective_capacity(b) * labor_per_production.
+    -- Total labor from current workers must be ≥ this ratio × required labor
+    -- before the AI is allowed to spawn a civilian or recruit an army unit.
+    chain_labor_gate_ratio = 0.66,
     armory_steel_per_arm  = 1,   -- Steel consumed per Arm produced at the Armory
     armory_labor_per_arm  = 2,   -- Labor units required per Arm produced
 

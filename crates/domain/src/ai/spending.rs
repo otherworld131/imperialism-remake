@@ -677,6 +677,14 @@ fn score_military(
     weights: &SpendingWeights,
 ) -> Option<ScoredAction> {
     let nation = game.get_nation(nation_id)?;
+
+    // Workforce-capacity gate: don't recruit new army units when the
+    // industrial chain is already understaffed — soldiers need workers
+    // behind them to keep producing arms, food, clothing.
+    if !nation.chain_labor_gate_passes(&game.game_data.game_config) {
+        return None;
+    }
+
     // Military scoring uses *field army* (projectable) counts throughout —
     // garrison militia never leave their home and shouldn't inflate the
     // "do I need more units?" signal.
@@ -1052,6 +1060,12 @@ fn score_civilian(
         return None;
     }
 
+    // Workforce-capacity gate: don't bleed workers into civilian units when
+    // the industrial chain is already understaffed.
+    if !nation.chain_labor_gate_passes(&game.game_data.game_config) {
+        return None;
+    }
+
     // Card #217 follow-up: per-tile weighted demand. An improvable tile only
     // produces yield once the nation can collect from it, so a tile in a
     // connected depot's collection radius pulls a stronger "we need a worker"
@@ -1201,6 +1215,9 @@ fn score_hire_engineer(
     let cfg = &game.game_data.game_config;
 
     if cfg.civilian_costs_expert && nation.economy.labor.expert == 0 {
+        return None;
+    }
+    if !nation.chain_labor_gate_passes(cfg) {
         return None;
     }
 
@@ -1358,6 +1375,9 @@ fn execute_hire_engineer(game: &mut GameState, nation_id: NationId) {
             None => return,
         };
         if cfg.civilian_costs_expert && nation.economy.labor.expert == 0 {
+            return;
+        }
+        if !nation.chain_labor_gate_passes(&cfg) {
             return;
         }
         if nation.economy.treasury.checked_sub(cost).is_none() {
@@ -1685,6 +1705,9 @@ fn execute_infrastructure(
                     None => return,
                 };
                 if civilian_costs_expert && nation.economy.labor.expert == 0 {
+                    return;
+                }
+                if !nation.chain_labor_gate_passes(&cfg) {
                     return;
                 }
                 if nation.economy.treasury.checked_sub(cost).is_none() {
@@ -2314,6 +2337,9 @@ fn execute_hire_improver(game: &mut GameState, nation_id: NationId) {
             None => return,
         };
         if civilian_costs_expert && nation.economy.labor.expert == 0 {
+            return;
+        }
+        if !nation.chain_labor_gate_passes(&cfg) {
             return;
         }
 
