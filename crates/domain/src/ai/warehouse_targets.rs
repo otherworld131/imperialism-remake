@@ -70,10 +70,18 @@ pub fn compute_warehouse_targets(game: &GameState, nation_id: NationId) -> Wareh
         );
     let paper_reserve = pending_train_paper.saturating_add(cfg.strategic_paper_reserve);
 
+    let clothing_cap = nation
+        .economy
+        .buildings
+        .iter()
+        .find(|b| b.building_type == crate::economy::BuildingType::ClothingFactory)
+        .map(|b| b.effective_capacity())
+        .unwrap_or(0);
     let fabric_chain_reserve = nation
         .economy
         .chain_targets
         .garment_factory
+        .min(clothing_cap)
         .saturating_mul(cfg.materials_per_good);
 
     let canned_food_stockpile_target = super::lua_bridge::get_personality_config(game, personality)

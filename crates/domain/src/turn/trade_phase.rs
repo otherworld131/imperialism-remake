@@ -301,11 +301,22 @@ pub(super) fn resolve_trade_session(
 
             // Chain-input reserve for Fabric: protect next turn's Clothing
             // Factory feed so we don't liquidate Fabric and stall the chain.
-            // Sized to the planned ClothingFactory output × materials_per_good.
+            // Sized to the planned ClothingFactory output × materials_per_good,
+            // but clamped by the factory's physical capacity — a target of 8
+            // with capacity 1 can never actually consume more than 2 fabric,
+            // so reserving 16 would falsely flag stock as undersupplied.
+            let clothing_cap = nation
+                .economy
+                .buildings
+                .iter()
+                .find(|b| b.building_type == crate::economy::BuildingType::ClothingFactory)
+                .map(|b| b.effective_capacity())
+                .unwrap_or(0);
             let fabric_chain_reserve = nation
                 .economy
                 .chain_targets
                 .garment_factory
+                .min(clothing_cap)
                 .saturating_mul(cfg_immig.materials_per_good);
 
             for &commodity in trade::ALL_MANUFACTURED {

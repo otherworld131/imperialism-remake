@@ -76,11 +76,11 @@ game_config = {
     -- every capital and would otherwise monopolise scarce early-game labor.
     -- Canned food joins steel/armory/paper at 1.5× since it gates immigration.
     chain_priority_timber_mill = 0.8,
-    chain_priority_metal_mill = 1.5,
-    chain_priority_textile_mill = 1.0,
-    chain_priority_furniture_factory = 1.0,
-    chain_priority_hardware_factory = 1.0,
-    chain_priority_clothing_factory = 1.0,
+    chain_priority_metal_mill = 1.0,
+    chain_priority_textile_mill = 0.8,
+    chain_priority_furniture_factory = 1.5,
+    chain_priority_hardware_factory = 1.5,
+    chain_priority_clothing_factory = 1.5,
     chain_priority_armory = 1.5,
     chain_priority_paper_factory = 1.5,
     chain_priority_canned_food_factory = 1.5,
