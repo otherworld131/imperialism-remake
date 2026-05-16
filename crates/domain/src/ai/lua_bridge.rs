@@ -124,6 +124,21 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         provinces_per_immigrant_upgraded: table
             .get("provinces_per_immigrant_upgraded")
             .unwrap_or(3),
+        cannery_immigration_buffer: table.get("cannery_immigration_buffer").unwrap_or(1.2),
+        strategic_paper_reserve: table.get("strategic_paper_reserve").unwrap_or(10),
+        chain_priority_weights: [
+            table.get("chain_priority_timber_mill").unwrap_or(1.0),
+            table.get("chain_priority_metal_mill").unwrap_or(1.5),
+            table.get("chain_priority_textile_mill").unwrap_or(1.0),
+            table.get("chain_priority_furniture_factory").unwrap_or(1.0),
+            table.get("chain_priority_hardware_factory").unwrap_or(1.0),
+            table.get("chain_priority_clothing_factory").unwrap_or(1.0),
+            table.get("chain_priority_armory").unwrap_or(1.5),
+            table.get("chain_priority_paper_factory").unwrap_or(1.5),
+            table
+                .get("chain_priority_canned_food_factory")
+                .unwrap_or(1.0),
+        ],
         gold_value: table.get("gold_value").unwrap_or(500),
         gems_value: table.get("gems_value").unwrap_or(1000),
         expansion_delay_turns: table

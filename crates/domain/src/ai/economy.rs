@@ -1999,7 +1999,17 @@ pub(crate) fn ai_set_production_targets(game: &mut GameState, nation_id: NationI
         workers,
     );
 
-    let immigration_demand = ((pending_immigration as f64) * canned_food_buffer).ceil() as u32;
+    // Effective cannery buffer: the personality-level multiplier, never below
+    // the global `cannery_immigration_buffer` floor (so even thrifty
+    // personalities cover ≥ 1.2× projected immigration per card #458).
+    let effective_canned_food_buffer = canned_food_buffer.max(
+        game.game_data
+            .game_config
+            .cannery_immigration_buffer
+            .max(0.0),
+    );
+    let immigration_demand =
+        ((pending_immigration as f64) * effective_canned_food_buffer).ceil() as u32;
     let stockpile_target = canned_food_stockpile_target.saturating_add(immigration_demand);
     let canned_food_demand = stockpile_target.saturating_sub(canned_in_stock).max(1);
     let canned_food_runnable = canned_food_demand.min(cannery_input_cap);

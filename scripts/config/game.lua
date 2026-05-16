@@ -48,10 +48,39 @@ game_config = {
     starvation_cap = 2,            -- max workers lost to starvation per turn
     canned_food_ratio = 2,         -- 2 raw food -> 1 canned food
 
-    -- Immigration requirements (per immigrant)
+    -- Immigration requirements (per immigrant). All three slots are enforced
+    -- by `process_pending_immigration`: an immigrant only lands when canned
+    -- food, clothing, AND furniture are all available.
     immigration_canned_food = 1,
     immigration_clothing = 1,
     immigration_furniture = 1,
+
+    -- Cannery output buffer for the AI's production target. The AI sizes the
+    -- canned-food chain to cover `pending_immigration × cannery_immigration_buffer`
+    -- so a few partial-production turns don't stall the immigrant queue.
+    cannery_immigration_buffer = 1.2,
+
+    -- Paper floor reserved from sale even when the training queue is empty.
+    -- Covers tech-research costs and emergency training. Training consumes
+    -- paper freely on top of this — the queue's paper cost is reserved
+    -- additionally (see `trade_phase.rs`).
+    strategic_paper_reserve = 10,
+
+    -- Chain labor-allocation priority weights used as the Hamilton split's
+    -- relative weights in `allocate_labor`. Above 1.0 means a chain wins
+    -- more labor under scarcity (capped at the chain's real demand); 1.0 is
+    -- neutral. Steel Mill, Armory, and Paper Factory get a bump per card
+    -- #458 so the chain backbone (capital goods + worker training input)
+    -- staffs up before consumer chains drain the shared pool.
+    chain_priority_timber_mill = 1.0,
+    chain_priority_metal_mill = 1.5,
+    chain_priority_textile_mill = 1.0,
+    chain_priority_furniture_factory = 1.0,
+    chain_priority_hardware_factory = 1.0,
+    chain_priority_clothing_factory = 1.0,
+    chain_priority_armory = 1.5,
+    chain_priority_paper_factory = 1.5,
+    chain_priority_canned_food_factory = 1.0,
     provinces_per_immigrant = 4,           -- 1 immigrant per N provinces
     provinces_per_immigrant_upgraded = 3,  -- with upgraded Capitol
 

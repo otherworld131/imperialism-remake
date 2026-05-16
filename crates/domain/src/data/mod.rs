@@ -81,6 +81,16 @@ pub struct GameConfig {
     pub immigration_furniture: u32,
     pub provinces_per_immigrant: u32,
     pub provinces_per_immigrant_upgraded: u32,
+    /// AI cannery target multiplier applied to `pending_immigration` so the
+    /// canned-food chain plans ahead of immigrant landings.
+    pub cannery_immigration_buffer: f64,
+    /// Paper floor reserved from sale to minor nations even when no
+    /// training is queued. Training paper costs are reserved on top of this.
+    pub strategic_paper_reserve: u32,
+    /// Hamilton-split priority weight per chain (order matches `LaborBudgets`).
+    /// `[timber_mill, metal_mill, textile_mill, lumber_factory, steel_factory,
+    /// garment_factory, armory, paper_factory, canned_food_factory]`.
+    pub chain_priority_weights: [f64; 9],
     // Monetary
     pub gold_value: i64,
     pub gems_value: i64,
@@ -356,6 +366,9 @@ impl Default for GameConfig {
             immigration_furniture: 1,
             provinces_per_immigrant: 4,
             provinces_per_immigrant_upgraded: 3,
+            cannery_immigration_buffer: 1.2,
+            strategic_paper_reserve: 10,
+            chain_priority_weights: [1.0, 1.5, 1.0, 1.0, 1.0, 1.0, 1.5, 1.5, 1.0],
             gold_value: 500,
             gems_value: 1000,
             expansion_delay_turns: 2,

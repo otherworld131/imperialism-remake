@@ -396,14 +396,20 @@ pub(crate) fn ai_deploy_civilians(game: &mut GameState, nation_id: NationId) {
     }
 }
 
-/// AI trains untrained workers and promotes trained workers to expert.
+/// AI queues worker training and promotion via the deferred end-of-turn
+/// pipeline (`process_pending_worker_training` in the turn processor). The
+/// queue size is driven by the **chain-labor gap**: how many labor units
+/// short the workforce is of staffing the six core chain buildings at their
+/// current `effective_capacity`. Each new trained worker yields +1 net labor
+/// (untrained 1 → trained 2); each new expert yields +2 (trained 2 → expert 4).
 ///
-/// Thresholds are Lua-configurable per personality:
-/// - `worker_train_threshold`: train when untrained > threshold (default 1)
-/// - `worker_promote_threshold`: promote when trained > threshold (default 2)
+/// When the gap is closed the AI falls back to the historic slow-drip
+/// thresholds (Lua-tunable per personality) so the workforce keeps advancing
+/// even with a healthy chain.
 #[allow(unused_labels, unused_variables)] // labeled blocks + personality used only with cfg(feature = "lua")
 pub(crate) fn ai_train_and_promote_workers(game: &mut GameState, nation_id: NationId) {
     let personality = super::common::get_personality(game, nation_id);
+    let cfg = game.game_data.game_config.clone();
 
     // ── Read Lua config (feature-gated) ──────────────────────
     let lua_cfg = super::lua_bridge::get_personality_config(game, personality);
@@ -421,46 +427,44 @@ pub(crate) fn ai_train_and_promote_workers(game: &mut GameState, nation_id: Nati
         2
     };
 
-    let nation = match game.get_nation(nation_id) {
-        Some(n) => n,
-        None => return,
+    let Some(nation) = game.get_nation(nation_id) else {
+        return;
     };
 
+    let required = nation.required_chain_labor(&cfg);
+    let worker_labor = nation.economy.labor.total_labor_units_with(
+        cfg.untrained_labor,
+        cfg.trained_labor,
+        cfg.expert_labor,
+    );
     let untrained = nation.economy.labor.untrained;
-    let has_paper = nation.material_amount(MaterialType::Paper) > 0;
+    let trained = nation.economy.labor.trained;
+    let gap = required.saturating_sub(worker_labor);
 
-    // Train one untrained worker if above threshold
-    if untrained > train_threshold {
-        let Some(nation) = game.get_nation_mut(nation_id) else {
-            return;
-        };
-        // Consume paper if available (training requires paper)
-        if has_paper {
-            nation.consume_material(MaterialType::Paper, 1);
-        }
-        nation.economy.labor.train_worker();
-        if has_paper {
-            game.transient.pending_ai_material_outflows.push((
-                nation_id,
-                MaterialType::Paper,
-                crate::economy::ledger::ResourceOut::ConstructionConsumed,
-                1,
-            ));
-        }
+    let (queue_train, queue_promote) = if gap > 0 {
+        let qt = gap.min(untrained);
+        let remaining = gap.saturating_sub(qt);
+        let qp = remaining.div_ceil(2).min(trained);
+        (qt, qp)
+    } else {
+        let qt = if untrained > train_threshold { 1 } else { 0 };
+        let qp = if trained > promote_threshold { 1 } else { 0 };
+        (qt, qp)
+    };
+
+    if queue_train == 0 && queue_promote == 0 {
+        return;
     }
 
-    // Re-read state after potential training
-    let nation = match game.get_nation(nation_id) {
-        Some(n) => n,
-        None => return,
-    };
-
-    // Promote one trained worker to expert if above threshold
-    if nation.economy.labor.trained > promote_threshold {
-        let Some(nation) = game.get_nation_mut(nation_id) else {
-            return;
-        };
-        nation.economy.labor.promote_worker();
+    if let Some(nation) = game.get_nation_mut(nation_id) {
+        nation.economy.pending_train_to_trained = nation
+            .economy
+            .pending_train_to_trained
+            .saturating_add(queue_train);
+        nation.economy.pending_train_to_expert = nation
+            .economy
+            .pending_train_to_expert
+            .saturating_add(queue_promote);
     }
 }
 
@@ -1007,123 +1011,109 @@ mod tests {
     // ── AI worker training/promotion tests ──────────────────
 
     #[test]
-    fn ai_trains_worker_when_many_untrained() {
+    fn ai_queues_training_when_untrained_above_threshold() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.economy.labor.untrained = 5; // > 3 threshold
+        ai.economy.labor.untrained = 5; // > default train_threshold (1)
         ai.economy.labor.trained = 0;
         ai.add_material(MaterialType::Paper, 2);
 
         ai_train_and_promote_workers(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
+        // Test nation has no chain buildings → required_chain_labor = 0 →
+        // gap = 0 → slow-drip path queues 1 training.
         assert_eq!(
-            ai.economy.labor.untrained, 4,
-            "Should have trained 1 untrained worker"
+            ai.economy.pending_train_to_trained, 1,
+            "Should queue 1 training when gap=0 and untrained > threshold"
         );
-        assert_eq!(ai.economy.labor.trained, 1, "Should have 1 trained worker");
         assert_eq!(
-            ai.material_amount(MaterialType::Paper),
-            1,
-            "Should consume 1 paper for training"
+            ai.economy.labor.untrained, 5,
+            "Queueing does not mutate the pool — the end-turn processor does"
         );
-    }
-
-    #[test]
-    fn ai_does_not_train_when_at_threshold() {
-        let mut game = test_game_with_ai();
-        let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.economy.labor.untrained = 1; // at default threshold (1), not above
-        ai.economy.labor.trained = 0;
-        ai.add_material(MaterialType::Paper, 2);
-
-        ai_train_and_promote_workers(&mut game, NationId(2));
-
-        let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(
-            ai.economy.labor.untrained, 1,
-            "Should not train when untrained <= threshold"
-        );
-        assert_eq!(ai.economy.labor.trained, 0);
         assert_eq!(
             ai.material_amount(MaterialType::Paper),
             2,
-            "Paper should be unchanged"
+            "Queueing does not consume paper — the processor does"
         );
     }
 
     #[test]
-    fn ai_promotes_worker_when_many_trained() {
+    fn ai_does_not_queue_training_at_threshold() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.economy.labor.untrained = 0;
-        ai.economy.labor.trained = 5; // > 3 threshold
-        ai.economy.labor.expert = 0;
-
-        ai_train_and_promote_workers(&mut game, NationId(2));
-
-        let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(
-            ai.economy.labor.trained, 4,
-            "Should have promoted 1 trained worker"
-        );
-        assert_eq!(ai.economy.labor.expert, 1, "Should have 1 expert worker");
-    }
-
-    #[test]
-    fn ai_does_not_promote_when_at_threshold() {
-        let mut game = test_game_with_ai();
-        let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.economy.labor.untrained = 0;
-        ai.economy.labor.trained = 2; // at default promote threshold (2)
-        ai.economy.labor.expert = 0;
-
-        ai_train_and_promote_workers(&mut game, NationId(2));
-
-        let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(
-            ai.economy.labor.trained, 2,
-            "Should not promote when trained <= threshold"
-        );
-        assert_eq!(ai.economy.labor.expert, 0);
-    }
-
-    #[test]
-    fn ai_trains_without_paper_available() {
-        let mut game = test_game_with_ai();
-        let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.economy.labor.untrained = 5;
+        ai.economy.labor.untrained = 1; // at default threshold, not above
         ai.economy.labor.trained = 0;
-        // No paper available
+        ai.add_material(MaterialType::Paper, 2);
 
         ai_train_and_promote_workers(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(
-            ai.economy.labor.untrained, 4,
-            "Should still train even without paper"
-        );
-        assert_eq!(ai.economy.labor.trained, 1);
+        assert_eq!(ai.economy.pending_train_to_trained, 0);
+        assert_eq!(ai.economy.pending_train_to_expert, 0);
     }
 
     #[test]
-    fn ai_trains_and_promotes_in_same_turn() {
+    fn ai_queues_promotion_when_trained_above_threshold() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.economy.labor.untrained = 5;
-        ai.economy.labor.trained = 4; // will be 5 after training
+        ai.economy.labor.untrained = 0;
+        ai.economy.labor.trained = 5; // > default promote_threshold (2)
         ai.economy.labor.expert = 0;
-        ai.add_material(MaterialType::Paper, 1);
 
         ai_train_and_promote_workers(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(ai.economy.labor.untrained, 4, "Trained 1 untrained");
-        // trained: was 4, +1 from training = 5, -1 from promotion = 4
+        assert_eq!(ai.economy.pending_train_to_expert, 1);
         assert_eq!(
-            ai.economy.labor.trained, 4,
-            "Net trained stays same (trained+1, promoted-1)"
+            ai.economy.labor.trained, 5,
+            "Queueing does not mutate the pool"
         );
-        assert_eq!(ai.economy.labor.expert, 1, "Promoted 1 to expert");
+    }
+
+    #[test]
+    fn ai_does_not_queue_promotion_at_threshold() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.economy.labor.untrained = 0;
+        ai.economy.labor.trained = 2; // at threshold
+        ai.economy.labor.expert = 0;
+
+        ai_train_and_promote_workers(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(ai.economy.pending_train_to_expert, 0);
+    }
+
+    #[test]
+    fn ai_queues_training_when_chain_labor_gap() {
+        // Six chain buildings @ tier 2 → required = 18 labor.
+        // 7 untrained = 7 labor → gap = 11. Queue 7 trainings (capped by
+        // untrained); remaining 4 → ceil(4/2) = 2 promotions but 0 trained
+        // so 0 queued.
+        use crate::economy::buildings::{Building, BuildingType};
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        for bt in [
+            BuildingType::LumberMill,
+            BuildingType::FurnitureFactory,
+            BuildingType::SteelMill,
+            BuildingType::HardwareFactory,
+            BuildingType::TextileMill,
+            BuildingType::ClothingFactory,
+        ] {
+            ai.economy.buildings.push(Building::new(bt, 2));
+        }
+        ai.economy.labor.untrained = 7;
+
+        ai_train_and_promote_workers(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            ai.economy.pending_train_to_trained, 7,
+            "Gap-driven path queues 1 training per missing labor unit, \
+             capped by untrained pool"
+        );
+        assert_eq!(ai.economy.pending_train_to_expert, 0);
     }
 }

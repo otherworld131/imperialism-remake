@@ -267,6 +267,32 @@ pub(super) fn resolve_trade_session(
                 pending_immig.saturating_mul(cfg_immig.immigration_canned_food.max(0) as u32);
             let immig_clothing_reserve =
                 pending_immig.saturating_mul(cfg_immig.immigration_clothing.max(0) as u32);
+            let immig_furniture_reserve =
+                pending_immig.saturating_mul(cfg_immig.immigration_furniture);
+
+            // Paper reserve: queued worker training + strategic floor for
+            // tech research and emergency training.
+            let pending_train_paper = nation
+                .economy
+                .pending_train_to_trained
+                .saturating_mul(cfg_immig.train_to_trained_paper_cost)
+                .saturating_add(
+                    nation
+                        .economy
+                        .pending_train_to_expert
+                        .saturating_mul(cfg_immig.train_to_expert_paper_cost),
+                );
+            let paper_reserve = pending_train_paper.saturating_add(cfg_immig.strategic_paper_reserve);
+
+            // Chain-input reserve for Fabric: protect next turn's Clothing
+            // Factory feed so we don't liquidate Fabric and stall the chain.
+            // Sized to the planned ClothingFactory output × materials_per_good.
+            let fabric_chain_reserve = nation
+                .economy
+                .chain_targets
+                .garment_factory
+                .saturating_mul(cfg_immig.materials_per_good);
+
             for &commodity in trade::ALL_MANUFACTURED {
                 let (stock, reserve) = match commodity {
                     trade::ManufacturedCommodity::Material(m) => {
@@ -274,9 +300,11 @@ pub(super) fn resolve_trade_session(
                         let reserve = match m {
                             MaterialType::Lumber => lumber_reserve.saturating_add(m_lumber_reserve),
                             MaterialType::Steel => steel_reserve.saturating_add(m_steel_reserve),
-                            MaterialType::Fabric => m_fabric_reserve,
+                            MaterialType::Fabric => {
+                                m_fabric_reserve.saturating_add(fabric_chain_reserve)
+                            }
                             MaterialType::CannedFood => immig_canned_food_reserve,
-                            _ => 0,
+                            MaterialType::Paper => paper_reserve,
                         };
                         (stock, reserve)
                     }
@@ -285,7 +313,8 @@ pub(super) fn resolve_trade_session(
                         let reserve = match g {
                             GoodsType::Arms => arms_reserve_total,
                             GoodsType::Clothing => immig_clothing_reserve,
-                            _ => 0,
+                            GoodsType::Furniture => immig_furniture_reserve,
+                            GoodsType::Hardware => 0,
                         };
                         (stock, reserve)
                     }

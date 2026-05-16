@@ -174,8 +174,11 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
 
         let mut targets = nation.economy.chain_targets.clone();
 
-        // Distribute labor proportionally across active steps using labor weights.
-        let mut labor_budgets = allocate_labor(
+        // Distribute labor proportionally across active steps using labor
+        // weights, biased by `chain_priority_weights` from game config so the
+        // chain backbone (steel mill / armory / paper factory by default)
+        // wins more labor under scarcity.
+        let mut labor_budgets = allocate_labor_with_priority(
             total_labor,
             &targets,
             BuildingCapacities {
@@ -189,6 +192,7 @@ fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
                 paper: paper_cap,
                 canned_food: canned_food_cap,
             },
+            &game.game_data.game_config.chain_priority_weights,
         );
 
         // Opportunistic cannery top-up — keep forecast aligned with the
@@ -651,6 +655,20 @@ pub fn allocate_labor(
     targets: &crate::nation::ChainOutputTargets,
     caps: BuildingCapacities,
 ) -> LaborBudgets {
+    allocate_labor_with_priority(total_labor, targets, caps, &[1.0; 9])
+}
+
+/// Same as `allocate_labor`, but the Hamilton split weights each chain by
+/// `priority[i]` (in the same chain order as `desired` / `LaborBudgets` —
+/// see indices in the body). Priorities > 1 cause that chain to win more
+/// labor when the budget is scarce; budgets are still capped at the chain's
+/// real desired demand.
+pub fn allocate_labor_with_priority(
+    total_labor: u32,
+    targets: &crate::nation::ChainOutputTargets,
+    caps: BuildingCapacities,
+    priority: &[f64; 9],
+) -> LaborBudgets {
     let timber_cap = caps.timber;
     let metal_cap = caps.metal;
     let textile_cap = caps.textile;
@@ -740,23 +758,61 @@ pub fn allocate_labor(
             canned_food_factory: desired[8],
         };
     }
-    // Hamilton: distribute total_labor proportionally to desired weights
+    // Hamilton: distribute total_labor proportionally to *priority-weighted*
+    // desired. Convert each chain's weight via `(desired_i × priority_i) ×
+    // SCALE` (rounded) so we can keep using integer Hamilton math even when
+    // priorities are fractional. Each chain's budget is still capped at its
+    // real (un-weighted) `desired[i]` — priorities only re-allocate scarcity,
+    // never push a chain above its real demand.
+    const SCALE: u64 = 1_000;
+    let weighted: [u64; 9] = {
+        let mut w = [0u64; 9];
+        for i in 0..9 {
+            if desired[i] > 0 {
+                let p = priority[i].max(0.0);
+                w[i] = ((desired[i] as f64) * p * SCALE as f64).round() as u64;
+            }
+        }
+        w
+    };
+    let weighted_total: u64 = weighted.iter().sum();
     let mut floors = [0u32; 9];
-    let mut remainders = [0u32; 9];
+    let mut remainders = [0u64; 9];
     let mut sum = 0u32;
-    for (i, &w) in desired.iter().enumerate() {
-        if w > 0 {
-            floors[i] = total_labor * w / total_desired;
-            remainders[i] = (total_labor * w) % total_desired;
-            sum += floors[i];
+    if weighted_total > 0 {
+        for (i, &w) in weighted.iter().enumerate() {
+            if w > 0 {
+                let share = (total_labor as u64 * w) / weighted_total;
+                let raw = share.min(desired[i] as u64) as u32;
+                floors[i] = raw;
+                remainders[i] = (total_labor as u64 * w) % weighted_total;
+                sum = sum.saturating_add(raw);
+            }
         }
     }
-    let leftover = total_labor.saturating_sub(sum);
+    let mut leftover = total_labor.saturating_sub(sum);
     if leftover > 0 {
+        // Distribute leftover to chains under their cap, in descending
+        // remainder order, then in chain order as a deterministic fallback.
         let mut order: Vec<usize> = (0..9).filter(|&i| desired[i] > 0).collect();
         order.sort_by(|&a, &b| remainders[b].cmp(&remainders[a]));
-        for &idx in order.iter().take(leftover as usize) {
-            floors[idx] += 1;
+        // Repeatedly pass over the priority order until either leftover is
+        // exhausted or every chain has hit its cap.
+        loop {
+            let mut placed = false;
+            for &idx in &order {
+                if leftover == 0 {
+                    break;
+                }
+                if floors[idx] < desired[idx] {
+                    floors[idx] += 1;
+                    leftover -= 1;
+                    placed = true;
+                }
+            }
+            if leftover == 0 || !placed {
+                break;
+            }
         }
     }
     LaborBudgets {
@@ -1365,5 +1421,45 @@ mod tests {
             + budgets.steel_factory
             + budgets.garment_factory;
         assert!(sum <= total, "allocated {sum} exceeds total {total}");
+    }
+
+    #[test]
+    fn allocate_labor_priority_weights_bias_metal_mill() {
+        // All six mills/factories have equal capacity 5 and max targets so
+        // demands are symmetric. With neutral weights, labor splits evenly.
+        // With metal_mill at 3.0×, it should win measurably more under scarcity.
+        let t = targets_n(u32::MAX);
+        let caps = BuildingCapacities {
+            timber: 5,
+            metal: 5,
+            textile: 5,
+            furniture: 5,
+            hardware: 5,
+            clothing: 5,
+            armory: 0,
+            paper: 0,
+            canned_food: 0,
+        };
+        let neutral = allocate_labor_with_priority(30, &t, caps, &[1.0; 9]);
+        let biased = allocate_labor_with_priority(
+            30, &t, caps, &[1.0, 3.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+        );
+        assert!(
+            biased.metal_mill > neutral.metal_mill,
+            "metal_mill biased {} should exceed neutral {}",
+            biased.metal_mill,
+            neutral.metal_mill,
+        );
+        // Total budget preserved.
+        let sum = |b: &LaborBudgets| {
+            b.timber_mill
+                + b.metal_mill
+                + b.textile_mill
+                + b.lumber_factory
+                + b.steel_factory
+                + b.garment_factory
+        };
+        assert_eq!(sum(&neutral), 30);
+        assert_eq!(sum(&biased), 30);
     }
 }
