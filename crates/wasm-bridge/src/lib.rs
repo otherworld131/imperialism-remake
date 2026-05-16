@@ -3736,6 +3736,29 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
         .collect::<serde_json::Map<String, serde_json::Value>>()
         .into();
 
+    // Warehouse stock targets — the AI's per-commodity aim (buy-side
+    // stockpile target for resources, sell-side reserve for materials and
+    // goods). Surfaced for the debug overlay in the Industry panel.
+    let wh_targets = domain::ai::warehouse_targets::compute_warehouse_targets(&game, nid);
+    let warehouse_target_resources_json: serde_json::Value = wh_targets
+        .resources
+        .iter()
+        .map(|(r, qty)| (format!("{:?}", r), serde_json::json!(qty)))
+        .collect::<serde_json::Map<String, serde_json::Value>>()
+        .into();
+    let warehouse_target_materials_json: serde_json::Value = wh_targets
+        .materials
+        .iter()
+        .map(|(m, qty)| (format!("{:?}", m), serde_json::json!(qty)))
+        .collect::<serde_json::Map<String, serde_json::Value>>()
+        .into();
+    let warehouse_target_goods_json: serde_json::Value = wh_targets
+        .goods
+        .iter()
+        .map(|(g, qty)| (format!("{:?}", g), serde_json::json!(qty)))
+        .collect::<serde_json::Map<String, serde_json::Value>>()
+        .into();
+
     // Labor
     let labor = &nation.economy.labor;
 
@@ -4172,6 +4195,11 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
             "resources": resources_json,
             "materials": materials_json,
             "goods": goods_json,
+        },
+        "warehouse_targets": {
+            "resources": warehouse_target_resources_json,
+            "materials": warehouse_target_materials_json,
+            "goods": warehouse_target_goods_json,
         },
         "labor": {
             "untrained": labor.untrained,

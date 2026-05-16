@@ -1197,6 +1197,16 @@ export interface IndustryData {
     materials: Record<string, number>;
     goods: Record<string, number>;
   };
+  /**
+   * Per-commodity stock targets the AI is aiming to maintain. Resources use
+   * the buy-side stockpile target (per-turn demand × buffer turns); materials
+   * and goods use the sell-side reserve held back from minor-nation trade.
+   */
+  warehouse_targets: {
+    resources: Record<string, number>;
+    materials: Record<string, number>;
+    goods: Record<string, number>;
+  };
   labor: {
     untrained: number;
     trained: number;

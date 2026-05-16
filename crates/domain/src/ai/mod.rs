@@ -11,6 +11,7 @@ pub mod snapshot;
 mod spending;
 mod tactical;
 mod transport;
+pub mod warehouse_targets;
 
 pub use common::{AiPersonality, personality_for_nation_index};
 pub use diplomacy::{ai_manage_diplomacy, ai_pre_election_strategy, minor_nation_bonus_trade};

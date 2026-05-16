@@ -67,10 +67,24 @@ export default function IndustryPanel({
   onExpand, onSetPendingArmyRecruit, onSetPendingShips, onSetPendingCivilianHire, onSetPendingFreightCars,
   onSetChainTarget, onSetPendingImmigration, onSetPendingTraining,
 }: Props) {
-  const { buildings, warehouse, labor, production_forecast, chain_targets, can_expand,
+  const { buildings, warehouse, warehouse_targets, labor, production_forecast, chain_targets, can_expand,
     pending_civilian_hires, pending_immigration, max_pending_immigration, pending_training, immigration_costs, training_costs,
     pending_freight_cars, max_freight_cars, pending_ships, pending_army_recruits,
     army_committed_arms, army_committed_horses } = industry;
+
+  // Debug overlay: when on, render the AI's per-commodity stock target
+  // beside each warehouse entry. Persisted across reloads; default on.
+  const [showTargets, setShowTargets] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem('industry.showWarehouseTargets');
+      return v === null ? true : v === '1';
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('industry.showWarehouseTargets', showTargets ? '1' : '0'); } catch { /* ignore */ }
+  }, [showTargets]);
   const treasury = buildable?.treasury ?? 0;
   const arms = buildable?.arms ?? 0;
   const pf = production_forecast;
@@ -269,58 +283,111 @@ export default function IndustryPanel({
           </Section>
 
           <Section label="Warehouse" emoji="📦">
+            <label
+              title="Show the AI's per-commodity stock target beside each entry. Resources use the buy-side stockpile target; materials/goods use the sell-side reserve."
+              style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9, color: '#888', marginBottom: 4, cursor: 'pointer' }}
+            >
+              <input
+                type="checkbox"
+                checked={showTargets}
+                onChange={e => setShowTargets(e.target.checked)}
+                style={{ margin: 0, transform: 'scale(0.85)' }}
+              />
+              Debug: show AI targets
+            </label>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 12px' }}>
               <div>
                 <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', marginBottom: 3 }}>Resources</div>
-                {Object.entries(warehouse.resources)
-                  .filter(([, v]) => v > 0)
-                  .map(([k, v]) => {
+                {(() => {
+                  const targets = warehouse_targets?.resources ?? {};
+                  const keys = new Set([
+                    ...Object.keys(warehouse.resources).filter(k => (warehouse.resources[k] ?? 0) > 0),
+                    ...(showTargets ? Object.keys(targets).filter(k => (targets[k] ?? 0) > 0) : []),
+                  ]);
+                  return Array.from(keys).sort().map(k => {
+                    const v = warehouse.resources[k] ?? 0;
                     const c = committed[k] ?? 0;
                     const free = v - c;
+                    const target = targets[k] ?? 0;
                     return (
                       <div key={k} style={{ fontSize: 'var(--ui-font-size, 14px)', marginBottom: 1 }}>
                         {RESOURCE_EMOJI[k] ?? '📦'} {k.replace(/([A-Z])/g, ' $1').trim()}:{' '}
                         <span style={{ color: free < v ? '#6ab0d4' : '#daa520' }}>{free}</span>
                         {c > 0 && <span style={{ fontSize: 9, color: '#555', marginLeft: 2 }}>({v})</span>}
+                        {showTargets && target > 0 && (
+                          <span style={{ fontSize: 10, color: v < target ? '#d97a4a' : '#6a8', marginLeft: 4 }}>
+                            · 🎯{target}
+                          </span>
+                        )}
                       </div>
                     );
-                  })}
+                  });
+                })()}
               </div>
               <div>
                 <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', marginBottom: 3 }}>Materials</div>
-                {Object.entries(warehouse.materials)
-                  .filter(([, v]) => v > 0)
-                  .map(([k, v]) => {
+                {(() => {
+                  const targets = warehouse_targets?.materials ?? {};
+                  const keys = new Set([
+                    ...Object.keys(warehouse.materials).filter(k => (warehouse.materials[k] ?? 0) > 0),
+                    ...(showTargets ? Object.keys(targets).filter(k => (targets[k] ?? 0) > 0) : []),
+                  ]);
+                  return Array.from(keys).sort().map(k => {
+                    const v = warehouse.materials[k] ?? 0;
                     const c = committed[k] ?? 0;
                     const free = Math.max(0, v - c);
+                    const target = targets[k] ?? 0;
                     return (
                       <div key={k} style={{ fontSize: 'var(--ui-font-size, 14px)', marginBottom: 1 }}>
                         {RESOURCE_EMOJI[k] ?? '📦'} {k.replace(/([A-Z])/g, ' $1').trim()}:{' '}
                         <span style={{ color: free < v ? '#6ab0d4' : '#daa520' }}>{free}</span>
                         {c > 0 && <span style={{ fontSize: 9, color: '#555', marginLeft: 2 }}>({v})</span>}
+                        {showTargets && target > 0 && (
+                          <span style={{ fontSize: 10, color: v < target ? '#d97a4a' : '#6a8', marginLeft: 4 }}>
+                            · 🎯{target}
+                          </span>
+                        )}
                       </div>
                     );
-                  })}
+                  });
+                })()}
               </div>
             </div>
-            {Object.values(warehouse.goods).some(v => v > 0) && (
-              <div style={{ marginTop: 6 }}>
-                <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', marginBottom: 3 }}>Goods</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
-                  {Object.entries(warehouse.goods).filter(([, v]) => v > 0).map(([k, v]) => {
-                    const c = committed[k] ?? 0;
-                    const free = Math.max(0, v - c);
-                    return (
-                      <span key={k} style={{ fontSize: 'var(--ui-font-size, 14px)' }}>
-                        {RESOURCE_EMOJI[k] ?? '📦'} {k.replace(/([A-Z])/g, ' $1').trim()}:{' '}
-                        <span style={{ color: free < v ? '#6ab0d4' : '#daa520' }}>{free}</span>
-                        {c > 0 && <span style={{ fontSize: 9, color: '#555', marginLeft: 2 }}>({v})</span>}
-                      </span>
-                    );
-                  })}
+            {(() => {
+              const targets = warehouse_targets?.goods ?? {};
+              const showGoods = Object.values(warehouse.goods).some(v => v > 0)
+                || (showTargets && Object.values(targets).some(v => v > 0));
+              if (!showGoods) return null;
+              const keys = new Set([
+                ...Object.keys(warehouse.goods).filter(k => (warehouse.goods[k] ?? 0) > 0),
+                ...(showTargets ? Object.keys(targets).filter(k => (targets[k] ?? 0) > 0) : []),
+              ]);
+              return (
+                <div style={{ marginTop: 6 }}>
+                  <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', marginBottom: 3 }}>Goods</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
+                    {Array.from(keys).sort().map(k => {
+                      const v = warehouse.goods[k] ?? 0;
+                      const c = committed[k] ?? 0;
+                      const free = Math.max(0, v - c);
+                      const target = targets[k] ?? 0;
+                      return (
+                        <span key={k} style={{ fontSize: 'var(--ui-font-size, 14px)' }}>
+                          {RESOURCE_EMOJI[k] ?? '📦'} {k.replace(/([A-Z])/g, ' $1').trim()}:{' '}
+                          <span style={{ color: free < v ? '#6ab0d4' : '#daa520' }}>{free}</span>
+                          {c > 0 && <span style={{ fontSize: 9, color: '#555', marginLeft: 2 }}>({v})</span>}
+                          {showTargets && target > 0 && (
+                            <span style={{ fontSize: 10, color: v < target ? '#d97a4a' : '#6a8', marginLeft: 4 }}>
+                              · 🎯{target}
+                            </span>
+                          )}
+                        </span>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </Section>
         </div>
 
