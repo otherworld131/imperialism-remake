@@ -270,6 +270,21 @@ pub(super) fn resolve_trade_session(
             let immig_furniture_reserve =
                 pending_immig.saturating_mul(cfg_immig.immigration_furniture);
 
+            // AI stockpile target for canned food: held back from sale on top
+            // of immigration demand so the cannery isn't liquidated the moment
+            // production catches up. Production-side aim lives in
+            // `ai_set_production_targets`; without mirroring it here, the
+            // surplus is offered to minors as soon as a single unit lands.
+            let canned_food_stockpile_target: u32 = crate::ai::lua_bridge::get_personality_config(
+                game,
+                reserve_personality,
+            )
+            .as_ref()
+            .and_then(|c| c.canned_food_stockpile_target)
+            .unwrap_or(10);
+            let canned_food_reserve_total = immig_canned_food_reserve
+                .saturating_add(canned_food_stockpile_target);
+
             // Paper reserve: queued worker training + strategic floor for
             // tech research and emergency training.
             let pending_train_paper = nation
@@ -303,7 +318,7 @@ pub(super) fn resolve_trade_session(
                             MaterialType::Fabric => {
                                 m_fabric_reserve.saturating_add(fabric_chain_reserve)
                             }
-                            MaterialType::CannedFood => immig_canned_food_reserve,
+                            MaterialType::CannedFood => canned_food_reserve_total,
                             MaterialType::Paper => paper_reserve,
                         };
                         (stock, reserve)

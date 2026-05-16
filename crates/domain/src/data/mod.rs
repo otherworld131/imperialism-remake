@@ -368,7 +368,7 @@ impl Default for GameConfig {
             provinces_per_immigrant_upgraded: 3,
             cannery_immigration_buffer: 1.2,
             strategic_paper_reserve: 10,
-            chain_priority_weights: [1.0, 1.5, 1.0, 1.0, 1.0, 1.0, 1.5, 1.5, 1.0],
+            chain_priority_weights: [0.8, 1.5, 1.0, 1.0, 1.0, 1.0, 1.5, 1.5, 1.5],
             gold_value: 500,
             gems_value: 1000,
             expansion_delay_turns: 2,

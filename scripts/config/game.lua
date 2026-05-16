@@ -72,7 +72,10 @@ game_config = {
     -- neutral. Steel Mill, Armory, and Paper Factory get a bump per card
     -- #458 so the chain backbone (capital goods + worker training input)
     -- staffs up before consumer chains drain the shared pool.
-    chain_priority_timber_mill = 1.0,
+    -- Timber gets dialed below neutral: it has reliable local supply in
+    -- every capital and would otherwise monopolise scarce early-game labor.
+    -- Canned food joins steel/armory/paper at 1.5× since it gates immigration.
+    chain_priority_timber_mill = 0.8,
     chain_priority_metal_mill = 1.5,
     chain_priority_textile_mill = 1.0,
     chain_priority_furniture_factory = 1.0,
@@ -80,7 +83,7 @@ game_config = {
     chain_priority_clothing_factory = 1.0,
     chain_priority_armory = 1.5,
     chain_priority_paper_factory = 1.5,
-    chain_priority_canned_food_factory = 1.0,
+    chain_priority_canned_food_factory = 1.5,
     provinces_per_immigrant = 4,           -- 1 immigrant per N provinces
     provinces_per_immigrant_upgraded = 3,  -- with upgraded Capitol
 
