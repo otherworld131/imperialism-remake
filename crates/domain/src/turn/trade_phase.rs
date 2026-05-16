@@ -270,6 +270,25 @@ pub(super) fn resolve_trade_session(
             let immig_furniture_reserve =
                 pending_immig.saturating_mul(cfg_immig.immigration_furniture);
 
+            // Physical-capacity floors: reserve 2× the factory's per-turn ceiling
+            // so the AI keeps a one-turn buffer instead of liquidating finished
+            // goods the moment production catches up. The "real demand"
+            // (immigration / training) numbers above are tiny in the early game
+            // and were getting drained immediately, blocking worker growth.
+            let cap_of = |bt: crate::economy::BuildingType| -> u32 {
+                nation
+                    .economy
+                    .buildings
+                    .iter()
+                    .find(|b| b.building_type == bt)
+                    .map(|b| b.effective_capacity())
+                    .unwrap_or(0)
+            };
+            let furniture_cap_floor = cap_of(crate::economy::BuildingType::FurnitureFactory) * 2;
+            let clothing_cap_floor = cap_of(crate::economy::BuildingType::ClothingFactory) * 2;
+            let armory_cap_floor = cap_of(crate::economy::BuildingType::Armory) * 2;
+            let paper_cap_floor = cap_of(crate::economy::BuildingType::PaperFactory) * 2;
+
             // AI stockpile target for canned food: held back from sale on top
             // of immigration demand so the cannery isn't liquidated the moment
             // production catches up. Production-side aim lives in
@@ -281,12 +300,13 @@ pub(super) fn resolve_trade_session(
             )
             .as_ref()
             .and_then(|c| c.canned_food_stockpile_target)
-            .unwrap_or(10);
+            .unwrap_or(20);
             let canned_food_reserve_total = immig_canned_food_reserve
                 .saturating_add(canned_food_stockpile_target);
 
             // Paper reserve: queued worker training + strategic floor for
-            // tech research and emergency training.
+            // tech research and emergency training, with a 2× factory-cap
+            // floor so the chain has a one-turn buffer to back training.
             let pending_train_paper = nation
                 .economy
                 .pending_train_to_trained
@@ -297,7 +317,9 @@ pub(super) fn resolve_trade_session(
                         .pending_train_to_expert
                         .saturating_mul(cfg_immig.train_to_expert_paper_cost),
                 );
-            let paper_reserve = pending_train_paper.saturating_add(cfg_immig.strategic_paper_reserve);
+            let paper_reserve = pending_train_paper
+                .saturating_add(cfg_immig.strategic_paper_reserve)
+                .max(paper_cap_floor);
 
             // Chain-input reserve for Fabric: protect next turn's Clothing
             // Factory feed so we don't liquidate Fabric and stall the chain.
@@ -337,9 +359,11 @@ pub(super) fn resolve_trade_session(
                     trade::ManufacturedCommodity::Goods(g) => {
                         let stock = nation.economy.goods.get(&g).copied().unwrap_or(0);
                         let reserve = match g {
-                            GoodsType::Arms => arms_reserve_total,
-                            GoodsType::Clothing => immig_clothing_reserve,
-                            GoodsType::Furniture => immig_furniture_reserve,
+                            GoodsType::Arms => arms_reserve_total.max(armory_cap_floor),
+                            GoodsType::Clothing => immig_clothing_reserve.max(clothing_cap_floor),
+                            GoodsType::Furniture => {
+                                immig_furniture_reserve.max(furniture_cap_floor)
+                            }
                             GoodsType::Hardware => 0,
                         };
                         (stock, reserve)

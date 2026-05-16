@@ -58,6 +58,21 @@ pub fn compute_warehouse_targets(game: &GameState, nation_id: NationId) -> Wareh
     let immig_clothing_reserve = pending_immig.saturating_mul(cfg.immigration_clothing);
     let immig_furniture_reserve = pending_immig.saturating_mul(cfg.immigration_furniture);
 
+    let cap_of = |bt: crate::economy::BuildingType| -> u32 {
+        nation
+            .economy
+            .buildings
+            .iter()
+            .find(|b| b.building_type == bt)
+            .map(|b| b.effective_capacity())
+            .unwrap_or(0)
+    };
+    let clothing_cap = cap_of(crate::economy::BuildingType::ClothingFactory);
+    let furniture_cap_floor = cap_of(crate::economy::BuildingType::FurnitureFactory) * 2;
+    let clothing_cap_floor = clothing_cap * 2;
+    let armory_cap_floor = cap_of(crate::economy::BuildingType::Armory) * 2;
+    let paper_cap_floor = cap_of(crate::economy::BuildingType::PaperFactory) * 2;
+
     let pending_train_paper = nation
         .economy
         .pending_train_to_trained
@@ -68,15 +83,10 @@ pub fn compute_warehouse_targets(game: &GameState, nation_id: NationId) -> Wareh
                 .pending_train_to_expert
                 .saturating_mul(cfg.train_to_expert_paper_cost),
         );
-    let paper_reserve = pending_train_paper.saturating_add(cfg.strategic_paper_reserve);
+    let paper_reserve = pending_train_paper
+        .saturating_add(cfg.strategic_paper_reserve)
+        .max(paper_cap_floor);
 
-    let clothing_cap = nation
-        .economy
-        .buildings
-        .iter()
-        .find(|b| b.building_type == crate::economy::BuildingType::ClothingFactory)
-        .map(|b| b.effective_capacity())
-        .unwrap_or(0);
     let fabric_chain_reserve = nation
         .economy
         .chain_targets
@@ -87,7 +97,7 @@ pub fn compute_warehouse_targets(game: &GameState, nation_id: NationId) -> Wareh
     let canned_food_stockpile_target = super::lua_bridge::get_personality_config(game, personality)
         .as_ref()
         .and_then(|c| c.canned_food_stockpile_target)
-        .unwrap_or(10);
+        .unwrap_or(20);
     let canned_food_reserve_total =
         immig_canned_food_reserve.saturating_add(canned_food_stockpile_target);
 
@@ -108,9 +118,9 @@ pub fn compute_warehouse_targets(game: &GameState, nation_id: NationId) -> Wareh
     materials.insert(MaterialType::Paper, paper_reserve);
 
     let mut goods = BTreeMap::new();
-    goods.insert(GoodsType::Arms, arms_reserve_total);
-    goods.insert(GoodsType::Clothing, immig_clothing_reserve);
-    goods.insert(GoodsType::Furniture, immig_furniture_reserve);
+    goods.insert(GoodsType::Arms, arms_reserve_total.max(armory_cap_floor));
+    goods.insert(GoodsType::Clothing, immig_clothing_reserve.max(clothing_cap_floor));
+    goods.insert(GoodsType::Furniture, immig_furniture_reserve.max(furniture_cap_floor));
     goods.insert(GoodsType::Hardware, 0);
 
     WarehouseTargets {

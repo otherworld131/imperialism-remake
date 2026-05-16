@@ -77,7 +77,7 @@ economic = {
     steel_armory_weight_peace = 0.1,
     steel_armory_weight_war = 0.5,
     canned_food_buffer = 2.0,
-    canned_food_stockpile_target = 15,
+    canned_food_stockpile_target = 30,
     min_chain_target = 1,
     -- Economic personality is the most expansion-hungry: larger reserve so
     -- more buildings can grow in parallel.
