@@ -8,6 +8,7 @@ interface Props {
 
 export default function TransportPanel({ transport, onSetAllocation }: Props) {
   const { total_capacity, remote_delivery_capacity, military_transport_capacity, allocations, deliveries, demand = [], local_deliveries = [] } = transport;
+  const transportDeliveries = deliveries;
 
   const allocationMap: Record<string, number> = {};
   for (const a of allocations) allocationMap[a.resource] = a.units;
@@ -17,7 +18,7 @@ export default function TransportPanel({ transport, onSetAllocation }: Props) {
 
   const cap = remote_delivery_capacity ?? total_capacity;
   const allocatedUnitsByResource: Record<string, number> = {};
-  for (const d of deliveries) {
+  for (const d of transportDeliveries) {
     allocatedUnitsByResource[d.resource] = allocationMap[d.resource] ?? 0;
   }
   const totalAllocatedUnits = Object.values(allocationMap).reduce((sum, units) => sum + units, 0);
@@ -31,11 +32,11 @@ export default function TransportPanel({ transport, onSetAllocation }: Props) {
       </div>
 
       <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 6 }}>
-        <div style={{ fontWeight: 'bold', marginBottom: 4 }}>Resource Allocation</div>
-        {deliveries.length === 0 && (
+        <div style={{ fontWeight: 'bold', marginBottom: 4 }}>Transport Allocation</div>
+        {transportDeliveries.length === 0 && (
           <div style={{ color: '#888', fontStyle: 'italic', fontSize: 'var(--ui-font-size, 14px)' }}>No resources available</div>
         )}
-        {deliveries.map(d => {
+        {transportDeliveries.map(d => {
           const allocatedUnits = allocatedUnitsByResource[d.resource] ?? 0;
           const projectedDelivery = Math.min(allocatedUnits, d.available);
           const demandQty = demandMap[d.resource] ?? 0;
@@ -76,7 +77,7 @@ export default function TransportPanel({ transport, onSetAllocation }: Props) {
 
       {local_deliveries.length > 0 && (
         <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 8 }}>
-          <div style={{ fontWeight: 'bold', marginBottom: 4 }}>Local Collection</div>
+          <div style={{ fontWeight: 'bold', marginBottom: 4 }}>Capital Tile Delivery</div>
           {local_deliveries.map(d => (
             <div key={d.resource} style={{
               display: 'flex', alignItems: 'center', gap: 4, marginBottom: 3,

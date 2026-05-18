@@ -98,7 +98,6 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<AiAction> {
         // slider at u32::MAX (which spreads labor evenly and starves
         // resource-light chains like steel).
         economy::ai_set_production_targets(game, *nation_id);
-        labor::ai_recruit_workers(game, *nation_id);
         // Need-based spending: replaces independent military, infrastructure,
         // consulate, embassy, and civilian hiring decisions
         spending::ai_scored_spending(game, *nation_id, &mut actions);
@@ -120,6 +119,7 @@ pub fn run_ai_turns(game: &mut GameState) -> Vec<AiAction> {
         military::ai_military_strategy(game, *nation_id, &mut actions);
         tactical::ai_tactical_decisions(game, *nation_id, &mut actions);
         labor::ai_train_and_promote_workers(game, *nation_id);
+        labor::ai_recruit_workers(game, *nation_id);
     }
 
     actions

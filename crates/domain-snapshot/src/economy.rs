@@ -63,7 +63,14 @@ pub struct LogisticsState {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct TransportSystem {
     pub freight_cars: u32,
-    pub allocations: Vec<(ResourceType, u32)>,
+    pub allocations: Vec<(FreightTarget, u32)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum FreightTarget {
+    Resource(ResourceType),
+    Material(MaterialType),
+    Goods(GoodsType),
 }
 
 // ── Buildings ────────────────────────────────────────────────────
@@ -488,6 +495,25 @@ impl From<LogisticsState> for d::transport::LogisticsState {
 }
 
 // ── TransportSystem ───────────────────────────────────────────────
+
+impl From<d::transport::FreightTarget> for FreightTarget {
+    fn from(v: d::transport::FreightTarget) -> Self {
+        match v {
+            d::transport::FreightTarget::Resource(r) => Self::Resource(r.into()),
+            d::transport::FreightTarget::Material(m) => Self::Material(m.into()),
+            d::transport::FreightTarget::Goods(g) => Self::Goods(g.into()),
+        }
+    }
+}
+impl From<FreightTarget> for d::transport::FreightTarget {
+    fn from(v: FreightTarget) -> Self {
+        match v {
+            FreightTarget::Resource(r) => Self::Resource(r.into()),
+            FreightTarget::Material(m) => Self::Material(m.into()),
+            FreightTarget::Goods(g) => Self::Goods(g.into()),
+        }
+    }
+}
 
 impl From<&d::transport::TransportSystem> for TransportSystem {
     fn from(v: &d::transport::TransportSystem) -> Self {

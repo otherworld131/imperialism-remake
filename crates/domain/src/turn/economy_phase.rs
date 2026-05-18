@@ -126,6 +126,250 @@ pub(super) fn validate_and_reserve(
         .collect()
 }
 
+/// Forecast the labor units this nation would spend on production this turn,
+/// using the same target, feed, and cannery reservation rules as the real
+/// production phase.
+pub fn forecast_production_labor_used(game: &GameState, nation_id: NationId) -> u32 {
+    let cfg = &game.game_data.game_config;
+    let armory_steel_per_arm = cfg.armory_steel_per_arm;
+    let armory_labor_per_arm = cfg.armory_labor_per_arm;
+
+    let Some(nation) = game.get_nation(nation_id) else {
+        return 0;
+    };
+    if nation.diplomacy.is_in_anarchy {
+        return 0;
+    }
+
+    let resources: Vec<(ResourceType, u32)> = nation
+        .economy
+        .warehouse
+        .iter()
+        .map(|(r, q)| (*r, *q))
+        .collect();
+    let starting_materials: HashMap<MaterialType, u32> = nation
+        .economy
+        .materials
+        .iter()
+        .map(|(m, q)| (*m, *q))
+        .collect();
+    let planning_labor = nation.economy.labor.total_labor_units_with(
+        cfg.untrained_labor,
+        cfg.trained_labor,
+        cfg.expert_labor,
+    );
+
+    let timber_cap = building_capacity(nation, BuildingType::LumberMill);
+    let steel_cap = building_capacity(nation, BuildingType::SteelMill);
+    let textile_cap = building_capacity(nation, BuildingType::TextileMill);
+    let furniture_cap = building_capacity(nation, BuildingType::FurnitureFactory);
+    let hardware_cap = building_capacity(nation, BuildingType::HardwareFactory);
+    let clothing_cap = building_capacity(nation, BuildingType::ClothingFactory);
+    let armory_cap = building_capacity(nation, BuildingType::Armory);
+    let paper_cap = building_capacity(nation, BuildingType::PaperFactory);
+    let canned_food_cap = building_capacity(nation, BuildingType::FoodProcessing);
+
+    let mut targets = nation.economy.chain_targets.clone();
+    let mut labor_budgets = allocate_labor_with_priority(
+        planning_labor,
+        &targets,
+        BuildingCapacities {
+            timber: timber_cap,
+            metal: steel_cap,
+            textile: textile_cap,
+            furniture: furniture_cap,
+            hardware: hardware_cap,
+            clothing: clothing_cap,
+            armory: armory_cap,
+            paper: paper_cap,
+            canned_food: canned_food_cap,
+        },
+        &cfg.chain_priority_weights,
+    );
+
+    if canned_food_cap > 0 {
+        let workers = nation.economy.labor.total_workers();
+        let (grain_need, fruit_need, meat_need) =
+            crate::economy::labor::worker_food_demand(workers);
+        let grain = nation.resource_amount(ResourceType::Grain);
+        let fruit = nation.resource_amount(ResourceType::Fruit);
+        let meat = nation
+            .resource_amount(ResourceType::Livestock)
+            .saturating_add(nation.resource_amount(ResourceType::Fish));
+        let bottleneck = grain
+            .saturating_sub(grain_need)
+            .min(fruit.saturating_sub(fruit_need))
+            .min(meat.saturating_sub(meat_need));
+        cannery_opportunistic_topup(
+            &mut labor_budgets,
+            &mut targets,
+            planning_labor,
+            canned_food_cap,
+            bottleneck,
+        );
+    }
+
+    let fed_resources = apply_feed_to_resources(&resources, &targets);
+    let timber_result = if timber_cap > 0 {
+        Some(calculate_mill_production(
+            ProductionChain::Timber,
+            &fed_resources,
+            timber_cap,
+            labor_budgets.timber_mill,
+        ))
+    } else {
+        None
+    };
+    let metal_result = if steel_cap > 0 {
+        Some(calculate_mill_production(
+            ProductionChain::Metal,
+            &fed_resources,
+            steel_cap,
+            labor_budgets.metal_mill,
+        ))
+    } else {
+        None
+    };
+    let textile_result = if textile_cap > 0 {
+        Some(calculate_mill_production(
+            ProductionChain::Textile,
+            &fed_resources,
+            textile_cap,
+            labor_budgets.textile_mill,
+        ))
+    } else {
+        None
+    };
+
+    let mut materials_inventory = starting_materials.clone();
+    for result in [&timber_result, &metal_result, &textile_result]
+        .into_iter()
+        .flatten()
+    {
+        for (material, qty) in &result.materials_produced {
+            *materials_inventory.entry(*material).or_insert(0) += *qty;
+        }
+    }
+
+    let fed_materials = apply_feed_to_materials(
+        &materials_inventory
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect::<Vec<_>>(),
+        &targets,
+    );
+    let furniture_result = if furniture_cap > 0 {
+        Some(calculate_factory_production(
+            ProductionChain::Timber,
+            &fed_materials,
+            furniture_cap,
+            labor_budgets.lumber_factory,
+        ))
+    } else {
+        None
+    };
+    let hardware_result = if hardware_cap > 0 {
+        Some(calculate_factory_production(
+            ProductionChain::Metal,
+            &fed_materials,
+            hardware_cap,
+            labor_budgets.steel_factory,
+        ))
+    } else {
+        None
+    };
+    let clothing_result = if clothing_cap > 0 {
+        Some(calculate_factory_production(
+            ProductionChain::Textile,
+            &fed_materials,
+            clothing_cap,
+            labor_budgets.garment_factory,
+        ))
+    } else {
+        None
+    };
+
+    let steel_consumed_by_factory = hardware_result
+        .as_ref()
+        .and_then(|r| {
+            r.materials_consumed
+                .iter()
+                .find(|(m, _)| *m == MaterialType::Steel)
+        })
+        .map(|(_, qty)| *qty)
+        .unwrap_or(0);
+    let armory_result = if armory_cap > 0 {
+        let steel_for_armory = materials_inventory
+            .get(&MaterialType::Steel)
+            .copied()
+            .unwrap_or(0)
+            .saturating_sub(steel_consumed_by_factory)
+            .min(targets.armory);
+        Some(calculate_armory_production(
+            steel_for_armory,
+            armory_cap,
+            labor_budgets.armory,
+            armory_steel_per_arm,
+            armory_labor_per_arm,
+        ))
+    } else {
+        None
+    };
+
+    let lumber_consumed_by_furniture = furniture_result
+        .as_ref()
+        .and_then(|r| {
+            r.materials_consumed
+                .iter()
+                .find(|(m, _)| *m == MaterialType::Lumber)
+        })
+        .map(|(_, qty)| *qty)
+        .unwrap_or(0);
+    let paper_result = if paper_cap > 0 {
+        let lumber_for_paper = materials_inventory
+            .get(&MaterialType::Lumber)
+            .copied()
+            .unwrap_or(0)
+            .saturating_sub(lumber_consumed_by_furniture);
+        let fed = vec![(MaterialType::Lumber, lumber_for_paper)];
+        Some(calculate_paper_production(
+            &fed,
+            paper_cap,
+            labor_budgets.paper_factory,
+        ))
+    } else {
+        None
+    };
+
+    let canned_food_result = if canned_food_cap > 0 {
+        Some(calculate_canned_food_production(
+            &fed_resources,
+            canned_food_cap,
+            labor_budgets.canned_food_factory,
+        ))
+    } else {
+        None
+    };
+
+    [&timber_result, &metal_result, &textile_result]
+        .into_iter()
+        .flatten()
+        .map(|r| r.labor_used)
+        .sum::<u32>()
+        + [
+            &furniture_result,
+            &hardware_result,
+            &clothing_result,
+            &armory_result,
+            &paper_result,
+            &canned_food_result,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|r| r.labor_used)
+        .sum::<u32>()
+}
+
 fn reserve_production_phase(game: &mut GameState) -> Vec<NationReservation> {
     let untrained_mult = game.game_data.game_config.untrained_labor;
     let trained_mult = game.game_data.game_config.trained_labor;
@@ -1442,7 +1686,10 @@ mod tests {
         };
         let neutral = allocate_labor_with_priority(30, &t, caps, &[1.0; 9]);
         let biased = allocate_labor_with_priority(
-            30, &t, caps, &[1.0, 3.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            30,
+            &t,
+            caps,
+            &[1.0, 3.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
         );
         assert!(
             biased.metal_mill > neutral.metal_mill,

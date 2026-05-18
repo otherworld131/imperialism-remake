@@ -119,8 +119,14 @@ pub fn compute_warehouse_targets(game: &GameState, nation_id: NationId) -> Wareh
 
     let mut goods = BTreeMap::new();
     goods.insert(GoodsType::Arms, arms_reserve_total.max(armory_cap_floor));
-    goods.insert(GoodsType::Clothing, immig_clothing_reserve.max(clothing_cap_floor));
-    goods.insert(GoodsType::Furniture, immig_furniture_reserve.max(furniture_cap_floor));
+    goods.insert(
+        GoodsType::Clothing,
+        immig_clothing_reserve.max(clothing_cap_floor),
+    );
+    goods.insert(
+        GoodsType::Furniture,
+        immig_furniture_reserve.max(furniture_cap_floor),
+    );
     goods.insert(GoodsType::Hardware, 0);
 
     WarehouseTargets {

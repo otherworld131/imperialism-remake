@@ -1,9 +1,10 @@
 use crate::game_state::GameState;
+use crate::map::SettlementLevel;
 use crate::map::infrastructure::{collectable_hexes, is_province_connected_multi};
 use crate::military::ships::Ship;
 use crate::military::units::{ArmyUnit, ArmyUnitType};
 use crate::types::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Per-commodity freight allocation result: how much was requested vs granted (Trello #165).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -101,12 +102,29 @@ impl LogisticsState {
 }
 
 /// The transport system for a nation — freight cars carrying resources.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FreightTarget {
+    Resource(ResourceType),
+    Material(MaterialType),
+    Goods(GoodsType),
+}
+
+impl FreightTarget {
+    pub fn label(self) -> String {
+        match self {
+            Self::Resource(r) => format!("{:?}", r),
+            Self::Material(m) => format!("{:?}", m),
+            Self::Goods(g) => format!("{:?}", g),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TransportSystem {
     /// Total freight cars owned
     pub freight_cars: u32,
     /// Resource allocation: how many freight units are explicitly assigned.
-    pub allocations: Vec<(ResourceType, u32)>, // (resource, assigned units)
+    pub allocations: Vec<(FreightTarget, u32)>, // (target, assigned units)
 }
 
 impl TransportSystem {
@@ -133,8 +151,8 @@ impl TransportSystem {
         self.freight_cars += count;
     }
 
-    /// Set the explicit freight-unit allocation for a resource type.
-    /// If the resource already has an allocation, it is updated; zero removes it.
+    /// Set the explicit freight-unit allocation for a freight target.
+    /// If the target already has an allocation, it is updated; zero removes it.
     ///
     /// **No cap is enforced here.** Effective transport capacity is
     /// `freight_cars + merchant_marine_cargo` (rail + sea), but
@@ -143,16 +161,28 @@ impl TransportSystem {
     /// `calculate_deliveries` enforces the hard rail-only cap at delivery
     /// time; callers (UI freight panel, AI allocator) are responsible for
     /// keeping the running total within the combined cap.
-    pub fn set_allocation(&mut self, resource: ResourceType, units: u32) {
+    pub fn set_allocation(&mut self, target: FreightTarget, units: u32) {
         if units == 0 {
-            self.allocations.retain(|(r, _)| *r != resource);
+            self.allocations.retain(|(r, _)| *r != target);
             return;
         }
-        if let Some(entry) = self.allocations.iter_mut().find(|(r, _)| *r == resource) {
+        if let Some(entry) = self.allocations.iter_mut().find(|(r, _)| *r == target) {
             entry.1 = units;
         } else {
-            self.allocations.push((resource, units));
+            self.allocations.push((target, units));
         }
+    }
+
+    pub fn set_resource_allocation(&mut self, resource: ResourceType, units: u32) {
+        self.set_allocation(FreightTarget::Resource(resource), units);
+    }
+
+    pub fn allocation_for(&self, target: FreightTarget) -> u32 {
+        self.allocations
+            .iter()
+            .find(|(t, _)| *t == target)
+            .map(|(_, units)| *units)
+            .unwrap_or(0)
     }
 
     /// Given available resources from tiles, calculate how many of each resource
@@ -185,7 +215,7 @@ impl TransportSystem {
         let has_allocations = nonempty.iter().any(|(r, _)| {
             self.allocations
                 .iter()
-                .any(|(ar, units)| *ar == *r && *units > 0)
+                .any(|(ar, units)| *ar == FreightTarget::Resource(*r) && *units > 0)
         });
 
         if !has_allocations {
@@ -201,7 +231,7 @@ impl TransportSystem {
             let assigned = self
                 .allocations
                 .iter()
-                .find(|(r, _)| *r == *resource)
+                .find(|(r, _)| *r == FreightTarget::Resource(*resource))
                 .map(|(_, units)| *units)
                 .unwrap_or(0);
 
@@ -306,9 +336,175 @@ pub fn compute_demand_forecast(
     demand.into_iter().collect()
 }
 
+/// Project village/town auto-production, split into:
+/// - local/free delivery from the capital province
+/// - remote/freight-gated delivery from all other producing provinces
+pub fn project_town_outputs(
+    game: &GameState,
+    nation_id: NationId,
+) -> (Vec<(FreightTarget, u32)>, Vec<(FreightTarget, u32)>) {
+    let Some(nation) = game.get_nation(nation_id) else {
+        return (Vec::new(), Vec::new());
+    };
+    if nation.diplomacy.is_in_anarchy {
+        return (Vec::new(), Vec::new());
+    }
+
+    let mut local: HashMap<FreightTarget, u32> = HashMap::new();
+    let mut remote: HashMap<FreightTarget, u32> = HashMap::new();
+
+    for province in game.world.provinces.iter().filter(|p| p.owner == nation_id) {
+        if !province.can_produce() {
+            continue;
+        }
+
+        let rate_multiplier: u32 = if province.settlement_level == SettlementLevel::Town {
+            2
+        } else {
+            1
+        };
+
+        let mut timber_yield: u32 = 0;
+        let mut coal_yield: u32 = 0;
+        let mut iron_yield: u32 = 0;
+        let mut cotton_yield: u32 = 0;
+        let mut wool_yield: u32 = 0;
+        let mut is_local = false;
+
+        for tile_coord in &province.tiles {
+            let Some(tile) = game.world.hex_map.get_tile(*tile_coord) else {
+                continue;
+            };
+            if tile.is_country_capital {
+                is_local = true;
+            }
+            if let Some(yield_amount) = tile.calculate_yield() {
+                match yield_amount.resource {
+                    ResourceType::Timber => timber_yield += yield_amount.quantity,
+                    ResourceType::Coal => coal_yield += yield_amount.quantity,
+                    ResourceType::Iron => iron_yield += yield_amount.quantity,
+                    ResourceType::Cotton => cotton_yield += yield_amount.quantity,
+                    ResourceType::Wool => wool_yield += yield_amount.quantity,
+                    _ => {}
+                }
+            }
+        }
+
+        let lumber = (timber_yield / 2).saturating_mul(rate_multiplier);
+        let steel = coal_yield.min(iron_yield).saturating_mul(rate_multiplier);
+        let fabric = ((cotton_yield + wool_yield) / 2).saturating_mul(rate_multiplier);
+        let furniture = lumber / 2;
+        let hardware = steel / 2;
+        let clothing = fabric / 2;
+
+        let target = if is_local { &mut local } else { &mut remote };
+        for (stockpile, qty) in [
+            (FreightTarget::Material(MaterialType::Lumber), lumber),
+            (FreightTarget::Material(MaterialType::Steel), steel),
+            (FreightTarget::Material(MaterialType::Fabric), fabric),
+            (FreightTarget::Goods(GoodsType::Furniture), furniture),
+            (FreightTarget::Goods(GoodsType::Hardware), hardware),
+            (FreightTarget::Goods(GoodsType::Clothing), clothing),
+        ] {
+            if qty > 0 {
+                *target.entry(stockpile).or_insert(0) += qty;
+            }
+        }
+    }
+
+    fn ordered(map: HashMap<FreightTarget, u32>) -> Vec<(FreightTarget, u32)> {
+        let order = [
+            FreightTarget::Material(MaterialType::Lumber),
+            FreightTarget::Material(MaterialType::Steel),
+            FreightTarget::Material(MaterialType::Fabric),
+            FreightTarget::Goods(GoodsType::Furniture),
+            FreightTarget::Goods(GoodsType::Hardware),
+            FreightTarget::Goods(GoodsType::Clothing),
+        ];
+        order
+            .into_iter()
+            .filter_map(|stockpile| map.get(&stockpile).copied().map(|qty| (stockpile, qty)))
+            .collect()
+    }
+
+    (ordered(local), ordered(remote))
+}
+
+fn priority_resources_for_town_output(target: FreightTarget) -> &'static [ResourceType] {
+    match target {
+        FreightTarget::Material(MaterialType::Lumber) => &[ResourceType::Timber],
+        FreightTarget::Material(MaterialType::Steel) => &[ResourceType::Coal, ResourceType::Iron],
+        FreightTarget::Material(MaterialType::Fabric) => {
+            &[ResourceType::Cotton, ResourceType::Wool]
+        }
+        _ => &[],
+    }
+}
+
+/// Allocate freight for remote town outputs. Materials can displace already
+/// planned raw-resource deliveries from the same production line one-for-one.
+///
+/// Returns `(delivered_outputs, remaining_unused_capacity)`. `raw_delivered` is
+/// mutated in place to reflect any displaced raw-resource deliveries.
+pub fn allocate_town_output_freight(
+    raw_delivered: &mut BTreeMap<ResourceType, u32>,
+    remote_outputs: &[(FreightTarget, u32)],
+    allocations: &[(FreightTarget, u32)],
+    freight_unused: u32,
+) -> (Vec<(FreightTarget, u32)>, u32) {
+    let mut unused = freight_unused;
+    let mut delivered_outputs = Vec::new();
+
+    for &(target, available) in remote_outputs {
+        if available == 0 {
+            continue;
+        }
+
+        let assigned = allocations
+            .iter()
+            .find(|(t, _)| *t == target)
+            .map(|(_, units)| *units)
+            .unwrap_or(0)
+            .min(available);
+        if assigned == 0 {
+            continue;
+        }
+
+        let from_unused = assigned.min(unused);
+        unused -= from_unused;
+        let mut delivered = from_unused;
+        let mut remaining = assigned.saturating_sub(from_unused);
+
+        for resource in priority_resources_for_town_output(target) {
+            if remaining == 0 {
+                break;
+            }
+            let displaced = raw_delivered
+                .get(resource)
+                .copied()
+                .unwrap_or(0)
+                .min(remaining);
+            if displaced > 0 {
+                raw_delivered
+                    .entry(*resource)
+                    .and_modify(|qty| *qty -= displaced);
+                delivered += displaced;
+                remaining -= displaced;
+            }
+        }
+
+        if delivered > 0 {
+            delivered_outputs.push((target, delivered));
+        }
+    }
+
+    (delivered_outputs, unused)
+}
+
 /// Compute currently collectable raw-resource yields for a nation, split into:
-/// - local/free delivery (country-capital collector radii)
-/// - remote/freight-gated delivery (connected depot radii and connected ports)
+/// - local/free delivery from the capital tile itself
+/// - remote/freight-gated delivery (capital-radius collection, connected depot
+///   radii, and connected ports)
 ///
 /// Returned quantities are base map yields only; caller-owned modifiers such as
 /// AI difficulty bonuses should be applied after the split so both local and
@@ -359,18 +555,8 @@ pub fn current_collectable_resources(
         .collect();
 
     let collectable = collectable_hexes(&game.world.hex_map, &owned, &connected);
-    let owned_tiles: std::collections::HashSet<crate::hex::HexCoord> =
-        owned.iter().flat_map(|p| p.tiles.iter().copied()).collect();
-    let mut local_hexes: std::collections::HashSet<crate::hex::HexCoord> =
-        std::collections::HashSet::new();
-    for &capital in &capital_tiles {
-        local_hexes.insert(capital);
-        for neighbor in capital.neighbors() {
-            if owned_tiles.contains(&neighbor) {
-                local_hexes.insert(neighbor);
-            }
-        }
-    }
+    let local_hexes: std::collections::HashSet<crate::hex::HexCoord> =
+        capital_tiles.iter().copied().collect();
 
     let mut local: BTreeMap<ResourceType, u32> = BTreeMap::new();
     let mut remote: BTreeMap<ResourceType, u32> = BTreeMap::new();
@@ -596,8 +782,8 @@ mod tests {
     fn allocation_based_delivery() {
         let mut ts = TransportSystem::new();
         ts.build_freight_cars(10);
-        ts.set_allocation(ResourceType::Timber, 7);
-        ts.set_allocation(ResourceType::Coal, 3);
+        ts.set_resource_allocation(ResourceType::Timber, 7);
+        ts.set_resource_allocation(ResourceType::Coal, 3);
 
         let available = vec![(ResourceType::Timber, 20), (ResourceType::Coal, 20)];
         let deliveries = ts.calculate_deliveries(&available);
@@ -613,8 +799,8 @@ mod tests {
     fn allocation_capped_by_availability() {
         let mut ts = TransportSystem::new();
         ts.build_freight_cars(10);
-        ts.set_allocation(ResourceType::Timber, 8);
-        ts.set_allocation(ResourceType::Coal, 2);
+        ts.set_resource_allocation(ResourceType::Timber, 8);
+        ts.set_resource_allocation(ResourceType::Coal, 2);
 
         let available = vec![
             (ResourceType::Timber, 3), // only 3 available despite 8 assigned units
@@ -633,11 +819,14 @@ mod tests {
     #[test]
     fn set_allocation_updates_existing() {
         let mut ts = TransportSystem::new();
-        ts.set_allocation(ResourceType::Timber, 5);
-        ts.set_allocation(ResourceType::Timber, 8);
+        ts.set_resource_allocation(ResourceType::Timber, 5);
+        ts.set_resource_allocation(ResourceType::Timber, 8);
 
         assert_eq!(ts.allocations.len(), 1);
-        assert_eq!(ts.allocations[0], (ResourceType::Timber, 8));
+        assert_eq!(
+            ts.allocations[0],
+            (FreightTarget::Resource(ResourceType::Timber), 8)
+        );
     }
 
     #[test]
@@ -647,18 +836,18 @@ mod tests {
         // (Trello bug #461). Over-allocation is still bounded at delivery time.
         let mut ts = TransportSystem::new();
         ts.build_freight_cars(5);
-        ts.set_allocation(ResourceType::Timber, 4);
-        ts.set_allocation(ResourceType::Coal, 4);
+        ts.set_resource_allocation(ResourceType::Timber, 4);
+        ts.set_resource_allocation(ResourceType::Coal, 4);
 
         let timber = ts
             .allocations
             .iter()
-            .find(|(r, _)| *r == ResourceType::Timber)
+            .find(|(r, _)| *r == FreightTarget::Resource(ResourceType::Timber))
             .map(|(_, units)| *units);
         let coal = ts
             .allocations
             .iter()
-            .find(|(r, _)| *r == ResourceType::Coal)
+            .find(|(r, _)| *r == FreightTarget::Resource(ResourceType::Coal))
             .map(|(_, units)| *units);
 
         assert_eq!(timber, Some(4));
@@ -678,8 +867,8 @@ mod tests {
     fn delivery_total_does_not_exceed_capacity() {
         let mut ts = TransportSystem::new();
         ts.build_freight_cars(5);
-        ts.set_allocation(ResourceType::Timber, 5);
-        ts.set_allocation(ResourceType::Coal, 5);
+        ts.set_resource_allocation(ResourceType::Timber, 5);
+        ts.set_resource_allocation(ResourceType::Coal, 5);
 
         let available = vec![(ResourceType::Timber, 100), (ResourceType::Coal, 100)];
         let deliveries = ts.calculate_deliveries(&available);

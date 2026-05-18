@@ -176,9 +176,7 @@ impl LaborPool {
         trained_mult: u32,
         expert_mult: u32,
     ) -> u32 {
-        self.untrained * untrained_mult
-            + self.trained * trained_mult
-            + self.expert * expert_mult
+        self.untrained * untrained_mult + self.trained * trained_mult + self.expert * expert_mult
     }
 
     /// Train one untrained worker, converting them to trained.

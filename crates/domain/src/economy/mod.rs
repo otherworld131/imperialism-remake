@@ -24,6 +24,6 @@ pub use trade::{
     Commodity, PlayerBuyOrder, PlayerSellOrder, TradeBid, TradeOffer, TradeTransaction,
 };
 pub use transport::{
-    FreightDemand, LogisticsState, TransportSystem, compute_demand_forecast,
-    current_collectable_resources,
+    FreightDemand, FreightTarget, LogisticsState, TransportSystem, allocate_town_output_freight,
+    compute_demand_forecast, current_collectable_resources, project_town_outputs,
 };

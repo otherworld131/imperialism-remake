@@ -1,45 +1,186 @@
-#[cfg(test)]
-use crate::economy::buildings::{Building, BuildingType};
 use crate::economy::civilians::CivilianType;
 #[cfg(test)]
 use crate::economy::civilians::{Civilian, next_civilian_id};
+use crate::economy::labor::worker_food_demand;
 use crate::game_state::GameState;
 use crate::types::*;
+use std::collections::BTreeMap;
 
 /// AI turns canned food + clothing into queued immigrant workers using the
 /// same projected end-of-turn capacity contract exposed to the player UI.
 pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
-    // Extract config values before borrowing nation mutably.
-    let wealthy_threshold =
-        Money::dollars(game.game_data.game_config.labor_wealthy_treasury_threshold);
-    let workers_per_province_base = game.game_data.game_config.labor_workers_per_province_base;
-    let workers_per_province_wealthy = game
-        .game_data
-        .game_config
-        .labor_workers_per_province_wealthy;
-    let min_workers_floor = game.game_data.game_config.labor_min_workers_floor;
-
-    let max_queue = crate::turn::projected_immigration_queue_capacity(game, nation_id);
-
-    let nation = match game.get_nation_mut(nation_id) {
-        Some(n) => n,
-        None => return,
+    let cfg = &game.game_data.game_config;
+    let min_workers_floor = cfg.labor_min_workers_floor;
+    let max_queue = crate::turn::projected_immigration_queue_capacity(game, nation_id)
+        .min(transport_capped_immigration_capacity(game, nation_id));
+    let Some(nation) = game.get_nation(nation_id) else {
+        return;
     };
 
     let total_workers = nation.economy.labor.total_workers();
-
-    // Scale max workers with province count, min floor.
-    // Wealthy nations invest in workforce growth.
-    let workers_per_province: u32 = if nation.economy.treasury > wealthy_threshold {
-        workers_per_province_wealthy
+    let desired = if total_workers < min_workers_floor {
+        min_workers_floor.saturating_sub(total_workers)
     } else {
-        workers_per_province_base
+        let current_labor_units = nation.economy.labor.total_labor_units_with(
+            cfg.untrained_labor,
+            cfg.trained_labor,
+            cfg.expert_labor,
+        );
+        let assigned_demand_units =
+            crate::turn::economy_phase::forecast_production_labor_used(game, nation_id)
+                .saturating_add(queued_labor_commitments(game, nation_id));
+        let labor_gap = assigned_demand_units.saturating_sub(current_labor_units);
+        if labor_gap == 0 {
+            0
+        } else {
+            labor_gap.div_ceil(cfg.untrained_labor.max(1))
+        }
     };
-    let max_workers =
-        (nation.province_count() as u32 * workers_per_province).max(min_workers_floor);
 
-    let desired = max_workers.saturating_sub(total_workers);
-    nation.economy.pending_immigration = desired.min(max_queue);
+    if let Some(nation) = game.get_nation_mut(nation_id) {
+        nation.economy.pending_immigration = desired.min(max_queue);
+    }
+}
+
+fn queued_labor_commitments(game: &GameState, nation_id: NationId) -> u32 {
+    let Some(nation) = game.get_nation(nation_id) else {
+        return 0;
+    };
+    let cfg = &game.game_data.game_config;
+
+    let training_labor = nation
+        .economy
+        .pending_train_to_trained
+        .saturating_mul(cfg.train_to_trained_labor_cost)
+        .saturating_add(
+            nation
+                .economy
+                .pending_train_to_expert
+                .saturating_mul(cfg.train_to_expert_labor_cost),
+        );
+
+    let freight_labor = nation
+        .economy
+        .pending_freight_cars
+        .saturating_mul(crate::economy::transport::TransportSystem::build_freight_car_cost().0);
+
+    let civilian_labor = if cfg.civilian_costs_expert {
+        nation
+            .economy
+            .pending_civilian_hires
+            .values()
+            .copied()
+            .sum::<u32>()
+            .saturating_mul(cfg.expert_labor)
+    } else {
+        0
+    };
+
+    let army_labor = nation
+        .economy
+        .pending_army_recruits
+        .iter()
+        .filter_map(|unit_str| {
+            unit_str
+                .parse::<crate::military::units::ArmyUnitType>()
+                .ok()
+        })
+        .map(|unit_type| match unit_type.stats().recruit_tier {
+            crate::economy::labor::WorkerType::Untrained => cfg.untrained_labor,
+            crate::economy::labor::WorkerType::Trained => cfg.trained_labor,
+            crate::economy::labor::WorkerType::Expert => cfg.expert_labor,
+        })
+        .sum::<u32>();
+
+    training_labor
+        .saturating_add(freight_labor)
+        .saturating_add(civilian_labor)
+        .saturating_add(army_labor)
+}
+
+fn transport_capped_immigration_capacity(game: &GameState, nation_id: NationId) -> u32 {
+    let Some(nation) = game.get_nation(nation_id) else {
+        return 0;
+    };
+
+    let current_workers = nation.economy.labor.total_workers();
+    let supported_workers = max_workers_supported_by_food_network(
+        game,
+        nation_id,
+        nation.military.transport.freight_cars / 2,
+    );
+
+    supported_workers.saturating_sub(current_workers)
+}
+
+fn max_workers_supported_by_food_network(
+    game: &GameState,
+    nation_id: NationId,
+    freight_capacity: u32,
+) -> u32 {
+    let (local_items, remote_items) =
+        crate::economy::current_collectable_resources(game, nation_id);
+    max_workers_supported_by_food_supply(
+        &resource_totals(&local_items),
+        &resource_totals(&remote_items),
+        freight_capacity,
+    )
+}
+
+fn resource_totals(items: &[(ResourceType, u32)]) -> BTreeMap<ResourceType, u32> {
+    let mut totals = BTreeMap::new();
+    for (resource, qty) in items {
+        *totals.entry(*resource).or_insert(0) += *qty;
+    }
+    totals
+}
+
+fn supply_amount(supply: &BTreeMap<ResourceType, u32>, resource: ResourceType) -> u32 {
+    supply.get(&resource).copied().unwrap_or(0)
+}
+
+fn max_workers_supported_by_food_supply(
+    local_supply: &BTreeMap<ResourceType, u32>,
+    remote_supply: &BTreeMap<ResourceType, u32>,
+    freight_capacity: u32,
+) -> u32 {
+    let local_grain = supply_amount(local_supply, ResourceType::Grain);
+    let local_fruit = supply_amount(local_supply, ResourceType::Fruit);
+    let local_meat = supply_amount(local_supply, ResourceType::Livestock)
+        .saturating_add(supply_amount(local_supply, ResourceType::Fish));
+
+    let remote_grain = supply_amount(remote_supply, ResourceType::Grain);
+    let remote_fruit = supply_amount(remote_supply, ResourceType::Fruit);
+    let remote_meat = supply_amount(remote_supply, ResourceType::Livestock)
+        .saturating_add(supply_amount(remote_supply, ResourceType::Fish));
+
+    let max_possible_workers = local_grain
+        .saturating_add(remote_grain.min(freight_capacity))
+        .saturating_add(local_fruit)
+        .saturating_add(remote_fruit.min(freight_capacity))
+        .saturating_add(local_meat)
+        .saturating_add(remote_meat.min(freight_capacity));
+
+    let mut supported_workers = 0;
+    for workers in 0..=max_possible_workers {
+        let (grain_need, fruit_need, meat_need) = worker_food_demand(workers);
+        let remote_grain_needed = grain_need.saturating_sub(local_grain);
+        let remote_fruit_needed = fruit_need.saturating_sub(local_fruit);
+        let remote_meat_needed = meat_need.saturating_sub(local_meat);
+        let remote_total_needed = remote_grain_needed
+            .saturating_add(remote_fruit_needed)
+            .saturating_add(remote_meat_needed);
+
+        if remote_grain_needed <= remote_grain
+            && remote_fruit_needed <= remote_fruit
+            && remote_meat_needed <= remote_meat
+            && remote_total_needed <= freight_capacity
+        {
+            supported_workers = workers;
+        }
+    }
+
+    supported_workers
 }
 
 /// Manage civilian units: hire new ones and deploy idle ones to improvable tiles.
@@ -472,67 +613,70 @@ pub(crate) fn ai_train_and_promote_workers(game: &mut GameState, nation_id: Nati
 mod tests {
     use super::*;
     use crate::ai::common::test_helpers::test_game_with_ai;
-    use crate::ai::run_ai_turns;
+    use crate::economy::buildings::{Building, BuildingType};
     use crate::economy::civilians::{Civilian, CivilianType};
     use crate::hex::HexCoord;
     use crate::map::UnitId;
+    use std::collections::BTreeMap;
 
     // ── Worker recruitment ───────────────────────────────────
 
     #[test]
-    fn ai_recruits_workers_when_workforce_is_small() {
+    fn ai_bootstraps_to_worker_floor_when_inputs_exist() {
         let mut game = test_game_with_ai();
+        seed_ai_food_network(&mut game, &[], 0);
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        // New canning recipe: 1 grain + 1 fruit + 1 (fish OR livestock) → 1 canned food.
-        ai.add_resource(ResourceType::Grain, 5);
-        ai.add_resource(ResourceType::Fruit, 5);
-        ai.add_resource(ResourceType::Fish, 5);
-        // Starts with 0 workers
+        ai.add_material(MaterialType::CannedFood, 2);
+        ai.add_goods(GoodsType::Clothing, 2);
+        ai.add_goods(GoodsType::Furniture, 2);
+        for i in 50..=53 {
+            ai.add_province(ProvinceId(i));
+        }
 
-        run_ai_turns(&mut game);
+        ai_recruit_workers(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
-            ai.economy.labor.total_workers(),
-            1,
-            "AI should recruit 1 worker when workforce < 5 and food available"
+            ai.economy.pending_immigration, 1,
+            "AI should bootstrap toward the minimum worker floor"
         );
     }
 
     #[test]
-    fn ai_does_not_recruit_when_workforce_at_five() {
+    fn ai_does_not_queue_immigration_when_spare_labor_exists() {
         let mut game = test_game_with_ai();
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.economy.labor.untrained = 5;
-        ai.add_resource(ResourceType::Grain, 5);
+        ai.economy.labor.untrained = 6;
+        ai.add_material(MaterialType::CannedFood, 5);
+        ai.add_goods(GoodsType::Clothing, 5);
+        ai.add_goods(GoodsType::Furniture, 5);
+        for i in 60..=63 {
+            ai.add_province(ProvinceId(i));
+        }
 
-        run_ai_turns(&mut game);
+        ai_recruit_workers(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
-            ai.economy.labor.total_workers(),
-            5,
-            "AI should not recruit when it already has 5 workers"
-        );
-        assert_eq!(
-            ai.resource_amount(ResourceType::Grain),
-            5,
-            "Grain should be unchanged"
+            ai.economy.pending_immigration, 0,
+            "AI should not queue immigrants just to chase a province-count target"
         );
     }
 
     #[test]
-    fn ai_does_not_recruit_without_food() {
+    fn ai_does_not_queue_immigration_without_inputs() {
         let mut game = test_game_with_ai();
-        // AI has 0 grain, 0 workers
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        for i in 70..=73 {
+            ai.add_province(ProvinceId(i));
+        }
 
-        run_ai_turns(&mut game);
+        ai_recruit_workers(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
         assert_eq!(
-            ai.economy.labor.total_workers(),
-            0,
-            "AI should not recruit without food"
+            ai.economy.pending_immigration, 0,
+            "AI should not queue immigration without the required inputs"
         );
     }
 
@@ -722,6 +866,31 @@ mod tests {
                 tile.province_id = Some(ProvinceId(2));
             }
         }
+    }
+
+    fn seed_ai_food_network(
+        game: &mut GameState,
+        remote_resources: &[ResourceType],
+        freight_cars: u32,
+    ) {
+        let capital = HexCoord::new(3, 3);
+        let mut capital_tile =
+            crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        capital_tile.set_resource(ResourceType::Grain);
+        capital_tile.is_country_capital = true;
+        game.world.hex_map.set_tile(capital, capital_tile);
+
+        let remote_coords: Vec<HexCoord> = capital.neighbors().into_iter().collect();
+        add_owned_tiles(game, &remote_coords[..remote_resources.len()]);
+        for (coord, resource) in remote_coords.iter().zip(remote_resources.iter()) {
+            let mut tile =
+                crate::map::tile::Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+            tile.set_resource(*resource);
+            game.world.hex_map.set_tile(*coord, tile);
+        }
+
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.military.transport.freight_cars = freight_cars;
     }
 
     #[test]
@@ -939,10 +1108,12 @@ mod tests {
     #[test]
     fn ai_queues_immigration_when_inputs_and_capacity_exist() {
         let mut game = test_game_with_ai();
+        seed_ai_food_network(&mut game, &[], 0);
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.labor.untrained = 0;
         ai.economy.labor.trained = 0;
         ai.economy.labor.expert = 0;
+        ai.add_goods(GoodsType::Furniture, 3);
         for i in 50..=53 {
             ai.add_province(ProvinceId(i));
         }
@@ -979,6 +1150,7 @@ mod tests {
     #[test]
     fn ai_can_queue_immigration_from_projected_food_processing_output() {
         let mut game = test_game_with_ai();
+        seed_ai_food_network(&mut game, &[ResourceType::Grain, ResourceType::Fruit], 4);
         let ai = game.get_nation_mut(NationId(2)).unwrap();
         ai.economy.labor.untrained = 2;
         ai.economy.labor.trained = 0;
@@ -993,6 +1165,7 @@ mod tests {
         ai.add_resource(ResourceType::Fruit, 6);
         ai.add_resource(ResourceType::Fish, 6);
         ai.add_goods(GoodsType::Clothing, 2);
+        ai.add_goods(GoodsType::Furniture, 2);
 
         ai_recruit_workers(&mut game, NationId(2));
 
@@ -1005,6 +1178,106 @@ mod tests {
             ai.material_amount(MaterialType::CannedFood),
             0,
             "Planning immigration should not mutate stockpiles during AI setup"
+        );
+    }
+
+    #[test]
+    fn ai_counts_pending_freight_car_labor_before_queueing_immigration() {
+        let mut game = test_game_with_ai();
+        seed_ai_food_network(
+            &mut game,
+            &[
+                ResourceType::Grain,
+                ResourceType::Grain,
+                ResourceType::Grain,
+                ResourceType::Fruit,
+                ResourceType::Fruit,
+                ResourceType::Livestock,
+            ],
+            20,
+        );
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.economy.labor.untrained = 6;
+        ai.economy.pending_freight_cars = 4;
+        ai.add_resource(ResourceType::Grain, 6);
+        ai.add_resource(ResourceType::Fruit, 6);
+        ai.add_resource(ResourceType::Fish, 6);
+        ai.add_material(MaterialType::Lumber, 10);
+        ai.add_material(MaterialType::Steel, 10);
+        ai.add_material(MaterialType::CannedFood, 5);
+        ai.add_goods(GoodsType::Clothing, 5);
+        ai.add_goods(GoodsType::Furniture, 5);
+        for i in 90..=96 {
+            ai.add_province(ProvinceId(i));
+        }
+
+        ai_recruit_workers(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            ai.economy.pending_immigration, 1,
+            "Pending freight-car labor should consume spare labor before immigration is capped by per-turn immigration capacity"
+        );
+    }
+
+    #[test]
+    fn ai_uses_assigned_labor_not_unbounded_projected_demand_for_immigration() {
+        let mut game = test_game_with_ai();
+        seed_ai_food_network(
+            &mut game,
+            &[
+                ResourceType::Grain,
+                ResourceType::Grain,
+                ResourceType::Grain,
+                ResourceType::Fruit,
+                ResourceType::Fruit,
+                ResourceType::Livestock,
+            ],
+            20,
+        );
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        ai.economy.labor.untrained = 6;
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 4));
+        ai.economy.chain_targets.timber_mill = 12;
+        ai.add_resource(ResourceType::Timber, 24);
+        ai.add_resource(ResourceType::Grain, 6);
+        ai.add_resource(ResourceType::Fruit, 6);
+        ai.add_resource(ResourceType::Fish, 6);
+        ai.add_material(MaterialType::CannedFood, 5);
+        ai.add_goods(GoodsType::Clothing, 5);
+        ai.add_goods(GoodsType::Furniture, 5);
+        for i in 80..=86 {
+            ai.add_province(ProvinceId(i));
+        }
+
+        ai_recruit_workers(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            ai.economy.pending_immigration, 0,
+            "Immigration should follow currently staffed production, not theoretical unbounded chain demand"
+        );
+    }
+
+    #[test]
+    fn food_support_cap_limits_immigration_to_half_freight_food_network() {
+        let local_supply = BTreeMap::from([
+            (ResourceType::Grain, 2),
+            (ResourceType::Fruit, 1),
+            (ResourceType::Fish, 1),
+        ]);
+        let remote_supply = BTreeMap::from([
+            (ResourceType::Grain, 4),
+            (ResourceType::Fruit, 4),
+            (ResourceType::Fish, 4),
+        ]);
+
+        assert_eq!(
+            max_workers_supported_by_food_supply(&local_supply, &remote_supply, 2),
+            6,
+            "With only two freight units, the network should support at most six workers"
         );
     }
 

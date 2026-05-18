@@ -3308,6 +3308,19 @@ fn parse_resource_type(name: &str) -> Option<ResourceType> {
     }
 }
 
+fn parse_freight_target(name: &str) -> Option<domain::economy::FreightTarget> {
+    if let Some(r) = parse_resource_type(name) {
+        return Some(domain::economy::FreightTarget::Resource(r));
+    }
+    if let Ok(m) = name.parse::<MaterialType>() {
+        return Some(domain::economy::FreightTarget::Material(m));
+    }
+    if let Ok(g) = name.parse::<GoodsType>() {
+        return Some(domain::economy::FreightTarget::Goods(g));
+    }
+    None
+}
+
 /// Industry-panel buildings: expandable production sites whose tier
 /// progression actually changes what they output. Fixed-capacity
 /// infrastructure (Armory, Capitol, FoodProcessing, Railyard, Shipyard,
@@ -3520,12 +3533,25 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         *delivered_map.entry(*resource).or_insert(0) += *qty;
     }
 
+    let (_local_town_outputs, remote_town_outputs) =
+        domain::economy::project_town_outputs(&game, nid);
+    let freight_unused_after_raw = combined_transport
+        .freight_cars
+        .saturating_sub(delivered_map.values().copied().sum::<u32>());
+    let (town_deliveries, _remaining_unused_after_towns) =
+        domain::economy::allocate_town_output_freight(
+            &mut delivered_map,
+            &remote_town_outputs,
+            &transport.allocations,
+            freight_unused_after_raw,
+        );
+
     let allocations_json: Vec<serde_json::Value> = transport
         .allocations
         .iter()
-        .map(|(r, units)| {
+        .map(|(target, units)| {
             serde_json::json!({
-                "resource": format!("{:?}", r),
+                "resource": target.label(),
                 "units": units,
             })
         })
@@ -3537,6 +3563,22 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
             let delivered = delivered_map.get(r).copied().unwrap_or(0);
             serde_json::json!({
                 "resource": format!("{:?}", r),
+                "available": avail,
+                "delivered": delivered,
+            })
+        })
+        .collect();
+
+    let town_deliveries_json: Vec<serde_json::Value> = remote_town_outputs
+        .iter()
+        .map(|(stockpile, avail)| {
+            let delivered = town_deliveries
+                .iter()
+                .find(|(delivered_stockpile, _)| delivered_stockpile == stockpile)
+                .map(|(_, qty)| *qty)
+                .unwrap_or(0);
+            serde_json::json!({
+                "resource": stockpile.label(),
                 "available": avail,
                 "delivered": delivered,
             })
@@ -3566,6 +3608,7 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
     // Resources with demand but zero stock are included with available=0 so the UI can
     // render the demand indicator even when the player has none in warehouse (F-013).
     let mut deliveries_with_demand = deliveries_json;
+    deliveries_with_demand.extend(town_deliveries_json.clone());
     for (r, _qty) in &demand_forecast {
         let already_present = remote_available.iter().any(|(ar, _)| ar == r);
         if !already_present {
@@ -3580,12 +3623,12 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         if *units == 0
             || deliveries_with_demand
                 .iter()
-                .any(|entry| entry["resource"] == format!("{:?}", r))
+                .any(|entry| entry["resource"] == r.label())
         {
             continue;
         }
         deliveries_with_demand.push(serde_json::json!({
-            "resource": format!("{:?}", r),
+            "resource": r.label(),
             "available": 0,
             "delivered": 0,
         }));
@@ -3620,6 +3663,7 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         "available_labor": available_labor,
         "deliveries": deliveries_with_demand,
         "local_deliveries": local_deliveries_json,
+        "town_deliveries": town_deliveries_json,
         "rail_only_deliveries": rail_only_deliveries_json,
         "demand": demand_json,
     })
@@ -3640,7 +3684,7 @@ pub fn wasm_set_pending_freight_cars(game_json: &str, nation_id: u32, count: u32
     serialize_game(&game)
 }
 
-/// Set transport allocation for a resource type (explicit freight units).
+/// Set transport allocation for a freight target (resource/material/good).
 #[wasm_bindgen]
 pub fn wasm_set_transport_allocation(
     game_json: &str,
@@ -3653,9 +3697,9 @@ pub fn wasm_set_transport_allocation(
         Err(e) => return e,
     };
     let nid = NationId(nation_id);
-    let res = match parse_resource_type(resource) {
-        Some(r) => r,
-        None => return "{\"error\":\"unknown resource type\"}".to_string(),
+    let target = match parse_freight_target(resource) {
+        Some(t) => t,
+        None => return "{\"error\":\"unknown freight target\"}".to_string(),
     };
 
     let nation = match game.get_nation_mut(nid) {
@@ -3663,7 +3707,7 @@ pub fn wasm_set_transport_allocation(
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
 
-    nation.military.transport.set_allocation(res, units);
+    nation.military.transport.set_allocation(target, units);
     serialize_game(&game)
 }
 
@@ -4169,15 +4213,17 @@ pub fn wasm_get_industry_data(game_json: &str, nation_id: u32) -> String {
         }
     }
 
+    let (fc_labor, fc_lumber, fc_steel) =
+        domain::economy::transport::TransportSystem::build_freight_car_cost();
     let committed_expert = committed_expert_civilian + army_committed_expert;
     let committed_untrained = committed_untrained_training + army_committed_untrained;
     let committed_trained = committed_trained_training + army_committed_trained;
+    let committed_freight_labor = nation.economy.pending_freight_cars.saturating_mul(fc_labor);
     let committed_labor_units = committed_untrained * cfg.untrained_labor
         + committed_trained * cfg.trained_labor
-        + committed_expert * cfg.expert_labor;
+        + committed_expert * cfg.expert_labor
+        + committed_freight_labor;
 
-    let (fc_labor, fc_lumber, fc_steel) =
-        domain::economy::transport::TransportSystem::build_freight_car_cost();
     let max_fc = if fc_lumber > 0 && fc_steel > 0 && fc_labor > 0 {
         (nation.material_amount(MaterialType::Lumber) / fc_lumber)
             .min(nation.material_amount(MaterialType::Steel) / fc_steel)

@@ -1078,6 +1078,7 @@ export interface TransportData {
   available_labor: number;
   deliveries: TransportDelivery[];
   local_deliveries?: TransportDelivery[];
+  town_deliveries?: TransportDelivery[];
   demand: TransportDemand[];
 }
 

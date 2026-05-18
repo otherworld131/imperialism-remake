@@ -294,15 +294,13 @@ pub(super) fn resolve_trade_session(
             // production catches up. Production-side aim lives in
             // `ai_set_production_targets`; without mirroring it here, the
             // surplus is offered to minors as soon as a single unit lands.
-            let canned_food_stockpile_target: u32 = crate::ai::lua_bridge::get_personality_config(
-                game,
-                reserve_personality,
-            )
-            .as_ref()
-            .and_then(|c| c.canned_food_stockpile_target)
-            .unwrap_or(20);
-            let canned_food_reserve_total = immig_canned_food_reserve
-                .saturating_add(canned_food_stockpile_target);
+            let canned_food_stockpile_target: u32 =
+                crate::ai::lua_bridge::get_personality_config(game, reserve_personality)
+                    .as_ref()
+                    .and_then(|c| c.canned_food_stockpile_target)
+                    .unwrap_or(20);
+            let canned_food_reserve_total =
+                immig_canned_food_reserve.saturating_add(canned_food_stockpile_target);
 
             // Paper reserve: queued worker training + strategic floor for
             // tech research and emergency training, with a 2× factory-cap

@@ -600,7 +600,7 @@ fn immigration_does_not_occur_without_queued_order() {
 #[test]
 fn set_allocation_stores_units() {
     let mut ts = TransportSystem::new();
-    ts.set_allocation(ResourceType::Coal, 150);
+    ts.set_resource_allocation(ResourceType::Coal, 150);
     let units = ts
         .allocations
         .iter()
@@ -618,8 +618,8 @@ fn set_allocation_stores_units() {
 fn unavailable_assigned_capacity_stays_unused() {
     let mut ts = TransportSystem::new();
     ts.build_freight_cars(10);
-    ts.set_allocation(ResourceType::Timber, 8);
-    ts.set_allocation(ResourceType::Coal, 2);
+    ts.set_resource_allocation(ResourceType::Timber, 8);
+    ts.set_resource_allocation(ResourceType::Coal, 2);
 
     let available = vec![(ResourceType::Timber, 2), (ResourceType::Coal, 20)];
     let deliveries = ts.calculate_deliveries(&available);
@@ -643,7 +643,7 @@ fn unavailable_assigned_capacity_stays_unused() {
 fn unallocated_resources_receive_no_capacity() {
     let mut ts = TransportSystem::new();
     ts.build_freight_cars(10);
-    ts.set_allocation(ResourceType::Timber, 5);
+    ts.set_resource_allocation(ResourceType::Timber, 5);
 
     let available = vec![(ResourceType::Timber, 5), (ResourceType::Coal, 10)];
     let deliveries = ts.calculate_deliveries(&available);

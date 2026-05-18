@@ -741,10 +741,16 @@ pub fn projected_immigration_queue_capacity(game: &GameState, nation_id: NationI
     } else {
         u32::MAX
     };
+    let max_by_furniture = if cfg.immigration_furniture > 0 {
+        nation.goods_amount(GoodsType::Furniture) / cfg.immigration_furniture
+    } else {
+        u32::MAX
+    };
     nation
         .immigration_turn_capacity(cfg)
         .min(max_by_canned_food)
         .min(max_by_clothing)
+        .min(max_by_furniture)
 }
 
 /// Derive per-nation `CashFlow` from the scattered per-source fields on
@@ -1398,9 +1404,9 @@ pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
 /// total warehouse. Resources already in the warehouse from prior turns are unaffected.
 ///
 /// For each nation:
-/// - Capital province tiles deliver for free (fidelity, Card #412).
-/// - All other provinces (including adjacent ones) draw from the freight pool.
-/// - If freight cars == 0: only capital province tile resources are delivered.
+/// - The capital tile itself delivers for free.
+/// - All other collectable tiles draw from the freight pool.
+/// - If freight cars == 0: only capital-tile resources are delivered.
 /// - If freight cars > 0: total resources from non-capital tiles are capped at freight capacity.
 ///   Excess resources are removed from warehouse.
 /// - Resources lost are tracked in `report.transport_overflow`.
@@ -2567,166 +2573,106 @@ pub(super) fn run_production(game: &mut GameState, report: &mut TurnReport) {
 /// 4. Towns produce at double rate (multiplier 2).
 /// 5. Add produced materials and goods to the owning nation's warehouse.
 fn resolve_town_production(game: &mut GameState, report: &mut TurnReport) {
-    // Phase 1: calculate production for each producing province
-    struct TownOutput {
-        owner: NationId,
-        lumber: u32,
-        steel: u32,
-        fabric: u32,
-        furniture: u32,
-        hardware: u32,
-        clothing: u32,
-    }
+    let nation_ids: Vec<NationId> = game.world.nations.iter().map(|n| n.id).collect();
 
-    let mut outputs: Vec<TownOutput> = Vec::new();
-
-    for province in &game.world.provinces {
-        if !province.can_produce() {
-            continue;
-        }
-        // Anarchic nations have no town production
-        if game
-            .get_nation(province.owner)
-            .is_some_and(|n| n.diplomacy.is_in_anarchy)
-        {
+    for nation_id in nation_ids {
+        let (local_outputs, remote_outputs) = crate::economy::project_town_outputs(game, nation_id);
+        if local_outputs.is_empty() && remote_outputs.is_empty() {
             continue;
         }
 
-        let rate_multiplier: u32 = if province.settlement_level == SettlementLevel::Town {
-            2
-        } else {
-            1
+        let Some(nation) = game.world.nations.iter_mut().find(|n| n.id == nation_id) else {
+            continue;
         };
+        let mut outputs_to_apply = local_outputs;
 
-        // Sum resource yields from all tiles in the province
-        let mut timber_yield: u32 = 0;
-        let mut coal_yield: u32 = 0;
-        let mut iron_yield: u32 = 0;
-        let mut cotton_yield: u32 = 0;
-        let mut wool_yield: u32 = 0;
+        let original_granted = nation
+            .economy
+            .logistics
+            .per_resource
+            .iter()
+            .map(|(resource, demand)| (*resource, demand.granted))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let mut adjusted_granted = original_granted.clone();
+        let original_unused = nation.economy.logistics.freight_unused;
+        let (delivered_remote_outputs, remaining_unused) =
+            crate::economy::allocate_town_output_freight(
+                &mut adjusted_granted,
+                &remote_outputs,
+                &nation.military.transport.allocations,
+                original_unused,
+            );
 
-        for tile_coord in &province.tiles {
-            if let Some(tile) = game.world.hex_map.get_tile(*tile_coord)
-                && let Some(yield_amount) = tile.calculate_yield()
-            {
-                match yield_amount.resource {
-                    ResourceType::Timber => timber_yield += yield_amount.quantity,
-                    ResourceType::Coal => coal_yield += yield_amount.quantity,
-                    ResourceType::Iron => iron_yield += yield_amount.quantity,
-                    ResourceType::Cotton => cotton_yield += yield_amount.quantity,
-                    ResourceType::Wool => wool_yield += yield_amount.quantity,
-                    _ => {} // other resources don't participate in town production
-                }
+        for (resource, before) in original_granted {
+            let after = adjusted_granted.get(&resource).copied().unwrap_or(0);
+            let displaced = before.saturating_sub(after);
+            if displaced == 0 {
+                continue;
             }
+            let removable = displaced.min(nation.resource_amount(resource));
+            if removable == 0 {
+                continue;
+            }
+            nation.remove_resource(resource, removable);
+            if let Some(demand) = nation.economy.logistics.per_resource.get_mut(&resource) {
+                demand.granted = demand.granted.saturating_sub(removable);
+                demand.unmet = demand.unmet.saturating_add(removable);
+            }
+            report
+                .transport_overflow
+                .push((nation_id, resource, removable));
         }
 
-        // Apply rate multiplier for Town
-        timber_yield *= rate_multiplier;
-        coal_yield *= rate_multiplier;
-        iron_yield *= rate_multiplier;
-        cotton_yield *= rate_multiplier;
-        wool_yield *= rate_multiplier;
+        let used_unused_capacity = original_unused.saturating_sub(remaining_unused);
+        nation.economy.logistics.freight_unused = remaining_unused;
+        nation.economy.logistics.freight_committed = nation
+            .economy
+            .logistics
+            .freight_total
+            .saturating_sub(remaining_unused);
 
-        // Step 2: Convert raw resources to materials (2:1 ratio)
-        let lumber = timber_yield / 2;
-        let steel = coal_yield.min(iron_yield); // 1 coal + 1 iron → 1 steel
-        let fabric = (cotton_yield + wool_yield) / 2;
+        if used_unused_capacity > 0 || !delivered_remote_outputs.is_empty() {
+            outputs_to_apply.extend(delivered_remote_outputs);
+        }
 
-        // Step 3: Convert half of materials to goods (2:1 ratio)
-        let furniture = lumber / 2;
-        let hardware = steel / 2;
-        let clothing = fabric / 2;
-
-        // Only record if something was produced
-        if lumber > 0 || steel > 0 || fabric > 0 || furniture > 0 || hardware > 0 || clothing > 0 {
-            outputs.push(TownOutput {
-                owner: province.owner,
-                lumber,
-                steel,
-                fabric,
-                furniture,
-                hardware,
-                clothing,
-            });
+        for (stockpile, qty) in outputs_to_apply {
+            apply_town_output(nation, report, nation_id, stockpile, qty);
         }
     }
+}
 
-    // Phase 2: apply to nations
-    for output in &outputs {
-        if let Some(nation) = game.world.nations.iter_mut().find(|n| n.id == output.owner) {
-            if output.lumber > 0 {
-                nation.add_material(MaterialType::Lumber, output.lumber);
-                report
-                    .town_production
-                    .push((output.owner, "Lumber".to_string(), output.lumber));
-                report.stockpile_flows.town_produced_materials.push((
-                    output.owner,
-                    MaterialType::Lumber,
-                    output.lumber,
-                ));
-            }
-            if output.steel > 0 {
-                nation.add_material(MaterialType::Steel, output.steel);
-                report
-                    .town_production
-                    .push((output.owner, "Steel".to_string(), output.steel));
-                report.stockpile_flows.town_produced_materials.push((
-                    output.owner,
-                    MaterialType::Steel,
-                    output.steel,
-                ));
-            }
-            if output.fabric > 0 {
-                nation.add_material(MaterialType::Fabric, output.fabric);
-                report
-                    .town_production
-                    .push((output.owner, "Fabric".to_string(), output.fabric));
-                report.stockpile_flows.town_produced_materials.push((
-                    output.owner,
-                    MaterialType::Fabric,
-                    output.fabric,
-                ));
-            }
-            if output.furniture > 0 {
-                nation.add_goods(GoodsType::Furniture, output.furniture);
-                report.town_production.push((
-                    output.owner,
-                    "Furniture".to_string(),
-                    output.furniture,
-                ));
-                report.stockpile_flows.town_produced_goods.push((
-                    output.owner,
-                    GoodsType::Furniture,
-                    output.furniture,
-                ));
-            }
-            if output.hardware > 0 {
-                nation.add_goods(GoodsType::Hardware, output.hardware);
-                report.town_production.push((
-                    output.owner,
-                    "Hardware".to_string(),
-                    output.hardware,
-                ));
-                report.stockpile_flows.town_produced_goods.push((
-                    output.owner,
-                    GoodsType::Hardware,
-                    output.hardware,
-                ));
-            }
-            if output.clothing > 0 {
-                nation.add_goods(GoodsType::Clothing, output.clothing);
-                report.town_production.push((
-                    output.owner,
-                    "Clothing".to_string(),
-                    output.clothing,
-                ));
-                report.stockpile_flows.town_produced_goods.push((
-                    output.owner,
-                    GoodsType::Clothing,
-                    output.clothing,
-                ));
-            }
+fn apply_town_output(
+    nation: &mut crate::nation::Nation,
+    report: &mut TurnReport,
+    nation_id: NationId,
+    stockpile: crate::economy::FreightTarget,
+    qty: u32,
+) {
+    if qty == 0 {
+        return;
+    }
+    match stockpile {
+        crate::economy::FreightTarget::Material(material) => {
+            nation.add_material(material, qty);
+            report
+                .town_production
+                .push((nation_id, format!("{:?}", material), qty));
+            report
+                .stockpile_flows
+                .town_produced_materials
+                .push((nation_id, material, qty));
         }
+        crate::economy::FreightTarget::Goods(good) => {
+            nation.add_goods(good, qty);
+            report
+                .town_production
+                .push((nation_id, format!("{:?}", good), qty));
+            report
+                .stockpile_flows
+                .town_produced_goods
+                .push((nation_id, good, qty));
+        }
+        crate::economy::FreightTarget::Resource(_) => {}
     }
 }
 
@@ -7664,11 +7610,9 @@ mod tests {
     }
 
     #[test]
-    fn capital_province_resources_delivered_without_transport() {
-        // Capital province resources are delivered for free (no freight cars needed).
-        // Under the unified collector model (cards #130 + #131), only tiles
-        // within the capital-tile's 1-hex radius yield — so we arrange the
-        // 6 grain tiles around the capital (not stretched in a line).
+    fn only_capital_tile_resources_are_delivered_without_transport() {
+        // The capital tile itself delivers for free. Neighboring tiles inside
+        // the capital's collection radius still need freight.
         let mut hex_map = HexMap::new(10, 10);
         let capital = HexCoord::new(2, 2);
         let mut tiles = vec![capital];
@@ -7704,7 +7648,7 @@ mod tests {
             ProvinceId(1),
         );
         nation.economy.treasury = Money::dollars(5000);
-        // Zero freight cars — capital province resources should still arrive
+        // Zero freight cars — only the capital tile should still arrive.
         nation.economy.labor = LaborPool::new();
 
         let mut game = crate::test_game_state! {
@@ -7736,8 +7680,8 @@ mod tests {
 
         let report = process_turn(&mut game);
 
-        // 7 farms all within the capital tile's 1-hex collector radius →
-        // all delivered for free, no overflow.
+        // The 6 neighboring farms are collectable but require freight, so they
+        // should overflow when no transport exists.
         let total_overflow: u32 = report
             .transport_overflow
             .iter()
@@ -7745,30 +7689,35 @@ mod tests {
             .map(|(_, _, q)| *q)
             .sum();
         assert_eq!(
-            total_overflow, 0,
-            "Capital province has no transport overflow"
+            total_overflow, 6,
+            "capital-radius collection should overflow without freight"
         );
 
-        // Capital + 6 neighbors = 7 grain.
+        // Only the capital tile's grain remains delivered for free.
         let nation = game.get_nation(NationId(1)).unwrap();
-        assert_eq!(nation.resource_amount(ResourceType::Grain), 7);
+        assert_eq!(nation.resource_amount(ResourceType::Grain), 1);
     }
 
     #[test]
-    fn transport_zero_cars_keeps_capital_province_resources() {
+    fn transport_zero_cars_keeps_only_capital_tile_resources() {
         let mut game = test_game_state();
-        // Default: 0 freight cars, 2 tiles in capital province (Farm + ScrubForest)
-        // Produces 2 resources total, capital tile count = 2, so all should be kept
+        // Default: 0 freight cars, 2 collectable tiles in the capital
+        // province. Only the capital tile should stay delivered.
 
         let report = process_turn(&mut game);
 
         assert!(
-            report.transport_overflow.is_empty(),
-            "With 0 freight cars but only capital province tiles, no overflow"
+            report
+                .transport_overflow
+                .iter()
+                .any(|(nid, resource, qty)| *nid == NationId(1)
+                    && *resource == ResourceType::Timber
+                    && *qty == 1),
+            "non-capital capital-radius resources should overflow without freight"
         );
         let nation = game.get_nation(NationId(1)).unwrap();
         assert_eq!(nation.resource_amount(ResourceType::Grain), 1);
-        assert_eq!(nation.resource_amount(ResourceType::Timber), 1);
+        assert_eq!(nation.resource_amount(ResourceType::Timber), 0);
     }
 
     #[test]
@@ -8254,22 +8203,52 @@ mod tests {
         terrain_resource_pairs: &[(TerrainType, Option<ResourceType>)],
     ) -> GameState {
         let mut hex_map = HexMap::new(20, 20);
-        let mut tiles = Vec::new();
         let capital_coord = HexCoord::new(0, 0);
+        let rail_coord = HexCoord::new(1, 0);
+        let depot_coord = HexCoord::new(2, 0);
+        let mut tiles = vec![depot_coord];
 
-        // Capital province (just a simple grassland)
-        let cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        // Capital province with the infrastructure needed to seed collection.
+        let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        cap_tile.is_country_capital = true;
+        cap_tile.infrastructure.has_depot = true;
+        cap_tile.infrastructure.has_railroad = true;
         hex_map.set_tile(capital_coord, cap_tile);
 
-        // Village province with given terrain/resource pairs
+        let mut rail_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        rail_tile.infrastructure.has_railroad = true;
+        hex_map.set_tile(rail_coord, rail_tile);
+
+        let mut depot_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(2));
+        depot_tile.infrastructure.has_depot = true;
+        depot_tile.infrastructure.has_railroad = true;
+        hex_map.set_tile(depot_coord, depot_tile);
+
+        let village_coords = [
+            HexCoord::new(3, 0),
+            HexCoord::new(3, -1),
+            HexCoord::new(2, -1),
+        ];
+
+        // Village province with given terrain/resource pairs inside the depot radius.
         for (i, (terrain, resource)) in terrain_resource_pairs.iter().enumerate() {
-            let coord = HexCoord::new(5 + i as i32, 0);
+            let coord = if i == 0 {
+                depot_coord
+            } else {
+                village_coords[(i - 1).min(village_coords.len() - 1)]
+            };
             let mut tile = Tile::with_province(*terrain, ProvinceId(2));
             if let Some(res) = resource {
                 tile.set_resource(*res);
             }
+            if coord == depot_coord {
+                tile.infrastructure.has_depot = true;
+                tile.infrastructure.has_railroad = true;
+            }
             hex_map.set_tile(coord, tile);
-            tiles.push(coord);
+            if !tiles.contains(&coord) {
+                tiles.push(coord);
+            }
         }
 
         let province_capital = Province::new(
@@ -8306,6 +8285,29 @@ mod tests {
         );
         nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
+        nation.military.transport.build_freight_cars(20);
+        for resource in [
+            ResourceType::Timber,
+            ResourceType::Coal,
+            ResourceType::Iron,
+            ResourceType::Cotton,
+            ResourceType::Wool,
+        ] {
+            nation
+                .military
+                .transport
+                .set_resource_allocation(resource, 20);
+        }
+        for target in [
+            crate::economy::FreightTarget::Material(MaterialType::Lumber),
+            crate::economy::FreightTarget::Material(MaterialType::Steel),
+            crate::economy::FreightTarget::Material(MaterialType::Fabric),
+            crate::economy::FreightTarget::Goods(GoodsType::Furniture),
+            crate::economy::FreightTarget::Goods(GoodsType::Hardware),
+            crate::economy::FreightTarget::Goods(GoodsType::Clothing),
+        ] {
+            nation.military.transport.set_allocation(target, 20);
+        }
 
         crate::test_game_state! {
         turn: TurnNumber::new(1),
@@ -8372,11 +8374,26 @@ mod tests {
         // Create a village with prospected BarrenHills tiles containing coal and iron
         let mut hex_map = HexMap::new(20, 20);
         let capital_coord = HexCoord::new(0, 0);
-        let cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        let rail_coord = HexCoord::new(1, 0);
+        let depot_coord = HexCoord::new(2, 0);
+        let coords = vec![
+            depot_coord,
+            HexCoord::new(3, 0),
+            HexCoord::new(3, -1),
+            HexCoord::new(2, -1),
+        ];
+
+        let mut cap_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        cap_tile.is_country_capital = true;
+        cap_tile.infrastructure.has_depot = true;
+        cap_tile.infrastructure.has_railroad = true;
         hex_map.set_tile(capital_coord, cap_tile);
 
+        let mut rail_tile = Tile::with_province(TerrainType::Grassland, ProvinceId(1));
+        rail_tile.infrastructure.has_railroad = true;
+        hex_map.set_tile(rail_coord, rail_tile);
+
         // 2 Coal tiles and 2 Iron tiles (Hills with revealed, mined deposits at L1)
-        let coords: Vec<HexCoord> = (0..4).map(|i| HexCoord::new(5 + i, 0)).collect();
         for (i, &coord) in coords.iter().enumerate() {
             let mut tile = Tile::with_province(TerrainType::Hills, ProvinceId(2));
             if i < 2 {
@@ -8386,6 +8403,10 @@ mod tests {
             }
             // Coal/Iron need level 1+ to produce (manual: Level 0 = 0).
             tile.set_improvement_level(1);
+            if coord == depot_coord {
+                tile.infrastructure.has_depot = true;
+                tile.infrastructure.has_railroad = true;
+            }
             hex_map.set_tile(coord, tile);
         }
 
@@ -8418,6 +8439,23 @@ mod tests {
         );
         nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
+        nation.military.transport.build_freight_cars(20);
+        nation
+            .military
+            .transport
+            .set_resource_allocation(ResourceType::Coal, 20);
+        nation
+            .military
+            .transport
+            .set_resource_allocation(ResourceType::Iron, 20);
+        nation.military.transport.set_allocation(
+            crate::economy::FreightTarget::Material(MaterialType::Steel),
+            20,
+        );
+        nation.military.transport.set_allocation(
+            crate::economy::FreightTarget::Goods(GoodsType::Hardware),
+            20,
+        );
 
         let mut game = crate::test_game_state! {
         turn: TurnNumber::new(1),
@@ -8562,6 +8600,33 @@ mod tests {
             .map(|(_, _, q)| *q)
             .sum();
         assert_eq!(lumber_output, 4);
+    }
+
+    #[test]
+    fn remote_town_production_requires_delivered_resources() {
+        let mut game =
+            test_game_state_with_village(&[(TerrainType::Forest, Some(ResourceType::Timber)); 4]);
+        let nation = game.get_nation_mut(NationId(1)).unwrap();
+        nation.military.transport.freight_cars = 0;
+        nation.military.transport.allocations.clear();
+
+        let report = process_turn(&mut game);
+        let nation = game.get_nation(NationId(1)).unwrap();
+
+        assert_eq!(
+            nation.material_amount(MaterialType::Lumber),
+            0,
+            "remote town should not auto-produce lumber when no timber was delivered"
+        );
+        assert_eq!(
+            nation.goods_amount(GoodsType::Furniture),
+            0,
+            "remote town should not auto-produce furniture when no timber was delivered"
+        );
+        assert!(
+            report.town_production.is_empty(),
+            "no delivered input means no town output"
+        );
     }
 
     // ── Village → Town progression ─────────────────────────────
@@ -8905,6 +8970,7 @@ mod tests {
         let mut game = test_game_state_with_production();
         let nation = game.get_nation_mut(NationId(1)).unwrap();
         nation.add_material(MaterialType::CannedFood, 1);
+        nation.add_goods(GoodsType::Furniture, 1);
         nation.add_resource(ResourceType::Cotton, 4);
         nation.add_resource(ResourceType::Grain, 10);
         nation.add_resource(ResourceType::Fruit, 10);
@@ -14700,7 +14766,7 @@ mod tests {
             game.world.nations[0]
                 .military
                 .transport
-                .set_allocation(ResourceType::Iron, 1);
+                .set_resource_allocation(ResourceType::Iron, 1);
 
             let before = game.world.nations[0].resource_amount(ResourceType::Iron);
             let _ = process_turn(&mut game);

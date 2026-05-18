@@ -600,7 +600,7 @@ fn collect_transport_rows(game: &domain::game_state::GameState) -> Vec<serde_jso
                 .transport
                 .allocations
                 .iter()
-                .map(|(r, q)| (format!("{:?}", r), *q))
+                .map(|(r, q)| (r.label(), *q))
                 .collect();
             let workers =
                 n.economy.labor.untrained + n.economy.labor.trained + n.economy.labor.expert;
