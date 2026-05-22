@@ -6,13 +6,21 @@ use crate::game_state::GameState;
 use crate::types::*;
 use std::collections::BTreeMap;
 
-/// AI turns canned food + clothing into queued immigrant workers using the
-/// same projected end-of-turn capacity contract exposed to the player UI.
+/// AI queues immigrant workers to staff its industrial chain.
+///
+/// `desired` is the genuine labor shortfall: the labor needed to staff current
+/// building capacity (`required_chain_labor`) minus the workforce already on
+/// hand. The only cap applied here is food-network sustainability — the AI
+/// recruits whenever the food network can feed more workers.
+///
+/// The per-turn province immigration rate is *not* applied here: it is a hard
+/// game rule enforced by `process_pending_immigration`, which also caps actual
+/// recruitment by the canned food / clothing / furniture on hand. Queueing more
+/// than those rules allow is harmless and self-correcting.
 pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
     let cfg = &game.game_data.game_config;
     let min_workers_floor = cfg.labor_min_workers_floor;
-    let max_queue = crate::turn::projected_immigration_queue_capacity(game, nation_id)
-        .min(transport_capped_immigration_capacity(game, nation_id));
+    let max_queue = transport_capped_immigration_capacity(game, nation_id);
     let Some(nation) = game.get_nation(nation_id) else {
         return;
     };
@@ -26,9 +34,9 @@ pub(crate) fn ai_recruit_workers(game: &mut GameState, nation_id: NationId) {
             cfg.trained_labor,
             cfg.expert_labor,
         );
-        let assigned_demand_units =
-            crate::turn::economy_phase::forecast_production_labor_used(game, nation_id)
-                .saturating_add(queued_labor_commitments(game, nation_id));
+        let assigned_demand_units = nation
+            .required_chain_labor(cfg)
+            .saturating_add(queued_labor_commitments(game, nation_id));
         let labor_gap = assigned_demand_units.saturating_sub(current_labor_units);
         if labor_gap == 0 {
             0
@@ -1130,21 +1138,45 @@ mod tests {
     }
 
     #[test]
-    fn ai_does_not_queue_immigration_without_clothing() {
+    fn ai_recruit_decision_ignores_missing_goods_stockpiles() {
+        // The AI no longer gates its recruit decision on canned food / clothing
+        // / furniture stockpiles — those are consumed (and capped) later by the
+        // turn processor. With unstaffed capacity and a sustaining food network
+        // it queues immigrants even with zero clothing/furniture/canned food.
         let mut game = test_game_with_ai();
+        seed_ai_food_network(
+            &mut game,
+            &[
+                ResourceType::Grain,
+                ResourceType::Grain,
+                ResourceType::Grain,
+                ResourceType::Fruit,
+                ResourceType::Fruit,
+                ResourceType::Livestock,
+            ],
+            20,
+        );
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.economy.labor.untrained = 0;
-        ai.economy.labor.trained = 0;
-        ai.economy.labor.expert = 0;
+        ai.economy.labor.untrained = 6;
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 4));
+        ai.add_resource(ResourceType::Grain, 6);
+        ai.add_resource(ResourceType::Fruit, 6);
+        ai.add_resource(ResourceType::Fish, 6);
+        // Deliberately no clothing, furniture, or canned food on hand.
         for i in 60..=63 {
             ai.add_province(ProvinceId(i));
         }
-        ai.add_material(MaterialType::CannedFood, 3);
 
         ai_recruit_workers(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(ai.economy.pending_immigration, 0);
+        assert!(
+            ai.economy.pending_immigration > 0,
+            "AI should queue immigration despite empty goods stockpiles (got {})",
+            ai.economy.pending_immigration
+        );
     }
 
     #[test]
@@ -1221,7 +1253,10 @@ mod tests {
     }
 
     #[test]
-    fn ai_uses_assigned_labor_not_unbounded_projected_demand_for_immigration() {
+    fn ai_recruits_to_staff_current_building_capacity() {
+        // A LumberMill at capacity 4 needs 8 labor units (cap * labor_per_production);
+        // 6 untrained workers supply only 6. The AI must queue immigrants to close
+        // that gap, not settle for whatever its current workforce already staffs.
         let mut game = test_game_with_ai();
         seed_ai_food_network(
             &mut game,
@@ -1255,9 +1290,10 @@ mod tests {
         ai_recruit_workers(&mut game, NationId(2));
 
         let ai = game.get_nation(NationId(2)).unwrap();
-        assert_eq!(
-            ai.economy.pending_immigration, 0,
-            "Immigration should follow currently staffed production, not theoretical unbounded chain demand"
+        assert!(
+            ai.economy.pending_immigration > 0,
+            "AI should recruit to staff current building capacity (got {})",
+            ai.economy.pending_immigration
         );
     }
 

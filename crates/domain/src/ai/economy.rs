@@ -1542,6 +1542,17 @@ fn expand_building(game: &mut GameState, nation_id: NationId, bt: BuildingType, 
         return;
     }
 
+    // Labor gate: don't grow industrial capacity the workforce can't staff.
+    // Applies to every building type — feeding workers draws on raw food, so
+    // even the cannery needs labor before it is worth enlarging.
+    if !nation.chain_labor_gate_passes(&game.game_data.game_config) {
+        if game.ai_debug {
+            let name = nation.name.clone();
+            eprintln!("[AI:{name}:economy] skipping {bt:?} expansion: labor gate not met");
+        }
+        return;
+    }
+
     let increase = if use_tier {
         nation
             .economy
@@ -2312,6 +2323,103 @@ mod tests {
         assert!(
             ai.has_building(BuildingType::FurnitureFactory),
             "AI should build a FurnitureFactory when it has a LumberMill and materials"
+        );
+    }
+
+    /// Give the AI all six core chain buildings, with LumberMill at `lumber_cap`
+    /// and the rest at capacity 2.
+    fn give_chain_buildings(ai: &mut crate::nation::Nation, lumber_cap: u32) {
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, lumber_cap));
+        for bt in [
+            BuildingType::SteelMill,
+            BuildingType::TextileMill,
+            BuildingType::FurnitureFactory,
+            BuildingType::HardwareFactory,
+            BuildingType::ClothingFactory,
+        ] {
+            ai.economy.buildings.push(Building::new(bt, 2));
+        }
+    }
+
+    fn building_capacity_of(ai: &crate::nation::Nation, bt: BuildingType) -> Building {
+        ai.economy
+            .buildings
+            .iter()
+            .find(|b| b.building_type == bt)
+            .cloned()
+            .unwrap()
+    }
+
+    #[test]
+    fn expansion_blocked_when_labor_short() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        give_chain_buildings(ai, 8);
+        // No workers — the workforce cannot staff the chain, so the labor gate
+        // must block expansion even though resources and materials are ample.
+        ai.economy.labor = crate::economy::labor::LaborPool::new();
+        ai.add_resource(ResourceType::Timber, 200);
+        ai.add_material(MaterialType::Lumber, 100);
+        ai.add_material(MaterialType::Steel, 100);
+
+        ai_manage_economy(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            building_capacity_of(ai, BuildingType::LumberMill).pending_capacity,
+            0,
+            "Labor-short AI should not expand its LumberMill"
+        );
+    }
+
+    #[test]
+    fn expansion_allowed_when_labor_sufficient() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        give_chain_buildings(ai, 8);
+        // Plenty of expert workers — the labor gate passes, so the AI may
+        // expand the LumberMill its overflowing Timber stockpile justifies.
+        ai.economy.labor = crate::economy::labor::LaborPool::new();
+        ai.economy.labor.expert = 12;
+        ai.add_resource(ResourceType::Timber, 200);
+        ai.add_material(MaterialType::Lumber, 100);
+        ai.add_material(MaterialType::Steel, 100);
+
+        ai_manage_economy(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert!(
+            building_capacity_of(ai, BuildingType::LumberMill).pending_capacity > 0,
+            "Well-staffed AI should expand its LumberMill"
+        );
+    }
+
+    #[test]
+    fn food_processing_expansion_also_labor_gated() {
+        let mut game = test_game_with_ai();
+        let ai = game.get_nation_mut(NationId(2)).unwrap();
+        // A LumberMill makes `required_chain_labor` non-zero; with no workers
+        // the gate fails and even the cannery must not expand.
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::LumberMill, 8));
+        ai.economy
+            .buildings
+            .push(Building::new(BuildingType::FoodProcessing, 4));
+        ai.economy.labor = crate::economy::labor::LaborPool::new();
+        ai.add_resource(ResourceType::Grain, 200);
+        ai.add_material(MaterialType::Lumber, 100);
+        ai.add_material(MaterialType::Steel, 100);
+
+        ai_manage_economy(&mut game, NationId(2));
+
+        let ai = game.get_nation(NationId(2)).unwrap();
+        assert_eq!(
+            building_capacity_of(ai, BuildingType::FoodProcessing).pending_capacity,
+            0,
+            "Labor-short AI should not expand FoodProcessing either"
         );
     }
 
@@ -3173,6 +3281,9 @@ mod tests {
             .economy
             .buildings
             .push(Building::new(BuildingType::LumberMill, 4));
+        // Enough workers that the labor gate passes — this test exercises
+        // idempotency, not the labor gate.
+        game.get_nation_mut(nation_id).unwrap().economy.labor.expert = 12;
         *game
             .get_nation_mut(nation_id)
             .unwrap()
