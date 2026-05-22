@@ -1075,6 +1075,41 @@ impl Nation {
         *entry = entry.saturating_add(amount);
     }
 
+    /// Add a commodity to the appropriate stockpile (warehouse / materials / goods).
+    pub fn add_commodity(&mut self, commodity: crate::economy::trade::Commodity, amount: u32) {
+        use crate::economy::trade::Commodity;
+        match commodity {
+            Commodity::Resource(r) => self.add_resource(r, amount),
+            Commodity::Material(m) => self.add_material(m, amount),
+            Commodity::Goods(g) => self.add_goods(g, amount),
+        }
+    }
+
+    /// Remove a commodity from the appropriate stockpile. Returns `false` (and
+    /// removes nothing) when the nation does not hold enough.
+    pub fn remove_commodity(
+        &mut self,
+        commodity: crate::economy::trade::Commodity,
+        amount: u32,
+    ) -> bool {
+        use crate::economy::trade::Commodity;
+        match commodity {
+            Commodity::Resource(r) => self.remove_resource(r, amount),
+            Commodity::Material(m) => self.consume_material(m, amount),
+            Commodity::Goods(g) => self.consume_goods(g, amount),
+        }
+    }
+
+    /// The current amount of a commodity held in the appropriate stockpile.
+    pub fn commodity_amount(&self, commodity: crate::economy::trade::Commodity) -> u32 {
+        use crate::economy::trade::Commodity;
+        match commodity {
+            Commodity::Resource(r) => self.resource_amount(r),
+            Commodity::Material(m) => self.material_amount(m),
+            Commodity::Goods(g) => self.goods_amount(g),
+        }
+    }
+
     /// Returns true if the nation has enough treasury, arms, horses, oil, and
     /// labor to recruit the given unit type. Does NOT check tech prerequisites.
     pub fn can_recruit_unit(&self, unit_type: ArmyUnitType) -> bool {

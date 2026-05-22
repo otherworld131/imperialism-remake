@@ -102,17 +102,16 @@ pub struct MarketTurnRecord {
     pub offers: Vec<MarketOfferRecord>,
 }
 
-/// One row in `MarketTurnRecord::offers`. The same `(seller, resource)` may
+/// One row in `MarketTurnRecord::offers`. The same `(seller, commodity)` may
 /// appear in multiple rows if it was sold via multiple offer entries (e.g. a
 /// minor nation that withholds part of its stock posts a single row per
-/// turn). Aggregating by `(seller, resource)` is safe for UI display.
+/// turn). Aggregating by `(seller, commodity)` is safe for UI display.
 #[derive(Debug, Clone)]
 pub struct MarketOfferRecord {
     pub seller: NationId,
-    pub resource: ResourceType,
-    /// Human-readable label for the traded commodity. For resource trades this
-    /// matches `resource` printed as a string. For material/goods rows it holds
-    /// the material or goods name (e.g. "Lumber", "Arms").
+    pub commodity: crate::economy::trade::Commodity,
+    /// Human-readable label for the traded commodity (e.g. "Coal", "Lumber",
+    /// "Arms").
     pub commodity_label: String,
     /// Quantity originally posted on the market this turn.
     pub offered: u32,

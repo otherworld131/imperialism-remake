@@ -489,11 +489,11 @@ pub(crate) fn print_trade(game: &GameState) {
         };
         println!("    {} {}:", name, status);
         let mut sorted_offers: Vec<_> = nation_offers.iter().collect();
-        sorted_offers.sort_by_key(|o| format!("{:?}", o.resource));
+        sorted_offers.sort_by_key(|o| o.commodity.to_string());
         for offer in sorted_offers {
             println!(
-                "      {:?}: {} available at {} each",
-                offer.resource, offer.quantity, offer.price_per_unit
+                "      {}: {} available at {} each",
+                offer.commodity, offer.quantity, offer.price_per_unit
             );
         }
     }

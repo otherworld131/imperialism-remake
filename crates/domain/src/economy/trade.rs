@@ -3,20 +3,20 @@ use crate::map::{HexMap, Province};
 use crate::nation::Nation;
 use crate::types::*;
 
-/// A trade offer: a nation wants to sell goods.
+/// A trade offer: a nation wants to sell a commodity.
 #[derive(Debug, Clone)]
 pub struct TradeOffer {
     pub seller: NationId,
-    pub resource: ResourceType,
+    pub commodity: Commodity,
     pub quantity: u32,
     pub price_per_unit: Money,
 }
 
-/// A trade bid: a nation wants to buy resources.
+/// A trade bid: a nation wants to buy a commodity.
 #[derive(Debug, Clone)]
 pub struct TradeBid {
     pub buyer: NationId,
-    pub resource: ResourceType,
+    pub commodity: Commodity,
     pub quantity: u32,
     pub max_price_per_unit: Money,
 }
@@ -26,7 +26,7 @@ pub struct TradeBid {
 pub struct TradeTransaction {
     pub buyer: NationId,
     pub seller: NationId,
-    pub resource: ResourceType,
+    pub commodity: Commodity,
     pub quantity: u32,
     pub price_per_unit: Money,
     pub total_cost: Money,
@@ -141,7 +141,7 @@ pub fn resolve_trades(offers: &[TradeOffer], bids: &[TradeBid]) -> Vec<TradeTran
             .iter()
             .enumerate()
             .filter(|(i, o)| {
-                o.resource == bid.resource
+                o.commodity == bid.commodity
                     && o.price_per_unit <= bid.max_price_per_unit
                     && remaining[*i] > 0
                     && o.seller != bid.buyer
@@ -168,7 +168,7 @@ pub fn resolve_trades(offers: &[TradeOffer], bids: &[TradeBid]) -> Vec<TradeTran
             transactions.push(TradeTransaction {
                 buyer: bid.buyer,
                 seller: offers[offer_idx].seller,
-                resource: bid.resource,
+                commodity: bid.commodity,
                 quantity: trade_qty,
                 price_per_unit: price,
                 total_cost: total,
@@ -182,11 +182,18 @@ pub fn resolve_trades(offers: &[TradeOffer], bids: &[TradeBid]) -> Vec<TradeTran
     transactions
 }
 
-/// Resolve trades with a preference system.
+/// Resolve trades with a seller-preference system.
 ///
-/// When multiple GPs bid for the same MN's resources, the MN prefers the GP with
-/// the highest effective relationship score. Subsidies boost the effective
+/// Resolution is **offer-centric**: each seller's offer is allocated to the
+/// bidders that want it, ranked by that seller's effective relationship with
+/// each buyer — so the diplomatic preference applies to the *actual* seller
+/// being filled, not a cross-seller surrogate. Subsidies boost the effective
 /// relationship by +1 per $100 of subsidy.
+///
+/// Offers are processed cheapest-first so buyers are filled from the cheapest
+/// available supply globally; within one offer, the highest-relationship
+/// (then lowest-`NationId`) buyer is served first. A buyer never trades with
+/// itself, and an offer only matches a bid whose `max_price` covers it.
 ///
 /// `relationship_scores` maps `(buyer, seller)` to the base diplomatic score.
 /// `subsidies` maps `(buyer, seller)` to the subsidy amount in Money.
@@ -198,81 +205,77 @@ pub fn resolve_trades_with_preference(
 ) -> Vec<TradeTransaction> {
     let mut transactions = Vec::new();
 
-    // Track remaining quantity for each offer
-    let mut remaining: Vec<u32> = offers.iter().map(|o| o.quantity).collect();
+    // Track remaining quantity wanted for each bid.
+    let mut bid_remaining: Vec<u32> = bids.iter().map(|b| b.quantity).collect();
 
-    // Sort bids by effective relationship score (descending) so preferred buyers go first
-    let mut sorted_bids: Vec<(usize, i64)> = bids
-        .iter()
-        .enumerate()
-        .map(|(i, bid)| {
-            // Calculate max effective score across all sellers this buyer might trade with
-            let max_score = offers
-                .iter()
-                .filter(|o| o.resource == bid.resource && o.seller != bid.buyer)
-                .map(|o| {
-                    let base_score = relationship_scores
-                        .get(&(bid.buyer, o.seller))
-                        .copied()
-                        .unwrap_or(0) as i64;
-                    let subsidy_bonus = subsidies
-                        .get(&(bid.buyer, o.seller))
-                        .map(|s| s.as_dollars() / 100)
-                        .unwrap_or(0);
-                    base_score + subsidy_bonus
-                })
-                .max()
-                .unwrap_or(0);
-            (i, max_score)
-        })
-        .collect();
+    // Effective relationship score the given seller has toward the given bid's
+    // buyer: base diplomatic score + subsidy bonus (+1 per $100).
+    let effective_score = |bid: &TradeBid, seller: NationId| -> i64 {
+        let base = relationship_scores
+            .get(&(bid.buyer, seller))
+            .copied()
+            .unwrap_or(0) as i64;
+        let subsidy_bonus = subsidies
+            .get(&(bid.buyer, seller))
+            .map(|s| s.as_dollars() / 100)
+            .unwrap_or(0);
+        base + subsidy_bonus
+    };
 
-    // Sort by effective score descending (preferred buyers first)
-    sorted_bids.sort_by(|a, b| b.1.cmp(&a.1));
+    // Process offers cheapest-first (ties broken by seller id for determinism)
+    // so buyers are filled from the cheapest supply available.
+    let mut offer_order: Vec<usize> = (0..offers.len()).collect();
+    offer_order.sort_by(|&a, &b| {
+        offers[a]
+            .price_per_unit
+            .cmp(&offers[b].price_per_unit)
+            .then(offers[a].seller.0.cmp(&offers[b].seller.0))
+    });
 
-    for (bid_idx, _) in &sorted_bids {
-        let bid = &bids[*bid_idx];
-        let mut bid_remaining = bid.quantity;
+    for &offer_idx in &offer_order {
+        let offer = &offers[offer_idx];
+        let mut offer_remaining = offer.quantity;
+        if offer_remaining == 0 {
+            continue;
+        }
 
-        // Find matching offers, sorted by price (cheapest first)
-        let mut matching_indices: Vec<usize> = offers
-            .iter()
-            .enumerate()
-            .filter(|(i, o)| {
-                o.resource == bid.resource
-                    && o.price_per_unit <= bid.max_price_per_unit
-                    && remaining[*i] > 0
-                    && o.seller != bid.buyer
+        // Bidders that still want this commodity at an acceptable price.
+        let mut candidates: Vec<usize> = (0..bids.len())
+            .filter(|&i| {
+                bids[i].commodity == offer.commodity
+                    && offer.price_per_unit <= bids[i].max_price_per_unit
+                    && bids[i].buyer != offer.seller
+                    && bid_remaining[i] > 0
             })
-            .map(|(i, _)| i)
             .collect();
 
-        matching_indices.sort_by_key(|&i| offers[i].price_per_unit);
+        // The seller serves its highest-relationship buyer first; ties broken
+        // by lowest buyer NationId for deterministic resolution.
+        candidates.sort_by(|&a, &b| {
+            effective_score(&bids[b], offer.seller)
+                .cmp(&effective_score(&bids[a], offer.seller))
+                .then(bids[a].buyer.0.cmp(&bids[b].buyer.0))
+        });
 
-        for &offer_idx in &matching_indices {
-            if bid_remaining == 0 {
+        for &bid_idx in &candidates {
+            if offer_remaining == 0 {
                 break;
             }
-
-            let trade_qty = bid_remaining.min(remaining[offer_idx]);
+            let trade_qty = offer_remaining.min(bid_remaining[bid_idx]);
             if trade_qty == 0 {
                 continue;
             }
-
-            let price = offers[offer_idx].price_per_unit;
-            let total = price * trade_qty as i64;
-
+            let price = offer.price_per_unit;
             transactions.push(TradeTransaction {
-                buyer: bid.buyer,
-                seller: offers[offer_idx].seller,
-                resource: bid.resource,
+                buyer: bids[bid_idx].buyer,
+                seller: offer.seller,
+                commodity: offer.commodity,
                 quantity: trade_qty,
                 price_per_unit: price,
-                total_cost: total,
+                total_cost: price * trade_qty as i64,
             });
-
-            remaining[offer_idx] -= trade_qty;
-            bid_remaining -= trade_qty;
+            offer_remaining -= trade_qty;
+            bid_remaining[bid_idx] -= trade_qty;
         }
     }
 
@@ -319,7 +322,7 @@ pub fn generate_minor_nation_offers(
                 if price != Money::ZERO {
                     offers.push(TradeOffer {
                         seller: nation.id,
-                        resource,
+                        commodity: Commodity::Resource(resource),
                         quantity,
                         price_per_unit: price,
                     });
@@ -430,7 +433,7 @@ pub fn generate_minor_nation_offers_with_seed(
                 if price != Money::ZERO {
                     offers.push(TradeOffer {
                         seller: nation.id,
-                        resource: *resource,
+                        commodity: Commodity::Resource(*resource),
                         quantity: *quantity,
                         price_per_unit: price,
                     });
@@ -466,18 +469,6 @@ pub const ALL_MANUFACTURED: &[ManufacturedCommodity] = {
         ManufacturedCommodity::Goods(GoodsType::Arms),
     ]
 };
-
-/// An offer from a Great Power to sell a manufactured commodity to minor
-/// nations at the fixed `minor_goods_buy_price`. Quantity is the seller's
-/// surplus above its reserve for that commodity. Filled by the first willing
-/// minor nation (sorted by relationship, with a per-minor skip chance).
-#[derive(Debug, Clone)]
-pub struct ManufacturedOffer {
-    pub seller: NationId,
-    pub commodity: ManufacturedCommodity,
-    pub quantity: u32,
-    pub price_per_unit: Money,
-}
 
 /// Project per-resource consumption demand for one turn from a nation's
 /// production-chain output targets. Used by need-based buy-side trade
@@ -598,10 +589,14 @@ pub fn generate_smart_bids(
         return Vec::new();
     }
 
-    // Collect unique tradeable resources from eligible offers
+    // Collect unique tradeable resources from eligible offers. `generate_smart_bids`
+    // only ever bids on raw resources, so non-resource offers are skipped here.
     let mut available_resources: Vec<ResourceType> = eligible_offers
         .iter()
-        .map(|o| o.resource)
+        .filter_map(|o| match o.commodity {
+            Commodity::Resource(r) => Some(r),
+            _ => None,
+        })
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();
@@ -620,7 +615,7 @@ pub fn generate_smart_bids(
         // Find total quantity available for this resource from eligible offers
         let total_available: u32 = eligible_offers
             .iter()
-            .filter(|o| o.resource == *resource)
+            .filter(|o| o.commodity == Commodity::Resource(*resource))
             .map(|o| o.quantity)
             .sum();
 
@@ -641,7 +636,7 @@ pub fn generate_smart_bids(
 
         bids.push(TradeBid {
             buyer: nation.id,
-            resource: *resource,
+            commodity: Commodity::Resource(*resource),
             quantity: bid_qty,
             max_price_per_unit: max_price,
         });
@@ -759,7 +754,7 @@ pub fn generate_need_based_bids(
     let total_available_for = |resource: ResourceType| -> u32 {
         eligible_offers
             .iter()
-            .filter(|o| o.resource == resource)
+            .filter(|o| o.commodity == Commodity::Resource(resource))
             .map(|o| o.quantity)
             .sum()
     };
@@ -845,7 +840,7 @@ pub fn generate_need_based_bids(
         let max_price = Money::dollars(bp.as_dollars() * 120 / 100);
         bids.push(TradeBid {
             buyer: nation.id,
-            resource: *resource,
+            commodity: Commodity::Resource(*resource),
             quantity: qty,
             max_price_per_unit: max_price,
         });
@@ -889,13 +884,13 @@ mod tests {
     fn resolve_trades_matches_compatible_offers_and_bids() {
         let offers = vec![TradeOffer {
             seller: NationId(10),
-            resource: ResourceType::Timber,
+            commodity: Commodity::Resource(ResourceType::Timber),
             quantity: 5,
             price_per_unit: Money::dollars(50),
         }];
         let bids = vec![TradeBid {
             buyer: NationId(1),
-            resource: ResourceType::Timber,
+            commodity: Commodity::Resource(ResourceType::Timber),
             quantity: 3,
             max_price_per_unit: Money::dollars(60),
         }];
@@ -904,7 +899,7 @@ mod tests {
         assert_eq!(txns.len(), 1);
         assert_eq!(txns[0].buyer, NationId(1));
         assert_eq!(txns[0].seller, NationId(10));
-        assert_eq!(txns[0].resource, ResourceType::Timber);
+        assert_eq!(txns[0].commodity, Commodity::Resource(ResourceType::Timber));
         assert_eq!(txns[0].quantity, 3);
         assert_eq!(txns[0].price_per_unit, Money::dollars(50));
         assert_eq!(txns[0].total_cost, Money::dollars(150));
@@ -914,13 +909,13 @@ mod tests {
     fn resolve_trades_respects_price_limits() {
         let offers = vec![TradeOffer {
             seller: NationId(10),
-            resource: ResourceType::Iron,
+            commodity: Commodity::Resource(ResourceType::Iron),
             quantity: 5,
             price_per_unit: Money::dollars(100),
         }];
         let bids = vec![TradeBid {
             buyer: NationId(1),
-            resource: ResourceType::Iron,
+            commodity: Commodity::Resource(ResourceType::Iron),
             quantity: 3,
             max_price_per_unit: Money::dollars(50), // too low
         }];
@@ -936,13 +931,13 @@ mod tests {
     fn resolve_trades_handles_partial_fills() {
         let offers = vec![TradeOffer {
             seller: NationId(10),
-            resource: ResourceType::Coal,
+            commodity: Commodity::Resource(ResourceType::Coal),
             quantity: 2,
             price_per_unit: Money::dollars(75),
         }];
         let bids = vec![TradeBid {
             buyer: NationId(1),
-            resource: ResourceType::Coal,
+            commodity: Commodity::Resource(ResourceType::Coal),
             quantity: 5,
             max_price_per_unit: Money::dollars(100),
         }];
@@ -957,13 +952,13 @@ mod tests {
     fn resolve_trades_no_self_trade() {
         let offers = vec![TradeOffer {
             seller: NationId(1),
-            resource: ResourceType::Timber,
+            commodity: Commodity::Resource(ResourceType::Timber),
             quantity: 5,
             price_per_unit: Money::dollars(50),
         }];
         let bids = vec![TradeBid {
             buyer: NationId(1), // same nation
-            resource: ResourceType::Timber,
+            commodity: Commodity::Resource(ResourceType::Timber),
             quantity: 3,
             max_price_per_unit: Money::dollars(60),
         }];
@@ -977,20 +972,20 @@ mod tests {
         let offers = vec![
             TradeOffer {
                 seller: NationId(10),
-                resource: ResourceType::Timber,
+                commodity: Commodity::Resource(ResourceType::Timber),
                 quantity: 2,
                 price_per_unit: Money::dollars(80),
             },
             TradeOffer {
                 seller: NationId(11),
-                resource: ResourceType::Timber,
+                commodity: Commodity::Resource(ResourceType::Timber),
                 quantity: 3,
                 price_per_unit: Money::dollars(50),
             },
         ];
         let bids = vec![TradeBid {
             buyer: NationId(1),
-            resource: ResourceType::Timber,
+            commodity: Commodity::Resource(ResourceType::Timber),
             quantity: 4,
             max_price_per_unit: Money::dollars(100),
         }];
@@ -1010,13 +1005,13 @@ mod tests {
     fn resolve_trades_different_resources_no_match() {
         let offers = vec![TradeOffer {
             seller: NationId(10),
-            resource: ResourceType::Coal,
+            commodity: Commodity::Resource(ResourceType::Coal),
             quantity: 5,
             price_per_unit: Money::dollars(75),
         }];
         let bids = vec![TradeBid {
             buyer: NationId(1),
-            resource: ResourceType::Iron, // different resource
+            commodity: Commodity::Resource(ResourceType::Iron), // different resource
             quantity: 3,
             max_price_per_unit: Money::dollars(100),
         }];
@@ -1032,7 +1027,7 @@ mod tests {
             resolve_trades(
                 &[TradeOffer {
                     seller: NationId(10),
-                    resource: ResourceType::Timber,
+                    commodity: Commodity::Resource(ResourceType::Timber),
                     quantity: 5,
                     price_per_unit: Money::dollars(50),
                 }],
@@ -1045,7 +1040,7 @@ mod tests {
                 &[],
                 &[TradeBid {
                     buyer: NationId(1),
-                    resource: ResourceType::Timber,
+                    commodity: Commodity::Resource(ResourceType::Timber),
                     quantity: 3,
                     max_price_per_unit: Money::dollars(60),
                 }]
@@ -1104,11 +1099,11 @@ mod tests {
 
         let timber_offers: Vec<_> = offers
             .iter()
-            .filter(|o| o.resource == ResourceType::Timber)
+            .filter(|o| o.commodity == Commodity::Resource(ResourceType::Timber))
             .collect();
         let cotton_offers: Vec<_> = offers
             .iter()
-            .filter(|o| o.resource == ResourceType::Cotton)
+            .filter(|o| o.commodity == Commodity::Resource(ResourceType::Cotton))
             .collect();
 
         // Card #464: minors offer at level-1 yield. For surface resources
@@ -1251,7 +1246,7 @@ mod tests {
     fn preference_gives_higher_relationship_priority() {
         let offers = vec![TradeOffer {
             seller: NationId(10),
-            resource: ResourceType::Timber,
+            commodity: Commodity::Resource(ResourceType::Timber),
             quantity: 3,
             price_per_unit: Money::dollars(50),
         }];
@@ -1259,13 +1254,13 @@ mod tests {
         let bids = vec![
             TradeBid {
                 buyer: NationId(1),
-                resource: ResourceType::Timber,
+                commodity: Commodity::Resource(ResourceType::Timber),
                 quantity: 3,
                 max_price_per_unit: Money::dollars(60),
             },
             TradeBid {
                 buyer: NationId(2),
-                resource: ResourceType::Timber,
+                commodity: Commodity::Resource(ResourceType::Timber),
                 quantity: 3,
                 max_price_per_unit: Money::dollars(60),
             },
@@ -1288,20 +1283,20 @@ mod tests {
     fn subsidy_boosts_trade_preference() {
         let offers = vec![TradeOffer {
             seller: NationId(10),
-            resource: ResourceType::Coal,
+            commodity: Commodity::Resource(ResourceType::Coal),
             quantity: 5,
             price_per_unit: Money::dollars(75),
         }];
         let bids = vec![
             TradeBid {
                 buyer: NationId(1),
-                resource: ResourceType::Coal,
+                commodity: Commodity::Resource(ResourceType::Coal),
                 quantity: 5,
                 max_price_per_unit: Money::dollars(100),
             },
             TradeBid {
                 buyer: NationId(2),
-                resource: ResourceType::Coal,
+                commodity: Commodity::Resource(ResourceType::Coal),
                 quantity: 5,
                 max_price_per_unit: Money::dollars(100),
             },
@@ -1319,6 +1314,53 @@ mod tests {
         assert_eq!(txns.len(), 1);
         // Nation 2 wins: effective score 15 > Nation 1 score 10
         assert_eq!(txns[0].buyer, NationId(2));
+    }
+
+    #[test]
+    fn preference_is_seller_specific_with_multiple_sellers() {
+        // Two sellers, two buyers. Seller 10 favors buyer 1; seller 11 favors
+        // buyer 2. Each buyer wants exactly one offer's worth. The matcher must
+        // route each offer to that seller's preferred buyer — a cross-seller
+        // "max score" surrogate would mis-route here.
+        let offers = vec![
+            TradeOffer {
+                seller: NationId(10),
+                commodity: Commodity::Resource(ResourceType::Timber),
+                quantity: 3,
+                price_per_unit: Money::dollars(50),
+            },
+            TradeOffer {
+                seller: NationId(11),
+                commodity: Commodity::Resource(ResourceType::Timber),
+                quantity: 3,
+                price_per_unit: Money::dollars(50),
+            },
+        ];
+        let bids = vec![
+            TradeBid {
+                buyer: NationId(1),
+                commodity: Commodity::Resource(ResourceType::Timber),
+                quantity: 3,
+                max_price_per_unit: Money::dollars(60),
+            },
+            TradeBid {
+                buyer: NationId(2),
+                commodity: Commodity::Resource(ResourceType::Timber),
+                quantity: 3,
+                max_price_per_unit: Money::dollars(60),
+            },
+        ];
+        let mut scores = std::collections::HashMap::new();
+        scores.insert((NationId(1), NationId(10)), 40); // buyer 1 favored by seller 10
+        scores.insert((NationId(2), NationId(11)), 50); // buyer 2 favored by seller 11
+        let subsidies = std::collections::HashMap::new();
+
+        let txns = resolve_trades_with_preference(&offers, &bids, &scores, &subsidies);
+        assert_eq!(txns.len(), 2);
+        let from_10 = txns.iter().find(|t| t.seller == NationId(10)).unwrap();
+        assert_eq!(from_10.buyer, NationId(1));
+        let from_11 = txns.iter().find(|t| t.seller == NationId(11)).unwrap();
+        assert_eq!(from_11.buyer, NationId(2));
     }
 
     // ── generate_minor_nation_offers_with_seed ─────────────────
@@ -1383,7 +1425,9 @@ mod tests {
         );
 
         let offers = generate_minor_nation_offers(&[minor], &[province], &hex_map);
-        let coal_offer = offers.iter().find(|o| o.resource == ResourceType::Coal);
+        let coal_offer = offers
+            .iter()
+            .find(|o| o.commodity == Commodity::Resource(ResourceType::Coal));
         assert!(
             coal_offer.is_some(),
             "minor nation must offer undiscovered Coal at level-1 yield (Trello #464)"
@@ -1441,17 +1485,17 @@ mod tests {
         let (nations, provinces, hex_map) = make_minor_with_resources();
         let full = generate_minor_nation_offers(&nations, &provinces, &hex_map);
         let by_resource: std::collections::HashMap<_, _> =
-            full.iter().map(|o| (o.resource, o.quantity)).collect();
+            full.iter().map(|o| (o.commodity, o.quantity)).collect();
 
         for seed in 1..20u64 {
             let offers =
                 generate_minor_nation_offers_with_seed(&nations, &provinces, &hex_map, 100, seed);
             for o in &offers {
-                let expected = by_resource[&o.resource];
+                let expected = by_resource[&o.commodity];
                 assert_eq!(
                     o.quantity, expected,
                     "minor must offer full turn yield for {:?}, got {} (expected {})",
-                    o.resource, o.quantity, expected
+                    o.commodity, o.quantity, expected
                 );
             }
         }
@@ -1465,7 +1509,7 @@ mod tests {
         assert_eq!(a.len(), b.len());
         for (x, y) in a.iter().zip(b.iter()) {
             assert_eq!(x.seller, y.seller);
-            assert_eq!(x.resource, y.resource);
+            assert_eq!(x.commodity, y.commodity);
         }
     }
 
@@ -1476,19 +1520,19 @@ mod tests {
         // Collect the withheld resource across seeds and verify they differ (not always same one).
         let full = generate_minor_nation_offers(&nations, &provinces, &hex_map);
         assert_eq!(full.len(), 2, "setup: minor must have Timber + Cotton");
-        let withheld: Vec<ResourceType> = (1u64..=200)
+        let withheld: Vec<Commodity> = (1u64..=200)
             .filter_map(|seed| {
                 let offers = generate_minor_nation_offers_with_seed(
                     &nations, &provinces, &hex_map, 100, seed,
                 );
                 // withheld = resource present in full but absent in offers
                 full.iter()
-                    .find(|o| !offers.iter().any(|x| x.resource == o.resource))
-                    .map(|o| o.resource)
+                    .find(|o| !offers.iter().any(|x| x.commodity == o.commodity))
+                    .map(|o| o.commodity)
             })
             .collect();
-        let has_timber = withheld.iter().any(|r| *r == ResourceType::Timber);
-        let has_cotton = withheld.iter().any(|r| *r == ResourceType::Cotton);
+        let has_timber = withheld.contains(&Commodity::Resource(ResourceType::Timber));
+        let has_cotton = withheld.contains(&Commodity::Resource(ResourceType::Cotton));
         // With 200 seeds both resources should appear as withheld at some point
         assert!(
             has_timber && has_cotton,
@@ -1558,13 +1602,13 @@ mod tests {
         let offers = vec![
             TradeOffer {
                 seller: NationId(3),
-                resource: ResourceType::Coal,
+                commodity: Commodity::Resource(ResourceType::Coal),
                 quantity: 10,
                 price_per_unit: base_price(ResourceType::Coal),
             },
             TradeOffer {
                 seller: NationId(3),
-                resource: ResourceType::Iron,
+                commodity: Commodity::Resource(ResourceType::Iron),
                 quantity: 10,
                 price_per_unit: base_price(ResourceType::Iron),
             },
@@ -1580,8 +1624,12 @@ mod tests {
             3,                     // buffer turns
         );
 
-        let coal_bid = bids.iter().find(|b| b.resource == ResourceType::Coal);
-        let iron_bid = bids.iter().find(|b| b.resource == ResourceType::Iron);
+        let coal_bid = bids
+            .iter()
+            .find(|b| b.commodity == Commodity::Resource(ResourceType::Coal));
+        let iron_bid = bids
+            .iter()
+            .find(|b| b.commodity == Commodity::Resource(ResourceType::Iron));
         assert!(
             coal_bid.is_some(),
             "should bid for coal when SteelMill is starved"
@@ -1612,7 +1660,7 @@ mod tests {
         let nations = vec![buyer.clone(), seller.clone()];
         let offers = vec![TradeOffer {
             seller: NationId(3),
-            resource: ResourceType::Coal,
+            commodity: Commodity::Resource(ResourceType::Coal),
             quantity: 10,
             price_per_unit: base_price(ResourceType::Coal),
         }];
@@ -1645,7 +1693,7 @@ mod tests {
         let nations = vec![buyer.clone(), seller.clone()];
         let offers = vec![TradeOffer {
             seller: NationId(3),
-            resource: ResourceType::Coal,
+            commodity: Commodity::Resource(ResourceType::Coal),
             quantity: 10,
             price_per_unit: base_price(ResourceType::Coal),
         }];
@@ -1679,7 +1727,7 @@ mod tests {
         // Offer iron expensively so coal alone is bid.
         let offers = vec![TradeOffer {
             seller: NationId(3),
-            resource: ResourceType::Coal,
+            commodity: Commodity::Resource(ResourceType::Coal),
             quantity: 100,
             price_per_unit: base_price(ResourceType::Coal),
         }];
@@ -1695,7 +1743,7 @@ mod tests {
         );
         let coal = bids
             .iter()
-            .find(|b| b.resource == ResourceType::Coal)
+            .find(|b| b.commodity == Commodity::Resource(ResourceType::Coal))
             .unwrap();
         // $300 cash budget / $75 = 4 max coal.
         assert!(
@@ -1722,7 +1770,7 @@ mod tests {
         let nations = vec![buyer.clone(), minor.clone()];
         let offers = vec![TradeOffer {
             seller: NationId(3),
-            resource: ResourceType::Coal,
+            commodity: Commodity::Resource(ResourceType::Coal),
             quantity: 10,
             price_per_unit: base_price(ResourceType::Coal),
         }];
@@ -1759,7 +1807,7 @@ mod tests {
         let nations = vec![buyer.clone(), minor.clone()];
         let offers = vec![TradeOffer {
             seller: NationId(3),
-            resource: ResourceType::Coal,
+            commodity: Commodity::Resource(ResourceType::Coal),
             quantity: 10,
             price_per_unit: base_price(ResourceType::Coal),
         }];
@@ -1774,7 +1822,8 @@ mod tests {
             3,
         );
         assert!(
-            bids.iter().any(|b| b.resource == ResourceType::Coal),
+            bids.iter()
+                .any(|b| b.commodity == Commodity::Resource(ResourceType::Coal)),
             "auto_trade_with_minors=true must accept minor offers"
         );
     }
@@ -1834,7 +1883,7 @@ mod tests {
         let nations = vec![buyer.clone(), seller.clone()];
         let offers = vec![TradeOffer {
             seller: NationId(3),
-            resource: ResourceType::Coal,
+            commodity: Commodity::Resource(ResourceType::Coal),
             quantity: 10,
             price_per_unit: base_price(ResourceType::Coal),
         }];
@@ -1894,5 +1943,50 @@ mod tests {
         assert_eq!(cloned.resource, entry.resource);
         assert_eq!(cloned.quantity, entry.quantity);
         assert_eq!(cloned.total_cost, entry.total_cost);
+    }
+
+    // ── Commodity-based trade resolution ───────────────────────────
+
+    #[test]
+    fn resolve_trades_matches_material_commodity() {
+        // A material offer matched by a material bid resolves like any other
+        // commodity — the matcher keys purely on `Commodity` equality.
+        let offers = vec![TradeOffer {
+            seller: NationId(10),
+            commodity: Commodity::Material(MaterialType::Steel),
+            quantity: 5,
+            price_per_unit: Money::dollars(150),
+        }];
+        let bids = vec![TradeBid {
+            buyer: NationId(1),
+            commodity: Commodity::Material(MaterialType::Steel),
+            quantity: 3,
+            max_price_per_unit: Money::dollars(150),
+        }];
+
+        let txns = resolve_trades(&offers, &bids);
+        assert_eq!(txns.len(), 1);
+        assert_eq!(txns[0].commodity, Commodity::Material(MaterialType::Steel));
+        assert_eq!(txns[0].quantity, 3);
+        assert_eq!(txns[0].total_cost, Money::dollars(450));
+    }
+
+    #[test]
+    fn resolve_trades_does_not_cross_match_resource_and_material() {
+        // A Steel *resource*-shaped bid must never pull a Steel *material*
+        // offer — `Commodity` discriminants differ.
+        let offers = vec![TradeOffer {
+            seller: NationId(10),
+            commodity: Commodity::Material(MaterialType::Lumber),
+            quantity: 5,
+            price_per_unit: Money::dollars(150),
+        }];
+        let bids = vec![TradeBid {
+            buyer: NationId(1),
+            commodity: Commodity::Resource(ResourceType::Timber),
+            quantity: 3,
+            max_price_per_unit: Money::dollars(150),
+        }];
+        assert!(resolve_trades(&offers, &bids).is_empty());
     }
 }

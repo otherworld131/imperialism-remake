@@ -746,7 +746,7 @@ fn reserve_trade_phase(game: &mut GameState) -> Vec<NationReservation> {
                     }
                     all_bids.push(trade::TradeBid {
                         buyer: *gp_id,
-                        resource: order.resource,
+                        commodity: Commodity::Resource(order.resource),
                         quantity: order.quantity,
                         max_price_per_unit: order.max_price_per_unit,
                     });

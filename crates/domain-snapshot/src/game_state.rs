@@ -4,7 +4,7 @@ use crate::events::{Headline, HistoryEvent, TreatyType};
 use crate::map::{HexMap, Province};
 use crate::military::{BattleResult, NavalBattleResult};
 use crate::nation::Nation;
-use crate::types::{Difficulty, Money, NationId, ProvinceId, ResourceType, TurnNumber};
+use crate::types::{Difficulty, Money, NationId, ProvinceId, TurnNumber};
 use domain::game_state as dgs;
 
 // ── MarketTurnRecord ─────────────────────────────────────────────────
@@ -17,7 +17,7 @@ pub struct MarketTurnRecord {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MarketOfferRecord {
     pub seller: NationId,
-    pub resource: ResourceType,
+    pub commodity: crate::economy::Commodity,
     #[serde(default)]
     pub commodity_label: String,
     pub offered: u32,
@@ -53,7 +53,7 @@ impl From<&dgs::MarketOfferRecord> for MarketOfferRecord {
     fn from(v: &dgs::MarketOfferRecord) -> Self {
         Self {
             seller: v.seller.into(),
-            resource: v.resource.into(),
+            commodity: v.commodity.into(),
             commodity_label: v.commodity_label.clone(),
             offered: v.offered,
             price_per_unit: v.price_per_unit.into(),
@@ -66,7 +66,7 @@ impl From<MarketOfferRecord> for dgs::MarketOfferRecord {
     fn from(v: MarketOfferRecord) -> Self {
         Self {
             seller: v.seller.into(),
-            resource: v.resource.into(),
+            commodity: v.commodity.into(),
             commodity_label: v.commodity_label,
             offered: v.offered,
             price_per_unit: v.price_per_unit.into(),

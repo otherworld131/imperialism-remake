@@ -436,7 +436,7 @@ pub fn wasm_process_turn(game_json: &str) -> String {
                 .collect::<Vec<_>>(),
             "trade": report.trade_transactions.iter()
                 .map(|t| serde_json::json!({
-                    "resource": format!("{:?}", t.resource),
+                    "resource": t.commodity.to_string(),
                     "quantity": t.quantity,
                     "cost": t.total_cost.as_dollars(),
                 }))
@@ -4680,7 +4680,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
             serde_json::json!({
                 "seller_id": o.seller.0,
                 "seller_name": seller_name,
-                "resource": format!("{:?}", o.resource),
+                "resource": o.commodity.to_string(),
                 "quantity": o.quantity,
                 "price": o.price_per_unit.as_dollars(),
                 "is_great_power": false,
@@ -4783,7 +4783,7 @@ pub fn wasm_get_trade_data(game_json: &str, nation_id: u32) -> String {
                         .collect();
                     let sold: u32 = row.fills.iter().map(|f| f.quantity).sum();
                     let commodity_label = if row.commodity_label.is_empty() {
-                        format!("{:?}", row.resource)
+                        row.commodity.to_string()
                     } else {
                         row.commodity_label.clone()
                     };

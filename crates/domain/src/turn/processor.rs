@@ -922,21 +922,20 @@ fn finalize_resource_flow(game: &mut GameState, report: &mut TurnReport) {
             );
         }
     }
-    // Trade inflow (buyer) / outflow (seller)
+    // Trade inflow (buyer) / outflow (seller). `report.trade_transactions`
+    // holds resource trades; material/goods trades carry their own stockpile
+    // accounting via `auto_sold_materials`/`auto_sold_goods` below.
     for txn in &report.trade_transactions {
+        let stockpile = match txn.commodity {
+            crate::economy::trade::Commodity::Resource(r) => Stockpile::Resource(r),
+            crate::economy::trade::Commodity::Material(m) => Stockpile::Material(m),
+            crate::economy::trade::Commodity::Goods(g) => Stockpile::Goods(g),
+        };
         if let Some(flow) = flows.get_mut(&txn.buyer) {
-            flow.add_inflow(
-                Stockpile::Resource(txn.resource),
-                ResourceIn::TradeImport,
-                txn.quantity,
-            );
+            flow.add_inflow(stockpile, ResourceIn::TradeImport, txn.quantity);
         }
         if let Some(flow) = flows.get_mut(&txn.seller) {
-            flow.add_outflow(
-                Stockpile::Resource(txn.resource),
-                ResourceOut::TradeExport,
-                txn.quantity,
-            );
+            flow.add_outflow(stockpile, ResourceOut::TradeExport, txn.quantity);
         }
     }
 
