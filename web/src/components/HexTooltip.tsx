@@ -80,6 +80,7 @@ export default function HexTooltip({
           {tile.resource && (!tile.resource_hidden || showHiddenResources) && (
             <div>Level: {tile.improvement_level}/{tile.max_improvement_level}</div>
           )}
+          {tile.has_river && <div>River (+1 Fish)</div>}
           {tile.is_capital && <div>{'\u2605'} Capital</div>}
           {tile.has_railroad && <div>Railroad</div>}
           {tile.has_port && (

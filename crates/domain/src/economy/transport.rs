@@ -581,9 +581,10 @@ pub fn current_collectable_resources(
             let Some(tile) = game.world.hex_map.get_tile(coord) else {
                 continue;
             };
-            if let Some(y) = tile.calculate_yield() {
+            for y in tile.calculate_yields() {
                 add_yield(coord, y.resource, y.quantity);
-            } else if tile.terrain() == TerrainType::Grassland
+            }
+            if tile.terrain() == TerrainType::Grassland
                 && tile.resource_deposit().is_none()
                 && tile.improvement_level() == 0
             {

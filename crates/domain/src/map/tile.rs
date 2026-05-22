@@ -41,6 +41,22 @@ impl Default for Infrastructure {
     }
 }
 
+pub struct TileYieldIter {
+    base_yield: Option<ResourceAmount>,
+    river_yield: Option<ResourceAmount>,
+}
+
+impl Iterator for TileYieldIter {
+    type Item = ResourceAmount;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(yield_amount) = self.base_yield.take() {
+            return Some(yield_amount);
+        }
+        self.river_yield.take()
+    }
+}
+
 // ── Tile ───────────────────────────────────────────────────────
 
 /// A single hex tile on the game map.
@@ -66,6 +82,10 @@ pub struct Tile {
 
     /// Infrastructure built on this tile.
     pub infrastructure: Infrastructure,
+
+    /// Whether a river crosses this hex. River fish is an additional,
+    /// non-developable yield that stacks with the tile's normal resource.
+    pub has_river: bool,
 
     /// The civilian unit currently working this tile, if any.
     pub assigned_civilian: Option<UnitId>,
@@ -93,6 +113,7 @@ impl Tile {
             prospected: false,
             improvement_level: 0,
             infrastructure: Infrastructure::NONE,
+            has_river: false,
             assigned_civilian: None,
             province_id: None,
             is_capital: false,
@@ -133,11 +154,19 @@ impl Tile {
         self.improvement_level
     }
 
+    pub fn has_river(&self) -> bool {
+        self.has_river
+    }
+
     // ── Resource management ───────────────────────────────────
 
     /// Place a visible resource on this tile (used during map generation).
     pub fn set_resource(&mut self, resource: ResourceType) {
         self.resource_deposit = Some(resource);
+    }
+
+    pub fn set_river(&mut self, has_river: bool) {
+        self.has_river = has_river;
     }
 
     /// Reveal a hidden deposit via prospecting.
@@ -248,6 +277,18 @@ impl Tile {
         }
     }
 
+    pub fn calculate_river_yield(&self) -> Option<ResourceAmount> {
+        self.has_river
+            .then_some(ResourceAmount::new(ResourceType::Fish, 1))
+    }
+
+    pub fn calculate_yields(&self) -> TileYieldIter {
+        TileYieldIter {
+            base_yield: self.calculate_yield(),
+            river_yield: self.calculate_river_yield(),
+        }
+    }
+
     /// Yield this tile would produce if it were developed to at least level 1.
     ///
     /// Used for **minor-nation auto-trade offers** (Trello card #464): in
@@ -275,6 +316,13 @@ impl Tile {
             _ => Some(ResourceAmount::new(resource, 1 + level)),
         }
     }
+
+    pub fn calculate_minor_offer_yields(&self) -> TileYieldIter {
+        TileYieldIter {
+            base_yield: self.calculate_minor_offer_yield(),
+            river_yield: self.calculate_river_yield(),
+        }
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────
@@ -291,6 +339,7 @@ mod tests {
         assert_eq!(tile.terrain(), TerrainType::Grassland);
         assert_eq!(tile.improvement_level(), 0);
         assert_eq!(tile.resource_deposit(), None);
+        assert!(!tile.has_river());
         assert!(!tile.is_capital);
         assert_eq!(tile.province_id, None);
         assert_eq!(tile.assigned_civilian, None);
@@ -408,6 +457,32 @@ mod tests {
         let mut tile = Tile::new(TerrainType::Forest);
         tile.set_improvement_level(5);
         assert_eq!(tile.improvement_level(), 0); // no resource means max is 0
+    }
+
+    #[test]
+    fn river_tile_adds_non_developable_fish_yield() {
+        let mut tile = Tile::new(TerrainType::Grassland);
+        tile.set_river(true);
+        assert_eq!(
+            tile.calculate_river_yield(),
+            Some(ResourceAmount::new(ResourceType::Fish, 1))
+        );
+        assert_eq!(tile.calculate_yield(), None);
+    }
+
+    #[test]
+    fn river_yield_stacks_with_normal_resource_yield() {
+        let mut tile = Tile::with_resource(TerrainType::Grassland, ResourceType::Grain);
+        tile.set_improvement_level(1);
+        tile.set_river(true);
+        let yields: Vec<ResourceAmount> = tile.calculate_yields().collect();
+        assert_eq!(
+            yields,
+            vec![
+                ResourceAmount::new(ResourceType::Grain, 2),
+                ResourceAmount::new(ResourceType::Fish, 1),
+            ]
+        );
     }
 
     // ── Prospecting ────────────────────────────────────────────

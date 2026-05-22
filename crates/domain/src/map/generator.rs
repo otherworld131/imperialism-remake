@@ -73,6 +73,8 @@ pub struct TerrainMix {
     /// Multiplier on continent target size: 1.0 = baseline (~200-500 tiles
     /// per continent), 0.3 = sparse archipelagos, 2.0 = dense supercontinents.
     pub land_amount: f32,
+    /// Percent of eligible mountain headwaters that spawn a river.
+    pub river_source_percent: i32,
 }
 
 impl Default for TerrainMix {
@@ -96,6 +98,7 @@ impl Default for TerrainMix {
             sea_hard_margin: DEFAULT_SEA_HARD_MARGIN,
             sea_falloff_radius: DEFAULT_SEA_FALLOFF_RADIUS,
             land_amount: 1.0,
+            river_source_percent: 20,
         }
     }
 }
@@ -303,6 +306,10 @@ pub fn generate_map_with_config(map_key: &str, cfg: &MapGenConfig) -> GeneratedM
     // Step 3: Cluster food terrain and enforce minimum food (before nations/provinces)
     cluster_food_terrain(&mut hex_map, &land_mask, &mut rng, 15);
     enforce_minimum_food_tiles(&mut hex_map, &land_mask, &mut rng, 20);
+
+    // Step 3b: Add rivers after terrain is stable but before nations/provinces exist.
+    let ocean_sea_tiles = ocean_sea_tiles(&hex_map);
+    generate_rivers(&mut hex_map, &land_mask, &ocean_sea_tiles, &mut rng, &cfg.terrain);
 
     // Step 4: Place nation centers (terrain-aware — prefers food-rich, coastal tiles)
     let total_nations = num_gp + num_mn;
@@ -606,6 +613,235 @@ fn edge_falloff_factor(
     } else {
         let span = (falloff_radius - hard_margin).max(1);
         ((dist - hard_margin) * 100) / span
+    }
+}
+
+fn ocean_sea_tiles(hex_map: &HexMap) -> HashSet<HexCoord> {
+    let bounds = hex_map.bounds();
+    let mut ocean = HashSet::new();
+    let mut frontier = Vec::new();
+    for coord in bounds.iter_coords() {
+        if !bounds.is_edge_ring(coord, DEFAULT_SEA_HARD_MARGIN) {
+            continue;
+        }
+        if hex_map
+            .get_tile(coord)
+            .is_some_and(|tile| tile.terrain() == TerrainType::Sea)
+            && ocean.insert(coord)
+        {
+            frontier.push(coord);
+        }
+    }
+
+    while let Some(coord) = frontier.pop() {
+        for neighbor in coord.neighbors() {
+            if ocean.contains(&neighbor) {
+                continue;
+            }
+            if hex_map
+                .get_tile(neighbor)
+                .is_some_and(|tile| tile.terrain() == TerrainType::Sea)
+            {
+                ocean.insert(neighbor);
+                frontier.push(neighbor);
+            }
+        }
+    }
+
+    ocean
+}
+
+fn river_tier(terrain: TerrainType) -> Option<u8> {
+    match terrain {
+        TerrainType::Mountain => Some(0),
+        TerrainType::Hills => Some(1),
+        TerrainType::Grassland => Some(2),
+        _ => None,
+    }
+}
+
+fn river_neighbor_allowed(current: TerrainType, next: TerrainType) -> bool {
+    let Some(current_tier) = river_tier(current) else {
+        return false;
+    };
+    let Some(next_tier) = river_tier(next) else {
+        return false;
+    };
+    next_tier == current_tier || next_tier == current_tier + 1
+}
+
+fn find_river_path(
+    source: HexCoord,
+    hex_map: &HexMap,
+    ocean_sea_tiles: &HashSet<HexCoord>,
+    used_river_tiles: &HashSet<HexCoord>,
+    rng: &mut Rng,
+) -> Option<Vec<HexCoord>> {
+    fn dfs_river_path(
+        current: HexCoord,
+        hex_map: &HexMap,
+        ocean_sea_tiles: &HashSet<HexCoord>,
+        used_river_tiles: &HashSet<HexCoord>,
+        path: &mut Vec<HexCoord>,
+        visited: &mut HashSet<HexCoord>,
+        rng: &mut Rng,
+    ) -> bool {
+        let Some(current_tile) = hex_map.get_tile(current) else {
+            return false;
+        };
+        if current_tile.terrain() == TerrainType::Grassland
+            && current
+                .neighbors()
+                .iter()
+                .any(|neighbor| ocean_sea_tiles.contains(neighbor))
+        {
+            return true;
+        }
+
+        let mut neighbors = current.neighbors();
+        rng.shuffle(&mut neighbors);
+        neighbors.sort_by_key(|coord| {
+            let coast_bias = coord
+                .neighbors()
+                .iter()
+                .filter(|neighbor| ocean_sea_tiles.contains(neighbor))
+                .count();
+            std::cmp::Reverse(coast_bias)
+        });
+
+        for neighbor in neighbors {
+            if visited.contains(&neighbor) || used_river_tiles.contains(&neighbor) {
+                continue;
+            }
+            if used_river_tiles.iter().any(|used| used.distance(neighbor) == 1) {
+                continue;
+            }
+            let Some(next_tile) = hex_map.get_tile(neighbor) else {
+                continue;
+            };
+            if !river_neighbor_allowed(current_tile.terrain(), next_tile.terrain()) {
+                continue;
+            }
+            if path.iter().any(|coord| *coord != current && coord.distance(neighbor) == 1) {
+                continue;
+            }
+
+            visited.insert(neighbor);
+            path.push(neighbor);
+            if dfs_river_path(
+                neighbor,
+                hex_map,
+                ocean_sea_tiles,
+                used_river_tiles,
+                path,
+                visited,
+                rng,
+            ) {
+                return true;
+            }
+            path.pop();
+            visited.remove(&neighbor);
+        }
+
+        false
+    }
+
+    let touches_used_river =
+        |coord: HexCoord| used_river_tiles.iter().any(|used| used.distance(coord) == 1);
+    let source_tile = hex_map.get_tile(source)?;
+    if source_tile.terrain() != TerrainType::Mountain
+        || used_river_tiles.contains(&source)
+        || touches_used_river(source)
+    {
+        return None;
+    }
+    let mut path = vec![source];
+    let mut visited: HashSet<HexCoord> = HashSet::from([source]);
+    dfs_river_path(
+        source,
+        hex_map,
+        ocean_sea_tiles,
+        used_river_tiles,
+        &mut path,
+        &mut visited,
+        rng,
+    )
+    .then_some(path)
+}
+
+fn generate_rivers(
+    hex_map: &mut HexMap,
+    land_mask: &HashSet<HexCoord>,
+    ocean_sea_tiles: &HashSet<HexCoord>,
+    rng: &mut Rng,
+    mix: &TerrainMix,
+) {
+    if mix.river_source_percent <= 0 {
+        return;
+    }
+
+    let mut candidate_sources: Vec<HexCoord> = land_mask
+        .iter()
+        .copied()
+        .filter(|coord| {
+            hex_map
+                .get_tile(*coord)
+                .is_some_and(|tile| tile.terrain() == TerrainType::Mountain)
+        })
+        .collect();
+    candidate_sources.sort_by_key(|coord| (coord.q, coord.r));
+
+    let mut eligibility_rng = Rng::from_seed(
+        candidate_sources.len() as u64
+            ^ hex_map.width() as u64
+            ^ ((hex_map.height() as u64) << 32)
+            ^ 0xA6E8_0F29_3D4B_C571,
+    );
+    let eligible_sources: Vec<HexCoord> = candidate_sources
+        .iter()
+        .copied()
+        .filter(|&coord| {
+            find_river_path(
+                coord,
+                hex_map,
+                ocean_sea_tiles,
+                &HashSet::new(),
+                &mut eligibility_rng,
+            )
+            .is_some()
+        })
+        .collect();
+
+    if eligible_sources.is_empty() {
+        return;
+    }
+
+    let target_rivers =
+        ((eligible_sources.len() * mix.river_source_percent as usize) + 50) / 100;
+    if target_rivers == 0 {
+        return;
+    }
+
+    let mut shuffled_sources = eligible_sources.clone();
+    rng.shuffle(&mut shuffled_sources);
+
+    let mut used_river_tiles: HashSet<HexCoord> = HashSet::new();
+    let mut built = 0usize;
+    for source in shuffled_sources {
+        if built >= target_rivers {
+            break;
+        }
+        let Some(path) = find_river_path(source, hex_map, ocean_sea_tiles, &used_river_tiles, rng)
+        else {
+            continue;
+        };
+        for coord in &path {
+            used_river_tiles.insert(*coord);
+            if let Some(tile) = hex_map.get_tile_mut(*coord) {
+                tile.set_river(true);
+            }
+        }
+        built += 1;
     }
 }
 
@@ -999,10 +1235,11 @@ fn subdivide_into_provinces(
 // ── Food tile guarantee ───────────────────────────────────────
 
 fn is_food_terrain(tile: &super::tile::Tile) -> bool {
-    matches!(
-        tile.resource_deposit(),
-        Some(ResourceType::Grain | ResourceType::Fruit | ResourceType::Livestock)
-    )
+    tile.has_river()
+        || matches!(
+            tile.resource_deposit(),
+            Some(ResourceType::Grain | ResourceType::Fruit | ResourceType::Livestock)
+        )
 }
 
 /// Whether this tile's terrain is replaceable when adding food tiles (least valuable first).
@@ -1223,18 +1460,20 @@ fn level1_food_yield(coord: HexCoord, hex_map: &super::hex_map::HexMap) -> (u32,
     let Some(tile) = hex_map.get_tile(coord) else {
         return (0, 0, 0);
     };
-    if let Some(res) = tile.resource_deposit() {
-        match res {
-            ResourceType::Grain => (2, 0, 0),
-            ResourceType::Fruit => (0, 2, 0),
-            ResourceType::Livestock => (0, 0, 2),
-            _ => (0, 0, 0),
-        }
-    } else if tile.terrain() == TerrainType::Grassland {
-        (1, 0, 0)
-    } else {
-        (0, 0, 0)
+    let mut grain = 0;
+    let mut fruit = 0;
+    let mut meat = 0;
+    match tile.resource_deposit() {
+        Some(ResourceType::Grain) => grain += 2,
+        Some(ResourceType::Fruit) => fruit += 2,
+        Some(ResourceType::Livestock) => meat += 2,
+        None if tile.terrain() == TerrainType::Grassland => grain += 1,
+        _ => {}
     }
+    if tile.has_river() {
+        meat += 1;
+    }
+    (grain, fruit, meat)
 }
 
 /// Maximum number of workers that can be fed by a balanced composite-meal
@@ -1817,6 +2056,125 @@ mod tests {
                 "Province {} ({}) has no tiles",
                 province.id,
                 province.name
+            );
+        }
+    }
+
+    #[test]
+    fn zero_river_percent_generates_no_rivers() {
+        let mut cfg = MapGenConfig::default();
+        cfg.terrain.river_source_percent = 0;
+        let result = generate_map_with_config("no_rivers", &cfg);
+        assert_eq!(
+            result
+                .hex_map
+                .all_tiles()
+                .filter(|(_, tile)| tile.has_river())
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn generated_rivers_form_unbranched_mountain_to_ocean_paths() {
+        let mut cfg = MapGenConfig::default();
+        cfg.terrain.grassland = 60.0;
+        cfg.terrain.hills = 18.0;
+        cfg.terrain.mountain = 16.0;
+        cfg.terrain.forest = 3.0;
+        cfg.terrain.desert = 1.0;
+        cfg.terrain.swamp = 1.0;
+        cfg.terrain.tundra = 1.0;
+        cfg.terrain.river_source_percent = 100;
+        let result = generate_map_with_config("river_paths", &cfg);
+        let ocean = ocean_sea_tiles(&result.hex_map);
+        let river_tiles: HashSet<HexCoord> = result
+            .hex_map
+            .all_tiles()
+            .filter(|(_, tile)| tile.has_river())
+            .map(|(coord, _)| coord)
+            .collect();
+        assert!(
+            !river_tiles.is_empty(),
+            "expected at least one river on a river-heavy map"
+        );
+
+        let mut remaining = river_tiles.clone();
+        while let Some(&start) = remaining.iter().next() {
+            let mut stack = vec![start];
+            let mut component = Vec::new();
+            remaining.remove(&start);
+            while let Some(coord) = stack.pop() {
+                component.push(coord);
+                for neighbor in coord.neighbors() {
+                    if remaining.remove(&neighbor) {
+                        stack.push(neighbor);
+                    }
+                }
+            }
+
+            assert!(component.len() >= 3, "river component should span multiple hexes");
+
+            let mut endpoints = Vec::new();
+            for &coord in &component {
+                let tile = result.hex_map.get_tile(coord).unwrap();
+                assert!(
+                    matches!(
+                        tile.terrain(),
+                        TerrainType::Mountain | TerrainType::Hills | TerrainType::Grassland
+                    ),
+                    "river tile {coord} has invalid terrain {:?}",
+                    tile.terrain()
+                );
+
+                let degree = coord
+                    .neighbors()
+                    .iter()
+                    .filter(|neighbor| component.contains(neighbor))
+                    .count();
+                assert!(degree <= 2, "river tile {coord} branched with degree {degree}");
+                if degree <= 1 {
+                    endpoints.push(coord);
+                }
+
+                for neighbor in coord.neighbors() {
+                    if !component.contains(&neighbor) {
+                        continue;
+                    }
+                    let neighbor_tile = result.hex_map.get_tile(neighbor).unwrap();
+                    let a = river_tier(tile.terrain()).unwrap();
+                    let b = river_tier(neighbor_tile.terrain()).unwrap();
+                    assert!(
+                        a.abs_diff(b) <= 1,
+                        "river edge {coord} -> {neighbor} jumps tiers {:?} -> {:?}",
+                        tile.terrain(),
+                        neighbor_tile.terrain()
+                    );
+                }
+            }
+
+            assert_eq!(
+                endpoints.len(),
+                2,
+                "river component should have exactly two endpoints"
+            );
+            assert!(
+                endpoints.iter().any(|coord| {
+                    result
+                        .hex_map
+                        .get_tile(*coord)
+                        .is_some_and(|tile| tile.terrain() == TerrainType::Mountain)
+                }),
+                "river component should start in mountains"
+            );
+            assert!(
+                endpoints.iter().any(|coord| {
+                    result.hex_map.get_tile(*coord).is_some_and(|tile| {
+                        tile.terrain() == TerrainType::Grassland
+                            && coord.neighbors().iter().any(|neighbor| ocean.contains(neighbor))
+                    })
+                }),
+                "river component should end on a coastal grassland hex"
             );
         }
     }

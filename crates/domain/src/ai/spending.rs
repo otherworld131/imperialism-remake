@@ -944,11 +944,12 @@ fn score_consulate(
             .iter()
             .filter(|p| p.owner == n.id)
             .flat_map(|p| &p.tiles)
-            .filter_map(|coord| {
+            .flat_map(|coord| {
                 game.world
                     .hex_map
                     .get_tile(*coord)
-                    .and_then(|t| t.calculate_yield())
+                    .into_iter()
+                    .flat_map(|tile| tile.calculate_yields())
             })
             .filter(|y| y.resource.is_tradeable())
             .map(|y| y.quantity)
@@ -2227,11 +2228,12 @@ fn execute_consulate(game: &mut GameState, nation_id: NationId) {
                 .iter()
                 .filter(|p| p.owner == n.id)
                 .flat_map(|p| &p.tiles)
-                .filter_map(|coord| {
+                .flat_map(|coord| {
                     game.world
                         .hex_map
                         .get_tile(*coord)
-                        .and_then(|t| t.calculate_yield())
+                        .into_iter()
+                        .flat_map(|tile| tile.calculate_yields())
                 })
                 .filter(|y| y.resource.is_tradeable())
                 .map(|y| y.quantity)
@@ -2604,11 +2606,12 @@ pub fn pick_priority_minor_targets(
             .iter()
             .filter(|p| p.owner == minor.id)
             .flat_map(|p| &p.tiles)
-            .filter_map(|c| {
+            .flat_map(|c| {
                 game.world
                     .hex_map
                     .get_tile(*c)
-                    .and_then(|t| t.calculate_yield())
+                    .into_iter()
+                    .flat_map(|tile| tile.calculate_yields())
             })
             .filter(|y| y.resource.is_tradeable())
             .map(|y| {

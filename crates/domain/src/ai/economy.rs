@@ -169,6 +169,7 @@ pub(super) fn compute_resource_demand(
         ResourceType::Grain,
         ResourceType::Fruit,
         ResourceType::Livestock,
+        ResourceType::Fish,
         ResourceType::Horses,
     ] {
         demand.entry(r).or_insert(food_urgency);
@@ -248,10 +249,12 @@ pub(super) fn importable_via_trade(
             if let Some(p) = game.get_province(*pid) {
                 for &coord in &p.tiles {
                     if let Some(tile) = game.world.hex_map.get_tile(coord)
-                        && let Some(y) = tile.calculate_yield()
-                        && y.resource.is_tradeable()
                     {
-                        *potential.entry(y.resource).or_default() += y.quantity as f64;
+                        for y in tile.calculate_yields() {
+                            if y.resource.is_tradeable() {
+                                *potential.entry(y.resource).or_default() += y.quantity as f64;
+                            }
+                        }
                     }
                 }
             }
@@ -267,11 +270,13 @@ pub(super) fn score_tile_for_demand(
     coord: HexCoord,
     demand: &HashMap<ResourceType, f64>,
 ) -> u32 {
-    if let Some(tile) = hex_map.get_tile(coord)
-        && let Some(yield_info) = tile.calculate_yield()
-    {
-        let weight = demand.get(&yield_info.resource).copied().unwrap_or(1.0);
-        return (yield_info.quantity as f64 * weight).max(1.0) as u32;
+    if let Some(tile) = hex_map.get_tile(coord) {
+        let mut total = 0u32;
+        for yield_info in tile.calculate_yields() {
+            let weight = demand.get(&yield_info.resource).copied().unwrap_or(1.0);
+            total += (yield_info.quantity as f64 * weight).max(1.0) as u32;
+        }
+        return total;
     }
     0
 }

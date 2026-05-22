@@ -117,6 +117,8 @@ pub(crate) fn parse_terrain_mix(json: &str) -> TerrainMix {
         i32_field("sea_falloff_radius", mix.sea_falloff_radius).clamp(mix.sea_hard_margin + 1, 30);
     mix.sea_falloff_radius = falloff;
     mix.land_amount = f32_field("land_amount", mix.land_amount).clamp(0.1, 4.0);
+    mix.river_source_percent =
+        i32_field("river_source_percent", mix.river_source_percent).clamp(0, 100);
     mix
 }
 
@@ -813,6 +815,7 @@ pub fn wasm_get_map_data(game_json: &str, disable_fog: bool) -> String {
                 "terrain": format!("{:?}", tile.terrain()),
                 "resource": tile.resource_deposit().map(|r| format!("{:?}", r)),
                 "resource_hidden": tile.resource_deposit().is_some() && !tile.has_visible_resource(),
+                "has_river": tile.has_river(),
                 "is_capital": tile.is_capital,
                 "is_country_capital": is_country_capital,
                 "improvement_level": tile.improvement_level(),

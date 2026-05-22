@@ -53,11 +53,12 @@ pub(crate) fn ai_build_consulates(game: &mut GameState, nation_id: NationId) {
                 .iter()
                 .filter(|p| p.owner == n.id)
                 .flat_map(|p| &p.tiles)
-                .filter_map(|coord| {
+                .flat_map(|coord| {
                     game.world
                         .hex_map
                         .get_tile(*coord)
-                        .and_then(|t| t.calculate_yield())
+                        .into_iter()
+                        .flat_map(|tile| tile.calculate_yields())
                 })
                 .filter(|y| y.resource.is_tradeable())
                 .map(|y| y.quantity)

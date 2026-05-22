@@ -192,6 +192,7 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
       sea_hard_margin: hardMargin,
       sea_falloff_radius: falloff,
       land_amount: rand(0.5, 1.6),
+      river_source_percent: Math.round(rand(0, 70)),
     });
   }, []);
 
@@ -574,6 +575,24 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
                     onChange={e => {
                       const v = Number(e.target.value);
                       setTerrainMix(prev => ({ ...prev, sea_falloff_radius: v }));
+                    }}
+                    style={s.slider}
+                  />
+                </div>
+                <div>
+                  <div style={s.sliderLabelRow}>
+                    <span>River sources</span>
+                    <span style={s.sliderValue}>{terrainMix.river_source_percent}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={terrainMix.river_source_percent}
+                    onChange={e => {
+                      const v = Number(e.target.value);
+                      setTerrainMix(prev => ({ ...prev, river_source_percent: v }));
                     }}
                     style={s.slider}
                   />

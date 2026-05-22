@@ -304,10 +304,11 @@ pub fn generate_minor_nation_offers(
             for tile_coord in &province.tiles {
                 // Trello #464: minors offer level-1 yields regardless of
                 // prospect/improvement state.
-                if let Some(tile) = hex_map.get_tile(*tile_coord)
-                    && let Some(yield_amount) = tile.calculate_minor_offer_yield()
-                {
-                    *production.entry(yield_amount.resource).or_insert(0) += yield_amount.quantity;
+                if let Some(tile) = hex_map.get_tile(*tile_coord) {
+                    for yield_amount in tile.calculate_minor_offer_yields() {
+                        *production.entry(yield_amount.resource).or_insert(0) +=
+                            yield_amount.quantity;
+                    }
                 }
             }
         }
@@ -375,10 +376,11 @@ pub fn generate_minor_nation_offers_with_seed(
                 // level-1 yields even when the deposit is unprospected /
                 // unimproved. This is what supplies the world market with
                 // coal/iron from minors that never develop their own tiles.
-                if let Some(tile) = hex_map.get_tile(*tile_coord)
-                    && let Some(yield_amount) = tile.calculate_minor_offer_yield()
-                {
-                    *production.entry(yield_amount.resource).or_insert(0) += yield_amount.quantity;
+                if let Some(tile) = hex_map.get_tile(*tile_coord) {
+                    for yield_amount in tile.calculate_minor_offer_yields() {
+                        *production.entry(yield_amount.resource).or_insert(0) +=
+                            yield_amount.quantity;
+                    }
                 }
             }
         }

@@ -2063,6 +2063,29 @@ export default function HexMap({
     }
 
     // ── Pass 3: Capitals ──
+    if (mapMode === 'terrain') {
+      ctx.strokeStyle = 'rgba(68, 140, 220, 0.95)';
+      ctx.lineWidth = Math.max(2, HEX_SIZE * 0.22);
+      ctx.lineCap = 'round';
+      for (const tile of visibleTiles) {
+        if (!tile.has_river || tile.terrain === 'Sea') continue;
+        const [px, py] = hexToPixel(tile.q, tile.r);
+        for (const [nq, nr] of hexNeighbors(tile.q, tile.r)) {
+          const neighbor = tileMap.get(`${nq},${nr}`);
+          if (!neighbor) continue;
+          if (!neighbor.has_river && neighbor.terrain !== 'Sea') continue;
+          const [nx, ny] = hexToPixel(nq, nr);
+          const tx = neighbor.terrain === 'Sea' ? px + (nx - px) * 0.45 : nx;
+          const ty = neighbor.terrain === 'Sea' ? py + (ny - py) * 0.45 : ny;
+          ctx.beginPath();
+          ctx.moveTo(px, py);
+          ctx.lineTo(tx, ty);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // ── Pass 3: Capitals ──
     for (const tile of visibleTiles) {
       if (!tile.is_capital || tile.terrain === 'Sea') continue;
       const [px, py] = hexToPixel(tile.q, tile.r);

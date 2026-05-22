@@ -22,6 +22,8 @@ pub struct Tile {
     pub prospected: bool,
     pub improvement_level: u8,
     pub infrastructure: Infrastructure,
+    #[serde(default)]
+    pub has_river: bool,
     pub assigned_civilian: Option<u32>,
     pub province_id: Option<ProvinceId>,
     pub is_capital: bool,
@@ -104,6 +106,7 @@ impl From<&dm::Tile> for Tile {
             prospected: v.is_prospected(),
             improvement_level: v.improvement_level(),
             infrastructure: v.infrastructure.into(),
+            has_river: v.has_river(),
             assigned_civilian: v.assigned_civilian.map(|u| u.0),
             province_id: v.province_id.map(Into::into),
             is_capital: v.is_capital,
@@ -130,6 +133,7 @@ impl From<Tile> for dm::Tile {
         }
         tile.set_improvement_level(v.improvement_level);
         tile.infrastructure = v.infrastructure.into();
+        tile.set_river(v.has_river);
         tile.assigned_civilian = v.assigned_civilian.map(UnitId);
         tile.province_id = v.province_id.map(Into::into);
         tile.is_capital = v.is_capital;
