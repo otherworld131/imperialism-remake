@@ -1235,28 +1235,28 @@ pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
             .map(|(_, s)| s);
 
         for tile_coord in &province.tiles {
-            if let Some(tile) = game.world.hex_map.get_tile(*tile_coord)
-                && let Some(yield_amount) = tile.calculate_yield()
-            {
+            if let Some(tile) = game.world.hex_map.get_tile(*tile_coord) {
                 let tile_collectable = collectable.map(|s| s.contains(tile_coord)).unwrap_or(false);
-                // A connected hex yields only if inside a connected depot's
-                // radius (or the capital province). Disconnected reporting
-                // keeps the whole province's yields — the player needs to see
-                // what's out there to decide where to place a depot, so we
-                // don't filter those by depot geometry (there is no depot
-                // geometry yet when a province is disconnected).
-                if is_connected && tile_collectable {
-                    production_data.push((
-                        province.owner,
-                        yield_amount.resource,
-                        yield_amount.quantity,
-                    ));
-                } else if !is_connected {
-                    disconnected_data.push((
-                        province.owner,
-                        yield_amount.resource,
-                        yield_amount.quantity,
-                    ));
+                for yield_amount in tile.calculate_yields() {
+                    // A connected hex yields only if inside a connected depot's
+                    // radius (or the capital province). Disconnected reporting
+                    // keeps the whole province's yields — the player needs to see
+                    // what's out there to decide where to place a depot, so we
+                    // don't filter those by depot geometry (there is no depot
+                    // geometry yet when a province is disconnected).
+                    if is_connected && tile_collectable {
+                        production_data.push((
+                            province.owner,
+                            yield_amount.resource,
+                            yield_amount.quantity,
+                        ));
+                    } else if !is_connected {
+                        disconnected_data.push((
+                            province.owner,
+                            yield_amount.resource,
+                            yield_amount.quantity,
+                        ));
+                    }
                 }
             }
 

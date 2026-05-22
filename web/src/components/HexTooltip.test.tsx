@@ -8,19 +8,22 @@ function makeTile(partial: Partial<TileData> = {}): TileData {
     q: 0, r: 0,
     terrain: 'Hills',
     resource: null, resource_hidden: false,
+    has_river: false,
     is_capital: false, is_country_capital: false,
     improvement_level: 0, max_improvement_level: 0,
     owner: 'Devron', owner_color: 'Red', province: 'Bavaria',
     province_id: 1,
     has_railroad: false, has_depot: false, has_port: false,
+    port_blockaded: false,
     has_fort: false, fort_level: 0,
     map_width: 100, map_height: 80, nation_id: 1,
     army_firepower: 0, army_unit_count: 0,
     army_composition: null,
     naval_firepower: 0, naval_ship_count: 0,
     civilian_on_tile: null,
-    is_minor: false, is_incorporated_minor: false, is_anarchic: false,
+    is_minor: false, is_incorporated_minor: false, incorporated_nation_id: null, is_anarchic: false,
     visual_group: null, visible: true,
+    is_prospected: true,
     ...partial,
   };
 }
@@ -64,6 +67,11 @@ describe('HexTooltip', () => {
     render(<HexTooltip tile={tile} screenX={0} screenY={0} sticky={false} />);
     expect(screen.getByText(/Coal/)).toBeInTheDocument();
     expect(screen.getByText('Level: 2/3')).toBeInTheDocument();
+  });
+
+  it('shows river production when a river crosses the tile', () => {
+    render(<HexTooltip tile={makeTile({ has_river: true })} screenX={0} screenY={0} sticky={false} />);
+    expect(screen.getByText('River (+1 Fish)')).toBeInTheDocument();
   });
 
   it('renders marker body with composition breakdown', () => {

@@ -11,6 +11,7 @@ export type MapMode = 'terrain' | 'political' | 'diplomatic' | 'relationship' | 
 export interface TileData {
   q: number; r: number;
   terrain: string; resource: string | null; resource_hidden: boolean;
+  has_river: boolean;
   is_capital: boolean;
   is_country_capital: boolean;
   improvement_level: number;
@@ -597,6 +598,8 @@ export interface TerrainMix {
   sea_falloff_radius: number;
   /** Multiplier on continent target size: 1 = baseline, 0.3 = sparse, 2 = dense. */
   land_amount: number;
+  /** Percent of eligible mountain headwaters that spawn a river. */
+  river_source_percent: number;
 }
 
 export const DEFAULT_TERRAIN_MIX: TerrainMix = {
@@ -616,6 +619,7 @@ export const DEFAULT_TERRAIN_MIX: TerrainMix = {
   sea_hard_margin: 1,
   sea_falloff_radius: 5,
   land_amount: 1.0,
+  river_source_percent: 20,
 };
 
 export interface MapGenConfig {

@@ -12,11 +12,13 @@ function tile(q: number, r: number, owner: string): TileData {
   return {
     q, r,
     terrain: 'Plain', resource: null, resource_hidden: false,
+    has_river: false,
     is_capital: false, is_country_capital: false,
     improvement_level: 0, max_improvement_level: 0,
     owner, owner_color: 'Red', province: 'P',
     province_id: null,
     has_railroad: false, has_depot: false, has_port: false,
+    port_blockaded: false,
     has_fort: false, fort_level: 0,
     map_width: 10,
     map_height: 10,
@@ -24,8 +26,9 @@ function tile(q: number, r: number, owner: string): TileData {
     army_firepower: 0, army_unit_count: 0, army_composition: null,
     naval_firepower: 0, naval_ship_count: 0,
     civilian_on_tile: null,
-    is_minor: false, is_incorporated_minor: false, is_anarchic: false,
+    is_minor: false, is_incorporated_minor: false, incorporated_nation_id: null, is_anarchic: false,
     visual_group: null, visible: true,
+    is_prospected: true,
   };
 }
 
