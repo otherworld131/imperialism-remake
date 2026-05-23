@@ -3647,6 +3647,23 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         })
         .collect();
 
+    // Worker food requirement (population × Imperialism-1 ratio). Same gate as
+    // compute_demand_forecast so it disappears cleanly if food_per_worker is
+    // disabled in the game config.
+    let total_workers = nation.economy.labor.total_workers();
+    let food_requirement_json = if total_workers > 0 && game.game_data.game_config.food_per_worker > 0 {
+        let (grain_need, fruit_need, meat_need) =
+            domain::economy::labor::worker_food_demand(total_workers);
+        serde_json::json!({
+            "workers": total_workers,
+            "grain": grain_need,
+            "fruit": fruit_need,
+            "meat": meat_need,
+        })
+    } else {
+        serde_json::Value::Null
+    };
+
     serde_json::json!({
         "freight_cars": transport.freight_cars,
         "total_capacity": transport.total_capacity(),
@@ -3669,6 +3686,7 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         "town_deliveries": town_deliveries_json,
         "rail_only_deliveries": rail_only_deliveries_json,
         "demand": demand_json,
+        "food_requirement": food_requirement_json,
     })
     .to_string()
 }

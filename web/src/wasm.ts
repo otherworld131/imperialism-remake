@@ -1069,6 +1069,13 @@ export interface TransportDemand {
   demand: number;
 }
 
+export interface FoodRequirement {
+  workers: number;
+  grain: number;
+  fruit: number;
+  meat: number;
+}
+
 export interface TransportData {
   freight_cars: number;
   total_capacity: number;
@@ -1084,6 +1091,7 @@ export interface TransportData {
   local_deliveries?: TransportDelivery[];
   town_deliveries?: TransportDelivery[];
   demand: TransportDemand[];
+  food_requirement?: FoodRequirement | null;
 }
 
 export async function getTransportData(gameJson: string, nationId: number): Promise<TransportData | null> {

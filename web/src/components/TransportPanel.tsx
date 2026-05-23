@@ -1,5 +1,5 @@
 import type { TransportData } from '../wasm';
-import { resourceLabel } from '../resourceEmoji';
+import { resourceLabel, resourceEmoji } from '../resourceEmoji';
 
 interface Props {
   transport: TransportData;
@@ -7,7 +7,7 @@ interface Props {
 }
 
 export default function TransportPanel({ transport, onSetAllocation }: Props) {
-  const { total_capacity, remote_delivery_capacity, military_transport_capacity, allocations, deliveries, demand = [], local_deliveries = [] } = transport;
+  const { total_capacity, remote_delivery_capacity, military_transport_capacity, allocations, deliveries, demand = [], local_deliveries = [], food_requirement } = transport;
   const transportDeliveries = deliveries;
 
   const allocationMap: Record<string, number> = {};
@@ -96,6 +96,34 @@ export default function TransportPanel({ transport, onSetAllocation }: Props) {
           Rail capacity: {military_transport_capacity} unit{military_transport_capacity !== 1 ? 's' : ''}
         </div>
       </div>
+
+      {food_requirement && food_requirement.workers > 0 && (
+        <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 8 }}>
+          <div style={{ fontWeight: 'bold', marginBottom: 4 }}>Food Requirements</div>
+          <div style={{ fontSize: 'var(--ui-font-size, 14px)', color: '#aaa', marginBottom: 3 }}>
+            👷 {food_requirement.workers.toLocaleString()} worker{food_requirement.workers !== 1 ? 's' : ''}
+          </div>
+          <FoodRow label={resourceLabel('Grain')} qty={food_requirement.grain} />
+          <FoodRow label={resourceLabel('Fruit')} qty={food_requirement.fruit} />
+          <FoodRow
+            label={`${resourceEmoji('Livestock')}${resourceEmoji('Fish')} Meat`}
+            qty={food_requirement.meat}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FoodRow({ label, qty }: { label: string; qty: number }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      fontSize: 'var(--ui-font-size, 14px)', color: '#aaa',
+      padding: '1px 0',
+    }}>
+      <span>{label}</span>
+      <span>{qty.toLocaleString()}</span>
     </div>
   );
 }

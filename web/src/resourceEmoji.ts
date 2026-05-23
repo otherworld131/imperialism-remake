@@ -6,6 +6,7 @@ const EMOJI: Record<string, string> = {
   Wool:       '\u{1F411}',
   Timber:     '\u{1FAB5}',
   Livestock:  '\u{1F404}',
+  Fish:       '\u{1F41F}',
   Horses:     '\u{1F434}',
   Coal:       '⚫',
   Iron:       '\u{1F518}',
