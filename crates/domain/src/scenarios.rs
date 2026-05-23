@@ -164,16 +164,35 @@ pub fn new_scenario_game_with_data(
     human_nation_index: usize,
     game_data: crate::data::GameData,
 ) -> Result<GameState, String> {
+    new_scenario_game_with_data_and_capital_override(
+        scenario_id,
+        difficulty,
+        human_nation_index,
+        game_data,
+        None,
+    )
+}
+
+/// `new_scenario_game_with_data` plus a caller-supplied capital tile for the
+/// selected Great Power.
+pub fn new_scenario_game_with_data_and_capital_override(
+    scenario_id: &str,
+    difficulty: Difficulty,
+    human_nation_index: usize,
+    game_data: crate::data::GameData,
+    capital_override: Option<crate::hex::HexCoord>,
+) -> Result<GameState, String> {
     let scenario = list_scenarios()
         .into_iter()
         .find(|s| s.id == scenario_id)
         .ok_or_else(|| format!("Unknown scenario: {}", scenario_id))?;
 
-    let mut game = crate::game_state::new_game_with_data(
+    let mut game = crate::game_state::new_game_with_data_and_capital_override(
         &format!("scenario_{}", scenario_id),
         difficulty,
         human_nation_index,
         game_data,
+        capital_override,
     );
 
     // Verify great power count matches scenario expectations
@@ -519,5 +538,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn scenario_game_accepts_capital_override() {
+        let baseline = test_scenario_game("1815", Difficulty::Normal, 0).unwrap();
+        let human = baseline.get_nation(baseline.human_player_nation).unwrap();
+        let old_capital = baseline
+            .get_province(human.capital_province_id)
+            .unwrap()
+            .capital_tile;
+
+        let override_coord = human
+            .province_ids
+            .iter()
+            .find_map(|pid| {
+                let province = baseline.get_province(*pid).unwrap();
+                province.tiles.iter().copied().find(|coord| {
+                    let tile = baseline.world.hex_map.get_tile(*coord).unwrap();
+                    *coord != old_capital
+                        && !matches!(tile.terrain(), crate::types::TerrainType::Sea | crate::types::TerrainType::Mountain)
+                })
+            })
+            .expect("expected a valid scenario capital override tile");
+
+        let overridden = new_scenario_game_with_data_and_capital_override(
+            "1815",
+            Difficulty::Normal,
+            0,
+            crate::data::test_game_data(),
+            Some(override_coord),
+        )
+        .unwrap();
+        let human = overridden
+            .get_nation(overridden.human_player_nation)
+            .unwrap();
+        let capital_province = overridden.get_province(human.capital_province_id).unwrap();
+        assert_eq!(capital_province.capital_tile, override_coord);
+        assert!(
+            overridden
+                .world
+                .hex_map
+                .get_tile(override_coord)
+                .is_some_and(|tile| tile.is_country_capital)
+        );
     }
 }

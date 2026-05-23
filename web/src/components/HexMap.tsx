@@ -1,6 +1,6 @@
 import { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
 import type { ReactNode } from 'react';
-import type { TileData, MapMode, DiplomacyOverlay, MilitaryOverlayEntry, ArmyUnitDetail, ValidMoveTargets, NavyMarker, SeaZone } from '../wasm';
+import type { TileData, MapMode, DiplomacyOverlay, MilitaryOverlayEntry, ValidMoveTargets, NavyMarker, SeaZone } from '../wasm';
 import { computeNationLabels } from '../lib/nationLabels';
 import { stitchPolylines, vKey, smoothPolylineAnchored, fbm, type Vec2 } from '../lib/mapGeometry';
 import HexTooltip from './HexTooltip';
@@ -316,6 +316,10 @@ interface Props {
   governmentTitleByNationId?: Record<number, string>;
   /** Key of the currently selected tile ("q,r") — used to blink its troop indicator. */
   selectedTileKey?: string | null;
+  /** Setup-preview hover key for custom capital placement. */
+  hoveredPreviewTileKey?: string | null;
+  /** Setup-preview selected key for custom capital placement. */
+  placedPreviewTileKey?: string | null;
   /** When true, zoom is locked to the minimum fit-scale (map fills canvas, no zoom in/out). */
   lockZoom?: boolean;
   /** When true, render consulate/embassy emoji markers on nation label centroids. */
@@ -330,6 +334,8 @@ interface Props {
   isDiplomacyTargetInvalid?: boolean;
   /** When set, the regular tile tooltip is replaced with this warning text. */
   diplomacyInvalidReason?: string | null;
+  /** Hide the map-mode dropup entirely. Used by single-purpose preview flows. */
+  hideMapModeControl?: boolean;
 }
 
 const CIVILIAN_EMOJI: Record<string, string> = {
@@ -376,6 +382,8 @@ export default function HexMap({
   renderTooltipModeExtras,
   governmentTitleByNationId,
   selectedTileKey = null,
+  hoveredPreviewTileKey = null,
+  placedPreviewTileKey = null,
   lockZoom = false,
   showDiplomacyMarkers = false,
   onPendingTreatyMarkerClick,
@@ -383,6 +391,7 @@ export default function HexMap({
   isDiplomacyTargetMode = false,
   isDiplomacyTargetInvalid = false,
   diplomacyInvalidReason = null,
+  hideMapModeControl = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Use props if provided (controlled mode), otherwise use local state (uncontrolled)
@@ -2062,6 +2071,33 @@ export default function HexMap({
       }
     }
 
+    if (hoveredPreviewTileKey || placedPreviewTileKey) {
+      const drawPreviewMarker = (tile: TileData, fill: string, stroke: string, lineWidth: number) => {
+        const [px, py] = hexToPixel(tile.q, tile.r);
+        ctx.beginPath();
+        drawHexagon(ctx, px, py, HEX_SIZE * 0.94);
+        ctx.fillStyle = fill;
+        ctx.fill();
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = lineWidth;
+        ctx.stroke();
+      };
+
+      if (hoveredPreviewTileKey && hoveredPreviewTileKey !== placedPreviewTileKey) {
+        const tile = tileMap.get(hoveredPreviewTileKey);
+        if (tile && tile.terrain !== 'Sea') {
+          drawPreviewMarker(tile, 'rgba(255,255,255,0.10)', 'rgba(240,240,255,0.95)', 2);
+        }
+      }
+
+      if (placedPreviewTileKey) {
+        const tile = tileMap.get(placedPreviewTileKey);
+        if (tile && tile.terrain !== 'Sea') {
+          drawPreviewMarker(tile, 'rgba(218,165,32,0.18)', '#ffd700', 3.2);
+        }
+      }
+    }
+
     // ── Pass 3: Capitals ──
     if (mapMode === 'terrain') {
       ctx.strokeStyle = 'rgba(68, 140, 220, 0.95)';
@@ -2674,7 +2710,8 @@ export default function HexMap({
       isMovementMode, validMoveTargets, validFleetTargets, isDeployMode, deployableTiles, prospectedTiles, pendingMoves, nationLabels, disableFogOfWar,
       navyMarkers, seaZones, selectedNavyKey, mapGeometry, tileMap, diplomacyOverlay,
       hideHexGrid, highlightedNationId, classifiedEdges, maxArmyFP, mapDims,
-      selectedTileKey, selectedCivilianId, blinkOn, showDiplomacyMarkers, provinceLabels, staticLayer]);
+      selectedTileKey, hoveredPreviewTileKey, placedPreviewTileKey, selectedCivilianId,
+      blinkOn, showDiplomacyMarkers, provinceLabels, staticLayer]);
 
   const scheduleFrame = useCallback(() => {
     if (rafIdRef.current != null) return;
@@ -3203,61 +3240,62 @@ export default function HexMap({
           </>
         )}
 
-        {/* Map mode dropup */}
-        <div style={{ position: 'relative' }}>
-          {dropupOpen && (
-            <div
-              style={{
-                position: 'absolute', bottom: '100%', right: 0, marginBottom: 4,
-                background: '#2a2518', border: '1px solid #5a5030', borderRadius: 4,
-                minWidth: 140, overflow: 'hidden', zIndex: 10,
-              }}
-              onClick={e => e.stopPropagation()}
+        {!hideMapModeControl && (
+          <div style={{ position: 'relative' }}>
+            {dropupOpen && (
+              <div
+                style={{
+                  position: 'absolute', bottom: '100%', right: 0, marginBottom: 4,
+                  background: '#2a2518', border: '1px solid #5a5030', borderRadius: 4,
+                  minWidth: 140, overflow: 'hidden', zIndex: 10,
+                }}
+                onClick={e => e.stopPropagation()}
+              >
+                {(['terrain', 'political'] as MapMode[]).map(mode => (
+                  <button
+                    key={mode}
+                    onClick={() => { onMapModeChange(mode); setDropupOpen(false); }}
+                    style={{
+                      display: 'block', width: '100%', textAlign: 'left',
+                      padding: '7px 12px', border: 'none', cursor: 'pointer',
+                      fontFamily: 'Georgia, serif', fontSize: 13,
+                      background: mapMode === mode ? 'rgba(218,165,32,0.15)' : 'transparent',
+                      color: mapMode === mode ? '#daa520' : '#e0d8c0',
+                    }}
+                  >
+                    {MAP_MODE_LABELS[mode]}
+                  </button>
+                ))}
+                {!limitedMapModes && (
+                  <>
+                    <div style={{ height: 1, background: '#5a5030', margin: '2px 0' }} />
+                    {(['diplomatic', 'relationship', 'military', 'naval'] as MapMode[]).map(mode => (
+                      <button
+                        key={mode}
+                        onClick={() => { onMapModeChange(mode); setDropupOpen(false); }}
+                        style={{
+                          display: 'block', width: '100%', textAlign: 'left',
+                          padding: '7px 12px', border: 'none', cursor: 'pointer',
+                          fontFamily: 'Georgia, serif', fontSize: 13,
+                          background: mapMode === mode ? 'rgba(218,165,32,0.15)' : 'transparent',
+                          color: mapMode === mode ? '#daa520' : '#e0d8c0',
+                        }}
+                      >
+                        {MAP_MODE_LABELS[mode]}
+                      </button>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+            <button
+              onClick={(e) => { e.stopPropagation(); setDropupOpen(o => !o); }}
+              style={{ ...controlBtn, padding: '6px 14px', minWidth: 110, textAlign: 'left' }}
             >
-              {(['terrain', 'political'] as MapMode[]).map(mode => (
-                <button
-                  key={mode}
-                  onClick={() => { onMapModeChange(mode); setDropupOpen(false); }}
-                  style={{
-                    display: 'block', width: '100%', textAlign: 'left',
-                    padding: '7px 12px', border: 'none', cursor: 'pointer',
-                    fontFamily: 'Georgia, serif', fontSize: 13,
-                    background: mapMode === mode ? 'rgba(218,165,32,0.15)' : 'transparent',
-                    color: mapMode === mode ? '#daa520' : '#e0d8c0',
-                  }}
-                >
-                  {MAP_MODE_LABELS[mode]}
-                </button>
-              ))}
-              {!limitedMapModes && (
-                <>
-                  <div style={{ height: 1, background: '#5a5030', margin: '2px 0' }} />
-                  {(['diplomatic', 'relationship', 'military', 'naval'] as MapMode[]).map(mode => (
-                    <button
-                      key={mode}
-                      onClick={() => { onMapModeChange(mode); setDropupOpen(false); }}
-                      style={{
-                        display: 'block', width: '100%', textAlign: 'left',
-                        padding: '7px 12px', border: 'none', cursor: 'pointer',
-                        fontFamily: 'Georgia, serif', fontSize: 13,
-                        background: mapMode === mode ? 'rgba(218,165,32,0.15)' : 'transparent',
-                        color: mapMode === mode ? '#daa520' : '#e0d8c0',
-                      }}
-                    >
-                      {MAP_MODE_LABELS[mode]}
-                    </button>
-                  ))}
-                </>
-              )}
-            </div>
-          )}
-          <button
-            onClick={(e) => { e.stopPropagation(); setDropupOpen(o => !o); }}
-            style={{ ...controlBtn, padding: '6px 14px', minWidth: 110, textAlign: 'left' }}
-          >
-            {MAP_MODE_LABELS[mapMode]} {'\u25B4'}
-          </button>
-        </div>
+              {MAP_MODE_LABELS[mapMode]} {'\u25B4'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

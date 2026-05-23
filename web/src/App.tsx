@@ -730,8 +730,8 @@ function App() {
         }
       } else {
         json = p.scenario
-          ? await newScenarioGame(p.scenario, p.difficulty, idx)
-          : await newGame(p.mapKey, p.difficulty, idx, p.mapGenConfig);
+          ? await newScenarioGame(p.scenario, p.difficulty, idx, '', p.capitalOverride)
+          : await newGame(p.mapKey, p.difficulty, idx, p.mapGenConfig, '', p.capitalOverride);
       }
       const parsed = parseGameJson(json);
       if (parsed.error) { alert(parsed.error); return; }
@@ -1107,6 +1107,7 @@ function App() {
         scenario: null,
         difficulty,
         nationIdx: 0,
+        capitalOverride: null,
         mapGenConfig: {
           ...DEFAULT_MAP_GEN_CONFIG,
         },

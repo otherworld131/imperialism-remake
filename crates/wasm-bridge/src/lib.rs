@@ -14,7 +14,8 @@ use domain::economy::trade::base_price;
 use domain::economy::transport::TransportSystem;
 use domain::events::TreatyType;
 use domain::game_state::{
-    GameState, new_game_with_data_and_config, new_observer_game_with_data_and_config,
+    GameState, new_game_with_data_and_config, new_game_with_data_and_config_and_capital_override,
+    new_observer_game_with_data_and_config,
 };
 #[cfg(test)]
 use domain::game_state::{new_game, new_observer_game};
@@ -24,7 +25,7 @@ use domain::military::combat::BattleResult;
 use domain::military::naval::NavalBattleResult;
 use domain::military::ships::{Ship, ShipCategory, ShipType};
 use domain::military::units::{ArmyUnit, ArmyUnitType};
-use domain::scenarios::{list_scenarios, new_scenario_game_with_data};
+use domain::scenarios::{list_scenarios, new_scenario_game_with_data, new_scenario_game_with_data_and_capital_override};
 use domain::turn::process_turn;
 use domain::types::*;
 use domain_snapshot::game_state::GameState as SnapshotGameState;
@@ -147,6 +148,9 @@ pub fn wasm_new_game(
     num_minor_nations: u32,
     flavor_key: &str,
     terrain_json: &str,
+    has_capital_override: bool,
+    capital_q: i32,
+    capital_r: i32,
 ) -> String {
     let diff = difficulty_from_u8(difficulty);
     let cfg = build_map_config(
@@ -156,8 +160,15 @@ pub fn wasm_new_game(
         num_minor_nations,
         terrain_json,
     );
-    let mut game =
-        new_game_with_data_and_config(map_key, diff, nation_index, load_embedded_game_data(), cfg);
+    let capital_override = has_capital_override.then_some(HexCoord::new(capital_q, capital_r));
+    let mut game = new_game_with_data_and_config_and_capital_override(
+        map_key,
+        diff,
+        nation_index,
+        load_embedded_game_data(),
+        cfg,
+        capital_override,
+    );
     flavor_bridge::apply_flavor(&mut game, flavor_key);
     game_to_json(&game)
 }
@@ -170,6 +181,9 @@ pub fn wasm_new_scenario_game(
     difficulty: u8,
     nation_index: usize,
     flavor_key: &str,
+    has_capital_override: bool,
+    capital_q: i32,
+    capital_r: i32,
 ) -> String {
     let diff = match difficulty {
         0 => Difficulty::Introductory,
@@ -178,7 +192,14 @@ pub fn wasm_new_scenario_game(
         3 => Difficulty::Hard,
         _ => Difficulty::Normal,
     };
-    match new_scenario_game_with_data(scenario_id, diff, nation_index, load_embedded_game_data()) {
+    let capital_override = has_capital_override.then_some(HexCoord::new(capital_q, capital_r));
+    match new_scenario_game_with_data_and_capital_override(
+        scenario_id,
+        diff,
+        nation_index,
+        load_embedded_game_data(),
+        capital_override,
+    ) {
         Ok(mut game) => {
             flavor_bridge::apply_flavor(&mut game, flavor_key);
             game_to_json(&game)

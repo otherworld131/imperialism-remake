@@ -7,9 +7,15 @@ import {
   DEFAULT_TERRAIN_MIX,
   parseGameJson,
 } from '../wasm';
-import type { TileData, MapMode, MapGenConfig, TerrainMix } from '../wasm';
+import type { CapitalOverride, TileData, MapMode, MapGenConfig, TerrainMix } from '../wasm';
 import HexMap from './HexMap';
 import Flag from './Flag';
+import {
+  computeNationPlacementView,
+  evaluateCapitalSite,
+  type CapitalSitePreview,
+  tileKey,
+} from './GameSetup.logic';
 
 const MAP_SIZE_PRESETS: Array<{ key: string; label: string; width: number; height: number }> = [
   { key: 'small', label: 'Small (60×40)', width: 60, height: 40 },
@@ -38,6 +44,7 @@ export interface GameStartParams {
   scenario: string | null;
   difficulty: number;
   nationIdx: number;
+  capitalOverride: CapitalOverride | null;
   mapGenConfig: MapGenConfig;
   organicBorders: boolean;
   hideHexGrid: boolean;
@@ -58,6 +65,7 @@ interface GpInfo {
 }
 
 type Step = 'config' | 'preview';
+type PreviewStage = 'nation' | 'capital';
 
 function randomSeed(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -73,7 +81,6 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
   const [organicBorders, setOrganicBorders] = useState(true);
   const [hideHexGrid, setHideHexGrid] = useState(true);
 
-  // Random-map customization (ignored for historical scenarios).
   const [mapWidth, setMapWidth] = useState(DEFAULT_MAP_GEN_CONFIG.width);
   const [mapHeight, setMapHeight] = useState(DEFAULT_MAP_GEN_CONFIG.height);
   const [numGreatPowers, setNumGreatPowers] = useState(DEFAULT_MAP_GEN_CONFIG.numGreatPowers);
@@ -99,6 +106,13 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
   const [pickedNationIdx, setPickedNationIdx] = useState<number | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewMapMode, setPreviewMapMode] = useState<'terrain' | 'political'>('political');
+  const [previewStage, setPreviewStage] = useState<PreviewStage>('nation');
+  const [hoveredCapital, setHoveredCapital] = useState<CapitalSitePreview | null>(null);
+  const [pickedCapital, setPickedCapital] = useState<CapitalSitePreview | null>(null);
+  const [placementScale, setPlacementScale] = useState<number | undefined>(undefined);
+  const [placementOffset, setPlacementOffset] = useState<{ x: number; y: number } | undefined>(undefined);
+  const [mapViewport, setMapViewport] = useState({ width: 0, height: 0 });
+  const mapWrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     getScenarios().then(setScenarios).catch(() => { /* no scenarios available */ });
@@ -118,6 +132,14 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
         flagSvg: n.flag_svg || '',
       }));
 
+  const resetPlacementState = useCallback(() => {
+    setPreviewStage('nation');
+    setHoveredCapital(null);
+    setPickedCapital(null);
+    setPlacementScale(undefined);
+    setPlacementOffset(undefined);
+  }, []);
+
   const buildPreview = useCallback(async (keyOverride?: string, flavorOverride?: string) => {
     setPreviewError(null);
     const key = keyOverride ?? effectiveMapKey;
@@ -126,7 +148,6 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
       const json = selectedScenario
         ? await newScenarioGame(selectedScenario, difficulty, 0, fkey)
         : await newGame(key, difficulty, 0, mapGenConfig, fkey);
-      // Detect error payloads from the bridge.
       const parsed = parseGameJson(json);
       if (parsed.error) {
         setPreviewError(parsed.error);
@@ -137,7 +158,8 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
       setPreviewJson(json);
       setPreviewTiles(tiles);
       setPreviewGps(gps);
-      // Carry over previous pick if valid.
+      setPreviewMapMode('political');
+      resetPlacementState();
       if (pickedNationIdx != null && pickedNationIdx >= gps.length) {
         setPickedNationIdx(null);
       }
@@ -148,12 +170,8 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
     // pickedNationIdx intentionally omitted: we only consult it to clear an
     // out-of-range pick, which is fine to skip when the pick is stale.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveMapKey, flavorKey, selectedScenario, difficulty, mapGenConfig]);
+  }, [effectiveMapKey, flavorKey, selectedScenario, difficulty, mapGenConfig, resetPlacementState]);
 
-  // While the preview is open, debounced re-roll on terrain-mix changes so the
-  // sliders feel live. Same seed → same continents, just regenerated with the
-  // new terrain knobs. The skip-on-mount ref prevents a redundant rebuild when
-  // the user first lands on the preview.
   const skipNextTerrainRebuild = useRef(true);
   useEffect(() => {
     if (step !== 'preview') {
@@ -168,9 +186,6 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
     return () => clearTimeout(t);
   }, [terrainMix, step, buildPreview]);
 
-  // Randomize all terrain sliders within sensible ranges. Used by the "Randomize
-  // terrain" button in the preview sidebar — gives the player a one-click way
-  // to explore wildly different worlds without dragging seven sliders.
   const randomizeTerrain = useCallback(() => {
     const rand = (lo: number, hi: number) => lo + Math.random() * (hi - lo);
     const hardMargin = Math.round(rand(0, 3));
@@ -199,6 +214,7 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
   const handleReroll = () => {
     const fresh = randomSeed();
     setFlavorKey(fresh);
+    setPickedNationIdx(null);
     if (selectedScenario) {
       buildPreview(undefined, fresh);
     } else {
@@ -220,24 +236,107 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
       }
       setPreviewJson(updated);
       setPreviewGps(extractGps(parsed));
-      // Tiles use Nation.name in the legend; refresh them too so labels
-      // pick up the new short names.
       const tiles = await getMapData(updated, true);
       setPreviewTiles(tiles);
+      resetPlacementState();
     } catch (e) {
       setPreviewError(String(e));
     }
   };
 
-  const handleTileClick = (tile: TileData) => {
+  const tileByCoord = useMemo(() => {
+    const map = new Map<string, TileData>();
+    for (const tile of previewTiles) map.set(tileKey(tile.q, tile.r), tile);
+    return map;
+  }, [previewTiles]);
+
+  const pickedGp = pickedNationIdx != null ? previewGps[pickedNationIdx] : null;
+  const hoveredPreviewTileKey = hoveredCapital ? tileKey(hoveredCapital.capital.q, hoveredCapital.capital.r) : null;
+  const placedPreviewTileKey = pickedCapital ? tileKey(pickedCapital.capital.q, pickedCapital.capital.r) : null;
+  const activeCapitalPreview = hoveredCapital ?? pickedCapital;
+
+  useEffect(() => {
+    if (observerMode) {
+      resetPlacementState();
+      setPreviewMapMode('political');
+    }
+  }, [observerMode, resetPlacementState]);
+
+  useEffect(() => {
+    if (step !== 'preview') return;
+    const element = mapWrapRef.current;
+    if (!element) return;
+    const updateViewport = () => {
+      const rect = element.getBoundingClientRect();
+      setMapViewport({ width: rect.width, height: rect.height });
+    };
+    updateViewport();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(updateViewport);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [step]);
+
+  useEffect(() => {
+    if (observerMode || previewStage !== 'capital' || !pickedGp) return;
+    setPreviewMapMode('terrain');
+    const nextView = computeNationPlacementView(previewTiles, pickedGp.id, mapViewport);
+    if (!nextView) return;
+    setPlacementScale(nextView.scale);
+    setPlacementOffset(nextView.offset);
+  }, [observerMode, previewStage, pickedGp, previewTiles, mapViewport]);
+
+  const handleNationPick = useCallback((idx: number) => {
+    setPickedNationIdx(idx);
+    setHoveredCapital(null);
+    setPickedCapital(null);
+    setPreviewStage('nation');
+  }, []);
+
+  const handleTileHover = useCallback((tile: TileData | null) => {
+    if (observerMode || previewStage !== 'capital' || !pickedGp) {
+      setHoveredCapital(null);
+      return;
+    }
+    setHoveredCapital(evaluateCapitalSite(tile, tileByCoord, pickedGp.id));
+  }, [observerMode, previewStage, pickedGp, tileByCoord]);
+
+  const handleTileClick = useCallback((tile: TileData) => {
     if (tile.nation_id == null) return;
-    const gp = previewGps.find(g => g.id === tile.nation_id);
-    if (gp) setPickedNationIdx(gp.idx);
+    if (observerMode) {
+      const gp = previewGps.find(g => g.id === tile.nation_id);
+      if (gp) setPickedNationIdx(gp.idx);
+      return;
+    }
+    if (previewStage === 'nation') {
+      const gp = previewGps.find(g => g.id === tile.nation_id);
+      if (gp) handleNationPick(gp.idx);
+      return;
+    }
+    if (!pickedGp) return;
+    const preview = evaluateCapitalSite(tile, tileByCoord, pickedGp.id);
+    if (preview) {
+      setPickedCapital(preview);
+      setHoveredCapital(preview);
+    }
+  }, [observerMode, previewStage, previewGps, pickedGp, tileByCoord, handleNationPick]);
+
+  const handleEnterCapitalPlacement = () => {
+    if (observerMode || pickedNationIdx == null) return;
+    setPreviewStage('capital');
+    setPreviewMapMode('terrain');
+    setHoveredCapital(null);
+  };
+
+  const handleLeaveCapitalPlacement = () => {
+    setPreviewStage('nation');
+    setHoveredCapital(null);
   };
 
   const handleBegin = async () => {
     const idx = pickedNationIdx ?? 0;
     let gameJson: string;
+    let capitalOverride: CapitalOverride | null = null;
     if (observerMode) {
       gameJson = selectedScenario
         ? await newObserverScenarioGame(selectedScenario, difficulty, flavorKey)
@@ -246,10 +345,11 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
         gameJson = await setHumanPlayer(gameJson, idx);
       }
     } else {
-      gameJson = previewJson;
-      if (idx !== 0) {
-        gameJson = await setHumanPlayer(gameJson, idx);
-      }
+      if (!pickedCapital) return;
+      capitalOverride = pickedCapital.capital;
+      gameJson = selectedScenario
+        ? await newScenarioGame(selectedScenario, difficulty, idx, flavorKey, capitalOverride)
+        : await newGame(effectiveMapKey, difficulty, idx, mapGenConfig, flavorKey, capitalOverride);
     }
     onStartGame(gameJson, {
       mapKey: effectiveMapKey,
@@ -257,14 +357,15 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
       scenario: selectedScenario,
       difficulty,
       nationIdx: idx,
+      capitalOverride,
       mapGenConfig,
       organicBorders,
       hideHexGrid,
     });
   };
 
-  const pickedGp = pickedNationIdx != null ? previewGps[pickedNationIdx] : null;
-  const canBegin = observerMode || pickedNationIdx != null;
+  const canBegin = observerMode || pickedCapital != null;
+  const canPlaceCapital = pickedNationIdx != null;
 
   if (step === 'config') {
     return (
@@ -304,13 +405,13 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
             <div style={s.group}>
               <label style={s.label}>Difficulty</label>
               <div style={s.diffRow}>
-                {DIFFICULTIES.map((d, i) => (
+                {DIFFICULTIES.map((label, i) => (
                   <div
-                    key={d}
+                    key={label}
                     style={difficulty === i ? { ...s.diffBtn, ...s.diffSelected } : s.diffBtn}
                     onClick={() => setDifficulty(i)}
                   >
-                    {d}
+                    {label}
                   </div>
                 ))}
               </div>
@@ -471,22 +572,23 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
     );
   }
 
-  // Preview step
+  const showTerrainControls = previewStage === 'nation' && !selectedScenario;
+  const showNationPicker = observerMode || previewStage === 'nation';
+
   return (
     <div style={s.previewPage}>
       <div style={s.previewHeader}>
         <h1 style={s.headerTitle}>Preview</h1>
         <div style={s.previewSub}>
-          {selectedScenario
-            ? `Scenario: ${selectedScenario}`
-            : `Seed: ${effectiveMapKey}`}
+          {selectedScenario ? `Scenario: ${selectedScenario}` : `Seed: ${effectiveMapKey}`}
           {' \u00b7 '}Names: {flavorKey || effectiveMapKey}
           {' \u00b7 '}{DIFFICULTIES[difficulty]}
           {observerMode ? ' \u00b7 Observer Mode' : ''}
+          {!observerMode && previewStage === 'capital' ? ' \u00b7 Place Capital' : ''}
         </div>
       </div>
       <div style={s.previewBody}>
-        <div style={s.mapWrap}>
+        <div ref={mapWrapRef} style={s.mapWrap}>
           <HexMap
             tiles={previewTiles}
             mapMode={previewMapMode}
@@ -496,15 +598,23 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
               if (mode === 'terrain' || mode === 'political') setPreviewMapMode(mode);
             }}
             onTileClick={handleTileClick}
+            onTileHover={handleTileHover}
             disableFogOfWar={true}
             highlightedNationId={pickedGp?.id ?? null}
+            hoveredPreviewTileKey={hoveredPreviewTileKey}
+            placedPreviewTileKey={placedPreviewTileKey}
+            hideMapModeControl={!observerMode && previewStage === 'capital'}
             organicBorders={organicBorders}
             hideHexGrid={hideHexGrid}
             limitedMapModes={true}
+            scale={previewStage === 'capital' ? placementScale : undefined}
+            offset={previewStage === 'capital' ? placementOffset : undefined}
+            onScaleChange={previewStage === 'capital' ? setPlacementScale : undefined}
+            onOffsetChange={previewStage === 'capital' ? setPlacementOffset : undefined}
           />
         </div>
         <div style={s.sidebar}>
-          {!selectedScenario && (
+          {showTerrainControls && (
             <div style={{ marginBottom: 14 }}>
               <div style={s.sidebarTitle}>
                 <span>Terrain</span>
@@ -647,48 +757,130 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
               </div>
             </div>
           )}
-          <div style={s.sidebarTitle}>
-            {observerMode ? 'Viewpoint Nation' : 'Choose Your Empire'}
-          </div>
-          <div style={s.sidebarHint}>
-            {observerMode
-              ? 'Pick a nation whose ledger and diplomacy screens to view. You can switch in-game.'
-              : 'Click a starting region on the map or a nation below.'}
-          </div>
-          <div style={s.gpList}>
-            {previewGps.map(gp => (
-              <div
-                key={gp.id}
-                style={pickedNationIdx === gp.idx ? { ...s.gpRow, ...s.gpRowSelected } : s.gpRow}
-                onClick={() => setPickedNationIdx(gp.idx)}
-              >
-                <div style={{ ...s.gpSwatch, background: NATION_COLORS[gp.color] || '#888' }} />
-                <Flag svg={gp.flagSvg} width={36} height={24} title={gp.governmentTitle} />
-                <div style={s.gpNameBlock}>
-                  <div style={s.gpName}>{gp.name}</div>
-                  {gp.governmentTitle && gp.governmentTitle !== gp.name && (
-                    <div style={s.gpTitle}>{gp.governmentTitle}</div>
-                  )}
+
+          {showNationPicker ? (
+            <>
+              <div style={s.sidebarTitle}>
+                {observerMode ? 'Viewpoint Nation' : 'Choose Your Empire'}
+              </div>
+              <div style={s.sidebarHint}>
+                {observerMode
+                  ? 'Pick a nation whose ledger and diplomacy screens to view. You can switch in-game.'
+                  : 'Choose your nation first. Then place the capital on a hex inside your country.'}
+              </div>
+              <div style={s.gpList}>
+                {previewGps.map(gp => (
+                  <div
+                    key={gp.id}
+                    style={pickedNationIdx === gp.idx ? { ...s.gpRow, ...s.gpRowSelected } : s.gpRow}
+                    onClick={() => handleNationPick(gp.idx)}
+                  >
+                    <div style={{ ...s.gpSwatch, background: NATION_COLORS[gp.color] || '#888' }} />
+                    <Flag svg={gp.flagSvg} width={36} height={24} title={gp.governmentTitle} />
+                    <div style={s.gpNameBlock}>
+                      <div style={s.gpName}>{gp.name}</div>
+                      {gp.governmentTitle && gp.governmentTitle !== gp.name && (
+                        <div style={s.gpTitle}>{gp.governmentTitle}</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={s.sidebarTitle}>Place Capital</div>
+              <div style={s.sidebarHint}>
+                Hover a hex inside {pickedGp?.name} to preview its opening capital yield. Click a valid hex to place the capital, then begin the campaign.
+              </div>
+              <div style={s.placementBox}>
+                <div style={s.placementLine}>
+                  <span>Nation</span>
+                  <strong>{pickedGp?.name ?? '—'}</strong>
+                </div>
+                <div style={s.placementLine}>
+                  <span>Hovering</span>
+                  <strong>{activeCapitalPreview ? `(${activeCapitalPreview.capital.q}, ${activeCapitalPreview.capital.r})` : 'Choose a hex'}</strong>
+                </div>
+                <div style={s.placementLine}>
+                  <span>Collected hexes</span>
+                  <strong>{activeCapitalPreview?.collectedTiles ?? 0}</strong>
+                </div>
+                <div style={s.placementLine}>
+                  <span>Supported workers</span>
+                  <strong style={{ color: '#daa520' }}>{activeCapitalPreview?.support ?? 0}</strong>
                 </div>
               </div>
-            ))}
-          </div>
+              <div style={s.sidebarTitle}>Turn 1 Capital Yields</div>
+              {activeCapitalPreview?.resources.length ? (
+                <div style={s.resourceList}>
+                  {activeCapitalPreview.resources.map(entry => (
+                    <div key={entry.resource} style={s.resourceRow}>
+                      <span>{entry.resource}</span>
+                      <strong>{entry.amount}</strong>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={s.sidebarHint}>Only owned land tiles in the capital’s 1-hex ring are counted.</div>
+              )}
+              {pickedCapital && (
+                <div style={s.selectedCapitalBanner}>
+                  Placed at ({pickedCapital.capital.q}, {pickedCapital.capital.r})
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
       <div style={s.previewFooter}>
-        <button style={s.secondaryBtn} onClick={() => setStep('config')}>Back</button>
-        <button style={s.secondaryBtn} onClick={handleReroll}>Re-roll</button>
-        <button style={s.secondaryBtn} onClick={handleRerollNames} title="Re-roll only the country names and flags. Map layout stays the same.">
-          Re-roll Names
-        </button>
-        <div style={{ flex: 1 }} />
         <button
-          style={canBegin ? s.startBtn : { ...s.startBtn, ...s.startBtnDisabled }}
-          disabled={!canBegin}
-          onClick={handleBegin}
+          style={s.secondaryBtn}
+          onClick={observerMode
+            ? () => setStep('config')
+            : previewStage === 'capital'
+              ? handleLeaveCapitalPlacement
+              : () => setStep('config')}
         >
-          Begin Campaign
+          Back
         </button>
+        {previewStage === 'nation' && (
+          <>
+            <button style={s.secondaryBtn} onClick={handleReroll}>Re-roll</button>
+            <button
+              style={s.secondaryBtn}
+              onClick={handleRerollNames}
+              title="Re-roll only the country names and flags. Map layout stays the same."
+            >
+              Re-roll Names
+            </button>
+          </>
+        )}
+        <div style={{ flex: 1 }} />
+        {observerMode ? (
+          <button
+            style={s.startBtn}
+            onClick={handleBegin}
+          >
+            Begin Campaign
+          </button>
+        ) : previewStage === 'nation' ? (
+          <button
+            style={canPlaceCapital ? s.startBtn : { ...s.startBtn, ...s.startBtnDisabled }}
+            disabled={!canPlaceCapital}
+            onClick={handleEnterCapitalPlacement}
+          >
+            Place Capital
+          </button>
+        ) : (
+          <button
+            style={canBegin ? s.startBtn : { ...s.startBtn, ...s.startBtnDisabled }}
+            disabled={!canBegin}
+            onClick={handleBegin}
+          >
+            Begin Campaign
+          </button>
+        )}
       </div>
     </div>
   );
@@ -729,7 +921,6 @@ const s: Record<string, React.CSSProperties> = {
   startBtnDisabled: { opacity: 0.4, cursor: 'not-allowed' },
   secondaryBtn: { padding: '8px 20px', background: '#1a1a2e', color: '#e0d8c0', border: '1px solid #3a3520', fontFamily: 'Georgia, serif', fontSize: 13, cursor: 'pointer', borderRadius: 3 },
 
-  // Preview
   previewPage: { fontFamily: 'Georgia, serif', background: '#1a1a2e', color: '#e0d8c0', height: '100vh', display: 'flex', flexDirection: 'column' as const },
   previewHeader: { background: '#0f0f23', padding: '10px 20px', borderBottom: '2px solid #3a3520', textAlign: 'center' as const },
   previewSub: { fontSize: 12, color: '#9a9a9a', marginTop: 2 },
@@ -746,4 +937,9 @@ const s: Record<string, React.CSSProperties> = {
   gpName: { fontSize: 13, fontWeight: 'bold' as const },
   gpTitle: { fontSize: 11, color: '#9a9a9a', marginTop: 1 },
   previewFooter: { padding: '12px 20px', background: '#0f0f23', borderTop: '2px solid #3a3520', display: 'flex', gap: 10, alignItems: 'center' },
+  placementBox: { marginBottom: 16, border: '1px solid #3a3520', background: '#1a1a2e', padding: 10, display: 'flex', flexDirection: 'column' as const, gap: 8 },
+  placementLine: { display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 12 },
+  resourceList: { display: 'flex', flexDirection: 'column' as const, gap: 6 },
+  resourceRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '6px 8px', background: '#1a1a2e', border: '1px solid #2c2c3e', borderRadius: 3 },
+  selectedCapitalBanner: { marginTop: 14, padding: '8px 10px', fontSize: 12, border: '1px solid #705113', background: 'rgba(218,165,32,0.10)', color: '#f0d58a' },
 };

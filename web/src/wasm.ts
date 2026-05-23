@@ -42,6 +42,11 @@ export interface TileData {
   is_prospected: boolean;
 }
 
+export interface CapitalOverride {
+  q: number;
+  r: number;
+}
+
 export interface NavyMarker {
   q: number;
   r: number;
@@ -648,6 +653,7 @@ export async function newGame(
   nationIndex: number,
   cfg: MapGenConfig = DEFAULT_MAP_GEN_CONFIG,
   flavorKey: string = '',
+  capitalOverride: CapitalOverride | null = null,
 ): Promise<string> {
   return call<string>(
     'wasm_new_game',
@@ -660,6 +666,9 @@ export async function newGame(
     cfg.numMinorNations,
     flavorKey,
     terrainJson(cfg),
+    capitalOverride != null,
+    capitalOverride?.q ?? 0,
+    capitalOverride?.r ?? 0,
   );
 }
 
@@ -740,8 +749,18 @@ export async function newScenarioGame(
   difficulty: number,
   nationIndex: number,
   flavorKey: string = '',
+  capitalOverride: CapitalOverride | null = null,
 ): Promise<string> {
-  return call<string>('wasm_new_scenario_game', scenarioId, difficulty, nationIndex, flavorKey);
+  return call<string>(
+    'wasm_new_scenario_game',
+    scenarioId,
+    difficulty,
+    nationIndex,
+    flavorKey,
+    capitalOverride != null,
+    capitalOverride?.q ?? 0,
+    capitalOverride?.r ?? 0,
+  );
 }
 
 export async function newObserverGame(

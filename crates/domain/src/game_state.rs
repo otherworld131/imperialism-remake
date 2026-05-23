@@ -880,6 +880,25 @@ pub fn new_game_with_data(
     )
 }
 
+/// `new_game_with_data` + a caller-supplied capital tile for the selected
+/// Great Power.
+pub fn new_game_with_data_and_capital_override(
+    map_key: &str,
+    difficulty: Difficulty,
+    human_nation_index: usize,
+    game_data: crate::data::GameData,
+    capital_override: Option<crate::hex::HexCoord>,
+) -> GameState {
+    new_game_with_data_and_config_and_capital_override(
+        map_key,
+        difficulty,
+        human_nation_index,
+        game_data,
+        crate::map::MapGenConfig::default(),
+        capital_override,
+    )
+}
+
 /// `new_game_with_data` + custom map-generation config.
 pub fn new_game_with_data_and_config(
     map_key: &str,
@@ -895,13 +914,42 @@ pub fn new_game_with_data_and_config(
         }
         h ^ 0xA1CA_FE42
     };
-    new_game_with_seed_and_data_and_config(
+    new_game_with_seed_and_data_and_config_and_capital_override(
         map_key,
         difficulty,
         human_nation_index,
         personality_seed,
         game_data,
         cfg,
+        None,
+    )
+}
+
+/// `new_game_with_data_and_config` + a caller-supplied capital tile for the
+/// selected Great Power.
+pub fn new_game_with_data_and_config_and_capital_override(
+    map_key: &str,
+    difficulty: Difficulty,
+    human_nation_index: usize,
+    game_data: crate::data::GameData,
+    cfg: crate::map::MapGenConfig,
+    capital_override: Option<crate::hex::HexCoord>,
+) -> GameState {
+    let personality_seed = {
+        let mut h: u64 = 5381;
+        for b in map_key.bytes() {
+            h = h.wrapping_mul(33).wrapping_add(b as u64);
+        }
+        h ^ 0xA1CA_FE42
+    };
+    new_game_with_seed_and_data_and_config_and_capital_override(
+        map_key,
+        difficulty,
+        human_nation_index,
+        personality_seed,
+        game_data,
+        cfg,
+        capital_override,
     )
 }
 
@@ -913,13 +961,14 @@ pub fn new_game_with_seed_and_data(
     personality_seed: u64,
     game_data: crate::data::GameData,
 ) -> GameState {
-    new_game_with_seed_and_data_and_config(
+    new_game_with_seed_and_data_and_config_and_capital_override(
         map_key,
         difficulty,
         human_nation_index,
         personality_seed,
         game_data,
         crate::map::MapGenConfig::default(),
+        None,
     )
 }
 
@@ -932,6 +981,28 @@ pub fn new_game_with_seed_and_data_and_config(
     game_data: crate::data::GameData,
     cfg: crate::map::MapGenConfig,
 ) -> GameState {
+    new_game_with_seed_and_data_and_config_and_capital_override(
+        map_key,
+        difficulty,
+        human_nation_index,
+        personality_seed,
+        game_data,
+        cfg,
+        None,
+    )
+}
+
+/// Create a new game with explicit game data, personality seed, map config,
+/// and an optional capital tile for the selected Great Power.
+pub fn new_game_with_seed_and_data_and_config_and_capital_override(
+    map_key: &str,
+    difficulty: Difficulty,
+    human_nation_index: usize,
+    personality_seed: u64,
+    game_data: crate::data::GameData,
+    cfg: crate::map::MapGenConfig,
+    capital_override: Option<crate::hex::HexCoord>,
+) -> GameState {
     new_game_inner(
         map_key,
         difficulty,
@@ -939,6 +1010,7 @@ pub fn new_game_with_seed_and_data_and_config(
         personality_seed,
         cfg,
         game_data,
+        capital_override,
     )
 }
 
@@ -991,13 +1063,14 @@ pub fn new_game_with_seed_and_config(
     personality_seed: u64,
     cfg: crate::map::MapGenConfig,
 ) -> GameState {
-    new_game_with_seed_and_data_and_config(
+    new_game_with_seed_and_data_and_config_and_capital_override(
         map_key,
         difficulty,
         human_nation_index,
         personality_seed,
         GameData::default(),
         cfg,
+        None,
     )
 }
 
@@ -1008,8 +1081,9 @@ fn new_game_inner(
     personality_seed: u64,
     cfg: crate::map::MapGenConfig,
     game_data: GameData,
+    capital_override: Option<crate::hex::HexCoord>,
 ) -> GameState {
-    let generated = crate::map::generate_map_with_config(map_key, &cfg);
+    let mut generated = crate::map::generate_map_with_config(map_key, &cfg);
 
     assert!(
         !generated.great_power_nations.is_empty(),
@@ -1020,6 +1094,9 @@ fn new_game_inner(
     // Pre-generate random personalities for all AI nations
     let gp_count = generated.great_power_nations.len();
     let human_idx = human_nation_index.min(gp_count - 1);
+    if let Some(coord) = capital_override {
+        apply_generated_capital_override(&mut generated, human_idx, coord);
+    }
     let ai_count = gp_count - 1; // minus human
     let personalities = random_personalities(personality_seed, ai_count);
 
@@ -1557,6 +1634,51 @@ fn new_game_inner(
     }
 
     game_state
+}
+
+fn apply_generated_capital_override(
+    generated: &mut crate::map::GeneratedMap,
+    great_power_index: usize,
+    capital_override: crate::hex::HexCoord,
+) {
+    let Some(setup) = generated.great_power_nations.get_mut(great_power_index) else {
+        return;
+    };
+    let nation_province_ids: HashSet<ProvinceId> = setup.province_ids.iter().copied().collect();
+    let Some(tile) = generated.hex_map.get_tile(capital_override) else {
+        return;
+    };
+    let Some(province_id) = tile.province_id else {
+        return;
+    };
+    if !nation_province_ids.contains(&province_id)
+        || matches!(tile.terrain(), TerrainType::Sea | TerrainType::Mountain)
+    {
+        return;
+    }
+
+    let Some(province_idx) = generated
+        .provinces
+        .iter()
+        .position(|province| province.id == province_id)
+    else {
+        return;
+    };
+    let old_province_capital = generated.provinces[province_idx].capital_tile;
+    if old_province_capital != capital_override {
+        if let Some(tile) = generated.hex_map.get_tile_mut(old_province_capital) {
+            tile.is_capital = false;
+        }
+        if let Some(tile) = generated.hex_map.get_tile_mut(capital_override) {
+            tile.is_capital = true;
+        }
+        generated.provinces[province_idx].capital_tile = capital_override;
+    }
+
+    setup.capital_province = province_id;
+    if let Some(pos) = setup.province_ids.iter().position(|&pid| pid == province_id) {
+        setup.province_ids.swap(0, pos);
+    }
 }
 
 /// Create a new game in observer mode — all 7 Great Powers play as AI.
@@ -2644,6 +2766,76 @@ mod tests {
                     tile_coord.r
                 );
             }
+        }
+    }
+
+    #[test]
+    fn capital_override_moves_human_capital_before_startup_bonuses() {
+        let seed = "capital_override";
+        let baseline = new_game(seed, Difficulty::Normal, 0);
+        let human = baseline.get_nation(baseline.human_player_nation).unwrap();
+        let old_capital_pid = human.capital_province_id;
+        let old_capital_tile = baseline.get_province(old_capital_pid).unwrap().capital_tile;
+
+        let mut override_coord = None;
+        let mut previous_province_capital = None;
+        let mut override_province_id = None;
+        'province_search: for pid in &human.province_ids {
+            let province = baseline.get_province(*pid).unwrap();
+            for &coord in &province.tiles {
+                let tile = baseline.world.hex_map.get_tile(coord).unwrap();
+                if coord == old_capital_tile
+                    || matches!(tile.terrain(), crate::types::TerrainType::Sea | crate::types::TerrainType::Mountain)
+                {
+                    continue;
+                }
+                override_coord = Some(coord);
+                previous_province_capital = Some(province.capital_tile);
+                override_province_id = Some(province.id);
+                break 'province_search;
+            }
+        }
+
+        let override_coord = override_coord.expect("expected a valid non-capital tile for the player");
+        let previous_province_capital = previous_province_capital.unwrap();
+        let override_province_id = override_province_id.unwrap();
+
+        let overridden = new_game_with_data_and_capital_override(
+            seed,
+            Difficulty::Normal,
+            0,
+            GameData::default(),
+            Some(override_coord),
+        );
+        let human = overridden
+            .get_nation(overridden.human_player_nation)
+            .unwrap();
+        assert_eq!(human.capital_province_id, override_province_id);
+
+        let capital_province = overridden.get_province(override_province_id).unwrap();
+        assert_eq!(capital_province.capital_tile, override_coord);
+
+        let capital_tile = overridden.world.hex_map.get_tile(override_coord).unwrap();
+        assert!(capital_tile.is_capital);
+        assert!(capital_tile.is_country_capital);
+        assert!(capital_tile.infrastructure.has_depot);
+
+        let former_tile = overridden.world.hex_map.get_tile(old_capital_tile).unwrap();
+        assert!(
+            !former_tile.is_country_capital,
+            "former home capital should not retain country-capital behavior"
+        );
+
+        if previous_province_capital != override_coord {
+            let previous = overridden
+                .world
+                .hex_map
+                .get_tile(previous_province_capital)
+                .unwrap();
+            assert!(
+                !previous.is_capital,
+                "the chosen province's old centroid should stop being the province capital"
+            );
         }
     }
 }
