@@ -2124,6 +2124,13 @@ fn find_port_alternative(
         return None;
     }
 
+    // Trello #426: another engineer of this nation is already mid-port in or
+    // next to this province — don't double up on the same coastline.
+    let in_progress = super::economy::provinces_with_port_under_construction(game, nation_id);
+    if super::economy::province_adjacent_to_any(game, candidate_pid, &in_progress) {
+        return None;
+    }
+
     // (3) Find an owned coastal land tile (sea-adjacent, real ocean, no
     // building yet, no civilian assigned). Prefer the province centroid if
     // it qualifies, else any qualifying tile in the province.

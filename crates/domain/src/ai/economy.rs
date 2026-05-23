@@ -514,17 +514,38 @@ fn plan_next_depot_with(
                     &nation.researched_techs,
                     cfg.infra_improvability_weight,
                 );
-                let net_score = net_score(coverage_value, path_cost, cfg);
-                let plan = DepotPlan {
-                    candidate: t.candidate,
-                    path,
-                    origin_capital: t.origin_capital,
-                    path_cost,
-                    coverage_value,
-                    net_score,
-                };
-                log_depot_plan(game, nation_id, "keep_commitment", Some(&plan));
-                return PlanOutcome::KeepCommitment(plan);
+                // Trello #426: abandon the commitment if the candidate now
+                // covers nothing new (e.g. another engineer's just-built
+                // depot now blankets the same tiles). Fall through to a
+                // fresh re-plan rather than burning $ on a zero-value depot.
+                if coverage_value == 0 {
+                    if game.ai_debug {
+                        let name = game
+                            .get_nation(nation_id)
+                            .map(|n| n.name.as_str())
+                            .unwrap_or("?");
+                        eprintln!(
+                            "[AI:{}:infra-plan] clear_commitment coverage_dropped_to_zero candidate=({}, {}) origin=({}, {})",
+                            name,
+                            t.candidate.q,
+                            t.candidate.r,
+                            t.origin_capital.q,
+                            t.origin_capital.r
+                        );
+                    }
+                } else {
+                    let net_score = net_score(coverage_value, path_cost, cfg);
+                    let plan = DepotPlan {
+                        candidate: t.candidate,
+                        path,
+                        origin_capital: t.origin_capital,
+                        path_cost,
+                        coverage_value,
+                        net_score,
+                    };
+                    log_depot_plan(game, nation_id, "keep_commitment", Some(&plan));
+                    return PlanOutcome::KeepCommitment(plan);
+                }
             }
             if game.ai_debug {
                 let name = game
@@ -670,6 +691,67 @@ pub(super) fn plan_next_depot_excluding(
     plan_next_depot_with(game, nation_id, commitment, excluded_candidates)
 }
 
+/// Provinces in which this nation already has an engineer assigned to a
+/// `BuildTask::Port` (i.e. a port build is in progress or queued this turn).
+///
+/// Used by [`find_stranded_port_target`] and `find_port_alternative` to skip
+/// candidate provinces whose coastal area is already being served by another
+/// engineer — including any *adjacent* province, since two ports in adjacent
+/// provinces typically double-cover the same coastal tiles (Trello #426).
+pub(super) fn provinces_with_port_under_construction(
+    game: &GameState,
+    nation_id: NationId,
+) -> HashSet<ProvinceId> {
+    use crate::economy::civilians::BuildTask;
+    let Some(nation) = game.get_nation(nation_id) else {
+        return HashSet::new();
+    };
+    nation
+        .military
+        .civilians
+        .iter()
+        .filter(|c| c.build_task == Some(BuildTask::Port))
+        .filter_map(|c| c.position)
+        .filter_map(|pos| {
+            game.world
+                .hex_map
+                .get_tile(pos)
+                .and_then(|t| t.province_id)
+        })
+        .collect()
+}
+
+/// True when `candidate_pid` is the same as, or shares a hex border with, any
+/// province in `port_pids`. Cheap O(tiles · 6) scan; used to suppress
+/// redundant port builds when an engineer in this nation is already busy on a
+/// port in or next to the target province.
+pub(super) fn province_adjacent_to_any(
+    game: &GameState,
+    candidate_pid: ProvinceId,
+    port_pids: &HashSet<ProvinceId>,
+) -> bool {
+    if port_pids.is_empty() {
+        return false;
+    }
+    if port_pids.contains(&candidate_pid) {
+        return true;
+    }
+    let Some(province) = game.get_province(candidate_pid) else {
+        return false;
+    };
+    for &tile in &province.tiles {
+        for n in tile.neighbors() {
+            if let Some(t) = game.world.hex_map.get_tile(n)
+                && let Some(pid) = t.province_id
+                && port_pids.contains(&pid)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Find the best coastal tile in an owned province that is completely
 /// unreachable by rail from any country capital given current technology.
 ///
@@ -727,6 +809,10 @@ pub(super) fn find_stranded_port_target(game: &GameState, nation_id: NationId) -
     let connected = connected_provinces(game, nation_id);
     let already_covered = collectable_hexes(&game.world.hex_map, &owned_provinces, &connected);
     let demand = compute_resource_demand(nation, game, cfg);
+    // Trello #426: don't pick a province whose neighbour already has an
+    // engineer building a port — two ports in adjacent provinces typically
+    // double-cover the same coastline.
+    let in_progress_port_pids = provinces_with_port_under_construction(game, nation_id);
 
     let mut best_coord: Option<HexCoord> = None;
     let mut best_coverage: u32 = 0;
@@ -753,6 +839,11 @@ pub(super) fn find_stranded_port_target(game: &GameState, nation_id: NationId) -
                 .is_some_and(|t| t.infrastructure.has_port)
         });
         if already_has_port {
+            continue;
+        }
+
+        // Adjacent province already has an engineer mid-port — skip.
+        if province_adjacent_to_any(game, province.id, &in_progress_port_pids) {
             continue;
         }
 
@@ -3700,6 +3791,139 @@ mod tests {
             ai.economy.chain_targets.lumber_factory > 0,
             "furniture factory should also get a share, got {}",
             ai.economy.chain_targets.lumber_factory
+        );
+    }
+
+    // ── Trello #426: AI infra planner cleanup ─────────────────
+
+    /// Coverage of the committed candidate dropped to zero (a freshly built
+    /// neighbour depot now blankets the same tiles). The commitment must
+    /// clear and the planner must fall through to a Fresh re-plan rather
+    /// than returning a zero-value KeepCommitment.
+    #[test]
+    fn plan_clears_zero_coverage_commitment() {
+        // Capital has a depot, so the 1-hex radius around (0,0) is already
+        // covered. The committed candidate is (1,0): its 1-hex radius is
+        // (1,0) + neighbours, but only (1,0) itself is in the owned province
+        // (the only `extras` tile), and (1,0) is already covered by the
+        // capital depot — so `coverage_value` collapses to zero.
+        let capital = HexCoord::new(0, 0);
+        let cand = HexCoord::new(1, 0);
+        let mut game = planner_game(capital, &[(cand, ResourceType::Timber)]);
+        game.get_nation_mut(NationId(1))
+            .unwrap()
+            .diplomacy
+            .ai_priority_state
+            .committed_infra_target = Some(crate::nation::CommittedInfraTarget {
+            candidate: cand,
+            origin_capital: capital,
+            turn_committed: 1,
+        });
+
+        let outcome = plan_next_depot(&game, NationId(1));
+        assert!(
+            matches!(outcome, PlanOutcome::Fresh(_)),
+            "zero-coverage commitment must clear and re-plan, got {outcome:?}"
+        );
+    }
+
+    /// `province_adjacent_to_any` and `provinces_with_port_under_construction`
+    /// together must prevent the AI from queuing a second port in a province
+    /// that shares a border with one already mid-build (gameplay bug from
+    /// the Trello report — two idle engineers picking adjacent provinces in
+    /// the same spending turn).
+    #[test]
+    fn port_construction_in_progress_blocks_adjacent_province() {
+        use crate::economy::civilians::{BuildTask, Civilian, CivilianType, next_civilian_id};
+        use crate::map::tile::Tile;
+
+        // Two provinces sharing the border between (0,0)/(1,0) and (2,0)/(3,0):
+        //   P1: tiles (0,0) capital, (1,0)
+        //   P2: tiles (2,0) capital, (3,0)
+        // (1,0) and (2,0) are direct hex neighbours (offset axial).
+        let mut hex_map = HexMap::new(10, 10);
+        for (c, pid) in &[
+            (HexCoord::new(0, 0), ProvinceId(1)),
+            (HexCoord::new(1, 0), ProvinceId(1)),
+            (HexCoord::new(2, 0), ProvinceId(2)),
+            (HexCoord::new(3, 0), ProvinceId(2)),
+        ] {
+            let mut t = Tile::with_province(TerrainType::Grassland, *pid);
+            t.set_resource(ResourceType::Grain);
+            hex_map.set_tile(*c, t);
+        }
+
+        let p1 = Province::new(
+            ProvinceId(1),
+            "P1".into(),
+            NationId(1),
+            HexCoord::new(0, 0),
+            vec![HexCoord::new(0, 0), HexCoord::new(1, 0)],
+            4,
+        );
+        let p2 = Province::new(
+            ProvinceId(2),
+            "P2".into(),
+            NationId(1),
+            HexCoord::new(2, 0),
+            vec![HexCoord::new(2, 0), HexCoord::new(3, 0)],
+            4,
+        );
+
+        let mut nation = Nation::new(
+            NationId(1),
+            "N1".into(),
+            crate::nation::NationColor::Blue,
+            NationType::GreatPower,
+            ProvinceId(1),
+        );
+        // An engineer mid-port at (1,0), the easternmost tile of P1.
+        let mut engineer = Civilian::new(next_civilian_id(), CivilianType::Engineer, NationId(1));
+        engineer.position = Some(HexCoord::new(1, 0));
+        engineer.working = true;
+        engineer.turns_remaining = 2;
+        engineer.build_task = Some(BuildTask::Port);
+        nation.military.civilians.push(engineer);
+
+        let game = crate::test_game_state! {
+        turn: TurnNumber::new(1),
+        difficulty: Difficulty::Normal,
+        map_key: "t".into(),
+        hex_map: hex_map,
+        provinces: vec![p1, p2],
+        nations: vec![nation],
+        human_player_nation: NationId(99),
+        events: Vec::new(),
+        game_data: GameData::default(),
+        diplomacy: crate::diplomacy::DiplomacyState::new(),
+        pending_attacks: Vec::new(),
+        pending_moves: Vec::new(),
+        pending_landings: Vec::new(),
+        history: Vec::new(),
+        high_scores: Vec::new(),
+        newspaper_archive: Vec::new(),
+        battle_archive: Vec::new(),
+        political_archive: Vec::new(),
+        ai_debug: false,
+        observer_mode: false,
+        last_cash_flow: std::collections::HashMap::new(),
+        last_resource_flow: std::collections::HashMap::new(),
+        pending_ai_cash_spending: Vec::new(),
+        pending_ai_cash_income: Vec::new(),
+        next_unit_id: 6_000_000,};
+
+        let in_progress = provinces_with_port_under_construction(&game, NationId(1));
+        assert!(
+            in_progress.contains(&ProvinceId(1)),
+            "engineer mid-port on P1 must register P1 as in-progress"
+        );
+        assert!(
+            province_adjacent_to_any(&game, ProvinceId(1), &in_progress),
+            "same-province check (P1) must report a conflict"
+        );
+        assert!(
+            province_adjacent_to_any(&game, ProvinceId(2), &in_progress),
+            "adjacent-province check (P2 neighbours P1) must report a conflict"
         );
     }
 }
