@@ -60,7 +60,8 @@ describe('evaluateCapitalSite', () => {
     const preview = evaluateCapitalSite(center, tiles, 1);
     expect(preview).not.toBeNull();
     expect(preview?.collectedTiles).toBe(5);
-    expect(preview?.support).toBe(6);
+    expect(preview?.support).toBeNull();
+    expect(preview?.foodSupply).toEqual({ grain: 3, fruit: 2, meat: 5 });
     expect(preview?.resources).toEqual([
       { resource: 'Grain', amount: 3 },
       { resource: 'Fruit', amount: 2 },

@@ -1476,18 +1476,6 @@ fn level1_food_yield(coord: HexCoord, hex_map: &super::hex_map::HexMap) -> (u32,
     (grain, fruit, meat)
 }
 
-/// Maximum number of workers that can be fed by a balanced composite-meal
-/// supply of (grain, fruit, meat), matching `worker_food_demand`:
-///   grain need = ⌈w/2⌉   → w ≤ 2·grain
-///   meat  need = ⌊w/4⌋   → w ≤ 4·meat + 3
-///   fruit need = w − grain − meat = ⌊(w+2)/4⌋ → w ≤ 4·fruit + 1
-fn max_workers_supportable(grain: u32, fruit: u32, meat: u32) -> u32 {
-    let w_grain = grain.saturating_mul(2);
-    let w_fruit = fruit.saturating_mul(4).saturating_add(1);
-    let w_meat = meat.saturating_mul(4).saturating_add(3);
-    w_grain.min(w_fruit).min(w_meat)
-}
-
 /// Score a tile as a potential capital location.
 ///
 /// Picks the hex that supports the largest population. Workers eat balanced
@@ -1540,7 +1528,7 @@ fn score_capital_candidate(coord: HexCoord, hex_map: &super::hex_map::HexMap) ->
     // Tiebreakers: coastal access (port path), and a small penalty for
     // siting the capital on otherwise barren tiles (Desert/Tundra/Swamp)
     // with no resource of their own.
-    let workers = max_workers_supportable(grain, fruit, meat);
+    let workers = crate::economy::labor::max_workers_supportable(grain, fruit, meat);
     let mut score = workers * 100;
     if ocean_neighbors > 0 {
         score += 10;

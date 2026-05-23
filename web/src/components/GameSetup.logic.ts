@@ -19,9 +19,16 @@ export interface CapitalResourceEntry {
   amount: number;
 }
 
+export interface CapitalFoodSupply {
+  grain: number;
+  fruit: number;
+  meat: number;
+}
+
 export interface CapitalSitePreview {
   capital: CapitalOverride;
-  support: number;
+  support: number | null;
+  foodSupply: CapitalFoodSupply;
   resources: CapitalResourceEntry[];
   collectedTiles: number;
 }
@@ -46,13 +53,6 @@ export function isValidCapitalTile(tile: TileData | null, nationId: number | nul
     && tile.nation_id === nationId
     && tile.terrain !== 'Sea'
     && tile.terrain !== 'Mountain';
-}
-
-export function maxWorkersSupportable(grain: number, fruit: number, meat: number): number {
-  const wGrain = grain * 2;
-  const wFruit = fruit * 4 + 1;
-  const wMeat = meat * 4 + 3;
-  return Math.min(wGrain, wFruit, wMeat);
 }
 
 function hexToPixel(q: number, r: number): [number, number] {
@@ -136,7 +136,8 @@ export function evaluateCapitalSite(
 
   return {
     capital: { q: center.q, r: center.r },
-    support: maxWorkersSupportable(grain, fruit, meat),
+    support: null,
+    foodSupply: { grain, fruit, meat },
     resources: orderedResources,
     collectedTiles,
   };

@@ -6,6 +6,15 @@ export async function initWasm(): Promise<void> {
   await call<string>('wasm_get_scenarios');
 }
 
+export async function getMaxWorkersSupportable(grain: number, fruit: number, meat: number): Promise<number> {
+  return call<number>(
+    'wasm_max_workers_supportable',
+    Math.max(0, Math.round(grain)),
+    Math.max(0, Math.round(fruit)),
+    Math.max(0, Math.round(meat)),
+  );
+}
+
 export type MapMode = 'terrain' | 'political' | 'diplomatic' | 'relationship' | 'military' | 'naval';
 
 export interface TileData {

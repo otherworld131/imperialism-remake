@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   getScenarios, newGame, newScenarioGame, getMapData,
   newObserverGame, newObserverScenarioGame, setHumanPlayer,
+  getMaxWorkersSupportable,
   applyFlavor,
   DEFAULT_MAP_GEN_CONFIG,
   DEFAULT_TERRAIN_MIX,
@@ -10,9 +11,11 @@ import {
 import type { CapitalOverride, TileData, MapMode, MapGenConfig, TerrainMix } from '../wasm';
 import HexMap from './HexMap';
 import Flag from './Flag';
+import { resourceEmoji } from '../resourceEmoji';
 import {
   computeNationPlacementView,
   evaluateCapitalSite,
+  isValidCapitalTile,
   type CapitalSitePreview,
   tileKey,
 } from './GameSetup.logic';
@@ -64,6 +67,11 @@ interface GpInfo {
   flagSvg: string;
 }
 
+interface SuggestedPlacement extends CapitalSitePreview {
+  provinceId: number | null;
+  provinceName: string;
+}
+
 type Step = 'config' | 'preview';
 type PreviewStage = 'nation' | 'capital';
 
@@ -109,10 +117,16 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
   const [previewStage, setPreviewStage] = useState<PreviewStage>('nation');
   const [hoveredCapital, setHoveredCapital] = useState<CapitalSitePreview | null>(null);
   const [pickedCapital, setPickedCapital] = useState<CapitalSitePreview | null>(null);
+  const [sidebarHoveredCapital, setSidebarHoveredCapital] = useState<SuggestedPlacement | null>(null);
+  const [suggestedCapitals, setSuggestedCapitals] = useState<SuggestedPlacement[]>([]);
   const [placementScale, setPlacementScale] = useState<number | undefined>(undefined);
   const [placementOffset, setPlacementOffset] = useState<{ x: number; y: number } | undefined>(undefined);
   const [mapViewport, setMapViewport] = useState({ width: 0, height: 0 });
   const mapWrapRef = useRef<HTMLDivElement>(null);
+  const capitalSupportCacheRef = useRef(new Map<string, number>());
+  const hoveredCapitalSeqRef = useRef(0);
+  const pickedCapitalSeqRef = useRef(0);
+  const suggestionsSeqRef = useRef(0);
 
   useEffect(() => {
     getScenarios().then(setScenarios).catch(() => { /* no scenarios available */ });
@@ -133,11 +147,30 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
       }));
 
   const resetPlacementState = useCallback(() => {
+    hoveredCapitalSeqRef.current += 1;
+    pickedCapitalSeqRef.current += 1;
+    suggestionsSeqRef.current += 1;
+    capitalSupportCacheRef.current.clear();
     setPreviewStage('nation');
     setHoveredCapital(null);
     setPickedCapital(null);
+    setSidebarHoveredCapital(null);
+    setSuggestedCapitals([]);
     setPlacementScale(undefined);
     setPlacementOffset(undefined);
+  }, []);
+
+  const resolveCapitalSupport = useCallback(async (preview: CapitalSitePreview): Promise<CapitalSitePreview> => {
+    const key = tileKey(preview.capital.q, preview.capital.r);
+    const cached = capitalSupportCacheRef.current.get(key);
+    if (cached != null) return { ...preview, support: cached };
+    const support = await getMaxWorkersSupportable(
+      preview.foodSupply.grain,
+      preview.foodSupply.fruit,
+      preview.foodSupply.meat,
+    );
+    capitalSupportCacheRef.current.set(key, support);
+    return { ...preview, support };
   }, []);
 
   const buildPreview = useCallback(async (keyOverride?: string, flavorOverride?: string) => {
@@ -250,10 +283,32 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
     return map;
   }, [previewTiles]);
 
+  const previewMapTiles = useMemo(() => {
+    return previewTiles.map(tile => {
+      if (observerMode) {
+        return { ...tile, resource_hidden: false };
+      }
+      const wasCountryCapital = tile.is_country_capital;
+      return {
+        ...tile,
+        resource_hidden: false,
+        is_capital: false,
+        is_country_capital: false,
+        improvement_level: 0,
+        has_depot: wasCountryCapital ? false : tile.has_depot,
+        army_firepower: wasCountryCapital ? 0 : tile.army_firepower,
+        army_unit_count: wasCountryCapital ? 0 : tile.army_unit_count,
+        army_composition: wasCountryCapital ? null : tile.army_composition,
+        naval_firepower: wasCountryCapital ? 0 : tile.naval_firepower,
+        naval_ship_count: wasCountryCapital ? 0 : tile.naval_ship_count,
+      };
+    });
+  }, [observerMode, previewTiles]);
+
   const pickedGp = pickedNationIdx != null ? previewGps[pickedNationIdx] : null;
-  const hoveredPreviewTileKey = hoveredCapital ? tileKey(hoveredCapital.capital.q, hoveredCapital.capital.r) : null;
+  const activeCapitalPreview = sidebarHoveredCapital ?? hoveredCapital ?? pickedCapital;
+  const hoveredPreviewTileKey = activeCapitalPreview ? tileKey(activeCapitalPreview.capital.q, activeCapitalPreview.capital.r) : null;
   const placedPreviewTileKey = pickedCapital ? tileKey(pickedCapital.capital.q, pickedCapital.capital.r) : null;
-  const activeCapitalPreview = hoveredCapital ?? pickedCapital;
 
   useEffect(() => {
     if (observerMode) {
@@ -280,26 +335,125 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
   useEffect(() => {
     if (observerMode || previewStage !== 'capital' || !pickedGp) return;
     setPreviewMapMode('terrain');
-    const nextView = computeNationPlacementView(previewTiles, pickedGp.id, mapViewport);
+    const nextView = computeNationPlacementView(previewMapTiles, pickedGp.id, mapViewport);
     if (!nextView) return;
     setPlacementScale(nextView.scale);
     setPlacementOffset(nextView.offset);
-  }, [observerMode, previewStage, pickedGp, previewTiles, mapViewport]);
+  }, [observerMode, previewStage, pickedGp, previewMapTiles, mapViewport]);
+
+  useEffect(() => {
+    if (observerMode || previewStage !== 'capital' || !pickedGp) {
+      suggestionsSeqRef.current += 1;
+      setSidebarHoveredCapital(null);
+      setSuggestedCapitals([]);
+      return;
+    }
+    const seq = suggestionsSeqRef.current + 1;
+    suggestionsSeqRef.current = seq;
+    setSidebarHoveredCapital(null);
+
+    const candidates = previewMapTiles
+      .filter(tile => isValidCapitalTile(tile, pickedGp.id))
+      .map(tile => ({
+        tile,
+        preview: evaluateCapitalSite(tile, tileByCoord, pickedGp.id),
+      }))
+      .filter((entry): entry is { tile: TileData; preview: CapitalSitePreview } => entry.preview != null);
+
+    void Promise.all(
+      candidates.map(async ({ tile, preview }) => {
+        const resolved = await resolveCapitalSupport(preview);
+        return {
+          ...resolved,
+          provinceId: tile.province_id,
+          provinceName: tile.province || 'Unknown Province',
+        } satisfies SuggestedPlacement;
+      }),
+    ).then(resolved => {
+      if (suggestionsSeqRef.current !== seq) return;
+      const score = (entry: SuggestedPlacement) =>
+        (entry.support ?? 0) * 1000 + entry.resources.reduce((sum, resource) => sum + resource.amount, 0);
+      const ranked = resolved.sort((a, b) => {
+        const supportDelta = (b.support ?? 0) - (a.support ?? 0);
+        if (supportDelta !== 0) return supportDelta;
+        const yieldDelta = b.resources.reduce((sum, resource) => sum + resource.amount, 0)
+          - a.resources.reduce((sum, resource) => sum + resource.amount, 0);
+        if (yieldDelta !== 0) return yieldDelta;
+        const scoreDelta = score(b) - score(a);
+        if (scoreDelta !== 0) return scoreDelta;
+        if (a.provinceName !== b.provinceName) return a.provinceName.localeCompare(b.provinceName);
+        if (a.capital.q !== b.capital.q) return a.capital.q - b.capital.q;
+        return a.capital.r - b.capital.r;
+      });
+      setSuggestedCapitals(ranked.slice(0, 5));
+    }).catch(() => {
+      if (suggestionsSeqRef.current !== seq) return;
+      setSuggestedCapitals([]);
+    });
+  }, [observerMode, previewStage, pickedGp, previewMapTiles, tileByCoord, resolveCapitalSupport]);
+
+  const applyCapitalSelection = useCallback((preview: CapitalSitePreview) => {
+    const seq = pickedCapitalSeqRef.current + 1;
+    pickedCapitalSeqRef.current = seq;
+    hoveredCapitalSeqRef.current = seq;
+    setPickedCapital(preview);
+    setHoveredCapital(preview);
+    void resolveCapitalSupport(preview).then(resolved => {
+      if (pickedCapitalSeqRef.current !== seq) return;
+      setPickedCapital(current => (
+        current && current.capital.q === preview.capital.q && current.capital.r === preview.capital.r
+          ? resolved
+          : current
+      ));
+      setHoveredCapital(current => (
+        current && current.capital.q === preview.capital.q && current.capital.r === preview.capital.r
+          ? resolved
+          : current
+      ));
+      setSidebarHoveredCapital(current => (
+        current && current.capital.q === preview.capital.q && current.capital.r === preview.capital.r
+          ? { ...current, support: resolved.support }
+          : current
+      ));
+    }).catch(() => {});
+  }, [resolveCapitalSupport]);
 
   const handleNationPick = useCallback((idx: number) => {
+    hoveredCapitalSeqRef.current += 1;
+    pickedCapitalSeqRef.current += 1;
+    suggestionsSeqRef.current += 1;
     setPickedNationIdx(idx);
     setHoveredCapital(null);
     setPickedCapital(null);
+    setSidebarHoveredCapital(null);
+    setSuggestedCapitals([]);
     setPreviewStage('nation');
   }, []);
 
   const handleTileHover = useCallback((tile: TileData | null) => {
     if (observerMode || previewStage !== 'capital' || !pickedGp) {
+      hoveredCapitalSeqRef.current += 1;
       setHoveredCapital(null);
       return;
     }
-    setHoveredCapital(evaluateCapitalSite(tile, tileByCoord, pickedGp.id));
-  }, [observerMode, previewStage, pickedGp, tileByCoord]);
+    const preview = evaluateCapitalSite(tile, tileByCoord, pickedGp.id);
+    if (!preview) {
+      hoveredCapitalSeqRef.current += 1;
+      setHoveredCapital(null);
+      return;
+    }
+    const seq = hoveredCapitalSeqRef.current + 1;
+    hoveredCapitalSeqRef.current = seq;
+    setHoveredCapital(preview);
+    void resolveCapitalSupport(preview).then(resolved => {
+      if (hoveredCapitalSeqRef.current !== seq) return;
+      setHoveredCapital(current => (
+        current && current.capital.q === preview.capital.q && current.capital.r === preview.capital.r
+          ? resolved
+          : current
+      ));
+    }).catch(() => {});
+  }, [observerMode, previewStage, pickedGp, tileByCoord, resolveCapitalSupport]);
 
   const handleTileClick = useCallback((tile: TileData) => {
     if (tile.nation_id == null) return;
@@ -316,21 +470,27 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
     if (!pickedGp) return;
     const preview = evaluateCapitalSite(tile, tileByCoord, pickedGp.id);
     if (preview) {
-      setPickedCapital(preview);
-      setHoveredCapital(preview);
+      applyCapitalSelection(preview);
     }
-  }, [observerMode, previewStage, previewGps, pickedGp, tileByCoord, handleNationPick]);
+  }, [observerMode, previewStage, previewGps, pickedGp, tileByCoord, handleNationPick, applyCapitalSelection]);
 
   const handleEnterCapitalPlacement = () => {
     if (observerMode || pickedNationIdx == null) return;
+    hoveredCapitalSeqRef.current += 1;
     setPreviewStage('capital');
     setPreviewMapMode('terrain');
     setHoveredCapital(null);
+    setSidebarHoveredCapital(null);
   };
 
   const handleLeaveCapitalPlacement = () => {
+    hoveredCapitalSeqRef.current += 1;
     setPreviewStage('nation');
+    setPreviewMapMode('political');
     setHoveredCapital(null);
+    setSidebarHoveredCapital(null);
+    setPlacementScale(undefined);
+    setPlacementOffset(undefined);
   };
 
   const handleBegin = async () => {
@@ -590,7 +750,7 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
       <div style={s.previewBody}>
         <div ref={mapWrapRef} style={s.mapWrap}>
           <HexMap
-            tiles={previewTiles}
+            tiles={previewMapTiles}
             mapMode={previewMapMode}
             diplomacyOverlay={null}
             militaryOverlay={null}
@@ -600,10 +760,12 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
             onTileClick={handleTileClick}
             onTileHover={handleTileHover}
             disableFogOfWar={true}
+            showHiddenResources={!observerMode}
             highlightedNationId={pickedGp?.id ?? null}
             hoveredPreviewTileKey={hoveredPreviewTileKey}
             placedPreviewTileKey={placedPreviewTileKey}
             hideMapModeControl={!observerMode && previewStage === 'capital'}
+            hideCapitalMarkers={!observerMode}
             organicBorders={organicBorders}
             hideHexGrid={hideHexGrid}
             limitedMapModes={true}
@@ -615,7 +777,7 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
         </div>
         <div style={s.sidebar}>
           {showTerrainControls && (
-            <div style={{ marginBottom: 14 }}>
+            <div style={s.sidebarSection}>
               <div style={s.sidebarTitle}>
                 <span>Terrain</span>
                 <span
@@ -759,7 +921,7 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
           )}
 
           {showNationPicker ? (
-            <>
+            <div style={s.sidebarSection}>
               <div style={s.sidebarTitle}>
                 {observerMode ? 'Viewpoint Nation' : 'Choose Your Empire'}
               </div>
@@ -786,49 +948,75 @@ export default function GameSetup({ onStartGame, onRequestLoadSavedGame }: Props
                   </div>
                 ))}
               </div>
-            </>
+            </div>
           ) : (
             <>
-              <div style={s.sidebarTitle}>Place Capital</div>
-              <div style={s.sidebarHint}>
-                Hover a hex inside {pickedGp?.name} to preview its opening capital yield. Click a valid hex to place the capital, then begin the campaign.
-              </div>
-              <div style={s.placementBox}>
-                <div style={s.placementLine}>
-                  <span>Nation</span>
-                  <strong>{pickedGp?.name ?? '—'}</strong>
-                </div>
-                <div style={s.placementLine}>
-                  <span>Hovering</span>
-                  <strong>{activeCapitalPreview ? `(${activeCapitalPreview.capital.q}, ${activeCapitalPreview.capital.r})` : 'Choose a hex'}</strong>
-                </div>
-                <div style={s.placementLine}>
-                  <span>Collected hexes</span>
-                  <strong>{activeCapitalPreview?.collectedTiles ?? 0}</strong>
-                </div>
-                <div style={s.placementLine}>
-                  <span>Supported workers</span>
-                  <strong style={{ color: '#daa520' }}>{activeCapitalPreview?.support ?? 0}</strong>
+              <div style={s.sidebarSection}>
+                <div style={s.sidebarTitle}>Place Capital</div>
+                <div style={s.sidebarHint}>
+                  Hover a hex inside {pickedGp?.name} to preview its opening capital yield. Click a valid hex to place the capital, then begin the campaign.
                 </div>
               </div>
-              <div style={s.sidebarTitle}>Turn 1 Capital Yields</div>
-              {activeCapitalPreview?.resources.length ? (
-                <div style={s.resourceList}>
-                  {activeCapitalPreview.resources.map(entry => (
-                    <div key={entry.resource} style={s.resourceRow}>
-                      <span>{entry.resource}</span>
-                      <strong>{entry.amount}</strong>
+              {suggestedCapitals.length > 0 && (
+                <div style={s.sidebarSection}>
+                  <div style={s.sidebarTitle}>Suggested Placements</div>
+                  <div style={s.suggestionList}>
+                    {suggestedCapitals.map(entry => {
+                      const isSelected = pickedCapital?.capital.q === entry.capital.q
+                        && pickedCapital?.capital.r === entry.capital.r;
+                      const isHovered = sidebarHoveredCapital?.capital.q === entry.capital.q
+                        && sidebarHoveredCapital?.capital.r === entry.capital.r;
+                      return (
+                        <button
+                          key={`${entry.capital.q},${entry.capital.r}`}
+                          type="button"
+                          style={
+                            isSelected
+                              ? { ...s.suggestionRow, ...s.suggestionRowSelected }
+                              : isHovered
+                                ? { ...s.suggestionRow, ...s.suggestionRowHovered }
+                                : s.suggestionRow
+                          }
+                          onMouseEnter={() => setSidebarHoveredCapital(entry)}
+                          onMouseLeave={() => setSidebarHoveredCapital(current => (
+                            current && current.capital.q === entry.capital.q && current.capital.r === entry.capital.r
+                              ? null
+                              : current
+                          ))}
+                          onClick={() => applyCapitalSelection(entry)}
+                        >
+                          <span style={s.suggestionProvince}>{entry.provinceName}</span>
+                          <strong style={s.suggestionValue}>👷 {entry.support ?? '—'}</strong>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              <div style={s.sidebarSection}>
+                <div style={s.sidebarTitle}>🏭 Capital Yields</div>
+                <div style={s.yieldsBody}>
+                  <div style={s.supportBox}>
+                    <span>👷 Supported workers</span>
+                    <strong style={s.supportValue}>{activeCapitalPreview?.support ?? '—'}</strong>
+                  </div>
+                  {activeCapitalPreview?.resources.length ? (
+                    <div style={s.resourceList}>
+                      {activeCapitalPreview.resources.map(entry => (
+                        <div key={entry.resource} style={s.resourceRow}>
+                          <span style={s.resourceLabel}>
+                            <span>{resourceEmoji(entry.resource)}</span>
+                            <span>{entry.resource}</span>
+                          </span>
+                          <strong>{entry.amount}</strong>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  ) : (
+                    <div style={s.sidebarHint}>Hover a valid hex to preview its opening capital yields.</div>
+                  )}
                 </div>
-              ) : (
-                <div style={s.sidebarHint}>Only owned land tiles in the capital’s 1-hex ring are counted.</div>
-              )}
-              {pickedCapital && (
-                <div style={s.selectedCapitalBanner}>
-                  Placed at ({pickedCapital.capital.q}, {pickedCapital.capital.r})
-                </div>
-              )}
+              </div>
             </>
           )}
         </div>
@@ -926,9 +1114,11 @@ const s: Record<string, React.CSSProperties> = {
   previewSub: { fontSize: 12, color: '#9a9a9a', marginTop: 2 },
   previewBody: { flex: 1, display: 'flex', overflow: 'hidden' },
   mapWrap: { flex: 1, position: 'relative' as const, overflow: 'hidden' },
-  sidebar: { width: 320, background: '#161625', borderLeft: '2px solid #3a3520', padding: 16, overflowY: 'auto' as const },
-  sidebarTitle: { fontSize: 14, color: '#daa520', textTransform: 'uppercase' as const, letterSpacing: 0.5, marginBottom: 4 },
-  sidebarHint: { fontSize: 11, color: '#9a9a9a', marginBottom: 14, lineHeight: 1.4 },
+  sidebar: { width: 320, background: '#161625', borderLeft: '2px solid #3a3520', padding: 16, overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, gap: 18 },
+  sidebarSection: { display: 'flex', flexDirection: 'column' as const, gap: 8 },
+  sidebarTitle: { fontSize: 14, color: '#daa520', textTransform: 'uppercase' as const, letterSpacing: 0.5 },
+  sidebarHint: { fontSize: 11, color: '#9a9a9a', lineHeight: 1.4 },
+  yieldsBody: { display: 'flex', flexDirection: 'column' as const, gap: 8 },
   gpList: { display: 'flex', flexDirection: 'column' as const, gap: 6 },
   gpRow: { display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: '#1a1a2e', border: '1px solid #3a3520', borderRadius: 3, cursor: 'pointer' },
   gpRowSelected: { borderColor: '#daa520', background: 'rgba(218,165,32,0.08)' },
@@ -937,9 +1127,15 @@ const s: Record<string, React.CSSProperties> = {
   gpName: { fontSize: 13, fontWeight: 'bold' as const },
   gpTitle: { fontSize: 11, color: '#9a9a9a', marginTop: 1 },
   previewFooter: { padding: '12px 20px', background: '#0f0f23', borderTop: '2px solid #3a3520', display: 'flex', gap: 10, alignItems: 'center' },
-  placementBox: { marginBottom: 16, border: '1px solid #3a3520', background: '#1a1a2e', padding: 10, display: 'flex', flexDirection: 'column' as const, gap: 8 },
-  placementLine: { display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 12 },
   resourceList: { display: 'flex', flexDirection: 'column' as const, gap: 6 },
   resourceRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '6px 8px', background: '#1a1a2e', border: '1px solid #2c2c3e', borderRadius: 3 },
-  selectedCapitalBanner: { marginTop: 14, padding: '8px 10px', fontSize: 12, border: '1px solid #705113', background: 'rgba(218,165,32,0.10)', color: '#f0d58a' },
+  resourceLabel: { display: 'inline-flex', alignItems: 'center', gap: 8 },
+  supportBox: { padding: '8px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, border: '1px solid #3a3520', background: '#1a1a2e' },
+  supportValue: { color: '#daa520' },
+  suggestionList: { display: 'flex', flexDirection: 'column' as const, gap: 6 },
+  suggestionRow: { width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 10px', background: '#1a1a2e', border: '1px solid #2c2c3e', borderRadius: 3, color: '#e0d8c0', fontFamily: 'Georgia, serif', fontSize: 12, cursor: 'pointer', textAlign: 'left' as const },
+  suggestionRowHovered: { borderColor: '#b7a26b', background: 'rgba(255,235,150,0.08)' },
+  suggestionRowSelected: { borderColor: '#daa520', background: 'rgba(218,165,32,0.12)' },
+  suggestionProvince: { minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
+  suggestionValue: { color: '#daa520', flexShrink: 0 },
 };

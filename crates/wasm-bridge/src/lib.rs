@@ -14,7 +14,7 @@ use domain::economy::trade::base_price;
 use domain::economy::transport::TransportSystem;
 use domain::events::TreatyType;
 use domain::game_state::{
-    GameState, new_game_with_data_and_config, new_game_with_data_and_config_and_capital_override,
+    GameState, new_game_with_data_and_config_and_capital_override,
     new_observer_game_with_data_and_config,
 };
 #[cfg(test)]
@@ -131,6 +131,11 @@ pub(crate) fn parse_terrain_mix(json: &str) -> TerrainMix {
 #[wasm_bindgen]
 pub fn wasm_debug_marker() -> String {
     load_embedded_game_data().game_config.debug_marker
+}
+
+#[wasm_bindgen]
+pub fn wasm_max_workers_supportable(grain: u32, fruit: u32, meat: u32) -> u32 {
+    domain::economy::labor::max_workers_supportable(grain, fruit, meat)
 }
 
 /// Create a new game. Returns JSON string of the full game state.

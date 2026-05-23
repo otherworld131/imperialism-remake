@@ -336,6 +336,8 @@ interface Props {
   diplomacyInvalidReason?: string | null;
   /** Hide the map-mode dropup entirely. Used by single-purpose preview flows. */
   hideMapModeControl?: boolean;
+  /** Hide all capital markers. Used by setup-time capital placement preview. */
+  hideCapitalMarkers?: boolean;
 }
 
 const CIVILIAN_EMOJI: Record<string, string> = {
@@ -392,6 +394,7 @@ export default function HexMap({
   isDiplomacyTargetInvalid = false,
   diplomacyInvalidReason = null,
   hideMapModeControl = false,
+  hideCapitalMarkers = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Use props if provided (controlled mode), otherwise use local state (uncontrolled)
@@ -2122,28 +2125,30 @@ export default function HexMap({
     }
 
     // ── Pass 3: Capitals ──
-    for (const tile of visibleTiles) {
-      if (!tile.is_capital || tile.terrain === 'Sea') continue;
-      const [px, py] = hexToPixel(tile.q, tile.r);
+    if (!hideCapitalMarkers) {
+      for (const tile of visibleTiles) {
+        if (!tile.is_capital || tile.terrain === 'Sea') continue;
+        const [px, py] = hexToPixel(tile.q, tile.r);
 
-      if (tile.is_country_capital) {
-        const sz = Math.max(15, HEX_SIZE * 0.9);
-        ctx.font = `bold ${sz}px serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.lineWidth = 2.5;
-        ctx.strokeStyle = 'rgba(0,0,0,0.8)';
-        ctx.strokeText('\u2605', px, py);
-        ctx.fillStyle = '#ffd700';
-        ctx.fillText('\u2605', px, py);
-      } else {
-        ctx.beginPath();
-        ctx.arc(px, py, 2.5, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255,255,255,0.7)';
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(0,0,0,0.4)';
-        ctx.lineWidth = 0.8;
-        ctx.stroke();
+        if (tile.is_country_capital) {
+          const sz = Math.max(15, HEX_SIZE * 0.9);
+          ctx.font = `bold ${sz}px serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.lineWidth = 2.5;
+          ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+          ctx.strokeText('\u2605', px, py);
+          ctx.fillStyle = '#ffd700';
+          ctx.fillText('\u2605', px, py);
+        } else {
+          ctx.beginPath();
+          ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255,255,255,0.7)';
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+          ctx.lineWidth = 0.8;
+          ctx.stroke();
+        }
       }
     }
 
@@ -2159,6 +2164,11 @@ export default function HexMap({
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.font = resourceFontStr;
+      // Color emoji glyphs still pick up the current fillStyle as a tint; without
+      // this, Pass 4 inherits whatever the previous pass left (sea-blue from the
+      // background fillRect, or the translucent preview-marker fill while
+      // hovering during capital placement) and the icons vanish.
+      ctx.fillStyle = '#000';
       for (const tile of visibleTiles) {
         if (tile.terrain === 'Sea' || !tile.owner) continue;
         if (tile.is_capital || tile.is_country_capital) continue;

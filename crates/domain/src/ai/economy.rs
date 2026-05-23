@@ -13,6 +13,14 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 use super::common::{AiPersonality, PersonalityConfig, get_personality};
 
+fn worker_food_support(grain: u32, fruit: u32, livestock: u32, fish: u32) -> u32 {
+    crate::economy::labor::max_workers_supportable(
+        grain,
+        fruit,
+        livestock.saturating_add(fish),
+    )
+}
+
 /// Build mills and factories when the nation has the required materials.
 fn ai_build_infrastructure(game: &mut GameState, nation_id: NationId) {
     let nation = match game.get_nation_mut(nation_id) {
@@ -153,14 +161,16 @@ pub(super) fn compute_resource_demand(
     *demand.entry(ResourceType::Gems).or_default() += 10.0 * money_urgency;
     *demand.entry(ResourceType::Oil).or_default() += 2.0 * money_urgency;
 
-    let total_food = nation.resource_amount(ResourceType::Grain)
-        + nation.resource_amount(ResourceType::Fruit)
-        + nation.resource_amount(ResourceType::Livestock)
-        + nation.resource_amount(ResourceType::Fish);
     let workers = nation.economy.labor.total_workers();
-    let food_urgency = if total_food <= workers {
+    let supported_workers = worker_food_support(
+        nation.resource_amount(ResourceType::Grain),
+        nation.resource_amount(ResourceType::Fruit),
+        nation.resource_amount(ResourceType::Livestock),
+        nation.resource_amount(ResourceType::Fish),
+    );
+    let food_urgency = if supported_workers <= workers {
         10.0
-    } else if total_food <= workers * 2 {
+    } else if supported_workers <= workers.saturating_mul(2) {
         5.0
     } else {
         1.0
@@ -1614,7 +1624,13 @@ pub(crate) fn ai_manage_economy(game: &mut GameState, nation_id: NationId) {
     };
 
     let food_cap = snap.building_capacity(BuildingType::FoodProcessing);
-    let food_surplus = snap.total_food().saturating_sub(snap.total_workers);
+    let food_surplus = worker_food_support(
+        snap.resource(ResourceType::Grain),
+        snap.resource(ResourceType::Fruit),
+        snap.resource(ResourceType::Livestock),
+        snap.resource(ResourceType::Fish),
+    )
+    .saturating_sub(snap.total_workers);
 
     if food_surplus > food_cap * food_threshold
         && food_cap > 0

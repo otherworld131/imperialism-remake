@@ -18,6 +18,15 @@ pub fn worker_food_demand(workers: u32) -> (u32, u32, u32) {
     (grain, fruit, meat)
 }
 
+/// Maximum number of workers that can be fed by a balanced composite-meal
+/// supply of `(grain, fruit, meat)` matching [`worker_food_demand`].
+pub fn max_workers_supportable(grain: u32, fruit: u32, meat: u32) -> u32 {
+    let w_grain = grain.saturating_mul(2);
+    let w_fruit = fruit.saturating_mul(4).saturating_add(1);
+    let w_meat = meat.saturating_mul(4).saturating_add(3);
+    w_grain.min(w_fruit).min(w_meat)
+}
+
 /// Maximum canned-food units a cannery can produce this turn given raw stocks,
 /// after reserving worker-meal rations.
 ///
@@ -318,6 +327,19 @@ mod tests {
         assert_eq!(pool.total_labor_units_with(1, 3, 5), 15);
         // Default: 4*1 + 2*2 + 1*4 = 4 + 4 + 4 = 12
         assert_eq!(pool.total_labor_units(), 12);
+    }
+
+    #[test]
+    fn worker_food_support_matches_imperialism_ratio_examples() {
+        assert_eq!(worker_food_demand(7), (4, 2, 1));
+        assert_eq!(worker_food_demand(8), (4, 2, 2));
+        assert_eq!(worker_food_demand(10), (5, 3, 2));
+        assert_eq!(worker_food_demand(12), (6, 3, 3));
+
+        assert_eq!(max_workers_supportable(4, 2, 1), 7);
+        assert_eq!(max_workers_supportable(4, 2, 2), 8);
+        assert_eq!(max_workers_supportable(5, 3, 2), 10);
+        assert_eq!(max_workers_supportable(6, 3, 3), 12);
     }
 
     // ── recruit_immigrant ─────────────────────────────────────────
