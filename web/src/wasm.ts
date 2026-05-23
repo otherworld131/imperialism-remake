@@ -1088,7 +1088,6 @@ export interface TransportData {
   available_steel: number;
   available_labor: number;
   deliveries: TransportDelivery[];
-  local_deliveries?: TransportDelivery[];
   town_deliveries?: TransportDelivery[];
   demand: TransportDemand[];
   food_requirement?: FoodRequirement | null;

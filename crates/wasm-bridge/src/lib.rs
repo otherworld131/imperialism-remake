@@ -3488,32 +3488,21 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         && available_steel >= steel_cost
         && available_labor >= labor_cost;
 
+    // Trello #484: capital-tile yields are no longer a free-delivery slot.
+    // The UI's allocation panel reflects the unified pool used by
+    // `resolve_transport` — local + remote folded into a single "available"
+    // column that the player allocates against.
     let (local_items, remote_items) = domain::economy::current_collectable_resources(&game, nid);
-    let mut local_available_map: std::collections::BTreeMap<ResourceType, u32> =
+    let mut available_map: std::collections::BTreeMap<ResourceType, u32> =
         std::collections::BTreeMap::new();
-    for (resource, qty) in &local_items {
-        *local_available_map.entry(*resource).or_insert(0) += *qty;
+    for (resource, qty) in local_items.iter().chain(remote_items.iter()) {
+        *available_map.entry(*resource).or_insert(0) += *qty;
     }
-    let local_deliveries_json: Vec<serde_json::Value> = local_available_map
-        .iter()
-        .map(|(r, qty)| {
-            serde_json::json!({
-                "resource": format!("{:?}", r),
-                "available": qty,
-                "delivered": qty,
-            })
-        })
-        .collect();
+    let combined_items: Vec<(ResourceType, u32)> = available_map.clone().into_iter().collect();
+    let remote_available: Vec<(ResourceType, u32)> = combined_items.clone();
 
-    let mut remote_available_map: std::collections::BTreeMap<ResourceType, u32> =
-        std::collections::BTreeMap::new();
-    for (resource, qty) in &remote_items {
-        *remote_available_map.entry(*resource).or_insert(0) += *qty;
-    }
-    let remote_available: Vec<(ResourceType, u32)> = remote_available_map.into_iter().collect();
-
-    // Project deliveries against the same local/remote split used by turn
-    // processing so the UI reflects what will actually be collected this turn.
+    // Project deliveries against the same combined pool used by turn processing
+    // so the UI reflects what will actually be collected this turn.
     let merchant_cargo = nation.total_cargo_capacity(&game.game_data);
     let combined_transport = domain::economy::TransportSystem {
         freight_cars: transport.freight_cars + merchant_cargo,
@@ -3521,12 +3510,12 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
     };
     let has_positive_allocations = transport.allocations.iter().any(|(_, units)| *units > 0);
     let remote_deliveries = if has_positive_allocations {
-        combined_transport.calculate_deliveries(&remote_items)
+        combined_transport.calculate_deliveries(&combined_items)
     } else {
         Vec::new()
     };
     let rail_only_deliveries = if has_positive_allocations {
-        transport.calculate_deliveries(&remote_items)
+        transport.calculate_deliveries(&combined_items)
     } else {
         Vec::new()
     };
@@ -3682,7 +3671,6 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         "available_steel": available_steel,
         "available_labor": available_labor,
         "deliveries": deliveries_with_demand,
-        "local_deliveries": local_deliveries_json,
         "town_deliveries": town_deliveries_json,
         "rail_only_deliveries": rail_only_deliveries_json,
         "demand": demand_json,

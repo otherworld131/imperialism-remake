@@ -7,7 +7,7 @@ interface Props {
 }
 
 export default function TransportPanel({ transport, onSetAllocation }: Props) {
-  const { total_capacity, remote_delivery_capacity, military_transport_capacity, allocations, deliveries, demand = [], local_deliveries = [], food_requirement } = transport;
+  const { total_capacity, remote_delivery_capacity, military_transport_capacity, allocations, deliveries, demand = [], food_requirement } = transport;
   const transportDeliveries = deliveries;
 
   const allocationMap: Record<string, number> = {};
@@ -74,21 +74,6 @@ export default function TransportPanel({ transport, onSetAllocation }: Props) {
           );
         })}
       </div>
-
-      {local_deliveries.length > 0 && (
-        <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 8 }}>
-          <div style={{ fontWeight: 'bold', marginBottom: 4 }}>Capital Tile Delivery</div>
-          {local_deliveries.map(d => (
-            <div key={d.resource} style={{
-              display: 'flex', alignItems: 'center', gap: 4, marginBottom: 3,
-              background: 'rgba(255,255,255,0.03)', borderRadius: 3, padding: '3px 4px',
-            }}>
-              <span style={{ flex: 1, fontSize: 'var(--ui-font-size, 14px)' }}>{resourceLabel(d.resource)}</span>
-              <span style={{ fontSize: 11, color: '#999' }}>{d.delivered}/{d.available}</span>
-            </div>
-          ))}
-        </div>
-      )}
 
       <div style={{ borderTop: '1px solid #3a3520', paddingTop: 8, marginTop: 8 }}>
         <div style={{ fontWeight: 'bold', marginBottom: 4 }}>Military Transport</div>
