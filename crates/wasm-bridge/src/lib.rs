@@ -3478,7 +3478,7 @@ pub fn wasm_get_transport_data(game_json: &str, nation_id: u32) -> String {
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
 
-    let transport = &nation.military.transport;
+    let transport = &nation.economy.transport;
     let (labor_cost, lumber_cost, steel_cost) = TransportSystem::build_freight_car_cost();
     let available_lumber = nation.material_amount(MaterialType::Lumber);
     let available_steel = nation.material_amount(MaterialType::Steel);
@@ -3728,7 +3728,7 @@ pub fn wasm_set_transport_allocation(
         None => return "{\"error\":\"nation not found\"}".to_string(),
     };
 
-    nation.military.transport.set_allocation(target, units);
+    nation.economy.transport.set_allocation(target, units);
     serialize_game(&game)
 }
 

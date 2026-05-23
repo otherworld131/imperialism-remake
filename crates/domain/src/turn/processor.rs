@@ -1386,7 +1386,7 @@ pub(super) fn collect_resources(game: &mut GameState, report: &mut TurnReport) {
             if collected > 0 || disconnected > 0 {
                 eprintln!(
                     "[COLLECT:{}] food_delivered={}, food_disconnected={}, freight_cars={}",
-                    nation.name, collected, disconnected, nation.military.transport.freight_cars
+                    nation.name, collected, disconnected, nation.economy.transport.freight_cars
                 );
             }
         }
@@ -1422,9 +1422,9 @@ fn resolve_transport(game: &mut GameState, report: &mut TurnReport) {
             continue;
         }
 
-        let rail_capacity = nation.military.transport.total_capacity();
+        let rail_capacity = nation.economy.transport.total_capacity();
         let sea_capacity = nation.total_cargo_capacity(&game.game_data);
-        let transport = nation.military.transport.clone();
+        let transport = nation.economy.transport.clone();
         // Remote deliveries use rail freight + merchant-marine cargo as a
         // single combined pool. The UI's freight panel already projects against
         // this combined capacity (`crates/wasm-bridge/src/lib.rs:3079`); the
@@ -2043,7 +2043,7 @@ fn process_pending_freight_cars(game: &mut GameState) {
         if actual > 0 {
             nation.consume_material(MaterialType::Lumber, actual * lumber_cost);
             nation.consume_material(MaterialType::Steel, actual * steel_cost);
-            nation.military.transport.build_freight_cars(actual);
+            nation.economy.transport.build_freight_cars(actual);
         }
     }
 }
@@ -2598,7 +2598,7 @@ fn resolve_town_production(game: &mut GameState, report: &mut TurnReport) {
             crate::economy::allocate_town_output_freight(
                 &mut adjusted_granted,
                 &remote_outputs,
-                &nation.military.transport.allocations,
+                &nation.economy.transport.allocations,
                 original_unused,
             );
 
@@ -7580,7 +7580,7 @@ mod tests {
         // Give nation freight cars: capacity 10, production is 2 (1 Grain + 1 Timber)
         game.get_nation_mut(NationId(1))
             .unwrap()
-            .military
+            .economy
             .transport
             .build_freight_cars(10);
 
@@ -7760,7 +7760,7 @@ mod tests {
             ProvinceId(1),
         );
         nation1.add_province(ProvinceId(2));
-        nation1.military.transport.build_freight_cars(5);
+        nation1.economy.transport.build_freight_cars(5);
 
         let mut game = crate::test_game_state! {
         turn: TurnNumber::new(1),
@@ -8272,7 +8272,7 @@ mod tests {
         );
         nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
-        nation.military.transport.build_freight_cars(20);
+        nation.economy.transport.build_freight_cars(20);
         for resource in [
             ResourceType::Timber,
             ResourceType::Coal,
@@ -8281,7 +8281,7 @@ mod tests {
             ResourceType::Wool,
         ] {
             nation
-                .military
+                .economy
                 .transport
                 .set_resource_allocation(resource, 20);
         }
@@ -8293,7 +8293,7 @@ mod tests {
             crate::economy::FreightTarget::Goods(GoodsType::Hardware),
             crate::economy::FreightTarget::Goods(GoodsType::Clothing),
         ] {
-            nation.military.transport.set_allocation(target, 20);
+            nation.economy.transport.set_allocation(target, 20);
         }
 
         crate::test_game_state! {
@@ -8426,20 +8426,20 @@ mod tests {
         );
         nation.economy.treasury = Money::dollars(5000);
         nation.add_province(ProvinceId(2));
-        nation.military.transport.build_freight_cars(20);
+        nation.economy.transport.build_freight_cars(20);
         nation
-            .military
+            .economy
             .transport
             .set_resource_allocation(ResourceType::Coal, 20);
         nation
-            .military
+            .economy
             .transport
             .set_resource_allocation(ResourceType::Iron, 20);
-        nation.military.transport.set_allocation(
+        nation.economy.transport.set_allocation(
             crate::economy::FreightTarget::Material(MaterialType::Steel),
             20,
         );
-        nation.military.transport.set_allocation(
+        nation.economy.transport.set_allocation(
             crate::economy::FreightTarget::Goods(GoodsType::Hardware),
             20,
         );
@@ -8594,8 +8594,8 @@ mod tests {
         let mut game =
             test_game_state_with_village(&[(TerrainType::Forest, Some(ResourceType::Timber)); 4]);
         let nation = game.get_nation_mut(NationId(1)).unwrap();
-        nation.military.transport.freight_cars = 0;
-        nation.military.transport.allocations.clear();
+        nation.economy.transport.freight_cars = 0;
+        nation.economy.transport.allocations.clear();
 
         let report = process_turn(&mut game);
         let nation = game.get_nation(NationId(1)).unwrap();
@@ -12978,7 +12978,7 @@ mod tests {
         nation.add_province(ProvinceId(2));
         nation.economy.treasury = Money::dollars(1000);
         // 10 freight cars: enough for 2 Regulars (5 cars each, arms=1).
-        nation.military.transport.build_freight_cars(10);
+        nation.economy.transport.build_freight_cars(10);
         let unit = ArmyUnit::new(
             UnitId(1),
             ArmyUnitType::Regulars,
@@ -13090,7 +13090,7 @@ mod tests {
         nation.add_province(ProvinceId(3));
         nation.economy.treasury = Money::dollars(1000);
         // Only 5 freight cars (enough for 1 Regulars move at cost=5, not 2).
-        nation.military.transport.build_freight_cars(5);
+        nation.economy.transport.build_freight_cars(5);
         let unit1 = ArmyUnit::new(
             UnitId(1),
             ArmyUnitType::Regulars,
@@ -14738,12 +14738,12 @@ mod tests {
             ));
             game.world.nations[0].add_province(ProvinceId(2));
             game.world.nations[0]
-                .military
+                .economy
                 .transport
                 .build_freight_cars(50);
             // Human player now requires explicit allocations for remote resources.
             game.world.nations[0]
-                .military
+                .economy
                 .transport
                 .set_resource_allocation(ResourceType::Iron, 1);
 

@@ -126,6 +126,9 @@ pub struct NationEconomy {
     /// Updated by the turn processor after `calculate_deliveries` completes.
     pub logistics: LogisticsState,
 
+    /// Freight transport system — freight cars and per-target allocations.
+    pub transport: TransportSystem,
+
     /// Player-controlled production chain output targets.
     pub chain_targets: ChainOutputTargets,
 
@@ -181,6 +184,7 @@ impl NationEconomy {
             buildings: Vec::new(),
             labor: LaborPool::new(),
             logistics: LogisticsState::new(),
+            transport: TransportSystem::new(),
             chain_targets: ChainOutputTargets::default(),
             pending_civilian_hires: HashMap::new(),
             pending_train_to_trained: 0,
@@ -760,8 +764,6 @@ pub struct NationMilitary {
     pub army: Vec<ArmyUnit>,
     /// Civilian improver units (Farmers, Foresters, Miners, Engineers).
     pub civilians: Vec<Civilian>,
-    /// Freight transport system.
-    pub transport: TransportSystem,
     /// Merchant fleet — ships used for trade.
     pub merchant_fleet: Vec<Ship>,
     /// Warship fleet — military naval vessels.
@@ -1278,7 +1280,7 @@ impl Nation {
     /// also conduct trade — so sea cargo is fully available for collecting
     /// remote yields each turn alongside rail.
     pub fn total_transport_capacity(&self, data: &crate::data::GameData) -> u32 {
-        self.military
+        self.economy
             .transport
             .total_capacity()
             .saturating_add(self.total_cargo_capacity(data))

@@ -1173,7 +1173,7 @@ fn new_game_inner(
 
         // Starting freight cars (from game config)
         let starting_cars = game_data.game_config.starting_freight_cars;
-        nation.military.transport.build_freight_cars(starting_cars);
+        nation.economy.transport.build_freight_cars(starting_cars);
 
         // Starting civilians (per manual p.27–28 + card #212): each Great Power
         // gets N Prospectors + N Miners + N Engineers. Forester/Rancher/Driller

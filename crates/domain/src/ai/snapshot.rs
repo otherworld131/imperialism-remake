@@ -208,7 +208,7 @@ impl NationEconomySnapshot {
             pending_capacities,
             total_workers: nation.economy.labor.total_workers(),
             labor,
-            freight_capacity: nation.military.transport.total_capacity(),
+            freight_capacity: nation.economy.transport.total_capacity(),
             logistics: nation.economy.logistics.clone(),
             pending_orders,
             market_prices,

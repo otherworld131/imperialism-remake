@@ -70,7 +70,7 @@ pub fn calculate_score(nation: &Nation, data: &crate::data::GameData) -> NationS
         .map(|u| u.effective_firepower() as u32)
         .sum::<u32>();
     let labor_score = nation.economy.labor.total_workers() * 10;
-    let transport_score = nation.military.transport.freight_cars * 5;
+    let transport_score = nation.economy.transport.freight_cars * 5;
     let merchant_marine_score = nation.total_cargo_capacity(data) * 20;
     let diplomatic_score = 50; // placeholder
     let province_score = nation.province_count() as u32 * 75;

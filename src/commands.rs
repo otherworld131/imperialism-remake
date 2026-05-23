@@ -1803,14 +1803,14 @@ pub(crate) fn build_freight_car(game: &mut GameState) {
     player.consume_material(MaterialType::Steel, steel_needed);
     // Labor is consumed as a workforce requirement, not permanently removed.
     // (Workers are available each turn; this just requires having enough.)
-    player.military.transport.build_freight_cars(1);
+    player.economy.transport.build_freight_cars(1);
 
     println!(
         "  Freight car built! (consumed {} lumber, {} steel). Total cars: {}, capacity: {}.",
         lumber_needed,
         steel_needed,
-        player.military.transport.freight_cars,
-        player.military.transport.total_capacity()
+        player.economy.transport.freight_cars,
+        player.economy.transport.total_capacity()
     );
 }
 

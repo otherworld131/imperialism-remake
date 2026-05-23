@@ -1303,6 +1303,8 @@ pub struct NationEconomy {
     #[serde(default)]
     pub logistics: LogisticsState,
     #[serde(default)]
+    pub transport: TransportSystem,
+    #[serde(default)]
     pub chain_targets: ChainOutputTargets,
     #[serde(default)]
     pub pending_civilian_hires: HashMap<CivilianType, u32>,
@@ -1346,6 +1348,7 @@ impl From<&domain::nation::NationEconomy> for NationEconomy {
             buildings: v.buildings.iter().map(Into::into).collect(),
             labor: (&v.labor).into(),
             logistics: (&v.logistics).into(),
+            transport: (&v.transport).into(),
             chain_targets: (&v.chain_targets).into(),
             pending_civilian_hires: v
                 .pending_civilian_hires
@@ -1407,6 +1410,7 @@ impl From<NationEconomy> for domain::nation::NationEconomy {
         ne.buildings = v.buildings.into_iter().map(Into::into).collect();
         ne.labor = v.labor.into();
         ne.logistics = v.logistics.into();
+        ne.transport = v.transport.into();
         ne.chain_targets = v.chain_targets.into();
         ne.pending_civilian_hires = v
             .pending_civilian_hires

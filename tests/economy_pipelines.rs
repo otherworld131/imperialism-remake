@@ -32,7 +32,7 @@ fn freight_overflow_limits_delivery_when_capacity_is_low() {
     // sea into a single `freight_total` budget; zeroing only rail leaves sea
     // capacity (e.g. the starter merchant fleet) intact.
     let nation = game.get_nation_mut(human_id).unwrap();
-    nation.military.transport.freight_cars = 0;
+    nation.economy.transport.freight_cars = 0;
     nation.military.merchant_fleet.clear();
 
     let report = process_turn(&mut game);
@@ -70,7 +70,7 @@ fn adding_freight_cars_reduces_overflow() {
     game_no_freight
         .get_nation_mut(human_id)
         .unwrap()
-        .military
+        .economy
         .transport
         .freight_cars = 0;
 
@@ -87,7 +87,7 @@ fn adding_freight_cars_reduces_overflow() {
     game_with_freight
         .get_nation_mut(human_id)
         .unwrap()
-        .military
+        .economy
         .transport
         .freight_cars = 100;
 
@@ -486,7 +486,7 @@ fn snapshot_captures_complete_economy_state() {
             .economy
             .buildings
             .push(Building::new(BuildingType::SteelMill, 4));
-        nation.military.transport.freight_cars = 20;
+        nation.economy.transport.freight_cars = 20;
     }
 
     let snap = NationEconomySnapshot::build(&game, human_id);
@@ -721,7 +721,7 @@ fn logistics_freight_committed_never_exceeds_total() {
     // Set a small but non-zero freight capacity so remote resources can partially overflow.
     game.get_nation_mut(human_id)
         .unwrap()
-        .military
+        .economy
         .transport
         .freight_cars = 3;
 

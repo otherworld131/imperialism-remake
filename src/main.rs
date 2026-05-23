@@ -596,7 +596,7 @@ fn collect_transport_rows(game: &domain::game_state::GameState) -> Vec<serde_jso
                 }
             }
             let allocations: Vec<(String, u32)> = n
-                .military
+                .economy
                 .transport
                 .allocations
                 .iter()
@@ -613,7 +613,7 @@ fn collect_transport_rows(game: &domain::game_state::GameState) -> Vec<serde_jso
                 "name": n.name,
                 "is_human": n.id == human_id,
                 "workers": workers,
-                "freight_cars": n.military.transport.freight_cars,
+                "freight_cars": n.economy.transport.freight_cars,
                 "chain_targets": {
                     "timber_mill": n.economy.chain_targets.timber_mill,
                     "metal_mill": n.economy.chain_targets.metal_mill,

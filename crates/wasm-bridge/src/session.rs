@@ -425,7 +425,7 @@ fn apply_command(game: &mut GameState, cmd: FrontendCommand) -> CommandResult {
                 return CommandResult::error("insufficient funds");
             }
             nation.economy.treasury -= cost;
-            nation.military.transport.build_freight_cars(1);
+            nation.economy.transport.build_freight_cars(1);
             CommandResult::success()
         }
 
@@ -1230,7 +1230,7 @@ mod tests {
         let before_cars = game
             .get_nation(nid)
             .unwrap()
-            .military
+            .economy
             .transport
             .freight_cars;
 
@@ -1242,7 +1242,7 @@ mod tests {
 
         let after = game.get_nation(nid).unwrap();
         assert_eq!(after.economy.treasury, before_treasury - cost);
-        assert_eq!(after.military.transport.freight_cars, before_cars + 1);
+        assert_eq!(after.economy.transport.freight_cars, before_cars + 1);
     }
 
     #[test]
@@ -1254,7 +1254,7 @@ mod tests {
         let before_cars = game
             .get_nation(nid)
             .unwrap()
-            .military
+            .economy
             .transport
             .freight_cars;
 
@@ -1265,7 +1265,7 @@ mod tests {
         assert!(!result.ok, "should fail with no funds");
         let after = game.get_nation(nid).unwrap();
         assert_eq!(
-            after.military.transport.freight_cars, before_cars,
+            after.economy.transport.freight_cars, before_cars,
             "no freight car should be built when funds insufficient",
         );
         assert_eq!(

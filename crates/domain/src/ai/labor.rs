@@ -115,7 +115,7 @@ fn transport_capped_immigration_capacity(game: &GameState, nation_id: NationId) 
     let supported_workers = max_workers_supported_by_food_network(
         game,
         nation_id,
-        nation.military.transport.freight_cars / 2,
+        nation.economy.transport.freight_cars / 2,
     );
 
     supported_workers.saturating_sub(current_workers)
@@ -898,7 +898,7 @@ mod tests {
         }
 
         let ai = game.get_nation_mut(NationId(2)).unwrap();
-        ai.military.transport.freight_cars = freight_cars;
+        ai.economy.transport.freight_cars = freight_cars;
     }
 
     #[test]

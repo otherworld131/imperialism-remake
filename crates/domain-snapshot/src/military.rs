@@ -157,8 +157,6 @@ pub struct NationMilitary {
     #[serde(default)]
     pub civilians: Vec<crate::economy::Civilian>,
     #[serde(default)]
-    pub transport: crate::economy::TransportSystem,
-    #[serde(default)]
     pub merchant_fleet: Vec<Ship>,
     #[serde(default)]
     pub warships: Vec<Ship>,
@@ -533,7 +531,6 @@ impl From<&domain::nation::NationMilitary> for NationMilitary {
         Self {
             army: v.army.iter().map(Into::into).collect(),
             civilians: v.civilians.iter().map(Into::into).collect(),
-            transport: (&v.transport).into(),
             merchant_fleet: v.merchant_fleet.iter().map(Into::into).collect(),
             warships: v.warships.iter().map(Into::into).collect(),
             total_arms_built: v.total_arms_built,
@@ -553,7 +550,6 @@ impl From<NationMilitary> for domain::nation::NationMilitary {
         domain::nation::NationMilitary {
             army: v.army.into_iter().map(Into::into).collect(),
             civilians: v.civilians.into_iter().map(Into::into).collect(),
-            transport: v.transport.into(),
             merchant_fleet: v.merchant_fleet.into_iter().map(Into::into).collect(),
             warships: v.warships.into_iter().map(Into::into).collect(),
             total_arms_built: v.total_arms_built,

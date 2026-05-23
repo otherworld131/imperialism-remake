@@ -821,8 +821,8 @@ pub(crate) fn print_overview(game: &GameState) {
     }
 
     // Freight
-    let freight_cars = player.military.transport.freight_cars;
-    let freight_capacity = player.military.transport.total_capacity();
+    let freight_cars = player.economy.transport.freight_cars;
+    let freight_capacity = player.economy.transport.total_capacity();
 
     // Buildings
     let standard_count = player
@@ -1919,7 +1919,7 @@ pub(crate) fn print_transport(game: &GameState) {
     let Some(player) = human_player(game) else {
         return;
     };
-    let ts = &player.military.transport;
+    let ts = &player.economy.transport;
     println!("  TRANSPORT SYSTEM:");
     println!("    Freight cars: {}", ts.freight_cars);
     println!("    Total capacity: {} units", ts.total_capacity());

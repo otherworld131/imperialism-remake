@@ -245,7 +245,7 @@ fn take_snapshot(
                 warships_built: nation.military.warships_built,
                 warships_lost: nation.military.warships_lost,
                 merchant_ships: nation.military.merchant_fleet.len(),
-                freight_cars: nation.military.transport.freight_cars,
+                freight_cars: nation.economy.transport.freight_cars,
                 tech_count: nation.researched_techs.len(),
                 depots,
                 railroads,
@@ -913,15 +913,15 @@ pub(crate) fn auto_manage_human(game: &mut GameState) {
     // Auto-build freight cars: target province_count.max(5), up to 2 per turn
     if let Some(nation) = game.get_nation_mut(player_id) {
         let target_cars = (nation.province_count() as u32).max(5);
-        if nation.military.transport.freight_cars < target_cars {
+        if nation.economy.transport.freight_cars < target_cars {
             let lumber_avail = nation.material_amount(MaterialType::Lumber);
             let steel_avail = nation.material_amount(MaterialType::Steel);
-            let cars_to_build = (target_cars - nation.military.transport.freight_cars).min(2);
+            let cars_to_build = (target_cars - nation.economy.transport.freight_cars).min(2);
             let affordable = cars_to_build.min(lumber_avail).min(steel_avail);
             if affordable > 0 {
                 nation.consume_material(MaterialType::Lumber, affordable);
                 nation.consume_material(MaterialType::Steel, affordable);
-                nation.military.transport.build_freight_cars(affordable);
+                nation.economy.transport.build_freight_cars(affordable);
             }
         }
     }

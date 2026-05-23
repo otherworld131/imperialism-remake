@@ -98,8 +98,8 @@ pub fn get_map_screen(game: &GameState) -> Result<MapScreenData, ApplicationErro
 pub fn get_transport_screen(game: &GameState) -> Result<TransportScreenData, ApplicationError> {
     let nation = human_nation(game)?;
 
-    let freight_cars = nation.military.transport.freight_cars;
-    let total_capacity = nation.military.transport.total_capacity();
+    let freight_cars = nation.economy.transport.freight_cars;
+    let total_capacity = nation.economy.transport.total_capacity();
 
     // Total production is the sum of all raw resources in the warehouse.
     let total_production: u32 = nation.economy.warehouse.values().sum();
@@ -346,10 +346,10 @@ mod tests {
         let data = get_transport_screen(&game).unwrap();
 
         let human = game.get_nation(game.human_player_nation).unwrap();
-        assert_eq!(data.freight_cars, human.military.transport.freight_cars);
+        assert_eq!(data.freight_cars, human.economy.transport.freight_cars);
         assert_eq!(
             data.total_capacity,
-            human.military.transport.total_capacity()
+            human.economy.transport.total_capacity()
         );
     }
 
@@ -363,8 +363,8 @@ mod tests {
         nation.economy.warehouse.clear();
 
         // Reset freight cars and build exactly 10 for a clean test
-        nation.military.transport.freight_cars = 0;
-        nation.military.transport.build_freight_cars(10);
+        nation.economy.transport.freight_cars = 0;
+        nation.economy.transport.build_freight_cars(10);
         nation.add_resource(ResourceType::Timber, 3);
         nation.add_resource(ResourceType::Coal, 2);
 
@@ -384,7 +384,7 @@ mod tests {
         let nation = game.get_nation_mut(human_id).unwrap();
 
         // More resources than capacity
-        nation.military.transport.build_freight_cars(5);
+        nation.economy.transport.build_freight_cars(5);
         nation.add_resource(ResourceType::Timber, 10);
 
         let data = get_transport_screen(&game).unwrap();

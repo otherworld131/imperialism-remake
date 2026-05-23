@@ -70,7 +70,7 @@ pub fn ai_allocate_transport(game: &mut GameState, nation_id: NationId) {
     }
     if remote_items.is_empty() {
         if let Some(n) = game.get_nation_mut(nation_id) {
-            n.military.transport.allocations.clear();
+            n.economy.transport.allocations.clear();
         }
         return;
     }
@@ -89,10 +89,10 @@ pub fn ai_allocate_transport(game: &mut GameState, nation_id: NationId) {
     let allocations = distribute_freight(total_capacity, &demand);
 
     let nation = game.get_nation_mut(nation_id).expect("nation present");
-    nation.military.transport.allocations.clear();
+    nation.economy.transport.allocations.clear();
     for (target, units) in allocations {
         if units > 0 {
-            nation.military.transport.set_allocation(target, units);
+            nation.economy.transport.set_allocation(target, units);
         }
     }
 }
