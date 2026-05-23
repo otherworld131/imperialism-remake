@@ -202,6 +202,7 @@ pub fn load_game_config(engine: &LuaEngine) -> GameConfig {
         infrastructure_horizon_turns: table.get("infrastructure_horizon_turns").unwrap_or(50),
         infra_coverage_weight: table.get("infra_coverage_weight").unwrap_or(1.0),
         infra_path_cost_weight: table.get("infra_path_cost_weight").unwrap_or(1.0),
+        infra_min_coverage: table.get("infra_min_coverage").unwrap_or(5),
         infra_improvability_weight: table.get("infra_improvability_weight").unwrap_or(0.5),
         infra_early_game_bias_turns: table.get("infra_early_game_bias_turns").unwrap_or(5),
         infra_early_game_bias: table.get("infra_early_game_bias").unwrap_or(1.5),

@@ -164,6 +164,13 @@ pub struct GameConfig {
     // Card #217: depot-planner weight on improvable-but-not-yet-improved tiers
     // (0 disables, 1.0 = 1 demand-weighted point per unimproved tier).
     pub infra_improvability_weight: f64,
+    // Trello #426: minimum `coverage_value` a candidate (or kept commitment)
+    // must reach before the planner will spend $depot_cost on it. Strictly
+    // greater than zero blocks the "build a depot that only covers 1-2
+    // already-improvable tiles next to an existing depot" pattern that
+    // produces visible clusters of low-value depots. Set to 0 to restore the
+    // old "any positive coverage" behaviour.
+    pub infra_min_coverage: u32,
     // Card #217: early-game bias multiplier on `score_infrastructure` for the
     // first `infra_early_game_bias_turns` turns of the game.
     pub infra_early_game_bias_turns: u32,
@@ -416,6 +423,7 @@ impl Default for GameConfig {
             infrastructure_horizon_turns: 50,
             infra_coverage_weight: 1.0,
             infra_path_cost_weight: 1.0,
+            infra_min_coverage: 5,
             infra_improvability_weight: 0.5,
             infra_early_game_bias_turns: 5,
             infra_early_game_bias: 1.5,

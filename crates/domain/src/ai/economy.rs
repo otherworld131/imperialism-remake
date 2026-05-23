@@ -531,19 +531,22 @@ fn plan_next_depot_with(
                     &nation.researched_techs,
                     cfg.infra_improvability_weight,
                 );
-                // Trello #426: abandon the commitment if the candidate now
-                // covers nothing new (e.g. another engineer's just-built
-                // depot now blankets the same tiles). Fall through to a
-                // fresh re-plan rather than burning $ on a zero-value depot.
-                if coverage_value == 0 {
+                // Trello #426: abandon the commitment if the candidate's
+                // remaining new coverage has decayed below the configured
+                // minimum (e.g. another engineer's depot now blankets most
+                // of the same tiles). Falls through to a fresh re-plan
+                // rather than burning $depot_cost on a near-useless build.
+                if coverage_value < cfg.infra_min_coverage {
                     if game.ai_debug {
                         let name = game
                             .get_nation(nation_id)
                             .map(|n| n.name.as_str())
                             .unwrap_or("?");
                         eprintln!(
-                            "[AI:{}:infra-plan] clear_commitment coverage_dropped_to_zero candidate=({}, {}) origin=({}, {})",
+                            "[AI:{}:infra-plan] clear_commitment coverage_below_min coverage={} min={} candidate=({}, {}) origin=({}, {})",
                             name,
+                            coverage_value,
+                            cfg.infra_min_coverage,
                             t.candidate.q,
                             t.candidate.r,
                             t.origin_capital.q,
@@ -636,7 +639,10 @@ fn plan_next_depot_with(
             &nation.researched_techs,
             cfg.infra_improvability_weight,
         );
-        if coverage_value == 0 {
+        // Trello #426: don't spend $depot_cost on a candidate whose only
+        // contribution is a tile or two of yield/improvability. Threshold
+        // is per-Lua and defaults to 5.
+        if coverage_value < cfg.infra_min_coverage {
             continue;
         }
 
@@ -907,7 +913,10 @@ pub(super) fn find_stranded_port_target(game: &GameState, nation_id: NationId) -
             &nation.researched_techs,
             cfg.infra_improvability_weight,
         );
-        if coverage == 0 {
+        // Trello #426: same min-coverage gate as the depot planner — a
+        // stranded port costs $port_cost; don't pay it for a province whose
+        // best yield is a tile or two.
+        if coverage < cfg.infra_min_coverage {
             continue;
         }
 
@@ -2903,6 +2912,13 @@ mod tests {
             .push(Building::new(BuildingType::LumberMill, 2));
         nation.economy.treasury = Money::dollars(20_000);
 
+        // Planner tests use deliberately small resource fixtures (one or two
+        // extras tiles). The default `infra_min_coverage = 5` would reject
+        // all of them; preserve the historical "any positive coverage"
+        // semantics by lowering the threshold to 1 here so the suite still
+        // exercises the strict-zero edge cases.
+        let mut game_data = GameData::default();
+        game_data.game_config.infra_min_coverage = 1;
         crate::test_game_state! {
         turn: TurnNumber::new(1),
         difficulty: Difficulty::Normal,
@@ -2912,7 +2928,7 @@ mod tests {
         nations: vec![nation],
         human_player_nation: NationId(99), // unused in planner tests
         events: Vec::new(),
-        game_data: GameData::default(),
+        game_data: game_data,
         diplomacy: crate::diplomacy::DiplomacyState::new(),
         pending_attacks: Vec::new(),
         pending_moves: Vec::new(),
@@ -3100,6 +3116,8 @@ mod tests {
             .push(Building::new(BuildingType::LumberMill, 2));
         nation.economy.treasury = Money::dollars(20_000);
 
+        let mut game_data = GameData::default();
+        game_data.game_config.infra_min_coverage = 1;
         let game = crate::test_game_state! {
         turn: TurnNumber::new(1),
         difficulty: Difficulty::Normal,
@@ -3109,7 +3127,7 @@ mod tests {
         nations: vec![nation],
         human_player_nation: NationId(99),
         events: Vec::new(),
-        game_data: GameData::default(),
+        game_data: game_data,
         diplomacy: crate::diplomacy::DiplomacyState::new(),
         pending_attacks: Vec::new(),
         pending_moves: Vec::new(),
@@ -3873,6 +3891,37 @@ mod tests {
         assert!(
             matches!(outcome, PlanOutcome::Fresh(_)),
             "zero-coverage commitment must clear and re-plan, got {outcome:?}"
+        );
+    }
+
+    /// Trello #426 root cause: the AI was committing to depots with
+    /// `coverage_value` of 1 or 2 (i.e. a single yield tile or improvability
+    /// bonus next to an existing depot). The new `infra_min_coverage` knob
+    /// must reject those candidates so a tiny-coverage area produces no
+    /// plan rather than a useless build. With `min_coverage = 5` and a
+    /// fixture whose only candidate scores below that, planning returns
+    /// `Fresh(None)`.
+    #[test]
+    fn plan_rejects_candidate_below_min_coverage() {
+        let capital = HexCoord::new(0, 0);
+        let cand = HexCoord::new(2, 0);
+        let mut game = planner_game(
+            capital,
+            &[
+                // One single timber tile far from the capital's radius —
+                // candidate's coverage will be small (1-2 demand-weighted
+                // points), below the new minimum.
+                (cand, ResourceType::Timber),
+                (HexCoord::new(1, 0), ResourceType::Grain),
+            ],
+        );
+        // Raise the threshold to 10 to make sure this fixture's tiny
+        // coverage falls under it regardless of demand calibration.
+        game.game_data.game_config.infra_min_coverage = 10;
+        let outcome = plan_next_depot(&game, NationId(1));
+        assert!(
+            matches!(outcome, PlanOutcome::Fresh(None)),
+            "candidate below min_coverage threshold must produce no plan, got {outcome:?}"
         );
     }
 

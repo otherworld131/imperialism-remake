@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ::infrastructure::data_loader::load_embedded_game_data;
 use domain::economy::buildings::{Building, BuildingType};
-use domain::game_state::{GameState, new_game_with_seed_and_data};
+use domain::game_state::{
+    GameState, new_game_with_seed_and_data, new_game_with_seed_and_data_and_config,
+};
 use domain::hex::HexCoord;
 use domain::map::infrastructure;
 use domain::nation::Nation;
@@ -393,16 +395,44 @@ pub(crate) fn run_batch(n: u32, verbose_cashflow: bool, max_turns: Option<u32>) 
     let snapshot_years: &[u32] = &[1815, 1830, 1845, 1860, 1875, 1890, 1915];
     let mut games_data: Vec<GameReport> = Vec::with_capacity(n as usize);
 
+    // Debug knobs: `IMP_NUM_GP` / `IMP_NUM_MN` override the default nation
+    // counts so a single-GP focused trace can be set up without touching the
+    // CLI surface. Defaults match the standard game when unset.
+    let override_gp: Option<usize> = std::env::var("IMP_NUM_GP")
+        .ok()
+        .and_then(|s| s.parse().ok());
+    let override_mn: Option<usize> = std::env::var("IMP_NUM_MN")
+        .ok()
+        .and_then(|s| s.parse().ok());
+
     for game_idx in 0..n {
         let map_key = format!("batch_{}", game_idx);
         let personality_seed = game_idx as u64 * 6_364_136_223_846_793_005 + 1;
-        let mut game = new_game_with_seed_and_data(
-            &map_key,
-            Difficulty::Normal,
-            0,
-            personality_seed,
-            load_embedded_game_data(),
-        );
+        let mut game = if override_gp.is_some() || override_mn.is_some() {
+            let mut cfg = domain::map::MapGenConfig::default();
+            if let Some(gp) = override_gp {
+                cfg.num_great_powers = gp;
+            }
+            if let Some(mn) = override_mn {
+                cfg.num_minor_nations = mn;
+            }
+            new_game_with_seed_and_data_and_config(
+                &map_key,
+                Difficulty::Normal,
+                0,
+                personality_seed,
+                load_embedded_game_data(),
+                cfg,
+            )
+        } else {
+            new_game_with_seed_and_data(
+                &map_key,
+                Difficulty::Normal,
+                0,
+                personality_seed,
+                load_embedded_game_data(),
+            )
+        };
         crate::flavor_bridge::apply_flavor(&mut game, "");
         // Batch mode: promote the human slot to fully AI-managed so every GP
         // develops. Without this the slot-0 nation has no personality and is

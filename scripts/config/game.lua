@@ -168,6 +168,13 @@ game_config = {
     -- high-coverage remote candidates.
     infra_coverage_weight = 1.0,
     infra_path_cost_weight = 1.0,
+    -- Trello #426: minimum coverage_value a depot candidate (or kept
+    -- commitment) must reach before the planner spends $depot_cost on it.
+    -- Strictly greater than zero blocks the "build a depot that only covers
+    -- 1-2 already-improvable tiles next to an existing depot" pattern that
+    -- produces visible clusters of low-value depots. Set to 0 to restore
+    -- the old "any positive coverage" behaviour.
+    infra_min_coverage = 5,
     -- Card #217: weight on a tile's "eventual" yield (improvable tiers above
     -- current improvement_level, capped by tech) when scoring depot coverage.
     -- 0 = current yield only (legacy). 1.0 = 1 demand-weighted point per
