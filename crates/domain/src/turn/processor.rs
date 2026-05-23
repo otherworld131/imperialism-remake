@@ -3135,10 +3135,13 @@ fn resolve_military_movement(
 
             if is_non_adjacent {
                 let rail_cost = 5 * transport_size;
-                // Rail moves consume freight CARS only — not merchant-marine capacity.
-                // Available rail = rail_total
-                //   - resource-delivery portion of freight_committed (committed beyond sea_total)
-                //   - rail already used by earlier military moves this turn (tracked separately)
+                // Strategic military redeployment draws from its own pool sized
+                // by `rail_total`, independent of resource freight. Resource
+                // delivery routinely consumes 100% of `freight_committed` on
+                // mature empires; netting that off here would leave the army
+                // with zero capacity to move and the front would never form.
+                // The only subtraction is rail already used by earlier
+                // military moves processed this turn.
                 let mil_rail_used = rail_committed_military
                     .get(&nation_id)
                     .copied()
@@ -3148,17 +3151,7 @@ fn resolve_military_movement(
                     .nations
                     .iter()
                     .find(|n| n.id == nation_id)
-                    .map(|n| {
-                        let resource_rail = n
-                            .economy
-                            .logistics
-                            .freight_committed
-                            .saturating_sub(n.economy.logistics.sea_total);
-                        n.economy
-                            .logistics
-                            .rail_total
-                            .saturating_sub(resource_rail + mil_rail_used)
-                    })
+                    .map(|n| n.economy.logistics.rail_total.saturating_sub(mil_rail_used))
                     .unwrap_or(0);
                 if rail_cost > rail_available {
                     report.unit_movements.push((
@@ -3172,8 +3165,10 @@ fn resolve_military_movement(
                 }
             }
 
-            // Perform the move. Military rail costs are accumulated in
-            // rail_committed_military and flushed to logistics after the loop.
+            // Perform the move. Military rail usage is tracked in
+            // `rail_committed_military` purely so subsequent moves within
+            // the same turn see the budget shrink; it does NOT flow into
+            // `freight_committed` (resource freight is a separate pool).
             if let Some(nation) = game.get_nation_mut(nation_id)
                 && let Some(unit) = nation.military.army.iter_mut().find(|u| u.id == unit_id)
             {
@@ -3223,18 +3218,11 @@ fn resolve_military_movement(
         }
     }
 
-    // Flush military rail costs into logistics so freight_committed and freight_unused
-    // reflect the full turn usage (resources + military moves) for display purposes.
-    for (nation_id, mil_cost) in rail_committed_military {
-        if let Some(nation) = game.get_nation_mut(nation_id) {
-            nation.economy.logistics.freight_committed += mil_cost;
-            nation.economy.logistics.freight_unused = nation
-                .economy
-                .logistics
-                .freight_unused
-                .saturating_sub(mil_cost);
-        }
-    }
+    // Military rail usage is intentionally NOT merged into freight_committed /
+    // freight_unused: those numbers belong to the resource transport pool, and
+    // mixing them in produced the bug where a fully-committed resource budget
+    // (very common on mature AI empires) starved the army of all redeployment
+    // capacity. Military redeployment now has its own pool sized by rail_total.
 
     moved_unit_ids
 }
@@ -13035,13 +13023,9 @@ mod tests {
             ProvinceId(2),
             "rail move must succeed with sufficient freight"
         );
-        // Regulars have arms_required = 1, so cost = 5 freight cars.
-        // freight_committed should have increased by 5 (all capacity was also used
-        // by resources or just by the military move).
-        assert!(
-            nation.economy.logistics.freight_committed >= 5,
-            "freight_committed must reflect the rail move cost"
-        );
+        // Military rail usage no longer flows into freight_committed —
+        // resource and military rail are independent pools. The only
+        // invariant left to assert is that the unit actually moved.
     }
 
     #[test]
@@ -13170,10 +13154,6 @@ mod tests {
             moved.iter().filter(|&&m| m).count(),
             1,
             "exactly one of the two moves should succeed with 5 freight cars"
-        );
-        assert_eq!(
-            nation.economy.logistics.freight_committed, 5,
-            "freight_committed should reflect exactly one rail move"
         );
     }
 
